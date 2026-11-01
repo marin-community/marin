@@ -1,224 +1,368 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Marin Belay</title>
-    <link rel="stylesheet" href="tokens.css" />
-    <link rel="stylesheet" href="parts.css" />
-    <link rel="stylesheet" href="style.css" />
-  </head>
-  <body>
-    <template id="tpl-public">
-    <header class="marina-bar">
-      <div class="marina-title-row">
-        <a class="marina-brand" href="/">Marina</a>
-        <span class="marina-divider">/</span>
-        <a class="marina-app-title" href="./">Marin Belay</a>
-        <span class="marina-actions"><span class="chip" id="who"></span></span>
-      </div>
-      <nav class="marina-app-nav" aria-label="Sections">
-        <a href="#overview">Overview</a>
-        <a href="#suggestions">Suggestions</a>
-        <a href="#ideas">Ideas</a>
-        <a href="#runs">Runs</a>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marin Belay</title>
+<link rel="stylesheet" href="belay.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" id="brand" href="./"><b>Marin Belay</b></a>
+    <nav class="pages" id="pages" aria-label="Pages"></nav>
+  </div>
+</header>
+<template id="tpl-front">
+<main class="wrap" id="top">
+      <nav class="secnav" aria-label="Sections">
+        <a href="#progress">Progress</a>
+        <a href="#involved">Links</a>
+        <a href="#timeline">Timeline</a>
+        <a href="#gates">Gates</a>
+        <a href="#data">Data</a>
+        <a href="#kit">Starter kit</a>
+        <a href="#tracks">Tracks</a>
+        <a href="#logging">Logging</a>
+        <a href="#results">Results</a>
       </nav>
-    </header>
-    <main class="page">
-      <section id="overview" aria-labelledby="overview-h">
-        <div class="intro">
-          <h1 id="overview-h">Marin Belay</h1>
-          <p class="note">
-            Marin Belay tests research ideas for Marin's language models on 8×H100 nodes and records every result,
-            good or bad. Anyone can suggest an idea on the intake issue
-            <a href="https://github.com/marin-community/marin/issues/9514">#9514</a>. A maintainer reviews it, an
-            agent plans and runs the experiment against a same-commit control, and the result goes into the
-            experiment registry. Results are Paloma macro loss; lower is better.
-          </p>
+  <div class="headline" id="progress">
+    <div class="title-row">
+      <div>
+        <h1>Marin Belay</h1>
+        <p class="tagline">Project the lowest BPB possible at <span title="≈ 2.7e24 hardware FLOPs at 2.5 PF/s per GB200" style="text-decoration: underline dotted; text-underline-offset: 3px; cursor: help">300k GB200-hours</span>.<br>Human-guided, agent-executed pretraining challenge.</p>
+        <div class="climb">
+          <span class="climb-l">The Climb:</span>
+          <ol class="stages">
+            <li><b>1</b>Beat vanilla transformer</li>
+            <li><b>2</b>Integrate into 8-min speedrun</li>
+            <li><b>3</b>Validate hero scale MFU</li>
+            <li><b>4</b>Project hero-scale BPB</li>
+            <li><b>5</b>Assess results</li>
+          </ol>
         </div>
-        <div class="next" id="next" data-tone="idle">
-          <span class="next-dot" aria-hidden="true"></span>
+      </div>
+    </div>
+
+    <a class="latest" id="latest" href="status" hidden>
+      <span class="latest-l">Latest</span><span class="latest-body" id="latest-body"></span><span class="latest-go">Status →</span>
+    </a>
+
+    <div class="charts">
+
+      <article class="card" aria-labelledby="h-scaling">
+        <div class="card-head">
           <div>
-            <div class="next-label">What happens next</div>
-            <div class="next-text" id="next-text">Loading…</div>
+            <h2 id="h-scaling"><b class="sbadge" aria-label="Stage 4">4</b> Project hero-scale BPB</h2>
+            <div class="sub">Projected Paloma BPB at 300k GB200-hours (2.7e24 hardware FLOPs)</div>
           </div>
         </div>
-        <ol class="pipeline" id="pipeline" aria-label="Pipeline"></ol>
-      </section>
-
-      <section id="suggestions" aria-labelledby="suggestions-h">
-        <h2 id="suggestions-h">Suggestions from #9514</h2>
-        <p class="note">Every intake suggestion and where it stands.</p>
-        <div id="public-suggestions" class="cards"></div>
-      </section>
-
-      <section id="ideas" aria-labelledby="ideas-h">
-        <h2 id="ideas-h">Ideas being tested</h2>
-        <p class="note">Each approved idea follows five steps: approval, plan, runs, result, registry entry.</p>
-        <div id="public-ideas" class="ideas"></div>
-      </section>
-
-      <section id="runs" aria-labelledby="runs-h">
-        <h2 id="runs-h">Runs</h2>
-        <div class="scroll"><table>
-          <thead><tr><th>Run</th><th>State</th><th>Progress</th><th>Paloma macro</th><th>Submitted</th><th>Links</th></tr></thead>
-          <tbody id="public-run-rows"></tbody>
-        </table></div>
-      </section>
-      <p class="hint footer" id="public-updated"></p>
-    </main>
-    </template>
-    <template id="tpl-admin">
-    <header class="marina-bar">
-      <div class="marina-title-row">
-        <a class="marina-brand" href="/">Marina</a>
-        <span class="marina-divider">/</span>
-        <a class="marina-app-title" href="./">Marin Belay</a>
-        <span class="marina-actions"><span class="chip" id="who"></span></span>
-      </div>
-      <nav class="marina-app-nav" aria-label="Sections">
-        <a href="#overview">Overview</a>
-        <a href="#suggestions">Suggestions</a>
-        <a href="#ideas">Ideas</a>
-        <a href="#runs">Runs</a>
-        <a href="#sessions">Sessions</a>
-        <a href="#activity">Activity</a>
-      </nav>
-    </header>
-    <main class="page" id="admin-main">
-      <section id="overview" aria-labelledby="overview-h">
-        <div class="intro">
-          <h1 id="overview-h">Marin Belay · admin</h1>
-          <p class="note">
-            This is the maintainers' view: approvals, the dispatch switch, sessions and resources. The read-only
-            <a href="./">public page</a> shows the same ideas and results without controls.
-            An agent tests research ideas for
-            <a href="https://github.com/marin-community/marin/issues/9451">Marin Belay</a> on 8×H100 nodes.
-            Maintainers approve ideas here. Each approval starts a short agent session that plans the experiment,
-            commits it and launches its runs. When the runs finish, a new session records the result in the
-            registry. Nothing runs without an approval.
-          </p>
+        <ol class="proj-rows" id="legend-scaling" aria-label="Projected BPB by recipe, best first; also the plot legend"></ol>
+        <div class="chart-box" id="box-scaling">
+          <svg id="svg-scaling" viewBox="0 0 600 360" role="img" aria-label="Paloma macro BPB on a log axis against hardware FLOPs for three recipes"></svg>
+          <div class="tip" id="tip-scaling" hidden></div>
         </div>
+        <div class="hero-strip" aria-label="Hero run budget">
+          <div id="hc-tps"><div class="k">Rack tok/s</div><div class="v" id="h-tps">–</div></div>
+          <div id="hc-flops"><div class="k">Model FLOPs</div><div class="v" id="h-flops">–</div></div>
+          <div id="hc-n"><div class="k">Active params</div><div class="v" id="h-n">–</div></div>
+          <div id="hc-d"><div class="k">Tokens</div><div class="v" id="h-d">–</div></div>
+        </div>
+      </article>
 
-        <div class="next" id="next" data-tone="idle">
-          <span class="next-dot" aria-hidden="true"></span>
+      <article class="card" aria-labelledby="h-progress">
+        <div class="card-head">
           <div>
-            <div class="next-label">What happens next</div>
-            <div class="next-text" id="next-text">Loading…</div>
+            <h2 id="h-progress"><b class="sbadge" aria-label="Stage 2">2</b> Integrate into 8-min speedrun</h2>
           </div>
         </div>
-
-        <div class="controls">
-          <label class="switch">
-            <input type="checkbox" id="dispatch" role="switch" />
-            <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
-            <span>
-              <strong>Dispatch</strong> <span id="dispatch-word" class="chip">off</span><br />
-              <span class="hint">When on, queued events start an agent session (one at a time).</span>
-            </span>
-          </label>
-          <div class="control-facts">
-            <div><span class="hint">Watcher</span> <span id="watcher"></span></div>
-            <div><span class="hint">GitHub posting</span> <span id="github" class="chip"></span></div>
-            <div><span class="hint">Queued events</span> <span id="queued"></span></div>
-          </div>
+        <div class="legend">
+          <span><i style="background:var(--rope);height:4px"></i><b style="color:var(--ink)">Belay Ckpt 1</b> (current accepted)</span>
+          <span><i style="background:var(--slate)"></i>Marin Aug Hero Arch</span>
+          <span><i style="background:var(--amber)"></i>Vanilla dense</span>
+          <span><i style="width:3px;height:12px;background:var(--rope);opacity:.8"></i>Successful test, in Ckpt 1</span>
+          <span><i style="width:3px;height:12px;background:var(--faint)"></i>Successful test, not adopted</span>
         </div>
-
-        <ol class="pipeline" id="pipeline" aria-label="Pipeline"></ol>
-      </section>
-
-      <section id="suggestions" aria-labelledby="suggestions-h">
-        <div class="section-head">
-          <h2 id="suggestions-h">Suggestions waiting for a maintainer</h2>
-          <details class="propose">
-            <summary class="button">Propose an idea</summary>
-            <form id="propose-form">
-              <label>Title <input name="title" required maxlength="140" placeholder="e.g. Drop AdEMAMix at Ckpt 1" /></label>
-              <label>What to try and why
-                <textarea name="body" required rows="5" placeholder="The change, the rationale, and what would count as a win."></textarea>
-              </label>
-              <button class="primary" type="submit">Add as a pending suggestion</button>
-            </form>
-          </details>
+        <div class="chart-box" id="box-progress">
+          <svg id="svg-progress" viewBox="0 0 600 360" role="img" aria-label="d512 8-minute Paloma macro BPB: accepted records stepping down from dense to Aug Hero Arch to Belay Ckpt 1, with each successful d512 test as a drop below the Aug Hero Arch line"></svg>
+          <div class="tip" id="tip-progress" hidden></div>
         </div>
-        <p class="note">
-          New comments on the intake issue
-          <a href="https://github.com/marin-community/marin/issues/9514">#9514</a> appear here within two minutes.
-          <strong>Approve</strong> queues the idea for the next agent session; <strong>Dismiss</strong> hides it.
-        </p>
-        <div id="pending" class="cards"></div>
-      </section>
+      </article>
+    </div>
+  </div>
 
-      <section id="ideas" aria-labelledby="ideas-h">
-        <h2 id="ideas-h">Ideas in progress and recorded</h2>
-        <p class="note">Each approved idea follows five steps: approval, plan, runs, result, registry entry.</p>
-        <div id="idea-list" class="ideas"></div>
-      </section>
+  <section id="involved">
+    <div class="sec-head">
+      <h2>Links</h2>
+    </div>
+    <div class="involve">
+      <a class="link-card" href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">
+        <span class="num">github · marin#9514</span>
+        <h3>Intake</h3>
+        <p>Comment with a research direction, one idea per comment. When a maintainer approves it with a 👍, a bot copies it into the batch report issue, where the agent picks it up, and marks your comment with a 🚀.</p>
+        <p class="ex">e.g. &ldquo;Replace the sigmoid router scoring function with sqrt-softplus, applied to the current accepted speedrun record.&rdquo;</p>
+        <span class="go">Open the intake issue →</span>
+      </a>
+      <a class="link-card" href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">
+        <span class="num">github · marin#9451</span>
+        <h3>Batch Report</h3>
+        <p>The agent's live log with the approved intake suggestions. Locked to maintainers.</p>
+        <span class="go">Read the batch reports →</span>
+      </a>
+      <a class="link-card" href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">
+        <span class="num">github · marin_belay_v1_registry</span>
+        <h3>Experiment Registry</h3>
+        <p>Every tested experiment with its id, W&amp;B runs, results, and whether it’s included in the current recipe.</p>
+        <span class="go">Browse the registry →</span>
+      </a>
+      <a class="link-card" href="https://github.com/marin-community/marin/tree/marin_belay_v1_ckpt1" target="_blank" rel="noopener">
+        <span class="num">github · marin_belay_v1_ckpt1</span>
+        <h3>Belay Ckpt 1 Code</h3>
+        <p>Includes exact launch flags for the scaling ladder and GB200 rack in <code>experiments/grug/fast_track/belay_ckpt1.py</code>.</p>
+        <span class="go">Open the branch →</span>
+      </a>
+    </div>
+  </section>
 
-      <section id="runs" aria-labelledby="runs-h">
-        <h2 id="runs-h">Runs and resources</h2>
-        <div class="meters">
-          <div class="meter-card">
-            <div class="meter-label">Nodes (8×H100) in use</div>
-            <div class="meter-value" id="nodes-value"></div>
-            <div class="meter"><span id="nodes-bar"></span></div>
-            <div class="hint" id="nodes-hint"></div>
-          </div>
-          <div class="meter-card">
-            <div class="meter-label">Storage under <code>tmp/ttl=30d/belay/</code></div>
-            <div class="meter-value" id="storage-value"></div>
-            <div class="meter"><span id="storage-bar"></span></div>
-            <div class="hint" id="storage-hint"></div>
-          </div>
-        </div>
-        <div class="scroll"><table>
-          <thead><tr><th>Run</th><th>State</th><th>Progress</th><th>Paloma macro</th><th>Submitted</th><th>Links</th></tr></thead>
-          <tbody id="run-rows"></tbody>
-        </table></div>
-      </section>
-
-      <section id="sessions" aria-labelledby="sessions-h">
-        <h2 id="sessions-h">Agent sessions</h2>
-        <p class="note">
-          A session reads state, acts on its events, submits runs and exits. It never waits for runs; the watcher
-          starts the next session when one finishes.
-        </p>
-        <div id="session-list" class="sessions"></div>
-      </section>
-
-      <section id="activity" aria-labelledby="activity-h">
-        <h2 id="activity-h">Activity</h2>
-        <p class="note">Batch plans, results and every approval and dispatch, newest first.</p>
-        <ol id="feed" class="feed"></ol>
-      </section>
-    </main>
-    </template>
-    <template id="tpl-denied">
-    <header class="marina-bar">
-      <div class="marina-title-row">
-        <a class="marina-brand" href="/">Marina</a>
-        <span class="marina-divider">/</span>
-        <a class="marina-app-title" href="./">Marin Belay</a>
-        <span class="marina-actions"><span class="chip" id="who"></span></span>
+  <section id="timeline">
+    <div class="sec-head">
+      <h2>Timeline</h2>
+    </div>
+    <ol class="tline">
+      <li class="tnode done"><span class="dot" aria-hidden="true"></span><span class="ts">Shipped</span><h3>Marin 32B</h3><span class="tsub">Dense</span>
+        <button type="button" class="tbtn" aria-expanded="false" aria-controls="tl-p1">Architecture</button></li>
+      <li class="tnode done"><span class="dot" aria-hidden="true"></span><span class="ts">Shipped</span><h3>Marin 535B-A23B</h3><span class="tsub">MoE · Marin Aug Hero</span>
+        <button type="button" class="tbtn" aria-expanded="false" aria-controls="tl-p2">Architecture</button></li>
+      <li class="tnode done"><span class="dot" aria-hidden="true"></span><span class="ts">Cleared</span><h3>Belay Ckpt 1</h3><span class="tsub">Current Marin Belay recipe</span>
+        <button type="button" class="tbtn" aria-expanded="false" aria-controls="tl-p3">Architecture</button></li>
+      <li class="tnode prog next"><span class="dot" aria-hidden="true"></span><span class="ts">In development</span><span class="tq" aria-label="Next model: unknown">?</span>
+        <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">Propose an idea →</a></li>
+    </ol>
+    <div class="tpanel" id="tl-p1" role="region" aria-label="Marin 32B (dense) specification" hidden>
+      <header><h3>Marin 32B (dense)</h3><span class="src">docs/reports/marin-32b-retro.md</span></header>
+      <div class="tspec"><div><h4>Architecture</h4><ul><li>Qwen3-style dense transformer (began as Llama-3-style; switched to Qwen3 at step 80k to add QK-Norm, which removed the loss spikes)</li><li>hidden 5120, intermediate 27648, 64 layers</li><li>40 heads / 8 KV heads (GQA), SiLU, QK-Norm</li><li>seq len 4096</li></ul></div><div><h4>Data</h4><ul><li>≈6.44T tokens</li><li>global batch 8192 sequences</li></ul></div><div><h4>Optimizer</h4><ul><li>AdamW, peak LR 7e-4</li><li>WSD-style schedule (1% warmup, 40% decay)</li><li>weight decay 0.05, z-loss 1e-4, EMA 0.995</li><li>clip-update-norm and skip-bad-steps</li></ul></div></div>
+    </div>
+    <div class="tpanel" id="tl-p2" role="region" aria-label="Marin 535B-A23B (MoE) specification" hidden>
+      <header><h3>Marin 535B-A23B (MoE)</h3><span class="src">experiments/grug/moe_hero_ep</span></header>
+      <div class="tspec"><div><h4>Architecture</h4><ul><li>d6144, 48 layers</li><li>384 routed experts of width 3072, top-8</li><li>latent MoE width 3072</li><li>2 shared experts of width 3072</li></ul></div><div><h4>Attention</h4><ul><li>48 heads, 12 local / 6 global KV heads, head dim 128</li><li>sliding window 2048 on local layers</li><li>every 4th layer plus the final layer is full-causal global</li><li>Partial RoPE on local layers; NoPE on global layers</li><li>SConv on keys, attention output, and MLP output</li><li>attention gate</li><li>XSA (exclusive self-attention)</li><li>QK-norm (non-learnable) with qk_mult 1.3</li></ul></div><div><h4>Norms</h4><ul><li>gated norm</li><li>learnable RMS norm on the latent MoE</li><li>learnable RMS norm on the embedding</li></ul></div><div><h4>Router</h4><ul><li>top-8 quantile balancing</li><li>global 10,000-bin histogram, next-step stop-gradient expert biases, no aux loss</li><li>sigmoid combine weights, scaled 2.5× after renormalization</li></ul></div><div><h4>Loss</h4><ul><li>logit z-loss</li></ul></div><div><h4>Data</h4><ul><li>vocab 128,256 (Llama 3 tokenizer), seq len 4096</li><li>18T-token plan</li></ul></div><div><h4>Training</h4><ul><li>11 GB200 NVL72 racks, 64-way expert parallelism per rack</li><li>11,264 sequences per batch</li><li>ragged all-to-all EP transport</li></ul></div><div><h4>Optimizer</h4><ul><li>MuonH, with the lm_head routed to AdamH and the gated-norm params routed to MuonH</li><li>compute-scaled LR heuristic (the <a href="#kit">starter-kit</a> formulas)</li><li>linear LR decay with 1% warmup, decaying to 5% of peak</li><li>weight decay on the attention gate and the router</li><li>state offloaded to pinned host</li></ul></div></div>
+    </div>
+    <div class="tpanel" id="tl-p3" role="region" aria-label="Belay Ckpt 1 specification" hidden>
+      <header><h3>Belay Ckpt 1</h3><a class="src" href="https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py" target="_blank" rel="noopener">marin_belay_v1_ckpt1 · experiments/grug/fast_track/belay_ckpt1.py</a></header>
+      <p class="tstatus">Measured on one GB200 rack (64 GPUs): 14.59 s/step, 28.9% MFU (see the budget breakdown under the timeline table).</p>
+      <div class="tspec"><div><h4>Mixers</h4><ul><li>KDA (Kimi Delta Attention) local layers</li><li>MLA global layers with a 512-dim KV latent</li><li>Inkling relative-position bias instead of RoPE</li><li>On MLA layers, use partial key offset and QK norm</li></ul></div><div><h4>Residual</h4><ul><li>Block Attention Residuals with 8 blocks</li><li>SConv on attention/MLP outputs</li></ul></div><div><h4>MoE</h4><ul><li>latent MoE, 384 routed experts top-10 with ungated ReLU²</li><li>routed and shared experts 4,608 wide (0.75·d); 1 shared ungated ReLU² expert</li><li>sqrt-softplus renormalized router combine</li><li>ragged all-to-all EP</li></ul></div><div><h4>Embeddings and head</h4><ul><li>gated value embeddings</li><li>logit soft-cap 10</li><li>learnable QK multiplier</li></ul></div><div><h4>Optimizer</h4><ul><li>MuonH (pre-norm, decay power 0.7)</li><li>AdEMAMix Adam for the non-matrix params</li><li>beta1 0.9, beta2 from the starter-kit formula; cosine schedule</li></ul></div><div><h4>Tokenizer</h4><ul><li>16k BPE</li></ul></div><div><h4>Precision</h4><ul><li>MXFP8 on routed experts, dense projections and the expert dispatch</li></ul></div></div>
+    </div>
+    <div class="kit-table xlate">
+      <div class="xlate-head" style="justify-content:flex-end"><span class="pill est">placeholder numbers</span></div>
+      <table class="rungs">
+        <thead><tr><th>Model</th><th class="r">GB200-hours</th><th class="r">Hardware FLOPs</th><th class="r">1-rack MFU</th><th class="r">11-rack MFU</th><th class="r">Model FLOPs</th><th class="r">Projected scaling law</th><th class="r">Projected BPB</th><th class="r">Speedup</th></tr></thead>
+        <tbody id="xlate-body"></tbody>
+      </table>
+      <p class="note" style="margin:10px 0 0">Hardware FLOPs = GB200-hours × 3600 × 2.5 PF/s. The 11-rack MFU is the 1-rack MFU measured at gate 3, less 7% for scaling to the full run. Model FLOPs = hardware FLOPs × 11-rack MFU. The scaling law gives Paloma macro BPB as a function of model FLOPs C. Speedup = hardware FLOPs the Marin 535B-A23B recipe (its scaling law and 11-rack MFU) would need to reach the row's projected BPB, ÷ the row's hardware FLOPs.</p>
+    </div>
+    <details class="calc">
+      <summary>How the 300k GB200-hours become tokens and ladder steps</summary>
+      <div class="calc-body">
+        <table class="rungs">
+          <thead><tr><th>Recipe</th><th class="r">11-rack MFU</th><th class="r">Model FLOPs</th><th class="r">FLOPs / token</th><th class="r">Tokens</th><th class="r">Active params</th><th class="r">Tokens / param</th></tr></thead>
+          <tbody>
+            <tr><td>Belay Ckpt 1</td><td class="r">26.9%</td><td class="r">7.27e23</td><td class="r">1.61e11</td><td class="r">4.51T</td><td class="r">26.3B</td><td class="r">171</td></tr>
+            <tr><td>Marin 535B-A23B arch</td><td class="r">28.8%</td><td class="r">7.78e23</td><td class="r">1.44e11</td><td class="r">5.40T</td><td class="r">22.9B</td><td class="r">235</td></tr>
+          </tbody>
+        </table>
+<pre class="formula">model FLOPs = 2.70e24 hardware FLOPs × 11-rack MFU
+tokens      = model FLOPs ÷ training FLOPs per token
+ladder steps = tokens/param × active params ÷ (batch × 4,096)</pre>
+        <p class="note">Belay: 28.9% measured on one rack, less 7% for 11 racks. Marin 535B-A23B: 29.1% measured on 11 racks, 28.8% on our FLOP count. FLOPs per token are analytic (3 × forward, causal attention, routed experts at top-k ÷ 384, 16k vocab); active params exclude embeddings and the LM head.</p>
+        <table class="rungs">
+          <thead><tr><th>Rung</th><th class="r">Batch (seqs)</th><th class="r">Belay active</th><th class="r">Belay steps</th><th class="r">535B arch active</th><th class="r">535B arch steps</th></tr></thead>
+          <tbody><tr><td class="mono">d512</td><td class="r">128</td><td class="r">27.0M</td><td class="r">8,821</td><td class="r">22.7M</td><td class="r">10,187</td></tr><tr><td class="mono">d768</td><td class="r">128</td><td class="r">76.6M</td><td class="r">24,995</td><td class="r">64.2M</td><td class="r">28,778</td></tr><tr><td class="mono">d1024</td><td class="r">256</td><td class="r">198.2M</td><td class="r">32,323</td><td class="r">169.1M</td><td class="r">37,890</td></tr><tr><td class="mono">d1280</td><td class="r">256</td><td class="r">353.1M</td><td class="r">57,578</td><td class="r">301.5M</td><td class="r">67,576</td></tr></tbody>
+        </table>
       </div>
-    </header>
-    <main class="page denied">
-      <div class="denied-card">
-        <div class="denied-code" id="denied-code">403</div>
-        <h1>This is the Belay admin view</h1>
-        <p id="denied-text"></p>
-        <p class="note">
-          Only Belay approvers can approve ideas, switch dispatch or read session transcripts. Approvers are listed in
-          the app's settings. Everyone can follow the experiments on the read-only page.
-        </p>
-        <p class="denied-actions"><a class="button primary-link" href="./">Open the public Belay page</a>
-          <a class="button" href="/">Back to Marina</a></p>
+    </details>
+  </section>
+
+  <section id="gates">
+    <div class="sec-head">
+      <h2>Gates</h2>
+      <p class="lede">Mental model for how ideas can get promoted to the next Marin Hero run. Each gate is a soft blocker; skip ahead as appropriate. Recommend externally validated ideas start on gate 2. In a field this empirical, a failed gate never proves an idea doesn't work, only that it didn't work in that context, so revisiting how a past idea was implemented can be worthwhile.</p>
+    </div>
+    <ol class="gates">
+      <li class="gate"><span class="gn">1</span><h3>Beat vanilla transformer</h3>
+        <p>Find signs of life by beating a vanilla transformer along one axis (memory, data efficiency, compute efficiency, kv_cache, long context). The intent here is to screen out dead-ends and give signal on how much persistence should be applied during gate 2. Evaluate ideas in their preferred context to give them their best shot. Most research papers don't evaluate beyond this gate.</p></li>
+      <li class="gate"><span class="gn">2</span><h3>Integrate into 8-min speedrun</h3>
+        <p>Integrate the idea into the competitive stack and test it in the 8-minute speedrun. In general, ideas should build on the latest accepted record that has cleared gates 3 and 4. Decide whether it replaces, adds to, or adapts existing features, and which optimizer and schedule its new parameters use. The goal is not to Goodhart the speedrun or necessarily set a record, but to show the idea integrates cleanly with the existing stack and holds promise in some area.</p></li>
+      <li class="gate"><span class="gn">3</span><h3>Validate hero scale MFU</h3>
+        <p>Measure MFU at hero scale on a single GB200 rack. This enables conversion from 300k GB200-hours (2.7e24 hardware FLOPs) to model FLOPs.</p></li>
+      <li class="gate"><span class="gn">4</span><h3>Project hero-scale BPB</h3>
+        <p>Predict the pretraining BPB at the achievable FLOP budget. Run a scaling ladder at equal tokens per active parameter from 1e17 to 1e20 FLOPs. The added feature should have a clean scaling rule (e.g. 10% of active parameters on engram, sized at hidden_dim/2, or only on the second half of layers).</p></li>
+      <li class="gate wide"><span class="gn">5</span><h3>Assess results</h3>
+        <p>In addition to the metrics above, loss curve stability, router balancing, long-context evals, SFT/RL compatibility, OOD evals, activation norms, quantization behavior, robustness to datamix shifts, inference prefill and decode speed at various context lengths, and compatibility with serving hardware all influence decisions on the hero run. Results at this stage will be assessed holistically.</p></li>
+    </ol>
+  </section>
+
+  <section id="data">
+    <div class="sec-head">
+      <h2>Data and Tokenization</h2>
+    </div>
+    <p class="lede" style="margin-top:0">V1 of Marin Belay runs on our stage 1 datamix of the Marin Aug Hero Run. The data was retokenized with a 16k BPE tokenizer to enable faster small-scale iteration. Tokenizer and data tuning can heavily curve-fit a single eval, so before we open up this stage for hill climbing, we need a more comprehensive pretraining eval suite integrated into Belay. We observed that the 16k tokenizer achieved only 8% worse data compression than the 128k Llama 3 tokenizer. It also achieved equivalent bpb when trained on the same number of tokens (8% less data). As a result, Marin Belay will stick with the 16k tokenizer for now.</p>
+  </section>
+
+  <section id="kit">
+    <div class="sec-head">
+      <h2>Scaling starter kit</h2>
+      <p class="lede">Everything needed to set up a run at any rung so it scales cleanly. Agents will use these by default unless specified otherwise. T = total training tokens, d = hidden dim, B = tokens per batch.</p>
+    </div>
+    <div class="kit">
+      <div class="kit-card">
+        <h3>Learning rate (MuonH + Adam)</h3>
+<pre class="formula">adam_lr  = 0.0876 · T^−0.346 · d^−0.345 · √B
+muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
+        <p>Fit empirically over 122 runs (d512–d2048), R² = 0.978. Schedule: linear decay to 5% of peak.</p>
       </div>
-    </main>
-    </template>
-    <div id="view-root"></div>
-    <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="common.js"></script>
-    <script src="boot.js"></script>
-  </body>
+      <div class="kit-card">
+        <h3>beta2 scaling with batch size</h3>
+<pre class="formula">beta2 = clip(0.999^(B / 131072), 0.95, 0.9999)</pre>
+        <p>A constant per-token half-life. Worked values: d512/d768 (524k tokens per batch) → 0.996; d1024/d1280 (1.05M) → 0.992; hero (46.1M) → 0.95 (clipped). beta1 = 0.9 by default.</p>
+        <p>The current competitive d512 stack overrides beta2 to 0.98 and beta1 to 0.8, so tuned recipe values can differ from the default formula.</p>
+      </div>
+      <div class="kit-card">
+        <h3>Adam epsilon</h3>
+<pre class="formula">ε = 9.676e-18 · √(T / B)</pre>
+      </div>
+      <div class="kit-card">
+        <h3>Init</h3>
+<pre class="formula">std = 0.5 / √d</pre>
+      </div>
+    </div>
+    <div class="kit-table">
+      <table class="rungs">
+        <thead><tr><th>Rung</th><th class="r">Hidden</th><th class="r">Layers</th><th class="r">Heads</th><th class="r">Batch (seqs)</th><th class="r">Tokens / batch</th><th class="r">Hardware</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">d512</td><td class="r">512</td><td class="r">6</td><td class="r">4</td><td class="r">128</td><td class="r">524k</td><td class="r">8×H100</td></tr>
+          <tr><td class="mono">d768</td><td class="r">768</td><td class="r">8</td><td class="r">6</td><td class="r">128</td><td class="r">524k</td><td class="r">8×H100</td></tr>
+          <tr><td class="mono">d1024</td><td class="r">1024</td><td class="r">12</td><td class="r">8</td><td class="r">256</td><td class="r">1.05M</td><td class="r">8×H100</td></tr>
+          <tr><td class="mono">d1280</td><td class="r">1280</td><td class="r">14</td><td class="r">10</td><td class="r">256</td><td class="r">1.05M</td><td class="r">8×H100</td></tr>
+          <tr class="hero-row"><td>Hero (Marin Aug Hero, 11 GB200 racks)</td><td class="r">6144</td><td class="r">48</td><td class="r">48</td><td class="r">11,264</td><td class="r">46.1M</td><td class="r">11× GB200 NVL72 racks</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tracks">
+    <div class="sec-head">
+      <h2>Tracks</h2>
+      <p class="lede">When submitting a request to the intake, specify which track to build on.</p>
+    </div>
+    <div class="tracks" id="track-cards"></div>
+  </section>
+
+  <section id="logging">
+    <div class="sec-head">
+      <h2>Logging</h2>
+    </div>
+    <ul class="logs">
+      <li><b>Runs</b>: public W&amp;B project <a href="https://wandb.ai/marin-community/marin_moe" target="_blank" rel="noopener"><code>marin_moe</code></a>, with each run's full config.</li>
+      <li><b>Code</b>: the current recipe on <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_ckpt1" target="_blank" rel="noopener"><code>marin_belay_v1_ckpt1</code></a>; batch experiments on <code>marin_belay_v1_b&lt;batch&gt;</code> (earlier batches: <a href="https://github.com/marin-community/marin/tree/ladderclimb_v1_batch14" target="_blank" rel="noopener"><code>ladderclimb_v1_batch14</code></a>).</li>
+      <li><b>Results</b>: the <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">experiment registry</a>, one entry per experiment.</li>
+      <li><b>Discussion</b>: intake <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>; batch plans in <a href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">marin#9451</a>.</li>
+    </ul>
+  </section>
+
+  <section id="results">
+    <div class="sec-head">
+      <h2>Results</h2>
+      <div class="res-summary" id="res-summary"></div>
+    </div>
+    <div class="res-tools">
+      <div class="search-row">
+        <label class="search" for="q">
+          <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6" style="color:var(--faint)"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" style="color:var(--faint)"/></svg>
+          <input id="q" type="search" placeholder="Search ideas, settings, papers, arXiv ids, run names…" autocomplete="off" aria-label="Search results">
+        </label>
+        <select id="sort" class="sel" aria-label="Sort within categories">
+          <option value="best">Biggest win first</option>
+          <option value="recent">Most recently tested</option>
+          <option value="trials">Most tested</option>
+          <option value="name">A–Z</option>
+        </select>
+        <span class="count" id="res-count"></span>
+      </div>
+      <div class="facets">
+        <div class="facet" id="f-status" role="group" aria-label="Filter by status"><span class="fl">Status</span></div>
+        <div class="facet" id="f-cat" role="group" aria-label="Filter by category"><span class="fl">Category</span></div>
+        <div class="facet" id="f-reach" role="group" aria-label="Filter by scale reached"><span class="fl">Scale</span></div>
+      </div>
+    </div>
+    <div class="groups" id="groups"></div>
+  </section>
+</main>
+<footer>
+  <div class="wrap">
+    <span>Marin Belay</span>
+    <span>Results from <code>results.json</code>, built from the <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">Marin Belay experiment registry</a> (<a href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">marin-community/marin#9451</a>); GB200 throughput and the latest-best curve above d512 are estimates.</span>
+  </div>
+</footer>
+</template>
+<template id="tpl-status">
+<main class="wrap page">
+  <div class="page-head"><h1>Status</h1><span class="muted mono" id="updated"></span></div>
+  <div class="next" id="next" data-tone="idle"></div>
+  <ol class="pipe" id="pipeline" aria-label="Ideas by stage"></ol>
+  <div class="two">
+    <section class="block"><h2>Now running</h2><div class="list" id="running"></div></section>
+    <section class="block"><h2>Recent results</h2><div class="list" id="recent"></div></section>
+  </div>
+  <section class="block"><h2>Ideas</h2><div class="list" id="ideas"></div></section>
+  <section class="block"><h2>Activity</h2><ol class="feed" id="feed"></ol></section>
+</main>
+</template>
+<template id="tpl-admin">
+<main class="wrap page">
+  <div class="page-head"><h1>Admin</h1><span class="pill" id="who"></span></div>
+  <div class="next" id="next" data-tone="idle"></div>
+  <div class="controls">
+    <label class="switch" for="dispatch">
+      <input type="checkbox" id="dispatch" role="switch">
+      <span class="track" aria-hidden="true"><span class="knob"></span></span>
+      <span><b>Dispatch</b> <span class="muted" id="dispatch-word"></span></span>
+    </label>
+    <div class="meter"><div class="meter-k">Nodes</div><div class="meter-v mono" id="nodes-v"></div><div class="bar"><span id="nodes-bar"></span></div></div>
+    <div class="meter"><div class="meter-k">Storage</div><div class="meter-v mono" id="storage-v"></div><div class="bar"><span id="storage-bar"></span></div></div>
+    <div class="meter"><div class="meter-k">Watcher</div><div class="meter-v" id="watcher-v"></div><div class="muted small" id="queued-v"></div></div>
+  </div>
+  <section class="block"><h2>Pending <span class="count" id="pending-n"></span></h2><div class="list" id="pending"></div></section>
+  <section class="block"><h2>Sessions</h2><div class="list" id="sessions"></div></section>
+  <details class="block fold">
+    <summary>Settings</summary>
+    <form id="settings-form" class="settings">
+      <label>Node cap <input type="number" id="set-node-cap" min="0" max="64"></label>
+      <label class="check"><input type="checkbox" id="set-github"> Post plans and results to GitHub</label>
+      <label class="wide">Approvers <span class="muted small">one per line: github-login marina-identity</span>
+        <textarea id="set-approvers" rows="6" spellcheck="false"></textarea></label>
+      <button type="submit" class="btn primary">Save</button>
+    </form>
+  </details>
+  <details class="block fold">
+    <summary>Propose an idea</summary>
+    <form id="propose-form" class="settings">
+      <label class="wide">Title <input id="propose-title" required maxlength="140"></label>
+      <label class="wide">Idea <textarea id="propose-body" required rows="4"></textarea></label>
+      <button type="submit" class="btn primary">Add to pending</button>
+    </form>
+  </details>
+</main>
+</template>
+<template id="tpl-denied">
+<main class="wrap page denied">
+  <div class="denied-code mono" id="denied-code">403</div>
+  <h1>Approvers only</h1>
+  <p id="denied-text"></p>
+  <p class="denied-actions"><a class="btn primary" id="denied-status" href="status">Status</a><a class="btn" id="denied-front" href="./">Belay</a></p>
+</main>
+</template>
+<div id="view-root"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="common.js"></script>
+<script src="boot.js"></script>
+</body>
 </html>

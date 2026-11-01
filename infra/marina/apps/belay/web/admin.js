@@ -1,15 +1,16 @@
-// Marin Belay admin view: everything with controls or internal detail. Reads api/admin/state every few seconds;
-// the writes are approve, dismiss, propose and the dispatch switch. The server admits only listed approvers, and
-// anyone else sees the 403 page. Loaded after common.js.
+// Marin Belay admin page: approvals and controls. The server admits only listed approvers (401 signed out, 403
+// otherwise); everyone else sees the denied page. Loaded after common.js.
 
 const API = `${BELAY_BASE}api/admin`
+const openBodies = new Set()
 let busy = false
-const expanded = new Set()
-
-// ---------- network ----------
+let settingsLoaded = false
 
 async function api(path, body) {
-  const options = body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+  const options =
+    body === undefined
+      ? {}
+      : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
   const response = await fetch(`${API}/${path}`, options)
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`)
   return response.json()
@@ -20,7 +21,7 @@ function toast(text) {
   node.textContent = text
   node.dataset.show = 'true'
   clearTimeout(toast.timer)
-  toast.timer = setTimeout(() => (node.dataset.show = 'false'), 3500)
+  toast.timer = setTimeout(() => (node.dataset.show = 'false'), 3000)
 }
 
 async function act(path, body, message) {
@@ -37,187 +38,128 @@ async function act(path, body, message) {
   }
 }
 
-// ---------- sections ----------
+function meter(id, used, total, text) {
+  document.getElementById(`${id}-v`).textContent = text
+  const bar = document.getElementById(`${id}-bar`)
+  bar.style.width = `${Math.min(100, (100 * used) / Math.max(total, 1))}%`
+  bar.dataset.warn = String(used >= 0.9 * total)
+}
 
-function renderOverview() {
-  const { next, settings, watcher, queued, pipeline } = state
-  renderNext(next)
-
-  const dispatch = document.getElementById('dispatch')
-  dispatch.checked = settings.dispatch_enabled
-  const word = document.getElementById('dispatch-word')
-  word.textContent = settings.dispatch_enabled ? 'on' : 'off'
-  word.className = settings.dispatch_enabled ? 'pill' : 'chip'
-  if (settings.dispatch_enabled) word.dataset.good = 'true'
-  else delete word.dataset.good
-
-  const stale = watcher.ticked_at && Date.parse(state.now) - Date.parse(watcher.ticked_at) > 6 * 60 * 1000
-  setChildren(
-    'watcher',
-    watcher.ticked_at
-      ? el('span', { class: stale ? 'pill' : '' , dataset: stale ? { warn: 'true' } : {} }, `checked ${relative(watcher.ticked_at)}`)
-      : el('span', { class: 'pill', dataset: { warn: 'true' } }, 'not running'),
-    watcher.last_error ? el('span', { class: 'problem' }, ` ${watcher.last_error}`) : null,
+function renderControls() {
+  const { settings, watcher, queued } = state
+  document.getElementById('dispatch').checked = settings.dispatch_enabled
+  document.getElementById('dispatch-word').textContent = settings.dispatch_enabled ? 'on' : 'off'
+  meter('nodes', state.nodes_requested, settings.node_cap, `${state.nodes_requested} / ${settings.node_cap}`)
+  meter(
+    'storage',
+    watcher.storage_bytes ?? 0,
+    settings.storage_limit_bytes,
+    `${bytes(watcher.storage_bytes)} / ${bytes(settings.storage_limit_bytes)}`,
   )
-  const github = document.getElementById('github')
-  github.textContent = settings.github_posting ? 'on' : 'off (activity feed only)'
-  setChildren('queued', queued.length ? `${queued.length}: ${queued.map((e) => e.summary).join('; ')}` : 'none')
-
-  renderPipeline(pipeline)
+  const stale = !watcher.ticked_at || Date.parse(state.now) - Date.parse(watcher.ticked_at) > 6 * 60 * 1000
+  setChildren(
+    'watcher-v',
+    el('span', { class: stale ? 'warn' : 'ok' }, watcher.ticked_at ? relative(watcher.ticked_at) : 'not running'),
+  )
+  document.getElementById('queued-v').textContent = queued.length ? `${queued.length} queued` : 'queue empty'
 }
 
 function renderPending() {
   const pending = state.ideas.filter((i) => i.state === 'pending')
+  document.getElementById('pending-n').textContent = String(pending.length)
   if (!pending.length) {
-    setChildren('pending', el('div', { class: 'empty' }, 'No suggestions are waiting. New #9514 comments and proposals appear here.'))
+    setChildren('pending', el('div', { class: 'none' }, 'Nothing to review'))
     return
   }
   setChildren(
     'pending',
     pending.map((idea) => {
-      const open = expanded.has(idea.id)
-      const long = idea.body.length > 520 || idea.body.split('\n').length > 6
+      const first = (idea.title ?? idea.body.trim().split('\n')[0]).replace(/\*\*/g, '')
+      const expanded = openBodies.has(idea.id)
       return el(
-        'article',
-        { class: 'card' },
+        'div',
+        { class: 'line-wrap' },
         el(
           'div',
-          { class: 'card-head' },
-          el('span', { class: 'author' }, idea.author),
-          el('span', { class: 'chip' }, idea.origin === 'intake' ? '#9514 comment' : 'proposal'),
-          when(idea.posted_at),
-          idea.url ? link(idea.url, 'open on GitHub') : null,
+          { class: 'line pending' },
+          el(
+            'button',
+            {
+              type: 'button',
+              class: 'nm linkish',
+              'aria-expanded': String(expanded),
+              onclick: () => {
+                expanded ? openBodies.delete(idea.id) : openBodies.add(idea.id)
+                render()
+              },
+            },
+            el('b', {}, first),
+            el('small', {}, `${idea.origin === 'intake' ? '#9514' : 'proposal'} · ${idea.author} · `, when(idea.posted_at)),
+          ),
+          idea.url ? link(idea.url, '↗') : el('span'),
+          el(
+            'button',
+            { type: 'button', class: 'btn primary', onclick: () => act(`ideas/${idea.id}/approve`, {}, 'Approved') },
+            'Approve',
+          ),
+          el('button', { type: 'button', class: 'btn', onclick: () => act(`ideas/${idea.id}/dismiss`, {}, 'Dismissed') }, 'Dismiss'),
         ),
-        idea.title ? el('h3', {}, idea.title) : null,
-        el('p', { class: `body${long && !open ? ' clamped' : ''}` }, idea.body),
-        el(
-          'div',
-          { class: 'card-actions' },
-          el('button', { class: 'primary', type: 'button', onclick: () => act(`ideas/${idea.id}/approve`, {}, 'Approved: queued for the next session.') }, 'Approve'),
-          el('button', { class: 'quiet', type: 'button', onclick: () => act(`ideas/${idea.id}/dismiss`, {}, 'Dismissed.') }, 'Dismiss'),
-          long
-            ? el('button', { class: 'quiet', type: 'button', onclick: () => { open ? expanded.delete(idea.id) : expanded.add(idea.id); render() } }, open ? 'Show less' : 'Show all')
-            : null,
-        ),
+        expanded ? el('div', { class: 'detail-c' }, markdown(idea.body)) : null,
       )
     }),
   )
 }
 
-
-function renderIdeas() {
-  const ideas = state.ideas.filter((i) => !['pending', 'dismissed'].includes(i.state))
-  if (!ideas.length) {
-    setChildren('idea-list', el('div', { class: 'empty' }, 'No approved ideas yet. Approve a suggestion above to start one.'))
-    return
-  }
-  const active = state.sessions.find((s) => s.state === 'running')
-  const waiting = active
-    ? `session ${active.id} is planning it now`
-    : state.settings.dispatch_enabled
-      ? 'a session starts within a minute'
-      : 'waiting: dispatch is off'
-  setChildren('idea-list', ideas.map((idea) => renderIdea(idea, waiting)))
-}
-
-function renderRuns() {
-  const cap = state.settings.node_cap
-  const used = state.nodes_requested
-  document.getElementById('nodes-value').textContent = `${state.nodes_in_use} running, ${used} of ${cap} reserved`
-  const nodesBar = document.getElementById('nodes-bar')
-  nodesBar.style.width = `${Math.min(100, (100 * used) / cap)}%`
-  nodesBar.dataset.warn = String(used >= cap)
-  document.getElementById('nodes-hint').textContent =
-    used >= cap ? 'At the soft cap: new runs are held until one finishes.' : `${cap - used} node(s) free under the soft cap (checked by the submit helper).`
-
-  const w = state.watcher
-  const limit = state.settings.storage_limit_bytes
-  document.getElementById('storage-value').textContent = `${bytes(w.storage_bytes)} of ${bytes(limit)}`
-  const storageBar = document.getElementById('storage-bar')
-  storageBar.style.width = `${Math.min(100, (100 * (w.storage_bytes ?? 0)) / limit)}%`
-  storageBar.dataset.warn = String((w.storage_bytes ?? 0) > 0.9 * limit)
-  document.getElementById('storage-hint').textContent = w.storage_at
-    ? `${(w.storage_objects ?? 0).toLocaleString()} objects, summed ${relative(w.storage_at)}. Objects expire 30 days after they are written.`
-    : 'Not measured yet.'
-
-  if (!state.runs.length) {
-    setChildren('run-rows', el('tr', {}, el('td', { colspan: '6', class: 'hint' }, 'No Belay runs yet.')))
-    return
-  }
-  setChildren(
-    'run-rows',
-    state.runs.map((r) =>
-      el(
-        'tr',
-        {},
-        el('td', {}, el('code', {}, r.name), el('div', { class: 'hint' }, r.job_id)),
-        el('td', {}, runPill(r)),
-        el('td', {}, progress(r)),
-        el('td', { class: 'num' }, loss(r.loss)),
-        el('td', {}, when(r.submitted_at)),
-        el('td', {}, link(wandbUrl(r), 'W&B')),
-      ),
-    ),
-  )
-}
+const SESSION_CLASS = { succeeded: 'won', running: 'tested', failed: 'lost', lost: 'lost' }
 
 function renderSessions() {
   if (!state.sessions.length) {
-    setChildren('session-list', el('div', { class: 'empty' }, 'No sessions have run yet. One starts when dispatch is on and an event is queued.'))
+    setChildren('sessions', el('div', { class: 'none' }, 'No sessions yet'))
     return
   }
   setChildren(
-    'session-list',
-    state.sessions.map((s) => {
-      const good = s.state === 'succeeded' ? { good: 'true' } : s.state === 'running' ? {} : { warn: 'true' }
-      return el(
-        'article',
-        { class: 'session' },
-        el(
-          'div',
-          { class: 'session-head' },
-          el('strong', {}, el('code', {}, s.id)),
-          el('span', { class: 'pill', dataset: good }, s.state === 'running' ? 'working' : s.state),
-          when(s.started_at),
-          el('span', { class: 'hint' }, s.ended_at ? `took ${duration(s.started_at, s.ended_at)}` : `running for ${duration(s.started_at)}`),
-          s.turns ? el('span', { class: 'hint' }, `${s.turns} turns`) : null,
-          s.cost_usd ? el('span', { class: 'hint' }, `$${s.cost_usd.toFixed(2)}`) : null,
-          link(`${API}/sessions/${encodeURIComponent(s.id)}/transcript`, s.transcript_bytes ? 'transcript' : 'transcript (pending)'),
-        ),
-        s.events.length ? el('ul', {}, s.events.map((e) => el('li', {}, e.summary))) : null,
-        s.summary ? el('div', { class: 'summary' }, markdown(s.summary)) : null,
-      )
-    }),
-  )
-}
-
-function renderActivity() {
-  if (!state.activity.length) {
-    setChildren('feed', el('li', { class: 'hint' }, 'Nothing has happened yet.'))
-    return
-  }
-  setChildren(
-    'feed',
-    state.activity.map((a) =>
+    'sessions',
+    state.sessions.map((s) =>
       el(
-        'li',
-        { dataset: { kind: a.kind } },
-        el('div', { class: 'feed-title' }, a.registry_id && !a.title.startsWith(a.registry_id) ? [el('code', {}, a.registry_id), ' '] : null, a.title),
-        el('div', {}, when(a.at), a.github_url ? [' · ', link(a.github_url, 'on GitHub')] : null),
-        a.body ? el('div', { class: 'feed-body' }, markdown(a.body)) : null,
+        'div',
+        { class: 'line static session' },
+        when(s.started_at),
+        el('span', { class: `st ${SESSION_CLASS[s.state] ?? 'tested'}` }, s.state === 'running' ? 'working' : s.state),
+        el('span', { class: 'nm' }, el('b', {}, s.events.map((e) => e.summary).join('; ') || '—'), el('small', {}, s.id)),
+        el(
+          'span',
+          { class: 'mono muted' },
+          [
+            s.ended_at ? duration(s.started_at, s.ended_at) : duration(s.started_at),
+            s.turns ? `${s.turns}t` : null,
+            s.cost_usd ? `$${s.cost_usd.toFixed(2)}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        ),
+        link(`${API}/sessions/${encodeURIComponent(s.id)}/transcript`, 'log ↗'),
       ),
     ),
   )
 }
 
+function fillSettings() {
+  if (settingsLoaded) return
+  settingsLoaded = true
+  const { settings } = state
+  document.getElementById('set-node-cap').value = settings.node_cap
+  document.getElementById('set-github').checked = settings.github_posting
+  document.getElementById('set-approvers').value = settings.approvers
+    .map((a) => `${a.github} ${a.identity ?? ''}`.trim())
+    .join('\n')
+}
+
 function render() {
-  if (!state) return
-  renderOverview()
+  renderNext(state.next)
+  renderControls()
   renderPending()
-  renderIdeas()
-  renderRuns()
   renderSessions()
-  renderActivity()
+  fillSettings()
 }
 
 async function refresh() {
@@ -225,40 +167,59 @@ async function refresh() {
     state = await api('state')
     render()
   } catch (error) {
-    document.getElementById('next-text').textContent = `Cannot reach the Belay API: ${error.message}`
-    document.getElementById('next').dataset.tone = 'blocked'
+    renderNext({ tone: 'blocked', text: `Belay API unavailable (${error.message})` })
   }
 }
 
 function wireControls() {
   document.getElementById('dispatch').addEventListener('change', (event) => {
     const on = event.target.checked
-    act('settings', { dispatch_enabled: on }, on ? 'Dispatch on: queued events start a session.' : 'Dispatch off: no new sessions start.')
+    act('settings', { dispatch_enabled: on }, on ? 'Dispatch on' : 'Dispatch off')
   })
-
+  document.getElementById('settings-form').addEventListener('submit', (event) => {
+    event.preventDefault()
+    const previous = new Map(state.settings.approvers.map((a) => [a.github, a]))
+    const approvers = document
+      .getElementById('set-approvers')
+      .value.split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .filter(([github]) => github)
+      .map(([github, identity]) => ({ ...(previous.get(github) ?? { github }), identity: identity ?? null }))
+    act(
+      'settings',
+      {
+        node_cap: Number(document.getElementById('set-node-cap').value),
+        github_posting: document.getElementById('set-github').checked,
+        approvers,
+      },
+      'Settings saved',
+    ).then(() => (settingsLoaded = false))
+  })
   document.getElementById('propose-form').addEventListener('submit', (event) => {
     event.preventDefault()
-    const form = event.target
-    const data = new FormData(form)
-    act('ideas', { title: data.get('title'), body: data.get('body') }, 'Added as a pending suggestion.').then(() => {
-      form.reset()
-      form.closest('details').open = false
+    const title = document.getElementById('propose-title')
+    const body = document.getElementById('propose-body')
+    act('ideas', { title: title.value, body: body.value }, 'Added to pending').then(() => {
+      title.value = ''
+      body.value = ''
     })
   })
 }
 
 function deny(status, message) {
   showView('denied')
-  document.title = `${status} · Marin Belay admin`
+  document.title = `${status} · Marin Belay`
   document.getElementById('denied-code').textContent = String(status)
   document.getElementById('denied-text').textContent = message
+  document.getElementById('denied-status').href = PAGES.status
+  document.getElementById('denied-front').href = PAGES.front
 }
 
 async function start() {
   const response = await fetch(`${API}/me`, { headers: { accept: 'application/json' } })
   if (!response.ok) {
     const detail = await response.json().then((b) => b.detail).catch(() => '')
-    deny(response.status, detail || 'You do not have access to the Belay admin view.')
+    deny(response.status, detail || 'You do not have access to Belay admin.')
     return
   }
   const me = await response.json()

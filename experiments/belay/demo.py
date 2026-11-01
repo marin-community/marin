@@ -85,8 +85,9 @@ TOKEN_HEADER = "X-Belay-Token"
 # How a session's `demo api` calls receive the service token (Loom would inject it as a profile secret).
 TOKEN_ENV = "BELAY_SERVICE_TOKEN"
 APP_SCHEMA = "belay"
-PUBLIC_FILES = ("common.js", "public.js", "style.css")
-SHARED_CSS = ("tokens.css", "parts.css")
+PUBLIC_FILES = ("boot.js", "common.js", "front.js", "status.js", "belay.css")
+# The public page's speedrun chart and results show macro loss as placeholder BPB until BPB evals land in the registry.
+PLACEHOLDER_BPB_RATIO = "0.4147"
 
 
 def api_base(port: int = MARINA_PORT) -> str:
@@ -254,15 +255,16 @@ def bootstrap_access(stack: Stack, demo_approver: str) -> str:
 
 
 def export_public(directory: Path) -> Path:
-    """Write the public page and a JSON snapshot of ``api/public/state`` for static hosting (GitHub Pages)."""
+    """Write the front and status pages with JSON snapshots of the public state and registry results, for static
+    hosting (GitHub Pages)."""
     directory.mkdir(parents=True, exist_ok=True)
     web = APP_DIR / "web"
-    shutil.copyfile(web / "public.html", directory / "index.html")
+    for page in ("index.html", "status.html"):
+        shutil.copyfile(web / "static.html", directory / page)
     for name in PUBLIC_FILES:
         shutil.copyfile(web / name, directory / name)
-    for name in SHARED_CSS:
-        shutil.copyfile(REPO / "infra/marina/web" / name, directory / name)
     (directory / "public.json").write_text(json.dumps(call("public/state"), indent=1))
+    (directory / "results.json").write_text(json.dumps(call("public/results"), separators=(",", ":")))
     return directory
 
 
@@ -315,9 +317,30 @@ def _run_state(coord: str, train: str | None) -> str:
     return coord
 
 
+def registry_results(registry_dir: Path) -> tuple[str, dict]:
+    """The registry checkout's HEAD and its ``registry build`` output (the public page's results data)."""
+    revision = subprocess.run(
+        ["git", "-C", str(registry_dir), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    built = subprocess.run(
+        [
+            sys.executable,
+            str(registry_dir / "experiments/belay/registry.py"),
+            "build",
+            "--placeholder-bpb-ratio",
+            PLACEHOLDER_BPB_RATIO,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return revision, json.loads(built)
+
+
 class Watcher:
-    def __init__(self, agent_dir: Path, token: str) -> None:
+    def __init__(self, agent_dir: Path, registry_dir: Path, token: str) -> None:
         self.agent_dir = agent_dir
+        self.registry_dir = registry_dir
         self.token = token
         self.final: dict[str, dict] = {}
         self.storage_at = 0.0
@@ -391,12 +414,27 @@ class Watcher:
         self.storage_at = time.monotonic()
         return sum(f["size"] for f in files.values()), len(files)
 
+    def upload_registry(self) -> None:
+        """Rebuild and upload the registry's results when the registry checkout moved."""
+        head = subprocess.run(
+            ["git", "-C", str(self.registry_dir), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        if call("agent/registry", token=self.token)["revision"] == head:
+            return
+        revision, data = registry_results(self.registry_dir)
+        call("agent/registry", {"revision": revision, "data": data}, token=self.token)
+        logger.info("uploaded registry results at %s (%d ideas)", revision[:10], len(data["ideas"]))
+
     def tick(self) -> None:
         error = None
         try:
             call("agent/sync/intake", {"comments": intake_comments()}, token=self.token)
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             error = f"intake: {e}"
+        try:
+            self.upload_registry()
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            error = f"registry: {e}"
         reports = self.runs()
         call("agent/sync/runs", {"runs": reports}, token=self.token)
         storage = None
@@ -608,7 +646,7 @@ class Dispatcher:
 
 
 def watch(stack: Stack, agent_dir: Path, registry_dir: Path, interval: int, token: str) -> None:
-    watcher = Watcher(agent_dir, token)
+    watcher = Watcher(agent_dir, registry_dir, token)
     dispatcher = Dispatcher(agent_dir, registry_dir, stack.state_dir, stack.page_url, token)
     last_tick = 0.0
     while True:
@@ -727,7 +765,7 @@ def main(argv: list[str]) -> None:
         print("released belay revision", release_app(stack))
         return
     if args.command == "tick":
-        Watcher(args.agent_dir, bootstrap_access(stack, args.demo_approver)).tick()
+        Watcher(args.agent_dir, args.registry_dir, bootstrap_access(stack, args.demo_approver)).tick()
         return
     start_postgres(stack)
     start_marina(stack)
@@ -735,7 +773,8 @@ def main(argv: list[str]) -> None:
         logger.info("released belay revision %d", release_app(stack))
     token = bootstrap_access(stack, args.demo_approver)
     print(
-        f"\n  Public page: {stack.page_url}\n  Admin page:  {stack.page_url}admin (local browser acts as "
+        f"\n  Belay:  {stack.page_url}\n  Status: {stack.page_url}status\n"
+        f"  Admin:  {stack.page_url}admin (local browser acts as "
         f"{args.demo_approver})\n  Watcher every {args.interval}s; Ctrl-C stops the loop "
         f"(`demo down` stops Marina and Postgres).\n",
         flush=True,

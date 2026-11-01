@@ -63,6 +63,7 @@ SECRET_SETTINGS = frozenset({"service_token_sha256"})
 ANONYMOUS = "anonymous"
 TOKEN_HEADER = "X-Belay-Token"
 PUBLIC_EXCERPT = 600
+PUBLIC_ACTIVITY = 30
 TERMINAL_RUN_STATES = frozenset({"succeeded", "failed", "killed", "worker_failed", "unschedulable"})
 # A session that has not reported back within this long is presumed lost, so the queue is not blocked forever.
 SESSION_TIMEOUT = datetime.timedelta(hours=3)
@@ -93,17 +94,22 @@ SCHEMA = (
     """CREATE TABLE IF NOT EXISTS activity (
         id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), kind TEXT NOT NULL, registry_id TEXT,
         idea_id BIGINT, session_id TEXT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', github_url TEXT)""",
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS step_at TIMESTAMPTZ",
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS steps_per_sec DOUBLE PRECISION",
+    """CREATE TABLE IF NOT EXISTS registry (
+        id INTEGER PRIMARY KEY, revision TEXT NOT NULL, built_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        data JSONB NOT NULL)""",
     """CREATE TABLE IF NOT EXISTS watcher (
         id INTEGER PRIMARY KEY, ticked_at TIMESTAMPTZ, nodes_in_use INTEGER, storage_bytes BIGINT,
         storage_objects BIGINT, storage_at TIMESTAMPTZ, last_error TEXT)""",
 )
 
 
-UPSERT_RUN = """
+_TERMINAL_SQL = ", ".join(f"'{state}'" for state in sorted(TERMINAL_RUN_STATES))
+UPSERT_RUN = f"""
 INSERT INTO runs (name, job_id, registry_id, run, state, submitted_at, finished_at, nodes, step, total_steps, loss,
                   wandb_url, updated_at)
-VALUES (:name, :job_id, :rid, :run, :state, :submitted_at, CASE WHEN CAST(:terminal AS BOOLEAN) THEN now() END,
-        :nodes, :step, :total_steps, :loss, :wandb_url, now())
+VALUES (:name, :job_id, :rid, :run, :state, :submitted_at, NULL, :nodes, :step, :total_steps, :loss, :wandb_url, now())
 ON CONFLICT (name) DO UPDATE SET
     state = EXCLUDED.state,
     step = COALESCE(EXCLUDED.step, runs.step),
@@ -111,7 +117,11 @@ ON CONFLICT (name) DO UPDATE SET
     loss = COALESCE(EXCLUDED.loss, runs.loss),
     wandb_url = COALESCE(EXCLUDED.wandb_url, runs.wandb_url),
     nodes = EXCLUDED.nodes,
-    finished_at = COALESCE(runs.finished_at, EXCLUDED.finished_at),
+    -- When a run is first seen already finished, its end time is unknown; otherwise it is when the watcher saw it end.
+    finished_at = COALESCE(
+        runs.finished_at,
+        CASE WHEN CAST(:terminal AS BOOLEAN) AND runs.state NOT IN ({_TERMINAL_SQL}) THEN now() END
+    ),
     updated_at = now()
 """
 
@@ -226,6 +236,12 @@ class IdeaReport(BaseModel):
     note: str | None = None
 
 
+class RegistryUpload(BaseModel):
+    revision: str
+    """The registry branch commit the data was built from."""
+    data: dict[str, Any]
+
+
 class ActivityPost(BaseModel):
     kind: str
     title: str
@@ -325,35 +341,85 @@ def _expire_sessions(conn: Connection) -> None:
         _requeue(conn, session_id)
 
 
-def _events(count: int) -> str:
-    return "1 queued event waits" if count == 1 else f"{count} queued events wait"
+def _training(live: list[dict]) -> str:
+    """``Training a, b · slowest 1,234/8,821`` for the live runs."""
+    names = ", ".join(r["name"] for r in live)
+    steps = [r for r in live if r["step"] and r["total_steps"]]
+    if not steps:
+        return f"Training {names}"
+    r = min(steps, key=lambda r: r["step"] / r["total_steps"])
+    return f"Training {names} · slowest {r['step']:,}/{r['total_steps']:,}"
 
 
 def _next_step(
     settings: dict[str, Any], active: dict | None, queued: list[dict], live: list[dict], pending: int
 ) -> dict[str, str]:
-    """One plain sentence on what happens next, and its tone (``busy``, ``waiting``, ``blocked`` or ``idle``)."""
+    """The admin's one-line "what happens next", and its tone (``busy``, ``waiting``, ``blocked`` or ``idle``)."""
     if active is not None:
-        return {"tone": "busy", "text": f"Session {active['id']} is working on {active['events']}. It exits on its own."}
+        return {"tone": "busy", "text": f"Session {active['id']} working: {active['events']}"}
     if queued and not settings["dispatch_enabled"]:
-        return {
-            "tone": "blocked",
-            "text": f"Dispatch is off, so {_events(len(queued))}. Turn dispatch on to start a session.",
-        }
+        return {"tone": "blocked", "text": f"Dispatch off · {len(queued)} queued"}
     if queued:
-        return {"tone": "busy", "text": f"A session starts within a minute to handle: {queued[0]['summary']}."}
+        return {"tone": "busy", "text": f"Starting a session: {queued[0]['summary']}"}
     if live:
-        names = ", ".join(r["name"] for r in live)
-        steps = [r for r in live if r["step"] and r["total_steps"]]
-        progress = ""
-        if steps:
-            r = min(steps, key=lambda r: r["step"] / r["total_steps"])
-            progress = f" (slowest at step {r['step']:,} of {r['total_steps']:,})"
-        return {"tone": "waiting", "text": f"Waiting for {names} to finish{progress}; the next session records them."}
+        return {"tone": "waiting", "text": _training(live)}
     if pending:
-        waiting = "1 suggestion waits" if pending == 1 else f"{pending} suggestions wait"
-        return {"tone": "idle", "text": f"{waiting} for a maintainer. Approve one to start it."}
-    return {"tone": "idle", "text": "Nothing is queued. Propose an idea or wait for a new intake suggestion."}
+        return {"tone": "idle", "text": f"{pending} to review"}
+    return {"tone": "idle", "text": "Idle"}
+
+
+# Weight of the newest step-rate observation in the running average behind ETAs.
+RATE_WEIGHT = 0.5
+
+
+def _update_rate(conn: Connection, run: "RunReport", previous: dict[str, Any] | None) -> None:
+    """Track steps per second from successive watcher reports, for the status page's ETAs."""
+    if run.step is None or (previous is not None and previous["step"] == run.step):
+        return
+    rate = previous["steps_per_sec"] if previous else None
+    if previous and previous["step"] is not None and previous["step_at"] is not None and run.step > previous["step"]:
+        elapsed = (_now() - previous["step_at"]).total_seconds()
+        if elapsed > 0:
+            observed = (run.step - previous["step"]) / elapsed
+            rate = observed if rate is None else RATE_WEIGHT * observed + (1 - RATE_WEIGHT) * rate
+    conn.execute(
+        text("UPDATE runs SET step_at = now(), steps_per_sec = :rate WHERE name = :n"), {"rate": rate, "n": run.name}
+    )
+
+
+def _public_activity(ideas: list[dict], runs: list[dict], posts: list[dict]) -> list[dict[str, Any]]:
+    """One line per public event, newest first: suggestions, approvals, plans, run starts and ends, results."""
+    by_id = {i["id"]: i for i in ideas}
+    by_registry = {i["registry_id"]: i for i in ideas if i["registry_id"]}
+    items = []
+    for i in ideas:
+        if i["origin"] == "intake":
+            items.append({"at": i["posted_at"], "kind": "intake", "text": f"New suggestion from {i['author']}"})
+        title = i["title"] or i["body"].strip().splitlines()[0][:80]
+        if i["decided_at"] and i["state"] not in ("pending", "dismissed"):
+            items.append({"at": i["decided_at"], "kind": "approved", "text": f"Approved: {title}"})
+        if i["state"] == "declined":
+            items.append({"at": i["updated_at"], "kind": "declined", "text": f"Declined: {title}"})
+    for r in runs:
+        if r["submitted_at"]:
+            items.append({"at": r["submitted_at"], "kind": "started", "text": f"Started {r['name']}"})
+        if r["finished_at"]:
+            items.append({"at": r["finished_at"], "kind": "finished", "text": f"{r['name']} {r['state']}"})
+    for p in posts:
+        idea = by_id.get(p["idea_id"]) or by_registry.get(p["registry_id"])
+        label = idea["title"] if idea and idea["title"] else p["registry_id"] or ""
+        if p["kind"] == "plan" and not (idea and idea["state"] == "declined"):
+            items.append(
+                {"at": p["at"], "kind": "plan", "registry_id": p["registry_id"], "text": f"Plan posted: {label}"}
+            )
+        if p["kind"] == "result" and idea and idea["result"]:
+            row = next((x for x in idea["result"].get("rows", []) if not x.get("control")), None)
+            change = f" {row['delta']:+.4f}" if row and row.get("delta") is not None else ""
+            items.append(
+                {"at": p["at"], "kind": "result", "registry_id": p["registry_id"], "text": f"Result{change}: {label}"}
+            )
+    items.sort(key=lambda x: x["at"], reverse=True)
+    return [{**x, "at": _iso(x["at"]), "registry_id": x.get("registry_id")} for x in items[:PUBLIC_ACTIVITY]]
 
 
 def _pipeline(ideas: list[dict[str, Any]]) -> dict[str, int]:
@@ -362,26 +428,16 @@ def _pipeline(ideas: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _public_next(active: bool, queued: int, live: list[dict], pending: int) -> dict[str, str]:
-    """The public form of the "what happens next" line: no session ids, people or controls."""
+    """The public "what happens next": no session ids, people or controls."""
     if active:
-        return {"tone": "busy", "text": "The Belay agent is working now: planning approved ideas or recording results."}
+        return {"tone": "busy", "text": "Agent working"}
     if queued:
-        return {"tone": "busy", "text": "Approved work is queued for the Belay agent."}
+        return {"tone": "busy", "text": "Queued for the agent"}
     if live:
-        names = ", ".join(r["name"] for r in live)
-        steps = [r for r in live if r["step"] and r["total_steps"]]
-        progress = ""
-        if steps:
-            r = min(steps, key=lambda r: r["step"] / r["total_steps"])
-            progress = f" (slowest at step {r['step']:,} of {r['total_steps']:,})"
-        return {"tone": "waiting", "text": f"Training {names}{progress}. Results are recorded when they finish."}
+        return {"tone": "waiting", "text": _training(live)}
     if pending:
-        waiting = "1 suggestion is" if pending == 1 else f"{pending} suggestions are"
-        return {"tone": "idle", "text": f"{waiting} waiting for a maintainer's review."}
-    return {
-        "tone": "idle",
-        "text": "Nothing is running. New suggestions on the intake issue are reviewed by maintainers.",
-    }
+        return {"tone": "idle", "text": f"{pending} awaiting review"}
+    return {"tone": "idle", "text": "Idle"}
 
 
 def _public_idea(idea: dict[str, Any]) -> dict[str, Any]:
@@ -412,7 +468,18 @@ def _public_idea(idea: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_run(run: dict[str, Any]) -> dict[str, Any]:
-    keys = ("name", "registry_id", "state", "step", "total_steps", "loss", "wandb_url", "submitted_at", "finished_at")
+    keys = (
+        "name",
+        "registry_id",
+        "state",
+        "step",
+        "total_steps",
+        "steps_per_sec",
+        "loss",
+        "wandb_url",
+        "submitted_at",
+        "finished_at",
+    )
     return {k: _iso(run[k]) for k in keys}
 
 
@@ -450,6 +517,11 @@ def create_api(services: Any) -> FastAPI:
             runs = _rows(conn, "SELECT * FROM runs ORDER BY submitted_at DESC NULLS LAST")
             active = bool(_rows(conn, "SELECT id FROM sessions WHERE state = 'running'"))
             queued = len(_rows(conn, "SELECT id FROM events WHERE session_id IS NULL"))
+            posts = _rows(
+                conn,
+                "SELECT at, kind, registry_id, idea_id FROM activity WHERE kind IN ('plan', 'result') ORDER BY at DESC "
+                f"LIMIT {PUBLIC_ACTIVITY}",
+            )
         live = [r for r in runs if r["state"] not in TERMINAL_RUN_STATES]
         pending = sum(1 for i in ideas if i["state"] == IdeaState.PENDING)
         return {
@@ -458,7 +530,17 @@ def create_api(services: Any) -> FastAPI:
             "next": _public_next(active, queued, live, pending),
             "ideas": [_public_idea(i) for i in ideas],
             "runs": [_public_run(r) for r in runs],
+            "activity": _public_activity(ideas, runs, posts),
         }
+
+    @public.get("/results")
+    def public_results() -> dict[str, Any]:
+        """The registry's results (``experiments.belay.registry build``), as the watcher last uploaded them."""
+        with engine.connect() as conn:
+            rows = _rows(conn, "SELECT revision, built_at, data FROM registry WHERE id = 1")
+        if not rows:
+            raise HTTPException(404, "the watcher has not uploaded the registry yet")
+        return {**rows[0]["data"], "revision": rows[0]["revision"], "built_at": _iso(rows[0]["built_at"])}
 
     @admin.get("/me")
     def me(user: str = Depends(approver)) -> dict[str, str]:
@@ -618,13 +700,14 @@ def create_api(services: Any) -> FastAPI:
         finished = 0
         with engine.begin() as conn:
             for r in sync.runs:
-                previous = _rows(conn, "SELECT state FROM runs WHERE name = :n", n=r.name)
+                previous = _rows(conn, "SELECT state, step, step_at, steps_per_sec FROM runs WHERE name = :n", n=r.name)
                 experiment, _, run = r.name.removeprefix("belay-").partition("-")
                 terminal = r.state in TERMINAL_RUN_STATES
                 conn.execute(
                     text(UPSERT_RUN),
                     {**r.model_dump(), "rid": experiment, "run": run, "terminal": terminal},
                 )
+                _update_rate(conn, r, previous[0] if previous else None)
                 was_live = bool(previous) and previous[0]["state"] not in TERMINAL_RUN_STATES
                 if terminal and was_live:
                     finished += 1
@@ -764,6 +847,24 @@ def create_api(services: Any) -> FastAPI:
     def post_activity(post: ActivityPost) -> dict[str, int]:
         with engine.begin() as conn:
             return {"id": _activity(conn, post)}
+
+    @agent.get("/registry")
+    def registry_revision() -> dict[str, str | None]:
+        with engine.connect() as conn:
+            rows = _rows(conn, "SELECT revision FROM registry WHERE id = 1")
+        return {"revision": rows[0]["revision"] if rows else None}
+
+    @agent.post("/registry")
+    def upload_registry(upload: RegistryUpload) -> dict[str, str]:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO registry (id, revision, built_at, data) VALUES (1, :rev, now(), CAST(:data AS JSONB)) "
+                    "ON CONFLICT (id) DO UPDATE SET revision = EXCLUDED.revision, built_at = now(), data = EXCLUDED.data"
+                ),
+                {"rev": upload.revision, "data": json.dumps(upload.data)},
+            )
+        return {"revision": upload.revision}
 
     @agent.get("/state")
     def agent_state() -> dict[str, Any]:

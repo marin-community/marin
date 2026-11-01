@@ -1,27 +1,62 @@
-// Shared by the Belay admin and public views: DOM and Markdown helpers, formatting, and the idea timeline.
-// Nothing from the API is parsed as HTML.
+// Shared by the three Belay pages (front, status, admin): routing, data loading, the page nav, and small DOM and
+// formatting helpers. Nothing from the API is parsed as HTML here.
 
-const REFRESH_MS = 8000
+const REFRESH_MS = 10000
 const TERMINAL = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'unschedulable'])
 const WANDB = 'https://wandb.ai/marin-community/marin_moe/runs/'
-const STAGES = [
-  ['pending', 'Suggestions', 'waiting for a maintainer'],
-  ['approved', 'Approved', 'waiting for a session to plan'],
-  ['planned', 'Planned', 'plan posted, runs submitting'],
-  ['running', 'Running', 'runs on the cluster'],
-  ['recorded', 'Recorded', 'result in the registry'],
-]
+// A static export (GitHub Pages) reads JSON snapshots next to the page instead of the app's API.
+const STATIC = document.body.dataset.static === 'true'
+// The app's root (`/belay/`) for /belay/, /belay/status and /belay/admin; the directory for a static copy.
+const BELAY_BASE = location.pathname.replace(/(status|admin)(\.html)?\/?$/, '').replace(/[^/]*$/, '')
+const PAGES = {
+  front: STATIC ? `${BELAY_BASE}index.html` : BELAY_BASE,
+  status: STATIC ? `${BELAY_BASE}status.html` : `${BELAY_BASE}status`,
+  admin: `${BELAY_BASE}admin`,
+}
+const SOURCES = {
+  results: STATIC ? 'results.json' : `${BELAY_BASE}api/public/results`,
+  state: STATIC ? 'public.json' : `${BELAY_BASE}api/public/state`,
+}
 
 // The last state read from the API; `now` anchors relative times.
 let state = null
-// The app's root (`/belay/`) whether the page was opened at `/belay/` or `/belay/admin`; also works for a static copy.
-const BELAY_BASE = location.pathname.replace(/admin\/?$/, '').replace(/[^/]*$/, '')
 
-// Each view (public, admin, denied) is a <template>; showing one clones it into #view-root, so element ids are
-// unique on the page.
+function pageName() {
+  if (/\/admin\/?$/.test(location.pathname)) return 'admin'
+  if (/\/status(\.html)?\/?$/.test(location.pathname)) return 'status'
+  return 'front'
+}
+
+// Each page is a <template>; showing one clones it into #view-root, so element ids stay unique.
 function showView(name) {
   const template = document.getElementById(`tpl-${name}`)
   document.getElementById('view-root').replaceChildren(template.content.cloneNode(true))
+}
+
+async function loadJson(kind) {
+  const response = await fetch(SOURCES[kind], { headers: { accept: 'application/json' } })
+  if (!response.ok) throw new Error(`${kind}: ${response.status}`)
+  return response.json()
+}
+
+// Belay · Status · Admin. Admin appears only for callers the server accepts as approvers.
+async function renderNav(current) {
+  const links = [['front', 'Belay'], ['status', 'Status'], ['admin', 'Admin']]
+  const nav = document.getElementById('pages')
+  const show = (canAdmin) =>
+    nav.replaceChildren(
+      ...links
+        .filter(([key]) => key !== 'admin' || canAdmin || current === 'admin')
+        .map(([key, label]) => el('a', { href: PAGES[key], 'aria-current': key === current ? 'page' : null }, label)),
+    )
+  show(false)
+  if (STATIC || current === 'admin') return
+  try {
+    const response = await fetch(`${BELAY_BASE}api/admin/me`, { headers: { accept: 'application/json' } })
+    show(response.ok)
+  } catch {
+    show(false)
+  }
 }
 
 // ---------- tiny DOM helpers (text only; nothing from the API is parsed as HTML) ----------
@@ -136,7 +171,7 @@ function absolute(iso) {
 
 function when(iso) {
   if (!iso) return el('time', { text: '—' })
-  return el('time', { datetime: iso, title: new Date(iso).toString() }, `${relative(iso)} · ${absolute(iso)}`)
+  return el('time', { datetime: iso, title: `${absolute(iso)} · ${new Date(iso).toString()}` }, relative(iso))
 }
 
 function duration(start, end) {
@@ -169,7 +204,7 @@ function delta(v) {
 }
 
 const RUN_WORDS = {
-  pending: 'waiting for a node',
+  pending: 'queued',
   running: 'training',
   succeeded: 'finished',
   failed: 'failed',
@@ -204,170 +239,33 @@ function wandbUrl(run) {
   return run.wandb_url ?? `${WANDB}${run.name}`
 }
 
-// ---------- shared sections ----------
 
-function step(stateName, title, sub, ...body) {
-  return el(
-    'li',
-    { class: 'step', dataset: { state: stateName } },
-    el('span', { class: 'step-mark', 'aria-hidden': 'true' }, stateName === 'done' ? '✓' : stateName === 'failed' ? '!' : ''),
-    el('div', { class: 'step-title' }, title, sub ? el('span', { class: 'step-sub' }, sub) : null),
-    body.length ? el('div', { class: 'step-body' }, ...body) : null,
-  )
+function eta(run) {
+  if (!run.steps_per_sec || !run.total_steps || run.step === null) return null
+  const seconds = (run.total_steps - run.step) / run.steps_per_sec
+  if (seconds < 60) return '<1 min'
+  return seconds < 3600 ? `${Math.round(seconds / 60)} min` : `${(seconds / 3600).toFixed(1)} h`
 }
 
-function runsTable(runs) {
-  return el(
-    'div',
-    { class: 'scroll' },
-    el(
-      'table',
-      {},
-      el('thead', {}, el('tr', {}, ['Run', 'State', 'Progress', 'Paloma macro', ''].map((h) => el('th', {}, h)))),
-      el(
-        'tbody',
-        {},
-        runs.map((r) =>
-          el(
-            'tr',
-            {},
-            el('td', {}, el('code', {}, r.name)),
-            el('td', {}, runPill(r)),
-            el('td', {}, progress(r)),
-            el('td', { class: 'num' }, loss(r.loss)),
-            el('td', {}, link(wandbUrl(r), 'W&B')),
-          ),
-        ),
-      ),
-    ),
-  )
-}
-
-// One idea's five-step timeline. `planWaiting` says what the plan step is waiting on, which only the admin view
-// knows in detail.
-function renderIdea(idea, planWaiting) {
-  const plan = idea.plan
-  const result = idea.result
-  const runs = state.runs.filter((r) => idea.registry_id && r.registry_id === idea.registry_id)
-  const live = runs.filter((r) => !TERMINAL.has(r.state))
-  const label = idea.title ?? idea.body.split('\n')[0].slice(0, 120)
-
-  const approved = step(
-    'done',
-    'Approved',
-    idea.origin === 'intake' ? `suggested on #9514 by ${idea.author}` : `proposed by ${idea.author ?? 'a maintainer'}`,
-    el('span', { class: 'hint' }, idea.decided_by ? `approved by ${idea.decided_by} · ` : 'approved · '),
-    when(idea.decided_at ?? idea.approved_at),
-    idea.url ? [' · ', link(idea.url, 'original comment')] : null,
-  )
-
-  let planStep
-  if (plan) {
-    planStep = step(
-      'done',
-      'Plan',
-      plan.protocol,
-      markdown(plan.summary ?? ''),
-      el(
-        'dl',
-        { class: 'facts' },
-        el('dt', {}, 'Cost'), el('dd', {}, plan.cost),
-        el('dt', {}, 'Code'),
-        el('dd', {}, plan.commit ? link(`https://github.com/marin-community/marin/commit/${plan.commit}`, el('code', {}, plan.commit.slice(0, 10))) : '—', plan.branch ? [' on ', el('code', {}, plan.branch)] : null),
-        plan.spec_url ? [el('dt', {}, 'Run spec'), el('dd', {}, link(plan.spec_url, 'runs/' + idea.registry_id + '.yaml'))] : null,
-        el('dt', {}, 'Runs'),
-        el('dd', {}, (plan.runs ?? []).map((r) => el('div', {}, el('code', {}, r.name), ' — ', r.variant, r.control ? ' (control)' : ''))),
-      ),
-    )
-  } else if (idea.state === 'declined') {
-    planStep = step('failed', 'Plan', 'declined by the agent', markdown(idea.note ?? ''))
-  } else {
-    planStep = step('current', 'Plan', planWaiting)
-  }
-
-  let runStep
-  if (runs.length) {
-    const finished = runs.length - live.length
-    runStep = step(live.length ? 'current' : 'done', 'Runs', `${finished} of ${runs.length} finished`, runsTable(runs))
-  } else {
-    runStep = step(plan ? 'current' : 'todo', 'Runs', plan ? 'submitting…' : 'not submitted yet')
-  }
-
-  let resultStep
-  if (result) {
-    resultStep = step(
-      'done',
-      'Result',
-      'Δ Paloma macro loss vs the same-seed control (negative is better)',
-      el(
-        'div',
-        { class: 'scroll' },
-        el(
-          'table',
-          {},
-          el('thead', {}, el('tr', {}, ['Run', 'Variant', 'Paloma macro', 'Δ vs control'].map((h) => el('th', {}, h)))),
-          el(
-            'tbody',
-            {},
-            (result.rows ?? []).map((r) =>
-              el('tr', {}, el('td', {}, el('code', {}, r.name)), el('td', {}, r.variant), el('td', { class: 'num' }, loss(r.loss)), el('td', {}, r.control ? el('span', { class: 'hint' }, 'control') : delta(r.delta))),
-            ),
-          ),
-        ),
-      ),
-      el('div', { class: 'verdict', dataset: { kind: result.kind ?? 'neutral' } }, result.verdict),
-      result.summary ? markdown(result.summary) : null,
-    )
-  } else {
-    resultStep = step(live.length ? 'todo' : runs.length ? 'current' : 'todo', 'Result', runs.length && !live.length ? 'being recorded' : 'after the runs finish')
-  }
-
-  const registryStep = step(
-    idea.state === 'recorded' ? 'done' : idea.registry_id ? 'current' : 'todo',
-    'Registry',
-    idea.registry_id
-      ? idea.state === 'recorded'
-        ? 'trial recorded'
-        : 'entry created, trial pending'
-      : idea.state === 'declined'
-        ? 'no entry: declined'
-        : 'gets an id when planned',
-    idea.registry_id
-      ? idea.registry_url
-        ? link(idea.registry_url, el('code', {}, idea.registry_id))
-        : el('code', {}, idea.registry_id)
-      : null,
-  )
-
-  if (idea.state === 'declined') {
-    runStep = step('todo', 'Runs', 'none: declined')
-    resultStep = step('todo', 'Result', 'none: declined')
-  }
-
-  const statePill = el('span', { class: 'pill', dataset: idea.state === 'recorded' ? { good: 'true' } : idea.state === 'declined' ? { warn: 'true' } : {} }, idea.state)
-  return el(
-    'article',
-    { class: 'idea', id: `idea-${idea.id}` },
-    el('div', { class: 'idea-head' }, idea.registry_id ? el('code', {}, idea.registry_id) : null, el('h3', {}, label), statePill, el('span', { class: 'hint' }, 'updated ', when(idea.updated_at))),
-    el('ol', { class: 'steps' }, approved, planStep, runStep, resultStep, registryStep),
-  )
-}
+const STAGES = [
+  ['pending', 'Waiting'],
+  ['approved', 'Approved'],
+  ['planned', 'Planned'],
+  ['running', 'Running'],
+  ['recorded', 'Recorded'],
+]
 
 function renderPipeline(pipeline) {
   setChildren(
     'pipeline',
-    STAGES.map(([key, label, what]) =>
-      el(
-        'li',
-        { dataset: { hot: String(pipeline[key] > 0) } },
-        el('div', { class: 'count' }, String(pipeline[key])),
-        el('div', {}, el('div', { class: 'stage' }, label), el('div', { class: 'what' }, what)),
-      ),
+    STAGES.map(([key, label]) =>
+      el('li', { dataset: { hot: String(pipeline[key] > 0) } }, el('b', {}, String(pipeline[key])), el('span', {}, label)),
     ),
   )
 }
 
 function renderNext(next) {
-  document.getElementById('next').dataset.tone = next.tone
-  document.getElementById('next-text').textContent = next.text
+  const box = document.getElementById('next')
+  box.dataset.tone = next.tone
+  setChildren('next', el('span', { class: 'dot', 'aria-hidden': 'true' }), el('span', {}, next.text))
 }

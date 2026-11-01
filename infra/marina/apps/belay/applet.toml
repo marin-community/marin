@@ -1,9 +1,8 @@
 applet_id = "10534466-6e92-4305-a354-217d0e4f5038"
-source_paths = ["infra/marina/web"]
 
 name = "belay"
 python_entrypoint = "app:create_api"
 title = "Marin Belay"
-description = "Approve Belay experiment ideas, follow each one from plan to result, and see what the Belay agent is doing."
+description = "Marin Belay: the project page, live experiment status, and the approvers' admin view."
 build_command = "uv run --no-project python build.py"
 connect_src = []
