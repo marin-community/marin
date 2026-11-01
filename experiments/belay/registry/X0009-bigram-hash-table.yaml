@@ -4,7 +4,7 @@ name: Hashed bigram table as AttnRes source
 category: Embeddings and inputs
 summary: A hashed (prev, cur) token-pair embedding table read as an AttnRes source.
 source: agent
-status: done
+status: running
 first_batch: 1
 tags:
 - bigram
@@ -708,6 +708,17 @@ trials:
   steps: 3030
   baseline: belay-X0009-control 3.0437 (same commit, seed 0)
   step_time_change: +17%
+- id: t034
+  variant: 2M-row hashed bigram table as AttnRes source, LR x10
+  rung: speedrun
+  protocol: fixed_time
+  batch: X0009
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6561731252
+  wandb: []
+  settings:
+    attn_res_bigram_rows: '2097152'
+  commit: 8f361a1129
 events:
 - type: adopted
   batch: '51'
