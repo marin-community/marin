@@ -112,7 +112,7 @@
   "to": "aughero",
   "from": "s7n"
  },
- "caveat": "* Extrapolated ~4,000× past the largest rung's compute, so expect large error: ±0.002 in α moves loss ±0.009 at the budget. BPB points: byte-weighted for Belay Ckpt Oct 20 2026, token-weighted for Aug Hero.",
+ "caveat": "* Extrapolation of ~4,000× past the largest rung, beyond the ~300× expected for a reliable forecast: ±0.002 in α moves loss ±0.009 at the budget. BPB points: byte-weighted for Belay Ckpt Oct 20 2026, token-weighted for Aug Hero.",
  "sources": {
   "points": "W&B marin_moe summaries: eval/paloma/macro_loss, eval/paloma/macro_bpb, throughput/flops_per_example_analytic × batch × steps",
   "fit": "refit 2026-11-01 with d1024 (four rungs); reproduces the 2026-10-22 three-rung S7, Ckpt 1 and Aug Hero fits exactly",
