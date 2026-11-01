@@ -18,6 +18,7 @@ from shellbox.machine import (
     NetworkPolicy,
     UnsupportedMachineSpec,
 )
+from shellbox.process_session import finish_owned, own_cleanup
 
 _TIMED_PROBE = """\
 import os
@@ -140,8 +141,11 @@ class Task:
             for container in self.spec.containers:
                 if container.readiness is not None:
                     await wait_service_ready(self.containers[container.name], container.readiness)
-        except BaseException:
-            await asyncio.shield(self.close())
+        except BaseException as error:
+            try:
+                await finish_owned(own_cleanup(self.close()))
+            except BaseException as cleanup_error:
+                error.add_note(f"Task readiness cleanup failed ({type(cleanup_error).__name__})")
             raise
 
     async def close(self) -> None:

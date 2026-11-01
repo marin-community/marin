@@ -5,7 +5,8 @@
 
 import asyncio
 import tempfile
-from contextlib import AsyncExitStack
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.env import resolve_env_vars
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.http_service import serve_http
-from shellbox.machine import Command, Machine
+from shellbox.machine import Command, Machine, MachineTerminated
 from shellbox.process_session import acquire_owned, await_cleanup, finish_owned, own_cleanup
 from shellbox.task import Task
 
@@ -186,19 +187,39 @@ class LocalEnvironment(BaseEnvironment):
             await self._upload_environment_dir_after_start()
         except BaseException as error:
             try:
-                await finish_owned(own_cleanup(self.stop(True)))
+                await finish_owned(self._stop_task(error))
             except BaseException as cleanup_error:
                 error.add_note(f"Prepared sandbox cleanup failed ({type(cleanup_error).__name__})")
             raise
 
     async def stop(self, delete: bool) -> None:
-        if self._stopping is None:
-            self._stopping = own_cleanup(self._stop())
-        await await_cleanup(self._stopping)
+        await await_cleanup(self._stop_task())
 
-    async def _stop(self) -> None:
+    def _stop_task(self, primary: BaseException | None = None) -> asyncio.Task[None]:
+        if self._stopping is None:
+            self._stopping = own_cleanup(self._stop(primary))
+        return self._stopping
+
+    @asynccontextmanager
+    async def _operation(self) -> AsyncIterator[None]:
         try:
-            await self._relay.aclose()
+            yield
+        except (asyncio.CancelledError, TimeoutError, MachineTerminated) as interruption:
+            # Interrupted local I/O closes the container group and its HTTP
+            # helpers. Unwind them with the originating error, including startup.
+            try:
+                await finish_owned(self._stop_task(interruption))
+            except BaseException as cleanup_error:
+                interruption.add_note(f"Prepared sandbox cleanup failed ({type(cleanup_error).__name__})")
+            raise
+
+    async def _stop(self, primary: BaseException | None = None) -> None:
+        try:
+            await self._relay.__aexit__(
+                type(primary) if primary is not None else None,
+                primary,
+                primary.__traceback__ if primary is not None else None,
+            )
         finally:
             execution = self.execution
             self.execution = self.machine = None
@@ -225,20 +246,22 @@ class LocalEnvironment(BaseEnvironment):
     ) -> ExecResult:
         if self.machine is None:
             raise RuntimeError("Prepared sandbox is not running")
-        await self._sync_service_logs()
-        return await execute_shellbox_command(
-            self.machine,
-            command,
-            cwd=cwd,
-            env=self._merge_env(env) or {},
-            timeout_sec=timeout_sec,
-            user=self._command_user(user),
-        )
+        async with self._operation():
+            await self._sync_service_logs()
+            return await execute_shellbox_command(
+                self.machine,
+                command,
+                cwd=cwd,
+                env=self._merge_env(env) or {},
+                timeout_sec=timeout_sec,
+                user=self._command_user(user),
+            )
 
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:
         if self.machine is None:
             raise RuntimeError("Prepared sandbox is not running")
-        await self.machine.upload(Path(source_path), target_path)
+        async with self._operation():
+            await self.machine.upload(Path(source_path), target_path)
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
         await self.upload_file(source_dir, target_dir)
@@ -246,8 +269,9 @@ class LocalEnvironment(BaseEnvironment):
     async def _download(self, source: str, target: Path | str, *, directory: bool) -> None:
         if self.machine is None:
             raise RuntimeError("Prepared sandbox is not running")
-        await self._sync_service_logs()
-        await download_artifact(self.machine, source, str(target), directory=directory)
+        async with self._operation():
+            await self._sync_service_logs()
+            await download_artifact(self.machine, source, str(target), directory=directory)
 
     async def download_file(self, source_path: str, target_path: Path | str) -> None:
         await self._download(source_path, target_path, directory=False)

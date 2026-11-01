@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -21,8 +22,8 @@ from harbor.models.trial.config import ResourceMode
 from harbor.models.trial.paths import TrialPaths
 from shellbox.backends.local.machine import SandboxUnavailable
 from shellbox.image import ImageCache
-from shellbox.machine import Command, MachineTerminated, UnsupportedMachineSpec
-from shellbox.task import Task
+from shellbox.machine import Command, ExitReason, MachineTerminated, Result, UnsupportedMachineSpec
+from shellbox.task import ReadinessProbe, Task
 from tests.unit.environments.transport import ProcessMachine, available_port
 
 
@@ -241,3 +242,105 @@ print('ok')
     finally:
         await adapter.stop(delete=True)
     assert machine.closed
+
+
+@pytest.mark.parametrize("phase", ["exec", "readiness", "upload", "download"])
+@pytest.mark.parametrize("interruption", ["cancel", "timeout"])
+async def test_local_interrupted_operation_keeps_original_error_through_relay_cleanup(
+    tmp_path, monkeypatch, phase, interruption
+):
+    (tmp_path / "environment").mkdir()
+    monkeypatch.setattr(local, "CANDIDATE_MODEL_RELAY_PORT", available_port())
+    io_started = asyncio.Event()
+    blocked_command = Command((sys.executable, "-c", "import signal; signal.pause()"))
+
+    class ClosingProcessMachine(ProcessMachine):
+        async def run(self, command):
+            session = await self.open_process(command)
+            io_started.set()
+            try:
+                async with asyncio.timeout(command.timeout):
+                    code = await session.wait()
+            except BaseException as error:
+                # Model LocalMachine's group teardown at the machine I/O boundary.
+                await self.close()
+                if isinstance(error, TimeoutError):
+                    return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+                raise
+            finally:
+                await session.close()
+            return Result(code, b"", b"", False, False, ExitReason.EXITED)
+
+        async def upload(self, source, target):
+            if target == "/interrupted-upload":
+                await self.run(blocked_command)
+                return
+            await super().upload(source, target)
+
+        async def download(self, source, target):
+            if source == "/interrupted-download":
+                await self.run(blocked_command)
+                return
+            await super().download(source, target)
+
+    class ClosingTaskFactory(ProcessTaskFactory):
+        async def create_task(self, spec):
+            if phase == "readiness":
+                spec = replace(
+                    spec,
+                    containers=(
+                        replace(
+                            spec.primary_container,
+                            readiness=ReadinessProbe(
+                                blocked_command, timeout=1 if interruption == "timeout" else 30, interval=0.1
+                            ),
+                        ),
+                    ),
+                )
+            self.machine = ClosingProcessMachine(self.root, spec.primary_container.machine)
+            return Task({spec.primary: self.machine}, spec, self.machine.close)
+
+    adapter = local_environment(
+        tmp_path,
+        candidate_model_endpoint="https://candidate.test/v1",
+        candidate_model_name="candidate",
+    )
+    factory = ClosingTaskFactory(tmp_path / "guest")
+    adapter.factory = factory
+    if phase != "readiness":
+        # Harbor's startup phase finishes before later I/O phases use the relay.
+        await asyncio.create_task(adapter.start(force_build=False))
+        io_started.clear()
+
+    async def operate():
+        if phase == "readiness":
+            await adapter.start(force_build=False)
+        elif phase == "exec":
+            await adapter.exec(
+                "exec python3 -c 'import signal; signal.pause()'", timeout_sec=1 if interruption == "timeout" else None
+            )
+        else:
+            async with asyncio.timeout(1 if interruption == "timeout" else None):
+                if phase == "upload":
+                    await adapter.upload_file(tmp_path / "input", "/interrupted-upload")
+                else:
+                    await adapter.download_dir("/interrupted-download", tmp_path / "download")
+
+    operation = asyncio.create_task(operate())
+    await asyncio.wait_for(io_started.wait(), 5)
+    machine = factory.machine
+    if interruption == "cancel":
+        operation.cancel("original operation cancellation")
+    try:
+        with pytest.raises(asyncio.CancelledError if interruption == "cancel" else TimeoutError) as caught:
+            await operation
+        if interruption == "cancel":
+            assert caught.value.args == ("original operation cancellation",)
+        else:
+            assert operation.cancelling() == 0
+        await adapter.stop(delete=True)
+        assert machine.closed
+        assert adapter.machine is None
+        assert all(session.process.returncode is not None for session in machine.sessions)
+    finally:
+        await machine.close()

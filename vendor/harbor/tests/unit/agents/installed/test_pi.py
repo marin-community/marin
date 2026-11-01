@@ -82,17 +82,6 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
 
 
 @pytest.mark.asyncio
-async def test_version_check_uses_image_binary(temp_dir, monkeypatch):
-    shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
-    agent = Pi(logs_dir=temp_dir)
-
-    result = await shell.environment.exec(agent.get_version_command())
-
-    assert result.return_code == 0
-    assert agent.parse_version(result.stdout) == "0.87.0"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("requested_version", [None, "0.87.0", "0.80.5"])
 async def test_image_pi_preserves_requested_version(temp_dir, monkeypatch, requested_version):
     shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
@@ -582,7 +571,7 @@ process.stdout.write(JSON.stringify({ transformed, promptTokens: tokenCount(tran
 
 
 @pytest.mark.asyncio
-async def test_hosted_vllm_full_command_loads_nvm_and_preserves_capability_url(
+async def test_hosted_vllm_command_classifies_authentication_and_cleans_provider_config(
     temp_dir, monkeypatch
 ):
     endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"

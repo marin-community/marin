@@ -304,7 +304,8 @@ Resumed runs receive a fresh model capability from Marin rather than reusing one
 
 Both relays authorize only `POST /v1/chat/completions`, `POST /v1/responses`, and
 `POST /tokenize`. They fix the upstream model, reject redirects, and bound request
-and response bodies. The Responses route supports non-streaming text input with
+and response bodies. Upstream authentication and context-limit errors retain sanitized SDK
+error codes; provider error messages are never forwarded. The Responses route supports non-streaming text input with
 an output-token limit and reasoning options; tools, stored responses, and stateful
 continuations are unsupported.
 The tokenization route uses the configured upstream's server root. For installed
@@ -373,7 +374,8 @@ uv run --isolated --project vendor/harbor --frozen --extra runtime \
 ```
 
 Model and judge settings follow the host bindings described above. A command timeout or
-cancellation closes the entire local machine or group. Local execution shares the host kernel;
+cancellation closes the entire local machine or group. Cleanup preserves the originating
+interruption during startup, commands and file transfers. Local execution shares the host kernel;
 use it for trusted tasks on isolated workers. Iris remains the default production boundary.
 
 The local backend uses the same Docker/OCI image contents; it unpacks the layers

@@ -179,8 +179,7 @@ async def serve_http(
             # request is active. Retrieve the actual failure after cleanup.
             failed = True
             if not owner.cancelling():
-                interrupted = True
-                owner.cancel()
+                interrupted = owner.cancel()
 
     try:
         frames = _Frames(session)
@@ -213,11 +212,12 @@ async def serve_http(
                 error.add_note(f"HTTP service cleanup failed ({type(cleanup_error).__name__})")
             if primary is None:
                 raise
+        finally:
+            if interrupted:
+                owner.uncancel()
         if (
             failed
             and pump is not None
             and (primary is None or (interrupted and isinstance(primary, asyncio.CancelledError)))
         ):
-            if interrupted:
-                owner.uncancel()
             pump.result()
