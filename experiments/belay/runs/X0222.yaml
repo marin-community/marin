@@ -1,0 +1,13 @@
+experiment: X0222
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: 'causal MoD: 80% of tokens routed at top-10, rest shared'
+    flags:
+    - --model-set
+    - mod_routed_frac=0.8
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
