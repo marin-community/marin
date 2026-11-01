@@ -267,6 +267,36 @@ class DaytonaMachine:
         finally:
             await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"))
 
+    async def _stop_command(self, pidfile: str, completed_path: str) -> None:
+        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            stopped = await self.sandbox.process.exec(
+                _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path)))
+            )
+            if stopped.exit_code:
+                raise RuntimeError(stopped.result)
+
+    async def _remove_command_files(self, prefix: str) -> None:
+        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"))
+            if removed.exit_code:
+                raise RuntimeError("Cannot remove Daytona command files")
+
+    async def _cleanup_cancelled_command(
+        self, prefix: str, pidfile: str, completed_path: str, started: bool, cancellation: asyncio.CancelledError
+    ) -> None:
+        try:
+            if started:
+                await finish_owned(own_cleanup(self._stop_command(pidfile, completed_path)))
+                await finish_owned(own_cleanup(self._remove_command_files(prefix)))
+            else:
+                await finish_owned(own_cleanup(self.close()))
+        except BaseException as cleanup_error:
+            cancellation.add_note(f"Daytona command cancellation cleanup failed ({type(cleanup_error).__name__})")
+            try:
+                await finish_owned(own_cleanup(self.close()))
+            except BaseException as close_error:
+                cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
@@ -342,31 +372,26 @@ class DaytonaMachine:
             if not started:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             try:
-                async with asyncio.timeout(INTERRUPT_TIMEOUT):
-                    stopped = await self.sandbox.process.exec(
-                        _control_command(
-                            shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path))
-                        )
-                    )
-                    if stopped.exit_code:
-                        raise RuntimeError(stopped.result)
+                await self._stop_command(pidfile, completed_path)
+            except asyncio.CancelledError as cancellation:
+                primary_error = cancellation
+                await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
+                raise
             except Exception as error:
                 await self.close()
                 raise RuntimeError("Cannot stop the Daytona command process group") from error
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-        except asyncio.CancelledError:
-            await self.close()
+        except asyncio.CancelledError as cancellation:
+            primary_error = cancellation
+            await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
             raise
         except BaseException as error:
             primary_error = error
             raise
         finally:
-            if not self._closed:
+            if not self._closed and not isinstance(primary_error, asyncio.CancelledError):
                 try:
-                    async with asyncio.timeout(INTERRUPT_TIMEOUT):
-                        removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"))
-                        if removed.exit_code:
-                            raise RuntimeError("Cannot remove Daytona command files")
+                    await self._remove_command_files(prefix)
                 except asyncio.CancelledError:
                     await self.close()
                     raise
