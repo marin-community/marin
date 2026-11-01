@@ -13,7 +13,7 @@ SHARED = ROOT.parents[1] / "web"
 if DIST.exists():
     shutil.rmtree(DIST)
 DIST.mkdir()
-for name in ("index.html", "app.js", "style.css"):
+for name in ("index.html", "boot.js", "common.js", "admin.js", "public.js", "style.css"):
     shutil.copyfile(ROOT / "web" / name, DIST / name)
 for name in ("tokens.css", "parts.css"):
     shutil.copyfile(SHARED / name, DIST / name)

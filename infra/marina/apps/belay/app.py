@@ -8,19 +8,25 @@ the dispatcher claims every undispatched event for one agent session when dispat
 The session plans, submits runs and reports back through the agent endpoints, which feed the page's idea timelines
 and activity feed. The watcher reports Belay's Iris runs, the intake issue's comments and storage use every tick.
 
-The kernel serves these under ``/belay/api``. Browser endpoints: ``GET /state``, ``POST /ideas`` (propose),
-``POST /ideas/{id}/approve|dismiss``, ``POST /settings``. Watcher and agent endpoints: ``POST /sync/intake``,
-``POST /sync/runs``, ``POST /tick``, ``POST /dispatch/claim``, ``POST /sessions/{id}/finish``,
-``POST /ideas/{id}/report``, ``POST /activity``. In production the agent endpoints admit only the watcher's and the
-session's identities.
+The kernel serves three groups of routes under ``/belay/api``:
+
+- ``/public/*``: read-only GETs with no caller check and no internal detail (no transcripts, paths, job ids, node or
+  storage figures, people's Marina identities). The public page and ``demo export-public`` read only these, so the
+  same page can be served from Marina's GET/HEAD-only public applet host or from GitHub Pages.
+- ``/admin/*``: the maintainers' view and controls. The caller must be a signed-in Marina user listed in the
+  ``approvers`` setting; anyone else gets 403.
+- ``/agent/*``: the watcher's and sessions' writes. They require the service token in the ``X-Belay-Token`` header,
+  checked against the ``service_token_sha256`` setting, so a browser session alone cannot call them.
 """
 
 import datetime
+import hashlib
+import hmac
 import json
 from enum import StrEnum
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from rigging.server_auth import get_verified_identity
@@ -33,7 +39,30 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "node_cap": 8,
     "storage_limit_bytes": 1_000_000_000_000,
     "watch_interval": 120,
+    # Who may use the admin view: Marina identities. Seeded from the intake bot's BELAY_APPROVER_IDS
+    # (ops-belay-intake.yaml); an entry without an identity cannot sign in until a maintainer maps it.
+    "approvers": [
+        {"github": "ClassicLarry", "github_id": 42926649, "identity": None},
+        {"github": "dlwh", "github_id": 9633, "identity": None},
+        {"github": "Helw150", "github_id": 9847335, "identity": None},
+        {"github": "hammer", "github_id": 15233, "identity": None},
+        {"github": "rjpower", "github_id": 607207, "identity": None},
+        {"github": "ravwojdyla", "github_id": 1419010, "identity": None},
+        {"github": "karansag", "github_id": 1545121, "identity": None},
+        {"github": "yonromai", "github_id": 1596570, "identity": None},
+        {"github": "atqamar", "github_id": 1707358, "identity": None},
+        {"github": "muchanem", "github_id": 8000756, "identity": None},
+    ],
+    # Local previews only: the identity an unauthenticated loopback caller acts as. Never set in production.
+    "demo_approver": None,
+    # SHA-256 of the watcher's and sessions' shared token; unset means every agent call is refused.
+    "service_token_sha256": None,
 }
+# Settings that never leave the server, even to approvers.
+SECRET_SETTINGS = frozenset({"service_token_sha256"})
+ANONYMOUS = "anonymous"
+TOKEN_HEADER = "X-Belay-Token"
+PUBLIC_EXCERPT = 600
 TERMINAL_RUN_STATES = frozenset({"succeeded", "failed", "killed", "worker_failed", "unschedulable"})
 # A session that has not reported back within this long is presumed lost, so the queue is not blocked forever.
 SESSION_TIMEOUT = datetime.timedelta(hours=3)
@@ -159,10 +188,20 @@ class Proposal(BaseModel):
     body: str
 
 
+class Approver(BaseModel):
+    github: str
+    github_id: int | None = None
+    identity: str | None = None
+    """The Marina identity (IAP email) this approver signs in with."""
+
+
 class SettingsUpdate(BaseModel):
+    """The settings an approver may change from the admin view."""
+
     dispatch_enabled: bool | None = None
     github_posting: bool | None = None
     node_cap: int | None = None
+    approvers: list[Approver] | None = None
 
 
 class Claim(BaseModel):
@@ -208,14 +247,23 @@ def migrate(connection: Connection) -> None:
     connection.execute(text("INSERT INTO watcher (id) VALUES (1) ON CONFLICT (id) DO NOTHING"))
 
 
-LOCAL_CALLER = "maintainer (local preview)"
-
-
-def _caller() -> str:
+def _signed_in_user(settings: dict[str, Any]) -> str | None:
+    """The caller's Marina identity, or the configured demo approver for an unauthenticated local preview."""
     identity = get_verified_identity()
-    if identity is None or identity.user_id == "anonymous":
-        return LOCAL_CALLER
-    return identity.user_id
+    if identity is not None and identity.user_id != ANONYMOUS:
+        return identity.user_id
+    return settings["demo_approver"]
+
+
+def _approver_identities(settings: dict[str, Any]) -> set[str]:
+    return {a["identity"] for a in settings["approvers"] if a.get("identity")}
+
+
+def _token_ok(settings: dict[str, Any], token: str | None) -> bool:
+    expected = settings["service_token_sha256"]
+    if not expected or not token:
+        return False
+    return hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), expected)
 
 
 def _now() -> datetime.datetime:
@@ -308,11 +356,115 @@ def _next_step(
     return {"tone": "idle", "text": "Nothing is queued. Propose an idea or wait for a new intake suggestion."}
 
 
+def _pipeline(ideas: list[dict[str, Any]]) -> dict[str, int]:
+    stages = (IdeaState.PENDING, IdeaState.APPROVED, IdeaState.PLANNED, IdeaState.RUNNING, IdeaState.RECORDED)
+    return {stage.value: sum(1 for i in ideas if i["state"] == stage) for stage in stages}
+
+
+def _public_next(active: bool, queued: int, live: list[dict], pending: int) -> dict[str, str]:
+    """The public form of the "what happens next" line: no session ids, people or controls."""
+    if active:
+        return {"tone": "busy", "text": "The Belay agent is working now: planning approved ideas or recording results."}
+    if queued:
+        return {"tone": "busy", "text": "Approved work is queued for the Belay agent."}
+    if live:
+        names = ", ".join(r["name"] for r in live)
+        steps = [r for r in live if r["step"] and r["total_steps"]]
+        progress = ""
+        if steps:
+            r = min(steps, key=lambda r: r["step"] / r["total_steps"])
+            progress = f" (slowest at step {r['step']:,} of {r['total_steps']:,})"
+        return {"tone": "waiting", "text": f"Training {names}{progress}. Results are recorded when they finish."}
+    if pending:
+        waiting = "1 suggestion is" if pending == 1 else f"{pending} suggestions are"
+        return {"tone": "idle", "text": f"{waiting} waiting for a maintainer's review."}
+    return {
+        "tone": "idle",
+        "text": "Nothing is running. New suggestions on the intake issue are reviewed by maintainers.",
+    }
+
+
+def _public_idea(idea: dict[str, Any]) -> dict[str, Any]:
+    plan = idea["plan"] or {}
+    return {
+        "id": idea["id"],
+        "title": idea["title"] or idea["body"].strip().splitlines()[0][:120],
+        "state": idea["state"],
+        "origin": idea["origin"],
+        # Intake authors posted publicly on GitHub; maintainers' Marina identities are not published.
+        "author": idea["author"] if idea["origin"] == "intake" else None,
+        "url": idea["url"],
+        "body": idea["body"][:PUBLIC_EXCERPT],
+        "posted_at": _iso(idea["posted_at"]),
+        "approved_at": _iso(idea["decided_at"]) if idea["state"] not in ("pending", "dismissed") else None,
+        "registry_id": idea["registry_id"],
+        "registry_url": idea["registry_url"],
+        "plan": (
+            {k: plan.get(k) for k in ("summary", "protocol", "cost", "commit", "spec_url")}
+            | {"runs": [{k: r.get(k) for k in ("name", "variant", "control")} for r in plan.get("runs", [])]}
+            if idea["plan"]
+            else None
+        ),
+        "result": idea["result"],
+        "note": idea["note"] if idea["state"] == "declined" else None,
+        "updated_at": _iso(idea["updated_at"]),
+    }
+
+
+def _public_run(run: dict[str, Any]) -> dict[str, Any]:
+    keys = ("name", "registry_id", "state", "step", "total_steps", "loss", "wandb_url", "submitted_at", "finished_at")
+    return {k: _iso(run[k]) for k in keys}
+
+
 def create_api(services: Any) -> FastAPI:
     api = FastAPI()
     engine: Engine = services.engine()
 
-    @api.get("/state")
+    def approver() -> str:
+        with engine.connect() as conn:
+            settings = _settings(conn)
+        user = _signed_in_user(settings)
+        if user is None:
+            raise HTTPException(401, "Sign in to Marina to use the Belay admin view.")
+        if user not in _approver_identities(settings):
+            raise HTTPException(403, f"{user} is not a Belay approver. Ask a maintainer to add you in settings.")
+        return user
+
+    def service(x_belay_token: str | None = Header(default=None)) -> None:
+        with engine.connect() as conn:
+            settings = _settings(conn)
+        if not _token_ok(settings, x_belay_token):
+            raise HTTPException(401, f"Belay agent endpoints need the service token in {TOKEN_HEADER}.")
+
+    public = APIRouter(prefix="/public")
+    admin = APIRouter(prefix="/admin", dependencies=[Depends(approver)])
+    agent = APIRouter(prefix="/agent", dependencies=[Depends(service)])
+
+    @public.get("/state")
+    def public_state() -> dict[str, Any]:
+        """Read-only Belay status for anyone: pipeline, suggestions, idea timelines and runs."""
+        with engine.connect() as conn:
+            ideas = _rows(
+                conn, "SELECT * FROM ideas WHERE state NOT IN ('upstream', 'dismissed') ORDER BY posted_at DESC"
+            )
+            runs = _rows(conn, "SELECT * FROM runs ORDER BY submitted_at DESC NULLS LAST")
+            active = bool(_rows(conn, "SELECT id FROM sessions WHERE state = 'running'"))
+            queued = len(_rows(conn, "SELECT id FROM events WHERE session_id IS NULL"))
+        live = [r for r in runs if r["state"] not in TERMINAL_RUN_STATES]
+        pending = sum(1 for i in ideas if i["state"] == IdeaState.PENDING)
+        return {
+            "now": _now().isoformat(),
+            "pipeline": _pipeline(ideas),
+            "next": _public_next(active, queued, live, pending),
+            "ideas": [_public_idea(i) for i in ideas],
+            "runs": [_public_run(r) for r in runs],
+        }
+
+    @admin.get("/me")
+    def me(user: str = Depends(approver)) -> dict[str, str]:
+        return {"user": user}
+
+    @admin.get("/state")
     def state() -> dict[str, Any]:
         with engine.begin() as conn:
             _expire_sessions(conn)
@@ -335,20 +487,10 @@ def create_api(services: Any) -> FastAPI:
             active = {**active, "events": "; ".join(e["summary"] for e in active["events"]) or "its queued events"}
         live = [r for r in runs if r["state"] not in TERMINAL_RUN_STATES]
         pending = [i for i in ideas if i["state"] == IdeaState.PENDING]
-        pipeline = {
-            stage.value: sum(1 for i in ideas if i["state"] == stage)
-            for stage in (
-                IdeaState.PENDING,
-                IdeaState.APPROVED,
-                IdeaState.PLANNED,
-                IdeaState.RUNNING,
-                IdeaState.RECORDED,
-            )
-        }
         return {
             "now": _now().isoformat(),
-            "settings": settings,
-            "pipeline": pipeline,
+            "settings": {k: v for k, v in settings.items() if k not in SECRET_SETTINGS},
+            "pipeline": _pipeline(ideas),
             "next": _next_step(settings, active, queued, live, len(pending)),
             "ideas": _plain(ideas),
             "runs": _plain(runs),
@@ -360,9 +502,8 @@ def create_api(services: Any) -> FastAPI:
             "nodes_requested": sum(r["nodes"] for r in live),
         }
 
-    @api.post("/ideas")
-    def propose(proposal: Proposal) -> dict[str, int]:
-        caller = _caller()
+    @admin.post("/ideas")
+    def propose(proposal: Proposal, caller: str = Depends(approver)) -> dict[str, int]:
         with engine.begin() as conn:
             idea_id = conn.execute(
                 text(
@@ -374,8 +515,7 @@ def create_api(services: Any) -> FastAPI:
             _activity(conn, ActivityPost(kind="proposal", idea_id=idea_id, title=f"{caller} proposed: {proposal.title}"))
         return {"id": idea_id}
 
-    def _decide(idea_id: int, approve: bool) -> dict[str, str]:
-        caller = _caller()
+    def _decide(idea_id: int, approve: bool, caller: str) -> dict[str, str]:
         with engine.begin() as conn:
             idea = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
             if not idea:
@@ -412,17 +552,16 @@ def create_api(services: Any) -> FastAPI:
                 )
         return {"state": new_state.value}
 
-    @api.post("/ideas/{idea_id}/approve")
-    def approve(idea_id: int) -> dict[str, str]:
-        return _decide(idea_id, approve=True)
+    @admin.post("/ideas/{idea_id}/approve")
+    def approve(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
+        return _decide(idea_id, approve=True, caller=caller)
 
-    @api.post("/ideas/{idea_id}/dismiss")
-    def dismiss(idea_id: int) -> dict[str, str]:
-        return _decide(idea_id, approve=False)
+    @admin.post("/ideas/{idea_id}/dismiss")
+    def dismiss(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
+        return _decide(idea_id, approve=False, caller=caller)
 
-    @api.post("/settings")
-    def update_settings(update: SettingsUpdate) -> dict[str, Any]:
-        caller = _caller()
+    @admin.post("/settings")
+    def update_settings(update: SettingsUpdate, caller: str = Depends(approver)) -> dict[str, Any]:
         with engine.begin() as conn:
             for key, value in update.model_dump(exclude_none=True).items():
                 conn.execute(
@@ -436,9 +575,9 @@ def create_api(services: Any) -> FastAPI:
                 if key == "dispatch_enabled":
                     word = "on" if value else "off"
                     _activity(conn, ActivityPost(kind="control", title=f"{caller} turned dispatch {word}"))
-            return _settings(conn)
+            return {k: v for k, v in _settings(conn).items() if k not in SECRET_SETTINGS}
 
-    @api.get("/sessions/{session_id}/transcript", response_class=PlainTextResponse)
+    @admin.get("/sessions/{session_id}/transcript", response_class=PlainTextResponse)
     def transcript(session_id: str) -> str:
         with engine.connect() as conn:
             rows = _rows(conn, "SELECT transcript FROM sessions WHERE id = :id", id=session_id)
@@ -448,7 +587,7 @@ def create_api(services: Any) -> FastAPI:
 
     # Watcher and agent endpoints.
 
-    @api.post("/sync/intake")
+    @agent.post("/sync/intake")
     def sync_intake(sync: IntakeSync) -> dict[str, int]:
         added = 0
         with engine.begin() as conn:
@@ -474,7 +613,7 @@ def create_api(services: Any) -> FastAPI:
                     _activity(conn, ActivityPost(kind="intake", title=f"New intake suggestion from {c.author}"))
         return {"new_pending": added}
 
-    @api.post("/sync/runs")
+    @agent.post("/sync/runs")
     def sync_runs(sync: RunsSync) -> dict[str, int]:
         finished = 0
         with engine.begin() as conn:
@@ -506,7 +645,7 @@ def create_api(services: Any) -> FastAPI:
                     )
         return {"finished": finished}
 
-    @api.post("/tick")
+    @agent.post("/tick")
     def tick(update: Tick) -> dict[str, int]:
         """The watcher's heartbeat: node use, storage, and re-offering approved work no session has taken."""
         offered = 0
@@ -547,7 +686,7 @@ def create_api(services: Any) -> FastAPI:
                     )
         return {"work_pending": offered}
 
-    @api.post("/dispatch/claim")
+    @agent.post("/dispatch/claim")
     def claim(request: Claim) -> dict[str, Any]:
         """Give every undispatched event to a new session, when dispatch is on and no session is active."""
         with engine.begin() as conn:
@@ -572,7 +711,7 @@ def create_api(services: Any) -> FastAPI:
             )
         return {"launch": True, "session_id": request.session_id, "events": _plain(events)}
 
-    @api.post("/sessions/{session_id}/finish")
+    @agent.post("/sessions/{session_id}/finish")
     def finish(session_id: str, report: SessionFinish) -> dict[str, str]:
         with engine.begin() as conn:
             updated = conn.execute(
@@ -604,7 +743,7 @@ def create_api(services: Any) -> FastAPI:
             )
         return {"state": report.state.value}
 
-    @api.post("/ideas/{idea_id}/report")
+    @agent.post("/ideas/{idea_id}/report")
     def report(idea_id: int, update: IdeaReport) -> dict[str, str]:
         fields = update.model_dump(exclude_none=True)
         if not fields:
@@ -621,9 +760,17 @@ def create_api(services: Any) -> FastAPI:
             raise HTTPException(404, f"no idea {idea_id}")
         return {"updated": ", ".join(fields)}
 
-    @api.post("/activity")
+    @agent.post("/activity")
     def post_activity(post: ActivityPost) -> dict[str, int]:
         with engine.begin() as conn:
             return {"id": _activity(conn, post)}
+
+    @agent.get("/state")
+    def agent_state() -> dict[str, Any]:
+        """The full state, for sessions."""
+        return state()
+
+    for router in (public, admin, agent):
+        api.include_router(router)
 
     return api
