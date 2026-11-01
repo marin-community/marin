@@ -292,9 +292,9 @@ events:
   note: 'Not in the Belay Ckpt Oct 20 2026 config: adam_ademamix_alpha=0.0 (Ckpt 1: 5.0)'
   checkpoint: belay-ckpt-2026-10-20
 potential:
-  score: 6
-  rationale: 'prior (Ckpt 1); retest pending: AdEMAMix off costs +0.0048/+0.0063 at d768 (small ladder win); d512 -0.003 to
-    -0.005 noise; equal time, MFU not run -> 6'
+  score: 4
+  rationale: -0.0043 at equal time on current recipe (noise, step time 0%); sign consistent with Ckpt 1 d512/d768 trials;
+    ladder and MFU not run on current recipe -> 4
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: 910ad29fc7fa
+  inputs_digest: 6b745c3fbdcd
