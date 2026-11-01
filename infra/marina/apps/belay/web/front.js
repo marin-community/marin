@@ -457,7 +457,7 @@ async function front() {
     fetch(STATIC ? 'speedrun.json' : `${BELAY_BASE}speedrun.json`).then((r) => r.json()),
     fetch(STATIC ? 'tracks.json' : `${BELAY_BASE}tracks.json`).then((r) => r.json()),
   ])
-  startFront(results, scaling, speedrun, trackTable)
+  startFront(results, scaling, speedrun, trackTable.tracks)
   if (status) {
     state = status
     renderLatest(status)

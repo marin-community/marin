@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from experiments.belay.__main__ import launch, prior_trials_hold, reproduce, track_rows, write_spec
+from experiments.belay.__main__ import launch, prior_trials_hold, reproduce, tracks_page_data, write_spec
 from experiments.belay.analysis import Header, series_from_rows, write_report
 from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
@@ -216,7 +216,7 @@ def test_overall_verdict() -> None:
 
 def test_page_tracks_json_is_generated_from_config() -> None:
     page = Path(__file__).parents[2] / "infra/marina/apps/belay/web/tracks.json"
-    assert json.loads(page.read_text()) == track_rows(), "regenerate: python -m experiments.belay tracks --json"
+    assert json.loads(page.read_text()) == tracks_page_data(), "regenerate: python -m experiments.belay tracks --json"
 
 
 def test_comment_edited_after_approval_refused() -> None:

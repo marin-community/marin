@@ -907,21 +907,37 @@ def write_analysis(
     return [report, report.with_name(f"{trial}_loss.png"), report.with_name(f"{trial}_delta.png")]
 
 
-def score(registry_id: str, value: int, rationale: str, model: str, *, dry_run: bool) -> None:
-    """Record the session's 0-10 potential score for the idea (RUNBOOK section 2d) on its registry entry."""
+def scored_entry(registry_id: str, value: int, rationale: str, model: str, *, dry_run: bool) -> Path:
     if not 0 <= value <= 10:
-        raise SystemExit("refusing: --score must be 0 to 10")
+        raise SystemExit(f"refusing: {registry_id}: the score must be 0 to 10")
     if not rationale or len(rationale) > MAX_RATIONALE:
-        raise SystemExit(f"refusing: --rationale must be one line of at most {MAX_RATIONALE} characters")
-    require_registry_checkout()
+        raise SystemExit(
+            f"refusing: {registry_id}: the rationale must be one line of at most {MAX_RATIONALE} characters"
+        )
     path = entry_path(registry_id)
     entry = yaml.safe_load(path.read_text())
     entry["potential"] = potential_of(entry, value, rationale, model)
     print(f"{registry_id} potential: {entry['potential']}")
     if not dry_run:
         path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
+    return path
+
+
+def score(registry_id: str, value: int, rationale: str, model: str, *, dry_run: bool) -> None:
+    """Record the session's 0-10 potential score for the idea (RUNBOOK section 2d) on its registry entry."""
+    require_registry_checkout()
+    path = scored_entry(registry_id, value, rationale, model, dry_run=dry_run)
     commit_and_push([path], f"Belay registry: {registry_id} potential {value}/10", dry_run=dry_run)
     say_next("stop")
+
+
+def score_batch(batch: Path, model: str, *, dry_run: bool) -> None:
+    """Score many ideas from a JSON list of ``{id, score, rationale}`` in one registry commit (a maintainer's
+    rescore; sessions score one idea at a time)."""
+    require_registry_checkout()
+    items = json.loads(batch.read_text())
+    paths = [scored_entry(i["id"], int(i["score"]), i["rationale"], model, dry_run=dry_run) for i in items]
+    commit_and_push(paths, f"Belay registry: potential scores for {len(paths)} ideas ({model})", dry_run=dry_run)
 
 
 # ---------- 3. run failed ----------
@@ -1036,10 +1052,15 @@ def track_rows() -> list[dict[str, object]]:
     return rows
 
 
+def tracks_page_data() -> dict[str, object]:
+    """``web/tracks.json``: every Track, and the live recipe's tag (the Status page highlights its ideas)."""
+    return {"recipe_tag": CONFIG.recipe_tag, "recipe_name": CONFIG.recipe_name, "tracks": track_rows()}
+
+
 def tracks(as_json: bool) -> None:
     rows = track_rows()
     if as_json:
-        print(json.dumps(rows, indent=1, ensure_ascii=False))
+        print(json.dumps(tracks_page_data(), indent=1, ensure_ascii=False))
         return
     for row in rows:
         print(f"{row['track']}: {row['baseline']}")
@@ -1087,9 +1108,10 @@ def main(argv: list[str]) -> None:
     command("run-finished").add_argument("registry_id")
     command("analyze").add_argument("registry_id")
     p = command("score")
-    p.add_argument("registry_id")
-    p.add_argument("--score", type=int, required=True, dest="value")
-    p.add_argument("--rationale", required=True)
+    p.add_argument("registry_id", nargs="?")
+    p.add_argument("--score", type=int, dest="value")
+    p.add_argument("--rationale")
+    p.add_argument("--batch", type=Path, help="JSON list of {id, score, rationale}, committed together")
     p.add_argument("--model", required=True, help="the model that scored it, e.g. claude-opus-5-5")
     p = command("run-failed")
     p.add_argument("registry_id")
@@ -1127,7 +1149,11 @@ def main(argv: list[str]) -> None:
         code_change_finish(args.registry_id, settings, dry_run=args.dry_run)
     elif args.command == "run-finished":
         run_finished(args.registry_id, dry_run=args.dry_run)
+    elif args.command == "score" and args.batch:
+        score_batch(args.batch, args.model, dry_run=args.dry_run)
     elif args.command == "score":
+        if args.registry_id is None or args.value is None or args.rationale is None:
+            raise SystemExit("refusing: give X####, --score and --rationale (or --batch FILE)")
         score(args.registry_id, args.value, args.rationale, args.model, dry_run=args.dry_run)
     elif args.command == "analyze":
         analyze(args.registry_id, dry_run=args.dry_run)

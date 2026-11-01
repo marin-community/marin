@@ -3,7 +3,8 @@
 // data the static export publishes). Loaded after common.js.
 
 let registry = null // the registry's results JSON (ideas with trials, events, potential)
-let trackTable = [] // tracks.json, generated from config.TRACKS
+let trackTable = [] // tracks.json's tracks, generated from config.TRACKS
+let recipeTag = '' // the live recipe's checkpoint tag (config.recipe_tag), from tracks.json
 const checklistView = { sort: 'potential', query: '' }
 const GATE = {
   win: { icon: '✓', cls: 'won' },
@@ -205,15 +206,21 @@ function scalingGate(idea) {
   return { kind, text: `${parts.join(' · ')} · projection pending`, title: parts.join('\n') }
 }
 
+// The idea's standing in the live recipe: its latest adopted/removed event for the recipe's checkpoint tag.
+function recipeEvent(idea) {
+  return (idea.events ?? []).filter((e) => e.checkpoint === recipeTag && ['adopted', 'removed'].includes(e.type)).at(-1)
+}
+
+function inLiveRecipe(idea) {
+  return recipeEvent(idea)?.type === 'adopted'
+}
+
 function recipeCell(idea) {
-  const adopted = (idea.events ?? []).filter((e) => e.type === 'adopted').at(-1)
-  if (idea.status === 'adopted') {
-    const tag = [adopted?.as_adopted, adopted?.candidate, adopted?.note].find((v) => (v ?? '').includes('belay-ckpt-'))
-    const label = tag ?? (adopted ? `batch ${adopted.batch}` : 'current recipe')
-    return el('span', { class: 'gate-chip won', title: adopted?.note ?? '' }, el('b', {}, '✓'), ` ${label}${adopted ? ` · ${adopted.date}` : ''}`)
-  }
-  if (idea.status === 'removed') return el('span', { class: 'gate-chip noise' }, el('b', {}, '↺'), ' removed')
-  return el('span', { class: 'gate-chip tested' }, el('b', {}, '–'), ' no')
+  const event = recipeEvent(idea)
+  const day = event ? new Date(`${event.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+  if (event?.type === 'adopted') return el('span', { class: 'gate-chip won', title: event.note ?? '' }, el('b', {}, '✓'), ` ${recipeTag}`)
+  if (event?.type === 'removed') return el('span', { class: 'gate-chip noise', title: event.note ?? '' }, el('b', {}, '↺'), ` removed at ${day}`)
+  return el('span', { class: 'gate-chip tested' }, el('b', {}, '–'))
 }
 
 function gateChip(g) {
@@ -236,7 +243,7 @@ function checklistRows() {
       comment,
       date: approvalDate(idea, pageIdea),
       author: idea.intake?.author ?? null,
-      accepted: idea.status === 'adopted',
+      accepted: inLiveRecipe(idea),
       score: idea.potential?.score ?? null,
       speedrun: speedrunGate(idea, live.has(idea.xid)),
       hero: heroGate(idea),
@@ -270,7 +277,7 @@ function renderChecklist() {
     rows.map((r) =>
       el(
         'div',
-        { class: 'ck-row', role: 'row' },
+        { class: `ck-row${r.accepted ? ' live' : ''}`, role: 'row', title: r.accepted ? `In the live recipe, ${recipeTag}` : '' },
         el(
           'span',
           { class: 'ck-idea', 'data-label': 'Idea' },
@@ -345,6 +352,8 @@ async function refresh() {
       loadJson('results'),
       fetch(tracksUrl).then((r) => r.json()),
     ])
+    recipeTag = trackTable.recipe_tag
+    trackTable = trackTable.tracks
     render()
   } catch (error) {
     renderNext({ tone: 'blocked', text: `Status unavailable (${error.message})` })

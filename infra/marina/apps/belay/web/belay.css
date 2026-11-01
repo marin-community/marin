@@ -6,7 +6,7 @@ img { max-width: 100%; }
 :root {
   --bg: #F1F3EF; --surface: #FFFFFF; --surface-2: #E8ECE7; --ink: #15212B; --slate: #5E6B73; --faint: #8C979D;
   --line: #D6DCD8; --rope: #D9345F; --teal: #1F7A6C; --teal-soft: #D3EAE4; --amber: #B7790F; --base: #9AA4A9;
-  --worse: #C2413A; --worse-soft: #F5D8D5; --neutral-cell: #E3E7E4;
+  --worse: #C2413A; --worse-soft: #F5D8D5; --neutral-cell: #E3E7E4; --live-row: #E7F4EF;
   --shadow: 0 1px 2px rgba(21,33,43,.06), 0 6px 24px rgba(21,33,43,.06);
   --display: "Archivo", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
   --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
@@ -17,14 +17,14 @@ img { max-width: 100%; }
   :root:not([data-theme="light"]) {
     --bg: #0F161C; --surface: #17212A; --surface-2: #1E2A34; --ink: #E7ECE8; --slate: #A2AFB6; --faint: #74838B;
     --line: #2B3944; --rope: #FF6B8E; --teal: #4FC1AC; --teal-soft: #173530; --amber: #F0B44A; --base: #66747C;
-    --worse: #FF7A70; --worse-soft: #3D1F1D; --neutral-cell: #26333D; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 24px rgba(0,0,0,.25);
+    --worse: #FF7A70; --worse-soft: #3D1F1D; --neutral-cell: #26333D; --live-row: #15302A; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 24px rgba(0,0,0,.25);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0F161C; --surface: #17212A; --surface-2: #1E2A34; --ink: #E7ECE8; --slate: #A2AFB6; --faint: #74838B;
   --line: #2B3944; --rope: #FF6B8E; --teal: #4FC1AC; --teal-soft: #173530; --amber: #F0B44A; --base: #66747C;
-  --worse: #FF7A70; --worse-soft: #3D1F1D; --neutral-cell: #26333D; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 24px rgba(0,0,0,.25);
+  --worse: #FF7A70; --worse-soft: #3D1F1D; --neutral-cell: #26333D; --live-row: #15302A; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 24px rgba(0,0,0,.25);
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -567,3 +567,4 @@ button.line:hover { background: var(--surface-2); }
   #ck-filter { min-width: 0; width: 100%; }
 }
 .ck-row > span[data-label='Author'] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-row.live { background: var(--live-row); box-shadow: inset 3px 0 0 var(--teal); }
