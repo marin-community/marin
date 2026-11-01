@@ -11,6 +11,8 @@ from rolloutengine.models import LENGTH_STOP_REASON, ModelTurn, Prompt
 
 
 TRIAL_HEADER = "x-ot-trial-id"
+EXECUTED_TEACHER_HEADER = "x-harbor-pi-executed-teacher"
+PI_EXECUTION_MODEL_OPTION = "__pi_execution_model__"
 TRANSPORT_FIELDS = frozenset(
     {"model", "messages", "stream", "stream_options", "n", "user", "return_token_ids", "logprobs", "top_logprobs"}
 )
@@ -41,33 +43,80 @@ class AgentInferenceBackend:
         max_model_len: int,
         tokenize: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
         decoder: TokenDecoder,
+        *,
+        model_revision: str | None = None,
+        source_kind: str | None = None,
+        model_endpoint: str | None = None,
+        teacher_model_name: str | None = None,
+        teacher_decoder: TokenDecoder | None = None,
     ):
         self.model_name = model_name
+        self.model_revision = model_revision
+        self.source_kind = source_kind
+        self.model_endpoint = model_endpoint
         self.max_model_len = max_model_len
         self.tokenize = tokenize
         self.decoder = decoder
+        if (teacher_model_name is None) != (teacher_decoder is None) or teacher_model_name == model_name:
+            raise ValueError("Independent Pi teacher routing requires a distinct model and decoder")
+        self.teacher_model_name = teacher_model_name
+        self.teacher_decoder = teacher_decoder
         self.sessions: dict[str, Callable[[Prompt], Awaitable[ModelTurn]]] = {}
+        self.teacher_sessions: dict[str, Callable[[Prompt], Awaitable[ModelTurn]]] = {}
 
     @contextmanager
-    def session(self, trial_id: str, complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> Iterator[None]:
+    def session(
+        self,
+        trial_id: str,
+        complete: Callable[[Prompt], Awaitable[ModelTurn]],
+        *,
+        teacher_complete: Callable[[Prompt], Awaitable[ModelTurn]] | None = None,
+    ) -> Iterator[None]:
         if trial_id in self.sessions:
             raise ValueError(f"Agent session already registered: {trial_id}")
+        if (teacher_complete is None) != (self.teacher_model_name is None):
+            raise ValueError("Pi teacher session must match its independently routed model")
         self.sessions[trial_id] = complete
+        if teacher_complete is not None:
+            self.teacher_sessions[trial_id] = teacher_complete
         try:
             yield
         finally:
             del self.sessions[trial_id]
+            self.teacher_sessions.pop(trial_id, None)
 
     async def chat_completion(self, request_payload: dict[str, Any]) -> dict[str, Any]:
         trial_id = request_payload["headers"].get(TRIAL_HEADER)
         if trial_id not in self.sessions:
             raise ValueError("No active agent session matches the request correlation ID")
         body = request_payload["json"]
+        model_name = body.get("model")
+        execution_marker = request_payload["headers"].get(EXECUTED_TEACHER_HEADER)
+        if execution_marker is not None and (
+            model_name != self.teacher_model_name or execution_marker not in {"0", "1"}
+        ):
+            raise ValueError("Only independently routed teacher labels can declare execution")
+        if model_name == self.teacher_model_name and trial_id in self.teacher_sessions:
+            # A private label must never enter the rollout engine as an executed
+            # action. Executed teacher turns must enter that same model session
+            # for shared-engine grading, without sampling the student policy.
+            complete = self.sessions[trial_id] if execution_marker == "1" else self.teacher_sessions[trial_id]
+            decoder = self.teacher_decoder
+        elif model_name == self.model_name:
+            complete = self.sessions[trial_id]
+            decoder = self.decoder
+        else:
+            raise ValueError("Pi completion requested an unregistered student or teacher model")
+        assert decoder is not None
         if body.get("n", 1) != 1:
             raise ValueError("An agent session requires exactly one completion per request")
         options = {key: value for key, value in body.items() if key not in TRANSPORT_FIELDS}
+        if PI_EXECUTION_MODEL_OPTION in options:
+            raise ValueError("Pi execution routing is reserved for the in-memory recorder")
+        if execution_marker == "1":
+            options[PI_EXECUTION_MODEL_OPTION] = "teacher"
         try:
-            turn = await self.sessions[trial_id](Prompt(tuple(body["messages"]), options))
+            turn = await complete(Prompt(tuple(body["messages"]), options))
         except AgentGenerationStopped as error:
             return {
                 "error": {
@@ -84,11 +133,11 @@ class AgentInferenceBackend:
             else "stop"
         )
         logprobs = None
-        if turn.logprobs is not None:
+        if body.get("logprobs") is True and turn.logprobs is not None:
             logprobs = {
                 "content": [
                     {
-                        "token": self.decoder.decode([token]),
+                        "token": decoder.decode([token]),
                         "logprob": probability,
                         "bytes": None,
                         "top_logprobs": [],
@@ -100,7 +149,7 @@ class AgentInferenceBackend:
             "id": f"chatcmpl-{uuid4().hex}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": self.model_name,
+            "model": model_name,
             "prompt_token_ids": list(turn.prompt_token_ids),
             "choices": [
                 {

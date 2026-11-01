@@ -1,0 +1,23 @@
+# @package _global_
+# A separately pinned external judge is configured in environment.task_sessions.pi_judge.
+# Scores one completed physical trial; train on exact served turns without treating
+# the task verifier's score as the AI-judged optimization reward.
+scenario:
+  preset: rlaif_pi_base
+trainer:
+  step_wise_training: true
+  algorithm:
+    policy_loss_type: regular
+    advantage_estimator: grpo
+    dynamic_sampling:
+      type: null
+generator:
+  n_samples_per_prompt: 2
+  sampling_params:
+    logprobs: 0
+terminal_bench_config:
+  installed_agent:
+    agent:
+      name: pi
+      pi:
+        mode: literal

@@ -1,0 +1,29 @@
+# @package _global_
+# Draw an executor before each visited turn; label *every* visited state.
+scenario:
+  preset: dagger_pi_turn_mixture_base
+trainer:
+  step_wise_training: false
+  algorithm:
+    policy_loss_type: sft
+    advantage_estimator: uniform
+    dynamic_sampling:
+      type: null
+generator:
+  n_samples_per_prompt: 1
+  sampling_params:
+    logprobs: 0
+terminal_bench_config:
+  harbor:
+    verifier_disable: false
+  installed_agent:
+    agent:
+      name: pi
+      pi:
+        mode: literal
+    turn_mixture_schedule:
+      teacher_execution_probability:
+        scheduler: linear
+        start: 1.0
+        end: 0.6
+        duration_iterations: 2
