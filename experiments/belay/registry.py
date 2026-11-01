@@ -353,6 +353,7 @@ def main(argv: list[str]) -> None:
     new.add_argument("--intake-url")
     new.add_argument("--intake-author")
     new.add_argument("--approved-by")
+    new.add_argument("--dry-run", action="store_true", help="print the entry instead of writing it")
     args = parser.parse_args(argv)
 
     experiments = load_registry()
@@ -379,6 +380,10 @@ def main(argv: list[str]) -> None:
             intake=intake,
         )
         validate([*experiments, experiment])
+        if args.dry_run:
+            print(f"would write {REGISTRY_DIR / experiment.filename}:")
+            yaml.safe_dump(_plain(experiment), sys.stdout, sort_keys=False, allow_unicode=True, width=120)
+            return
         print(write_experiment(experiment))
 
 
