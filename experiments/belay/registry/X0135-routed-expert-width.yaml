@@ -414,3 +414,10 @@ trials:
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
   note: OOM
+events:
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: intermediate_dim=0.75·d (maintainer decision)'
+  checkpoint: belay-ckpt-2026-10-20
