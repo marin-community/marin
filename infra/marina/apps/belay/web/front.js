@@ -226,9 +226,9 @@ function startFront(RD, SC) {
     const ex = X(C_EQ), ey = Y(Lt);
     el("line", { x1: ex, x2: hx, y1: ey, y2: ey, stroke: css("--ink"), "stroke-dasharray": "3 3", "stroke-width": 1.6 }, svg);
     el("circle", { cx: ex, cy: ey, r: 4.2, fill: css("--rope"), stroke: css("--surface"), "stroke-width": 1.6 }, svg);
-    txt(svg, ex - 6, ey + 18, `${NX.toFixed(1)}× less compute`, { "text-anchor": "end", fill: css("--ink"), "font-weight": 600, "font-size": 11.5 });
+    txt(svg, ex - 6, ey + 18, `${NX.toFixed(1)}× less compute*`, { "text-anchor": "end", fill: css("--ink"), "font-weight": 600, "font-size": 11.5 });
     const eh = el("circle", { cx: ex, cy: ey, r: 11, fill: "transparent", tabindex: 0 }, svg);
-    eh.dataset.tip = `<b>${NX.toFixed(2)}×</b> less compute to the same BPB (${Lt.toFixed(3)})<br>${nc.name} at ${sci(C_EQ, 2)} vs ${bc.name} at ${sci(C_HW_BUDGET, 2)} hardware FLOPs<br><span style="opacity:.75">from the four-rung fits; each at its own 11-rack MFU</span>`;
+    eh.dataset.tip = `<b>${NX.toFixed(2)}×</b> less compute to the same BPB (${Lt.toFixed(3)})<br>${nc.name} at ${sci(C_EQ, 2)} vs ${bc.name} at ${sci(C_HW_BUDGET, 2)} hardware FLOPs<br><span style="opacity:.75">from the four-rung fits; each at its own 11-rack MFU<br>*extrapolated ~4,000× past the largest rung, so expect large error</span>`;
     tipper("box-scaling", "tip-scaling", svg);
   }
 
