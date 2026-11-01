@@ -733,9 +733,9 @@ events:
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: bigram table dropped for Belay Ckpt 1
 potential:
-  score: 6
-  rationale: '-0.022 equal data d512 at -9% ex/s; ladder mixed: d768 data-matched -0.014/-0.0097 but rule-A d768 +0.006/+0.009;
-    equal time, MFU not run -> 6'
+  score: 7
+  rationale: -0.0255 at equal data on speedrun (step time +17%); equal time probe running; ladder (old rule-A d768 +0.006/+0.009)
+    and MFU not run on current recipe -> 7
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: 39ba938906de
+  inputs_digest: 6aa3f5503223
