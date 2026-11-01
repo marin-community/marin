@@ -97,7 +97,7 @@ SCHEMA = (
         id BIGSERIAL PRIMARY KEY, origin TEXT NOT NULL, comment_id TEXT UNIQUE, author TEXT NOT NULL,
         body TEXT NOT NULL, url TEXT, posted_at TIMESTAMPTZ NOT NULL, state TEXT NOT NULL, title TEXT,
         registry_id TEXT, registry_url TEXT, decided_by TEXT, decided_at TIMESTAMPTZ, plan JSONB, result JSONB,
-        note TEXT, node_grant INTEGER, hidden_removed JSONB, reply_url TEXT,
+        note TEXT, node_grant INTEGER, hidden_removed JSONB, reply_url TEXT, budget_hours DOUBLE PRECISION,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
     """CREATE TABLE IF NOT EXISTS runs (
         name TEXT PRIMARY KEY, job_id TEXT NOT NULL, registry_id TEXT, run TEXT, state TEXT NOT NULL,
@@ -113,6 +113,8 @@ SCHEMA = (
         cache_read_tokens BIGINT, secret_sha256 TEXT)""",
     # A sessions table created before the claim secret existed lacks this column.
     "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_sha256 TEXT",
+    # An ideas table created before study budgets existed lacks this column.
+    "ALTER TABLE ideas ADD COLUMN IF NOT EXISTS budget_hours DOUBLE PRECISION",
     """CREATE TABLE IF NOT EXISTS activity (
         id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), kind TEXT NOT NULL, registry_id TEXT,
         idea_id BIGINT, session_id TEXT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', github_url TEXT)""",
@@ -252,15 +254,19 @@ class SettingsUpdate(BaseModel):
 
 
 class MaintainerNote(BaseModel):
-    """A maintainer's note on a re-queue or a decline, and for a re-queue an optional node grant."""
+    """A maintainer's note on a re-queue or a decline, and for a re-queue an optional node grant and study hours."""
 
     note: str = ""
     nodes: int | None = Field(default=None, ge=1)
+    hours: float | None = Field(default=None, gt=0)
+    """A study's budget hours (custom track): with the node grant, the most its runs may use."""
 
 
 class Approval(BaseModel):
     nodes: int | None = Field(default=None, ge=1)
     """A node grant: this idea's launches may hold up to this many nodes, past the global cap."""
+    hours: float | None = Field(default=None, gt=0)
+    """A study's budget hours (custom track): with the node grant, the most its runs may use."""
 
 
 class IntakeApproval(BaseModel):
@@ -274,6 +280,8 @@ class IntakeApproval(BaseModel):
     """The visible text the admin page showed the approver; the approval stores exactly this."""
     posted_at: datetime.datetime
     nodes: int | None = Field(default=None, ge=1)
+    hours: float | None = Field(default=None, gt=0)
+    """A study's budget hours (custom track): with the node grant, the most its runs may use."""
 
 
 class RunExpectation(BaseModel):
@@ -472,7 +480,9 @@ def offer_pending_work(conn: Connection) -> int:
     return offered
 
 
-def approve_idea(conn: Connection, idea_id: int, caller: str, node_grant: int | None = None) -> bool:
+def approve_idea(
+    conn: Connection, idea_id: int, caller: str, node_grant: int | None = None, budget_hours: float | None = None
+) -> bool:
     """Approve an idea and queue its one ``approved`` event; False unless it is pending.
 
     Approving an idea that already has its ``approved`` event queues nothing more, so it runs once. A pending
@@ -487,11 +497,13 @@ def approve_idea(conn: Connection, idea_id: int, caller: str, node_grant: int | 
     conn.execute(
         text(
             "UPDATE ideas SET state = 'approved', decided_by = :by, decided_at = now(), "
-            "node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), updated_at = now() WHERE id = :id"
+            "node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), "
+            "budget_hours = COALESCE(CAST(:hours AS DOUBLE PRECISION), budget_hours), updated_at = now() WHERE id = :id"
         ),
-        {"by": caller, "grant": node_grant, "id": idea_id},
+        {"by": caller, "grant": node_grant, "hours": budget_hours, "id": idea_id},
     )
     grant = f" with up to {node_grant} nodes" if node_grant else ""
+    grant += f" for {budget_hours:g} h" if budget_hours else ""
     _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} approved “{_label(idea)}”{grant}"))
     queued = _rows(conn, "SELECT id FROM events WHERE kind = 'approved' AND ref = :ref", ref=str(idea_id))
     if not queued:
@@ -752,12 +764,14 @@ def approve_intake_comment(conn: Connection, comment: IntakeApproval, login: str
     idea = _rows(conn, "SELECT id, state, registry_id FROM ideas WHERE comment_id = :c", c=comment.comment_id)[0]
     if idea["state"] == IdeaState.RECORDED:
         raise HTTPException(409, f"already run as {idea['registry_id']}")
-    if not approve_idea(conn, idea["id"], login, node_grant=comment.nodes):
+    if not approve_idea(conn, idea["id"], login, node_grant=comment.nodes, budget_hours=comment.hours):
         raise HTTPException(409, f"idea {idea['id']} is already {idea['state']}")
     return {"state": IdeaState.APPROVED.value, "idea_id": idea["id"]}
 
 
-def requeue_idea(conn: Connection, idea_id: int, login: str, note: str, nodes: int | None = None) -> dict[str, str]:
+def requeue_idea(
+    conn: Connection, idea_id: int, login: str, note: str, nodes: int | None = None, hours: float | None = None
+) -> dict[str, str]:
     """Keep the maintainer's note (and any node grant) for the session and offer the idea to the next session. A
     retried re-queue whose event is still unclaimed queues nothing more."""
     rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
@@ -766,9 +780,10 @@ def requeue_idea(conn: Connection, idea_id: int, login: str, note: str, nodes: i
     conn.execute(
         text(
             "UPDATE ideas SET state = 'approved', note = :n, "
-            "node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), updated_at = now() WHERE id = :id"
+            "node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), "
+            "budget_hours = COALESCE(CAST(:hours AS DOUBLE PRECISION), budget_hours), updated_at = now() WHERE id = :id"
         ),
-        {"n": f"Maintainer {login}: {note}" if note else None, "grant": nodes, "id": idea_id},
+        {"n": f"Maintainer {login}: {note}" if note else None, "grant": nodes, "hours": hours, "id": idea_id},
     )
     waiting = _rows(
         conn,
@@ -1124,8 +1139,10 @@ def create_api(services: Services) -> RegisteredApi:
     @admin.post("/ideas/{idea_id}/approve")
     def approve(idea_id: int, approval: Approval | None = None, caller: str = Depends(approver)) -> dict[str, str]:
         grant = approval.nodes if approval is not None else None
+        hours = approval.hours if approval is not None else None
         with engine.begin() as conn:
-            if not approve_idea(conn, idea_id, approver_login(_settings(conn), caller), node_grant=grant):
+            login = approver_login(_settings(conn), caller)
+            if not approve_idea(conn, idea_id, login, node_grant=grant, budget_hours=hours):
                 raise HTTPException(409, f"idea {idea_id} is not waiting for approval")
         return {"state": IdeaState.APPROVED.value}
 
@@ -1153,7 +1170,8 @@ def create_api(services: Services) -> RegisteredApi:
     def requeue(idea_id: int, request: MaintainerNote, caller: str = Depends(approver)) -> dict[str, str]:
         """A maintainer's answer to an escalation, or a rerun of an idea that already has results."""
         with engine.begin() as conn:
-            return requeue_idea(conn, idea_id, approver_login(_settings(conn), caller), request.note, request.nodes)
+            login = approver_login(_settings(conn), caller)
+            return requeue_idea(conn, idea_id, login, request.note, request.nodes, request.hours)
 
     @admin.post("/ideas/{idea_id}/decline")
     def decline(idea_id: int, request: MaintainerNote, caller: str = Depends(approver)) -> dict[str, str]:

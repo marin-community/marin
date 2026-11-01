@@ -486,6 +486,7 @@ pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow
 .gate-chip.lost { background: var(--worse-soft); color: var(--worse); }
 .gate-chip.run { background: transparent; color: var(--amber); border: 1px solid var(--amber); }
 .gate-chip.tested { background: transparent; color: var(--faint); }
+.gate-chip.study { margin-left: 6px; background: var(--surface-2); color: var(--rope); font-family: var(--mono); font-size: 11px; }
 .gcell { position: relative; display: inline-block; cursor: help; border-radius: 8px; }
 .gcell:focus-visible { outline: 2px solid var(--rope); outline-offset: 1px; }
 .gate-tip { display: none; position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: max-content; max-width: 300px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); box-shadow: 0 6px 18px rgb(0 0 0 / .12); font-size: 12px; line-height: 1.45; flex-direction: column; gap: 2px; }
