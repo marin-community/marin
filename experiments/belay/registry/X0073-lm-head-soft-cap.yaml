@@ -4,7 +4,7 @@ name: lm_head tanh soft-cap
 category: Output head and loss
 summary: Cap output logits with c*tanh(z/c) before the loss; eval scores capped logits.
 source: agent
-status: adopted
+status: running
 first_batch: 32
 tags:
 - soft-cap
@@ -440,6 +440,17 @@ trials:
   step_time_change: +1% asym kernel
   tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
   note: mean delta; ties
+- id: t024
+  variant: lm_head tanh soft-cap 10
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0073
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6561619228
+  wandb: []
+  settings:
+    logit_soft_cap: '10'
+  commit: 00e9d64ae1
 events:
 - type: adopted
   batch: '35'
