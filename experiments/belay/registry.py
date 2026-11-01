@@ -142,6 +142,9 @@ class Experiment:
     intake: Intake | None = None
     trials: tuple[Trial, ...] = ()
     events: tuple[Event, ...] = ()
+    potential: dict[str, object] | None = None
+    """A session's 0-10 estimate of how promising the idea is (``score``, ``rationale``, ``model``, ``date``,
+    ``inputs_digest``), written only by ``python -m experiments.belay score``."""
 
     @property
     def filename(self) -> str:
