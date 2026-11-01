@@ -447,7 +447,8 @@ trials:
   batch: X0073
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6561619228
-  wandb: []
+  wandb:
+  - belay-X0073-seed0
   settings:
     logit_soft_cap: '10'
   commit: 00e9d64ae1
