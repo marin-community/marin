@@ -59,12 +59,16 @@ The change goes straight onto this week's branch. No human reviews it: passing `
 
 1. **Run:** `B code-change X#### --start`
    - **Expect:** the rules below and `next: B code-change X#### --finish --model-set <flag>=<on value>`.
-2. **Edit** only `experiments/grug/fast_track/` and `tests/grug/test_fast_track_*.py`:
+2. **If the idea points at a pull request** (`#NNNN`), read it with `gh pr view NNNN --json title,body,files` and
+   `gh pr diff NNNN`, and port only its change to the model or optimizer, behind the new flag.
+   If you cannot tell which part of the PR the idea asks for, run section 6 and stop.
+3. **Edit** only `experiments/grug/fast_track/` and `tests/grug/test_fast_track_*.py`:
    - add one new field to `GrugModelConfig` (`model.py`) or `GrugMoeMuonHConfig` (`optimizer.py`) whose default
      is off (`False`, `None`, `0` or `0.0`);
    - put every behavior change behind that field;
    - add `tests/grug/test_fast_track_<flag>.py`, a test that turns the flag on.
-3. **Run:** `B code-change X#### --finish --model-set <flag>=<on value>` (use `--opt-set` for an optimizer flag).
+   Do not run the test yourself; `--finish` runs it (gate 5).
+4. **Run:** `B code-change X#### --finish --model-set <flag>=<on value>` (use `--opt-set` for an optimizer flag).
    These are the tests that gate the change, in order. All must pass:
    1. **Paths:** only the two allowed paths changed, including a test file.
    2. **Default off:** at least one new config field; every new field defaults to off; no existing default changed.
