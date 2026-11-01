@@ -38,7 +38,8 @@ trials:
   batch: X0223
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562007895
-  wandb: []
+  wandb:
+  - belay-X0223-seed0-t
   settings:
     mtp_weight: '0.1'
     mtp_decay_frac: '0.5'
