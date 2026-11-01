@@ -27,6 +27,7 @@ import json
 import shlex
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -82,6 +83,7 @@ from experiments.belay.page import (
     record_activity,
     report_idea,
     require_unedited,
+    service_token,
     visible_text,
 )
 from experiments.belay.posts import (
@@ -219,6 +221,27 @@ def check_only() -> None:
         print(f"work: {work['queued_events']} queued event(s)")
     else:
         print("no work: no queued events")
+
+
+def claim() -> None:
+    """A scheduled session's own dispatch: claim every queued event and write them to an events file for start."""
+    session_id = f"loom-{datetime.datetime.now(datetime.UTC):%m%d-%H%M%S}"
+    claimed = call("agent/dispatch/claim", {"session_id": session_id}, token=service_token())
+    if not claimed["launch"]:
+        print(f"nothing claimed: {claimed['reason']}")
+        say_next("stop")
+        return
+    path = Path(tempfile.gettempdir()) / f"belay-{session_id}.events.json"
+    path.write_text(json.dumps(claimed["events"], indent=2))
+    print(f"session {session_id} claimed {len(claimed['events'])} event(s) into {path}")
+    say_next(f"{BELAY} start --events {path}; at the end, {BELAY} finish --session {session_id} --summary ...")
+
+
+def finish(session_id: str, summary: str) -> None:
+    """Report a scheduled session's final message, which frees the queue for the next session."""
+    call(f"agent/sessions/{session_id}/finish", {"state": "succeeded", "summary": summary}, token=service_token())
+    print(f"session {session_id} finished")
+    say_next("stop")
 
 
 def start(events_file: Path, today: datetime.date) -> None:
@@ -1153,6 +1176,10 @@ def main(argv: list[str]) -> None:
         p.add_argument("--dry-run", action="store_true", help="check and print; write, push, launch and post nothing")
         return p
 
+    command("claim")
+    p = command("finish")
+    p.add_argument("--session", required=True, help="the session id claim printed")
+    p.add_argument("--summary", required=True, help="the final message (RUNBOOK section 7)")
     p = command("start")
     events = p.add_mutually_exclusive_group(required=True)
     events.add_argument("--events", type=Path, help="the session's events file, named in its prompt")
@@ -1216,7 +1243,11 @@ def main(argv: list[str]) -> None:
             raise SystemExit("refusing: --today is for dry runs only")
         today = args.today
 
-    if args.command == "start" and args.check_only:
+    if args.command == "claim":
+        claim()
+    elif args.command == "finish":
+        finish(args.session, args.summary)
+    elif args.command == "start" and args.check_only:
         check_only()
     elif args.command == "start":
         start(args.events, today)
