@@ -129,8 +129,9 @@ def test_cancelled_start_reclaims_a_late_daytona_machine(tmp_path, cleanup_failu
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("verifier_endpoint", ["https://api.together.xyz/v1", "https://other-judge.test/v1"])
 def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, verifier_endpoint
 ):
     port = available_port()
     monkeypatch.setattr(daytona, "MODEL_RELAY_PORT", port)
@@ -203,9 +204,14 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
                 ],
                 model_endpoint="https://api.together.xyz/v1",
                 model_name="together_ai/openai/gpt-oss-120b",
-                verifier_model_endpoint="https://api.together.xyz/v1",
+                verifier_model_endpoint=verifier_endpoint,
             )
             adapter.factory = factory
+            if verifier_endpoint != "https://api.together.xyz/v1":
+                with pytest.raises(ValueError, match="single host model endpoint"):
+                    await adapter.start(False)
+                assert factory.machine is None
+                return
             await adapter.start(False)
             try:
                 verifier = Verifier(

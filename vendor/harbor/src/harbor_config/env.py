@@ -98,12 +98,13 @@ def resolve_env_vars(
     """
     Resolve environment variable templates in a dictionary.
 
-    Templates like "${VAR_NAME}" are replaced with values from os.environ.
+    Templates like "${VAR_NAME}" use values from source, or os.environ when source is omitted.
     Use "${VAR_NAME:-default}" to provide a default when the variable is unset.
     Literal values are passed through unchanged.
 
     Args:
         env_dict: Dictionary with potentially templated values
+        source: Variable values to use instead of os.environ
 
     Returns:
         Dictionary with resolved values

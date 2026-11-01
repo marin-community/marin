@@ -140,6 +140,8 @@ class LocalEnvironment(BaseEnvironment):
             raise ValueError(
                 "Task model calls require an explicit hosted judge (--judge-model) or standalone host model endpoint"
             )
+        if self.verifier_model_endpoint is not None and self.verifier_model_endpoint != self.model_endpoint:
+            raise ValueError("Prepared sandbox supports a single host model endpoint for runtime and verifier calls")
         self._stopping = None
         execution = await acquire_owned(asyncio.create_task(self.factory.create_task(task_spec)))
         self.execution = execution

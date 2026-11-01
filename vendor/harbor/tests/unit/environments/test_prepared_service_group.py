@@ -10,6 +10,7 @@ import shlex
 from pathlib import Path
 
 import httpx
+import pytest
 
 from harbor.environments import local
 from harbor.environments.local import LocalEnvironment
@@ -81,7 +82,8 @@ class ProcessTaskFactory:
         return Task({spec.primary: actor, runtime_spec.name: runtime}, spec, close)
 
 
-def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypatch):
+@pytest.mark.parametrize("verifier_endpoint", [None, "https://judge.test/v1", "https://other-judge.test/v1"])
+def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypatch, verifier_endpoint):
     runtime_port, relay_port = available_port(), available_port()
     monkeypatch.setattr(local, "MODEL_RELAY_PORT", relay_port)
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "storage-private-canary")
@@ -162,6 +164,7 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
                 trial_paths=TrialPaths(tmp_path / "trial"),
                 model_endpoint="https://judge.test/v1",
                 model_name="judge-model",
+                verifier_model_endpoint=verifier_endpoint,
                 task_env_config=EnvironmentConfig(
                     allow_internet=False,
                     mcp_servers=[
@@ -173,6 +176,12 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
                     ],
                 ),
             )
+            if verifier_endpoint not in {None, "https://judge.test/v1"}:
+                with pytest.raises(ValueError, match="single host model endpoint"):
+                    await adapter.start(force_build=False)
+                assert not (tmp_path / "actor").exists()
+                assert model_calls == []
+                return
             await adapter.start(force_build=False)
             try:
                 actor_code = f"import json,os,urllib.request; assert 'AWS_SECRET_ACCESS_KEY' not in os.environ; print(json.load(urllib.request.urlopen(urllib.request.Request('http://tau3-runtime:{runtime_port}/mcp',data=b'{{}}'))))"

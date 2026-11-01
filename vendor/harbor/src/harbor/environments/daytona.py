@@ -158,6 +158,8 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Daytona model capability requires a host endpoint and model"
             )
+        if self.verifier_model_endpoint is not None and self.verifier_model_endpoint != self.model_endpoint:
+            raise ValueError("Daytona supports a single host model endpoint for runtime and verifier calls")
         self._stopping = None
         self.machine = await acquire_owned(asyncio.create_task(self.factory.create(spec)))
         try:
