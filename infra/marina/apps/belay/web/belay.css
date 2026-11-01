@@ -1,6 +1,8 @@
 /* Marin Belay pages. The base is the original public Belay page's stylesheet (tokens, front-page components); the
- * status and admin components at the end use the same tokens. Fonts fall back to system faces because Marina's CSP
- * serves no external stylesheets. */
+ * status and admin components at the end use the same tokens. The faces are in fonts.css. */
+/* The original page relied on the artifact host's reset for these. */
+[hidden] { display: none !important; }
+img { max-width: 100%; }
 :root {
   --bg: #F1F3EF; --surface: #FFFFFF; --surface-2: #E8ECE7; --ink: #15212B; --slate: #5E6B73; --faint: #8C979D;
   --line: #D6DCD8; --rope: #D9345F; --teal: #1F7A6C; --teal-soft: #D3EAE4; --amber: #B7790F; --base: #9AA4A9;
@@ -321,6 +323,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
 
 /* ---------- shared across pages ---------- */
 .pages { display: flex; gap: 2px; margin-left: auto; }
+.nav + .pages { margin-left: 8px; padding-left: 8px; border-left: 1px solid var(--line); }
 .pages a { font-size: 13.5px; font-weight: 600; text-decoration: none; color: var(--slate); padding: 6px 11px; border-radius: 7px; }
 .pages a:hover { color: var(--ink); background: var(--surface-2); }
 .pages a[aria-current="page"] { color: var(--bg); background: var(--ink); }
@@ -336,8 +339,8 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
 .block h2 { font-size: 17px; font-stretch: 110%; font-weight: 800; display: flex; gap: 8px; align-items: baseline; }
 .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
 .none { padding: 14px 16px; color: var(--faint); font-size: 13px; }
-time { font-family: var(--mono); font-size: 11.5px; color: var(--faint); white-space: nowrap; }
-code { font-family: var(--mono); font-size: .9em; }
+.page time, .latest time { font-family: var(--mono); font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+.page code { font-family: var(--mono); font-size: .9em; }
 
 /* the "next" line */
 .next { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); font-weight: 600; }
@@ -431,11 +434,11 @@ button.line:hover { background: var(--surface-2); }
 .meter .warn { color: var(--worse); }
 .switch { display: flex; gap: 10px; align-items: center; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.track { width: 44px; height: 24px; border-radius: 99px; background: var(--line); position: relative; flex: none; transition: background .15s; }
+.sw-track { width: 44px; height: 24px; border-radius: 99px; background: var(--line); position: relative; flex: none; transition: background .15s; }
 .knob { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: left .15s; }
-.switch input:checked + .track { background: var(--teal); }
-.switch input:checked + .track .knob { left: 23px; }
-.switch input:focus-visible + .track { outline: 2px solid var(--rope); outline-offset: 2px; }
+.switch input:checked + .sw-track { background: var(--teal); }
+.switch input:checked + .sw-track .knob { left: 23px; }
+.switch input:focus-visible + .sw-track { outline: 2px solid var(--rope); outline-offset: 2px; }
 .btn { font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; text-decoration: none; display: inline-block; }
 .btn:hover { border-color: var(--ink); }
 .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
