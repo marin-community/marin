@@ -301,9 +301,15 @@ def render_diff(before: StepProfile, after: StepProfile, top: int = 25) -> str:
     return "\n".join(lines)
 
 
-def run_sessions(run_id: str) -> list[str]:
-    """The run's uploaded profile session directories (its XProf root under the cluster's temp bucket)."""
-    root = StoragePath(XprofUploadConfig().destination_for_run(run_id)) / "plugins" / "profile"
+def run_sessions(run_id: str, xprof_root: str | None = None) -> list[str]:
+    """The run's uploaded profile session directories, under ``xprof_root`` (default: the XProf root this process
+    would upload to, which is the run's when it runs in the run's region)."""
+    run_root = (
+        StoragePath(f"{xprof_root}/{run_id}")
+        if xprof_root
+        else StoragePath(XprofUploadConfig().destination_for_run(run_id))
+    )
+    root = run_root / "plugins" / "profile"
     return sorted(str(p) for p in root.ls()) if root.exists() else []
 
 
@@ -313,8 +319,8 @@ def download_session(session: str, into: Path) -> Path:
     return local
 
 
-def summarize_run(run_id: str, workdir: Path) -> StepProfile:
-    sessions = run_sessions(run_id)
+def summarize_run(run_id: str, workdir: Path, xprof_root: str | None = None) -> StepProfile:
+    sessions = run_sessions(run_id, xprof_root)
     if not sessions:
         raise SystemExit(f"{run_id}: no uploaded profile sessions")
     # The first process's session: one host's devices, as the in-run summary reports.
@@ -329,12 +335,13 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Summarize a run's uploaded profile.")
     parser.add_argument("run")
     parser.add_argument("--compare", help="a second run: also print a per-kernel diff against it")
+    parser.add_argument("--xprof-root", help="the runs' XProf root, e.g. s3://<bucket>/tmp/ttl=30d/xprof")
     args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory() as tmp:
-        profile = summarize_run(args.run, Path(tmp))
+        profile = summarize_run(args.run, Path(tmp), args.xprof_root)
         print(render(profile, args.run))
         if args.compare:
-            other = summarize_run(args.compare, Path(tmp))
+            other = summarize_run(args.compare, Path(tmp), args.xprof_root)
             print(render(other, args.compare))
             print(render_diff(other, profile))
 

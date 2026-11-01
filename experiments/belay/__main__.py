@@ -1151,7 +1151,9 @@ def job_output(job: str) -> list[str]:
 def analyze_profile(run: str, compare: str | None, cluster: str, *, dry_run: bool) -> None:
     """Summarize a run's uploaded profile (and diff it against ``compare``) in a CPU job on the run's cluster, which
     reads the full trace in place; waits for the job and prints the summary."""
-    module = ["marin.profiling.step_profile", run, *(["--compare", compare] if compare else [])]
+    # CoreWeave cluster cw-<region> keeps run data in bucket marin-<region>; XProf uploads go under its temp prefix.
+    root = f"s3://marin-{cluster.removeprefix('cw-')}/tmp/ttl=30d/xprof"
+    module = ["marin.profiling.step_profile", run, "--xprof-root", root, *(["--compare", compare] if compare else [])]
     name = f"belay-profile-{run}-{datetime.datetime.now():%m%d-%H%M%S}"[:63]
     command = remote_job_command(name, cluster, module)
     shown = [arg if arg not in (os.environ.get(k) for k in CLUSTER_STORAGE_KEYS) else "<key>" for arg in command]
