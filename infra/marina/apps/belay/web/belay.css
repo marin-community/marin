@@ -514,6 +514,9 @@ pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow
 .ck-row .ck-detail a { color: var(--rope); text-decoration: underline; text-underline-offset: 2px; }
 .ck-detail .md table, .log-body .md table { font-size: 12px; }
 .md .scroll { overflow-x: auto; max-width: 100%; }
+.md table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.md th, .md td { padding: 4px 12px 4px 0; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.md th { font-weight: 600; color: var(--slate); }
 /* Agent log: one post per idea, newest update first. */
 .feed.log li { display: block; }
 .feed.log .log-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: baseline; width: 100%; text-align: left; }
