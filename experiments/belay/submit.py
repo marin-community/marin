@@ -222,13 +222,15 @@ def refuse_over_cap(needed: int, jobs: list[IrisJob]) -> None:
         )
 
 
-def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: str = "uv run python") -> list[str]:
-    """The exact launch of one run on ``track``: its baseline command plus ``flags``, named ``name``."""
+def track_command(
+    track: Track, name: str, flags: tuple[str, ...] = (), python: str = "uv run python", seed: int = CONFIG.seed
+) -> list[str]:
+    """The exact launch of one run on ``track``: its baseline command plus ``flags``, named ``name``, at ``seed``."""
     baseline = TRACKS[track]
     if baseline.launch is None:
         raise SystemExit(f"refusing: track {track} has no launch recipe; a maintainer runs it")
     command = [*python.split(), "-m", *baseline.launch, *flags]
-    command += ["--seed", str(CONFIG.seed), "--run-id", name]
+    command += ["--seed", str(seed), "--run-id", name]
     if baseline.output_path:
         command += ["--output-path", f"{CONFIG.output_root}/{name}"]
     command += ["--submit", "--target-cluster", baseline.cluster, "--priority", baseline.band]
@@ -238,7 +240,7 @@ def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: 
 def launch_command(spec: ExperimentSpec, run: RunSpec) -> list[str]:
     """The run's command, run from the checkout of the Track's code branch (``uv run`` uses that checkout's
     environment)."""
-    return track_command(spec.track, run_name(spec.experiment, run.name), run.flags)
+    return track_command(spec.track, run_name(spec.experiment, run.name), run.flags, seed=run.seed)
 
 
 def with_launched(text: str, launched: dict[str, list[str]]) -> str:
