@@ -4,7 +4,7 @@ name: Remove GatedNorm on embedding / lm_head input
 category: Normalization
 summary: Use plain RMSNorm instead of RMSNorm+GatedNorm on the embedding and before the lm_head.
 source: maintainer
-status: running
+status: done
 first_batch: 10
 tags:
 - gatednorm
@@ -83,6 +83,13 @@ trials:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
   commit: 49539f058a
+  loss:
+  - 3.0377
+  delta:
+  - -0.0074
+  steps: 3030
+  baseline: belay-X0017-control 3.0451 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: '17'
