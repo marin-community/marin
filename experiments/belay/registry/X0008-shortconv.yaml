@@ -15,6 +15,7 @@ tags:
 details:
 - 4-tap causal depthwise conv
 - respects document boundaries
+- '2026-11-01: a retest dropping the attention and MLP output ShortConv on Belay Ckpt Oct 20 2026 was declined before launch.'
 knobs:
 - sconv_sites=
 trials:
