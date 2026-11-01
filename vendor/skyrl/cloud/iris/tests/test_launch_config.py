@@ -21,6 +21,8 @@ from cloud.iris.rl_config_translation import (
     materialize_launch_config,
     parse_rl_config,
 )
+from skyrl_train.callbacks.base import TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_callbacks
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
 from skyrl_train.dataset.tasks import source_row_task
 from marinskyrl.runtime_options import reference_model_required
@@ -154,14 +156,20 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
     assert OmegaConf.to_container(resolved_task) == task
 
 
-def test_launch_rejects_terminal_export_without_request_callback(tmp_path):
+def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
     raw = _raw_config()
-    raw["skyrl"]["trainer"].update(export_hf_artifact=True, ckpt_interval=1, hf_save_interval=-1)
+    raw["skyrl"]["trainer"].update(export_hf_artifact=True, ckpt_interval=1)
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
 
-    with pytest.raises(ValueError, match="Terminal HF artifact export"):
-        load_launch_config(path)
+    config = load_launch_config(path)
+    [export_callback] = [
+        callback for callback in create_default_callbacks(config.skyrl) if isinstance(callback, HFModelSaveCallback)
+    ]
+    state = TrainerState(global_step=1, epoch=0, total_steps=3, num_steps_per_epoch=3)
+
+    assert not export_callback.on_step_end(state, TrainerControl()).should_save_hf_model
+    assert export_callback.on_train_end(state, TrainerControl()).should_save_hf_model
 
 
 @pytest.mark.asyncio

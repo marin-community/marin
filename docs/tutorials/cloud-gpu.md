@@ -81,8 +81,9 @@ All CoreWeave clusters share the scratch bucket declared by
 `marin_temp_bucket` also selects it when called on a launch host with a
 CoreWeave `source_prefix`. Paths use `tmp/ttl=Nd/` lifecycle prefixes.
 
-Permanent outputs remain under `s3://marin-us-east-02a/marin`, or the existing
-west-region prefix on `cw-us-west-04a`. `s3://hero-checkpoints` is reserved for
+Permanent outputs remain under `s3://marin-us-east-02a/marin`, under
+`s3://marin-us-east-08a/marin` on `cw-rno2a`, or under the west-region prefix on
+`cw-us-west-04a`. `s3://hero-checkpoints` is reserved for
 hero checkpoints; the d6144 hero launcher explicitly keeps its rolling checkpoints
 there. A per-job `MARIN_TEMP_PREFIX` overrides the shared scratch default.
 Passing `temp_prefix` to `marin_temp_bucket` selects an explicit destination even
