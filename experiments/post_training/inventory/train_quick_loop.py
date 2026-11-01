@@ -84,7 +84,6 @@ def training_recipe(steps: int) -> dict:
         advantage_estimator="rloo_n",
         group_advantage_min_size=2,
         advantage_batch_normalize=False,
-        rloo_n_filter_zero_reward_groups=True,
         use_entropy_loss=False,
     )
     trainer["policy"]["optimizer_config"].update(

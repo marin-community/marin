@@ -213,7 +213,6 @@ trainer:
       label_smoothing: 0.0
     loss_reduction: "token_mean"
     grpo_norm_by_std: true
-    rloo_n_filter_zero_reward_groups: true
     lambd: 1.0
     gamma: 1.0
     eps_clip_low: 0.2
@@ -223,7 +222,6 @@ trainer:
     off_policy_correction_rules: null
     tis_splice: true
     tis_lcs_alert_threshold: 0.005
-    enable_token_reward_channel: false
     think_token_weight: 1.0
     sapo:
       tau_pos: 1.0
@@ -528,8 +526,6 @@ generator:
     model_source_identity: ${trainer.policy.model.source_identity}
     resume_path: ${trainer.resume_path}
     inference_backend: ${generator.backend}
-
-  apply_overlong_filtering: false
 
   rope_scaling: ${trainer.rope_scaling}
   rope_theta: ${trainer.rope_theta}

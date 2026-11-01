@@ -15,7 +15,6 @@ class TrainingTransition:
     observations: tuple[dict[str, Any], ...] = ()
     reward: float | None = None
     token_rewards: tuple[float, ...] | None = None
-    token_credit: tuple[float, ...] | None = None
     reward_components: dict[str, float] = field(default_factory=dict)
     grade: GradeResult | None = None
     task_grade: GradeResult | None = None
@@ -63,7 +62,6 @@ def training_rollout(result: GradedRollout, spec: TaskRolloutSpec) -> TrainingRo
                     observations=step.transition.observations,
                     reward=data.reward,
                     token_rewards=data.token_rewards,
-                    token_credit=data.token_credit,
                     reward_components=data.reward_components,
                     grade=data.grade,
                     task_grade=data.task_grade,

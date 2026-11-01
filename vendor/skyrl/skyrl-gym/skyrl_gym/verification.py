@@ -140,7 +140,6 @@ class RewardResult:
     optimization_reward: float
     token_rewards: tuple[float, ...] | None = None
     components: Mapping[str, float] = field(default_factory=dict)
-    token_credit: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -170,21 +169,9 @@ class RewardResult:
                 for name, value in self.components.items()
             },
         )
-        if self.token_credit is not None:
-            object.__setattr__(
-                self,
-                "token_credit",
-                tuple(
-                    _normalize_finite(value, field_name=f"token_credit[{index}]")
-                    for index, value in enumerate(self.token_credit)
-                ),
-            )
 
     def validate_for(self, evidence: RolloutEvidence) -> None:
         """Validate reward channels that depend on the associated evidence."""
-        if self.token_credit is not None:
-            if len(self.token_credit) != len(evidence.response_token_ids):
-                raise ValueError("token_credit must align with response_token_ids")
         if self.token_rewards is not None:
             if len(self.token_rewards) != len(evidence.response_token_ids):
                 raise ValueError("token_rewards must align with response_token_ids")
