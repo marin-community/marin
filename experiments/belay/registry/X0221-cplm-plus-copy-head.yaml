@@ -5,9 +5,22 @@ category: Output head and loss
 summary: '**Try adding CPLM Plus from #10678 to the Belay experiment ladder.** It extends the copy head with predecessor-conditioned
   keys and normalized case-class emissions, adding only d² + 2d + 1 parameters over ordinary CPLM.'
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6424405220
   author: WhenWen
   approved_by: ClassicLarry
+trials:
+- id: t001
+  variant: CPLM Plus copy head (cplm_plus=true)
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0221
+  date: '2026-11-01'
+  comment_url: http://127.0.0.1:8091/belay/
+  wandb:
+  - belay-X0221-seed0-b
+  settings:
+    cplm_plus: 'true'
+  commit: 9db6be9125
