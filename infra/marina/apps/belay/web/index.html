@@ -45,7 +45,7 @@
       </div>
     </div>
 
-    <a class="latest" id="latest" href="status" hidden>
+    <a class="latest" id="latest" href="#status" hidden>
       <span class="latest-l">Latest</span><span class="latest-body" id="latest-body"></span><span class="latest-go">Status →</span>
     </a>
 
@@ -102,7 +102,7 @@
         <div class="chips"><code>speedrun</code> <code>competitive-d512…d1280</code> <code>moe-d512…d1280</code> <code>vanilla-d512…d1280</code> <code>hero-mfu</code> <code>custom</code></div>
         <div class="muted">Example: <code>Track: moe-d512</code>, &ldquo;Replace the sigmoid router scoring with sqrt-softplus.&rdquo;</div></li>
       <li><b>Approval</b>: a maintainer reviews it on this page; reactions on GitHub do not approve anything.</li>
-      <li><b>Run</b>: an agent runs it against the track's baseline and replies to your comment once, with a link to its row on the <a href="status">Status</a> page. The reply is edited with the verdict when the runs finish.</li>
+      <li><b>Run</b>: an agent runs it against the track's baseline and replies to your comment once, with a link to its row on the <a href="#status">Status</a> page. The reply is edited with the verdict when the runs finish.</li>
       <li><b>Result</b>: win, noise or loss, by the track's fixed rule: Paloma macro Δ beyond ±0.005, or for <code>hero-mfu</code> step time beyond ±0.5%. It goes to the registry and this page. A win goes to maintainers, who decide whether it joins the recipe.</li>
     </ol>
     <div class="involve">
@@ -113,7 +113,7 @@
         <p class="ex">e.g. &ldquo;Track: competitive-d512. Replace the sigmoid router scoring function with sqrt-softplus.&rdquo;</p>
         <span class="go">Open the intake issue →</span>
       </a>
-      <a class="link-card" href="status#agent-log">
+      <a class="link-card" href="#status/agent-log">
         <span class="num">belay · status</span>
         <h3>Agent Log</h3>
         <p>Every plan, stage table and verdict the agent posts, one post per idea, updated in place.</p>
@@ -273,11 +273,11 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
       <h2>Logging</h2>
     </div>
     <ul class="logs">
-      <li><b>Runs</b>: W&amp;B project <a href="https://wandb.ai/marin-community/marin_moe" target="_blank" rel="noopener"><code>marin_moe</code></a>, with each run's full config; live runs, queue and storage on the <a href="status">Status</a> page.</li>
+      <li><b>Runs</b>: W&amp;B project <a href="https://wandb.ai/marin-community/marin_moe" target="_blank" rel="noopener"><code>marin_moe</code></a>, with each run's full config; live runs, queue and storage on the <a href="#status">Status</a> page.</li>
       <li><b>Recipe</b>: Belay Ckpt Oct 20 2026 on <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_recipe" target="_blank" rel="noopener"><code>marin_belay_v1_recipe</code></a>, tagged <a href="https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20" target="_blank" rel="noopener"><code>belay-ckpt-2026-10-20</code></a>. Weekly experiment branches are cut from it.</li>
       <li><b>Experiment code</b>: one branch per week, <code>marin_belay_v1_w&lt;monday&gt;</code> (latest: <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_w2026-10-19" target="_blank" rel="noopener"><code>marin_belay_v1_w2026-10-19</code></a>); every run pins a commit SHA.</li>
-      <li><b>Results</b>: the <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">experiment registry</a>, one <code>X####</code> entry per idea; hero-scale throughput on the <a href="mfu">Hero MFU</a> page.</li>
-      <li><b>Discussion</b>: intake <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>; plans and results in the <a href="status#agent-log">agent log</a>.</li>
+      <li><b>Results</b>: the <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">experiment registry</a>, one <code>X####</code> entry per idea; hero-scale throughput on the <a href="#mfu">Hero MFU</a> page.</li>
+      <li><b>Discussion</b>: intake <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>; plans and results in the <a href="#status/agent-log">agent log</a>.</li>
     </ul>
   </section>
 
@@ -407,7 +407,7 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
   <div class="denied-code mono" id="denied-code">403</div>
   <h1>Approvers only</h1>
   <p id="denied-text"></p>
-  <p class="denied-actions"><a class="btn primary" id="denied-status" href="status">Status</a><a class="btn" id="denied-front" href="./">Belay</a></p>
+  <p class="denied-actions"><a class="btn primary" id="denied-status" href="#status">Status</a><a class="btn" id="denied-front" href="./">Belay</a></p>
 </main>
 </template>
 <div id="view-root"></div>

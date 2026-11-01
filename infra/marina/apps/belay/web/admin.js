@@ -285,7 +285,7 @@ function alreadyRun() {
           'span',
           { class: 'nm' },
           el('b', {}, (idea.title ?? idea.body.trim().split('\n')[0]).replace(/\*\*/g, '').slice(0, 90)),
-          el('small', {}, `#9514 · ${idea.author} · done → `, link(`${PAGES.status}#${idea.registry_id}`, idea.registry_id)),
+          el('small', {}, `#9514 · ${idea.author} · done → `, link(`${PAGES.status}/${idea.registry_id}`, idea.registry_id)),
         ),
         idea.url ? link(idea.url, '↗') : el('span'),
         requeueWithGrant(idea, 'retest on current recipe'),

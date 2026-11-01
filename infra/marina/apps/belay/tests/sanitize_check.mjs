@@ -47,12 +47,12 @@ const document = {
   createElement: (tag) => new Element(tag),
   createTextNode: (text) => new Text(text),
 }
-const context = vm.createContext({ document, location: { pathname: '/belay/status' }, Node: Object, console })
+const context = vm.createContext({ document, location: { pathname: '/belay/', hash: '#status' }, Node: Object, console })
 vm.runInContext(readFileSync(process.argv[2], 'utf8'), context)
 const source = readFileSync(0, 'utf8')
 const rendered = vm.runInContext(
   `[markdown(${JSON.stringify(source)}), link('javascript:alert(1)', 'a'), link('//evil.example/x', 'b'),
-    link('/belay/status#X0001', 'c'), link('https://example.com/ok', 'd')]`,
+    link('/belay/#status/X0001', 'c'), link('https://example.com/ok', 'd')]`,
   context,
 )
 process.stdout.write(JSON.stringify(rendered))

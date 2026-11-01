@@ -16,10 +16,6 @@ ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 DIST = ROOT / "dist"
 VERSION_MARK = "__BELAY_VERSION__"
-# The page's routes below the app root. A route opened with a trailing slash (``status/``) resolves the page's
-# relative asset URLs one level down, so the head assets are also served there.
-ROUTES = ("status", "mfu", "admin")
-HEAD_ASSETS = ("fonts.css", "belay.css", "common.js", "boot.js")
 PAGE_FILES = (
     "boot.js",
     "common.js",
@@ -59,10 +55,6 @@ def main() -> None:
     for name in PAGE_FILES:
         shutil.copyfile(WEB / name, DIST / name)
     write_page(WEB / "index.html", DIST / "index.html", web_version())
-    for route in ROUTES:
-        (DIST / route).mkdir()
-        for name in HEAD_ASSETS:
-            shutil.copyfile(WEB / name, DIST / route / name)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ them.
   3. The session reads only that stored text (an edit on GitHub after approval is refused), gives the idea its
      registry id, and posts one reply on the #9514 comment: "Running as X#### → <its Status row>". At the verdict it
      edits that reply to "X#### · <track> · <verdict> → <its Status row>". Internal proposals get no reply.
-  - Plans, stage tables and verdicts go to the page's agent log, one thread per idea at `status#X####`, updated in
+  - Plans, stage tables and verdicts go to the page's agent log, one thread per idea at `#status/X####` on the page, updated in
     place. Nothing new is posted on #9451; its existing comments stay as they are.
 - **How edits are made.**
   - A session changes nothing by hand. Each command writes, commits and pushes its own files:

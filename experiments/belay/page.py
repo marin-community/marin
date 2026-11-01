@@ -2,23 +2,43 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Client for the Belay page's API: read its state, update an idea, write an idea's agent thread, and the one
-reply on the idea's #9514 comment."""
+reply on the idea's #9514 comment.
+
+On Marina (any page URL that is not localhost) every call carries an IAP ID token from ``marina.client``: the
+person's cached ``iris login`` on a laptop, or the ambient service-account identity on Loom (``loom-vm``). Only a
+local preview takes the service token, in ``X-Belay-Token``. A session's own writes also carry the session id and
+secret its claim issued (``SessionCredentials``)."""
 
 import datetime
 import json
 import os
 import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+from urllib.parse import urlparse
+
+import requests
+from marina.client import bearer_token
 
 from experiments.belay.config import CONFIG
 
-# The service token is a credential, so it comes from the environment (the dispatcher sets it for each session).
+# The local preview's service token is a credential, so it comes from the environment (the local dispatcher sets
+# it for each session). Marina callers never use it.
 TOKEN_ENV = "BELAY_SERVICE_TOKEN"
 TOKEN_HEADER = "X-Belay-Token"
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
+REQUEST_TIMEOUT = 60
+# A session's credentials: from the environment (the local dispatcher claims for each session it starts), or from
+# SESSION_FILE (a Loom session's own `claim` writes it; `finish` removes it).
 SESSION_ENV = "BELAY_SESSION_ID"
+SESSION_SECRET_ENV = "BELAY_SESSION_SECRET"
+SESSION_HEADER = "X-Belay-Session"
+SESSION_SECRET_HEADER = "X-Belay-Session-Secret"
+SESSION_FILE = Path(tempfile.gettempdir()) / "belay-session.json"
 BOT_MARK = "🤖"
 TERMINAL_RUN_STATES = ("succeeded", "failed", "killed", "worker_failed", "unschedulable")
 
@@ -101,21 +121,78 @@ class PageState:
         return [r for r in self.runs if r.registry_id == registry_id]
 
 
-def call(path: str, body: dict | None = None, *, token: str | None = None) -> dict:
-    """GET (no body) or POST JSON to the Belay API; ``token`` is required for its ``agent/`` routes."""
-    data = None if body is None else json.dumps(body).encode()
+class PageRequestError(RuntimeError):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(f"Belay API request failed ({status_code}): {detail}")
+        self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class SessionCredentials:
+    """The session id and secret a claim issued; the app accepts a session's writes only with both."""
+
+    id: str
+    secret: str
+
+
+def session_credentials() -> SessionCredentials | None:
+    """This process's session: from the environment, else from SESSION_FILE; None outside a session."""
+    if os.environ.get(SESSION_ENV) and os.environ.get(SESSION_SECRET_ENV):
+        return SessionCredentials(os.environ[SESSION_ENV], os.environ[SESSION_SECRET_ENV])
+    if SESSION_FILE.exists():
+        return SessionCredentials(**json.loads(SESSION_FILE.read_text()))
+    return None
+
+
+def save_session(credentials: SessionCredentials) -> None:
+    SESSION_FILE.touch(mode=0o600)
+    SESSION_FILE.write_text(json.dumps(asdict(credentials)))
+
+
+def is_local_page(page_url: str) -> bool:
+    return urlparse(page_url).hostname in LOCAL_HOSTS
+
+
+def call(
+    path: str, body: dict | None = None, *, token: str | None = None, session: SessionCredentials | None = None
+) -> dict:
+    """GET (no body) or POST JSON to the Belay API. ``session`` (default: this process's session) goes with every
+    call; ``token`` is the local preview's service token (default: from the environment, for ``agent/`` routes)."""
+    session = session or session_credentials()
     headers = {"content-type": "application/json"}
+    if session is not None:
+        headers |= {SESSION_HEADER: session.id, SESSION_SECRET_HEADER: session.secret}
+    url = f"{CONFIG.page_url}api/{path}"
+    if is_local_page(CONFIG.page_url):
+        token = token or (_local_service_token() if path.startswith("agent/") else None)
+        return _local_call(url, body, headers | ({TOKEN_HEADER: token} if token else {}))
     if token is not None:
-        headers[TOKEN_HEADER] = token
-    request = urllib.request.Request(f"{CONFIG.page_url}api/{path}", data=data, headers=headers)
-    with urllib.request.urlopen(request, timeout=60) as response:
-        return json.loads(response.read())
+        raise ValueError("the service token is only for a local preview; Marina callers use their IAP identity")
+    return _marina_call(url, body, headers | {"Authorization": f"Bearer {bearer_token()}"})
 
 
-def service_token() -> str:
+def _local_call(url: str, body: dict | None, headers: dict[str, str]) -> dict:
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(url, data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        raise PageRequestError(error.code, error.read().decode()[:500]) from error
+
+
+def _marina_call(url: str, body: dict | None, headers: dict[str, str]) -> dict:
+    method = "GET" if body is None else "POST"
+    response = requests.request(method, url, json=body, headers=headers, timeout=REQUEST_TIMEOUT)
+    if response.status_code >= 400:
+        raise PageRequestError(response.status_code, response.text[:500])
+    return response.json()
+
+
+def _local_service_token() -> str:
     token = os.environ.get(TOKEN_ENV)
     if not token:
-        raise SystemExit(f"{TOKEN_ENV} is not set; the dispatcher passes the Belay service token to each session")
+        raise SystemExit(f"{TOKEN_ENV} is not set; the local dispatcher passes the service token to each session")
     return token
 
 
@@ -124,7 +201,7 @@ def _fields(cls: type, row: dict) -> dict:
 
 
 def page_state() -> PageState:
-    state = call("agent/state", token=service_token())
+    state = call("agent/state")
     return PageState(
         ideas=[Idea(**_fields(Idea, i)) for i in state["ideas"]],
         runs=[PageRun(**_fields(PageRun, r)) for r in state["runs"]],
@@ -139,7 +216,7 @@ def expect_finish(run_name: str, expected_at: datetime.datetime, *, dry_run: boo
     """Tell the app when a launched run should finish."""
     if dry_run:
         return
-    call("agent/runs/expected", {"name": run_name, "expected_at": expected_at.isoformat()}, token=service_token())
+    call("agent/runs/expected", {"name": run_name, "expected_at": expected_at.isoformat()})
 
 
 def report_idea(idea_id: int, report: dict, *, dry_run: bool) -> None:
@@ -148,7 +225,7 @@ def report_idea(idea_id: int, report: dict, *, dry_run: bool) -> None:
     if dry_run:
         print(f"would report idea #{idea_id}: {json.dumps(report)}")
         return
-    call(f"agent/ideas/{idea_id}/report", report, token=service_token())
+    call(f"agent/ideas/{idea_id}/report", report)
     print(f"reported idea #{idea_id}: state {report.get('state', 'unchanged')}")
 
 
@@ -160,17 +237,15 @@ class Post:
     body: str
     registry_id: str | None = None
     idea_id: int | None = None
-    session_id: str | None = None
 
 
 def post_activity(post: Post, *, dry_run: bool) -> None:
-    """Post to the page's activity feed (escalations and notes, which only the admin page shows). Posts carry the
-    session that made them, so the admin page links each to its transcript."""
-    post = replace(post, session_id=os.environ.get(SESSION_ENV))
+    """Post to the page's activity feed (escalations and notes, which only the admin page shows). The app records
+    the posting session (from its credentials), so the admin page links each post to its transcript."""
     if dry_run:
         print(f"would post {post.kind} to the page:\n--- {post.title}\n{post.body}\n---")
         return
-    call("agent/activity", asdict(post), token=service_token())
+    call("agent/activity", asdict(post))
     print(f"posted {post.kind}: {post.title}")
 
 
@@ -196,16 +271,17 @@ def gh_api(args: list[str]) -> str:
 
 
 def thread_url(registry_id: str) -> str:
-    """The idea's row on the Status page, which expands to its agent thread."""
-    return f"{CONFIG.page_url}status#{registry_id}"
+    """The idea's row on the Status page, which opens to its agent thread (a fragment route: Marina's canonical applet
+    URL serves only the root document)."""
+    return f"{CONFIG.page_url}#status/{registry_id}"
 
 
 def read_thread(registry_id: str) -> str | None:
     """The idea's agent thread so far, or None before its first plan."""
     try:
-        return call(f"agent/threads/{registry_id}", token=service_token())["body"]
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
+        return call(f"agent/threads/{registry_id}")["body"]
+    except PageRequestError as error:
+        if error.status_code == 404:
             return None
         raise
 
@@ -218,7 +294,6 @@ def publish_thread(registry_id: str, title: str, body: str, idea_id: int | None,
         call(
             f"agent/threads/{registry_id}",
             {"title": title, "body": body, "idea_id": idea_id, "kind": kind},
-            token=service_token(),
         )
         print(f"wrote the {registry_id} thread: {title}")
     return thread_url(registry_id)
