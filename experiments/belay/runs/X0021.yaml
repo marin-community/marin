@@ -1,0 +1,16 @@
+experiment: X0021
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: qk_mult=4.0, learnable_qk_mult=true
+    flags:
+    - --model-set
+    - qk_mult=4.0
+    - --model-set
+    - learnable_qk_mult=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0017-control
