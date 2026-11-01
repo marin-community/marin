@@ -299,6 +299,7 @@ key. The candidate endpoint and its authentication remain in the trusted driver;
 the executor supplies the served endpoint's API key only through the driver environment.
 Host-side agents such as Terminus and the AIME agent call their candidate endpoint directly.
 Persisted job and trial JSON redacts Iris bearer URLs; live configurations retain their routes.
+Resumed runs receive a fresh model capability from Marin rather than reusing one from saved JSON.
 
 Both relays authorize only `POST /v1/chat/completions` and `POST /tokenize`, fix
 the upstream model, reject redirects, and bound request and response bodies.

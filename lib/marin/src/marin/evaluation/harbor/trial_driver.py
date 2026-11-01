@@ -645,13 +645,12 @@ def _judge_authentication(config: JobConfig, overlay: RuntimeOverlay) -> dict[st
     return {judge[0]: key}
 
 
-def _model_authentication(config: JobConfig, overlay: RuntimeOverlay) -> dict[str, str]:
+def _model_authentication(config: JobConfig, overlay: RuntimeOverlay, *, candidate_api_key: str) -> dict[str, str]:
     authentication = _judge_authentication(config, overlay)
     if _installed_agent(config.agents[0]):
-        key = os.environ.get("OPENAI_API_KEY", "EMPTY")
-        if overlay.endpoint_url in authentication and authentication[overlay.endpoint_url] != key:
+        if overlay.endpoint_url in authentication and authentication[overlay.endpoint_url] != candidate_api_key:
             raise ValueError("Candidate and judge credentials conflict for the same host endpoint")
-        authentication[overlay.endpoint_url] = key
+        authentication[overlay.endpoint_url] = candidate_api_key
     return authentication
 
 
@@ -868,7 +867,9 @@ def main() -> None:
             daytona_api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
             daytona_target=os.environ.get("DAYTONA_TARGET"),
         ),
-        host_model_authentication(_model_authentication(policy, overlay)),
+        host_model_authentication(
+            _model_authentication(policy, overlay, candidate_api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"))
+        ),
     ):
         asyncio.run(_run(config))
 

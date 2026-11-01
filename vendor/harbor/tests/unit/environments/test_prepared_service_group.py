@@ -201,6 +201,6 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
             finally:
                 await adapter.stop(delete=True)
         assert factory.closed
-        assert model_calls == [{"model": "judge-model", "messages": []}]
+        assert model_calls == [{"model": "judge-model", "messages": [], "stream": False}]
 
     asyncio.run(check())
