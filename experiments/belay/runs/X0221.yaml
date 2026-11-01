@@ -29,3 +29,16 @@ runs:
     - --num-steps
     - '2308'
     stage: time
+launched:
+  control-b: /Users/larry/marin_wt_belay_live/.venv/bin/python3 -m experiments.grug.fast_track.belay_s7 --ladder s7n --size
+    d512 --num-steps 3030 --seed 0 --run-id belay-X0221-control-b --output-path tmp/ttl=30d/belay/runs/belay-X0221-control-b
+    --submit --target-cluster cw-us-east-02a --priority batch
+  seed0-b: /Users/larry/marin_wt_belay_live/.venv/bin/python3 -m experiments.grug.fast_track.belay_s7 --ladder s7n --size
+    d512 --num-steps 3030 --model-set cplm_plus=true --seed 0 --run-id belay-X0221-seed0-b --output-path tmp/ttl=30d/belay/runs/belay-X0221-seed0-b
+    --submit --target-cluster cw-us-east-02a --priority batch
+  probe-c: /Users/larry/marin_wt_belay_live/.venv/bin/python3 -m experiments.grug.fast_track.belay_s7 --ladder s7n --size
+    d512 --num-steps 3030 --model-set cplm_plus=true --num-steps 150 --seed 0 --run-id belay-X0221-probe-c --output-path tmp/ttl=30d/belay/runs/belay-X0221-probe-c
+    --submit --target-cluster cw-us-east-02a --priority batch
+  seed0-t-c: /Users/larry/marin_wt_belay_live/.venv/bin/python3 -m experiments.grug.fast_track.belay_s7 --ladder s7n --size
+    d512 --num-steps 3030 --model-set cplm_plus=true --num-steps 2308 --seed 0 --run-id belay-X0221-seed0-t-c --output-path
+    tmp/ttl=30d/belay/runs/belay-X0221-seed0-t-c --submit --target-cluster cw-us-east-02a --priority batch
