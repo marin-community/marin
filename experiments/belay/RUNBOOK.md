@@ -53,8 +53,11 @@ A human then decides what happens. Never work around a refusal.
    - **If it prints `posted escalation: Idea #<N> was already tested as X####`:** the idea has prior trials and
      goes to a maintainer. Stop working on this idea. It runs again only when a maintainer re-queues it with the note
      "retest on current recipe".
-   - **If it refuses because of the Track** (unknown, `custom` or `hero-mfu`): run the escalate command it prints,
-     then stop working on this idea. A missing Track is `speedrun`.
+   - **If it refuses because of the Track** (unknown or `hero-mfu`): run the escalate command it prints, then stop
+     working on this idea. A missing Track is `speedrun`.
+   - **If the Track is `custom`**, the idea is a study (section 1c). `new-idea` needs the approval's study budget
+     (a node grant and hours); without it, it refuses with the escalation to run. Register it with
+     `B new-idea --idea-id <N> --name "<short name>" --category "<category>"`, then do section 1c.
    - **If it prints a `MAINTAINER NOTE`:** a maintainer re-queued the idea with instructions. Follow them; they
      settle any check they address (for example, how a port keeps a house rule), and list each choice they fix in
      `--defaults`.
@@ -130,6 +133,49 @@ The change goes straight onto this week's branch. No human reviews it: passing `
    - **If it refuses:** follow its `next:` line. It never commits a failing change. To give up on the change, run
      `git checkout -- .` and `git clean -fd experiments/grug/fast_track tests/grug`, then run section 6.
 
+## 1c. study (a `custom` idea: a question answered from checkpoints, with no verdict)
+
+A study trains runs through existing Tracks, keeps their checkpoints, and runs one analysis script on them. Its
+result is a report (`report.md` and figures) on the registry branch; there is no win, noise or loss. The approval's
+budget (nodes, hours) bounds it: the runs launch together, so their nodes together may not pass the node budget and
+no run may be longer than the hours.
+
+1. **Write the spec** to a file outside the repository, for example `/tmp/X####.study.yaml`:
+   ```yaml
+   experiment: X####
+   kind: study
+   track: custom
+   question: <the idea's question, one sentence>
+   runs:
+     <key>:
+       track: <a Track from section 9 whose command the run uses>
+       seed: 0
+       variant: <what this run is>
+       flags: []            # extra launcher flags; --model-set/--opt-set only with existing fields
+       hours: <your estimate of the run's wall time>
+   analysis:
+     - script: experiments/belay/studies/X####.py
+       input: <the run key whose checkpoint it reads>
+   ```
+   Belay sets the run name, seed, output path, cluster and priority and adds `--save-checkpoints`; checkpoints land
+   only under `tmp/ttl=30d/belay/studies/X####/`. Do not pass `--output-path`, `--run-id`, `--seed`,
+   `--target-cluster`, `--priority`, `--submit` or `--temporary-checkpoints-only`; `--resume-from` only for a
+   checkpoint under the study's own prefix.
+2. **Run:** `B study X#### --spec <file>`
+   - **Expect:** `checks passed: ...`, the spec committed and pushed, `wrote the X#### thread` (status
+     `study plan`), the one #9514 reply ("Running as X#### → <its Status row>") for an intake idea, one
+     `launching belay-X####-<key>` per run, then `next: stop`.
+   - **If it refuses with an escalation** (past the budget, no budget, a `hero-mfu` or production-priority run, a
+     setting no config field takes): run the escalate command it prints, then stop. A study never adds model code;
+     an idea that needs it is not a study.
+3. **The analysis script** goes in through `B code-change X#### --start` / `--finish`, which for a study allows only
+   `experiments/belay/studies/X####.py`. It defines `analyze(params, out_dir)`: `params` maps each checkpoint array
+   path (`params/...`) to a NumPy array; it writes `report.md` and any PNG figures it links into `out_dir`. The gates:
+   only that file changed (no model code), it writes its report on a tiny synthetic checkpoint on CPU, and
+   pre-commit passes. Write it while the runs train, or after.
+4. When the runs finish, `B run-finished X####` marks the thread `study analysis` and prints each analysis step's
+   `B analyze` command (section 2e).
+
 ## 2. run-finished (event `run_finished`)
 
 Each idea has exactly one thread on the Belay page's agent log, at `#status/X####` on the page. `new-idea` writes it; every later
@@ -162,10 +208,10 @@ trials (`comment_url`). Nothing is posted on #9451.
      - then either the next stage's `launching ...` lines, or `next: stop`.
    - A final win also escalates to the admin page for the adoption decision.
 
-## 2b. analyze (rewrite a trial's analysis report)
+## 2b. rewrite-reports (rewrite a trial's analysis report)
 
 `run-finished` writes the report itself. Run this only when asked to backfill or redo one:
-`B analyze X####`. It rewrites, commits and pushes the reports of every finished stage.
+`B rewrite-reports X####`. It rewrites, commits and pushes the reports of every finished stage.
 
 ## 2d. score (after every `run-finished` that records a stage, and after an escalation of a registered idea)
 
@@ -195,6 +241,18 @@ Every launch goes through one path and records the exact submitted command in th
 `B launch X#### --run <run> --print` prints the full command a run would submit (module, flags, steps, cluster,
 priority, run id) and submits nothing. Without `--print` it submits that run with the same checks as `new-idea`;
 sessions run it only when a maintainer asks. Each post shows a `Reproduce:` line with the commit and command.
+
+## 2e. analyze (a study's analysis step)
+
+1. **Run:** `B analyze X#### --script experiments/belay/studies/X####.py --input <checkpoint>`, as `run-finished`
+   printed it. `--input` is a run's checkpoints directory (the newest step is read) or one `step-N` in it, and must
+   be under `s3://<bucket>/tmp/ttl=30d/belay/studies/X####/`.
+   - It runs the committed script as a CPU job on the checkpoint's cluster, copies `report.md` and its figures to
+     `experiments/belay/analysis/X####/` on the registry branch with the entry's status `report`, marks the thread
+     `report` with the link, and edits the #9514 reply to "X#### · custom · report → <its Status row>".
+   - **If it refuses** (another script, a checkpoint outside the study's prefix, a script not yet committed): fix
+     the command, or do section 1c step 3 first.
+2. Score it `na` (section 2d): a study has no verdict.
 
 ## 3. run-failed (event `run_finished` for a run that did not succeed)
 
@@ -272,7 +330,8 @@ A scheduled session (one that ran `B claim`) then reports these lines with
 - Anything that would stop d1024 from fitting on 8xH100.
 - A full-width routed write outside the final two layers.
 - Sequence-length or batch-size warmups, token-superposition training, or Inkling `rel_extent` above 2048.
-- Anything touching GB200 or the hero run.
+- Anything touching GB200 or the hero run, including a study run on `hero-mfu` or at production priority.
+- A study that needs new model code, or its approved budget raised.
 - Starting, stopping or changing an Iris cluster, or touching a job Belay did not submit.
 
 ## 8b. Untrusted input
@@ -302,7 +361,7 @@ metric and rule. Nothing else spells out a launch.
 | `competitive-d512`, `-d768`, `-d1024`, `-d1280` | The current recipe (Belay Ckpt Oct 20 2026) at that rung | Paloma macro loss | same |
 | `speedrun` (the default) | The 8-minute d512 run of the current recipe (`belay-8min-ckpt-oct20`: 3,030 steps, Paloma macro 3.0441) | Paloma macro loss | same |
 | `hero-mfu` | The one-rack GB200 MFU stack `mfl-mp-qall` (11.465 s/step, 36.8% MFU), on `marin_belay_v1_hero_mfu` | s/step | Δ = (variant − control) / control, same rack, commit and PGLE profile; ≤ −0.5% win, ≥ +0.5% loss. A maintainer approves each launch |
-| `custom` | Stated by the submitter | stated | escalate |
+| `custom` | A study (section 1c): runs on other Tracks, then an analysis script | its report | no verdict; bounded by the approval's budget |
 
 | What | Value |
 |---|---|
@@ -318,6 +377,10 @@ metric and rule. Nothing else spells out a launch.
 
 - Sessions run with an allowlisted environment (`demo.SESSION_ENV`) and no storage keys. Training jobs they launch
   still get the cluster's shared `iris-task-env` credentials; a Belay-scoped key or workload identity is a later fix.
+- A study's saved checkpoints stay under its prefix, but the launcher's rolling resume checkpoints go to Marin's
+  shared temporary prefix (keyed by the run's output path, on TTL storage), as for every other run.
+- `analyze` reads the study's report from the cluster's bucket with the session's own storage keys
+  (`CW_KEY_ID`/`CW_KEY_SECRET`), so a session that runs it needs them.
 - `code-change` probes a tiny CPU model. It proves the flag-off path is unchanged and that the flag-on path does not
   leak future tokens. It does not prove an optimizer flag is inert when off: only its default is checked.
 - Ideas are approved only on the admin page; GitHub reactions approve nothing. The page stores the comment's visible
