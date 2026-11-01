@@ -1,0 +1,14 @@
+experiment: X0151
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: init_std_mult_gates=2
+    flags:
+    - --model-set
+    - init_std_mult_gates=2
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0017-control
