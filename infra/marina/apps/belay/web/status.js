@@ -14,7 +14,7 @@ const GATE = {
   na: { icon: '·', cls: 'tested' },
 }
 const SIGN = (v, digits = 4) => `${v > 0 ? '+' : v < 0 ? '\u2212' : '±'}${Math.abs(v).toFixed(digits)}`
-const OUTSIDE = 'outside the verdict'
+const OUTSIDE = /outside the verdict|not part of the verdict/
 
 const expandedIdeas = new Set()
 const KIND_CLASS = { better: 'won', worse: 'lost', neutral: 'noise' }
@@ -159,7 +159,7 @@ function verdictOf(d, noise) {
 function counted(trials) {
   const ratio = registry.placeholder_bpb_ratio ?? 1
   return trials
-    .filter((t) => !(t.note ?? '').includes(OUTSIDE) && (t.delta ?? []).length)
+    .filter((t) => !OUTSIDE.test(t.note ?? '') && (t.delta ?? []).length)
     .map((t) => ({ ...t, delta: t.delta.map((d) => d / ratio) }))
 }
 
