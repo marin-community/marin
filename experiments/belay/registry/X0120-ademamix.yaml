@@ -261,7 +261,8 @@ trials:
   batch: X0120
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562786148
-  wandb: []
+  wandb:
+  - belay-X0120-seed0
   settings:
     adam_ademamix_alpha: '5.0'
     adam_ademamix_beta3: '0.98'
