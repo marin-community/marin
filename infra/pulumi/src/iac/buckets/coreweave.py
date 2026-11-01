@@ -25,18 +25,12 @@ COREWEAVE_MULTIPART_EXPIRATION = 7
 BELAY_PRINCIPAL = "coreweave/unAfPLe6TaiRmJsewaUog"
 BELAY_BUCKET = "marin-us-east-02a"
 BELAY_RUN_ROOT = "marin/tmp/ttl=30d/belay"
-# Levanter writes temporary checkpoints under a bucket-root temp prefix that embeds the run's full output path.
-BELAY_RUN_PREFIXES = (
-    f"{BELAY_BUCKET}/{BELAY_RUN_ROOT}/*",
-    f"{BELAY_BUCKET}/tmp/ttl=14d/checkpoints-temp/{BELAY_BUCKET}/{BELAY_RUN_ROOT}/*",
-)
+BELAY_RUN_PREFIX = f"{BELAY_BUCKET}/{BELAY_RUN_ROOT}/*"
 BELAY_READ_PREFIXES = (
     f"{BELAY_BUCKET}/marin/datakit/hero_tok/*",
     f"{BELAY_BUCKET}/marin/paloma/*",
     f"{BELAY_BUCKET}/marin/uncheatable_eval/*",
-    "marin-us-east-08a/tmp/ttl=30d/xprof/*",
 )
-BELAY_LIST_BUCKETS = (BELAY_BUCKET, "marin-us-east-08a")
 
 
 def coreweave_bucket_policy(bucket_name: str) -> str:
@@ -77,21 +71,37 @@ def coreweave_bucket_policy(bucket_name: str) -> str:
     )
 
 
-def belay_policy_statements() -> list[coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs]:
-    """Belay may list the two buckets, read the training and eval data and profiles, and write only its own runs."""
+def coreweave_temp_bucket(data_config: DataConfig) -> str:
+    store = data_config.stores.get(StoreType.COREWEAVE)
+    if store is None or store.temp_bucket is None:
+        raise ValueError("the CoreWeave data config has no temp_bucket")
+    return store.temp_bucket.name
+
+
+def belay_temp_checkpoint_prefixes(temp_bucket: str) -> list[str]:
+    """Temporary checkpoints of Belay runs: the backend's scratch bucket, plus the run's own bucket for Belay
+    code branches that predate the shared CoreWeave scratch bucket (#10221)."""
+    return [
+        f"{bucket}/tmp/ttl=14d/checkpoints-temp/{BELAY_BUCKET}/{BELAY_RUN_ROOT}/*"
+        for bucket in dict.fromkeys((temp_bucket, BELAY_BUCKET))
+    ]
+
+
+def belay_policy_statements(temp_bucket: str) -> list[coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs]:
+    """Belay may list its buckets, read training and eval data and profiles, and write only its own runs."""
     return [
         coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs(
             name="belay-list-buckets",
             effect="Allow",
             actions=["s3:ListBucket"],
-            resources=list(BELAY_LIST_BUCKETS),
+            resources=list(dict.fromkeys((BELAY_BUCKET, temp_bucket))),
             principals=[BELAY_PRINCIPAL],
         ),
         coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs(
             name="belay-read-data",
             effect="Allow",
             actions=["s3:GetObject"],
-            resources=list(BELAY_READ_PREFIXES),
+            resources=[*BELAY_READ_PREFIXES, f"{temp_bucket}/tmp/ttl=30d/xprof/*"],
             principals=[BELAY_PRINCIPAL],
         ),
         coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs(
@@ -104,7 +114,7 @@ def belay_policy_statements() -> list[coreweave.ObjectStorageOrganizationAccessP
                 "s3:AbortMultipartUpload",
                 "s3:ListMultipartUploadParts",
             ],
-            resources=list(BELAY_RUN_PREFIXES),
+            resources=[BELAY_RUN_PREFIX, *belay_temp_checkpoint_prefixes(temp_bucket)],
             principals=[BELAY_PRINCIPAL],
         ),
     ]
@@ -188,7 +198,7 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
         coreweave.ObjectStorageOrganizationAccessPolicy(
             "policy-belay",
             name="marin-belay",
-            statements=belay_policy_statements(),
+            statements=belay_policy_statements(coreweave_temp_bucket(data_config)),
             opts=pulumi.ResourceOptions(parent=self, provider=coreweave_provider),
         )
         self.register_outputs({})
