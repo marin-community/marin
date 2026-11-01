@@ -4,7 +4,7 @@ name: MuonEq pre-NS normalization
 category: Optimizers
 summary: Normalize momentum rows or columns before Newton-Schulz.
 source: agent
-status: adopted
+status: running
 first_batch: 46
 tags:
 - muon
@@ -96,6 +96,17 @@ trials:
     muon_pre_norm: none
   step_time_change: 171.5 vs 171.6 ms
   note: MuonEq worth about -0.006
+- id: t005
+  variant: muon_pre_norm=in
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0087
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562775915
+  wandb: []
+  settings:
+    muon_pre_norm: in
+  commit: e305cef52a
 events:
 - type: adopted
   batch: '51'
