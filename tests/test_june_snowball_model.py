@@ -153,15 +153,16 @@ def test_june_training_config_drops_snowball_only_settings_at_their_defaults():
     snowball_only = {field.name for field in dataclasses.fields(SnowballConfig)} - {
         field.name for field in dataclasses.fields(GrugModelConfig)
     }
-    assert "router_dot_fp32" in snowball_only
+    assert {"router_dot_fp32", "moe_capacity_factor"} <= snowball_only
     training = _config().training_config()
     assert training.num_experts == 4
     assert training.capacity_factor == _config().capacity_factor
 
 
-def test_june_training_config_rejects_a_set_snowball_only_setting():
-    with pytest.raises(ValueError, match="router_dot_fp32"):
-        dataclasses.replace(_config(), router_dot_fp32=True).training_config()
+@pytest.mark.parametrize("setting", [{"router_dot_fp32": True}, {"moe_capacity_factor": 2.0}])
+def test_june_training_config_rejects_a_set_snowball_only_setting(setting):
+    with pytest.raises(ValueError, match=next(iter(setting))):
+        dataclasses.replace(_config(), **setting).training_config()
 
 
 def test_june_stage_telemetry_rejects_oversized_expert_parallel_microbatches():
