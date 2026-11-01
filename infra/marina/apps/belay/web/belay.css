@@ -511,6 +511,7 @@ pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow
 .ck-caret { color: var(--faint); margin-left: 6px; font-size: 11px; }
 .ck-detail { grid-column: 1 / -1; cursor: auto; display: grid; gap: 8px; padding: 10px 2px 4px; border-top: 1px dashed var(--line); font-size: 13px; min-width: 0; }
 .ck-detail .md { min-width: 0; }
+.ck-row .ck-detail a { color: var(--rope); text-decoration: underline; text-underline-offset: 2px; }
 .ck-detail .md table, .log-body .md table { font-size: 12px; }
 .md .scroll { overflow-x: auto; max-width: 100%; }
 /* Agent log: one post per idea, newest update first. */
@@ -521,4 +522,5 @@ pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow
 @media (max-width: 760px) {
   .ck-detail { padding-inline: 0; }
   #log-filter { min-width: 0; width: 100%; }
+  .ck-row:not(.ck-head) { scroll-margin-top: 112px; }
 }
