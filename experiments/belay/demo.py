@@ -86,6 +86,7 @@ PUBLIC_FILES = (
     "mfu.json",
     "scaling.json",
     "speedrun.json",
+    "tracks.json",
     "fonts.css",
     "belay.css",
 )

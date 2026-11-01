@@ -3,7 +3,7 @@
 // `experiments.belay.registry build`); stage 4's fits, points and hero budget come from scaling.json; the accepted
 // records and tracks are measured values kept here. Loaded after common.js.
 
-function startFront(RD, SC, SP) {
+function startFront(RD, SC, SP, TK) {
   const $ = (id) => document.getElementById(id);
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const NS = "http://www.w3.org/2000/svg";
@@ -240,9 +240,9 @@ function startFront(RD, SC, SP) {
   // ---------- Tracks ----------
   const TRACKS = [
     // runs: [active params, tokens, model FLOPs, Paloma macro BPB (measured), wall-clock minutes on 8×H100]
-    { id: "vanilla", name: "Vanilla Track", tag: "dense · 20 tokens / param", desc: "A barebones Qwen3-style dense transformer (full causal GQA, RoPE, QK-norm, SwiGLU) trained with AdamW at a compute-scaled LR. For testing ideas with minimal confounders.", tpp: 20, runs: {"d512": [18881536, 377487360, 9.025e+16, 1.6205, 2.0], "d768": [56636928, 1132986368, 6.416e+17, 1.4146, 6.5], "d1024": [151021568, 3020947456, 3.954e+18, 1.3016, 28.3], "d1280": [275289600, 5506072576, 1.221e+19, 1.2326, 80.4]}, src: "belay_tracks.py --track vanilla", runPrefix: "belay-vanilla-" },
-    { id: "moe", name: "Basic MoE", tag: "MoE · 60 tokens / active param", desc: "QB routing, top 4 of 128, 2 shared experts, MuonH. For testing MoE ideas with minimal confounders.", tpp: 60, runs: {"d512": [17219840, 1033371648, 2.237e+17, 1.3514, 6.9], "d768": [48473600, 2908225536, 1.422e+18, 1.2323, 26.1], "d1024": [128169472, 7690256384, 8.574e+18, 1.1336, 112.5], "d1280": [228123648, 13687062528, 2.54e+19, 1.0772, 294.8]}, src: "belay_tracks.py --track moe", runPrefix: "belay-moe-" },
-    { id: "comp", ...SC.competitive_track },
+    { id: "vanilla", name: "Vanilla Track", tag: "dense · 20 tokens / param", desc: "A barebones Qwen3-style dense transformer (full causal GQA, RoPE, QK-norm, SwiGLU) trained with AdamW at a compute-scaled LR. For testing ideas with minimal confounders.", tpp: 20, runs: {"d512": [18881536, 377487360, 9.025e+16, 1.6205, 2.0], "d768": [56636928, 1132986368, 6.416e+17, 1.4146, 6.5], "d1024": [151021568, 3020947456, 3.954e+18, 1.3016, 28.3], "d1280": [275289600, 5506072576, 1.221e+19, 1.2326, 80.4]}, launchPrefix: "vanilla-", runPrefix: "belay-vanilla-" },
+    { id: "moe", name: "Basic MoE", tag: "MoE · 60 tokens / active param", desc: "QB routing, top 4 of 128, 2 shared experts, MuonH. For testing MoE ideas with minimal confounders.", tpp: 60, runs: {"d512": [17219840, 1033371648, 2.237e+17, 1.3514, 6.9], "d768": [48473600, 2908225536, 1.422e+18, 1.2323, 26.1], "d1024": [128169472, 7690256384, 8.574e+18, 1.1336, 112.5], "d1280": [228123648, 13687062528, 2.54e+19, 1.0772, 294.8]}, launchPrefix: "moe-", runPrefix: "belay-moe-" },
+    { id: "comp", launchPrefix: "competitive-", ...SC.competitive_track },
   ];
   const tc = $("track-cards");
   const mins = (m) => (m < 90 ? `${m.toFixed(0)} min` : `${(m / 60).toFixed(1)} h`);
@@ -252,14 +252,17 @@ function startFront(RD, SC, SP) {
       const [active, tokens, flops, bpb, minutes] = t.runs[r];
       return { rung: r, label: r, run: t.runPrefix + r, active, tokens, flops, bpb, minutes, gpus: 8 };
     });
-    const srcUrl = t.src_url ?? "https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_tracks.py";
+    // Launch commands come from tracks.json, generated from config.TRACKS (`python -m experiments.belay tracks --json`).
+    const launches = TK.filter((k) => k.track.startsWith(t.launchPrefix) && k.command)
+      .map((k) => `<b>${k.track}</b> · ${k.code}\n${k.command}`).join("\n\n");
     const rows = rowsData.map((x) =>
       `<tr><td class="mono"><a class="wb" href="${WB(x.run)}" target="_blank" rel="noopener" title="${x.run} in W&amp;B">${x.label}</a>${x.note ? `<small>${x.note}</small>` : ""}</td><td class="r">${human(x.active)}</td><td class="r">${human(x.tokens)}</td><td class="r">${sci(x.flops)}</td><td class="r">${mins(x.minutes)}<small>on ${x.gpus}×H100</small></td><td class="r"><b>${x.bpb.toFixed(4)}</b></td></tr>`).join("");
     const card = document.createElement("article"); card.className = `track${t.id === "comp" ? " comp" : ""}`;
     card.innerHTML = `<header><div><div class="tag">${t.tag}</div><h3>${t.name}</h3></div></header>
       <p>${t.desc}</p>
       <div style="overflow-x:auto"><table class="rungs"><thead><tr><th>Rung</th><th class="r">Active</th><th class="r">Tokens</th><th class="r">FLOPs</th><th class="r">${t.rows ? "Wall clock" : "8×H100"}</th><th class="r">${t.rows ? "BPB" : "Baseline"}</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="note" style="margin:0">${t.note ?? "Measured Paloma macro BPB; wall clock includes compile and eval."} <a href="${srcUrl}" target="_blank" rel="noopener">${t.src}</a></p>`;
+      <p class="note" style="margin:0">${t.note ?? "Measured Paloma macro BPB; wall clock includes compile and eval."}</p>
+      <details class="launch"><summary>Launch commands</summary><pre>${launches}</pre></details>`;
     tc.appendChild(card);
   });
 
@@ -447,13 +450,14 @@ async function front() {
   sections.className = 'nav'
   document.querySelector('.topbar .wrap').insertBefore(sections, document.getElementById('pages'))
   const scalingUrl = STATIC ? 'scaling.json' : `${BELAY_BASE}scaling.json`
-  const [results, status, scaling, speedrun] = await Promise.all([
+  const [results, status, scaling, speedrun, trackTable] = await Promise.all([
     loadJson('results'),
     loadJson('state').catch(() => null),
     fetch(scalingUrl).then((r) => r.json()),
     fetch(STATIC ? 'speedrun.json' : `${BELAY_BASE}speedrun.json`).then((r) => r.json()),
+    fetch(STATIC ? 'tracks.json' : `${BELAY_BASE}tracks.json`).then((r) => r.json()),
   ])
-  startFront(results, scaling, speedrun)
+  startFront(results, scaling, speedrun, trackTable)
   if (status) {
     state = status
     renderLatest(status)

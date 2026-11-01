@@ -6,14 +6,16 @@ name or passing the node cap; every Track resolves to a real launch or is refuse
 a default-off flag that leaves the default model unchanged; results follow each Track's fixed rule."""
 
 import datetime
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from experiments.belay.__main__ import track_rows
 from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
-from experiments.belay.config import CONFIG, TRACKS, Track
+from experiments.belay.config import CONFIG, TRACKS, WEEKLY_BRANCH, Track
 from experiments.belay.results import Verdict, change, overall_verdict, verdict
 from experiments.belay.submit import IrisJob, check_launch, launch_command, parse_spec, track_of_comment
 from experiments.grug.fast_track import belay_s7, belay_tracks
@@ -115,7 +117,8 @@ def test_comment_track_defaults_to_speedrun_and_unknown_is_refused() -> None:
         parse_spec(SPEC.replace("competitive-d512", "competitive-d2048"))
 
 
-@pytest.mark.parametrize("track", list(Track))
+# hero-mfu's launcher lives on its own branch (config.HERO_MFU_BRANCH), which tests it there.
+@pytest.mark.parametrize("track", [t for t in Track if TRACKS[t].code == WEEKLY_BRANCH])
 def test_each_track_resolves_to_a_real_launch_or_is_refused(track: Track) -> None:
     spec = parse_spec(SPEC.replace("competitive-d512", track.value))
     launch = TRACKS[track].launch
@@ -183,3 +186,8 @@ def test_overall_verdict() -> None:
     assert overall_verdict([Verdict.NOISE, Verdict.WIN]) is Verdict.WIN
     assert overall_verdict([Verdict.LOSS, Verdict.LOSS]) is Verdict.LOSS
     assert overall_verdict([Verdict.LOSS, Verdict.NOISE]) is Verdict.NOISE
+
+
+def test_page_tracks_json_is_generated_from_config() -> None:
+    page = Path(__file__).parents[2] / "infra/marina/apps/belay/web/tracks.json"
+    assert json.loads(page.read_text()) == track_rows(), "regenerate: python -m experiments.belay tracks --json"

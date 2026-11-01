@@ -154,18 +154,21 @@ End with two to five plain lines:
 
 ## 9. Tracks and fixed values (from `experiments/belay/config.py`; the commands enforce them)
 
-Every idea names its Track on a `Track:` line. The Track sets the baseline it runs against and the rule it is
-judged by. The variant and its control run the same baseline command at the same commit and seed. The only
-difference is the variant's flags.
+Every idea may name its Track on a `Track:` line; with no such line it is `speedrun`. The Track sets the baseline
+it runs against and the rule it is judged by. The variant and its control (`belay-X####-control`) run the same
+baseline command at the same commit and seed. The only difference is the variant's flags.
 
-| Track | Baseline (launch) | Metric | Rule |
+`B tracks` prints the one definition of every Track: its code branch, exact launch command, hardware, priority,
+metric and rule. Nothing else spells out a launch.
+
+| Track | Baseline | Metric | Rule |
 |---|---|---|---|
-| `vanilla-d512` … `vanilla-d1280` | Vanilla Track at that rung (`belay_tracks --track vanilla --size <rung>`) | Paloma macro loss | Δ = variant − control; ≤ −0.006 win, ≥ +0.006 loss |
-| `moe-d512` … `moe-d1280` | Basic MoE at that rung (`belay_tracks --track moe --size <rung>`) | Paloma macro loss | same |
-| `competitive-d512`, `-d768`, `-d1024`, `-d1280L16` | The current recipe, Belay Ckpt Oct 20 2026 (`belay_s7 --ladder s7n --size <rung>`; d1280L16 takes 4 nodes) | Paloma macro loss | same |
-| `speedrun` | The 8-minute d512 run of the current recipe (`belay_s7 --ladder s7n --size d512 --num-steps 3030`). Baseline `belay-8min-ckpt-oct20`: 3,030 steps, Paloma macro 3.0441, BPB 1.2590 | Paloma macro loss | same |
-| `hero-mfu` | One-rack GB200 MFU stack, `mfl-mp-qall` on `marin_belay_v1_mfuladder_allwins`: 11.465 s/step, 36.8% MFU. Maintainers run it | s/step | Δ = (variant − control) / control on the same rack; ≤ −0.5% win, ≥ +0.5% loss |
-| `custom` | Stated by the submitter. Maintainers run it | stated | escalate |
+| `vanilla-d512` … `vanilla-d1280` | Vanilla Track at that rung | Paloma macro loss | Δ = variant − control; ≤ −0.006 win, ≥ +0.006 loss |
+| `moe-d512` … `moe-d1280` | Basic MoE at that rung | Paloma macro loss | same |
+| `competitive-d512`, `-d768`, `-d1024`, `-d1280L16` | The current recipe (Belay Ckpt Oct 20 2026) at that rung | Paloma macro loss | same |
+| `speedrun` (the default) | The 8-minute d512 run of the current recipe (`belay-8min-ckpt-oct20`: 3,030 steps, Paloma macro 3.0441) | Paloma macro loss | same |
+| `hero-mfu` | The one-rack GB200 MFU stack `mfl-mp-qall` (11.465 s/step, 36.8% MFU), on `marin_belay_v1_hero_mfu` | s/step | Δ = (variant − control) / control, same rack, commit and PGLE profile; ≤ −0.5% win, ≥ +0.5% loss. A maintainer approves each launch |
+| `custom` | Stated by the submitter | stated | escalate |
 
 | What | Value |
 |---|---|
@@ -173,6 +176,6 @@ difference is the variant's flags.
 | Weekly branch | `<week_branch_prefix><Monday as YYYY-MM-DD>`. Demo: `marin_belay_v1_loomdemo_w2026-10-26` |
 | Weekly base | Must contain `base_branch`. Production: `marin_belay_v1_recipe`. Demo: `marin_belay_v1_loomdemo` |
 | Registry branch | Demo: `marin_belay_v1_registry_demo`. The demo never touches `marin_belay_v1_registry` |
-| Runs | Seed 0, on `cw-us-east-02a` at `batch` priority |
+| Runs | Seed 0; cluster, priority and nodes per Track (`B tracks`) |
 | Budget | Soft cap of 8 nodes across all Belay runs |
 | Posts | Always the Belay page. Also #9451, but only when an approver turns GitHub posting on |

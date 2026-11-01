@@ -11,6 +11,7 @@
     uv run python -m experiments.belay weekly-rollover                            # section 4
     uv run python -m experiments.belay recipe-change                              # section 5
     uv run python -m experiments.belay escalate --title "..." --body "..."        # section 6
+    uv run python -m experiments.belay tracks [--json]                            # section 9: every launch
 
 Each command checks its inputs, does its step, and prints a ``next:`` line (the next command, or ``stop``); a
 refusal says what is wrong and what to run instead. ``--dry-run`` runs every read-only check and prints what would
@@ -32,6 +33,7 @@ from experiments.belay.branch import (
     cut_week_branch,
     git,
     head_contains,
+    named_checkout,
     repo_root,
     require_clean_pushed_head,
     require_week_branch,
@@ -49,7 +51,7 @@ from experiments.belay.code_change import (
     run_precommit,
     run_tests,
 )
-from experiments.belay.config import CHECKPOINT_TAG_PREFIX, CONFIG, TRACKS, Baseline, Track
+from experiments.belay.config import CHECKPOINT_TAG_PREFIX, CONFIG, CONTROL_RUN, TRACKS, WEEKLY_BRANCH, Baseline, Track
 from experiments.belay.page import Idea, PageRun, Post, page_state, post_activity, report_idea
 from experiments.belay.registry_entry import (
     ENTRIES,
@@ -63,6 +65,8 @@ from experiments.belay.registry_entry import (
 )
 from experiments.belay.results import RunResult, Verdict, experiment_results, overall_verdict
 from experiments.belay.submit import (
+    DEFAULT_TRACK,
+    RUN_PREFIX,
     ExperimentSpec,
     check_launch,
     check_variant,
@@ -71,10 +75,12 @@ from experiments.belay.submit import (
     load_spec,
     new_spec_text,
     parse_spec,
+    parse_track,
     run_name,
     setting_fields,
     settings_of,
     spec_path,
+    track_command,
     track_of_comment,
 )
 
@@ -272,6 +278,23 @@ def plan_markdown(registry_id: str, name: str, plan: Plan) -> str:
     )
 
 
+def request_go_ahead(idea: Idea, registry_id: str, track: Track, flags: list[str], *, dry_run: bool) -> None:
+    """Escalate a Track whose launches a maintainer approves, with the exact commands at a pinned commit."""
+    baseline = TRACKS[track]
+    commit = git(repo_root(), "ls-remote", "origin", f"refs/heads/{baseline.code}").split()[0]
+    control = " ".join(track_command(track, f"{RUN_PREFIX}{registry_id}-control", (), "uv run python"))
+    variant = " ".join(
+        track_command(track, f"{RUN_PREFIX}{registry_id}-seed{CONFIG.seed}", tuple(flags), "uv run python")
+    )
+    body = (
+        f"{registry_id} is on track {track} ({baseline.description}): {baseline.nodes} node(s) of {baseline.hardware} "
+        f"on {baseline.cluster} at {baseline.band} priority, so a maintainer approves the launch. From a checkout of "
+        f"`{baseline.code}` at `{commit[:10]}`, run the control and the variant on the same rack:\n\n"
+        f"```\n{control}\n{variant}\n```\n\nRule: {baseline.metric}, {baseline.rule}, noise {baseline.noise}."
+    )
+    escalate(f"Go-ahead needed: {registry_id} on {track}", body, idea.id, registry_id, dry_run=dry_run)
+
+
 def new_idea(
     idea_id: int, category: str | None, variant: str | None, settings: list[tuple[str, str]], *, dry_run: bool
 ) -> None:
@@ -304,6 +327,9 @@ def new_idea(
     if variant is None or not settings:
         print(f"{registry_id} is registered; its change needs code (section 1b)")
         say_next(f"{BELAY} code-change {registry_id} --start")
+        return
+    if TRACKS[track].needs_go_ahead:
+        request_go_ahead(idea, registry_id, track, [x for setting in settings for x in setting], dry_run=dry_run)
         return
     spec = write_spec(repo, branch, new_spec_text(registry_id, track, variant, settings), dry_run=dry_run)
     commit = require_clean_pushed_head(repo, branch)
@@ -340,23 +366,30 @@ CODE_RULES = """Rules for the change (code-change --finish checks every one; pas
   6. ./infra/pre-commit.py must pass on the changed files."""
 
 
-def code_change_start(registry_id: str) -> None:
+def code_checkout(registry_id: str) -> tuple[Path, str]:
+    """The checkout and branch an idea's code goes on: this week's branch, or its Track's own branch."""
+    track = parse_track(load_entry(registry_id).get("track") or DEFAULT_TRACK.value)
     repo = repo_root()
-    branch = require_week_branch(repo, datetime.date.today())
+    code = TRACKS[track].code
+    if code == WEEKLY_BRANCH:
+        return repo, require_week_branch(repo, datetime.date.today())
+    return named_checkout(repo, code), code
+
+
+def code_change_start(registry_id: str) -> None:
+    repo, branch = code_checkout(registry_id)
     require_clean_pushed_head(repo, branch)
-    load_entry(registry_id)
     print(f"{registry_id}: edit {repo} on {branch} (clean, at origin/{branch}).\n{CODE_RULES}")
     say_next(f"{BELAY} code-change {registry_id} --finish --model-set <flag>=<on value>   (or --opt-set)")
 
 
 def code_change_finish(registry_id: str, settings: list[tuple[str, str]], *, dry_run: bool) -> None:
-    """Run every check on the uncommitted change, then commit and push it to the weekly branch."""
-    repo = repo_root()
-    branch = require_week_branch(repo, datetime.date.today())
+    """Run every check on the uncommitted change, then commit and push it to its code branch."""
+    repo, branch = code_checkout(registry_id)
     paths = changed_paths(repo)
     if not paths:
         raise SystemExit(f"refusing: nothing changed.\nnext: {BELAY} code-change {registry_id} --start")
-    revert = "next: git checkout -- . && git clean -fd experiments/grug/fast_track tests/grug, then fix and retry"
+    revert = f"next: git -C {repo} checkout -- . && git -C {repo} clean -fd experiments/grug/fast_track tests/grug"
     refuse_outside_allowed(paths)
     print(f"1. paths ok: {paths}")
     with temporary_worktree(repo, "HEAD") as before_dir:
@@ -541,6 +574,49 @@ def escalate(title: str, body: str, idea_id: int | None, registry_id: str | None
     say_next("stop")
 
 
+# ---------- 9. tracks ----------
+
+
+def track_rows() -> list[dict[str, object]]:
+    """Every Track as printed by ``tracks``: the one definition of each launch, from ``config.TRACKS``."""
+    rows = []
+    for track, baseline in TRACKS.items():
+        code = f"{CONFIG.week_branch_prefix}<monday>" if baseline.code == WEEKLY_BRANCH else baseline.code
+        command = None
+        if baseline.launch is not None:
+            command = " ".join(track_command(track, f"{RUN_PREFIX}<X####>-<run>", ("<flags>",), "uv run python"))
+        rows.append(
+            {
+                "track": track.value,
+                "baseline": baseline.description,
+                "code": code,
+                "command": command,
+                "hardware": (
+                    f"{baseline.nodes} node(s) of {baseline.hardware} on {baseline.cluster}" if baseline.nodes else ""
+                ),
+                "priority": baseline.band,
+                "control": CONTROL_RUN,
+                "metric": baseline.metric,
+                "rule": f"{baseline.rule}, noise {baseline.noise}",
+                "go_ahead": baseline.needs_go_ahead,
+            }
+        )
+    return rows
+
+
+def tracks(as_json: bool) -> None:
+    rows = track_rows()
+    if as_json:
+        print(json.dumps(rows, indent=1, ensure_ascii=False))
+        return
+    for row in rows:
+        print(f"{row['track']}: {row['baseline']}")
+        for key in ("code", "command", "hardware", "priority", "control", "metric", "rule"):
+            print(f"  {key}: {row[key] or '(none: a maintainer runs it)'}")
+        if row["go_ahead"]:
+            print("  go-ahead: a maintainer approves each launch; sessions escalate with the exact command")
+
+
 def main(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -575,6 +651,7 @@ def main(argv: list[str]) -> None:
     p.add_argument("--today", type=datetime.date.fromisoformat, help="pretend date (with --dry-run only)")
     p = command("recipe-change")
     p.add_argument("--from", dest="source", required=True, help="the branch whose tip becomes the new recipe")
+    command("tracks").add_argument("--json", action="store_true", help="the table as JSON (web/tracks.json)")
     p = command("escalate")
     p.add_argument("--title", required=True)
     p.add_argument("--body", required=True)
@@ -606,6 +683,8 @@ def main(argv: list[str]) -> None:
         weekly_rollover(today, fresh=args.fresh, dry_run=args.dry_run)
     elif args.command == "recipe-change":
         recipe_change(args.source, today, dry_run=args.dry_run)
+    elif args.command == "tracks":
+        tracks(args.json)
     else:
         escalate(args.title, args.body, args.idea_id, args.registry_id, dry_run=args.dry_run)
 

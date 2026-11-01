@@ -115,3 +115,15 @@ def temporary_worktree(repo: Path, ref: str) -> Iterator[Path]:
             yield path
         finally:
             git(repo, "worktree", "remove", "--force", str(path))
+
+
+def named_checkout(repo: Path, branch: str) -> Path:
+    """A worktree of ``repo`` on ``branch`` (created next to ``repo`` on first use), for a Track whose code is not on
+    the weekly branch."""
+    path = repo.parent / f"{repo.name}__{branch}"
+    if not path.exists():
+        git(repo, "fetch", "--quiet", "origin", branch)
+        git(repo, "worktree", "add", "--quiet", "-B", branch, str(path), f"origin/{branch}")
+    if current_branch(path) != branch:
+        raise SystemExit(f"refusing: {path} is on {current_branch(path)}, not {branch}")
+    return path

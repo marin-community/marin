@@ -1,6 +1,6 @@
 {
  "updated": "2026-11-01",
- "form": "Paloma macro loss L(C) = 1.2 + A·C^−α on analytic training FLOPs C; BPB = L ÷ (loss/BPB ratio, linear in log10 C per ladder)",
+ "form": "Paloma macro loss L(C) = 1.2 + A\u00b7C^\u2212\u03b1 on analytic training FLOPs C; BPB = L \u00f7 (loss/BPB ratio, linear in log10 C per ladder)",
  "floor": 1.2,
  "gb200_hours": 300000,
  "peak_flops": 2500000000000000.0,
@@ -112,11 +112,11 @@
   "to": "aughero",
   "from": "s7n"
  },
- "caveat": "* Extrapolation of ~4,000× past the largest rung, beyond the ~300× expected for a reliable forecast: ±0.002 in α moves loss ±0.009 at the budget. BPB points: byte-weighted for Belay Ckpt Oct 20 2026, token-weighted for Aug Hero.",
+ "caveat": "* Extrapolation of ~4,000\u00d7 past the largest rung, beyond the ~300\u00d7 expected for a reliable forecast: \u00b10.002 in \u03b1 moves loss \u00b10.009 at the budget. BPB points: byte-weighted for Belay Ckpt Oct 20 2026, token-weighted for Aug Hero.",
  "sources": {
-  "points": "W&B marin_moe summaries: eval/paloma/macro_loss, eval/paloma/macro_bpb, throughput/flops_per_example_analytic × batch × steps",
+  "points": "W&B marin_moe summaries: eval/paloma/macro_loss, eval/paloma/macro_bpb, throughput/flops_per_example_analytic \u00d7 batch \u00d7 steps",
   "fit": "refit 2026-11-01 with d1024 (four rungs); reproduces the 2026-10-22 three-rung S7, Ckpt 1 and Aug Hero fits exactly",
-  "mfu": "Aug Hero 28.8%, Ckpt 1 26.9%, S7 34.2% = 36.8% × 0.93 (transcript 2026-10-22T01:01; MFU ladder artifact LNAhYDvbmgrkPbXcUAYV7Y)"
+  "mfu": "Aug Hero 28.8%, Ckpt 1 26.9%, S7 34.2% = 36.8% \u00d7 0.93 (transcript 2026-10-22T01:01; MFU ladder artifact LNAhYDvbmgrkPbXcUAYV7Y)"
  },
  "xlate": {
   "rows": [
@@ -131,10 +131,8 @@
  },
  "competitive_track": {
   "name": "Competitive Track",
-  "tag": "MoE · 207 tokens / active param",
+  "tag": "MoE \u00b7 207 tokens / active param",
   "desc": "For building on the best active scaling recipe.",
-  "src": "Belay Ckpt Oct 20 2026 · belay_s7.py --ladder s7n",
-  "src_url": "https://github.com/marin-community/marin/blob/marin_belay_v1_recipe/experiments/grug/fast_track/belay_s7.py",
   "rows": [
    {
     "rung": "d512",
@@ -175,7 +173,7 @@
    {
     "rung": "d1280L16",
     "label": "d1280L16",
-    "note": "16 layers · batch 1,024",
+    "note": "16 layers \u00b7 batch 1,024",
     "run": "s7n-d1280L16",
     "active": 405700000.0,
     "tokens": 83982548992,

@@ -533,3 +533,8 @@ button.line:hover { background: var(--surface-2); }
   .secnav { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .nextup .dot { animation: none !important; } }
+.track details.launch summary { cursor: pointer; font-size: 13px; color: var(--slate); }
+.track details.launch pre { margin: 8px 0 0; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--slate); }
+.howto .chips { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 4px 0 2px; }
+.howto .chips code { background: var(--line); border-radius: 4px; padding: 1px 6px; }
+.howto .muted { color: var(--slate); font-size: 13px; }
