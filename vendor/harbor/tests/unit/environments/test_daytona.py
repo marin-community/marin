@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from daytona._utils.env import DaytonaEnvReader
+from openai import AsyncOpenAI, AuthenticationError, BadRequestError, PermissionDeniedError
 
 from harbor.agents.terminus_2.tmux_session import TmuxCommandError, TmuxKeystrokeBatch, TmuxSession
 from harbor.environments import daytona, model_relay
@@ -26,7 +27,7 @@ from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
 from harbor.utils.env import task_environment
 from harbor.verifier.verifier import Verifier
-from shellbox.http_service import serve_http
+from shellbox.http_service import HttpRequest, serve_http
 from shellbox.machine import Command, MachineSpec, PackageSpec
 from tests.unit.environments.transport import ProcessMachine, available_port
 
@@ -383,7 +384,7 @@ for failure in ('redirect', 'oversized', 'provider-failure'):
         post('/v1/chat/completions', {{'messages':[failure]}})
         raise AssertionError('upstream failure accepted')
     except urllib.error.HTTPError as error:
-        assert error.code == 502
+        assert error.code == (401 if failure == 'provider-failure' else 502)
         body = error.read().decode()
         assert 'candidate-private' not in body and 'host-capability' not in body
 print('ok')
@@ -495,6 +496,63 @@ print('ok')
             assert result.stdout.strip() == b"ok"
     finally:
         await machine.close()
+
+
+@pytest.mark.parametrize(
+    "status, upstream_error, expected_error, expected_code",
+    [
+        (401, {"message": "invalid host-private credential"}, AuthenticationError, "authentication_error"),
+        (403, {"message": "forbidden host-private capability"}, PermissionDeniedError, "authentication_error"),
+        (
+            400,
+            {"code": "context_length_exceeded", "message": "host-private details"},
+            BadRequestError,
+            "context_length_exceeded",
+        ),
+        (
+            400,
+            {"code": 400, "message": "This model's maximum context length is 131072 tokens: host-private details"},
+            BadRequestError,
+            "context_length_exceeded",
+        ),
+    ],
+    ids=["authentication", "permission", "openai-context", "vllm-context"],
+)
+async def test_model_relay_preserves_sdk_error_classification_without_upstream_details(
+    monkeypatch, status, upstream_error, expected_error, expected_code
+):
+    original_client = httpx.AsyncClient
+
+    def provider(request):
+        assert request.headers["authorization"] == "Bearer host-private"
+        return httpx.Response(status, json={"error": upstream_error})
+
+    class RelayClient(original_client):
+        def __init__(self, **kwargs):
+            kwargs.setdefault("transport", httpx.MockTransport(provider))
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(model_relay.httpx, "AsyncClient", RelayClient)
+    endpoint = "https://provider.example/private-capability/v1"
+    with host_model_authentication({endpoint: "host-private"}):
+        relay = ModelRelay(endpoint, "candidate")
+
+    async def guest(request):
+        response = await relay.handle(HttpRequest("POST", request.url.path, request.content))
+        assert b"host-private" not in response.body
+        assert b"private-capability" not in response.body
+        return httpx.Response(response.status, content=response.body)
+
+    async with AsyncOpenAI(
+        base_url="http://guest.test/v1",
+        api_key="EMPTY",
+        max_retries=0,
+        http_client=RelayClient(transport=httpx.MockTransport(guest)),
+    ) as client:
+        with pytest.raises(expected_error) as failure:
+            await client.chat.completions.create(model="guest-choice", messages=[])
+    assert failure.value.code == expected_code
+    assert "host-private" not in str(failure.value)
 
 
 def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(

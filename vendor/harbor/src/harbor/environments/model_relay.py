@@ -92,8 +92,6 @@ class ModelRelay:
                     json=payload,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                 ) as response:
-                    if not response.is_success:
-                        return HttpResponse(502, b'{"error":"model request failed"}')
                     body = bytearray()
                     async for chunk in response.aiter_bytes():
                         if len(body) + len(chunk) > MAX_BODY:
@@ -101,6 +99,8 @@ class ModelRelay:
                                 502, b'{"error":"model response exceeded limit"}'
                             )
                         body.extend(chunk)
+                    if not response.is_success:
+                        return _upstream_error(response.status_code, bytes(body))
                     if streaming:
                         try:
                             events = _completion_events(json.loads(body))
@@ -116,6 +116,32 @@ class ModelRelay:
                     return HttpResponse(response.status_code, bytes(body))
         except httpx.HTTPError:
             return HttpResponse(502, b'{"error":"model request failed"}')
+
+
+def _upstream_error(status: int, body: bytes) -> HttpResponse:
+    """Preserve SDK failure classification without exposing upstream capabilities."""
+    if status in (401, 403):
+        return HttpResponse(
+            status,
+            b'{"error":{"type":"authentication_error","code":"authentication_error",'
+            b'"message":"Model authentication required"}}',
+        )
+    if status in (400, 413, 422):
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            payload = None
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict) and (
+            error.get("code") == "context_length_exceeded"
+            or "maximum context length" in str(error.get("message", "")).lower()
+        ):
+            return HttpResponse(
+                400,
+                b'{"error":{"type":"invalid_request_error","code":"context_length_exceeded",'
+                b'"message":"Maximum context length exceeded"}}',
+            )
+    return HttpResponse(502, b'{"error":"model request failed"}')
 
 
 def _completion_events(completion: dict) -> bytes:
