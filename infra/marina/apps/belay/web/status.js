@@ -1,6 +1,8 @@
-// Marin Belay status page: the idea checklist (one row per registry idea, its gates, recipe status and potential),
-// then what is running and the activity feed, from the registry results plus the public state (read-only, the same
-// data the static export publishes). Loaded after common.js.
+// Marin Belay status page: the idea checklist (one row per registry idea, its gates, recipe status and potential;
+// a row expands in place to the agent's thread for it), what is running, the agent log and the activity feed, from
+// the registry results plus the public state (read-only, the same data the static export publishes). status#X####
+// opens that idea's row. Agent text is rendered by markdown(), which builds DOM text nodes only (no HTML) and links
+// only http(s) URLs. Loaded after common.js.
 
 let registry = null // the registry's results JSON (ideas with trials, events, potential)
 let state = null // the public state last read from the API
@@ -99,6 +101,11 @@ function gateChip(g, more = null) {
   return cell
 }
 const checklistView = { sort: 'potential', query: '' }
+const openRows = new Set() // checklist rows expanded to their thread, by registry id
+const logView = { query: '' }
+const openPosts = new Set() // agent log entries expanded, by registry id
+const REGISTRY_BLOB = 'https://github.com/marin-community/marin/blob/marin_belay_v1_registry/experiments/belay'
+const XID = /^X\d{4,}$/
 
 const expandedIdeas = new Set()
 const KIND_CLASS = { better: 'won', worse: 'lost', neutral: 'noise' }
@@ -107,7 +114,6 @@ const STATE_CLASS = { recorded: 'in', running: 'won', planned: 'tested', approve
 const STATE_WORD = {
   pending: 'waiting',
   approved: 'approved, queued',
-  upstream: 'approved on GitHub, not queued',
   planned: 'planned',
   running: 'running',
   recorded: 'recorded',
@@ -282,10 +288,12 @@ function checklistRows(cfg) {
   const live = new Map(state.runs.filter((r) => !TERMINAL.has(r.state)).map((r) => [r.registry_id, r]))
   return registry.ideas.map((idea) => {
     const pageIdea = state.ideas.find((i) => i.registry_id === idea.xid)
+    // A link from before the agent log: an idea's post on the old running issue, kept in place there.
     const comment = (idea.trials ?? []).map((t) => t.comment_url).find((u) => (u ?? '').includes('issuecomment-'))
     return {
       idea,
       comment,
+      thread: (state.threads ?? []).find((t) => t.registry_id === idea.xid),
       date: approvalDate(idea, pageIdea),
       author: idea.author,
       accepted: inLiveRecipe(idea, cfg.recipe_tag),
@@ -317,37 +325,88 @@ function renderChecklist() {
     { class: 'ck-row ck-head', role: 'row' },
     ['Idea', 'Author', 'Date', 'Dense', 'Speedrun', 'Hero MFU', 'Projection', 'Recipe', 'Potential'].map((h) => el('span', { role: 'columnheader' }, h)),
   )
-  setChildren(
-    'checklist',
-    head,
-    rows.map((r) =>
-      el(
-        'div',
-        { class: `ck-row${r.accepted ? ' live' : ''}`, id: r.idea.xid, role: 'row', title: r.accepted ? `In the live recipe, ${config.recipe_tag}` : '' },
-        el(
-          'span',
-          { class: 'ck-idea', 'data-label': 'Idea' },
-          el('span', { class: 'xid mono' }, r.comment ? link(r.comment, r.idea.xid) : r.idea.xid),
-          ' ',
-          link(registryUrl(r.idea), r.idea.name),
-        ),
-        el('span', { 'data-label': 'Author' }, link(`https://github.com/${r.author}`, `@${r.author}`)),
-        el('span', { class: 'mono', 'data-label': 'Date' }, r.date),
-        el('span', { 'data-label': 'Dense' }, gateChip(r.dense)),
-        el('span', { 'data-label': 'Speedrun' }, gateChip(r.speedrun, r.comment ? link(r.comment, '#9451 comment') : null)),
-        el('span', { 'data-label': 'Hero MFU' }, gateChip(r.hero)),
-        el('span', { 'data-label': 'Projection' }, gateChip(r.scaling)),
-        el('span', { 'data-label': 'Recipe' }, recipeCell(r.idea, config.recipe_tag)),
-        el(
-          'span',
-          { 'data-label': 'Potential' },
-          r.score === null
-            ? el('span', { class: 'muted', title: r.idea.potential?.rationale ?? '' }, r.idea.potential ? 'n/a' : '–')
-            : el('span', { class: 'score', title: `${r.idea.potential.rationale} (${r.idea.potential.model}, ${r.idea.potential.date})` }, `${r.score}/10`),
-        ),
-      ),
+  setChildren('checklist', head, rows.map((r) => checklistRow(r, registryUrl)))
+}
+
+// The analysis reports of the idea's Track trials (one per trial, on the registry branch).
+function analysisLinks(idea, cfg) {
+  const tracks = new Set(cfg.tracks.map((t) => t.track))
+  return (idea.trials ?? [])
+    .filter((t) => tracks.has(t.rung) && (t.wandb ?? []).length)
+    .map((t) => link(`${REGISTRY_BLOB}/analysis/${idea.xid}/${t.id}.md`, `${idea.xid} ${t.id}`))
+}
+
+function threadDetail(r, cfg) {
+  const analyses = analysisLinks(r.idea, cfg)
+  return el(
+    'div',
+    { class: 'ck-detail', role: 'cell' },
+    r.thread
+      ? [el('div', { class: 'muted small' }, 'Agent thread · updated ', when(r.thread.updated_at)), markdown(r.thread.body)]
+      : el('p', { class: 'muted small' }, 'No agent thread for this idea.'),
+    el(
+      'div',
+      { class: 'kv' },
+      analyses.length ? el('span', { class: 'kvp' }, el('span', { class: 'k' }, 'Analysis'), ...analyses.flatMap((a, i) => (i ? [' · ', a] : [a]))) : null,
+      r.comment ? el('span', { class: 'kvp' }, el('span', { class: 'k' }, 'Earlier post'), link(r.comment, 'GitHub ↗')) : null,
     ),
   )
+}
+
+function toggleRow(xid) {
+  openRows.has(xid) ? openRows.delete(xid) : openRows.add(xid)
+  renderChecklist()
+  document.getElementById(xid)?.focus({ preventScroll: true })
+}
+
+function checklistRow(r, registryUrl) {
+  const xid = r.idea.xid
+  const open = openRows.has(xid)
+  const row = el(
+    'div',
+    {
+      class: `ck-row${r.accepted ? ' live' : ''}${open ? ' open' : ''}`,
+      id: xid,
+      role: 'row',
+      tabindex: '0',
+      'aria-expanded': String(open),
+      title: r.accepted ? `In the live recipe, ${config.recipe_tag}` : '',
+    },
+    el(
+      'span',
+      { class: 'ck-idea', 'data-label': 'Idea' },
+      el('span', { class: 'xid mono' }, el('a', { href: `#${xid}` }, xid)),
+      ' ',
+      link(registryUrl(r.idea), r.idea.name),
+      el('span', { class: 'ck-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
+    ),
+    el('span', { 'data-label': 'Author' }, link(`https://github.com/${r.author}`, `@${r.author}`)),
+    el('span', { class: 'mono', 'data-label': 'Date' }, r.date),
+    el('span', { 'data-label': 'Dense' }, gateChip(r.dense)),
+    el('span', { 'data-label': 'Speedrun' }, gateChip(r.speedrun)),
+    el('span', { 'data-label': 'Hero MFU' }, gateChip(r.hero)),
+    el('span', { 'data-label': 'Projection' }, gateChip(r.scaling)),
+    el('span', { 'data-label': 'Recipe' }, recipeCell(r.idea, config.recipe_tag)),
+    el(
+      'span',
+      { 'data-label': 'Potential' },
+      r.score === null
+        ? el('span', { class: 'muted', title: r.idea.potential?.rationale ?? '' }, r.idea.potential ? 'n/a' : '–')
+        : el('span', { class: 'score', title: `${r.idea.potential.rationale} (${r.idea.potential.model}, ${r.idea.potential.date})` }, `${r.score}/10`),
+    ),
+    open ? threadDetail(r, config) : null,
+  )
+  // A click on the row (not on a link, a gate chip or the open thread) or Enter toggles it.
+  row.addEventListener('click', (e) => {
+    if (e.target.closest('a, .gcell, .ck-detail')) return
+    toggleRow(xid)
+  })
+  row.addEventListener('keydown', (e) => {
+    if (e.target !== row || (e.key !== 'Enter' && e.key !== ' ')) return
+    e.preventDefault()
+    toggleRow(xid)
+  })
+  return row
 }
 
 function wireChecklist() {
@@ -359,6 +418,49 @@ function wireChecklist() {
     checklistView.query = e.target.value
     renderChecklist()
   })
+  document.getElementById('log-filter').addEventListener('input', (e) => {
+    logView.query = e.target.value
+    renderAgentLog()
+  })
+  window.addEventListener('hashchange', () => openLinkedRow())
+}
+
+// Every agent post, one per idea, each updated in place as the idea moves on; the latest update first.
+function renderAgentLog() {
+  const q = logView.query.toLowerCase()
+  const posts = [...(state.threads ?? [])]
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    .filter((t) => !q || `${t.registry_id} ${t.title} ${t.body}`.toLowerCase().includes(q))
+  document.getElementById('log-n').textContent = String(posts.length)
+  if (!posts.length) {
+    setChildren('agent-log', el('li', { class: 'none' }, q ? 'No posts match' : 'No posts yet'))
+    return
+  }
+  setChildren(
+    'agent-log',
+    posts.map((t) => {
+      const open = openPosts.has(t.registry_id)
+      return el(
+        'li',
+        { class: open ? 'open' : '' },
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'log-head linkish',
+            'aria-expanded': String(open),
+            onclick: () => {
+              open ? openPosts.delete(t.registry_id) : openPosts.add(t.registry_id)
+              renderAgentLog()
+            },
+          },
+          el('span', { class: 'ft' }, t.title),
+          when(t.updated_at),
+        ),
+        open ? el('div', { class: 'log-body' }, markdown(t.body), el('a', { href: `#${t.registry_id}` }, `${t.registry_id} in the checklist`)) : null,
+      )
+    }),
+  )
 }
 
 function renderFeed() {
@@ -387,16 +489,20 @@ function render() {
   renderRunning()
   renderRecent()
   renderChecklist()
+  renderAgentLog()
   renderFeed()
   setChildren('updated', 'updated ', when(state.now))
 }
 
-// A link to status#X#### (from the admin page) scrolls to that idea's row once the checklist has rendered.
+// status#X#### (from a #9514 reply, the agent log or the admin page) opens that idea's row and scrolls to it.
 let linkedRowShown = false
-function revealLinkedRow() {
-  if (linkedRowShown || !location.hash) return
-  linkedRowShown = true
-  document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView({ block: 'center' })
+function openLinkedRow() {
+  const xid = decodeURIComponent(location.hash.slice(1))
+  if (xid === 'agent-log') document.getElementById('agent-log-block')?.scrollIntoView({ block: 'start' })
+  if (!XID.test(xid) || !registry) return
+  openRows.add(xid)
+  renderChecklist()
+  document.getElementById(xid)?.scrollIntoView({ block: 'start' })
 }
 
 async function refresh() {
@@ -407,7 +513,10 @@ async function refresh() {
       fetch(asset('tracks.json')).then((r) => r.json()),
     ])
     render()
-    revealLinkedRow()
+    if (!linkedRowShown) {
+      linkedRowShown = true
+      openLinkedRow()
+    }
   } catch (error) {
     renderNext({ tone: 'blocked', text: `Status unavailable (${error.message})` })
   }

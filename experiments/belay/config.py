@@ -32,12 +32,9 @@ class BelayConfig:
     output_root: str
     wandb_project: str
     repository: str
-    batch_issue: int
-    """Where plans and results are posted when GitHub posting is on."""
+    intake_issue: int
+    """Where ideas are suggested; each approved idea gets one reply there, linking its Status row."""
     page_url: str
-    github_approval_cutover: datetime.datetime
-    """A #9514 comment the intake bot transfers (🚀) after this queues the idea by itself; earlier ones need the
-    admin page's Queue, so the backlog does not flood the queue."""
     default_author: str
     """GitHub login credited for ideas with no #9514 comment and no recorded proposer (internal proposals)."""
 
@@ -63,9 +60,8 @@ PRODUCTION = BelayConfig(
     output_root="tmp/ttl=30d/belay/runs",
     wandb_project="marin-community/marin_moe",
     repository="marin-community/marin",
-    batch_issue=9451,
+    intake_issue=9514,
     page_url="https://marina.oa.dev/belay/",
-    github_approval_cutover=datetime.datetime(2026, 11, 1, 8, 26, tzinfo=datetime.UTC),
     default_author="ClassicLarry",
 )
 
