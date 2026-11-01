@@ -49,7 +49,8 @@
      "loss": 2.2879,
      "bpb": 0.9551
     }
-   ]
+   ],
+   "mfu_1rack": 0.368
   },
   {
    "id": "s7n",
@@ -94,7 +95,8 @@
      "loss": 2.2706,
      "bpb": 0.9459
     }
-   ]
+   ],
+   "mfu_1rack": 0.368
   },
   {
    "id": "ckpt1",
@@ -139,7 +141,8 @@
      "loss": 2.3166,
      "bpb": 0.9677
     }
-   ]
+   ],
+   "mfu_1rack": 0.289
   },
   {
    "id": "aughero",
@@ -184,7 +187,8 @@
      "loss": 2.3664,
      "bpb": 0.9876
     }
-   ]
+   ],
+   "mfu_1rack": null
   }
  ],
  "hero": {
@@ -192,16 +196,33 @@
   "rack_tps": 365800,
   "rack_step": 11.465,
   "flops_per_token": 161100000000.0,
-  "flops_per_token_note": "S7: 6.75669e17 FLOPs per 4,194,304-token step"
+  "flops_per_token_note": "S7: 6.75669e17 FLOPs per 4,194,304-token step",
+  "active_params": 26333000000.0,
+  "active_params_note": "S7 hero-scale active params (matmul weights, routed experts at top-k/384, no embeddings or LM head); counted 2026-10-20 for the ladder sizing"
  },
  "compare": {
   "to": "aughero",
   "from": "s7"
  },
- "caveat": "Extrapolates ~3.6 decades past the largest rung; \u00b10.002 in \u03b1 moves loss \u00b10.009 at the budget. BPB points: s7n and s7l-d1024 byte-weighted, the rest token-weighted.",
+ "caveat": "Extrapolates ~4,000\u00d7 past the largest rung's compute; \u00b10.002 in \u03b1 moves loss \u00b10.009 at the budget. BPB points: s7n and s7l-d1024 byte-weighted, the rest token-weighted.",
  "sources": {
   "points": "W&B marin_moe summaries: eval/paloma/macro_loss, eval/paloma/macro_bpb, throughput/flops_per_example_analytic \u00d7 batch \u00d7 steps",
   "fit": "refit 2026-11-01 with d1024 (four rungs); reproduces the 2026-10-22 three-rung S7, Ckpt 1 and Aug Hero fits exactly",
   "mfu": "Aug Hero 28.8%, Ckpt 1 26.9%, S7 34.2% = 36.8% \u00d7 0.93 (transcript 2026-10-22T01:01; MFU ladder artifact LNAhYDvbmgrkPbXcUAYV7Y)"
+ },
+ "xlate": {
+  "rows": [
+   "aughero",
+   "ckpt1",
+   "s7",
+   "s7n"
+  ],
+  "reference": "aughero",
+  "names": {
+   "aughero": "Marin 535B-A23B",
+   "ckpt1": "Belay Ckpt 1",
+   "s7": "S7",
+   "s7n": "S7, shuffled data + cosine"
+  }
  }
 }

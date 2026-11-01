@@ -138,30 +138,27 @@ function startFront(RD, SC) {
   {
     const h = SC.hero, hc = curve(h.recipe), C_HERO = C_HW_BUDGET * hc.mfu, D_HERO = C_HERO / h.flops_per_token;
     $("h-tps").textContent = human(h.rack_tps); $("h-flops").textContent = sci(C_HERO, 2);
-    $("h-n").textContent = `${(hc.mfu * 100).toFixed(1)}%`; $("h-d").textContent = human(D_HERO);
+    $("h-n").textContent = human(h.active_params); $("h-d").textContent = human(D_HERO);
     $("hc-tps").title = `Measured: ${hc.name} on one GB200 rack (64 GPUs, ${h.rack_step} s/step)`;
     $("hc-flops").title = `300k GB200-hours = ${sci(C_HW_BUDGET, 1)} hardware FLOPs × ${(hc.mfu * 100).toFixed(1)}% MFU (${hc.mfu_note})`;
-    $("hc-n").title = `${hc.name}: ${hc.mfu_note}`;
-    $("hc-d").title = `D = model FLOPs ÷ ${sci(h.flops_per_token, 3)} training FLOPs per token (${h.flops_per_token_note})`;
+    $("hc-n").title = h.active_params_note;
+    $("hc-d").title = `D = model FLOPs ÷ ${sci(h.flops_per_token, 3)} training FLOPs per token (${h.flops_per_token_note}) = ${(D_HERO / h.active_params).toFixed(0)} tokens per active param`;
     $("scaling-caveat").textContent = SC.caveat;
   }
-  // The timeline table below keeps its own placeholder BPB fits.
-  const E = 0.498;
-  const HERO = { hit: 0.07 };
-
-  // ---------- Timeline translation table (placeholder numbers) ----------
-  const XLATE = [
-    { name: "Marin 535B-A23B", hours: 300000, mfu11: 0.288, A: 24.63, a: 0.0842 },
-    { name: "Belay Ckpt 1", hours: 300000, mfu: 0.289, A: 20.01, a: 0.0809 },
-  ];
+  // Timeline table: each recipe's four-rung fit at 300k GB200-hours and its own 11-rack MFU; speedup is the hardware
+  // FLOPs the reference recipe needs for the row's projected BPB over the row's hardware FLOPs.
   {
-    const ref = XLATE[0];
-    $("xlate-body").innerHTML = XLATE.map((r) => {
-      const mfu11r = r.mfu11 ?? r.mfu * (1 - HERO.hit), hw = r.hours * 3600 * 2.5e15, model = hw * mfu11r, bpb = E + r.A * Math.pow(model, -r.a);
-      const refHw = Math.pow((bpb - E) / ref.A, -1 / ref.a) / (ref.mfu11 ?? ref.mfu * (1 - HERO.hit));
-      const spd = refHw / hw;
-      return `<tr><td>${r.name}</td><td class="r">${human(r.hours)}</td><td class="r">${sci(hw, 2)}</td><td class="r">${r.mfu ? (r.mfu * 100).toFixed(1) + "%" : "–"}</td><td class="r">${(mfu11r * 100).toFixed(1)}%</td><td class="r">${sci(model, 2)}</td>`
-        + `<td class="r law">${E} + ${r.A.toFixed(1)}·C<sup>−${r.a}</sup></td><td class="r">${bpb.toFixed(3)}</td><td class="r${r === ref ? "" : " spd"}">${spd.toFixed(2)}×</td></tr>`;
+    const hwFor = (c, target) => {
+      let lo = 17, hi = 27;
+      for (let i = 0; i < 80; i++) { const mid = (lo + hi) / 2; if (Lhw(c, 10 ** mid) > target) lo = mid; else hi = mid; }
+      return 10 ** hi;
+    };
+    const ref = curve(SC.xlate.reference);
+    $("xlate-body").innerHTML = SC.xlate.rows.map((id) => {
+      const c = curve(id), model = C_HW_BUDGET * c.mfu, bpb = Lf(c, model), spd = hwFor(ref, bpb) / C_HW_BUDGET;
+      return `<tr><td>${SC.xlate.names[id]}</td><td class="r">${human(SC.gb200_hours)}</td><td class="r">${sci(C_HW_BUDGET, 2)}</td>`
+        + `<td class="r">${c.mfu_1rack ? (c.mfu_1rack * 100).toFixed(1) + "%" : "–"}</td><td class="r">${(c.mfu * 100).toFixed(1)}%</td><td class="r">${sci(model, 2)}</td>`
+        + `<td class="r law">${SC.floor} + ${c.A.toFixed(1)}·C<sup>−${c.alpha.toFixed(4)}</sup></td><td class="r">${bpb.toFixed(3)}</td><td class="r${c === ref ? "" : " spd"}">${spd.toFixed(2)}×</td></tr>`;
     }).join("");
   }
   const lg = $("legend-scaling");

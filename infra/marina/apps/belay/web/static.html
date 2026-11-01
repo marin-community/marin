@@ -66,7 +66,7 @@
         <div class="hero-strip" aria-label="Hero run budget">
           <div id="hc-tps"><div class="k">Rack tok/s</div><div class="v" id="h-tps">–</div></div>
           <div id="hc-flops"><div class="k">Model FLOPs</div><div class="v" id="h-flops">–</div></div>
-          <div id="hc-n"><div class="k">11-rack MFU</div><div class="v" id="h-n">–</div></div>
+          <div id="hc-n"><div class="k">Active params</div><div class="v" id="h-n">–</div></div>
           <div id="hc-d"><div class="k">Tokens</div><div class="v" id="h-d">–</div></div>
         </div>
         <p class="note scaling-caveat" id="scaling-caveat"></p>
@@ -154,12 +154,11 @@
       <div class="tspec"><div><h4>Mixers</h4><ul><li>KDA (Kimi Delta Attention) local layers</li><li>MLA global layers with a 512-dim KV latent</li><li>Inkling relative-position bias instead of RoPE</li><li>On MLA layers, use partial key offset and QK norm</li></ul></div><div><h4>Residual</h4><ul><li>Block Attention Residuals with 8 blocks</li><li>SConv on attention/MLP outputs</li></ul></div><div><h4>MoE</h4><ul><li>latent MoE, 384 routed experts top-10 with ungated ReLU²</li><li>routed and shared experts 4,608 wide (0.75·d); 1 shared ungated ReLU² expert</li><li>sqrt-softplus renormalized router combine</li><li>ragged all-to-all EP</li></ul></div><div><h4>Embeddings and head</h4><ul><li>gated value embeddings</li><li>logit soft-cap 10</li><li>learnable QK multiplier</li></ul></div><div><h4>Optimizer</h4><ul><li>MuonH (pre-norm, decay power 0.7)</li><li>AdEMAMix Adam for the non-matrix params</li><li>beta1 0.9, beta2 from the starter-kit formula; cosine schedule</li></ul></div><div><h4>Tokenizer</h4><ul><li>16k BPE</li></ul></div><div><h4>Precision</h4><ul><li>MXFP8 on routed experts, dense projections and the expert dispatch</li></ul></div></div>
     </div>
     <div class="kit-table xlate">
-      <div class="xlate-head" style="justify-content:flex-end"><span class="pill est">placeholder numbers</span></div>
       <table class="rungs">
-        <thead><tr><th>Model</th><th class="r">GB200-hours</th><th class="r">Hardware FLOPs</th><th class="r">1-rack MFU</th><th class="r">11-rack MFU</th><th class="r">Model FLOPs</th><th class="r">Projected scaling law</th><th class="r">Projected BPB</th><th class="r">Speedup</th></tr></thead>
+        <thead><tr><th>Model</th><th class="r">GB200-hours</th><th class="r">Hardware FLOPs</th><th class="r">1-rack MFU</th><th class="r">11-rack MFU</th><th class="r">Model FLOPs</th><th class="r">Scaling law (loss)</th><th class="r">Projected BPB</th><th class="r">Speedup</th></tr></thead>
         <tbody id="xlate-body"></tbody>
       </table>
-      <p class="note" style="margin:10px 0 0">Hardware FLOPs = GB200-hours × 3600 × 2.5 PF/s. The 11-rack MFU is the 1-rack MFU measured at gate 3, less 7% for scaling to the full run. Model FLOPs = hardware FLOPs × 11-rack MFU. The scaling law gives Paloma macro BPB as a function of model FLOPs C. Speedup = hardware FLOPs the Marin 535B-A23B recipe (its scaling law and 11-rack MFU) would need to reach the row's projected BPB, ÷ the row's hardware FLOPs.</p>
+      <p class="note" style="margin:10px 0 0">Hardware FLOPs = GB200-hours × 3600 × 2.5 PF/s. 11-rack MFU = 1-rack MFU less 7% (Marin 535B-A23B: measured on 11 racks). Model FLOPs = hardware FLOPs × 11-rack MFU. Scaling law: Paloma macro loss vs model FLOPs C, fit on each recipe's four ladder rungs; BPB = loss ÷ the ladder's loss/BPB ratio. Speedup = hardware FLOPs the Marin 535B-A23B recipe would need for the row's projected BPB ÷ the row's hardware FLOPs.</p>
     </div>
     <details class="calc">
       <summary>How the 300k GB200-hours become tokens and ladder steps</summary>
@@ -169,15 +168,17 @@
           <tbody>
             <tr><td>Belay Ckpt 1</td><td class="r">26.9%</td><td class="r">7.27e23</td><td class="r">1.61e11</td><td class="r">4.51T</td><td class="r">26.3B</td><td class="r">171</td></tr>
             <tr><td>Marin 535B-A23B arch</td><td class="r">28.8%</td><td class="r">7.78e23</td><td class="r">1.44e11</td><td class="r">5.40T</td><td class="r">22.9B</td><td class="r">235</td></tr>
+            <tr><td>S7, as sized for its ladder</td><td class="r">32.55%</td><td class="r">8.79e23</td><td class="r">1.61e11</td><td class="r">5.46T</td><td class="r">26.3B</td><td class="r">207</td></tr>
+            <tr><td>S7, today's MFU</td><td class="r">34.2%</td><td class="r">9.23e23</td><td class="r">1.61e11</td><td class="r">5.73T</td><td class="r">26.3B</td><td class="r">218</td></tr>
           </tbody>
         </table>
 <pre class="formula">model FLOPs = 2.70e24 hardware FLOPs × 11-rack MFU
 tokens      = model FLOPs ÷ training FLOPs per token
 ladder steps = tokens/param × active params ÷ (batch × 4,096)</pre>
-        <p class="note">Belay: 28.9% measured on one rack, less 7% for 11 racks. Marin 535B-A23B: 29.1% measured on 11 racks, 28.8% on our FLOP count. FLOPs per token are analytic (3 × forward, causal attention, routed experts at top-k ÷ 384, 16k vocab); active params exclude embeddings and the LM head.</p>
+        <p class="note">Belay: 28.9% measured on one rack, less 7% for 11 racks. Marin 535B-A23B: 29.1% measured on 11 racks, 28.8% on our FLOP count. S7: its ladder was sized at 35% on one rack (32.55% at 11 racks); the one-rack stack now runs 36.8% (34.2%). FLOPs per token are analytic (3 × forward, causal attention, routed experts at top-k ÷ 384, 16k vocab); active params exclude embeddings and the LM head.</p>
         <table class="rungs">
-          <thead><tr><th>Rung</th><th class="r">Batch (seqs)</th><th class="r">Belay active</th><th class="r">Belay steps</th><th class="r">535B arch active</th><th class="r">535B arch steps</th></tr></thead>
-          <tbody><tr><td class="mono">d512</td><td class="r">128</td><td class="r">27.0M</td><td class="r">8,821</td><td class="r">22.7M</td><td class="r">10,187</td></tr><tr><td class="mono">d768</td><td class="r">128</td><td class="r">76.6M</td><td class="r">24,995</td><td class="r">64.2M</td><td class="r">28,778</td></tr><tr><td class="mono">d1024</td><td class="r">256</td><td class="r">198.2M</td><td class="r">32,323</td><td class="r">169.1M</td><td class="r">37,890</td></tr><tr><td class="mono">d1280</td><td class="r">256</td><td class="r">353.1M</td><td class="r">57,578</td><td class="r">301.5M</td><td class="r">67,576</td></tr></tbody>
+          <thead><tr><th>Rung</th><th class="r">Batch (seqs)</th><th class="r">Belay active</th><th class="r">Belay steps</th><th class="r">535B arch active</th><th class="r">535B arch steps</th><th class="r">S7 active</th><th class="r">S7 steps</th></tr></thead>
+          <tbody><tr><td class="mono">d512</td><td class="r">128</td><td class="r">27.0M</td><td class="r">8,821</td><td class="r">22.7M</td><td class="r">10,187</td><td class="r">27.3M</td><td class="r">10,767</td></tr><tr><td class="mono">d768</td><td class="r">128</td><td class="r">76.6M</td><td class="r">24,995</td><td class="r">64.2M</td><td class="r">28,778</td><td class="r">77.0M</td><td class="r">30,389</td></tr><tr><td class="mono">d1024</td><td class="r">256</td><td class="r">198.2M</td><td class="r">32,323</td><td class="r">169.1M</td><td class="r">37,890</td><td class="r">198.6M</td><td class="r">39,210</td></tr><tr><td class="mono">d1280</td><td class="r">256</td><td class="r">353.1M</td><td class="r">57,578</td><td class="r">301.5M</td><td class="r">67,576</td><td class="r">405.7M<small>16 layers</small></td><td class="r">20,023<small>batch 1,024</small></td></tr></tbody>
         </table>
       </div>
     </details>
@@ -352,7 +353,7 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
 <template id="tpl-status">
 <main class="wrap page">
   <div class="page-head"><h1>Status</h1><span class="muted mono" id="updated"></span></div>
-  <div class="next" id="next" data-tone="idle"></div>
+  <div class="nextup" id="next" data-tone="idle"></div>
   <ol class="pipe" id="pipeline" aria-label="Ideas by stage"></ol>
   <div class="two">
     <section class="block"><h2>Now running</h2><div class="list" id="running"></div></section>
