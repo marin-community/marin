@@ -15,10 +15,10 @@ Two ladders share the model:
 - ``s7n``: the sequence-shuffled v16384 cache (the launcher default), a cosine LR schedule and MuonH decay power 0.7
   (``s7n-*`` runs, marin_belay_v1_fp8quality @ a5a8647840).
 
-Rungs: ``d512``, ``d768``, ``d1024`` (one 8xH100 node each) and ``d1280L16`` (16 layers, batch 1024, four 8xH100
+Rungs: ``d512``, ``d768``, ``d1024`` (one 8xH100 node each) and ``d1280`` (16 layers, batch 1024, four 8xH100
 nodes with experts sharded within each node and data parallel across nodes).
 
-    uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d1280L16 --submit \\
+    uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d1280 --submit \\
         --run-id my-d1280 --target-cluster cw-rno2a --priority batch \\
         --job-env MARIN_PREFIX=s3://marin-us-east-02a/marin --job-env MARIN_TEMP_PREFIX=s3://marin-us-east-02a
 
@@ -84,7 +84,7 @@ RUNGS: dict[str, tuple[str, int, tuple[str, ...]]] = {
     "d512": ("d512", 10767, ()),
     "d768": ("d768", 30389, ()),
     "d1024": ("d1024", 39210, ()),
-    "d1280L16": (
+    "d1280": (
         "d1280",
         20023,
         (

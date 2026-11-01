@@ -5,8 +5,14 @@ This file is the only set of instructions for a Belay session. Follow it exactly
 `B` below means `uv run python -m experiments.belay`. Type it out in full every time.
 
 Each section below is one command, `B <section name>`. Every command ends by printing a line that starts with
-`next:`. Run that line next, unchanged except for the `<placeholders>` it names. When it says `next: stop`, finish
-with the final message in section 7.
+`next:`. Run that line next, unchanged except for the `<placeholders>` it names. When it says `next: stop`, go on
+with the drain loop (section 0b) unless it says the session is done.
+
+A session drains the queue, then exits:
+
+1. `B start --events <file>` and work through every item it lists (sections 1 to 3, 6).
+2. `B wait --events <that file>`, then follow its `next:` line, repeating from step 1 with the file it prints.
+3. When `wait` prints `drained:`, finish with the final message (section 7).
 
 Run section 6 (escalate) and stop when:
 
@@ -25,6 +31,20 @@ A human then decides what happens. Never work around a refusal.
    - `no events`: stop;
    - a numbered `do these in order:` list. Work through it from the top. Each item names its section and its
      first command. An item marked `skip:` needs nothing; go on to the next one.
+
+## 0b. wait (the drain loop)
+
+1. **Run:** `B wait --events <the events file you last worked through>` (give the shell command a 10-minute
+   timeout; a scheduled session adds the `--session <id>` that `claim` printed). It polls the Belay page once a minute and spends no model turns while it waits.
+2. **Expect** one of:
+   - `claimed <n> event(s) into <file>`: new work (a finished run, an overdue run, or a newly approved idea). Run
+     `B start --events <file>` and work through it, then run `wait` again with that file.
+   - `still waiting on <n> run(s) ...`: runs due before this session's hard stop are still going. Run the same
+     `wait` again.
+   - `drained: ...`: nothing is queued and nothing short is running. Runs due later (long ladder rungs) are left to
+     a later session, which the page starts when they finish or run late. Finish with section 7.
+3. **Budget:** after 3 hours or 10 ideas, `wait` takes only run results (finished or overdue runs), so the session
+   finishes what it launched; at 3 hours 45 minutes it prints `drained:` regardless.
 
 ## 1. new-idea (events `approved` and `work_pending`)
 
@@ -64,7 +84,8 @@ A human then decides what happens. Never work around a refusal.
      4. the idea's #9451 comment posted (status `plan`, the planned runs with their steps);
      5. one `launching belay-X####-<run>` per run;
      6. `next: stop (...)`.
-   - **If it prints `held:`:** stop. The idea stays approved, and a later session reruns this step. Running it
+   - **If it prints `held:`:** the launch would pass the node cap (set on the admin page) or the idea's node grant.
+     Stop working on this idea; it stays approved, and a later session reruns this step. Running it
      again resumes where it stopped.
 
 ## 1b. code-change (an idea that needs new code)
@@ -72,7 +93,9 @@ A human then decides what happens. Never work around a refusal.
 The change goes straight onto this week's branch. No human reviews it: passing `--finish` is the only gate.
 
 1. **Run:** `B code-change X#### --start`
-   - **Expect:** the rules below and `next: B code-change X#### --finish --model-set <flag>=<on value>`.
+   - **Expect:** the rules below and `next: B code-change X#### --finish --model-set <flag>=<on value>`. For an
+     idea with recorded code that this branch lacks, it first prints `applied X####'s recorded code (uncommitted)`;
+     check it, then go to step 4.
 2. **If the idea points at a pull request** (`#NNNN`), read it with `gh pr view NNNN --json title,body,files` and
    `gh pr diff NNNN`, and the PRs it builds on the same way. Port the change, and everything it depends on, into
    `experiments/grug/fast_track/`:
@@ -175,15 +198,24 @@ sessions run it only when a maintainer asks. Each post shows a `Reproduce:` line
 
 ## 4. weekly-rollover (when start prints `next: B weekly-rollover`)
 
+Each week's branch starts fresh from `marin_belay_v1_recipe`, the last accepted recipe, and carries only the code
+of ideas still in play: ideas in progress (approved, planned or running, or with a stage still pending) and wins
+not yet adopted. Their code commits come from the registry (`code_commits`). Losses, noise, declined and closed
+ideas stay behind on the old branch; settings-only ideas carry nothing.
+
 1. **Run:** `B weekly-rollover`
    - **Expect:**
-     - `checking out <this week's branch> from origin/<source>`. The source is last week's branch, which keeps its
-       flags, or `marin_belay_v1_recipe` when there is no last week.
-     - The push, then `on <branch>, which contains origin/<base>`.
-     - The list of flag commits since the recipe. A maintainer deletes the flags that never won; sessions do not.
+     - `carrying <n> idea(s): X####, ...`, then `cutting <branch> from origin/marin_belay_v1_recipe` and one
+       `carrying <commit> X####: <flag> (default off)` line per carried commit;
+     - the push, then `on <branch>: origin/marin_belay_v1_recipe plus <n> carried commit(s)`;
      - `next: B start ...`.
-   - **If it prints `merging ... conflicts`:** run the escalate command it prints, then stop.
+   - **If a carried commit conflicts, or the carried code fails its code-change gates on the recipe:** it pushes
+     nothing; run the escalate command it prints, then stop.
 2. Go back to section 0.
+
+To retest an idea that stayed behind, a maintainer re-queues it with the note "retest on current recipe". If it
+needs its code, `B code-change X#### --start` applies its recorded commits (uncommitted), and `--finish` runs the
+gates again and commits them.
 
 ## 5. recipe-change (maintainers only; a session never does this)
 
@@ -194,10 +226,9 @@ section 6 and stops.
    - checks that every Track's launch module exists;
    - merges the branch into `marin_belay_v1_recipe` (fast-forward when possible);
    - tags the new tip `belay-ckpt-<YYYY-MM-DD>`, named "Belay Ckpt <Mon DD YYYY>";
-   - pushes both, and lists the flag commits since the old recipe.
+   - pushes both.
 2. Set `recipe_tag` in `experiments/belay/config.py` to the new tag, then commit and push.
-3. At the next weekly rollover, run `B weekly-rollover --fresh` once. This cuts the new week's branch from the new
-   recipe.
+3. The next weekly rollover cuts the new week's branch from the new recipe.
 
 ## 6. escalate (any mismatch, refusal or judgment call)
 
@@ -251,7 +282,7 @@ metric and rule. Nothing else spells out a launch.
 |---|---|---|---|
 | `vanilla-d512` … `vanilla-d1280` | Vanilla Track at that rung | Paloma macro loss | Δ = variant − control; ≤ −0.005 win, ≥ +0.005 loss |
 | `moe-d512` … `moe-d1280` | Basic MoE at that rung | Paloma macro loss | same |
-| `competitive-d512`, `-d768`, `-d1024`, `-d1280L16` | The current recipe (Belay Ckpt Oct 20 2026) at that rung | Paloma macro loss | same |
+| `competitive-d512`, `-d768`, `-d1024`, `-d1280` | The current recipe (Belay Ckpt Oct 20 2026) at that rung | Paloma macro loss | same |
 | `speedrun` (the default) | The 8-minute d512 run of the current recipe (`belay-8min-ckpt-oct20`: 3,030 steps, Paloma macro 3.0441) | Paloma macro loss | same |
 | `hero-mfu` | The one-rack GB200 MFU stack `mfl-mp-qall` (11.465 s/step, 36.8% MFU), on `marin_belay_v1_hero_mfu` | s/step | Δ = (variant − control) / control, same rack, commit and PGLE profile; ≤ −0.5% win, ≥ +0.5% loss. A maintainer approves each launch |
 | `custom` | Stated by the submitter | stated | escalate |
@@ -263,7 +294,7 @@ metric and rule. Nothing else spells out a launch.
 | Weekly base | Must contain `base_branch`. Production: `marin_belay_v1_recipe`. Demo: `marin_belay_v1_loomdemo` |
 | Registry branch | Demo: `marin_belay_v1_registry_demo`. The demo never touches `marin_belay_v1_registry` |
 | Runs | Seed 0; cluster, priority and nodes per Track (`B tracks`) |
-| Budget | Soft cap of 8 nodes across all Belay runs |
+| Budget | A soft cap on nodes across all Belay runs, set on the admin page (default 8); a maintainer may grant one idea more nodes at approval. Sessions read both from the page and never change them |
 | Posts | Always the Belay page. Also #9451, but only when an approver turns GitHub posting on |
 
 ## 10. Known limits

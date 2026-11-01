@@ -44,6 +44,23 @@ def entry_url(path: Path) -> str:
     return f"https://github.com/{CONFIG.repository}/blob/{CONFIG.registry_branch}/{ENTRIES}/{path.name}"
 
 
+def all_entries() -> list[dict]:
+    """Every registry entry, in id order."""
+    return [yaml.safe_load(p.read_text()) for p in sorted((CONFIG.registry_checkout / ENTRIES).glob("X*.yaml"))]
+
+
+def record_code_commit(registry_id: str, commit: str, *, dry_run: bool) -> Path:
+    """Add an idea's code-change commit to its entry, so a rollover or a retest can cherry-pick it."""
+    path = entry_path(registry_id)
+    entry = yaml.safe_load(path.read_text())
+    commits = entry.setdefault("code_commits", [])
+    if commit not in commits:
+        commits.append(commit)
+    if not dry_run:
+        path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
+    return path
+
+
 def load_entry(registry_id: str) -> dict:
     return yaml.safe_load(entry_path(registry_id).read_text())
 
@@ -101,9 +118,17 @@ def create_entry(idea: Idea, name: str, category: str, track: Track, *, dry_run:
 
 
 def add_trial(
-    registry_id: str, track: Track, protocol: str, variant: str, commit: str, settings: dict[str, str], comment_url: str
+    registry_id: str,
+    track: Track,
+    protocol: str,
+    variant: str,
+    commit: str,
+    settings: dict[str, str],
+    comment_url: str,
+    node_grant: int | None = None,
 ) -> tuple[str, Path]:
-    """A new trial of the entry (``protocol`` is ``equal_steps`` or ``fixed_time``); returns its id and the path."""
+    """A new trial of the entry (``protocol`` is ``equal_steps`` or ``fixed_time``); returns its id and the path.
+    ``node_grant`` records a maintainer's node grant the trial ran under."""
     path = entry_path(registry_id)
     entry = yaml.safe_load(path.read_text())
     trials = entry.setdefault("trials", [])
@@ -120,6 +145,8 @@ def add_trial(
         "settings": settings,
         "commit": commit[:10],
     }
+    if node_grant is not None:
+        trial["node_grant"] = node_grant
     trials.append(trial)
     entry["status"] = "running"
     path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))

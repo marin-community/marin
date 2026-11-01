@@ -37,10 +37,23 @@ class Idea:
     decided_by: str | None
     decided_at: str | None
     note: str | None
+    node_grant: int | None
+    """A maintainer's node grant: this idea's launches may hold up to this many nodes, past the global cap."""
 
     @property
     def name(self) -> str:
         return (self.title or self.body.strip().splitlines()[0])[:90]
+
+
+@dataclass(frozen=True)
+class Expectation:
+    name: str
+    expected_at: str
+    state: str | None
+
+    @property
+    def live(self) -> bool:
+        return self.state is None or self.state not in TERMINAL_RUN_STATES
 
 
 @dataclass(frozen=True)
@@ -62,6 +75,11 @@ class PageState:
     ideas: list[Idea]
     runs: list[PageRun]
     github_posting: bool
+    node_cap: int
+    """The global soft cap on nodes held by Belay runs, set by a maintainer on the admin page."""
+    expectations: list[Expectation]
+    """Every launched run's expected finish, and its state once the watcher has seen it."""
+    sessions: list[dict]
 
     def idea(self, idea_id: int) -> Idea:
         for idea in self.ideas:
@@ -108,7 +126,17 @@ def page_state() -> PageState:
         ideas=[Idea(**_fields(Idea, i)) for i in state["ideas"]],
         runs=[PageRun(**_fields(PageRun, r)) for r in state["runs"]],
         github_posting=state["settings"]["github_posting"],
+        node_cap=state["settings"]["node_cap"],
+        expectations=[Expectation(**_fields(Expectation, e)) for e in state["expectations"]],
+        sessions=state["sessions"],
     )
+
+
+def expect_finish(run_name: str, expected_at: datetime.datetime, *, dry_run: bool) -> None:
+    """Tell the app when a launched run should finish."""
+    if dry_run:
+        return
+    call("agent/runs/expected", {"name": run_name, "expected_at": expected_at.isoformat()}, token=service_token())
 
 
 def report_idea(idea_id: int, report: dict, *, dry_run: bool) -> None:
