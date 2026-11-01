@@ -242,7 +242,12 @@ def print_idea_brief(idea: Idea, track: Track, defaulted: bool) -> None:
     print(f"idea #{idea.id}: {idea.name}\n\n{idea.body.strip()}\n")
     label = track_label(track, defaulted)
     print(f"{label}: {baseline.description}; judged on {baseline.metric}, noise {baseline.noise}.\n")
-    print("Check 1, house rules: if the idea asks for anything in RUNBOOK.md section 8, run section 6 and stop.")
+    if (idea.note or "").startswith(MAINTAINER_NOTE):
+        print(f"MAINTAINER NOTE (follow it; it settles the checks it addresses):\n{idea.note}\n")
+    print(
+        "Check 1, house rules: if the idea asks for anything in RUNBOOK.md section 8, run section 6 and stop, unless "
+        "the maintainer note says how to meet the rule; then follow the note."
+    )
     print(f"Check 2, category (the best match; 'Unsorted' if none): {', '.join(categories())}")
     print("Check 3, settings: the fields below that make the change. If none does, the idea needs code (section 1b).")
     for line in setting_fields():
@@ -275,6 +280,7 @@ def write_spec(repo: Path, branch: str, text: str, *, dry_run: bool) -> Experime
 
 MAX_NAME = 50
 RETEST = "retest on current recipe"
+MAINTAINER_NOTE = "Maintainer "  # the app's prefix for a re-queue note
 SPECS = Path("experiments/belay/runs")
 
 
