@@ -161,8 +161,20 @@ function recipeCell(idea) {
   const event = recipeEvent(idea)
   const day = event ? new Date(`${event.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
   if (event?.type === 'adopted') return el('span', { class: 'gate-chip won', title: event.note ?? '' }, el('b', {}, '✓'), ` ${recipeTag}`)
-  if (event?.type === 'removed') return el('span', { class: 'gate-chip noise', title: event.note ?? '' }, el('b', {}, '↺'), ` removed at ${day}`)
+  if (event?.type === 'removed') {
+    return el(
+      'span',
+      { class: 'recipe-cell' },
+      el('span', { class: 'gate-chip noise', title: event.note ?? '' }, el('b', {}, '↺'), ` removed at ${day}`),
+      el('span', { class: 'gate-chip run', title: 'In Belay Ckpt 1, not in the live recipe: retested on the current recipe' }, retestStage(idea, event)),
+    )
+  }
   return el('span', { class: 'gate-chip tested' }, el('b', {}, '–'))
+}
+
+// A Ckpt 1 idea the live recipe dropped is retested on the current recipe: "retest" until a speedrun trial lands.
+function retestStage(idea, event) {
+  return idea.trials.some((t) => t.rung === 'speedrun' && t.date >= event.date) ? 'retested' : 'retest'
 }
 
 function approvalDate(idea, pageIdea) {
@@ -199,7 +211,7 @@ function renderChecklist() {
   if (!registry) return
   const q = checklistView.query.toLowerCase()
   const rows = checklistRows()
-    .filter((r) => !q || `${r.idea.xid} ${r.idea.name} ${r.author ?? ''} ${r.idea.category}`.toLowerCase().includes(q))
+    .filter((r) => !q || `${r.idea.xid} ${r.idea.name} ${r.author ?? ''} ${r.idea.category} ${recipeEvent(r.idea)?.type === 'removed' ? 'retest' : ''}`.toLowerCase().includes(q))
     .sort(SORTS[checklistView.sort])
   document.getElementById('checklist-n').textContent = String(rows.length)
   const registryUrl = (x) => `https://github.com/marin-community/marin/blob/marin_belay_v1_registry/experiments/belay/registry/${x.xid}-${x.id}.yaml`

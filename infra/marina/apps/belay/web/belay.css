@@ -501,6 +501,7 @@ button.line:hover { background: var(--surface-2); }
 .gate-chip.lost { background: var(--worse-soft); color: var(--worse); }
 .gate-chip.run { background: transparent; color: var(--amber); border: 1px solid var(--amber); }
 .gate-chip.tested { background: transparent; color: var(--faint); }
+.recipe-cell { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .score { font: 600 13px var(--mono); color: var(--ink); background: var(--surface-2); border-radius: 8px; padding: 2px 8px; cursor: help; }
 @media (max-width: 760px) {
   .ck-head { display: none; }
