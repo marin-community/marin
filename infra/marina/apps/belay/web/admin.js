@@ -9,6 +9,7 @@ let settingsLoaded = false
 const INTAKE_ISSUE = 'https://api.github.com/repos/marin-community/marin/issues/9514'
 const BOTS = new Set(['marin-belay-bot', 'loom-oa-dev[bot]'])
 let intakeComments = null // the newest #9514 comments, read from GitHub in this browser on load and on Reload
+let intakeError = null
 
 async function api(path, body) {
   const options =
@@ -175,13 +176,19 @@ function requeueWithGrant(idea, suggested) {
 // and freezes its text at the approval.
 async function loadIntake() {
   try {
-    const issue = await fetch(INTAKE_ISSUE).then((r) => r.json())
+    const github = async (url) => {
+      const response = await fetch(url)
+      if (!response.ok) throw new Error(response.status === 403 ? 'GitHub rate limit for this browser; Reload later' : `${response.status}`)
+      return response.json()
+    }
+    const issue = await github(INTAKE_ISSUE)
     const last = Math.max(1, Math.ceil(issue.comments / 30))
-    const page = await fetch(`${INTAKE_ISSUE}/comments?per_page=30&page=${last}`).then((r) => r.json())
+    const page = await github(`${INTAKE_ISSUE}/comments?per_page=30&page=${last}`)
     intakeComments = page.filter((c) => c.user.type !== 'Bot' && !BOTS.has(c.user.login)).reverse()
+    intakeError = null
   } catch (error) {
     intakeComments = []
-    toast(`GitHub unavailable: ${error.message}`)
+    intakeError = error.message
   }
   renderIntakeLive()
 }
@@ -192,7 +199,7 @@ function renderIntakeLive() {
     return
   }
   if (!intakeComments.length) {
-    setChildren('intake-live', el('div', { class: 'none' }, 'No comments'))
+    setChildren('intake-live', el('div', { class: 'none' }, intakeError ? `GitHub unavailable: ${intakeError}` : 'No comments'))
     return
   }
   const known = new Map(state.ideas.filter((i) => i.comment_id).map((i) => [String(i.comment_id), i]))
