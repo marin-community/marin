@@ -4,7 +4,7 @@ name: Remove GatedNorm on embedding / lm_head input
 category: Normalization
 summary: Use plain RMSNorm instead of RMSNorm+GatedNorm on the embedding and before the lm_head.
 source: maintainer
-status: adopted
+status: running
 first_batch: 10
 tags:
 - gatednorm
@@ -70,6 +70,18 @@ trials:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
   tuned: embed / final / both
+- id: t004
+  variant: embed_gated_norm=false, final_gated_norm=false
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0037
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562765958
+  wandb: []
+  settings:
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+  commit: 49539f058a
 events:
 - type: adopted
   batch: '17'
