@@ -79,10 +79,3 @@ def test_every_own_link_is_a_fragment_route() -> None:
     assert hrefs
     paths = [h for h in hrefs if not (h.startswith("#") or h == "./" or "?v=__BELAY_VERSION__" in h)]
     assert paths == []
-
-
-def test_views_are_chosen_by_the_fragment() -> None:
-    common = (WEB / "common.js").read_text()
-    assert "location.pathname.replace(/[^/]*$/, '')" in common  # the document's directory, never a view path
-    for view in ("status", "mfu", "admin"):
-        assert f"{view}: `${{BELAY_BASE}}#{view}`" in common

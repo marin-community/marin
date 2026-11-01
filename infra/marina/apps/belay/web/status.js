@@ -319,7 +319,7 @@ function renderChecklist() {
     .filter((r) => !q || `${r.idea.xid} ${r.idea.name} ${r.author ?? ''} ${r.idea.category} ${recipeEvent(r.idea, config.recipe_tag)?.type === 'removed' ? 'retest' : ''}`.toLowerCase().includes(q))
     .sort(SORTS[checklistView.sort])
   document.getElementById('checklist-n').textContent = String(rows.length)
-  const registryUrl = (x) => `https://github.com/marin-community/marin/blob/marin_belay_v1_registry/experiments/belay/registry/${x.xid}-${x.id}.yaml`
+  const registryUrl = (x) => `${REGISTRY_BLOB}/registry/${x.xid}-${x.id}.yaml`
   const head = el(
     'div',
     { class: 'ck-row ck-head', role: 'row' },
