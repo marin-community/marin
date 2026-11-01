@@ -4,7 +4,7 @@ name: AdEMAMix on Adam groups
 category: Optimizers
 summary: Adds a slow gradient EMA to Adam's first moment for the Adam parameter groups.
 source: agent
-status: adopted
+status: running
 first_batch: 77
 tags:
 - ademamix
@@ -254,6 +254,18 @@ trials:
   settings:
     adam_ademamix_alpha: '0'
   note: AdEMAMix pays at d768
+- id: t012
+  variant: adam_ademamix_alpha=5.0, adam_ademamix_beta3=0.98
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0120
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562786148
+  wandb: []
+  settings:
+    adam_ademamix_alpha: '5.0'
+    adam_ademamix_beta3: '0.98'
+  commit: 1244ef6ec4
 events:
 - type: adopted
   batch: '78'
