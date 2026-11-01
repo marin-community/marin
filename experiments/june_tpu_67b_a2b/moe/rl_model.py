@@ -55,10 +55,25 @@ class JuneSnowballConfig(SnowballConfig):
         return JuneSnowballLMHeadModel
 
     def training_config(self) -> GrugModelConfig:
+        """The June training config: every Snowball field June's kernels share, from this config.
+
+        Snowball-only runtime settings (numerics options of the Levanter forward) have no June kernel. They pass
+        through only at their defaults; a set one raises, so a run never trains without a setting it asked for.
+        """
+        june_fields = {field.name for field in dataclasses.fields(GrugModelConfig)}
+        unsupported = [
+            field.name
+            for field in dataclasses.fields(SnowballConfig)
+            if field.name not in june_fields
+            and field.name not in ("reference_checkpoint", "tokenizer")
+            and getattr(self, field.name) != field.default
+        ]
+        if unsupported:
+            raise ValueError(f"June's training kernels do not implement {unsupported}")
         fields = {
             field.name: getattr(self, field.name)
             for field in dataclasses.fields(SnowballConfig)
-            if field.name not in ("reference_checkpoint", "tokenizer")
+            if field.name in june_fields
         }
         return GrugModelConfig(**fields, disable_pko=True, disable_long_rope=True, capacity_factor=self.capacity_factor)
 
