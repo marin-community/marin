@@ -41,15 +41,16 @@ yet.
 - **Checkpoints**: an adopted flag is folded into the next recipe branch, which holds only that checkpoint's code
   (today `marin_belay_v1_recipe`).
 - **Runs**: W&B runs (project `marin_moe`) are listed in each trial's `wandb`; new runs carry the id in their name.
-- **Discussion**: plans and results are posted to the Belay page and to #9451; trials link to them (`comment_url`).
+- **Discussion**: plans and results are posted to the Belay page's agent log, one thread per idea at
+  `status#X####`; trials link to it (`comment_url`). Older trials link their #9451 posts, which stay in place.
 
 ## Proposing an idea
 
 Comment on the intake issue ([marin#9514](https://github.com/marin-community/marin/issues/9514)) with the template
-in [`intake_template.md`](intake_template.md), one idea per comment. A 👍 from a maintainer approves it: the intake
-bot (every 5 minutes) copies it into [marin#9451](https://github.com/marin-community/marin/issues/9451) and marks
-your comment 🚀. The next Belay session then gives it the next id, writes its `status: approved` entry, and fills
-the entry in as its trials run.
+in [`intake_template.md`](intake_template.md), one idea per comment. A maintainer approves it on the Belay admin
+page (GitHub reactions approve nothing). The next Belay session gives it the next id, writes its `status: approved`
+entry, replies once to your comment with a link to its row on the Belay Status page, and fills the entry in as its
+trials run; the reply is edited with the verdict.
 
 ## Entry format
 
