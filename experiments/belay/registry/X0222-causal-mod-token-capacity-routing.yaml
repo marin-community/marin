@@ -19,7 +19,8 @@ trials:
   batch: X0222
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6561943796
-  wandb: []
+  wandb:
+  - belay-X0222-seed0
   settings:
     mod_routed_frac: '0.8'
   commit: 6b8f1e9a06
