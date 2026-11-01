@@ -89,7 +89,8 @@ trials:
   batch: X0084
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562745363
-  wandb: []
+  wandb:
+  - belay-X0084-seed0
   settings:
     mla_key_offset: 'true'
   commit: c4b66cea21
