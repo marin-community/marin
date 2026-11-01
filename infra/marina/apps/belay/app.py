@@ -586,6 +586,35 @@ def claim_events(conn: Connection, session_id: str) -> dict[str, Any]:
     return {"launch": True, "session_id": session_id, "events": _plain(events)}
 
 
+def requeue_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[str, str]:
+    """Keep the maintainer's note for the session and offer the idea to the next session. A retried re-queue whose
+    event is still unclaimed queues nothing more."""
+    rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
+    if not rows or rows[0]["state"] not in (IdeaState.APPROVED, IdeaState.RECORDED):
+        raise HTTPException(409, f"idea {idea_id} is neither approved nor recorded")
+    conn.execute(
+        text("UPDATE ideas SET state = 'approved', note = :n, updated_at = now() WHERE id = :id"),
+        {"n": f"Maintainer {login}: {note}" if note else None, "id": idea_id},
+    )
+    waiting = _rows(
+        conn,
+        "SELECT id FROM events WHERE kind = :kind AND ref = :ref AND session_id IS NULL",
+        kind=EventKind.WORK_PENDING.value,
+        ref=str(idea_id),
+    )
+    if waiting:
+        return {"state": IdeaState.APPROVED.value}
+    _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} re-queued “{_label(rows[0])}”"))
+    _enqueue(
+        conn,
+        EventKind.WORK_PENDING,
+        str(idea_id),
+        f"idea #{idea_id} re-queued by {login}",
+        {"idea_id": idea_id, "title": rows[0]["title"], "body": rows[0]["body"]},
+    )
+    return {"state": IdeaState.APPROVED.value}
+
+
 def _activity(conn: Connection, post: ActivityPost) -> int:
     return conn.execute(
         text(
@@ -912,28 +941,9 @@ def create_api(services: Services) -> RegisteredApi:
 
     @admin.post("/ideas/{idea_id}/requeue")
     def requeue(idea_id: int, request: MaintainerNote, caller: str = Depends(approver)) -> dict[str, str]:
-        """A maintainer's answer to an escalation, or a rerun of an idea that already has results: keep the
-        maintainer's note for the session and offer the idea to the next session."""
+        """A maintainer's answer to an escalation, or a rerun of an idea that already has results."""
         with engine.begin() as conn:
-            rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
-            if not rows or rows[0]["state"] not in (IdeaState.APPROVED, IdeaState.RECORDED):
-                raise HTTPException(409, f"idea {idea_id} is neither approved nor recorded")
-            login = approver_login(_settings(conn), caller)
-            note = f"Maintainer {login}: {request.note}" if request.note else None
-            conn.execute(
-                text("UPDATE ideas SET state = 'approved', note = :n, updated_at = now() WHERE id = :id"),
-                {"n": note, "id": idea_id},
-            )
-            label = _label(rows[0])
-            _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} re-queued “{label}”"))
-            _enqueue(
-                conn,
-                EventKind.WORK_PENDING,
-                str(idea_id),
-                f"idea #{idea_id} re-queued by {login}",
-                {"idea_id": idea_id, "title": rows[0]["title"], "body": rows[0]["body"]},
-            )
-        return {"state": IdeaState.APPROVED.value}
+            return requeue_idea(conn, idea_id, approver_login(_settings(conn), caller), request.note)
 
     @admin.post("/ideas/{idea_id}/decline")
     def decline(idea_id: int, request: MaintainerNote, caller: str = Depends(approver)) -> dict[str, str]:
