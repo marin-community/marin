@@ -1,0 +1,13 @@
+id: X0222
+slug: causal-mod-token-capacity-routing
+name: Causal MoD token capacity routing
+category: MoE and routing
+summary: Try causal token-level capacity routing in front of the MoE (Mixture-of-Depths style ([arXiv 2404.02258](https://arxiv.org/abs/2404.02258))
+  ), keeping top-k + QB for expert choice.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6497735060
+  author: TimS-ml
+  approved_by: ClassicLarry
