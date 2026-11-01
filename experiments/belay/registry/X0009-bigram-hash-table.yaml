@@ -746,8 +746,8 @@ events:
   note: bigram table dropped for Belay Ckpt 1
 potential:
   score: 7
-  rationale: -0.0255 at equal data on speedrun (step time +17%); equal time probe running; ladder (old rule-A d768 +0.006/+0.009)
-    and MFU not run on current recipe -> 7
+  rationale: -0.0255 at equal data (step +17%); equal-time run (2,602 steps) launched; ladder and MFU not run on current recipe
+    -> 7
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: 6aa3f5503223
+  inputs_digest: 1c7c59a4ceb4
