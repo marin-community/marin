@@ -19,6 +19,7 @@ from belay.app import (
     finish_session,
     migrate,
     offer_pending_work,
+    requeue_idea,
     sync_intake_comments,
 )
 from fastapi import HTTPException
@@ -156,3 +157,11 @@ def test_a_retried_claim_gets_its_events_back(conn) -> None:
 def test_a_finish_report_needs_a_terminal_state() -> None:
     with pytest.raises(ValidationError):
         SessionFinish(state=SessionState.RUNNING, summary="still going")
+
+
+def test_a_retried_requeue_queues_once(conn) -> None:
+    sync_intake_comments(conn, [comment(approved_upstream=False)])
+    approve_idea(conn, idea_id(conn), "maintainer")
+    requeue_idea(conn, idea_id(conn), "ClassicLarry", "retest on current recipe")
+    requeue_idea(conn, idea_id(conn), "ClassicLarry", "retest on current recipe")
+    assert conn.execute(text("SELECT count(*) FROM events WHERE kind = 'work_pending'")).scalar_one() == 1
