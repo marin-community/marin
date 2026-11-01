@@ -127,7 +127,7 @@ HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (
     HarrierContextPhase(end_step=372_000, seq_len=16384),
 )
 # The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
-HERO_FLOPS_BASELINE_TOTAL: float | None = 2.5387233132353885e24
+HERO_FLOPS_BASELINE_TOTAL: float | None = 2.6276788418873884e24
 
 
 def _hero_flops_baseline(
