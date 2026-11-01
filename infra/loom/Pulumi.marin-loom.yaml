@@ -528,11 +528,11 @@ config:
       repo: marin-community/marin
       promptFile: watches/goals.md
       slackChannels: []
-    # Marin Belay's trigger: a cheap check every 30 minutes that runs a session only when the Belay app has queued
-    # events. Disabled until the Belay Marina app (marin#10829) is released and its agent endpoints accept loom-vm.
+    # Marin Belay's trigger: a cheap check every 10 minutes; a session runs only when the Belay app has queued
+    # events, then drains the queue before it exits. Disabled until the Belay Marina app (marin#10829) is released.
     belay:
       enabled: false
-      every: 30m
+      every: 10m
       runTimeoutSeconds: 14400
       profile: belay
       repo: marin-community/marin
