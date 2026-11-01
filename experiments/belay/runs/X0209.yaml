@@ -1,0 +1,16 @@
+experiment: X0209
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: KDA beta init x1, beta in Adam group
+    flags:
+    - --opt-set
+    - kda_beta_group=adam
+    - --model-set
+    - init_std_mult_beta=1
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0151-control
