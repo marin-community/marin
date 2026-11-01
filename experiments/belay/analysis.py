@@ -149,23 +149,30 @@ def _fmt(value: float | None, digits: int) -> str:
 
 
 def write_report(
-    out_dir: Path, header: Header, control: Series, variant: Series, final: dict[str, tuple[float, float | None]]
+    out_dir: Path,
+    header: Header,
+    control: Series,
+    variant: Series,
+    final: dict[str, tuple[float, float | None, float | None]],
 ) -> Path:
-    """Write ``<trial>.md`` and its PNGs into ``out_dir``; ``final`` maps a run name to (final metric, Δ)."""
+    """Write ``<trial>.md`` and its PNGs into ``out_dir``; ``final`` maps a run name to (loss, Δ, BPB)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     loss_png, delta_png = f"{header.trial}_loss.png", f"{header.trial}_delta.png"
     plot_loss(control, variant, out_dir / loss_png)
     plot_delta(control, variant, out_dir / delta_png)
     idea = f"[#9514 comment]({header.idea_url})" if header.idea_url else "maintainer proposal"
     approver = f" · approved by @{header.approver}" if header.approver else ""
-    eval_rows = "\n".join(f"| {name} | {value:.4f} | {_signed(delta)} |" for name, (value, delta) in final.items())
+    eval_rows = "\n".join(
+        f"| {name} | {loss:.4f} | {_signed(delta)} | {_fmt(bpb, 4)} |" for name, (loss, delta, bpb) in final.items()
+    )
     speed_rows = "\n".join(
         f"| {s.run} | {_fmt(_median(s, STEP_TIME), 4)} | {_fmt(_median(s, TOKENS), 0)} |" for s in (control, variant)
     )
     sections = [
         f"# {header.registry_id} · {header.title} · {header.track} · {header.verdict}",
         f"Trial {header.trial} · commit `{header.commit[:10]}` · {idea}{approver}",
-        f"## Final eval\n\n| Run | Paloma macro loss | Δ vs control |\n|---|---|---|\n{eval_rows}\n\n{header.rule}",
+        f"## Final eval\n\n| Run | Paloma macro loss | Δ vs control | Paloma macro BPB |\n|---|---|---|---|\n"
+        f"{eval_rows}\n\n{header.rule}",
         f"## Train loss\n\n![train loss]({loss_png})",
         f"## Δ train loss\n\n![delta loss]({delta_png})",
         f"## Speed (median after step {SKIP_STEPS})\n\n| Run | s/step | tokens/s |\n|---|---|---|\n{speed_rows}",

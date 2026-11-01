@@ -110,6 +110,17 @@ class Track(StrEnum):
     CUSTOM = "custom"
 
 
+class Comparison(StrEnum):
+    """What a Track holds equal between the variant and its control; every post states it above its table."""
+
+    EQUAL_DATA = "equal data"
+    """Both arms train on the same tokens (the rung's steps); wall time is shown."""
+    EQUAL_DATA_THEN_TIME = "equal data, then equal time"
+    """Stage 1 at equal data; only a stage-1 win goes on to stage 2, equal training time (``train_seconds``)."""
+    FIXED_CONFIG = "fixed config"
+    """Same config and hardware; compared on step time."""
+
+
 class Rule(StrEnum):
     """How Δ is measured; lower is better for every metric."""
 
@@ -150,6 +161,13 @@ class Baseline:
     """Δ ≤ -noise is a win, Δ ≥ +noise a loss, anything between is noise."""
     needs_go_ahead: bool
     """A maintainer approves each launch (it shares capacity with production runs); sessions escalate it."""
+    control_name: str = ""
+    """How a post names the control: "speedrun d512", "Basic MoE d768", "hero MFU stack mfl-mp-qall"."""
+    comparison: Comparison = Comparison.EQUAL_DATA
+    train_seconds: float | None = None
+    """Stage 2 of ``EQUAL_DATA_THEN_TIME``: seconds of training per arm (the control's steps x its s/step)."""
+    baseline_steps: int | None = None
+    """The control's steps (stage 1 for both arms)."""
     output_path: bool = True
     """The launcher takes ``--output-path`` (Belay writes under ``CONFIG.output_root``)."""
     seed_run: tuple[str, ...] = ()
@@ -157,6 +175,12 @@ class Baseline:
 
 
 H100 = "8xH100"
+# Steps per rung, as the launchers set them (belay_tracks.RUNGS and belay_s7.RUNGS); posts show them in every table.
+TRACK_STEPS = {
+    "vanilla": {"d512": 720, "d768": 2161, "d1024": 2881, "d1280": 5251},
+    "moe": {"d512": 1971, "d768": 5547, "d1024": 7334, "d1280": 13053},
+}
+COMPETITIVE_STEPS = {"d512": 10767, "d768": 30389, "d1024": 39210, "d1280L16": 20023}
 
 
 def _vanilla_or_moe(track: str, size: str) -> Baseline:
@@ -173,6 +197,8 @@ def _vanilla_or_moe(track: str, size: str) -> Baseline:
         Rule.DIFFERENCE,
         LOSS_NOISE,
         needs_go_ahead=False,
+        control_name=f"{name} {size}",
+        baseline_steps=TRACK_STEPS[track][size],
     )
 
 
@@ -189,6 +215,8 @@ def _competitive(size: str, nodes: int) -> Baseline:
         Rule.DIFFERENCE,
         LOSS_NOISE,
         needs_go_ahead=False,
+        control_name=f"competitive {size}",
+        baseline_steps=COMPETITIVE_STEPS[size],
     )
 
 
@@ -220,6 +248,10 @@ TRACKS: dict[Track, Baseline] = {
         Rule.DIFFERENCE,
         LOSS_NOISE,
         needs_go_ahead=False,
+        comparison=Comparison.EQUAL_DATA_THEN_TIME,
+        train_seconds=480.0,
+        baseline_steps=3030,
+        control_name="speedrun d512",
     ),
     # Rack-to-rack step-time noise is about 20-35 ms (0.2-0.3%). A result counts only against a control on the same
     # rack, at the same commit, with the same PGLE profile; a win is a step at least 0.5% faster.
@@ -235,6 +267,9 @@ TRACKS: dict[Track, Baseline] = {
         Rule.RELATIVE,
         0.005,
         needs_go_ahead=True,
+        comparison=Comparison.FIXED_CONFIG,
+        control_name="hero MFU stack mfl-mp-qall",
+        baseline_steps=30,
         output_path=False,
         seed_run=("--seed-xla-autotune-cache",),
     ),

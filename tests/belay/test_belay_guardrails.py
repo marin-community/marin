@@ -17,10 +17,28 @@ from experiments.belay.analysis import Header, series_from_rows, write_report
 from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
 from experiments.belay.config import CONFIG, TRACKS, WEEKLY_BRANCH, Track
-from experiments.belay.page import require_unedited, visible_text
-from experiments.belay.posts import IdeaRef, PlannedRun, ResultRow, plan_body, result_body, title
+from experiments.belay.page import publish_comment, read_comment, require_unedited, visible_text
+from experiments.belay.posts import (
+    Comment,
+    Row,
+    control_label,
+    hardware,
+    render,
+    stage_section,
+    table,
+    title,
+    updated,
+)
 from experiments.belay.results import Verdict, change, overall_verdict, verdict
-from experiments.belay.submit import IrisJob, check_launch, launch_command, parse_spec, track_of_comment
+from experiments.belay.submit import (
+    IrisJob,
+    check_launch,
+    launch_command,
+    new_spec_text,
+    parse_spec,
+    run_suffix,
+    track_of_comment,
+)
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
@@ -225,50 +243,87 @@ def test_idea_with_prior_trials_is_held_unless_retest_requested() -> None:
     assert prior_trials_hold({}, None) is None
 
 
-REF = IdeaRef(
-    "https://github.com/marin-community/marin/issues/9514#issuecomment-1",
-    "RavnaBergsndot",
-    "ClassicLarry",
-    "https://github.com/marin-community/marin/blob/marin_belay_v1_registry/experiments/belay/registry/X0217.yaml",
-)
 WB = "https://wandb.ai/marin-community/marin_moe/runs"
+RECIPE = "[Belay Ckpt Oct 20 2026](https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20)"
 
 
-def test_plan_post_format() -> None:
-    runs = [
-        PlannedRun("belay-X0217-control", "speedrun control", 0, "recipe"),
-        PlannedRun("belay-X0217-seed0", "0.85→0.98 over 10%", 0, "--opt-set momentum=0.98"),
+@pytest.mark.parametrize("track", [t for t in Track if t is not Track.CUSTOM])
+def test_every_table_has_hardware_steps_and_time(track: Track) -> None:
+    plan = table([Row("belay-X0001-control", control_label(track, "abc1234567"), 0, hardware(track), 100)])
+    result = table([Row("belay-X0001-seed0", "v", 0, hardware(track), 100, 0.5, 0.1, 3.0, -0.01, 1.2375)])
+    for text in (plan, result):
+        header = text.splitlines()[0]
+        assert header == (
+            "| Run | Variant | Seed | Hardware | Steps | s/step | Time | Paloma macro loss | Δ vs control "
+            "| Paloma macro BPB |"
+        )
+        assert f"| {hardware(track)} | 100 |" in text
+    assert "| 50 s (+10%) |" in result and result.endswith("| 1.2375 |")
+    assert plan.splitlines()[2].split(" | ")[1].startswith("control: ")
+
+
+def test_control_rows_name_and_link_the_control() -> None:
+    assert control_label(Track.SPEEDRUN, "abc") == f"control: current recipe, {RECIPE} (speedrun d512)"
+    assert control_label(Track.COMPETITIVE_D1024, "abc") == f"control: current recipe, {RECIPE} (competitive d1024)"
+    tracks = "https://github.com/marin-community/marin/blob/abc/experiments/grug/fast_track/belay_tracks.py"
+    assert control_label(Track.MOE_D768, "abc") == f"control: [Basic MoE d768]({tracks})"
+    assert control_label(Track.VANILLA_D512, "abc") == f"control: [Vanilla Track d512]({tracks})"
+    hero = "https://github.com/marin-community/marin/tree/abc"
+    assert control_label(Track.HERO_MFU, "abc") == f"control: [hero MFU stack mfl-mp-qall]({hero})"
+    assert [hardware(t) for t in (Track.SPEEDRUN, Track.COMPETITIVE_D1280L16, Track.HERO_MFU)] == [
+        "8\u00d7H100",
+        "32\u00d7H100",
+        "64\u00d7GB200",
     ]
-    assert title("X0217", "MuonH momentum warmup", Track.SPEEDRUN, "plan") == (
-        "X0217 · MuonH momentum warmup · speedrun · plan"
-    )
-    assert plan_body(Track.SPEEDRUN, runs, "warmup over 10% (idea suggests 10-20%)", REF, "6d1ef53450ab") == (
-        "| Run | Variant | Seed | Settings |\n|---|---|---|---|\n"
-        f"| [belay-X0217-control]({WB}/belay-X0217-control) | speedrun control | 0 | recipe |\n"
-        f"| [belay-X0217-seed0]({WB}/belay-X0217-seed0) | 0.85→0.98 over 10% | 0 | --opt-set momentum=0.98 |\n\n"
-        f"Baseline: {TRACKS[Track.SPEEDRUN].description}\n"
-        "Defaults chosen: warmup over 10% (idea suggests 10-20%)\n"
-        "Rule: Δ ≤ \u22120.006 win · ≥ +0.006 loss · otherwise noise\n"
-        f"Idea: [#9514 comment]({REF.url}) by @RavnaBergsndot · approved by @ClassicLarry · commit `6d1ef53450` · "
-        f"[registry]({REF.registry_url})"
-    )
 
 
-def test_result_post_format() -> None:
-    rows = [
-        ResultRow("belay-X0217-control", "control", 0, 3.045486, None),
-        ResultRow("belay-X0217-seed0", "0.85→0.98 over 10%", 0, 3.067813, 0.0223),
-    ]
-    analysis = ("X0217 t005", "https://example.com/X0217/t005.md")
-    assert result_body(Track.SPEEDRUN, rows, REF, "6d1ef53450ab", analysis) == (
-        "| Run | Variant | Seed | Paloma macro loss | Δ vs control |\n|---|---|---|---|---|\n"
-        f"| [belay-X0217-control]({WB}/belay-X0217-control) | control | 0 | 3.0455 |  |\n"
-        f"| [belay-X0217-seed0]({WB}/belay-X0217-seed0) | 0.85→0.98 over 10% | 0 | 3.0678 | +0.0223 |\n\n"
-        "Rule: Δ ≤ \u22120.006 win · ≥ +0.006 loss · otherwise noise\n"
-        f"Idea: [#9514 comment]({REF.url}) by @RavnaBergsndot · approved by @ClassicLarry · commit `6d1ef53450` · "
-        f"[registry]({REF.registry_url})\n"
-        "Analysis: [X0217 t005](https://example.com/X0217/t005.md)"
+def test_one_comment_per_idea_plan_then_result() -> None:
+    calls: list[list[str]] = []
+    posted: dict[str, str] = {}
+
+    def gh(args: list[str]) -> str:
+        calls.append(args)
+        if "POST" in args:
+            posted["body"] = args[-1].removeprefix("body=")
+            return '{"html_url": "https://github.com/marin-community/marin/issues/9451#issuecomment-7"}'
+        if "PATCH" in args:
+            posted["body"] = args[-1].removeprefix("body=")
+            return "{}"
+        return json.dumps({"body": posted["body"]})
+
+    stage_1 = stage_section(
+        1, "equal data, 3,030 steps per arm", [Row("belay-X0001-seed0", "v", 0, "8\u00d7H100", 3030)]
     )
+    plan = render(Comment(title("X0001", "Toy", Track.SPEEDRUN, "plan"), {1: stage_1}, ["Defaults chosen: none"]))
+    url = publish_comment(None, plan, github_posting=True, dry_run=False, gh=gh)
+    measured = Row("belay-X0001-seed0", "v", 0, "8\u00d7H100", 3030, 0.2, 0.31, 2.98, -0.0578)
+    result = updated(
+        read_comment(url, gh=gh),
+        title("X0001", "Toy", Track.SPEEDRUN, "win at equal data"),
+        1,
+        stage_section(1, "equal data, 3,030 steps per arm", [measured]),
+        ("X0001 t001", "https://example.com/t001.md"),
+    )
+    publish_comment(url, result, github_posting=True, dry_run=False, gh=gh)
+    writes = [c for c in calls if "POST" in c or "PATCH" in c]
+    assert [("POST" in c, "PATCH" in c) for c in writes] == [(True, False), (False, True)]
+    assert posted["body"].startswith("\U0001f916 **X0001 · Toy · speedrun · win at equal data**")
+    assert "\u22120.0578" in posted["body"] and posted["body"].count("**Stage 1.") == 1
+    assert posted["body"].endswith("Analysis: [X0001 t001](https://example.com/t001.md)")
+
+
+def test_a_later_stage_keeps_earlier_sections_and_renames_train_time() -> None:
+    body = (
+        "\U0001f916 **X0221 · CPLM Plus copy head · speedrun · win at equal data · equal-time run pending**\n\n"
+        "**Stage 1. Comparison: equal data.**\n\n| Run | Train time |\n|---|---|\n| a | 481 s |\n\n"
+        "**Stage 2. Comparison: equal time, 480 s of training per arm.** Pending.\n\n"
+        "Defaults chosen: x\nRule: y\nIdea: z\nAnalysis: [X0221 t001](u1)"
+    )
+    stage_2 = stage_section(2, "equal time, 480 s of training per arm", [])
+    new = updated(body, "X0221 · CPLM Plus copy head · speedrun · win at equal time", 2, stage_2, ("X0221 t002", "u2"))
+    assert "| Run | Time |" in new and "Pending" not in new
+    assert new.index("**Stage 1.") < new.index("**Stage 2.") < new.index("Defaults chosen: x")
+    assert new.endswith("Analysis: [X0221 t001](u1) · [X0221 t002](u2)")
 
 
 def test_analysis_report_from_recorded_history(tmp_path: Path) -> None:
@@ -278,11 +333,23 @@ def test_analysis_report_from_recorded_history(tmp_path: Path) -> None:
     header = Header(
         "X0217", "t005", "MuonH momentum warmup", "speedrun", "loss", "6d1ef53450", "ClassicLarry", None, "Rule"
     )
-    final = {"belay-X0217-control": (3.0455, None), "belay-X0217-seed0": (3.0678, 0.0223)}
+    final = {"belay-X0217-control": (3.0455, None, 1.26), "belay-X0217-seed0": (3.0678, 0.0223, 1.27)}
     report = write_report(tmp_path, header, control, variant, final)
     text = report.read_text()
     assert text.startswith("# X0217 · MuonH momentum warmup · speedrun · loss")
     for section in ("## Final eval", "## Train loss", "## Δ train loss", "## Speed", "## Gradient norm"):
         assert section in text
-    assert "| belay-X0217-seed0 | 3.0678 | +0.0223 |" in text
+    assert "| belay-X0217-seed0 | 3.0678 | +0.0223 | 1.2700 |" in text
     assert (tmp_path / "t005_loss.png").stat().st_size > 0 and (tmp_path / "t005_delta.png").stat().st_size > 0
+
+
+def test_run_names_never_repeat_an_earlier_run() -> None:
+    assert run_suffix("X0001", []) == ""
+    used = [
+        IrisJob("/u/belay-X0001-control-coord", "succeeded", ""),
+        IrisJob("/u/belay-X0001-control-b-coord", "failed", ""),
+    ]
+    suffix = run_suffix("X0001", used)
+    assert suffix == "-c"
+    spec = parse_spec(new_spec_text("X0001", Track.SPEEDRUN, "v", [("--opt-set", "muonh_decay_power=0.5")], suffix))
+    check_launch(spec, used)  # no reused name
