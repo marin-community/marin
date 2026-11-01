@@ -93,6 +93,7 @@ PUBLIC_FILES = (
     "mfu.js",
     "mfu.json",
     "scaling.json",
+    "speedrun.json",
     "fonts.css",
     "belay.css",
 )

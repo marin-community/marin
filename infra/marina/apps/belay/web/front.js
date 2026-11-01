@@ -3,7 +3,7 @@
 // `experiments.belay.registry build`); stage 4's fits, points and hero budget come from scaling.json; the accepted
 // records and tracks are measured values kept here. Loaded after common.js.
 
-function startFront(RD, SC) {
+function startFront(RD, SC, SP) {
   const $ = (id) => document.getElementById(id);
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const NS = "http://www.w3.org/2000/svg";
@@ -49,10 +49,10 @@ function startFront(RD, SC) {
     ["Belay Ckpt 1", 1.2562, "--rope", false, 2759, "belay-8min-ckpt1"],
   ];
 
-  // Successful d512 tests: each idea's best d512 trial with a mean delta at least NOISE better, in the order the ideas
-  // were first tested. [name, mean delta (placeholder BPB), in Belay Ckpt 1, W&B run, batch, registry id]
   // Successful d512 tests, from the registry: each idea's best d512 trial whose mean delta is at least NOISE better,
-  // in the order the ideas were first tested. [name, mean delta (placeholder BPB), in Belay Ckpt 1, W&B run, batch, id]
+  // in the order the ideas were first tested. Whether each is in the current recipe comes from speedrun.json, which
+  // maps ideas to the flags of the current recipe's config (true, false, or null when unclear).
+  // [name, mean delta (placeholder BPB), in the current recipe, W&B run, batch, id]
   const WINS = (() => {
     const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
     const wins = [];
@@ -63,7 +63,8 @@ function startFront(RD, SC) {
       const m = avg(best.delta);
       if (m > -0.002) return;
       const first = idea.trials.map((t) => t.date).filter(Boolean).sort()[0] || "";
-      wins.push({ first, order, row: [idea.name, m, idea.status === "adopted", (best.wandb || [])[0] || null, String(best.batch), idea.xid] });
+      const inRecipe = SP.in_recipe[idea.xid]?.in ?? null;
+      wins.push({ first, order, row: [idea.name, m, inRecipe, (best.wandb || [])[0] || null, String(best.batch), idea.xid] });
     });
     wins.sort((a, b) => a.first.localeCompare(b.first) || a.order - b.order);
     return wins.map((w) => w.row);
@@ -97,14 +98,14 @@ function startFront(RD, SC) {
     // Lollipops: from the Aug Hero Arch line down by each test's improvement.
     const yh = Y(hero[1]);
     WINS.forEach(([name, delta, inCkpt, run, batch, xid], i) => {
-      const cx = xw(i), cy = Y(hero[1] + delta), col = inCkpt ? css("--rope") : css("--faint");
+      const cx = xw(i), cy = Y(hero[1] + delta), col = inCkpt === true ? css("--rope") : css("--faint");
       el("line", { x1: cx, x2: cx, y1: yh, y2: cy, stroke: col, "stroke-width": inCkpt ? 1.6 : 1.2, opacity: inCkpt ? 0.8 : 0.7 }, svg);
       el("circle", { cx, cy, r: inCkpt ? 3.6 : 3, fill: col, opacity: inCkpt ? 0.95 : 0.85 }, svg);
       const link = run ? el("a", { href: WB(run), target: "_blank", rel: "noopener", style: "cursor:pointer" }, svg) : svg;
       const hit = el("rect", { x: cx - 5, y: yh, width: 10, height: Math.max(cy - yh + 6, 10), fill: "transparent", tabindex: run ? -1 : 0 }, link);
-      hit.dataset.tip = `<b>${delta.toFixed(4)}</b> · ${esc(name)}${xid ? ` · ${xid}` : ""}<br>${inCkpt ? "In Belay Ckpt 1" : "Not in Belay Ckpt 1"} · best d512 trial, batch ${esc(batch)}<br><span style="opacity:.6">mean Δ vs its baseline, placeholder BPB${run ? ` · ${run} · click to open in W&amp;B` : ""}</span>`;
+      hit.dataset.tip = `<b>${delta.toFixed(4)}</b> · ${esc(name)}${xid ? ` · ${xid}` : ""}<br>${inCkpt === true ? `In ${SP.recipe}` : inCkpt === false ? `Not in ${SP.recipe}` : `Unclear whether in ${SP.recipe}`} · best d512 trial, batch ${esc(batch)}<br><span style="opacity:.6">mean Δ vs its baseline, placeholder BPB${run ? ` · ${run} · click to open in W&amp;B` : ""}</span>`;
     });
-    // The accepted staircase: dense -> Aug Hero Arch -> Belay Ckpt 1.
+    // The accepted staircase: dense -> Aug Hero Arch -> Belay Ckpt 1 (the last recipe with an 8-minute run).
     const stair = segs.map(([[, l], a, b], i) => (i ? `V${Y(l)}` : `M${a},${Y(l)}`) + `H${b}`).join("");
     el("path", { d: stair, fill: "none", stroke: css("--ink"), "stroke-width": 1.4, opacity: 0.35, "stroke-linejoin": "round" }, svg);
     segs.forEach(([[name, l, color, , steps, run], a, b], i) => {
@@ -116,7 +117,7 @@ function startFront(RD, SC) {
       else txt(svg, a + 8, y - 8, label, { fill: css("--slate"), "font-weight": 600, "font-size": 11.5 });
       const link = el("a", { href: WB(run), target: "_blank", rel: "noopener", style: "cursor:pointer" }, svg);
       const hit = el("rect", { x: a - 6, y: y - 8, width: b - a + 12, height: 16, fill: "transparent", tabindex: -1 }, link);
-      hit.dataset.tip = `<b>${l.toFixed(4)}</b> · ${name}${cur ? " · current accepted recipe" : " · accepted"}<br>d512 · 8 min on 8×H100 (${steps.toLocaleString()} steps) · measured Paloma macro BPB<br><span style="opacity:.6">${run} · click to open in W&amp;B</span>`;
+      hit.dataset.tip = `<b>${l.toFixed(4)}</b> · ${name} · accepted<br>d512 · 8 min on 8×H100 (${steps.toLocaleString()} steps) · measured Paloma macro BPB<br><span style="opacity:.6">${run} · click to open in W&amp;B</span>`;
     });
     tipper("box-progress", "tip-progress", svg);
   }
@@ -226,9 +227,9 @@ function startFront(RD, SC) {
     const ex = X(C_EQ), ey = Y(Lt);
     el("line", { x1: ex, x2: hx, y1: ey, y2: ey, stroke: css("--ink"), "stroke-dasharray": "3 3", "stroke-width": 1.6 }, svg);
     el("circle", { cx: ex, cy: ey, r: 4.2, fill: css("--rope"), stroke: css("--surface"), "stroke-width": 1.6 }, svg);
-    txt(svg, ex - 6, ey + 18, `${NX.toFixed(1)}× less compute`, { "text-anchor": "end", fill: css("--ink"), "font-weight": 600, "font-size": 11.5 });
+    txt(svg, ex - 6, ey + 18, `${NX.toFixed(1)}× less compute*`, { "text-anchor": "end", fill: css("--ink"), "font-weight": 600, "font-size": 11.5 });
     const eh = el("circle", { cx: ex, cy: ey, r: 11, fill: "transparent", tabindex: 0 }, svg);
-    eh.dataset.tip = `<b>${NX.toFixed(2)}×</b> less compute to the same BPB (${Lt.toFixed(3)})<br>${nc.name} at ${sci(C_EQ, 2)} vs ${bc.name} at ${sci(C_HW_BUDGET, 2)} hardware FLOPs<br><span style="opacity:.75">from the four-rung fits; each at its own 11-rack MFU</span>`;
+    eh.dataset.tip = `<b>${NX.toFixed(2)}×</b> less compute to the same BPB (${Lt.toFixed(3)})<br>${nc.name} at ${sci(C_EQ, 2)} vs ${bc.name} at ${sci(C_HW_BUDGET, 2)} hardware FLOPs<br><span style="opacity:.75">from the four-rung fits; each at its own 11-rack MFU<br>*extrapolated ~4,000× past the largest rung, so expect large error</span>`;
     tipper("box-scaling", "tip-scaling", svg);
   }
 
@@ -462,12 +463,13 @@ async function front() {
   sections.className = 'nav'
   document.querySelector('.topbar .wrap').insertBefore(sections, document.getElementById('pages'))
   const scalingUrl = STATIC ? 'scaling.json' : `${BELAY_BASE}scaling.json`
-  const [results, status, scaling] = await Promise.all([
+  const [results, status, scaling, speedrun] = await Promise.all([
     loadJson('results'),
     loadJson('state').catch(() => null),
     fetch(scalingUrl).then((r) => r.json()),
+    fetch(STATIC ? 'speedrun.json' : `${BELAY_BASE}speedrun.json`).then((r) => r.json()),
   ])
-  startFront(results, scaling)
+  startFront(results, scaling, speedrun)
   if (status) {
     state = status
     renderLatest(status)

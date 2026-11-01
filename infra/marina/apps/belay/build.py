@@ -21,6 +21,7 @@ for name in (
     "mfu.js",
     "mfu.json",
     "scaling.json",
+    "speedrun.json",
     "admin.js",
     "fonts.css",
     "belay.css",
