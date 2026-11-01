@@ -289,6 +289,9 @@ KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
 MUONH_MOMENTUM_WARMUP_START = 0.85
 """MuonH momentum at step 0 under ``muonh_momentum_warmup`` (modded-nanogpt's warmup start)."""
+BIGRAM_TABLE_LR_MULT = 10.0
+"""Adam LR multiple of the hashed bigram table (``attn_res_bigram_rows``), in the ``embed2`` group."""
+_BIGRAM_TABLE = re.compile(r"(?:^|\.)bigram_embed$")
 _ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult)$")
 _VALUE_EMBED_TABLE = re.compile(r"(?:^|\.)value_embed$")
 
@@ -415,9 +418,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "kda_beta_adam": adam_at(adam_lr, decay=True),
                 "kda_decay": adam_at(adam_lr),
                 # The entropy head and the skip router: no decay pull. (Group names stay as the checkpoints
-                # of earlier runs store them; "embed2" holds no parameter.)
+                # of earlier runs store them; "embed2" holds the bigram table when there is one.)
                 "null_gain": adam_at(adam_lr),
-                "embed2": adam_at(adam_lr),
+                "embed2": adam_at(adam_lr * BIGRAM_TABLE_LR_MULT),
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
                 "embed": embed_at(adam_lr),
             }
@@ -456,6 +459,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "kda_decay"
             if re.search(r"entropy_head|skip_router", path_lower):
                 return "null_gain"
+            if _BIGRAM_TABLE.search(path_lower):
+                return "embed2"
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if "attn_res_query" in path_lower:
                 return "attn_res_query"

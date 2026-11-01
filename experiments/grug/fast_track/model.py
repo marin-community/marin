@@ -250,6 +250,27 @@ def _embedding_gather_bwd(residuals, g: jax.Array):
 
 _embedding_gather.defvjp(_embedding_gather_fwd, _embedding_gather_bwd)
 
+# Pair-combine multiplier and murmur3 finalizer constants of the (previous, current) bigram hash.
+_BIGRAM_HASH_PAIR = 0x9E3779B1
+_MURMUR_C1 = 0x85EBCA6B
+_MURMUR_C2 = 0xC2B2AE35
+
+
+def _bigram_hash_ids(
+    token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None, num_rows: int
+) -> Int[Array, "B S"]:
+    """Hash each (previous token, token) pair into ``num_rows`` rows. The previous token at position 0 or in an
+    earlier document is the sentinel ``num_rows``."""
+    prev = jnp.pad(token_ids[:, :-1], ((0, 0), (1, 0)), constant_values=num_rows)
+    if segment_ids is not None:
+        other_doc = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=True)
+        prev = jnp.where(other_doc, num_rows, prev)
+    x = prev.astype(jnp.uint32) * jnp.uint32(_BIGRAM_HASH_PAIR) + token_ids.astype(jnp.uint32)
+    x = (x ^ (x >> 16)) * jnp.uint32(_MURMUR_C1)
+    x = (x ^ (x >> 13)) * jnp.uint32(_MURMUR_C2)
+    x = x ^ (x >> 16)
+    return (x % jnp.uint32(num_rows)).astype(jnp.int32)
+
 
 def _partition_spec_of(x: jax.Array) -> P | None:
     sharding = jax.typeof(x).sharding if isinstance(x, core.Tracer) else x.sharding
@@ -451,6 +472,10 @@ class GrugModelConfig:
     cplm_plus: bool = False
     """CPLM Plus copy head (``cplm.py``): the next-token distribution mixes the vocabulary softmax with a copy
     distribution over earlier same-document tokens and their case classes. Needs ``cplm.bind_case_tables``."""
+    attn_res_bigram_rows: int = 0
+    """A hashed bigram table with this many full-width rows (0: off): each token reads the row of its (previous
+    token, token) hash, RMS-normed, as an extra AttnRes source ahead of the embedding. Needs ``attn_res``. The
+    optimizer trains the table at ``BIGRAM_TABLE_LR_MULT`` x the Adam LR."""
 
     def __post_init__(self) -> None:
         if self.cplm_plus and self.logit_soft_cap is not None:
@@ -480,6 +505,8 @@ class GrugModelConfig:
                 raise ValueError(f"extra_mlp_frac must be in (0, 1), got {self.extra_mlp_frac}")
         if self.skip_adapter_dim and not self.attn_res:
             raise ValueError("skip_adapter_dim needs attn_res")
+        if self.attn_res_bigram_rows and not self.attn_res:
+            raise ValueError("attn_res_bigram_rows needs attn_res")
         if self.skip_router_layers and (not self.attn_res or not 0.0 < self.skip_router_frac < 1.0):
             raise ValueError("skip_router_layers needs attn_res and 0 < skip_router_frac < 1")
         if self.attn_res_kv_layers:
@@ -1691,7 +1718,9 @@ def _attn_res_layer(
             return _attn_res_mix(blocks, block_logits, p, queries, gate_index, eps, plain_sum=cfg.attn_res_plain_sum)
         # The leading layers' sources: the blocks rolled at layers 0, seg, ... <= the cutoff (each holds only
         # earlier layers); the partial and later blocks are later layers' work.
-        keep = sum(start <= cfg.kv_source_layers for start in attn_res_block_starts(cfg))
+        keep = int(cfg.attn_res_bigram_rows > 0) + sum(
+            start <= cfg.kv_source_layers for start in attn_res_block_starts(cfg)
+        )
         return _attn_res_mix(
             blocks[:keep], block_logits[:keep], None, queries, gate_index, eps, plain_sum=cfg.attn_res_plain_sum
         )
@@ -1855,6 +1884,8 @@ class Transformer(eqx.Module):
     skip_router: Float[Array, " D"] | None  # cfg.skip_router_layers: the skip router's score
     skip_router_bias: Float[Array, ""] | None
     copy_head: CopyHead | None  # cfg.cplm_plus
+    bigram_embed: jax.Array | None  # cfg.attn_res_bigram_rows: the hashed bigram table
+    bigram_norm: RMSNorm | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1906,6 +1937,17 @@ class Transformer(eqx.Module):
             ),
             skip_router_bias=jnp.zeros((), jnp.float32) if cfg.skip_router_layers else None,
             copy_head=CopyHead.init(cfg.hidden_dim, key=key) if cfg.cplm_plus else None,
+            bigram_embed=(
+                reshard(
+                    _init_weight(
+                        random.fold_in(key, 2), (cfg.attn_res_bigram_rows, cfg.hidden_dim), cfg.initializer_std
+                    ),
+                    P(None, None),
+                )
+                if cfg.attn_res_bigram_rows
+                else None
+            ),
+            bigram_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.attn_res_bigram_rows else None,
             config=cfg,
         )
 
@@ -1975,9 +2017,16 @@ class Transformer(eqx.Module):
 
         final_gate_stats: dict[str, jax.Array] = {}
         if cfg.attn_res:
+            extra_sources: tuple[jax.Array, ...] = ()
+            if self.bigram_embed is not None:
+                assert self.bigram_norm is not None
+                doc_ids = None if segment_ids is None else segment_ids[0]
+                bigram_ids = _bigram_hash_ids(token_ids, doc_ids, cfg.attn_res_bigram_rows)
+                extra_sources = (self.bigram_norm(_embedding_gather(self.bigram_embed, bigram_ids)),)
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
                 token_ids,
+                extra_sources,
                 long_mask.with_fa4_bounds(long_lower_bounds, valid),
                 long_mask.with_fa4_bounds(short_lower_bounds, valid),
                 layer_skip,
@@ -2039,6 +2088,7 @@ class Transformer(eqx.Module):
         self,
         hidden: Float[Array, "B S D"],
         token_ids: Int[Array, "B S"],
+        extra_sources: tuple[jax.Array, ...],
         long_layer_mask: AttentionMask,
         short_layer_mask: AttentionMask,
         layer_skip: LayerSkip | None,
@@ -2046,8 +2096,8 @@ class Transformer(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
-        The residual history is a Python tuple of completed block sums (the token embedding is the
-        first, rolled in at layer 0) plus the running partial; each layer in ``attn_res_block_starts`` rolls its
+        The residual history is a Python tuple of completed block sums (``extra_sources`` first, then the token
+        embedding, rolled in at layer 0) plus the running partial; each layer in ``attn_res_block_starts`` rolls its
         incoming partial into a new block. Completed blocks are immutable, so each block's logits
         against the queries of every gate that reads it (layer ``i``'s onwards and the final gate) are
         computed once when it is rolled, and each gate then only scores the partial. Blocks are shared
@@ -2079,8 +2129,11 @@ class Transformer(eqx.Module):
         stats_out: list[dict[str, jax.Array]] = []
         z_out: list[jax.Array] = []
         extra_state: dict[str, jax.Array] = {}
-        blocks: tuple[jax.Array, ...] = ()
-        block_logits: tuple[tuple[jax.Array, ...], ...] = ()
+        # Extra sources are completed blocks from the start, scored once against every gate.
+        blocks: tuple[jax.Array, ...] = extra_sources
+        block_logits: tuple[tuple[jax.Array, ...], ...] = tuple(
+            _logit_rows(_attn_res_source_logits(src, queries, eps)) for src in extra_sources
+        )
         partial: jax.Array | None = hidden
         for i, layer in enumerate(layers):
             if i in starts:
@@ -2143,7 +2196,7 @@ class Transformer(eqx.Module):
             final_stats[_ENTROPY_PRED] = extra_state["pred"]
         if "router_frac" in extra_state:
             final_stats["attn_res_skip_router_frac"] = extra_state["router_frac"]
-        # Source n is block n (the embedding is block 0); "p" is the running partial.
+        # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
             num_blocks = mean_weights.shape[0] - int(has_partial)
             for n in range(num_blocks):
@@ -2405,7 +2458,7 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
 
 
 # Lookup tables: a token reads one row, so they cost no matmul FLOPs.
-_EMBEDDING_TABLES = frozenset({"token_embed", "value_embed"})
+_EMBEDDING_TABLES = frozenset({"token_embed", "value_embed", "bigram_embed"})
 # Per-head or per-expert vectors stored as 2-D arrays that are added, not multiplied.
 _NON_MATMUL_PARAMS = frozenset({"dt_bias", "router_bias", "a_log"})
 
