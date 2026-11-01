@@ -1095,6 +1095,25 @@ def test_environment_relay_rotation_without_model_identity_is_rejected(endpoint)
     assert locks[0] != locks[1]
 
 
+def test_candidate_model_change_without_immutable_agent_identity_rejects_saved_results():
+    task = TaskConfig(name="test-org/test-task", ref=_sha("a"))
+    trials = [
+        _trial(
+            task,
+            agent=AgentConfig(name="pi"),
+            environment=EnvironmentConfig(
+                kwargs={"candidate_model_endpoint": "https://iris.example/v1", "candidate_model_name": model}
+            ),
+        )
+        for model in ("candidate-a", "candidate-b")
+    ]
+    saved_trial = TrialConfig.model_validate_json(trials[0].model_dump_json())
+    assert not saved_trial.matches_identity(trials[1])
+    config = JobConfig(job_name="job", tasks=[task])
+    saved_lock = JobLock.model_validate_json(build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json())
+    assert saved_lock != build_job_lock(config=config, trial_configs=[trials[1]])
+
+
 @pytest.mark.parametrize(
     "provisioning_kwarg",
     [

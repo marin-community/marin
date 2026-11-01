@@ -269,7 +269,7 @@ class EnvironmentConfig(BaseModel):
     def _serialize_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
         return redact_capability_urls(kwargs)
 
-    def identity_fingerprint(self) -> dict[str, Any]:
+    def identity_fingerprint(self, *, candidate_model_identity: str | None) -> dict[str, Any]:
         """Compare relay hosts and models without per-allocation capability routing."""
         dump = self.model_dump()
         for endpoint_name, model_name in (
@@ -282,7 +282,7 @@ class EnvironmentConfig(BaseModel):
                 url = urlsplit(endpoint)
                 if url.hostname:
                     dump["kwargs"][endpoint_name] = (url.scheme.lower(), url.hostname)
-                    if endpoint_name == "candidate_model_endpoint":
+                    if endpoint_name == "candidate_model_endpoint" and candidate_model_identity:
                         # The agent's immutable model_name anchors candidate identity.
                         dump["kwargs"].pop("candidate_model_name", None)
         return dump
@@ -532,7 +532,7 @@ class TrialConfig(BaseModel):
         drift while still rejecting a genuinely different eval.
         """
         dump = self.model_dump(exclude=self._SERVING_TOP_FIELDS)
-        dump["environment"] = self.environment.identity_fingerprint()
+        dump["environment"] = self.environment.identity_fingerprint(candidate_model_identity=self.agent.model_name)
         dump["verifier"] = self.verifier.identity_fingerprint()
         task = dump.get("task")
         if isinstance(task, dict) and task.get("source") == "hf_dataset":

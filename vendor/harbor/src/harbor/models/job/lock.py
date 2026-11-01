@@ -221,7 +221,7 @@ class TrialLock(BaseModel):
                 )
             ),
             tuple(skill._equality_key() for skill in self.skills),
-            _environment_equality_key(self.environment),
+            _environment_equality_key(self.environment, candidate_model_identity=self.agent.model_name),
             _lock_list_equality_key(self.extra_docker_compose),
             _frozen_value(self.verifier.identity_fingerprint()),
         )
@@ -323,8 +323,8 @@ def _agent_equality_key(agent: AgentConfig) -> Any:
     return _frozen_value(sanitized, exclude={"skills", "model_alias"})
 
 
-def _environment_equality_key(environment: EnvironmentConfig) -> Any:
-    fingerprint = environment.identity_fingerprint()
+def _environment_equality_key(environment: EnvironmentConfig, *, candidate_model_identity: str | None) -> Any:
+    fingerprint = environment.identity_fingerprint(candidate_model_identity=candidate_model_identity)
     fingerprint.pop("extra_docker_compose", None)
     for key in TrialConfig._PROVISIONING_ENV_KWARG_KEYS:
         fingerprint["kwargs"].pop(key, None)
