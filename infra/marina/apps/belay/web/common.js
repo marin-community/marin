@@ -7,10 +7,11 @@ const WANDB = 'https://wandb.ai/marin-community/marin_moe/runs/'
 // A static export (GitHub Pages) reads JSON snapshots next to the page instead of the app's API.
 const STATIC = document.body.dataset.static === 'true'
 // The app's root (`/belay/`) for /belay/, /belay/status and /belay/admin; the directory for a static copy.
-const BELAY_BASE = location.pathname.replace(/(status|admin)(\.html)?\/?$/, '').replace(/[^/]*$/, '')
+const BELAY_BASE = location.pathname.replace(/(status|admin|mfu)(\.html)?\/?$/, '').replace(/[^/]*$/, '')
 const PAGES = {
   front: STATIC ? `${BELAY_BASE}index.html` : BELAY_BASE,
   status: STATIC ? `${BELAY_BASE}status.html` : `${BELAY_BASE}status`,
+  mfu: STATIC ? `${BELAY_BASE}mfu.html` : `${BELAY_BASE}mfu`,
   admin: `${BELAY_BASE}admin`,
 }
 const SOURCES = {
@@ -24,6 +25,7 @@ let state = null
 function pageName() {
   if (/\/admin\/?$/.test(location.pathname)) return 'admin'
   if (/\/status(\.html)?\/?$/.test(location.pathname)) return 'status'
+  if (/\/mfu(\.html)?\/?$/.test(location.pathname)) return 'mfu'
   return 'front'
 }
 
@@ -39,9 +41,9 @@ async function loadJson(kind) {
   return response.json()
 }
 
-// Belay · Status · Admin. Admin appears only for callers the server accepts as approvers.
+// Belay · Status · Hero MFU · Admin. Admin appears only for callers the server accepts as approvers.
 async function renderNav(current) {
-  const links = [['front', 'Belay'], ['status', 'Status'], ['admin', 'Admin']]
+  const links = [['front', 'Belay'], ['status', 'Status'], ['mfu', 'Hero MFU'], ['admin', 'Admin']]
   const nav = document.getElementById('pages')
   const show = (canAdmin) =>
     nav.replaceChildren(

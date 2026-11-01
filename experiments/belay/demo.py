@@ -85,7 +85,7 @@ TOKEN_HEADER = "X-Belay-Token"
 # How a session's `demo api` calls receive the service token (Loom would inject it as a profile secret).
 TOKEN_ENV = "BELAY_SERVICE_TOKEN"
 APP_SCHEMA = "belay"
-PUBLIC_FILES = ("boot.js", "common.js", "front.js", "status.js", "fonts.css", "belay.css")
+PUBLIC_FILES = ("boot.js", "common.js", "front.js", "status.js", "mfu.js", "mfu.json", "fonts.css", "belay.css")
 # The public page's speedrun chart and results show macro loss as placeholder BPB until BPB evals land in the registry.
 PLACEHOLDER_BPB_RATIO = "0.4147"
 
@@ -259,7 +259,7 @@ def export_public(directory: Path) -> Path:
     hosting (GitHub Pages)."""
     directory.mkdir(parents=True, exist_ok=True)
     web = APP_DIR / "web"
-    for page in ("index.html", "status.html"):
+    for page in ("index.html", "status.html", "mfu.html"):
         shutil.copyfile(web / "static.html", directory / page)
     for name in PUBLIC_FILES:
         shutil.copyfile(web / name, directory / name)
