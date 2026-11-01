@@ -5,7 +5,7 @@ category: Optimizers
 summary: Warm MuonH Nesterov momentum up linearly from 0.85 over 10-20% of training, and test whether it makes a higher final
   momentum (0.98) beat the default 0.95.
 source: intake
-status: running
+status: done
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6079384012
   author: RavnaBergsndot
@@ -117,6 +117,12 @@ trials:
     momentum: '0.98'
     muonh_momentum_warmup: '0.1'
   commit: a20ef74f2f
+  loss:
+  - 3.0678
+  delta:
+  - 0.0223
+  steps: 3029
+  baseline: belay-X0217-control 3.0455 (same commit, seed 0)
 events:
 - type: closed
   batch: X0217
