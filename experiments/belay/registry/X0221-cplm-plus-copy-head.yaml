@@ -66,3 +66,4 @@ trials:
   - -0.0087
   steps: 2308
   baseline: belay-X0221-control-s1 3.0391 (same commit, seed 1)
+  note: Seed-1 confirmation under a protocol step since dropped (2026-11-01); not part of the verdict.
