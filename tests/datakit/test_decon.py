@@ -1137,6 +1137,40 @@ def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: P
     assert {row["eval_id"] for row in index} == {"required-1", "included-1"}
 
 
+@pytest.mark.parametrize(
+    "required_tasks",
+    [None, {"required": ["required_a", "required_b"]}],
+    ids=["manifest-without-required-tasks", "required-leaf-not-included"],
+)
+def test_build_eval_bloom_requires_best_effort_required_tasks(tmp_path: Path, required_tasks: dict | None):
+    best_effort_root = tmp_path / "evals" / "lmh"
+    _write_input_parquet(best_effort_root / "required_a" / "eval.parquet", [{"id": "a-1", "text": "alpha beta gamma"}])
+    manifest = {
+        "schema_version": 1,
+        "corpus_version": "test-corpus-v1",
+        "required": False,
+        "status": "complete_with_failures",
+        "included_leaf_tasks": ["required_a"],
+        "artifacts": [{"task": "required_a", "artifact": "required_a/eval.parquet", "records": 1}],
+        "failed": [{"task": "required_b", "reason": "no docs"}],
+    }
+    if required_tasks is not None:
+        manifest["required_tasks"] = required_tasks
+    best_effort_manifest = best_effort_root / "_manifest.json"
+    best_effort_manifest.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="required task 'required'"):
+        build_eval_bloom(
+            eval_data_sources=str(best_effort_root),
+            output_path=str(tmp_path / "bloom"),
+            best_effort_eval_manifest_path=str(best_effort_manifest),
+            best_effort_eval_corpus_version="test-corpus-v1",
+            best_effort_required_tasks=("required",),
+        )
+
+    assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()
+
+
 def test_build_eval_bloom_excludes_named_task_dirs(tmp_path: Path):
     """``exclude_eval_dirs`` drops matching task dirs at read time.
 
