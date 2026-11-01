@@ -261,7 +261,8 @@ def test_prepared_tau2_models_resolve_openai_provider_and_hosted_judge_in_task_c
     assert "hosted-judge-secret" not in completed.stdout
 
 
-def test_distinct_judge_roles_require_separate_capabilities_before_allocation(tmp_path, prepared_policy):
+@pytest.mark.parametrize("other_role", ["REFUSAL_JUDGE_MODEL", "EXPANSION_MODEL"])
+def test_distinct_judge_roles_require_separate_capabilities_before_allocation(tmp_path, prepared_policy, other_role):
     document = json.loads(prepared_policy.read_text())
     document["environment"] = {"type": "daytona"}
     document["verifier"] = {
@@ -269,13 +270,106 @@ def test_distinct_judge_roles_require_separate_capabilities_before_allocation(tm
             "OPENAI_BASE_URL": "https://api.together.xyz/v1",
             "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
             "JUDGE_MODEL": "together_ai/openai/gpt-oss-120b",
-            "REFUSAL_JUDGE_MODEL": "together_ai/another-model",
+            other_role: "together_ai/another-model",
         }
     }
     prepared_policy.write_text(json.dumps(document))
     completed = _preflight(tmp_path, [(prepared_policy, {})], check=False)
     assert completed.returncode == 2
     assert completed.stdout == ""
+
+
+@pytest.mark.parametrize("roles", [("JUDGE_MODEL", "EXPANSION_MODEL"), ("EXPANSION_MODEL",)])
+def test_verifier_model_roles_call_hosted_judge_through_guest_loopback(tmp_path, prepared_policy, roles):
+    document = json.loads(prepared_policy.read_text())
+    document["environment"] = {"type": "daytona"}
+    document["verifier"] = {
+        "env": {
+            "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+            "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
+            **dict.fromkeys(roles, "together_ai/openai/gpt-oss-120b"),
+        }
+    }
+    prepared_policy.write_text(json.dumps(document))
+    overlay_path = tmp_path / "overlay.json"
+    write_runtime_overlay(
+        overlay_path,
+        tmp_path,
+        verifier_env={
+            "OPENAI_BASE_URL": "https://hosted-qwen.test/v1",
+            "OPENAI_API_KEY": "host-judge-private",
+            "MODEL_NAME": "Qwen/Qwen3-8B",
+        },
+    )
+    completed = _external_python(
+        "-c",
+        textwrap.dedent(
+            f"""
+            import asyncio, json
+            from pathlib import Path
+            import httpx
+            from openai import AsyncOpenAI
+            from harbor_config import JobConfig
+            from harbor.environments import model_relay
+            from harbor.environments.model_relay import ModelRelay, host_model_authentication
+            from shellbox.http_service import HttpRequest
+            from marin.evaluation.harbor.trial_driver import (
+                effective_job_config, RuntimeOverlay, _judge_authentication,
+            )
+
+            policy_path, overlay_path = Path({str(prepared_policy)!r}), Path({str(overlay_path)!r})
+            policy = JobConfig.model_validate_json(policy_path.read_text())
+            overlay = RuntimeOverlay.model_validate_json(overlay_path.read_text())
+            config = effective_job_config(policy_path, overlay_path)
+            provider_models = []
+            original_client = httpx.AsyncClient
+            def provider(request):
+                assert str(request.url) == 'https://hosted-qwen.test/v1/chat/completions'
+                assert request.headers['authorization'] == 'Bearer host-judge-private'
+                payload = json.loads(request.content)
+                assert payload['model'] == 'Qwen/Qwen3-8B'
+                provider_models.append(payload['model'])
+                return httpx.Response(200, json={{
+                    'id':'judge', 'object':'chat.completion', 'created':0,
+                    'model':payload['model'], 'choices':[{{'index':0, 'finish_reason':'stop',
+                        'message':{{'role':'assistant', 'content':payload['messages'][0]['content']}}}}],
+                }})
+            class WireClient(original_client):
+                def __init__(self, **kwargs):
+                    kwargs.setdefault('transport', httpx.MockTransport(provider))
+                    super().__init__(**kwargs)
+            model_relay.httpx.AsyncClient = WireClient
+            with host_model_authentication(_judge_authentication(policy, overlay)):
+                relay = ModelRelay(config.environment.kwargs['model_endpoint'], config.environment.kwargs['model_name'])
+            async def loopback(request):
+                assert str(request.url) == 'http://127.0.0.1:8787/v1/chat/completions'
+                assert request.headers['authorization'] == 'Bearer EMPTY'
+                assert json.loads(request.content)['model'] == 'Qwen/Qwen3-8B'
+                response = await relay.handle(HttpRequest('POST', request.url.path, request.content))
+                return httpx.Response(
+                    response.status, content=response.body, headers={{'content-type':'application/json'}})
+            async def guest():
+                replies = {{}}
+                for role in {roles!r}:
+                    transport, model = config.verifier.env[role].split('/', 1)
+                    assert transport == 'openai', 'guest must use the OpenAI-compatible transport'
+                    async with AsyncOpenAI(
+                        api_key=config.verifier.env['OPENAI_API_KEY'],
+                        base_url=config.verifier.env['OPENAI_API_BASE'],
+                        http_client=WireClient(transport=httpx.MockTransport(loopback)),
+                    ) as client:
+                        response = await client.chat.completions.create(
+                            model=model, messages=[{{'role':'user', 'content':role}}])
+                        replies[role] = response.choices[0].message.content
+                return replies
+            print(json.dumps({{'replies':asyncio.run(guest()), 'provider_models':provider_models}}))
+            """
+        ),
+    )
+    result = json.loads(completed.stdout)
+    assert result["replies"] == {role: role for role in roles}
+    assert result["provider_models"] == ["Qwen/Qwen3-8B"] * len(roles)
+    assert "host-judge-private" not in completed.stdout
 
 
 @pytest.mark.parametrize("agent_name", ["terminus-2", "sotopia"])

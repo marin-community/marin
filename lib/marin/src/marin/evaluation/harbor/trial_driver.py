@@ -100,6 +100,7 @@ _TASK_MODEL_ENVIRONMENT = {
     "OPENAI_BASE_URL": f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1",
     "OPENAI_API_KEY": "EMPTY",
 }
+_VERIFIER_MODEL_ROLES = ("MODEL_NAME", "JUDGE_MODEL", "REFUSAL_JUDGE_MODEL", "EXPANSION_MODEL")
 
 
 class RuntimeOverlay(BaseModel):
@@ -577,9 +578,9 @@ def _dummy_model_keys(values: dict[str, str]) -> dict[str, str]:
 
 def _guest_model_environment(values: dict[str, str], model: str) -> dict[str, str]:
     result = {**_dummy_model_keys(values), **_TASK_MODEL_ENVIRONMENT}
-    if "JUDGE_MODEL" in values or "REFUSAL_JUDGE_MODEL" in values:
+    if any(name != "MODEL_NAME" and name in values for name in _VERIFIER_MODEL_ROLES):
         result["OPENAI_API_BASE"] = _TASK_MODEL_ENVIRONMENT["OPENAI_BASE_URL"]
-    for name in ("MODEL_NAME", "JUDGE_MODEL", "REFUSAL_JUDGE_MODEL"):
+    for name in _VERIFIER_MODEL_ROLES:
         if name in result:
             result[name] = "openai/" + model if name != "MODEL_NAME" else model
     return result
@@ -592,7 +593,7 @@ def _judge_settings(config: JobConfig, overlay: RuntimeOverlay) -> tuple[str, st
         configured_model = _single_judge_model(config.verifier.env)
         model = _single_judge_model(overlay.verifier_env) or configured_model
         if not model:
-            raise ValueError("A judge endpoint requires an explicit MODEL_NAME or JUDGE_MODEL")
+            raise ValueError("A judge endpoint requires an explicit verifier model role")
         return endpoint, model
     agent = config.agents[0]
     if agent.name == "sotopia":
@@ -619,11 +620,11 @@ def _single_judge_model(values: dict[str, str]) -> str | None:
                 model.removeprefix("together_ai/") if model.startswith("together_ai/") else model.removeprefix("openai/")
             )
         )
-        for name in ("MODEL_NAME", "JUDGE_MODEL", "REFUSAL_JUDGE_MODEL")
+        for name in _VERIFIER_MODEL_ROLES
         if (model := values.get(name))
     }
     if len(models) > 1:
-        raise ValueError("Distinct judge and refusal models require separate host capabilities")
+        raise ValueError("Distinct verifier model roles require separate host capabilities")
     return next(iter(models), None)
 
 
