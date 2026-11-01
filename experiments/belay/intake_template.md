@@ -1,7 +1,13 @@
 # Marin Belay intake template
 
 Copy this into a comment on the intake issue ([marin#9514](https://github.com/marin-community/marin/issues/9514)), one
-idea per comment. Only **Title** and **Idea** are required; the rest helps the agent run it the way you intend.
+idea per comment. Only **Title** and **Idea** are required; the rest helps the agent run it the way you intend. A
+maintainer approves it on the Belay admin page; the agent then replies once with a link to its row on the Belay
+Status page and edits that reply with the verdict.
+
+The agent reads only the comment's visible text, as stored at approval: hidden HTML comments and invisible
+characters are removed, and an edit after approval needs a new approval. To point the agent at code, name the pull
+request (`#NNNN`) or link in the comment itself; it reads nothing else.
 
 Every idea runs against the baseline its **Track** names: one variant against a same-commit control at seed 0.
 **Track** is optional and defaults to `speedrun`, the 8-minute d512 run of the current recipe (Belay Ckpt Oct 20
