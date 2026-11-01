@@ -1,4 +1,4 @@
-// Loads the page's script: /belay/ front, /belay/status, /belay/mfu (hero-scale MFU) and /belay/admin.
+// Loads the page's script under the app's root: front, status, mfu (hero-scale MFU) and admin.
 const SCRIPTS = { front: 'front.js', status: 'status.js', mfu: 'mfu.js', admin: 'admin.js' }
 const page = pageName()
 document.getElementById('brand').href = PAGES.front

@@ -40,7 +40,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "github_posting": False,
     "node_cap": 8,
     "storage_limit_bytes": 1_000_000_000_000,
-    "watch_interval": 120,
     # Who may use the admin view: Marina identities. Seeded from the intake bot's BELAY_APPROVER_IDS
     # (ops-belay-intake.yaml); an entry without an identity cannot sign in until a maintainer maps it.
     "approvers": [
@@ -137,7 +136,8 @@ class IdeaState(StrEnum):
     PENDING = "pending"
     """An intake suggestion or maintainer proposal waiting for a maintainer."""
     UPSTREAM = "upstream"
-    """Approved on GitHub before the cutover, so not queued; approving it on the page queues it."""
+    """Approved on GitHub before ``github_approval_cutover`` (experiments/belay/config.py), when a GitHub 👍 did not
+    queue an idea; approving it on the page queues it."""
     DISMISSED = "dismissed"
     APPROVED = "approved"
     """Approved; no session has planned it yet."""
@@ -225,7 +225,9 @@ class SettingsUpdate(BaseModel):
     approvers: list[Approver] | None = None
 
 
-class Requeue(BaseModel):
+class MaintainerNote(BaseModel):
+    """A maintainer's note on a re-queue or a decline."""
+
     note: str = ""
 
 
@@ -356,7 +358,7 @@ def approver_login(settings: dict[str, Any], identity: str) -> str:
 def offer_pending_work(conn: Connection) -> int:
     """When nothing is running or queued, offer each approved idea no session has taken up (at most hourly);
     an idea a session escalated waits for a maintainer instead."""
-    if _rows(conn, "SELECT id FROM sessions WHERE state = 'running'") or _rows(
+    if _rows(conn, f"SELECT id FROM sessions WHERE state = '{SessionState.RUNNING}'") or _rows(
         conn, "SELECT ref FROM events WHERE session_id IS NULL"
     ):
         return 0
@@ -381,7 +383,7 @@ def offer_pending_work(conn: Connection) -> int:
 
 
 def approve_idea(conn: Connection, idea_id: int, caller: str, at: datetime.datetime | None = None) -> bool:
-    """Approve an idea and queue its one ``approved`` event; False when it is already approved or further along.
+    """Approve an idea and queue its one ``approved`` event; False unless it is pending or upstream.
 
     Both approval paths (the admin page and a GitHub 👍 the watcher saw) end here, so an idea approved on both runs
     once. A pending idea's text freezes here: from now on sessions get the text as it was approved.
@@ -488,6 +490,8 @@ def sync_intake_comments(conn: Connection, comments: list[IntakeComment]) -> int
     return added
 
 
+# Ideas with no approval: their decided_at, if any, is not an approval time.
+UNDECIDED_STATES = (IdeaState.PENDING, IdeaState.DISMISSED)
 # Ideas a maintainer may decline: not yet planned or running, and not already closed.
 DECLINABLE_STATES = (IdeaState.PENDING, IdeaState.UPSTREAM, IdeaState.APPROVED)
 
@@ -630,7 +634,7 @@ def _public_activity(ideas: list[dict], runs: list[dict], posts: list[dict]) -> 
         if i["origin"] == "intake":
             items.append({"at": i["posted_at"], "kind": "intake", "text": f"New suggestion from {i['author']}"})
         title = _label(i)
-        if i["decided_at"] and i["state"] not in ("pending", "dismissed"):
+        if i["decided_at"] and i["state"] not in UNDECIDED_STATES:
             items.append({"at": i["decided_at"], "kind": "approved", "text": f"Approved: {title}"})
         if i["state"] == "declined":
             items.append({"at": i["updated_at"], "kind": "declined", "text": f"Declined: {title}"})
@@ -686,7 +690,7 @@ def _public_idea(idea: dict[str, Any]) -> dict[str, Any]:
         "url": idea["url"],
         "body": idea["body"][:PUBLIC_EXCERPT],
         "posted_at": _iso(idea["posted_at"]),
-        "approved_at": _iso(idea["decided_at"]) if idea["state"] not in ("pending", "dismissed") else None,
+        "approved_at": _iso(idea["decided_at"]) if idea["state"] not in UNDECIDED_STATES else None,
         "registry_id": idea["registry_id"],
         "registry_url": idea["registry_url"],
         "plan": (
@@ -755,7 +759,7 @@ def create_api(services: Services) -> RegisteredApi:
                 conn, "SELECT * FROM ideas WHERE state NOT IN ('upstream', 'dismissed') ORDER BY posted_at DESC"
             )
             runs = _rows(conn, "SELECT * FROM runs ORDER BY submitted_at DESC NULLS LAST")
-            active = bool(_rows(conn, "SELECT id FROM sessions WHERE state = 'running'"))
+            active = bool(_rows(conn, f"SELECT id FROM sessions WHERE state = '{SessionState.RUNNING}'"))
             queued = len(_rows(conn, "SELECT id FROM events WHERE session_id IS NULL"))
             posts = _rows(
                 conn,
@@ -843,7 +847,7 @@ def create_api(services: Services) -> RegisteredApi:
     def approve(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
         with engine.begin() as conn:
             if not approve_idea(conn, idea_id, approver_login(_settings(conn), caller)):
-                raise HTTPException(409, f"idea {idea_id} is already approved or further along")
+                raise HTTPException(409, f"idea {idea_id} is not waiting for approval")
         return {"state": IdeaState.APPROVED.value}
 
     @admin.post("/ideas/{idea_id}/dismiss")
@@ -867,7 +871,7 @@ def create_api(services: Services) -> RegisteredApi:
         return {"state": IdeaState.DISMISSED.value}
 
     @admin.post("/ideas/{idea_id}/requeue")
-    def requeue(idea_id: int, request: Requeue, caller: str = Depends(approver)) -> dict[str, str]:
+    def requeue(idea_id: int, request: MaintainerNote, caller: str = Depends(approver)) -> dict[str, str]:
         """A maintainer's answer to an escalation, or a rerun of an idea that already has results: keep the
         maintainer's note for the session and offer the idea to the next session."""
         with engine.begin() as conn:
@@ -892,7 +896,7 @@ def create_api(services: Services) -> RegisteredApi:
         return {"state": IdeaState.APPROVED.value}
 
     @admin.post("/ideas/{idea_id}/decline")
-    def decline(idea_id: int, request: Requeue, caller: str = Depends(approver)) -> dict[str, str]:
+    def decline(idea_id: int, request: MaintainerNote, caller: str = Depends(approver)) -> dict[str, str]:
         """A maintainer closes an idea without running it."""
         with engine.begin() as conn:
             return decline_idea(conn, idea_id, approver_login(_settings(conn), caller), request.note)
@@ -992,7 +996,7 @@ def create_api(services: Services) -> RegisteredApi:
             _expire_sessions(conn)
             if not _settings(conn)["dispatch_enabled"]:
                 return {"launch": False, "reason": "dispatch is off"}
-            if _rows(conn, "SELECT id FROM sessions WHERE state = 'running'"):
+            if _rows(conn, f"SELECT id FROM sessions WHERE state = '{SessionState.RUNNING}'"):
                 return {"launch": False, "reason": "a session is active"}
             events = _rows(conn, "SELECT * FROM events WHERE session_id IS NULL ORDER BY id")
             if not events:

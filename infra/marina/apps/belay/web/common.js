@@ -204,10 +204,14 @@ function loss(v) {
   return v === null || v === undefined ? '—' : Number(v).toFixed(4)
 }
 
+function signed(v, digits = 4) {
+  return `${v > 0 ? '+' : v < 0 ? '−' : '±'}${Math.abs(v).toFixed(digits)}`
+}
+
 function delta(v) {
   if (v === null || v === undefined) return el('span', { class: 'num' }, '—')
   const cls = Math.abs(v) <= 0.002 ? 'num' : v < 0 ? 'delta-better' : 'delta-worse'
-  return el('span', { class: cls }, `${v > 0 ? '+' : v < 0 ? '−' : '±'}${Math.abs(v).toFixed(4)}`)
+  return el('span', { class: cls }, signed(v))
 }
 
 const RUN_WORDS = {

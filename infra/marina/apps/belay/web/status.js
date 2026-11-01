@@ -16,7 +16,7 @@ const GATE = {
   none: { icon: '–', cls: 'tested' },
   na: { icon: '·', cls: 'tested' },
 }
-const SIGN = (v, digits = 4) => `${v > 0 ? '+' : v < 0 ? '\u2212' : '±'}${Math.abs(v).toFixed(digits)}`
+const SIGN = signed
 const OUTSIDE = /outside the verdict|not part of the verdict/
 
 function trackInfo(cfg, id) {
