@@ -1,5 +1,5 @@
 {
-  "recipe_revision": 2,
+  "recipe_revision": 3,
   "platform": "linux/amd64",
   "base_image": "ghcr.io/marin-community/rollout-images@sha256:17a0f60def260b484134ca7f137970735cd9d0a30900aeb1a037f59acac9484a",
   "tau2_bench_commit": "fc0055dc4e0a316c3f83133267fbd6faaa770992",

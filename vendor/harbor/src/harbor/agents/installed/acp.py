@@ -400,12 +400,14 @@ class AcpAgent(BaseInstalledAgent, ACPAgentMixin):
                 api_key=self._api_key,
                 model_info=self._model_info,
                 thinking_format=self._thinking_format,
+                mcp_servers=self.mcp_servers,
             )
         return self._pi
 
     async def _configure_pi_endpoint(self, environment: BaseEnvironment) -> None:
         pi = self._pi_companion()
         if pi is not None:
+            await pi.configure_mcp_servers(environment)
             await pi.configure_hosted_provider(environment)
 
     @staticmethod

@@ -14,6 +14,7 @@ RUN cd /opt/harbor-pi && npm ci --omit=dev --no-audit --no-fund \
     && ln -s /opt/harbor-pi/node_modules/.bin/pi-acp /usr/local/bin/pi-acp \
     && ln -s /opt/harbor-pi/node_modules/.bin/acpx /usr/local/bin/acpx \
     && npm cache clean --force
+RUN python3 -c 'import json; from pathlib import Path; path = Path("/root/.pi/agent/settings.json"); settings = json.loads(path.read_text()) if path.exists() else {}; settings.setdefault("extensions", []).append("/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"); path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(settings))'
 
 COPY mcp.lock acp.lock /opt/harbor-deps/
 RUN python3 -m pip install --no-cache-dir --require-hashes -r /opt/harbor-deps/mcp.lock \

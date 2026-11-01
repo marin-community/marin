@@ -53,6 +53,7 @@ class Pi(BaseInstalledAgent):
     _API_KEY_ENV = "HARBOR_PI_API_KEY"
     _ENDPOINT_ENV_PATH = "/tmp/harbor-pi-endpoint.env"
     _CONTEXT_BUDGET_EXTENSION_PATH = "/tmp/harbor-pi-context-budget.js"
+    _MCP_EXTENSION_PATH = "/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"
     _PROVIDER_CONFIG_RELATIVE_PATH = ".pi/agent/models.json"
     _SETTINGS_CONFIG_RELATIVE_PATH = ".pi/agent/settings.json"
     _AUTHENTICATION_FAILURE_MARKER = "HARBOR_PI_MODEL_AUTHENTICATION_ERROR"
@@ -407,6 +408,42 @@ export default function (pi) {
             return {}
         return {self._API_KEY_ENV: self._api_key}
 
+    async def configure_mcp_servers(self, environment: BaseEnvironment) -> None:
+        """Configure the image-provided pi-mcp-extension before Pi starts."""
+        if not self.mcp_servers:
+            return
+        servers: dict[str, dict[str, Any]] = {}
+        for server in self.mcp_servers:
+            config: dict[str, Any] = {
+                "transport": server.transport,
+                "lifecycle": "eager",
+            }
+            if server.transport == "stdio":
+                config.update(command=server.command, args=server.args)
+            else:
+                config["url"] = server.url
+            servers[server.name] = config
+        content = shlex.quote(json.dumps({"mcpServers": servers}))
+        extension_path = shlex.quote(self._MCP_EXTENSION_PATH)
+        register_script = """
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const directory = path.join(os.homedir(), '.pi/agent');
+fs.mkdirSync(directory, {recursive: true});
+const settingsPath = path.join(directory, 'settings.json');
+const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+settings.extensions = [...new Set([...(settings.extensions ?? []), process.argv[2]])];
+fs.writeFileSync(settingsPath, JSON.stringify(settings));
+fs.writeFileSync(path.join(directory, 'mcp.json'), process.argv[1]);
+""".strip()
+        await self.exec_as_agent(
+            environment,
+            command=(
+                f"test -r {extension_path} || "
+                "{ echo 'Image does not provide pi-mcp-extension' >&2; exit 1; }; "
+                f"node -e {shlex.quote(register_script)} {content} {extension_path}"
+            ),
+        )
+
     async def configure_hosted_provider(self, environment: BaseEnvironment) -> None:
         """Register this agent's dynamic OpenAI-compatible endpoint with Pi."""
         if self._api_base is None:
@@ -573,6 +610,7 @@ export default function (pi) {
         if not provider or not model_id:
             raise ValueError("Model name must be in the format provider/model_name")
 
+        await self.configure_mcp_servers(environment)
         env: dict[str, str] = {}
         keys: list[str] = []
 

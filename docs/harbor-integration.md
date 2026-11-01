@@ -270,8 +270,9 @@ Task environment templates resolve only against explicit task capabilities. They
 driver's ambient environment, including through differently named aliases.
 Image contents and explicit task inputs must themselves be free of production credentials.
 
-The runtime has no independent Docker or other provider execution backend. The prepared local path also rejects installed agents,
-custom agent imports and custom host mounts. Its Compose importer supports `main` plus prepared
+The runtime has no independent Docker or other provider execution backend. The prepared local path
+supports image-provided Pi and Pi/ACP agents and the benchmark-owned Tau3 user relay. Other installed
+agents, arbitrary agent imports and custom host mounts are rejected. Its Compose importer supports `main` plus prepared
 sidecars, commands, environment values, exposed TCP ports, readiness checks and `main` dependencies
 on started or healthy services. MCP URLs must name an exposed endpoint inside the container group.
 Unknown Compose fields, published host ports, host networking, extra Compose files and dependencies
@@ -291,8 +292,8 @@ The relay starts one Python HTTP helper and exchanges bounded request/response
 frames over a persistent process session. The session uses owned local process
 pipes or Daytona's SDK transport; provider credentials remain on the host.
 
-Installed candidate agents on Daytona use a separate loopback relay on port 8788;
-the simulated-user and verifier relay uses port 8787. Marin resolves installed
+Installed candidate agents use a separate loopback relay on port 8788 on both local
+and Daytona backends; the simulated-user and verifier relay uses port 8787. Marin resolves installed
 agents through Harbor's agent classes, including Pi, OpenCode, Mini-SWE, and ACP Pi.
 Their provider configuration and environment contain a loopback URL and an `EMPTY`
 key. The candidate endpoint and its authentication remain in the trusted driver;
@@ -532,6 +533,11 @@ The Tau3 simulated-user relay requires `python3` with `mcp==1.25.0`. Setup stage
 endpoint credentials, provider configuration, and ACP session configuration; it does not
 install these dependencies. The Tau3 ACP Pi image does not satisfy the standalone Pi
 `0.87.0` pin.
+
+For Qwen3, set the model's `agent.agent_kwargs.thinking_format` to
+`qwen-chat-template` and `serve.reasoning_parser` to `qwen3`. The latter keeps reasoning
+out of simulated-user messages and structured judge answers. Serve the context window
+declared by the policy; Tau3's ACP policy uses 131,072 tokens.
 
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 

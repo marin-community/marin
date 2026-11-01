@@ -9,11 +9,15 @@ existing server and task configuration.
 
 [`dependencies.json`](dependencies.json) pins the parent digest, Node archive
 and checksum, platform, runtime digests and recipe revision.
-[`package-lock.json`](package-lock.json) locks Pi, pi-acp, acpx and their npm
+[`package-lock.json`](package-lock.json) locks Pi, pi-acp, acpx, the Pi MCP extension and their npm
 dependencies. [`mcp.lock`](mcp.lock) and [`acp.lock`](acp.lock) lock the Python
 dependencies with hashes. The image exposes `node`, `pi`, `pi-acp` and `acpx` on
 `PATH`, MCP to `python3`, and the ACP SDK through
 `/opt/harbor-acp-venv/bin/python`.
+Pi loads the installed MCP extension from an absolute path in
+`/root/.pi/agent/settings.json`; Harbor stages the task's MCP servers separately.
+The extension is pinned to `pi-mcp-extension@1.10.0`; its SDK peers use
+`@earendil-works/pi-ai@0.80.5` and `typebox@1.1.38`, matching Pi's own versions.
 
 ## Build or reuse
 
