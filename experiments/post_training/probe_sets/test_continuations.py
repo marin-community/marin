@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import sys
 
 import pytest
 import requests
@@ -193,3 +194,52 @@ def test_generation_keeps_remote_raw_records_and_reserves_prompt_context(monkeyp
     assert continuations.read_jsonl(raw_path) == [
         {"probe_id": "p-0", "prompt_ids": [1, 2, 3, 4], "response_ids": [7, 9]},
     ]
+
+
+def test_generation_preserves_client_budget_through_worker_deadlines(monkeypatch, tmp_path):
+    # Regression: 131k replies exceeded the default worker deadline (31 minutes)
+    # even though the sampler allowed two hours, causing repeated gateway timeouts.
+    checkpoint = tmp_path / "checkpoint"
+    byte_level_tokenizer().save_pretrained(checkpoint)
+    probes = tmp_path / "probes"
+    probes.mkdir()
+    (probes / "P_R.jsonl").write_text(json.dumps(PROBE) + "\n")
+    output = tmp_path / "output"
+    output.mkdir()
+    configs = []
+
+    def serving_boundary(config):
+        configs.append(config)
+        raise RuntimeError("stop before remote submission")
+
+    monkeypatch.setattr(continuations, "remote_inference", serving_boundary)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "continuations",
+            "--checkpoint",
+            str(checkpoint),
+            "--name",
+            "timeout-regression",
+            "--family",
+            "grug",
+            "--probe-dir",
+            str(probes),
+            "--sets",
+            "P_R",
+            "--max-model-len",
+            "131072",
+            "--max-tokens-for-set",
+            "P_R=131072",
+            "--out",
+            str(output),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="stop before remote submission"):
+        continuations.main()
+    broker = configs[0].broker
+    assert broker is not None
+    assert broker.worker.request_timeout_seconds > continuations.REQUEST_TIMEOUT
+    assert broker.request_lease_timeout_seconds > broker.worker.request_timeout_seconds
+    assert broker.proxy.request_timeout_seconds > broker.request_lease_timeout_seconds

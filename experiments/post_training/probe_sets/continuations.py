@@ -278,6 +278,7 @@ def main() -> None:
         accelerator,
         env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
         priority=job_pb2.PRIORITY_BAND_INHERIT,
+        request_timeout_seconds=REQUEST_TIMEOUT,
     )
     manifest: dict[str, Any] = {
         "checkpoint": args.checkpoint,
