@@ -4,7 +4,7 @@ name: MuonH sigmoid-gate init multiplier
 category: Training dynamics and schedules
 summary: Scale the init std (and thus the pinned MuonH norm) of sigmoid-gate matrices.
 source: agent
-status: adopted
+status: running
 first_batch: 98
 tags:
 - init
@@ -60,6 +60,17 @@ trials:
     init_std_mult_gates: '4'
   tuned: x0.5/1/2/4
   note: 2-seed mean
+- id: t004
+  variant: init_std_mult_gates=2 (sigmoid-gate init x2)
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0151
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6563417128
+  wandb: []
+  settings:
+    init_std_mult_gates: '2'
+  commit: fd7f69c31e
 events:
 - type: adopted
   batch: '102'
