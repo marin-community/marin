@@ -1,5 +1,5 @@
-// Marin Belay front page: the project's public home. Charts, timeline, starter kit, tracks and the top ideas by
-// potential. The top ideas and the speedrun chart's test markers come from the registry (results.json, built with
+// Marin Belay front page: the project's public home. Charts, timeline, starter kit and tracks. The
+// speedrun chart's test markers come from the registry (results.json, built with
 // `experiments.belay.registry build`); stage 4's fits, points and hero budget come from scaling.json; the accepted
 // records and tracks are measured values kept here. Loaded after common.js.
 
@@ -277,8 +277,6 @@ function startFront(RD, SC, SP, TK) {
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 }
 
-const TOP_IDEAS = 5
-
 function renderLatest(status) {
   const recent = status.ideas.find((i) => i.result)
   const live = status.runs.filter((r) => !TERMINAL.has(r.state)).length
@@ -291,31 +289,6 @@ function renderLatest(status) {
   parts.push(el('span', { class: 'latest-n' }, `${status.pipeline.pending} waiting`))
   setChildren('latest-body', ...parts)
   document.getElementById('latest').hidden = false
-}
-
-// The highest-potential ideas not in the live recipe. Ideas scored 10 were adopted, so they are left out too.
-function renderTopIdeas(results, status) {
-  const live = new Set((status?.runs ?? []).filter((r) => !TERMINAL.has(r.state)).map((r) => r.registry_id))
-  const top = results.ideas
-    .filter((idea) => idea.potential && idea.potential.score < 10 && !inLiveRecipe(idea))
-    .sort((a, b) => b.potential.score - a.potential.score || (b.potential.date ?? '').localeCompare(a.potential.date ?? ''))
-    .slice(0, TOP_IDEAS)
-  setChildren(
-    'top-list',
-    top.map((idea) => {
-      const author = idea.author
-      return el(
-        'li',
-        { class: 'top-row' },
-        el('span', { class: 'xid mono' }, idea.xid),
-        el('span', { class: 'top-name' }, idea.name),
-        el('span', { class: 'top-author' }, link(`https://github.com/${author}`, `@${author}`)),
-        el('span', { class: 'top-gate' }, gateChip(speedrunGate(idea, live.has(idea.xid)))),
-        el('span', { class: 'score', title: idea.potential.rationale }, `${idea.potential.score}/10`),
-      )
-    }),
-  )
-  document.getElementById('top-all').href = PAGES.status
 }
 
 async function front() {
@@ -331,11 +304,7 @@ async function front() {
     fetch(asset('speedrun.json')).then((r) => r.json()),
     fetch(asset('tracks.json')).then((r) => r.json()),
   ])
-  trackTable = tracks.tracks
-  recipeTag = tracks.recipe_tag
-  defaultAuthor = tracks.default_author
-  startFront(results, scaling, speedrun, trackTable)
-  renderTopIdeas(results, status)
+  startFront(results, scaling, speedrun, tracks.tracks)
   if (status) {
     state = status
     renderLatest(status)
