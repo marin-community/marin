@@ -1,13 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Client for the Belay page's API: read its state, update an idea, post to the activity feed."""
+"""Client for the Belay page's API: read its state, update an idea, write an idea's agent thread, and the one
+reply on the idea's #9514 comment."""
 
 import datetime
 import json
 import os
-import re
 import subprocess
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, replace
@@ -18,8 +19,6 @@ from experiments.belay.config import CONFIG
 TOKEN_ENV = "BELAY_SERVICE_TOKEN"
 TOKEN_HEADER = "X-Belay-Token"
 SESSION_ENV = "BELAY_SESSION_ID"
-# Only plans and results go to #9451; escalations and notes stay on the admin page.
-PUBLIC_KINDS = ("plan", "result")
 BOT_MARK = "🤖"
 TERMINAL_RUN_STATES = ("succeeded", "failed", "killed", "worker_failed", "unschedulable")
 
@@ -39,6 +38,10 @@ class Idea:
     note: str | None
     node_grant: int | None
     """A maintainer's node grant: this idea's launches may hold up to this many nodes, past the global cap."""
+    hidden_removed: list[str] | None
+    """What the app removed from the comment before storing the approved text (hidden HTML, invisible characters)."""
+    reply_url: str | None
+    """The session's one reply on the idea's #9514 comment."""
 
     @property
     def name(self) -> str:
@@ -160,48 +163,15 @@ class Post:
     session_id: str | None = None
 
 
-def post_activity(post: Post, *, github_posting: bool, dry_run: bool) -> None:
-    """Post to the page's activity feed, and a plan or result also to the batch issue when an approver has turned
-    GitHub posting on. Posts carry the session that made them, so the admin page links each to its transcript."""
-    github_posting = github_posting and post.kind in PUBLIC_KINDS
+def post_activity(post: Post, *, dry_run: bool) -> None:
+    """Post to the page's activity feed (escalations and notes, which only the admin page shows). Posts carry the
+    session that made them, so the admin page links each to its transcript."""
     post = replace(post, session_id=os.environ.get(SESSION_ENV))
     if dry_run:
-        target = f"page and #{CONFIG.batch_issue}" if github_posting else "page only (GitHub posting is off)"
-        print(f"would post {post.kind} to the {target}:\n--- {post.title}\n{post.body}\n---")
+        print(f"would post {post.kind} to the page:\n--- {post.title}\n{post.body}\n---")
         return
-    github_url = None
-    if github_posting:
-        comment = f"{BOT_MARK} **{post.title}**\n\n{post.body}"
-        github_url = subprocess.run(
-            ["gh", "issue", "comment", str(CONFIG.batch_issue), "--repo", CONFIG.repository, "--body", comment],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    call("agent/activity", {**asdict(post), "github_url": github_url}, token=service_token())
+    call("agent/activity", asdict(post), token=service_token())
     print(f"posted {post.kind}: {post.title}")
-
-
-HTML_COMMENT = re.compile(r"<!--.*?(-->|$)", re.DOTALL)
-DETAILS = re.compile(r"<details\b[^>]*>(.*?)</details>", re.DOTALL | re.IGNORECASE)
-# Zero-width characters and bidirectional controls, which render as nothing but can hide or reorder text.
-INVISIBLE = re.compile("[\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
-
-
-def visible_text(body: str) -> tuple[str, list[str]]:
-    """``body`` as a reviewer sees it rendered, and what was removed or marked: HTML comments and invisible
-    characters are dropped; ``<details>`` bodies are kept between markers."""
-    notes = []
-    if HTML_COMMENT.search(body):
-        notes.append("removed HTML comments")
-        body = HTML_COMMENT.sub("", body)
-    if INVISIBLE.search(body):
-        notes.append("removed zero-width or bidi control characters")
-        body = INVISIBLE.sub("", body)
-    if DETAILS.search(body):
-        notes.append("marked collapsed <details> text")
-        body = DETAILS.sub(lambda m: f"[collapsed on GitHub:]{m.group(1)}[end collapsed]", body)
-    return body, notes
 
 
 def require_unedited(updated_at: datetime.datetime, approved_at: datetime.datetime) -> None:
@@ -213,50 +183,64 @@ def require_unedited(updated_at: datetime.datetime, approved_at: datetime.dateti
         )
 
 
-def comment_times(url: str) -> tuple[datetime.datetime, datetime.datetime | None]:
-    """A GitHub issue comment's last edit and the time the intake bot marked it transferred (its 🚀), if any."""
+def comment_updated_at(url: str) -> datetime.datetime:
+    """When a #9514 comment was last edited (read with the caller's gh)."""
     comment_id = url.rsplit("issuecomment-", 1)[1]
     api = f"repos/{CONFIG.repository}/issues/comments/{comment_id}"
     comment = json.loads(subprocess.run(["gh", "api", api], check=True, capture_output=True, text=True).stdout)
-    reactions = json.loads(
-        subprocess.run(["gh", "api", f"{api}/reactions"], check=True, capture_output=True, text=True).stdout
-    )
-    rockets = sorted(r["created_at"] for r in reactions if r["content"] == "rocket")
-    parse = datetime.datetime.fromisoformat
-    return parse(comment["updated_at"]), parse(rockets[0]) if rockets else None
+    return datetime.datetime.fromisoformat(comment["updated_at"])
 
 
 def gh_api(args: list[str]) -> str:
     return subprocess.run(["gh", "api", *args], check=True, capture_output=True, text=True).stdout
 
 
-def read_comment(url: str, gh: Callable[[list[str]], str] = gh_api) -> str:
-    comment_id = url.rsplit("issuecomment-", 1)[1]
-    return json.loads(gh([f"repos/{CONFIG.repository}/issues/comments/{comment_id}"]))["body"]
+def thread_url(registry_id: str) -> str:
+    """The idea's row on the Status page, which expands to its agent thread."""
+    return f"{CONFIG.page_url}status#{registry_id}"
 
 
-def publish_comment(
-    url: str | None, body: str, *, github_posting: bool, dry_run: bool, gh: Callable[[list[str]], str] = gh_api
-) -> str | None:
-    """Post the idea's #9451 comment (no ``url`` yet) or edit it in place; returns its URL. Nothing is sent when
-    GitHub posting is off or on a dry run."""
-    if dry_run or not github_posting:
-        print(f"would {'edit ' + url if url else 'post'} the #{CONFIG.batch_issue} comment:\n{body}")
-        return url
-    if url is None:
-        api = f"repos/{CONFIG.repository}/issues/{CONFIG.batch_issue}/comments"
-        url = json.loads(gh([api, "-X", "POST", "-f", f"body={body}"]))["html_url"]
-        print(f"posted {url}")
-        return url
-    comment_id = url.rsplit("issuecomment-", 1)[1]
-    gh([f"repos/{CONFIG.repository}/issues/comments/{comment_id}", "-X", "PATCH", "-f", f"body={body}"])
-    print(f"edited {url}")
-    return url
+def read_thread(registry_id: str) -> str | None:
+    """The idea's agent thread so far, or None before its first plan."""
+    try:
+        return call(f"agent/threads/{registry_id}", token=service_token())["body"]
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
 
 
-def record_activity(post: Post, github_url: str | None, *, dry_run: bool) -> None:
-    """The page's activity feed entry for a comment posted or edited on #9451."""
+def publish_thread(registry_id: str, title: str, body: str, idea_id: int | None, kind: str, *, dry_run: bool) -> str:
+    """Write the idea's agent thread on the page (created, or replaced in place) and return its Status link."""
     if dry_run:
-        return
-    item = {**asdict(replace(post, session_id=os.environ.get(SESSION_ENV))), "github_url": github_url}
-    call("agent/activity", item, token=service_token())
+        print(f"would write the {registry_id} thread ({kind}):\n{body}")
+    else:
+        call(
+            f"agent/threads/{registry_id}",
+            {"title": title, "body": body, "idea_id": idea_id, "kind": kind},
+            token=service_token(),
+        )
+        print(f"wrote the {registry_id} thread: {title}")
+    return thread_url(registry_id)
+
+
+def reply_to_intake(
+    idea: Idea, text: str, *, github_posting: bool, dry_run: bool, gh: Callable[[list[str]], str] = gh_api
+) -> str | None:
+    """Post the one reply on the idea's #9514 comment, or edit it once it exists; returns its URL. Only for intake
+    ideas, and only when an approver has turned GitHub posting on."""
+    if idea.url is None or "issuecomment-" not in idea.url:
+        return None
+    body = f"{BOT_MARK} {text}"
+    if dry_run or not github_posting:
+        print(f"would {'edit ' + idea.reply_url if idea.reply_url else 'post'} the #{CONFIG.intake_issue} reply: {body}")
+        return idea.reply_url
+    if idea.reply_url is None:
+        api = f"repos/{CONFIG.repository}/issues/{CONFIG.intake_issue}/comments"
+        url = json.loads(gh([api, "-X", "POST", "-f", f"body={body}"]))["html_url"]
+        print(f"replied {url}")
+        return url
+    comment_id = idea.reply_url.rsplit("issuecomment-", 1)[1]
+    gh([f"repos/{CONFIG.repository}/issues/comments/{comment_id}", "-X", "PATCH", "-f", f"body={body}"])
+    print(f"edited {idea.reply_url}")
+    return idea.reply_url

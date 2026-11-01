@@ -163,17 +163,6 @@ def add_trial_run(registry_id: str, trial_id: str, run_name: str) -> Path:
     return path
 
 
-def comment_url_of(entry: dict) -> str | None:
-    """The idea's one #9451 comment, recorded on its Track trials. Trials from before Tracks (rung ``d512`` and so
-    on) link the batch reports they were posted in, which are not the idea's comment and are never edited."""
-    tracks = {t.value for t in Track}
-    for trial in entry.get("trials") or []:
-        url = trial.get("comment_url") or ""
-        if trial.get("rung") in tracks and "issuecomment-" in url:
-            return url
-    return None
-
-
 def entry_with_results(registry_id: str, results: list[RunResult]) -> tuple[Path, str]:
     """The entry with each trial's loss, delta, steps and same-seed control filled in (by W&B run name), as YAML."""
     path = entry_path(registry_id)

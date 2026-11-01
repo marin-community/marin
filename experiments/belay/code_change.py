@@ -12,6 +12,7 @@ and pass pre-commit. Losing ideas' flags stay as dead default-off code until a m
 import dataclasses
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,15 @@ OFF_DEFAULTS = ("False", "None", "0", "0.0", "''", "'none'", "'off'")
 # Past positions' hidden states may move by at most this much when future tokens change (float32 noise).
 LEAK_TOLERANCE = 1e-6
 PROBE_SCRIPT = Path(__file__).parent / "model_probe.py"
+# Pull requests and links an approved idea's text names: the only outside sources a code change may read.
+PR_REFERENCE = re.compile(r"(?<![\w/])#(\d{3,6})\b")
+URL = re.compile(r"https?://[^\s)\]>\"']+")
+
+
+def named_sources(approved_text: str) -> list[str]:
+    """The pull requests (``#NNNN``) and http(s) URLs in an idea's approved text, in order, without repeats."""
+    found = [f"#{n}" for n in PR_REFERENCE.findall(approved_text)] + URL.findall(approved_text)
+    return list(dict.fromkeys(found))
 
 
 @dataclasses.dataclass(frozen=True)

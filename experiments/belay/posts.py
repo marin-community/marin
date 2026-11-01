@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The one #9451 comment per idea: built here, posted once, then edited in place as the idea moves on.
+"""The one thread per idea on the Belay page's Agent log: built here, written once, then updated in place as the idea
+moves on.
 
     🤖 **X#### · <name> · <track> · <status>**
 
@@ -15,7 +16,7 @@
     Idea: ...
     Analysis: [X#### t001](...) · [X#### t002](...)
 
-Every table has the same columns, Steps always among them, so each comparison can be checked from the comment.
+Every table has the same columns, Steps always among them, so each comparison can be checked from the thread.
 """
 
 import re

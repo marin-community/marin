@@ -52,8 +52,8 @@ import sqlalchemy
 import wandb
 
 from experiments.belay.config import CONFIG
-from experiments.belay.page import BOT_MARK, TOKEN_ENV, call
 from experiments.belay.page import SESSION_ENV as SESSION_ID_ENV
+from experiments.belay.page import TOKEN_ENV, call
 from experiments.belay.submit import iris_jobs
 
 logger = logging.getLogger("belay.demo")
@@ -76,8 +76,6 @@ MARINA_PORT = 8091
 WATCH_INTERVAL = 120
 DISPATCH_INTERVAL = 5
 STORAGE_INTERVAL = 3600
-INTAKE_ISSUE = 9514
-REPOSITORY = CONFIG.repository
 WANDB_PATH = CONFIG.wandb_project
 STORAGE_BUCKET = "marin-us-east-02a"
 CW_ENDPOINT = "https://cwobject.com"
@@ -289,61 +287,6 @@ def stop_stack(stack: Stack) -> None:
 # ---------- watcher ----------
 
 
-def github_json(path: str) -> list | dict:
-    out = subprocess.run(["gh", "api", "--paginate", path], check=True, capture_output=True, text=True).stdout
-    pages = [json.loads(page) for page in out.replace("][", "]\n[").splitlines()]
-    return [item for page in pages for item in page] if isinstance(pages[0], list) else pages[0]
-
-
-@dataclass(frozen=True)
-class GithubApproval:
-    """The intake bot's first 🚀 on a #9514 comment, and the first 👍 (the maintainer who approved it)."""
-
-    transferred_at: datetime.datetime
-    approved_by: str | None
-
-
-def approval_time(comment: dict, approvals: dict[str, GithubApproval]) -> datetime.datetime | None:
-    """When the intake bot transferred ``comment``, if that was after the cutover; else None."""
-    approval = approvals.get(str(comment["id"]))
-    if approval is None or approval.transferred_at <= CONFIG.github_approval_cutover:
-        return None
-    return approval.transferred_at
-
-
-def intake_comments(approvals: dict[str, GithubApproval]) -> list[dict]:
-    """Comments on the intake issue. One the intake bot transferred is approved upstream; one it transferred after
-    the cutover also carries ``approved_at`` and ``approved_by``, which queue it. ``approvals`` caches reactions."""
-    comments = []
-    for c in github_json(f"repos/{REPOSITORY}/issues/{INTAKE_ISSUE}/comments?per_page=100"):
-        if c["user"]["type"] == "Bot" or c["body"].startswith(BOT_MARK):
-            continue  # bot and agent comments (tests, archived descriptions) are not suggestions
-        handled = c["reactions"]["rocket"] > 0
-        cid = str(c["id"])
-        if handled and cid not in approvals:
-            reactions = github_json(f"repos/{REPOSITORY}/issues/comments/{cid}/reactions?per_page=100")
-            rockets = sorted(r["created_at"] for r in reactions if r["content"] == "rocket")
-            thumbs = sorted((r["created_at"], r["user"]["login"]) for r in reactions if r["content"] == "+1")
-            if rockets:
-                approvals[cid] = GithubApproval(
-                    datetime.datetime.fromisoformat(rockets[0]), thumbs[0][1] if thumbs else None
-                )
-        at = approval_time(c, approvals)
-        comments.append(
-            {
-                "comment_id": cid,
-                "author": c["user"]["login"],
-                "body": c["body"],
-                "url": c["html_url"],
-                "posted_at": c["created_at"],
-                "approved_upstream": handled,
-                "approved_at": at.isoformat() if at else None,
-                "approved_by": approvals[cid].approved_by if at else None,
-            }
-        )
-    return comments
-
-
 def _run_state(coord: str, train: str | None) -> str:
     if coord in ("pending", "running") and train is not None:
         return train
@@ -382,7 +325,6 @@ class Watcher:
         self.final: dict[str, dict] = {}
         self.storage_at = 0.0
         self.wandb = wandb.Api()
-        self.approvals: dict[str, GithubApproval] = {}  # #9514 comment id -> its GitHub approval
 
     def _wandb(self, name: str) -> dict:
         try:
@@ -457,10 +399,6 @@ class Watcher:
     def tick(self) -> None:
         error = None
         try:
-            call("agent/sync/intake", {"comments": intake_comments(self.approvals)}, token=self.token)
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            error = f"intake: {e}"
-        try:
             self.upload_registry()
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             error = f"registry: {e}"
@@ -527,13 +465,11 @@ Your first command: `uv run python -m experiments.belay start --events {events_f
 # cluster's iris-task-env credentials, not these.
 SESSION_ENV = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "SSH_AUTH_SOCK", "WANDB_API_KEY")
 SESSION_ENV_PREFIXES = ("UV_", "XDG_")
-BOT_TOKEN_ENV = "BELAY_INTAKE_TOKEN"
 
 
 def session_env() -> dict[str, str]:
     """The allowlisted part of this process's environment, for a session."""
-    keep = {*SESSION_ENV, BOT_TOKEN_ENV}
-    return {k: v for k, v in os.environ.items() if k in keep or k.startswith(SESSION_ENV_PREFIXES)}
+    return {k: v for k, v in os.environ.items() if k in SESSION_ENV or k.startswith(SESSION_ENV_PREFIXES)}
 
 
 def run_session(
