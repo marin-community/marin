@@ -3,7 +3,9 @@
 // `experiments.belay.registry build`); stage 4's fits, points and hero budget come from scaling.json; the accepted
 // records and tracks are measured values kept here. Loaded after common.js.
 
-function startFront(RD, SC, SP, TK) {
+function startFront(RD, SC, SP, TK, RECIPE_TAG) {
+  const LOSS_NOISE = TK.find((t) => t.track === "speedrun").noise;
+  const SIGN = (v) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(4)}`;
   const $ = (id) => document.getElementById(id);
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const NS = "http://www.w3.org/2000/svg";
@@ -20,51 +22,23 @@ function startFront(RD, SC, SP, TK) {
     });
   }
 
-  // ---------- Record over time: d512 8-minute Competitive Track (#9451) ----------
-  // [batch, day (days after 2026-09-01; same-day records spread across the day), BPB, kind, label, detail]
-  const RECORDS = [
-    [0, 24.333, 1.2959, "base", "Clean KMA baseline", "cr1-base-d512"],
-    [3, 24.667, 1.2852, "speed", "fp32 embedding-gather backward", "+12% examples/s"],
-    [17, 25.5, 1.2786, "ml", "Learnable qk_mult, Adam β1 0.8, no embed / lm_head GatedNorm", "lc1-mfu1"],
-    [32, 26.143, 1.2686, "ml", "lm_head tanh soft-cap 10", "−0.011 on 2 seeds"],
-    [51, 26.286, 1.2576, "ml", "Candidate 1: bigram table, weight EMA, key offset, MuonEq", "batch 51"],
-    [63, 26.429, 1.2523, "ml", "Candidate 2: ReLU² 1.5× experts, Bi-Maxwell", "batch 63"],
-    [66, 26.571, 1.2499, "ml", "Candidate 3: MLA per-head key norm", "3 seeds"],
-    [71, 26.714, 1.2490, "ml", "Candidate 4: bigram content gate", "batch 71"],
-    [75, 26.857, 1.2484, "ml", "Candidate 5: MLA query norm, qk_mult init 4", "batch 75"],
-    [78, 27.167, 1.2461, "ml", "AdEMAMix on the Adam groups", "batch 78"],
-    [86, 27.333, 1.2424, "ml", "512 experts (sparsity 64)", "batch 86"],
-    [89, 27.5, 1.2385, "ml", "Candidate 7: gated value embeddings", "batch 89"],
-    [90, 27.667, 1.2355, "ml", "Candidate 8: Adam β2 0.98, GDN-2 gates, wider shared expert", "batch 90"],
-    [102, 27.833, 1.2337, "ml", "Candidate 9: router LR ×0.5, sqrt-softplus combine", "batch 102"],
-    [157, 30.5, 1.2347, "retime", "Re-timed on cw-us-east-02a without PGLE", "candidate 10 at its own 480 s budget; candidate 9 measured 1.2356 there"],
-    [174, 31.5, 1.2323, "speed", "Candidate 11: KDA speed flags", "−3.5% step time"],
-    [195, 34.5, 1.2322, "ml", "Candidate 12: ragged all-to-all, 6 MLA heads", "fixed-time confirmation"],
-  ];
-  // Accepted recipes at the 8-minute d512 budget (480 s of training on 8×H100), measured Paloma macro BPB (2026-10-14).
-  // [name, BPB, color, dashed, steps, W&B run]; the last is the current accepted recipe.
-  const ACCEPTED = [
-    ["Vanilla dense", 1.4275, "--amber", false, 6789, "belay-8min-vanilla"],
-    ["Marin Aug Hero Arch", 1.2980, "--slate", false, 2769, "belay-8min-hero"],
-    ["Belay Ckpt 1", 1.2562, "--rope", false, 2759, "belay-8min-ckpt1"],
-  ];
-
-  // Successful d512 tests, from the registry: each idea's best d512 trial whose mean delta is at least NOISE better,
-  // in the order the ideas were first tested. Whether each is in the current recipe comes from speedrun.json, which
-  // maps ideas to the flags of the current recipe's config (true, false, or null when unclear).
-  // [name, mean delta (placeholder BPB), in the current recipe, W&B run, batch, id]
+  // ---------- Stage 2: the 8-minute d512 speedrun, on Paloma macro loss ----------
+  // The accepted staircase comes from speedrun.json. Each successful d512 test is a drop below the Aug Hero Arch line by
+  // its best mean macro-loss Δ (from the registry, ``loss_delta``), in the order the ideas were first tested, marked
+  // by whether the live recipe holds it (its latest event for the recipe's checkpoint tag).
+  // [name, mean Δ loss, in the live recipe, W&B run, batch, id]
+  const inLive = (idea) => (idea.events || []).filter((e) => e.checkpoint === RECIPE_TAG && ["adopted", "removed"].includes(e.type)).at(-1)?.type === "adopted";
   const WINS = (() => {
     const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
     const wins = [];
     RD.ideas.forEach((idea, order) => {
-      const d512 = idea.trials.filter((t) => t.rung === "d512" && t.delta && t.delta.length && !t.derived);
+      const d512 = idea.trials.filter((t) => t.rung === "d512" && t.loss_delta && t.loss_delta.length && !t.derived);
       if (!d512.length) return;
-      const best = d512.reduce((a, b) => (avg(b.delta) < avg(a.delta) ? b : a));
-      const m = avg(best.delta);
-      if (m > -0.002) return;
+      const best = d512.reduce((a, b) => (avg(b.loss_delta) < avg(a.loss_delta) ? b : a));
+      const m = avg(best.loss_delta);
+      if (m > -LOSS_NOISE) return;
       const first = idea.trials.map((t) => t.date).filter(Boolean).sort()[0] || "";
-      const inRecipe = SP.in_recipe[idea.xid]?.in ?? null;
-      wins.push({ first, order, row: [idea.name, m, inRecipe, (best.wandb || [])[0] || null, String(best.batch), idea.xid] });
+      wins.push({ first, order, row: [idea.name, m, inLive(idea), (best.wandb || [])[0] || null, String(best.batch), idea.xid] });
     });
     wins.sort((a, b) => a.first.localeCompare(b.first) || a.order - b.order);
     return wins.map((w) => w.row);
@@ -76,48 +50,41 @@ function startFront(RD, SC, SP, TK) {
     const W = 600, H = Math.max(340, Math.round((W * box.clientHeight) / Math.max(box.clientWidth, 1)));
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
     const M = { l: 48, r: 14, t: 14, b: 22 };
-    // Broken y axis: a short top band for the dense baseline, the main band for the MoE recipes and the test deltas.
-    const TOP = { lo: 1.40, hi: 1.44, y0: M.t, y1: M.t + 34 }, MAIN = { lo: 1.25, hi: 1.302, y0: M.t + 54, y1: H - M.b };
-    const Y = (l) => {
-      const band = l >= TOP.lo ? TOP : MAIN;
-      return band.y0 + ((band.hi - l) / (band.hi - band.lo)) * (band.y1 - band.y0);
-    };
-    // x is ordinal: a dense segment, the Aug Hero Arch segment holding the tests evenly spaced, the Ckpt 1 segment.
-    const n = WINS.length, x0 = M.l, x1 = W - M.r;
-    const xd = x0 + 0.08 * (x1 - x0), xc = x1 - 0.1 * (x1 - x0);
-    const xw = (i) => xd + ((i + 1) / (n + 1)) * (xc - xd);
-    [[MAIN, [1.26, 1.28, 1.30]], [TOP, [1.42]]].forEach(([band, ticks]) => ticks.forEach((l) => {
+    const [hero, current] = SP.accepted;
+    const lows = [current.loss, ...WINS.map(([, d]) => hero.loss + d)];
+    const lo = Math.floor((Math.min(...lows) - 0.01) * 50) / 50, hi = Math.ceil((hero.loss + 0.01) * 50) / 50;
+    const Y = (l) => M.t + ((hi - l) / (hi - lo)) * (H - M.b - M.t);
+    // x is ordinal: the Aug Hero Arch segment holds the tests evenly spaced, then the current recipe's segment.
+    const n = WINS.length, x0 = M.l, x1 = W - M.r, xc = x1 - 0.14 * (x1 - x0);
+    const xw = (i) => x0 + ((i + 1) / (n + 1)) * (xc - x0);
+    for (let l = lo; l <= hi + 1e-9; l += 0.02) {
       el("line", { x1: x0, x2: x1, y1: Y(l), y2: Y(l), stroke: css("--line") }, svg);
       txt(svg, x0 - 8, Y(l) + 4, l.toFixed(2), { "text-anchor": "end" });
-    }));
-    const yb = (TOP.y1 + MAIN.y0) / 2;
-    [-4, 4].forEach((dy) => el("line", { x1: x0 - 6, x2: x0 + 6, y1: yb + dy + 3, y2: yb + dy - 3, stroke: css("--faint"), "stroke-width": 1.4 }, svg));
+    }
     el("line", { x1: x0, x2: x1, y1: H - M.b, y2: H - M.b, stroke: css("--faint") }, svg);
-    const [dense, hero, ckpt] = ACCEPTED;
-    const segs = [[dense, x0, xd], [hero, xd, xc], [ckpt, xc, x1]];
     // Lollipops: from the Aug Hero Arch line down by each test's improvement.
-    const yh = Y(hero[1]);
-    WINS.forEach(([name, delta, inCkpt, run, batch, xid], i) => {
-      const cx = xw(i), cy = Y(hero[1] + delta), col = inCkpt === true ? css("--rope") : css("--faint");
-      el("line", { x1: cx, x2: cx, y1: yh, y2: cy, stroke: col, "stroke-width": inCkpt ? 1.6 : 1.2, opacity: inCkpt ? 0.8 : 0.7 }, svg);
-      el("circle", { cx, cy, r: inCkpt ? 3.6 : 3, fill: col, opacity: inCkpt ? 0.95 : 0.85 }, svg);
+    const yh = Y(hero.loss);
+    WINS.forEach(([name, delta, inLiveRecipe, run, batch, xid], i) => {
+      const cx = xw(i), cy = Y(hero.loss + delta), col = inLiveRecipe ? css("--rope") : css("--faint");
+      el("line", { x1: cx, x2: cx, y1: yh, y2: cy, stroke: col, "stroke-width": inLiveRecipe ? 1.6 : 1.2, opacity: inLiveRecipe ? 0.8 : 0.7 }, svg);
+      el("circle", { cx, cy, r: inLiveRecipe ? 3.6 : 3, fill: col, opacity: inLiveRecipe ? 0.95 : 0.85 }, svg);
       const link = run ? el("a", { href: WB(run), target: "_blank", rel: "noopener", style: "cursor:pointer" }, svg) : svg;
       const hit = el("rect", { x: cx - 5, y: yh, width: 10, height: Math.max(cy - yh + 6, 10), fill: "transparent", tabindex: run ? -1 : 0 }, link);
-      hit.dataset.tip = `<b>${delta.toFixed(4)}</b> · ${esc(name)}${xid ? ` · ${xid}` : ""}<br>${inCkpt === true ? `In ${SP.recipe}` : inCkpt === false ? `Not in ${SP.recipe}` : `Unclear whether in ${SP.recipe}`} · best d512 trial, batch ${esc(batch)}<br><span style="opacity:.6">mean Δ vs its baseline, placeholder BPB${run ? ` · ${run} · click to open in W&amp;B` : ""}</span>`;
+      hit.dataset.tip = `<b>${SIGN(delta)}</b> · ${esc(name)}${xid ? ` · ${xid}` : ""}<br>${inLiveRecipe ? "In" : "Not in"} the current recipe · best d512 trial, batch ${esc(batch)}<br><span style="opacity:.6">mean Δ Paloma macro loss vs its baseline${run ? ` · ${run} · click to open in W&amp;B` : ""}</span>`;
     });
-    // The accepted staircase: dense -> Aug Hero Arch -> Belay Ckpt 1 (the last recipe with an 8-minute run).
-    const stair = segs.map(([[, l], a, b], i) => (i ? `V${Y(l)}` : `M${a},${Y(l)}`) + `H${b}`).join("");
-    el("path", { d: stair, fill: "none", stroke: css("--ink"), "stroke-width": 1.4, opacity: 0.35, "stroke-linejoin": "round" }, svg);
-    segs.forEach(([[name, l, color, , steps, run], a, b], i) => {
-      const cur = i === 2, col = css(color), y = Y(l);
+    // The accepted staircase: Aug Hero Arch -> the current recipe.
+    const segs = [[hero, x0, xc], [current, xc, x1]];
+    el("path", { d: `M${x0},${Y(hero.loss)}H${xc}V${Y(current.loss)}H${x1}`, fill: "none", stroke: css("--ink"), "stroke-width": 1.4, opacity: 0.35, "stroke-linejoin": "round" }, svg);
+    segs.forEach(([r, a, b], i) => {
+      const cur = i === 1, col = css(r.color), y = Y(r.loss);
       el("line", { x1: a, x2: b, y1: y, y2: y, stroke: col, "stroke-width": cur ? 3.4 : 2.4 }, svg);
       el("circle", { cx: a, cy: y, r: cur ? 7 : 5.5, fill: col, stroke: css("--surface"), "stroke-width": 2 }, svg);
-      const label = `${name} ${l.toFixed(3)}`;
+      const label = `${r.name} ${r.loss.toFixed(3)}`;
       if (cur) txt(svg, a - 12, y + 4, label, { "text-anchor": "end", fill: col, "font-weight": 700, "font-size": 13 });
       else txt(svg, a + 8, y - 8, label, { fill: css("--slate"), "font-weight": 600, "font-size": 11.5 });
-      const link = el("a", { href: WB(run), target: "_blank", rel: "noopener", style: "cursor:pointer" }, svg);
+      const link = el("a", { href: WB(r.run), target: "_blank", rel: "noopener", style: "cursor:pointer" }, svg);
       const hit = el("rect", { x: a - 6, y: y - 8, width: b - a + 12, height: 16, fill: "transparent", tabindex: -1 }, link);
-      hit.dataset.tip = `<b>${l.toFixed(4)}</b> · ${name} · accepted<br>d512 · 8 min on 8×H100 (${steps.toLocaleString()} steps) · measured Paloma macro BPB<br><span style="opacity:.6">${run} · click to open in W&amp;B</span>`;
+      hit.dataset.tip = `<b>${r.loss.toFixed(4)}</b> Paloma macro loss · ${esc(r.name)}<br>d512 · 8 min on 8×H100 (${r.steps.toLocaleString()} steps) · BPB ${r.bpb.toFixed(4)} (${r.bpb_kind})<br><span style="opacity:.6">${r.run} · click to open in W&amp;B</span>`;
     });
     tipper("box-progress", "tip-progress", svg);
   }
@@ -304,7 +271,7 @@ async function front() {
     fetch(asset('speedrun.json')).then((r) => r.json()),
     fetch(asset('tracks.json')).then((r) => r.json()),
   ])
-  startFront(results, scaling, speedrun, tracks.tracks)
+  startFront(results, scaling, speedrun, tracks.tracks, tracks.recipe_tag)
   if (status) {
     state = status
     renderLatest(status)

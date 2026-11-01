@@ -467,7 +467,7 @@ button.line:hover { background: var(--surface-2); }
 .ck-ctl select, #ck-filter { font: 13px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
 #ck-filter { min-width: 240px; }
 .ck-table { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.ck-row { display: grid; grid-template-columns: minmax(200px, 2.2fr) minmax(130px, 1fr) 86px minmax(190px, 2fr) minmax(150px, 1.4fr) minmax(130px, 1.3fr) minmax(110px, 1.1fr) 64px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13px; }
+.ck-row { display: grid; grid-template-columns: minmax(200px, 2.2fr) minmax(130px, 1fr) 86px minmax(130px, 1.3fr) minmax(190px, 2fr) minmax(150px, 1.4fr) minmax(130px, 1.3fr) minmax(110px, 1.1fr) 64px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13px; }
 .ck-head { border-top: 0; background: var(--surface-2); font: 600 11px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--slate); }
 .ck-row a { color: var(--ink); text-decoration: none; }
 .ck-row a:hover { text-decoration: underline; }

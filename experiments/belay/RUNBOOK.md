@@ -142,7 +142,7 @@ and one section per stage). Its link is stored on the idea's registry trials (`c
    `potential` (score, rationale, model, date, and a digest of the results it saw) on the registry entry. The
    Status page shows it; nothing else writes it.
 2. **Score with this rubric**, from the entry's trials and events. A win's validations are equal-time speedrun,
-   the competitive-ladder rungs (scaling) and `hero-mfu` (MFU cost); the noise band is ±0.005 Paloma macro loss.
+   the competitive-ladder rungs (scaling), `hero-mfu` (MFU cost) and a vanilla-track (Dense) win; the noise band is ±0.005 Paloma macro loss.
    | Score | When |
    |---|---|
    | 0–2 | Clear loss |

@@ -115,8 +115,8 @@
  "caveat": "* Extrapolation of ~4,000\u00d7 past the largest rung, beyond the ~300\u00d7 expected for a reliable forecast: \u00b10.002 in \u03b1 moves loss \u00b10.009 at the budget. BPB points: byte-weighted for Belay Ckpt Oct 20 2026, token-weighted for Aug Hero.",
  "sources": {
   "points": "W&B marin_moe summaries: eval/paloma/macro_loss, eval/paloma/macro_bpb, throughput/flops_per_example_analytic \u00d7 batch \u00d7 steps",
-  "fit": "refit 2026-11-01 with d1024 (four rungs); reproduces the 2026-10-22 three-rung S7, Ckpt 1 and Aug Hero fits exactly",
-  "mfu": "Aug Hero 28.8%, Ckpt 1 26.9%, S7 34.2% = 36.8% \u00d7 0.93 (transcript 2026-10-22T01:01; MFU ladder artifact LNAhYDvbmgrkPbXcUAYV7Y)"
+  "fit": "refit 2026-11-01 with d1024 (four rungs); reproduces the 2026-10-22 three-rung S7 and Aug Hero fits exactly",
+  "mfu": "Aug Hero 28.8%, S7 34.2% = 36.8% \u00d7 0.93 (transcript 2026-10-22T01:01; MFU ladder artifact LNAhYDvbmgrkPbXcUAYV7Y)"
  },
  "xlate": {
   "rows": [

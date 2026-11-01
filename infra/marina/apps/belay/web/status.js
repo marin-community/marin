@@ -34,6 +34,16 @@ function counted(trials) {
     .map((t) => ({ ...t, delta: t.loss_delta ?? t.delta }))
 }
 
+// Gate 1, beat a vanilla transformer: the latest vanilla-track trial (vanilla-d512 to vanilla-d1280).
+function denseGate(idea) {
+  const t = counted(idea.trials.filter((x) => x.rung?.startsWith('vanilla-'))).at(-1)
+  if (!t) return { kind: 'none', text: 'not run', title: '' }
+  const d = t.delta[0]
+  const kind = verdictOf(d, trackInfo(t.rung).noise)
+  const where = t.protocol === 'fixed_time' ? 'equal time' : 'equal data'
+  return { kind, text: `${kind} at ${where}, Δ ${SIGN(d)} · ${t.rung.replace('vanilla-', '')}`, title: `${t.variant} (${t.rung}, ${t.date})` }
+}
+
 // Gate 2, the 8-minute speedrun: the speedrun track's stages, or a legacy d512 trial from before Tracks existed.
 function speedrunGate(idea, live) {
   const sr = trackInfo('speedrun')
@@ -259,6 +269,7 @@ function checklistRows() {
       author: idea.author,
       accepted: inLiveRecipe(idea),
       score: idea.potential?.score ?? null,
+      dense: denseGate(idea),
       speedrun: speedrunGate(idea, live.has(idea.xid)),
       hero: heroGate(idea),
       scaling: scalingGate(idea),
@@ -283,7 +294,7 @@ function renderChecklist() {
   const head = el(
     'div',
     { class: 'ck-row ck-head', role: 'row' },
-    ['Idea', 'Author', 'Date', 'Speedrun', 'Hero MFU', 'Projection', 'Recipe', 'Potential'].map((h) => el('span', { role: 'columnheader' }, h)),
+    ['Idea', 'Author', 'Date', 'Dense', 'Speedrun', 'Hero MFU', 'Projection', 'Recipe', 'Potential'].map((h) => el('span', { role: 'columnheader' }, h)),
   )
   setChildren(
     'checklist',
@@ -301,6 +312,7 @@ function renderChecklist() {
         ),
         el('span', { 'data-label': 'Author' }, link(`https://github.com/${r.author}`, `@${r.author}`)),
         el('span', { class: 'mono', 'data-label': 'Date' }, r.date),
+        el('span', { 'data-label': 'Dense' }, gateChip(r.dense)),
         el('span', { 'data-label': 'Speedrun' }, gateChip(r.speedrun)),
         el('span', { 'data-label': 'Hero MFU' }, gateChip(r.hero)),
         el('span', { 'data-label': 'Projection' }, gateChip(r.scaling)),
