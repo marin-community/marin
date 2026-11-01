@@ -7,14 +7,16 @@ a default-off flag that leaves the default model unchanged; results follow each 
 
 import dataclasses
 import datetime
+import io
 import json
 import shlex
 import subprocess
-import urllib.error
-from email.message import Message
+import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import requests
 import yaml
 
 from experiments.belay import page
@@ -391,18 +393,17 @@ def app_threads(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict]:
     """The page's thread store, standing in for the Belay API."""
     threads: dict[str, dict] = {}
 
-    def call(path: str, body: dict | None = None, *, token: str | None = None) -> dict:
-        assert path.startswith("agent/threads/") and token == "t"
+    def call(path: str, body: dict | None = None) -> dict:
+        assert path.startswith("agent/threads/")
         registry_id = path.removeprefix("agent/threads/")
         if body is None:
             if registry_id not in threads:
-                raise urllib.error.HTTPError(path, 404, "not found", Message(), None)
+                raise page.PageRequestError(404, "no thread")
             return threads[registry_id]
         threads[registry_id] = body
         return {"registry_id": registry_id}
 
     monkeypatch.setattr(page, "call", call)
-    monkeypatch.setenv(page.TOKEN_ENV, "t")
     return threads
 
 
@@ -413,7 +414,7 @@ def test_one_thread_per_idea_plan_then_result(app_threads: dict[str, dict]) -> N
     plan_title = title("X0001", "Toy", Track.SPEEDRUN, "plan")
     plan = render(Comment(plan_title, {1: stage_1}, ["Defaults chosen: none"]))
     assert read_thread("X0001") is None
-    assert publish_thread("X0001", plan_title, plan, 3, "plan", dry_run=False) == f"{CONFIG.page_url}status#X0001"
+    assert publish_thread("X0001", plan_title, plan, 3, "plan", dry_run=False) == f"{CONFIG.page_url}#status/X0001"
     measured = Row("belay-X0001-seed0", "v", 0, "8\u00d7H100", 3030, 0.2, 0.31, 2.98, -0.0578)
     win = title("X0001", "Toy", Track.SPEEDRUN, "win at equal data")
     result = updated(
@@ -432,6 +433,83 @@ def test_one_thread_per_idea_plan_then_result(app_threads: dict[str, dict]) -> N
     assert thread["body"].endswith("Analysis: [X0001 t001](https://example.com/t001.md)")
 
 
+def fake_iap_token() -> str:
+    return "iap-id-token"
+
+
+def no_iap_token() -> str:
+    raise AssertionError("a local page must not ask for an IAP token")
+
+
+@dataclass
+class Sent:
+    """What one HTTP call carried."""
+
+    method: str
+    url: str
+    headers: dict[str, str]
+    body: dict | None
+
+
+def test_a_marina_page_is_called_with_the_iap_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[Sent] = []
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"ok": True}
+
+    def request(method: str, url: str, *, json: dict | None, headers: dict, timeout: int) -> Response:
+        sent.append(Sent(method, url, headers, json))
+        return Response()
+
+    applet = "https://applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/"
+    monkeypatch.setattr(page, "CONFIG", dataclasses.replace(CONFIG, page_url=applet))
+    monkeypatch.setattr(page, "bearer_token", fake_iap_token)
+    monkeypatch.setattr(requests, "request", request)
+    monkeypatch.setenv(page.TOKEN_ENV, "a-local-token")  # never sent to Marina
+    session = page.SessionCredentials("loom-1101-120000", "s3cret")
+    assert page.call("agent/ideas/3/report", {"note": "x"}, session=session) == {"ok": True}
+    assert page.call("public/state") == {"ok": True}
+    assert [(s.method, s.url) for s in sent] == [
+        ("POST", f"{applet}api/agent/ideas/3/report"),
+        ("GET", f"{applet}api/public/state"),
+    ]
+    assert sent[0].headers["Authorization"] == "Bearer iap-id-token"
+    assert (sent[0].headers["X-Belay-Session"], sent[0].headers["X-Belay-Session-Secret"]) == (session.id, "s3cret")
+    assert all(page.TOKEN_HEADER not in s.headers for s in sent)
+    with pytest.raises(ValueError, match="only for a local preview"):
+        page.call("agent/state", token="a-local-token")
+
+
+def test_a_local_page_takes_the_service_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[urllib.request.Request] = []
+
+    class Response(io.BytesIO):
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    def urlopen(request: urllib.request.Request, timeout: int) -> Response:
+        sent.append(request)
+        return Response(b'{"ok": true}')
+
+    monkeypatch.setattr(page, "CONFIG", dataclasses.replace(CONFIG, page_url="http://127.0.0.1:8091/belay/"))
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(page, "bearer_token", no_iap_token)
+    monkeypatch.setenv(page.TOKEN_ENV, "local-token")
+    monkeypatch.delenv(page.SESSION_ENV, raising=False)
+    monkeypatch.setattr(page, "SESSION_FILE", Path("/nonexistent/belay-session.json"))
+    page.call("agent/state")
+    page.call("public/state")
+    headers = [{k.lower(): v for k, v in r.header_items()} for r in sent]
+    assert headers[0]["x-belay-token"] == "local-token" and "authorization" not in headers[0]
+    assert "x-belay-token" not in headers[1] and "x-belay-session" not in headers[0]
+
+
 def intake_idea(url: str | None, reply_url: str | None = None) -> Idea:
     origin = "intake" if url else "proposal"
     return Idea(3, origin, "someone", None, "b", url, "approved", "X0001", None, None, None, None, [], reply_url)
@@ -445,7 +523,7 @@ def test_the_intake_reply_is_posted_once_then_edited() -> None:
         return '{"html_url": "https://github.com/marin-community/marin/issues/9514#issuecomment-77"}'
 
     idea = intake_idea("https://github.com/marin-community/marin/issues/9514#issuecomment-41")
-    status = f"{CONFIG.page_url}status#X0001"
+    status = f"{CONFIG.page_url}#status/X0001"
     reply = reply_to_intake(idea, f"Running as X0001 → {status}", github_posting=True, dry_run=False, gh=gh)
     assert reply == "https://github.com/marin-community/marin/issues/9514#issuecomment-77"
     verdict = f"X0001 · speedrun · win → {status}"

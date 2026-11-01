@@ -132,7 +132,7 @@ The change goes straight onto this week's branch. No human reviews it: passing `
 
 ## 2. run-finished (event `run_finished`)
 
-Each idea has exactly one thread on the Belay page's agent log, at `status#X####`. `new-idea` writes it; every later
+Each idea has exactly one thread on the Belay page's agent log, at `#status/X####` on the page. `new-idea` writes it; every later
 step replaces it in place (title status and one section per stage). Its link is stored on the idea's registry
 trials (`comment_url`). Nothing is posted on #9451.
 

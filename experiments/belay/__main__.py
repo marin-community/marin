@@ -76,11 +76,13 @@ from experiments.belay.config import (
 )
 from experiments.belay.page import (
     SESSION_ENV,
+    SESSION_FILE,
     TERMINAL_RUN_STATES,
     Idea,
     PageRun,
     PageState,
     Post,
+    SessionCredentials,
     call,
     comment_updated_at,
     expect_finish,
@@ -91,7 +93,8 @@ from experiments.belay.page import (
     reply_to_intake,
     report_idea,
     require_unedited,
-    service_token,
+    save_session,
+    session_credentials,
     thread_url,
 )
 from experiments.belay.posts import (
@@ -248,11 +251,12 @@ def check_only() -> None:
 def claim() -> None:
     """A scheduled session's own dispatch: claim every queued event and write them to an events file for start."""
     session_id = f"loom-{datetime.datetime.now(datetime.UTC):%m%d-%H%M%S}"
-    claimed = call("agent/dispatch/claim", {"session_id": session_id}, token=service_token())
+    claimed = call("agent/dispatch/claim", {"session_id": session_id})
     if not claimed["launch"]:
         print(f"nothing claimed: {claimed['reason']}")
         say_next("stop")
         return
+    save_session(SessionCredentials(session_id, claimed["session_secret"]))  # for this session's later commands
     path = Path(tempfile.gettempdir()) / f"belay-{session_id}.events.json"
     path.write_text(json.dumps(claimed["events"], indent=2))
     print(f"session {session_id} claimed {len(claimed['events'])} event(s) into {path}")
@@ -262,9 +266,19 @@ def claim() -> None:
     )
 
 
+def own_session(session_id: str) -> SessionCredentials:
+    """This process's credentials for ``session_id``; refuses when it holds none for that session."""
+    credentials = session_credentials()
+    if credentials is None or credentials.id != session_id:
+        raise SystemExit(f"refusing: this machine holds no credentials for session {session_id} (claim issues them)")
+    return credentials
+
+
 def finish(session_id: str, summary: str) -> None:
     """Report a scheduled session's final message, which frees the queue for the next session."""
-    call(f"agent/sessions/{session_id}/finish", {"state": "succeeded", "summary": summary}, token=service_token())
+    own_session(session_id)
+    call(f"agent/sessions/{session_id}/finish", {"state": "succeeded", "summary": summary})
+    SESSION_FILE.unlink(missing_ok=True)
     print(f"session {session_id} finished")
     say_next("stop")
 
@@ -309,9 +323,10 @@ def wait(session_id: str, events_file: Path) -> None:
     seen = set(json.loads(seen_file.read_text())) if seen_file.exists() else set()
     seen |= {e["id"] for e in json.loads(events_file.read_text()) if "id" in e}
     seen_file.write_text(json.dumps(sorted(seen)))
+    own_session(session_id)
     deadline = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=WAIT_CALL_SECONDS)
     while True:
-        state = call("agent/state", token=service_token())
+        state = call("agent/state")
         session = next((s for s in state["sessions"] if s["id"] == session_id), None)
         if session is None or session["state"] != "running":
             raise SystemExit(f"refusing: session {session_id} is not running on the Belay page")
@@ -326,7 +341,7 @@ def wait(session_id: str, events_file: Path) -> None:
         if outcome is WaitOutcome.WORK:
             within = now - started < DRAIN_BUDGET and taken < DRAIN_MAX_IDEAS
             kinds = None if within else [k.value for k in RESULT_KINDS]
-            claimed = call("agent/dispatch/claim", {"session_id": session_id, "kinds": kinds}, token=service_token())
+            claimed = call("agent/dispatch/claim", {"session_id": session_id, "kinds": kinds})
             new = [e for e in claimed["events"] if e["id"] not in seen]
             path = events_file.parent / f"belay-{session_id}-{now:%H%M%S}.events.json"
             path.write_text(json.dumps(new, indent=2))

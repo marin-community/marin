@@ -53,7 +53,7 @@ import wandb
 
 from experiments.belay.config import CONFIG
 from experiments.belay.page import SESSION_ENV as SESSION_ID_ENV
-from experiments.belay.page import TOKEN_ENV, call
+from experiments.belay.page import SESSION_SECRET_ENV, TOKEN_ENV, SessionCredentials, call
 from experiments.belay.submit import iris_jobs
 
 logger = logging.getLogger("belay.demo")
@@ -257,13 +257,12 @@ def bootstrap_access(stack: Stack, demo_approver: str) -> str:
 
 
 def export_public(directory: Path) -> Path:
-    """Write the front and status pages with JSON snapshots of the public state and registry results, for static
-    hosting (GitHub Pages)."""
+    """Write the page (its views are fragment routes) with JSON snapshots of the public state and registry results,
+    for static hosting (GitHub Pages)."""
     directory.mkdir(parents=True, exist_ok=True)
     web = APP_DIR / "web"
     version = BUILD.web_version()
-    for page in ("index.html", "status.html", "mfu.html"):
-        BUILD.write_page(web / "static.html", directory / page, version)
+    BUILD.write_page(web / "static.html", directory / "index.html", version)
     for name in PUBLIC_FILES:
         shutil.copyfile(web / name, directory / name)
     (directory / "public.json").write_text(json.dumps(call("public/state"), indent=1))
@@ -473,13 +472,14 @@ def session_env() -> dict[str, str]:
 
 
 def run_session(
-    session_id: str,
+    session: SessionCredentials,
     events: list[dict],
     agent_dir: Path,
     registry_dir: Path,
     state_dir: Path,
     token: str,
 ) -> None:
+    session_id = session.id
     log_path = state_dir / "sessions" / f"{session_id}.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     events_file = state_dir / "sessions" / f"{session_id}.events.json"
@@ -505,7 +505,7 @@ def run_session(
         process = subprocess.run(
             command,
             cwd=agent_dir,
-            env={**session_env(), TOKEN_ENV: token, SESSION_ID_ENV: session_id},
+            env={**session_env(), TOKEN_ENV: token, SESSION_ID_ENV: session_id, SESSION_SECRET_ENV: session.secret},
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -518,6 +518,7 @@ def run_session(
         f"agent/sessions/{session_id}/finish",
         {"state": state, "summary": summary, "transcript": transcript, **usage},
         token=token,
+        session=session,
     )
     logger.info("session %s: %s (%s turns, %s output tokens)", session_id, state, usage["turns"], usage["output_tokens"])
 
@@ -577,20 +578,22 @@ class Dispatcher:
         if not claim["launch"]:
             return
         logger.info("dispatch: session %s for %s", session_id, "; ".join(e["summary"] for e in claim["events"]))
+        session = SessionCredentials(session_id, claim["session_secret"])
         self.thread = threading.Thread(
-            target=self._run, args=(session_id, claim["events"]), name=f"session-{session_id}", daemon=True
+            target=self._run, args=(session, claim["events"]), name=f"session-{session_id}", daemon=True
         )
         self.thread.start()
 
-    def _run(self, session_id: str, events: list[dict]) -> None:
+    def _run(self, session: SessionCredentials, events: list[dict]) -> None:
         try:
-            run_session(session_id, events, self.agent_dir, self.registry_dir, self.state_dir, self.token)
+            run_session(session, events, self.agent_dir, self.registry_dir, self.state_dir, self.token)
         except Exception as e:
-            logger.exception("session %s crashed", session_id)
+            logger.exception("session %s crashed", session.id)
             call(
-                f"agent/sessions/{session_id}/finish",
+                f"agent/sessions/{session.id}/finish",
                 {"state": "failed", "summary": f"runner error: {e}"},
                 token=self.token,
+                session=session,
             )
 
 
