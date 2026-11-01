@@ -5,7 +5,7 @@ category: MoE and routing
 summary: Try causal token-level capacity routing in front of the MoE (Mixture-of-Depths style ([arXiv 2404.02258](https://arxiv.org/abs/2404.02258))
   ), keeping top-k + QB for expert choice.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6497735060
@@ -24,6 +24,13 @@ trials:
   settings:
     mod_routed_frac: '0.8'
   commit: 6b8f1e9a06
+  loss:
+  - 3.116
+  delta:
+  - 0.071
+  steps: 3030
+  baseline: belay-X0222-control 3.0450 (same commit, seed 0)
+  step_time_change: +3%
 potential:
   score: 5
   rationale: 'no result yet; scored on premise: causal MoD-style token-capacity routing in front of the MoE, keeping top-k
