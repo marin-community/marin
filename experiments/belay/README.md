@@ -49,7 +49,7 @@ Comment on the intake issue ([marin#9514](https://github.com/marin-community/mar
 in [`intake_template.md`](intake_template.md), one idea per comment. A 👍 from a maintainer approves it: the intake
 bot (every 5 minutes) copies it into [marin#9451](https://github.com/marin-community/marin/issues/9451) and marks
 your comment 🚀. The next Belay session then gives it the next id, writes its `status: approved` entry, and fills
-the entry in as its trials run. There are no weekly issues.
+the entry in as its trials run.
 
 ## Entry format
 

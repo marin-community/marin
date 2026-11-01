@@ -1,7 +1,7 @@
 name: "Ops - Belay Intake"
 
-# Copies Marin Belay suggestions approved on the intake issue (#9514) into the current weekly Belay issue (the open
-# issue labeled belay-weekly), after giving each one a registry id.
+# Copies Marin Belay suggestions approved on the intake issue (#9514) into the Belay issue (#9451), after giving each
+# one a registry id.
 # Logic lives in scripts/ci/belay_intake.py.
 
 on:
