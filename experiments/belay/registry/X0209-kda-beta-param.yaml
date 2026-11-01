@@ -4,7 +4,7 @@ name: KDA write-strength (w_beta) parameterization
 category: Linear attention / KDA
 summary: Change w_beta's init scale, LR multiplier, scale or optimizer group.
 source: agent
-status: running
+status: done
 first_batch: 201
 tags:
 - kda
@@ -225,6 +225,13 @@ trials:
     kda_beta_group: adam
     init_std_mult_beta: '1'
   commit: 63c0064b88
+  loss:
+  - 3.0466
+  delta:
+  - 0.0026
+  steps: 3030
+  baseline: belay-X0151-control 3.0441 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: 202-205
