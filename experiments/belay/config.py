@@ -120,10 +120,10 @@ GB200_CLUSTER = "cw-us-east-08a"
 # The weekly experiment branch holds the code for every H100 track.
 WEEKLY_BRANCH = "weekly"
 HERO_MFU_BRANCH = "marin_belay_v1_hero_mfu"
-# On HERO_MFU_BRANCH: the launcher module that renders the mfl-mp-qall stack (its PGLE profile, XLA flags and
-# model/optimizer settings) for one GB200 rack.
+# On HERO_MFU_BRANCH: the launcher that renders the measured mfl-mp-qall stack (c6d473c243; PGLE mfl-mp-m7g.pb, slop
+# 112, the S7 settings plus the qall extras) for one GB200 NVL72 rack; `--plan` prints it, `--accept <run>` checks a run.
 HERO_MFU_LAUNCH = ("experiments.grug.fast_track.belay_hero_mfu", "--stack", "mfl-mp-qall")
-HERO_MFU_NODES = 18
+HERO_MFU_NODES = 16  # replicas of 4xGB200, as mfl-mp-qall ran
 CONTROL_RUN = "belay-<X####>-control"
 
 
@@ -146,6 +146,10 @@ class Baseline:
     """Δ ≤ -noise is a win, Δ ≥ +noise a loss, anything between is noise."""
     needs_go_ahead: bool
     """A maintainer approves each launch (it shares capacity with production runs); sessions escalate it."""
+    output_path: bool = True
+    """The launcher takes ``--output-path`` (Belay writes under ``CONFIG.output_root``)."""
+    seed_run: tuple[str, ...] = ()
+    """Extra arguments of a one-off run that must precede the first timed run of a program (an autotune seed)."""
 
 
 H100 = "8xH100"
@@ -227,6 +231,8 @@ TRACKS: dict[Track, Baseline] = {
         Rule.RELATIVE,
         0.005,
         needs_go_ahead=True,
+        output_path=False,
+        seed_run=("--seed-xla-autotune-cache",),
     ),
     Track.CUSTOM: Baseline(
         "The submitter states the baseline",

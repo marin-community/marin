@@ -58,6 +58,8 @@ from experiments.belay.registry_entry import (
     add_trial,
     commit_and_push,
     create_entry,
+    entry_for_intake,
+    entry_path,
     entry_url,
     entry_with_results,
     load_entry,
@@ -286,7 +288,11 @@ def request_go_ahead(idea: Idea, registry_id: str, track: Track, flags: list[str
     variant = " ".join(
         track_command(track, f"{RUN_PREFIX}{registry_id}-seed{CONFIG.seed}", tuple(flags), "uv run python")
     )
-    body = (
+    seed = ""
+    if baseline.seed_run:
+        seed_command = track_command(track, f"{RUN_PREFIX}{registry_id}-seedrun", baseline.seed_run, "uv run python")
+        seed = f"First, if this program has no autotune cache yet:\n\n```\n{' '.join(seed_command)}\n```\n\n"
+    body = seed + (
         f"{registry_id} is on track {track} ({baseline.description}): {baseline.nodes} node(s) of {baseline.hardware} "
         f"on {baseline.cluster} at {baseline.band} priority, so a maintainer approves the launch. From a checkout of "
         f"`{baseline.code}` at `{commit[:10]}`, run the control and the variant on the same rack:\n\n"
@@ -316,7 +322,13 @@ def new_idea(
     if variant is not None or settings:
         check_variant(variant or "", settings)
     require_clean_pushed_head(repo, branch)  # before any write
-    if idea.registry_id is None:
+    existing = entry_for_intake(idea.url) if idea.registry_id is None and idea.url else None
+    if existing is not None:
+        report_idea(idea.id, {"registry_id": existing, "registry_url": entry_url(entry_path(existing))}, dry_run=dry_run)
+        print(f"idea #{idea.id} was registered before as {existing}; its new trial goes there")
+        registry_id = existing
+        summary = load_entry(existing)["summary"]
+    elif idea.registry_id is None:
         registry_id, path = create_entry(idea, category, track, dry_run=dry_run)
         report_idea(idea.id, {"registry_id": registry_id, "registry_url": entry_url(path)}, dry_run=dry_run)
         summary = idea.body
@@ -582,15 +594,18 @@ def track_rows() -> list[dict[str, object]]:
     rows = []
     for track, baseline in TRACKS.items():
         code = f"{CONFIG.week_branch_prefix}<monday>" if baseline.code == WEEKLY_BRANCH else baseline.code
-        command = None
+        command = seed_run = None
         if baseline.launch is not None:
             command = " ".join(track_command(track, f"{RUN_PREFIX}<X####>-<run>", ("<flags>",), "uv run python"))
+        if baseline.seed_run:
+            seed_run = " ".join(track_command(track, f"{RUN_PREFIX}<X####>-seedrun", baseline.seed_run, "uv run python"))
         rows.append(
             {
                 "track": track.value,
                 "baseline": baseline.description,
                 "code": code,
                 "command": command,
+                "seed_run": seed_run,
                 "hardware": (
                     f"{baseline.nodes} node(s) of {baseline.hardware} on {baseline.cluster}" if baseline.nodes else ""
                 ),
@@ -613,6 +628,8 @@ def tracks(as_json: bool) -> None:
         print(f"{row['track']}: {row['baseline']}")
         for key in ("code", "command", "hardware", "priority", "control", "metric", "rule"):
             print(f"  {key}: {row[key] or '(none: a maintainer runs it)'}")
+        if row["seed_run"]:
+            print(f"  seed run (once per program, before the first timed run): {row['seed_run']}")
         if row["go_ahead"]:
             print("  go-ahead: a maintainer approves each launch; sessions escalate with the exact command")
 

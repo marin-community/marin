@@ -194,7 +194,9 @@ def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: 
     if baseline.launch is None:
         raise SystemExit(f"refusing: track {track} has no launch recipe; a maintainer runs it")
     command = [python, "-m", *baseline.launch, *flags]
-    command += ["--seed", str(CONFIG.seed), "--run-id", name, "--output-path", f"{CONFIG.output_root}/{name}"]
+    command += ["--seed", str(CONFIG.seed), "--run-id", name]
+    if baseline.output_path:
+        command += ["--output-path", f"{CONFIG.output_root}/{name}"]
     command += ["--submit", "--target-cluster", baseline.cluster, "--priority", baseline.band]
     return command
 
