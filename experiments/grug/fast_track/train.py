@@ -66,6 +66,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.fast_track.cplm import bind_case_tables, case_class_tables
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
@@ -1091,6 +1092,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
+    if config.model.cplm_plus:
+        tables = case_class_tables(config.data.the_tokenizer, config.model.vocab_size)
+        bind_case_tables(tables)
+        shared = int(np.sum(tables.members[:, 1] >= 0))
+        logger.info("cplm_plus case classes: %d tokens in shared classes, width %d", shared, tables.members.shape[1])
 
     run_id = trainer.id
     if run_id is None:
