@@ -82,7 +82,7 @@ function gateChip(g, more = null) {
   const chip = el('span', { class: `gate-chip ${look.cls}` }, el('b', {}, look.icon), shown)
   const lines = [g.text, ...(g.title ? g.title.split('\n') : [])].filter((x, i, a) => x && a.indexOf(x) === i)
   const tip = el('span', { class: 'gate-tip', role: 'tooltip' }, ...lines.map((x) => el('span', {}, x)), more)
-  const cell = el('span', { class: 'gate', tabindex: '0', 'aria-expanded': 'false', 'aria-label': g.text }, chip, tip)
+  const cell = el('span', { class: 'gcell', tabindex: '0', 'aria-expanded': 'false', 'aria-label': g.text }, chip, tip)
   cell.addEventListener('click', (e) => {
     if (e.target.closest('a')) return
     cell.setAttribute('aria-expanded', String(cell.getAttribute('aria-expanded') !== 'true'))
@@ -314,7 +314,7 @@ function renderChecklist() {
     rows.map((r) =>
       el(
         'div',
-        { class: `ck-row${r.accepted ? ' live' : ''}`, role: 'row', title: r.accepted ? `In the live recipe, ${recipeTag}` : '' },
+        { class: `ck-row${r.accepted ? ' live' : ''}`, id: r.idea.xid, role: 'row', title: r.accepted ? `In the live recipe, ${recipeTag}` : '' },
         el(
           'span',
           { class: 'ck-idea', 'data-label': 'Idea' },
@@ -382,6 +382,14 @@ function render() {
   setChildren('updated', 'updated ', when(state.now))
 }
 
+// A link to status#X#### (from the admin page) scrolls to that idea's row once the checklist has rendered.
+let linkedRowShown = false
+function revealLinkedRow() {
+  if (linkedRowShown || !location.hash) return
+  linkedRowShown = true
+  document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView({ block: 'center' })
+}
+
 async function refresh() {
   try {
     ;[state, registry, trackTable] = await Promise.all([
@@ -393,6 +401,7 @@ async function refresh() {
     defaultAuthor = trackTable.default_author
     trackTable = trackTable.tracks
     render()
+    revealLinkedRow()
   } catch (error) {
     renderNext({ tone: 'blocked', text: `Status unavailable (${error.message})` })
   }

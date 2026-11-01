@@ -130,6 +130,35 @@ function renderPending() {
         expanded ? el('div', { class: 'detail-c' }, markdown(idea.body)) : null,
       )
     }),
+    alreadyRun(),
+  )
+}
+
+// #9514 suggestions the registry already holds: done, never queued again unless a maintainer re-queues one.
+function alreadyRun() {
+  const done = state.ideas.filter((i) => i.state === 'recorded' && (i.note ?? '').startsWith('Already run as'))
+  if (!done.length) return null
+  return el(
+    'details',
+    { class: 'fold' },
+    el('summary', {}, `Already run (${done.length})`),
+    ...done.map((idea) =>
+      el(
+        'div',
+        { class: 'line pending' },
+        el(
+          'span',
+          { class: 'nm' },
+          el('b', {}, (idea.title ?? idea.body.trim().split('\n')[0]).replace(/\*\*/g, '').slice(0, 90)),
+          el('small', {}, `#9514 · ${idea.author} · done → `, link(`${PAGES.status}#${idea.registry_id}`, idea.registry_id)),
+        ),
+        idea.url ? link(idea.url, '↗') : el('span'),
+        el('button', { type: 'button', class: 'btn', onclick: () => {
+          const note = window.prompt('Re-queue note for the session (for example "retest on current recipe")', 'retest on current recipe')
+          if (note) act(`ideas/${idea.id}/requeue`, { note }, 'Re-queued')
+        } }, 'Re-queue'),
+      ),
+    ),
   )
 }
 

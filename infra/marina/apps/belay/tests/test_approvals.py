@@ -4,6 +4,7 @@
 """Belay approvals: the admin page and a GitHub 👍 both queue an idea, and an idea approved on both runs once."""
 
 import datetime
+import json
 
 import pytest
 from belay.app import IntakeComment, approve_idea, migrate, offer_pending_work, sync_intake_comments
@@ -75,3 +76,16 @@ def test_escalated_idea_is_not_offered_again(conn) -> None:
     assert offer_pending_work(conn) == 0
     conn.execute(text("UPDATE ideas SET note = 'Maintainer ClassicLarry: retest on current recipe'"))
     assert offer_pending_work(conn) == 1
+
+
+def test_comment_already_in_the_registry_is_not_queued(conn) -> None:
+    ideas = [{"xid": "X0220", "intake": {"url": "https://github.com/marin-community/marin/issues/9514#issuecomment-1"}}]
+    conn.execute(
+        text("INSERT INTO registry (id, revision, data) VALUES (1, 'r', CAST(:d AS JSONB))"),
+        {"d": json.dumps({"ideas": ideas})},
+    )
+    sync_intake_comments(conn, [comment(approved_upstream=True, approved_at=ROCKET)])
+    assert approved_events(conn) == 0
+    assert not approve_idea(conn, idea_id(conn), "maintainer")
+    row = conn.execute(text("SELECT state, registry_id FROM ideas WHERE comment_id = '1'")).one()
+    assert tuple(row) == ("recorded", "X0220")

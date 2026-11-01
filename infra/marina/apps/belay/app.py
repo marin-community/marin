@@ -403,9 +403,43 @@ def approve_idea(conn: Connection, idea_id: int, caller: str, at: datetime.datet
     return True
 
 
+ALREADY_RUN = "Already run as"
+"""The note on an intake idea whose #9514 comment the registry already holds (it ran before the page tracked it)."""
+
+
+def _comment_id(url: str) -> str:
+    return url.rsplit("issuecomment-", 1)[-1]
+
+
+def link_registered_intake(conn: Connection) -> int:
+    """Mark each intake idea still waiting for a decision whose #9514 comment already has a registry entry as
+    recorded under that entry's id, so it is never queued again; only a maintainer's re-queue runs it. Returns how
+    many it marked."""
+    rows = _rows(conn, "SELECT data FROM registry WHERE id = 1")
+    if not rows:
+        return 0
+    registered = {
+        _comment_id(i["intake"]["url"]): i["xid"] for i in rows[0]["data"]["ideas"] if (i.get("intake") or {}).get("url")
+    }
+    marked = 0
+    for idea in _rows(conn, "SELECT id, url FROM ideas WHERE origin = 'intake' AND state IN ('pending', 'upstream')"):
+        xid = registered.get(_comment_id(idea["url"] or ""))
+        if xid is None:
+            continue
+        conn.execute(
+            text(
+                "UPDATE ideas SET state = 'recorded', registry_id = :xid, note = :note, updated_at = now() "
+                "WHERE id = :id"
+            ),
+            {"xid": xid, "note": f"{ALREADY_RUN} {xid}", "id": idea["id"]},
+        )
+        marked += 1
+    return marked
+
+
 def sync_intake_comments(conn: Connection, comments: list[IntakeComment]) -> int:
     """Upsert #9514 comments as ideas, and approve (queue) those the watcher saw approved on GitHub after its
-    cutover. Returns the number of new pending ideas."""
+    cutover, except comments the registry already holds. Returns the number of new pending ideas."""
     added = 0
     for c in comments:
         state = IdeaState.UPSTREAM if c.approved_upstream else IdeaState.PENDING
@@ -428,6 +462,8 @@ def sync_intake_comments(conn: Connection, comments: list[IntakeComment]) -> int
         if inserted and state is IdeaState.PENDING:
             added += 1
             _activity(conn, ActivityPost(kind="intake", title=f"New intake suggestion from {c.author}"))
+    link_registered_intake(conn)
+    for c in comments:
         if c.approved_at is not None:
             idea_id = _rows(conn, "SELECT id FROM ideas WHERE comment_id = :cid", cid=c.comment_id)[0]["id"]
             approve_idea(conn, idea_id, c.approved_by or GITHUB_APPROVER, c.approved_at)
@@ -749,16 +785,17 @@ def create_api(services: Any) -> FastAPI:
 
     @admin.post("/ideas/{idea_id}/requeue")
     def requeue(idea_id: int, request: Requeue, caller: str = Depends(approver)) -> dict[str, str]:
-        """A maintainer's answer to an escalation: clear it, keep the maintainer's note for the session, and offer
-        the idea to the next session."""
+        """A maintainer's answer to an escalation, or a rerun of an idea that already has results: keep the
+        maintainer's note for the session and offer the idea to the next session."""
         with engine.begin() as conn:
             rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
-            if not rows or rows[0]["state"] != IdeaState.APPROVED:
-                raise HTTPException(409, f"idea {idea_id} is not an approved idea waiting for a session")
+            if not rows or rows[0]["state"] not in (IdeaState.APPROVED, IdeaState.RECORDED):
+                raise HTTPException(409, f"idea {idea_id} is neither approved nor recorded")
             login = approver_login(_settings(conn), caller)
             note = f"Maintainer {login}: {request.note}" if request.note else None
             conn.execute(
-                text("UPDATE ideas SET note = :n, updated_at = now() WHERE id = :id"), {"n": note, "id": idea_id}
+                text("UPDATE ideas SET state = 'approved', note = :n, updated_at = now() WHERE id = :id"),
+                {"n": note, "id": idea_id},
             )
             label = rows[0]["title"] or rows[0]["body"].strip().splitlines()[0][:90]
             _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} re-queued “{label}”"))
@@ -969,6 +1006,7 @@ def create_api(services: Any) -> FastAPI:
                 ),
                 {"rev": upload.revision, "data": json.dumps(upload.data)},
             )
+            link_registered_intake(conn)
         return {"revision": upload.revision}
 
     @agent.get("/state")
