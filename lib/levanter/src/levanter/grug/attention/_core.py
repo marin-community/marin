@@ -32,6 +32,7 @@ GrugAttentionImplementation = Literal[
     "tpu_splash",
     "gpu_fa4_cute",
     "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
+    "torch_order",  # Torch eager's order: FP32 scores and softmax, normalized weights cast to BF16; materializes S x S.
     "gpu_pallas_triton_flash",  # Pallas-Triton flash kernel with block skipping; for AMD (ROCm) GPUs.
 ]
 
@@ -224,6 +225,43 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
+def _explicit_mask(
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    scores: Float[Array, "B H Q K"],
+    batch: int,
+) -> Bool[Array, "B 1 Q K"] | Float[Array, "B 1 Q K"] | None:
+    """The mask as a dense [B or 1, 1, Q, K] array broadcast across heads (bool = allowed, float = additive bias)."""
+    if mask is None:
+        return None
+    if isinstance(mask, AttentionMask):
+        explicit = mask.materialize_mask(scores.shape[-2], scores.shape[-1])
+    else:
+        explicit = mask
+    if explicit is None:
+        return None
+    # Standardize dense masks to [B, Q, K] (bool = allowed, float = additive bias).
+    if explicit.ndim == 2:
+        explicit = explicit[None, :, :]
+    if explicit.ndim != 3:
+        raise ValueError(f"explicit mask must have shape [batch, q, k], got shape={explicit.shape}")
+    if explicit.shape[0] not in (1, batch):
+        raise ValueError(f"explicit mask batch dim must be 1 or {batch}, got {explicit.shape[0]}")
+    if explicit.shape[1] != scores.shape[-2] or explicit.shape[2] != scores.shape[-1]:
+        raise ValueError(
+            "explicit mask must match attention shapes: "
+            f"got mask={explicit.shape}, expected [batch,{scores.shape[-2]},{scores.shape[-1]}]"
+        )
+    return explicit[:, None, :, :]  # -> [B, 1, Q, K], broadcast across heads.
+
+
+def _apply_mask(scores: jax.Array, explicit: jax.Array | None) -> jax.Array:
+    if explicit is None:
+        return scores
+    if explicit.dtype == jnp.bool_:
+        return jnp.where(explicit, scores, jnp.array(-1e9, dtype=scores.dtype))
+    return scores + explicit
+
+
 def _reference_attention_math(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -240,33 +278,7 @@ def _reference_attention_math(
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
 
-    explicit = None
-    if mask is None:
-        explicit = None
-    elif isinstance(mask, AttentionMask):
-        explicit = mask.materialize_mask(scores.shape[-2], scores.shape[-1])
-    else:
-        explicit = mask
-
-    if explicit is not None:
-        # Standardize dense masks to [B, Q, K] (bool = allowed, float = additive bias).
-        if explicit.ndim == 2:
-            explicit = explicit[None, :, :]
-        if explicit.ndim != 3:
-            raise ValueError(f"explicit mask must have shape [batch, q, k], got shape={explicit.shape}")
-        if explicit.shape[0] not in (1, q.shape[0]):
-            raise ValueError(f"explicit mask batch dim must be 1 or {q.shape[0]}, got {explicit.shape[0]}")
-        if explicit.shape[1] != scores.shape[-2] or explicit.shape[2] != scores.shape[-1]:
-            raise ValueError(
-                "explicit mask must match attention shapes: "
-                f"got mask={explicit.shape}, expected [batch,{scores.shape[-2]},{scores.shape[-1]}]"
-            )
-
-        explicit = explicit[:, None, :, :]  # -> [B, 1, Q, K], broadcast across heads.
-        if explicit.dtype == jnp.bool_:
-            scores = jnp.where(explicit, scores, jnp.array(-1e9, dtype=scores.dtype))
-        else:
-            scores = scores + explicit
+    scores = _apply_mask(scores, _explicit_mask(mask, scores, q.shape[0]))
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
@@ -293,6 +305,46 @@ def reference_attention(
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
     return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
+
+
+def _torch_order_attention_math(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Torch eager's order (GrugMoE ``_eager_attention``): FP32 scores from the upcast q and k with 1/sqrt(d) applied to
+    q in FP32, a -1e9 fill at masked positions, FP32 softmax, the normalized weights cast to v's dtype, then the PV
+    einsum in that dtype. The FP32 score matmul runs at full FP32 precision (no TF32)."""
+    num_q_heads = q.shape[2]
+    k = align_kv_heads(k, num_q_heads=num_q_heads)
+    v = align_kv_heads(v, num_q_heads=num_q_heads)
+    scores = jnp.einsum(
+        "bqhd,bkhd->bhqk",
+        q.astype(jnp.float32) / math.sqrt(q.shape[-1]),
+        k.astype(jnp.float32),
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    scores = _apply_mask(scores, _explicit_mask(mask, scores, q.shape[0]))
+    weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
+    return jnp.einsum("bhqk,bkhd->bqhd", weights, v)
+
+
+def torch_order_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Torch-order attention whose output sharding follows ``q`` (see ``reference_attention``)."""
+    out_sharding = named_sharding_of(q)
+    if out_sharding is None:
+        return _torch_order_attention_math(q, k, v, mask)
+    # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
+    wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(
+        _torch_order_attention_math, out_sharding=out_sharding
+    )
+    return wrapped(q, k, v, mask)
 
 
 def _tpu_splash_attention(
@@ -440,6 +492,8 @@ def attention(
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if implementation == "torch_order":
+        return torch_order_attention(q, k, v, mask)
     if implementation == "xla_flash":
         from levanter.grug.attention._xla_flash import xla_flash_attention  # noqa: PLC0415
 
