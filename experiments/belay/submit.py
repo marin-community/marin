@@ -10,11 +10,13 @@ both launched with the Track's baseline command. Runs are named ``belay-<id>-<ru
 
 import dataclasses
 import getpass
+import itertools
 import re
 import subprocess
 import sys
 import typing
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import yaml
@@ -33,6 +35,24 @@ ACTIVE_JOB_STATES = ("pending", "running")
 _JOB_LINE = re.compile(r"^(/\S+)\s+(\w+)\s+(\S+)")
 
 
+class Stage(StrEnum):
+    """A run's place in its Track's comparison, in order. Only ``EQUAL_DATA_THEN_TIME`` tracks go past ``DATA``."""
+
+    DATA = "data"
+    """The variant and its control at the baseline's steps (equal data)."""
+    PROBE = "probe"
+    """A short variant run that measures its s/step."""
+    TIME = "time"
+    """The variant at train_seconds / its s/step steps, against the stage-1 control (equal time)."""
+    CONFIRM = "confirm"
+    """Stage 2 again at seed 1: a control at the baseline's steps and the variant at the equal-time steps."""
+
+
+STAGE_ORDER = (Stage.DATA, Stage.PROBE, Stage.TIME, Stage.CONFIRM)
+PROBE_STEPS = 150
+PROBE_SKIP = 20  # compile and warm-up steps left out of the probe's s/step
+
+
 @dataclass(frozen=True)
 class RunSpec:
     name: str
@@ -40,6 +60,7 @@ class RunSpec:
     variant: str
     flags: tuple[str, ...] = ()
     control: bool = False
+    stage: Stage = Stage.DATA
 
 
 @dataclass(frozen=True)
@@ -73,6 +94,7 @@ def parse_spec(text: str) -> ExperimentSpec:
             variant=run["variant"],
             flags=tuple(str(f) for f in run.get("flags", ())),
             control=bool(run.get("control", False)),
+            stage=Stage(run.get("stage", Stage.DATA)),
         )
         for name, run in data["runs"].items()
     }
@@ -228,11 +250,53 @@ def check_launch(spec: ExperimentSpec, jobs: list[IrisJob]) -> None:
 
 
 def settings_of(flags: tuple[str, ...]) -> dict[str, str]:
-    """The ``name=value`` settings in a run's flags, as ``{name: value}``."""
+    """The ``--model-set`` / ``--opt-set`` settings in a run's flags, as ``{name: value}``."""
     settings = {}
-    for flag in flags:
-        if flag in SETTING_OPTIONS:
-            continue
-        name, _, value = flag.partition("=")
-        settings[name] = value
+    for option, value in itertools.pairwise(flags):
+        if option in SETTING_OPTIONS:
+            name, _, setting = value.partition("=")
+            settings[name] = setting
     return settings
+
+
+def variant_settings(spec: ExperimentSpec) -> tuple[str, ...]:
+    """The stage-1 variant's ``--model-set`` / ``--opt-set`` flags, which every later stage's variant repeats."""
+    variant = next(r for r in spec.runs.values() if r.stage is Stage.DATA and not r.control)
+    out: list[str] = []
+    for option, value in itertools.pairwise(variant.flags):
+        if option in SETTING_OPTIONS:
+            out += [option, value]
+    return tuple(out)
+
+
+def latest_stage(spec: ExperimentSpec) -> Stage:
+    return max((r.stage for r in spec.runs.values()), key=STAGE_ORDER.index)
+
+
+def stage_runs(spec: ExperimentSpec, stage: Stage) -> list[RunSpec]:
+    return [r for r in spec.runs.values() if r.stage is stage]
+
+
+def spec_with_runs(text: str, runs: dict[str, dict]) -> str:
+    """The spec ``text`` with ``runs`` (key -> run fields) added, for the next stage."""
+    data = yaml.safe_load(text)
+    data["runs"].update(runs)
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
+
+
+def next_stage_runs(spec: ExperimentSpec, stage: Stage, suffix: str, steps: int | None = None) -> dict[str, dict]:
+    """The runs that start ``stage`` (PROBE, TIME at ``steps``, or CONFIRM at ``steps``), keyed like the spec."""
+    variant = next(r for r in spec.runs.values() if r.stage is Stage.DATA and not r.control)
+    flags = list(variant_settings(spec))
+    if stage is Stage.PROBE:
+        probe_flags = [*flags, "--num-steps", str(PROBE_STEPS)]
+        probe = {"seed": variant.seed, "variant": f"{variant.variant} (timing probe)", "flags": probe_flags}
+        return {f"probe{suffix}": {**probe, "stage": "probe"}}
+    assert steps is not None
+    timed_flags = [*flags, "--num-steps", str(steps)]
+    if stage is Stage.TIME:
+        timed = {"seed": variant.seed, "variant": variant.variant, "flags": timed_flags, "stage": "time"}
+        return {f"seed{variant.seed}-t{suffix}": timed}
+    control = {"seed": 1, "variant": f"{spec.track} control", "control": True, "stage": "confirm"}
+    timed = {"seed": 1, "variant": variant.variant, "flags": timed_flags, "stage": "confirm"}
+    return {f"seed1-t{suffix}": timed, f"control-s1{suffix}": control}

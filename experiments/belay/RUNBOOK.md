@@ -59,7 +59,7 @@ A human then decides what happens. Never work around a refusal.
      1. the registry entry `X####` written and pushed (skipped if it already exists);
      2. the run spec written, committed and pushed;
      3. `checks passed: ...`;
-     4. the plan reported and posted;
+     4. the idea's #9451 comment posted (status `plan`, the planned runs with their steps);
      5. one `launching belay-X####-<run>` per run;
      6. `next: stop (...)`.
    - **If it prints `held:`:** stop. The idea stays approved, and a later session reruns this step. Running it
@@ -104,20 +104,33 @@ The change goes straight onto this week's branch. No human reviews it: passing `
 
 ## 2. run-finished (event `run_finished`)
 
+Each idea has exactly one #9451 comment. `new-idea` posts it; every later step edits it in place (title status
+and one section per stage). Its link is stored on the idea's registry trials (`comment_url`).
+
 1. **Run:** `B run-finished X####`
    - **If it prints `still running: [...]`:** stop. The last run to finish starts a new session.
    - **If it prints `next: B run-failed X#### --run <run>`:** do section 3.
-   - **Otherwise, expect** these, then `next: stop`:
-     1. the registry entry written with the results, and the trial's analysis report
-        (`experiments/belay/analysis/X####/tNNN.md` and its plots), pushed together in one registry commit
-        (`pushed ... as <sha> to origin/<registry branch>`);
-     2. the result posted with a table and one verdict, by the track's rule in section 9: `win`, `noise` or `loss`;
-     3. for a `win`, an escalation as well.
+   - **Otherwise** it records the stage that finished and, for the `speedrun` track, starts the next stage by
+     itself. The stages are fixed:
+     1. **Equal data:** the variant and its control at the baseline's steps. Noise or a loss ends here:
+        "<verdict> at equal data".
+     2. **Timing probe** (only after an equal-data win): a 150-step variant run that measures its s/step.
+     3. **Equal time:** the variant at 480 s ÷ its s/step steps, against the equal-data control. A noise or loss
+        verdict here is final.
+     4. **Seed-1 confirm** (only after an equal-time win): the equal-time pair again at seed 1. The final verdict
+        is "win at equal time, confirmed (or not confirmed) at seed 1".
+   - Other Tracks have one stage: equal data.
+   - **Expect**, at each recorded stage:
+     - the registry entry and the trial's analysis report pushed together
+       (`pushed ... as <sha> to origin/<registry branch>`);
+     - `edited <comment url>`;
+     - then either the next stage's `launching ...` lines, or `next: stop`.
+   - A final win also escalates to the admin page for the adoption decision.
 
 ## 2b. analyze (rewrite a trial's analysis report)
 
 `run-finished` writes the report itself. Run this only when asked to backfill or redo one:
-`B analyze X####`. It writes, commits and pushes the report and prints the result post it belongs in.
+`B analyze X####`. It rewrites, commits and pushes the reports of every finished stage.
 
 ## 3. run-failed (event `run_finished` for a run that did not succeed)
 

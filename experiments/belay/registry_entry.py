@@ -99,32 +99,48 @@ def create_entry(idea: Idea, name: str, category: str, track: Track, *, dry_run:
 
 
 def add_trial(
-    registry_id: str, track: Track, variant: str, run_name: str, commit: str, settings: dict[str, str]
-) -> Path:
-    """Add ``run_name`` as a new trial of the entry (or to its existing trial for the same variant and commit)."""
+    registry_id: str, track: Track, protocol: str, variant: str, commit: str, settings: dict[str, str], comment_url: str
+) -> tuple[str, Path]:
+    """A new trial of the entry (``protocol`` is ``equal_steps`` or ``fixed_time``); returns its id and the path."""
     path = entry_path(registry_id)
     entry = yaml.safe_load(path.read_text())
     trials = entry.setdefault("trials", [])
-    trial = next((t for t in trials if t["variant"] == variant and t.get("commit") == commit[:10]), None)
-    if trial is None:
-        trial = {
-            "id": f"t{len(trials) + 1:03d}",
-            "variant": variant,
-            "rung": track.value,
-            "protocol": "equal_steps",
-            "batch": registry_id,
-            "date": datetime.date.today().isoformat(),
-            "comment_url": CONFIG.page_url,
-            "wandb": [],
-            "settings": settings,
-            "commit": commit[:10],
-        }
-        trials.append(trial)
-    if run_name not in trial["wandb"]:
-        trial["wandb"].append(run_name)
+    trial_id = f"t{len(trials) + 1:03d}"
+    trial = {
+        "id": trial_id,
+        "variant": variant,
+        "rung": track.value,
+        "protocol": protocol,
+        "batch": registry_id,
+        "date": datetime.date.today().isoformat(),
+        "comment_url": comment_url,
+        "wandb": [],
+        "settings": settings,
+        "commit": commit[:10],
+    }
+    trials.append(trial)
     entry["status"] = "running"
     path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
+    return trial_id, path
+
+
+def add_trial_run(registry_id: str, trial_id: str, run_name: str) -> Path:
+    path = entry_path(registry_id)
+    entry = yaml.safe_load(path.read_text())
+    trial = next(t for t in entry["trials"] if t["id"] == trial_id)
+    if run_name not in trial["wandb"]:
+        trial["wandb"].append(run_name)
+    path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
     return path
+
+
+def comment_url_of(entry: dict) -> str | None:
+    """The idea's one #9451 comment, recorded on its trials."""
+    for trial in entry.get("trials") or []:
+        url = trial.get("comment_url") or ""
+        if "issuecomment-" in url:
+            return url
+    return None
 
 
 def entry_with_results(registry_id: str, results: list[RunResult]) -> tuple[Path, str]:

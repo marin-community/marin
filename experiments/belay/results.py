@@ -9,6 +9,7 @@ The verdict is a fixed rule per Track (``config.TRACKS``): Δ against the same-s
 
 from dataclasses import dataclass
 from enum import StrEnum
+from statistics import median
 
 import wandb
 
@@ -33,6 +34,7 @@ class RunResult:
     delta: float | None
     """Variant minus its same-seed control; None for a control."""
     verdict: Verdict | None
+    bpb: float | None = None
 
 
 def change(variant: float, control: float, baseline: Baseline) -> float:
@@ -57,6 +59,48 @@ def overall_verdict(verdicts: list[Verdict]) -> Verdict:
     if verdicts and all(v is Verdict.LOSS for v in verdicts):
         return Verdict.LOSS
     return Verdict.NOISE
+
+
+@dataclass(frozen=True)
+class Measure:
+    """One finished run as the comment's table shows it."""
+
+    name: str
+    steps: int
+    loss: float
+    s_step: float
+    tokens: float | None
+    bpb: float | None
+
+
+STEP_TIME = "throughput/duration"
+BPB = "eval/paloma/macro_bpb"
+SKIP_STEPS = 5  # compile and warm-up steps left out of a run's median s/step
+
+
+def measure(name: str, metric: str, skip: int = SKIP_STEPS) -> Measure:
+    """Steps, final ``metric``, median s/step and tokens of the finished W&B run ``name``; refuses an unfinished one."""
+    matches = list(wandb.Api().runs(CONFIG.wandb_project, filters={"display_name": name}, order="-created_at"))
+    if not matches or matches[0].state != "finished":
+        raise SystemExit(f"refusing: {name} has no finished W&B run")
+    run = matches[0]
+    durations = [row[STEP_TIME] for row in run.scan_history(keys=["_step", STEP_TIME]) if row["_step"] >= skip]
+    if not durations:
+        raise SystemExit(f"refusing: {name} logged no {STEP_TIME} after step {skip}")
+    loss = run.summary.get(metric)
+    return Measure(
+        name=name,
+        steps=int(run.summary["_step"]) + 1,
+        loss=float("nan") if loss is None else float(loss),
+        s_step=median(durations),
+        tokens=run.summary.get("throughput/total_tokens"),
+        bpb=run.summary.get(BPB),
+    )
+
+
+def compared(control: Measure, variant: Measure, baseline: Baseline) -> tuple[float, Verdict]:
+    delta = round(change(variant.loss, control.loss, baseline), 4)
+    return delta, verdict(delta, baseline)
 
 
 def experiment_results(spec: ExperimentSpec) -> list[RunResult]:
