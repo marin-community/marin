@@ -1,0 +1,14 @@
+experiment: X0160
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: router_lr_mult=0.5 (router Adam LR x0.5)
+    flags:
+    - --opt-set
+    - router_lr_mult=0.5
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0151-control
