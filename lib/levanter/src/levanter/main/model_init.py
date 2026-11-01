@@ -9,7 +9,7 @@ from haliax.partitioning import named_jit
 
 import haliax as hax
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, HFCompatConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.jax_utils import use_cpu_device
 
@@ -17,7 +17,7 @@ from levanter.utils.jax_utils import use_cpu_device
 @dataclass(frozen=True)
 class ModelInitContext:
     model: LmConfig
-    converter: HFCheckpointConverter | None
+    converter: HfLmCheckpointConverter | None
     use_hf_model_config: bool
 
 

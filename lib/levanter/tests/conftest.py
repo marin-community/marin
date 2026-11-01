@@ -26,7 +26,7 @@ def local_gpt2_tokenizer(tmp_path_factory):
 def local_gpt2_tokenizer_path(tmp_path_factory) -> str:
     """Path to a local GPT-2 tokenizer directory.
 
-    Lets HF roundtrip tests build an ``HFCheckpointConverter`` with a local
+    Lets HF roundtrip tests build an ``HfLmCheckpointConverter`` with a local
     tokenizer (and no ``reference_checkpoint``) so they never reach the Hub.
     """
     source_dir = Path(__file__).parent
