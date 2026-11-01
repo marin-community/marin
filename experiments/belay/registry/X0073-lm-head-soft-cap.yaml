@@ -468,3 +468,10 @@ events:
   date: '2026-10-02'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
   note: cap 11 and asymmetric forms flat; keep tanh 10
+potential:
+  score: 5
+  rationale: no result on current recipe yet; Ckpt 1-era wins (d512 -0.024/-0.028, d1024 -0.008) shrank with scale; retest
+    escalated
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 54eeee771a1d
