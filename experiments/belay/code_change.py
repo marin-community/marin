@@ -138,8 +138,3 @@ def run_precommit(repo: Path, paths: list[str]) -> None:
             f"refusing: pre-commit fails:\n{result.stdout[-3000:]}\n"
             f"next: ./infra/pre-commit.py --fix {' '.join(files)}, then --finish"
         )
-
-
-def flag_commits(repo: Path, base_ref: str) -> list[str]:
-    """The flag commits on this branch since ``base_ref``: ``X####: <flag> (default off)``."""
-    return git(repo, "log", "--format=%h %s", "--grep=(default off)", f"{base_ref}..HEAD").splitlines()
