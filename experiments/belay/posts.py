@@ -171,6 +171,16 @@ def parse(body: str) -> Comment:
     return Comment(head, {n: "\n".join(block).strip() for n, block in stages.items()}, footer)
 
 
+def with_reproduce(body: str, lines: dict[int, str]) -> str:
+    """``body`` with a Reproduce line added to each stage section in ``lines`` that has none yet."""
+    comment = parse(body)
+    stages = dict(comment.stages)
+    for number, line in lines.items():
+        if number in stages and "Reproduce:" not in stages[number]:
+            stages[number] += "\n\n" + line
+    return render(Comment(comment.title, stages, comment.footer))
+
+
 def updated(body: str, new_title: str, number: int, section: str, analysis: tuple[str, str] | None = None) -> str:
     """``body`` with its title replaced, stage ``number`` set to ``section``, and an analysis link added."""
     comment = parse(body)
