@@ -272,7 +272,7 @@ metric and rule. Nothing else spells out a launch.
 |---|---|---|---|
 | `vanilla-d512` … `vanilla-d1280` | Vanilla Track at that rung | Paloma macro loss | Δ = variant − control; ≤ −0.005 win, ≥ +0.005 loss |
 | `moe-d512` … `moe-d1280` | Basic MoE at that rung | Paloma macro loss | same |
-| `competitive-d512`, `-d768`, `-d1024`, `-d1280L16` | The current recipe (Belay Ckpt Oct 20 2026) at that rung | Paloma macro loss | same |
+| `competitive-d512`, `-d768`, `-d1024`, `-d1280` | The current recipe (Belay Ckpt Oct 20 2026) at that rung | Paloma macro loss | same |
 | `speedrun` (the default) | The 8-minute d512 run of the current recipe (`belay-8min-ckpt-oct20`: 3,030 steps, Paloma macro 3.0441) | Paloma macro loss | same |
 | `hero-mfu` | The one-rack GB200 MFU stack `mfl-mp-qall` (11.465 s/step, 36.8% MFU), on `marin_belay_v1_hero_mfu` | s/step | Δ = (variant − control) / control, same rack, commit and PGLE profile; ≤ −0.5% win, ≥ +0.5% loss. A maintainer approves each launch |
 | `custom` | Stated by the submitter | stated | escalate |

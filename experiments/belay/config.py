@@ -104,7 +104,7 @@ class Track(StrEnum):
     COMPETITIVE_D512 = "competitive-d512"
     COMPETITIVE_D768 = "competitive-d768"
     COMPETITIVE_D1024 = "competitive-d1024"
-    COMPETITIVE_D1280L16 = "competitive-d1280L16"
+    COMPETITIVE_D1280 = "competitive-d1280"
     SPEEDRUN = "speedrun"
     HERO_MFU = "hero-mfu"
     CUSTOM = "custom"
@@ -186,12 +186,12 @@ TRACK_STEPS = {
     "vanilla": {"d512": 720, "d768": 2161, "d1024": 2881, "d1280": 5251},
     "moe": {"d512": 1971, "d768": 5547, "d1024": 7334, "d1280": 13053},
 }
-COMPETITIVE_STEPS = {"d512": 10767, "d768": 30389, "d1024": 39210, "d1280L16": 20023}
+COMPETITIVE_STEPS = {"d512": 10767, "d768": 30389, "d1024": 39210, "d1280": 20023}
 
 
 # Rough wall minutes of one run per rung, submission to final eval (estimates; the overdue check allows 30 more).
 VANILLA_MOE_MINUTES = {"d512": 30, "d768": 90, "d1024": 150, "d1280": 360}
-COMPETITIVE_MINUTES = {"d512": 180, "d768": 720, "d1024": 1080, "d1280L16": 1440}
+COMPETITIVE_MINUTES = {"d512": 180, "d768": 720, "d1024": 1080, "d1280": 1440}
 
 
 def _vanilla_or_moe(track: str, size: str) -> Baseline:
@@ -214,9 +214,10 @@ def _vanilla_or_moe(track: str, size: str) -> Baseline:
     )
 
 
-def _competitive(size: str, nodes: int) -> Baseline:
+def _competitive(size: str, nodes: int, shape: str = "") -> Baseline:
+    """The competitive ladder at ``size``; ``shape`` notes a rung whose shape differs from the default."""
     return Baseline(
-        f"{PRODUCTION.recipe_name} (s7n) at {size}",
+        f"{PRODUCTION.recipe_name} (s7n) at {size}" + (f" ({shape})" if shape else ""),
         WEEKLY_BRANCH,
         (S7, "--ladder", "s7n", "--size", size),
         H100_CLUSTER,
@@ -247,7 +248,7 @@ TRACKS: dict[Track, Baseline] = {
     Track.COMPETITIVE_D512: _competitive("d512", 1),
     Track.COMPETITIVE_D768: _competitive("d768", 1),
     Track.COMPETITIVE_D1024: _competitive("d1024", 1),
-    Track.COMPETITIVE_D1280L16: _competitive("d1280L16", 4),
+    Track.COMPETITIVE_D1280: _competitive("d1280", 4, "16 layers · batch 1,024 · 4 nodes"),
     Track.SPEEDRUN: Baseline(
         "8-minute d512 run of the current recipe; baseline belay-8min-ckpt-oct20: 3,030 steps, Paloma macro 3.0441, "
         "BPB 1.2590 (measured at 0dd84c79f9)",

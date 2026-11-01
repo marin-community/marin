@@ -43,7 +43,7 @@
      "bpb": 1.0024
     },
     {
-     "rung": "d1280L16",
+     "rung": "d1280",
      "run": "s7n-d1280L16",
      "C": 2.2954122115236338e+20,
      "loss": 2.2706,
@@ -171,9 +171,9 @@
     "gpus": 8
    },
    {
-    "rung": "d1280L16",
-    "label": "d1280L16",
-    "note": "16 layers \u00b7 batch 1,024",
+    "rung": "d1280",
+    "label": "d1280",
+    "note": "16 layers \u00b7 batch 1,024 \u00b7 4 nodes",
     "run": "s7n-d1280L16",
     "active": 405700000.0,
     "tokens": 83982548992,

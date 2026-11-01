@@ -350,7 +350,7 @@ def test_control_rows_name_and_link_the_control() -> None:
     assert control_label(Track.VANILLA_D512, "abc") == f"control: [Vanilla Track d512]({tracks})"
     hero = "https://github.com/marin-community/marin/tree/abc"
     assert control_label(Track.HERO_MFU, "abc") == f"control: [hero MFU stack mfl-mp-qall]({hero})"
-    assert [hardware(t) for t in (Track.SPEEDRUN, Track.COMPETITIVE_D1280L16, Track.HERO_MFU)] == [
+    assert [hardware(t) for t in (Track.SPEEDRUN, Track.COMPETITIVE_D1280, Track.HERO_MFU)] == [
         "8\u00d7H100",
         "32\u00d7H100",
         "64\u00d7GB200",
