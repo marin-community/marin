@@ -49,8 +49,9 @@ class Probe:
 
 def changed_paths(repo: Path) -> list[str]:
     """Every uncommitted path in ``repo``: staged, unstaged and untracked."""
-    lines = git(repo, "status", "--porcelain", "--untracked-files=all").splitlines()
-    return sorted({line[3:] for line in lines})
+    tracked = git(repo, "diff", "--name-only", "HEAD").splitlines()
+    untracked = git(repo, "ls-files", "--others", "--exclude-standard").splitlines()
+    return sorted(set(tracked + untracked))
 
 
 def refuse_outside_allowed(paths: list[str]) -> None:
