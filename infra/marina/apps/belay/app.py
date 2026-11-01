@@ -30,7 +30,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from marina.apps import RegisteredApi, Services, registered_api
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from rigging.server_auth import get_verified_identity
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
@@ -71,7 +71,11 @@ PUBLIC_EXCERPT = 600
 PUBLIC_ACTIVITY = 30
 TERMINAL_RUN_STATES = frozenset({"succeeded", "failed", "killed", "worker_failed", "unschedulable"})
 # A session that has not reported back within this long is presumed lost, so the queue is not blocked forever.
-SESSION_TIMEOUT = datetime.timedelta(hours=3)
+# Loom ends a session after 4 hours; a draining session stops taking new work well before that.
+SESSION_TIMEOUT = datetime.timedelta(hours=4, minutes=15)
+# A run still going this long past its expected finish gets a run_overdue event, once.
+OVERDUE_GRACE = datetime.timedelta(minutes=30)
+INTAKE_URL_PREFIX = "https://github.com/marin-community/marin/issues/9514#issuecomment-"
 # Re-offer approved work that no session has picked up after this long.
 WORK_PENDING_INTERVAL = datetime.timedelta(hours=1)
 TRANSCRIPT_LIMIT = 600_000
@@ -98,12 +102,20 @@ SCHEMA = (
         summary TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}', session_id TEXT)""",
     """CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), ended_at TIMESTAMPTZ, state TEXT NOT NULL,
-        summary TEXT, transcript TEXT, cost_usd DOUBLE PRECISION, turns INTEGER)""",
+        summary TEXT, transcript TEXT, turns INTEGER, input_tokens BIGINT, output_tokens BIGINT,
+        cache_read_tokens BIGINT)""",
     """CREATE TABLE IF NOT EXISTS activity (
         id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), kind TEXT NOT NULL, registry_id TEXT,
         idea_id BIGINT, session_id TEXT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', github_url TEXT)""",
     "ALTER TABLE runs ADD COLUMN IF NOT EXISTS step_at TIMESTAMPTZ",
     "ALTER TABLE runs ADD COLUMN IF NOT EXISTS steps_per_sec DOUBLE PRECISION",
+    "ALTER TABLE ideas ADD COLUMN IF NOT EXISTS node_grant INTEGER",
+    "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS input_tokens BIGINT",
+    "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS output_tokens BIGINT",
+    "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT",
+    "ALTER TABLE sessions DROP COLUMN IF EXISTS cost_usd",
+    """CREATE TABLE IF NOT EXISTS run_expectations (
+        name TEXT PRIMARY KEY, expected_at TIMESTAMPTZ NOT NULL, overdue_noted BOOLEAN NOT NULL DEFAULT false)""",
     """CREATE TABLE IF NOT EXISTS registry (
         id INTEGER PRIMARY KEY, revision TEXT NOT NULL, built_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         data JSONB NOT NULL)""",
@@ -113,6 +125,10 @@ SCHEMA = (
 )
 
 
+RUNS_WITH_EXPECTATIONS = (
+    "SELECT runs.*, e.expected_at FROM runs LEFT JOIN run_expectations e USING (name) "
+    "ORDER BY submitted_at DESC NULLS LAST"
+)
 _TERMINAL_SQL = ", ".join(f"'{state}'" for state in sorted(TERMINAL_RUN_STATES))
 UPSERT_RUN = f"""
 INSERT INTO runs (name, job_id, registry_id, run, state, submitted_at, finished_at, nodes, step, total_steps, loss,
@@ -156,6 +172,7 @@ class EventKind(StrEnum):
     APPROVED = "approved"
     RUN_FINISHED = "run_finished"
     WORK_PENDING = "work_pending"
+    RUN_OVERDUE = "run_overdue"
 
 
 class SessionState(StrEnum):
@@ -223,18 +240,43 @@ class SettingsUpdate(BaseModel):
 
     dispatch_enabled: bool | None = None
     github_posting: bool | None = None
-    node_cap: int | None = None
+    node_cap: int | None = Field(default=None, ge=1)
+    """Soft cap on nodes held by Belay runs; launches read it from the app."""
     approvers: list[Approver] | None = None
 
 
 class MaintainerNote(BaseModel):
-    """A maintainer's note on a re-queue or a decline."""
+    """A maintainer's note on a re-queue or a decline, and for a re-queue an optional node grant."""
 
     note: str = ""
+    nodes: int | None = Field(default=None, ge=1)
+
+
+class Approval(BaseModel):
+    nodes: int | None = Field(default=None, ge=1)
+    """A node grant: this idea's launches may hold up to this many nodes, past the global cap."""
+
+
+class IntakeApproval(BaseModel):
+    """A #9514 comment an approver approves from the admin page, as GitHub serves it."""
+
+    comment_id: str
+    url: str
+    author: str
+    body: str
+    posted_at: datetime.datetime
+    nodes: int | None = Field(default=None, ge=1)
+
+
+class RunExpectation(BaseModel):
+    name: str
+    expected_at: datetime.datetime
 
 
 class Claim(BaseModel):
     session_id: str
+    kinds: list[EventKind] | None = None
+    """Only these kinds of event (a draining session past its budget takes only run results); None takes all."""
 
 
 class SessionFinish(BaseModel):
@@ -250,11 +292,18 @@ class SessionFinish(BaseModel):
 
     summary: str
     transcript: str = ""
-    cost_usd: float | None = None
+    input_tokens: int | None = None
+    """Input tokens not read from the prompt cache (fresh input plus cache writes)."""
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
     turns: int | None = None
 
 
 class IdeaReport(BaseModel):
+    """What a session may set on an idea; anything else (a node grant, say) is refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
     state: IdeaState | None = None
     title: str | None = None
     registry_id: str | None = None
@@ -395,7 +444,9 @@ def offer_pending_work(conn: Connection) -> int:
     return offered
 
 
-def approve_idea(conn: Connection, idea_id: int, caller: str, at: datetime.datetime | None = None) -> bool:
+def approve_idea(
+    conn: Connection, idea_id: int, caller: str, at: datetime.datetime | None = None, node_grant: int | None = None
+) -> bool:
     """Approve an idea and queue its one ``approved`` event; False unless it is pending or upstream.
 
     Approving an idea that already has its ``approved`` event queues nothing more, so it runs once. A pending
@@ -410,12 +461,12 @@ def approve_idea(conn: Connection, idea_id: int, caller: str, at: datetime.datet
     conn.execute(
         text(
             "UPDATE ideas SET state = 'approved', decided_by = :by, decided_at = COALESCE(CAST(:at AS TIMESTAMPTZ), "
-            "now()), updated_at = now() WHERE id = :id"
+            "now()), node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), updated_at = now() WHERE id = :id"
         ),
-        {"by": caller, "at": at, "id": idea_id},
+        {"by": caller, "at": at, "grant": node_grant, "id": idea_id},
     )
-    label = _label(idea)
-    _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} approved “{label}”"))
+    grant = f" with up to {node_grant} nodes" if node_grant else ""
+    _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} approved “{_label(idea)}”{grant}"))
     queued = _rows(conn, "SELECT id FROM events WHERE kind = 'approved' AND ref = :ref", ref=str(idea_id))
     if not queued:
         _enqueue(
@@ -536,13 +587,16 @@ def finish_session(conn: Connection, session_id: str, report: SessionFinish) -> 
     conn.execute(
         text(
             "UPDATE sessions SET state = :state, ended_at = now(), summary = :summary, "
-            "transcript = :transcript, cost_usd = :cost, turns = :turns WHERE id = :id"
+            "transcript = :transcript, turns = :turns, input_tokens = :input, output_tokens = :output, "
+            "cache_read_tokens = :cache_read WHERE id = :id"
         ),
         {
             "state": report.state.value,
             "summary": report.summary,
             "transcript": report.transcript[-TRANSCRIPT_LIMIT:],
-            "cost": report.cost_usd,
+            "input": report.input_tokens,
+            "output": report.output_tokens,
+            "cache_read": report.cache_read_tokens,
             "turns": report.turns,
             "id": session_id,
         },
@@ -561,43 +615,115 @@ def finish_session(conn: Connection, session_id: str, report: SessionFinish) -> 
     return {"state": report.state.value}
 
 
-def claim_events(conn: Connection, session_id: str) -> dict[str, Any]:
-    """Give every undispatched event to a new session, when dispatch is on and no session is active. A retried
-    claim for a session that is still running gets the same events back."""
+def claim_events(conn: Connection, session_id: str, kinds: list[EventKind] | None = None) -> dict[str, Any]:
+    """Give every undispatched event (of ``kinds``, if given) to a new session, when dispatch is on and no session is
+    active. A session still running (a draining session, or a retried claim) takes the newly queued events too, and
+    gets back every event it holds."""
     conn.execute(text("SELECT pg_advisory_xact_lock(4917)"))
     _expire_sessions(conn)
     mine = _rows(conn, "SELECT state FROM sessions WHERE id = :id", id=session_id)
-    if mine and mine[0]["state"] == SessionState.RUNNING:  # a retried claim whose response was lost
-        events = _rows(conn, "SELECT * FROM events WHERE session_id = :s ORDER BY id", s=session_id)
-        return {"launch": True, "session_id": session_id, "events": _plain(events)}
-    if not _settings(conn)["dispatch_enabled"]:
-        return {"launch": False, "reason": "dispatch is off"}
-    if _session_active(conn):
-        return {"launch": False, "reason": "a session is active"}
-    events = _rows(conn, "SELECT * FROM events WHERE session_id IS NULL ORDER BY id")
-    if not events:
-        return {"launch": False, "reason": "no queued events"}
-    conn.execute(
-        text("INSERT INTO sessions (id, state) VALUES (:id, :state)"), {"id": session_id, "state": SessionState.RUNNING}
-    )
-    conn.execute(
-        text("UPDATE events SET session_id = :s WHERE id = ANY(:ids)"),
-        {"s": session_id, "ids": [e["id"] for e in events]},
-    )
-    summary = "; ".join(e["summary"] for e in events)
-    _activity(conn, ActivityPost(kind="dispatch", session_id=session_id, title=f"Started session for: {summary}"))
+    if not (mine and mine[0]["state"] == SessionState.RUNNING):
+        if not _settings(conn)["dispatch_enabled"]:
+            return {"launch": False, "reason": "dispatch is off"}
+        if _session_active(conn):
+            return {"launch": False, "reason": "a session is active"}
+    wanted = [k.value for k in kinds] if kinds is not None else [k.value for k in EventKind]
+    new = _rows(conn, "SELECT * FROM events WHERE session_id IS NULL AND kind = ANY(:kinds) ORDER BY id", kinds=wanted)
+    if not mine:
+        if not new:
+            return {"launch": False, "reason": "no queued events"}
+        conn.execute(
+            text("INSERT INTO sessions (id, state) VALUES (:id, :state)"),
+            {"id": session_id, "state": SessionState.RUNNING},
+        )
+    if new:
+        conn.execute(
+            text("UPDATE events SET session_id = :s WHERE id = ANY(:ids)"),
+            {"s": session_id, "ids": [e["id"] for e in new]},
+        )
+        summary = "; ".join(e["summary"] for e in new)
+        verb = "Started session for" if not mine else "Session took"
+        _activity(conn, ActivityPost(kind="dispatch", session_id=session_id, title=f"{verb}: {summary}"))
+    events = _rows(conn, "SELECT * FROM events WHERE session_id = :s ORDER BY id", s=session_id)
     return {"launch": True, "session_id": session_id, "events": _plain(events)}
 
 
-def requeue_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[str, str]:
-    """Keep the maintainer's note for the session and offer the idea to the next session. A retried re-queue whose
-    event is still unclaimed queues nothing more."""
+def expect_run(conn: Connection, expectation: RunExpectation) -> None:
+    """Record when a launched run should finish (a session's wait and the overdue check read it)."""
+    conn.execute(
+        text(
+            "INSERT INTO run_expectations (name, expected_at) VALUES (:n, :at) "
+            "ON CONFLICT (name) DO UPDATE SET expected_at = EXCLUDED.expected_at, overdue_noted = false"
+        ),
+        {"n": expectation.name, "at": expectation.expected_at},
+    )
+
+
+def note_overdue_runs(conn: Connection) -> int:
+    """Queue one run_overdue event for each run still going (or never seen) past its expected finish plus grace."""
+    overdue = _rows(
+        conn,
+        "SELECT e.name, e.expected_at, r.state FROM run_expectations e LEFT JOIN runs r USING (name) "
+        "WHERE NOT e.overdue_noted AND e.expected_at < :cutoff "
+        f"AND (r.state IS NULL OR r.state NOT IN ({_TERMINAL_SQL}))",
+        cutoff=_now() - OVERDUE_GRACE,
+    )
+    for run in overdue:
+        experiment = run["name"].removeprefix("belay-").partition("-")[0]
+        _enqueue(
+            conn,
+            EventKind.RUN_OVERDUE,
+            run["name"],
+            f"{run['name']} overdue (expected by {_iso(run['expected_at'])})",
+            {
+                "run": run["name"],
+                "experiment": experiment,
+                "state": run["state"],
+                "expected_at": _iso(run["expected_at"]),
+            },
+        )
+        conn.execute(text("UPDATE run_expectations SET overdue_noted = true WHERE name = :n"), {"n": run["name"]})
+    return len(overdue)
+
+
+def approve_intake_comment(conn: Connection, comment: IntakeApproval, login: str) -> dict[str, Any]:
+    """Approve a #9514 comment straight from the admin page: record it as an intake idea and queue it, unless the
+    registry already holds it. Its text freezes at this approval, as with a GitHub 👍."""
+    if comment.url != f"{INTAKE_URL_PREFIX}{comment.comment_id}":
+        raise HTTPException(422, f"{comment.url} is not #9514 comment {comment.comment_id}")
+    sync_intake_comments(
+        conn,
+        [
+            IntakeComment(
+                comment_id=comment.comment_id,
+                author=comment.author,
+                body=comment.body,
+                url=comment.url,
+                posted_at=comment.posted_at,
+                approved_upstream=False,
+            )
+        ],
+    )
+    idea = _rows(conn, "SELECT id, state, registry_id FROM ideas WHERE comment_id = :c", c=comment.comment_id)[0]
+    if idea["state"] == IdeaState.RECORDED:
+        raise HTTPException(409, f"already run as {idea['registry_id']}")
+    if not approve_idea(conn, idea["id"], login, node_grant=comment.nodes):
+        raise HTTPException(409, f"idea {idea['id']} is already {idea['state']}")
+    return {"state": IdeaState.APPROVED.value, "idea_id": idea["id"]}
+
+
+def requeue_idea(conn: Connection, idea_id: int, login: str, note: str, nodes: int | None = None) -> dict[str, str]:
+    """Keep the maintainer's note (and any node grant) for the session and offer the idea to the next session. A
+    retried re-queue whose event is still unclaimed queues nothing more."""
     rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
     if not rows or rows[0]["state"] not in (IdeaState.APPROVED, IdeaState.RECORDED):
         raise HTTPException(409, f"idea {idea_id} is neither approved nor recorded")
     conn.execute(
-        text("UPDATE ideas SET state = 'approved', note = :n, updated_at = now() WHERE id = :id"),
-        {"n": f"Maintainer {login}: {note}" if note else None, "id": idea_id},
+        text(
+            "UPDATE ideas SET state = 'approved', note = :n, "
+            "node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), updated_at = now() WHERE id = :id"
+        ),
+        {"n": f"Maintainer {login}: {note}" if note else None, "grant": nodes, "id": idea_id},
     )
     waiting = _rows(
         conn,
@@ -787,6 +913,7 @@ def _public_run(run: dict[str, Any]) -> dict[str, Any]:
         "wandb_url",
         "submitted_at",
         "finished_at",
+        "expected_at",
     )
     return {k: _iso(run[k]) for k in keys}
 
@@ -827,10 +954,11 @@ def create_api(services: Services) -> RegisteredApi:
         timeout is marked lost first, so a scheduled check of ``work`` never waits on a dead session."""
         with engine.begin() as conn:
             _expire_sessions(conn)
+            note_overdue_runs(conn)
             ideas = _rows(
                 conn, "SELECT * FROM ideas WHERE state NOT IN ('upstream', 'dismissed') ORDER BY posted_at DESC"
             )
-            runs = _rows(conn, "SELECT * FROM runs ORDER BY submitted_at DESC NULLS LAST")
+            runs = _rows(conn, RUNS_WITH_EXPECTATIONS)
             active = _session_active(conn)
             queued = len(_rows(conn, "SELECT id FROM events WHERE session_id IS NULL"))
             posts = _rows(
@@ -870,11 +998,12 @@ def create_api(services: Services) -> RegisteredApi:
             _expire_sessions(conn)
             settings = _settings(conn)
             ideas = _rows(conn, "SELECT * FROM ideas ORDER BY posted_at DESC")
-            runs = _rows(conn, "SELECT * FROM runs ORDER BY submitted_at DESC NULLS LAST")
+            runs = _rows(conn, RUNS_WITH_EXPECTATIONS)
             activity = _rows(conn, f"SELECT * FROM activity ORDER BY at DESC LIMIT {RECENT_ACTIVITY}")
             sessions = _rows(
                 conn,
-                "SELECT id, started_at, ended_at, state, summary, cost_usd, turns, "
+                "SELECT id, started_at, ended_at, state, summary, turns, input_tokens, output_tokens, "
+                "cache_read_tokens, "
                 f"length(transcript) AS transcript_chars FROM sessions ORDER BY started_at DESC LIMIT {RECENT_SESSIONS}",
             )
             events = _rows(conn, "SELECT id, at, kind, ref, summary, session_id FROM events ORDER BY id DESC LIMIT 200")
@@ -915,10 +1044,17 @@ def create_api(services: Services) -> RegisteredApi:
             _activity(conn, ActivityPost(kind="proposal", idea_id=idea_id, title=f"{caller} proposed: {proposal.title}"))
         return {"id": idea_id}
 
-    @admin.post("/ideas/{idea_id}/approve")
-    def approve(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
+    @admin.post("/intake/approve")
+    def approve_intake(comment: IntakeApproval, caller: str = Depends(approver)) -> dict[str, Any]:
+        """Approve a #9514 comment the admin page read live from GitHub."""
         with engine.begin() as conn:
-            if not approve_idea(conn, idea_id, approver_login(_settings(conn), caller)):
+            return approve_intake_comment(conn, comment, approver_login(_settings(conn), caller))
+
+    @admin.post("/ideas/{idea_id}/approve")
+    def approve(idea_id: int, approval: Approval | None = None, caller: str = Depends(approver)) -> dict[str, str]:
+        grant = approval.nodes if approval is not None else None
+        with engine.begin() as conn:
+            if not approve_idea(conn, idea_id, approver_login(_settings(conn), caller), node_grant=grant):
                 raise HTTPException(409, f"idea {idea_id} is not waiting for approval")
         return {"state": IdeaState.APPROVED.value}
 
@@ -946,7 +1082,7 @@ def create_api(services: Services) -> RegisteredApi:
     def requeue(idea_id: int, request: MaintainerNote, caller: str = Depends(approver)) -> dict[str, str]:
         """A maintainer's answer to an escalation, or a rerun of an idea that already has results."""
         with engine.begin() as conn:
-            return requeue_idea(conn, idea_id, approver_login(_settings(conn), caller), request.note)
+            return requeue_idea(conn, idea_id, approver_login(_settings(conn), caller), request.note, request.nodes)
 
     @admin.post("/ideas/{idea_id}/decline")
     def decline(idea_id: int, request: MaintainerNote, caller: str = Depends(approver)) -> dict[str, str]:
@@ -957,6 +1093,7 @@ def create_api(services: Services) -> RegisteredApi:
     @admin.post("/settings")
     def update_settings(update: SettingsUpdate, caller: str = Depends(approver)) -> dict[str, Any]:
         with engine.begin() as conn:
+            before = _settings(conn)
             for key, value in update.model_dump(exclude_none=True).items():
                 conn.execute(
                     text(
@@ -969,6 +1106,8 @@ def create_api(services: Services) -> RegisteredApi:
                 if key == "dispatch_enabled":
                     word = "on" if value else "off"
                     _activity(conn, ActivityPost(kind="control", title=f"{caller} turned dispatch {word}"))
+                if key == "node_cap" and value != before["node_cap"]:
+                    _activity(conn, ActivityPost(kind="control", title=f"{caller} set the node cap to {value}"))
             return {k: v for k, v in _settings(conn).items() if k not in SECRET_SETTINGS}
 
     @admin.get("/sessions/{session_id}/transcript", response_class=PlainTextResponse)
@@ -1041,14 +1180,15 @@ def create_api(services: Services) -> RegisteredApi:
                     "objects": update.storage_objects,
                 },
             )
+            overdue = note_overdue_runs(conn)
             offered = offer_pending_work(conn)
-        return {"work_pending": offered}
+        return {"work_pending": offered, "overdue": overdue}
 
     @agent.post("/dispatch/claim")
     def claim(request: Claim) -> dict[str, Any]:
         """Give every undispatched event to a new session, when dispatch is on and no session is active."""
         with engine.begin() as conn:
-            return claim_events(conn, request.session_id)
+            return claim_events(conn, request.session_id, request.kinds)
 
     @agent.post("/sessions/{session_id}/finish")
     def finish(session_id: str, report: SessionFinish) -> dict[str, str]:
@@ -1098,8 +1238,21 @@ def create_api(services: Services) -> RegisteredApi:
 
     @agent.get("/state")
     def agent_state() -> dict[str, Any]:
-        """The full state, for sessions."""
-        return state()
+        """The full state, for sessions, plus every run's expected finish (including runs the watcher has not seen
+        yet)."""
+        with engine.connect() as conn:
+            expectations = _rows(
+                conn,
+                "SELECT e.name, e.expected_at, r.state FROM run_expectations e LEFT JOIN runs r USING (name) "
+                "ORDER BY name",
+            )
+        return {**state(), "expectations": _plain(expectations)}
+
+    @agent.post("/runs/expected")
+    def runs_expected(expectation: RunExpectation) -> dict[str, str]:
+        with engine.begin() as conn:
+            expect_run(conn, expectation)
+        return {"name": expectation.name}
 
     for router in (public, admin, agent):
         api.include_router(router)

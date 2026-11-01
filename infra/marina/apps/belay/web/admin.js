@@ -6,6 +6,9 @@ const openBodies = new Set()
 let state = null // the admin state last read from the API
 let busy = false
 let settingsLoaded = false
+const INTAKE_ISSUE = 'https://api.github.com/repos/marin-community/marin/issues/9514'
+const BOTS = new Set(['marin-belay-bot', 'loom-oa-dev[bot]'])
+let intakeComments = null // the newest #9514 comments, read from GitHub in this browser on load and on Reload
 
 async function api(path, body) {
   const options =
@@ -50,6 +53,8 @@ function renderControls() {
   const { settings, watcher, queued } = state
   document.getElementById('dispatch').checked = settings.dispatch_enabled
   document.getElementById('dispatch-word').textContent = settings.dispatch_enabled ? 'on' : 'off'
+  const cap = document.getElementById('node-cap')
+  if (document.activeElement !== cap) cap.value = settings.node_cap
   meter('nodes', state.nodes_requested, settings.node_cap, `${state.nodes_requested} / ${settings.node_cap}`)
   meter(
     'storage',
@@ -63,6 +68,23 @@ function renderControls() {
     el('span', { class: stale ? 'warn' : 'ok' }, watcher.ticked_at ? relative(watcher.ticked_at) : 'not running'),
   )
   document.getElementById('queued-v').textContent = queued.length ? `${queued.length} queued` : 'queue empty'
+}
+
+// An optional node grant beside an approval: blank keeps the idea under the global cap.
+function nodesInput() {
+  return el('input', {
+    type: 'number',
+    min: '1',
+    max: '64',
+    class: 'nodes-in',
+    placeholder: 'nodes',
+    title: 'Node grant: this idea may hold up to this many nodes, past the global cap. Blank: global cap.',
+    'aria-label': 'Node grant',
+  })
+}
+
+function grantOf(input) {
+  return input.value ? { nodes: Number(input.value) } : {}
 }
 
 function renderPending() {
@@ -110,14 +132,9 @@ function renderPending() {
           ),
           idea.url ? link(idea.url, '↗') : el('span'),
           escalated(idea)
-            ? el('button', { type: 'button', class: 'btn primary', onclick: () => {
-                const note = window.prompt('Note for the session (for example "retest on current recipe"), or leave empty', '')
-                if (note !== null) act(`ideas/${idea.id}/requeue`, { note }, 'Re-queued')
-              } }, 'Re-queue')
-            : el(
-                'button',
-                { type: 'button', class: 'btn primary', onclick: () => act(`ideas/${idea.id}/approve`, {}, 'Approved and queued') },
-                idea.state === 'upstream' ? 'Queue' : 'Approve',
+            ? requeueWithGrant(idea, '')
+            : approveWithGrant(idea.state === 'upstream' ? 'Queue' : 'Approve', (body) =>
+                act(`ideas/${idea.id}/approve`, body, 'Approved and queued'),
               ),
           idea.state === 'pending'
             ? el('button', { type: 'button', class: 'btn', onclick: () => act(`ideas/${idea.id}/dismiss`, {}, 'Dismissed') }, 'Dismiss')
@@ -132,6 +149,75 @@ function renderPending() {
       )
     }),
     alreadyRun(),
+  )
+}
+
+// A primary action with its node-grant field: the action gets ``{nodes}`` when the field is filled.
+function approveWithGrant(label, run) {
+  const nodes = nodesInput()
+  return el(
+    'span',
+    { class: 'grant' },
+    nodes,
+    el('button', { type: 'button', class: 'btn primary', onclick: () => run(grantOf(nodes)) }, label),
+  )
+}
+
+function requeueWithGrant(idea, suggested) {
+  return approveWithGrant('Re-queue', (grant) => {
+    const note = window.prompt('Note for the session (for example "retest on current recipe")', suggested)
+    if (note !== null) act(`ideas/${idea.id}/requeue`, { note, ...grant }, 'Re-queued')
+  })
+}
+
+// The newest #9514 comments, read from GitHub's public API in this browser (no server keys). Approving one sends
+// its URL, author and text as GitHub serves them; the server records it, refuses one the registry already holds,
+// and freezes its text at the approval.
+async function loadIntake() {
+  try {
+    const issue = await fetch(INTAKE_ISSUE).then((r) => r.json())
+    const last = Math.max(1, Math.ceil(issue.comments / 30))
+    const page = await fetch(`${INTAKE_ISSUE}/comments?per_page=30&page=${last}`).then((r) => r.json())
+    intakeComments = page.filter((c) => c.user.type !== 'Bot' && !BOTS.has(c.user.login)).reverse()
+  } catch (error) {
+    intakeComments = []
+    toast(`GitHub unavailable: ${error.message}`)
+  }
+  renderIntakeLive()
+}
+
+function renderIntakeLive() {
+  if (intakeComments === null) {
+    setChildren('intake-live', el('div', { class: 'none' }, 'Loading…'))
+    return
+  }
+  if (!intakeComments.length) {
+    setChildren('intake-live', el('div', { class: 'none' }, 'No comments'))
+    return
+  }
+  const known = new Map(state.ideas.filter((i) => i.comment_id).map((i) => [String(i.comment_id), i]))
+  setChildren(
+    'intake-live',
+    intakeComments.map((c) => {
+      const idea = known.get(String(c.id))
+      const waiting = !idea || idea.state === 'pending' || idea.state === 'upstream'
+      const first = c.body.trim().split('\n')[0].replace(/\*\*/g, '').slice(0, 110)
+      return el(
+        'div',
+        { class: 'line pending' },
+        el('span', { class: 'nm' }, el('b', {}, first), el('small', {}, `${c.user.login} · `, when(c.created_at))),
+        link(c.html_url, '↗'),
+        waiting
+          ? approveWithGrant('Approve', (grant) =>
+              act(
+                'intake/approve',
+                { comment_id: String(c.id), url: c.html_url, author: c.user.login, body: c.body, posted_at: c.created_at, ...grant },
+                'Approved and queued',
+              ),
+            )
+          : el('span', { class: 'muted small' }, idea.registry_id ? `${idea.state} → ${idea.registry_id}` : idea.state),
+      )
+    }),
   )
 }
 
@@ -154,13 +240,16 @@ function alreadyRun() {
           el('small', {}, `#9514 · ${idea.author} · done → `, link(`${PAGES.status}#${idea.registry_id}`, idea.registry_id)),
         ),
         idea.url ? link(idea.url, '↗') : el('span'),
-        el('button', { type: 'button', class: 'btn', onclick: () => {
-          const note = window.prompt('Re-queue note for the session (for example "retest on current recipe")', 'retest on current recipe')
-          if (note) act(`ideas/${idea.id}/requeue`, { note }, 'Re-queued')
-        } }, 'Re-queue'),
+        requeueWithGrant(idea, 'retest on current recipe'),
       ),
     ),
   )
+}
+
+// A token count as 1.2k / 3.4M; sessions run on a subscription, so tokens, not dollars, show their size.
+function tokens(n) {
+  if (n === undefined || n === null) return '—'
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n)
 }
 
 const SESSION_CLASS = { succeeded: 'won', running: 'tested', failed: 'lost', lost: 'lost' }
@@ -184,8 +273,10 @@ function renderSessions() {
           { class: 'mono muted' },
           [
             s.ended_at ? duration(s.started_at, s.ended_at) : duration(s.started_at),
-            s.turns ? `${s.turns}t` : null,
-            s.cost_usd ? `$${s.cost_usd.toFixed(2)}` : null,
+            s.turns ? `${s.turns} turns` : null,
+            s.input_tokens !== null ? `in ${tokens(s.input_tokens)}` : null,
+            s.output_tokens !== null ? `out ${tokens(s.output_tokens)}` : null,
+            s.cache_read_tokens !== null ? `cache ${tokens(s.cache_read_tokens)}` : null,
           ]
             .filter(Boolean)
             .join(' · '),
@@ -219,6 +310,7 @@ async function refresh() {
   try {
     state = await api('state')
     render()
+    renderIntakeLive()
   } catch (error) {
     renderNext({ tone: 'blocked', text: `Belay API unavailable (${error.message})` })
   }
@@ -229,6 +321,12 @@ function wireControls() {
     const on = event.target.checked
     act('settings', { dispatch_enabled: on }, on ? 'Dispatch on' : 'Dispatch off')
   })
+  document.getElementById('node-cap-form').addEventListener('submit', (event) => {
+    event.preventDefault()
+    const cap = Number(document.getElementById('node-cap').value)
+    act('settings', { node_cap: cap }, `Node cap ${cap}`)
+  })
+  document.getElementById('intake-reload').addEventListener('click', () => loadIntake())
   document.getElementById('settings-form').addEventListener('submit', (event) => {
     event.preventDefault()
     const previous = new Map(state.settings.approvers.map((a) => [a.github, a]))
@@ -241,7 +339,6 @@ function wireControls() {
     act(
       'settings',
       {
-        node_cap: Number(document.getElementById('set-node-cap').value),
         github_posting: document.getElementById('set-github').checked,
         approvers,
       },

@@ -24,10 +24,12 @@ import dataclasses
 import datetime
 import importlib.util
 import json
+import os
 import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -70,12 +72,15 @@ from experiments.belay.config import (
     Track,
 )
 from experiments.belay.page import (
+    SESSION_ENV,
+    TERMINAL_RUN_STATES,
     Idea,
     PageRun,
     PageState,
     Post,
     call,
     comment_times,
+    expect_finish,
     page_state,
     post_activity,
     publish_comment,
@@ -169,7 +174,20 @@ class EventKind(StrEnum):
     APPROVED = "approved"
     WORK_PENDING = "work_pending"
     RUN_FINISHED = "run_finished"
+    RUN_OVERDUE = "run_overdue"
     NOTE = "note"
+
+
+# Events about runs already in flight: a draining session past its budget still takes these, but no new ideas.
+RESULT_KINDS = (EventKind.RUN_FINISHED, EventKind.RUN_OVERDUE)
+# A draining session takes new ideas for this long or this many ideas, then only finishes what is in flight, and
+# exits by the hard stop, under Loom's 4-hour session limit.
+DRAIN_BUDGET = datetime.timedelta(hours=3)
+DRAIN_MAX_IDEAS = 10
+DRAIN_HARD_STOP = datetime.timedelta(hours=3, minutes=45)
+WAIT_POLL_SECONDS = 60
+# One `wait` call returns within this, so it fits in one shell command; the session then runs it again.
+WAIT_CALL_SECONDS = 9 * 60
 
 
 @dataclass(frozen=True)
@@ -234,7 +252,10 @@ def claim() -> None:
     path = Path(tempfile.gettempdir()) / f"belay-{session_id}.events.json"
     path.write_text(json.dumps(claimed["events"], indent=2))
     print(f"session {session_id} claimed {len(claimed['events'])} event(s) into {path}")
-    say_next(f"{BELAY} start --events {path}; at the end, {BELAY} finish --session {session_id} --summary ...")
+    say_next(
+        f"{BELAY} start --events {path}; the drain loop's wait is {BELAY} wait --session {session_id} --events <file>; "
+        f"at the end, {BELAY} finish --session {session_id} --summary ..."
+    )
 
 
 def finish(session_id: str, summary: str) -> None:
@@ -242,6 +263,84 @@ def finish(session_id: str, summary: str) -> None:
     call(f"agent/sessions/{session_id}/finish", {"state": "succeeded", "summary": summary}, token=service_token())
     print(f"session {session_id} finished")
     say_next("stop")
+
+
+class WaitOutcome(StrEnum):
+    WORK = "work"
+    WAIT = "wait"
+    DRAINED = "drained"
+    OUT_OF_TIME = "out_of_time"
+
+
+def wait_outcome(
+    now: datetime.datetime,
+    started: datetime.datetime,
+    ideas_taken: int,
+    queued: list[EventKind],
+    live_due: list[datetime.datetime | None],
+) -> WaitOutcome:
+    """What a draining session does next: take queued work (only run results once past its budget), keep waiting on
+    runs due before its hard stop (``None``: due unknown, so wait), or exit. Runs due later are left to a later
+    session."""
+    if now - started >= DRAIN_HARD_STOP:
+        return WaitOutcome.OUT_OF_TIME
+    taking_ideas = now - started < DRAIN_BUDGET and ideas_taken < DRAIN_MAX_IDEAS
+    if any(taking_ideas or kind in RESULT_KINDS for kind in queued):
+        return WaitOutcome.WORK
+    end = started + DRAIN_HARD_STOP
+    if any(due is None or due <= end for due in live_due):
+        return WaitOutcome.WAIT
+    return WaitOutcome.DRAINED
+
+
+def _instant(iso: str) -> datetime.datetime:
+    return datetime.datetime.fromisoformat(iso)
+
+
+def wait(session_id: str, events_file: Path) -> None:
+    """The drain loop's wait (RUNBOOK section 0b), a plain poll with no model turns: return when queued work (a
+    finished run, or a newly approved idea while within the budget) is claimed into a new events file, or when
+    nothing short is left to wait for."""
+    seen_file = events_file.parent / f"belay-{session_id}.seen.json"
+    seen = set(json.loads(seen_file.read_text())) if seen_file.exists() else set()
+    seen |= {e["id"] for e in json.loads(events_file.read_text()) if "id" in e}
+    seen_file.write_text(json.dumps(sorted(seen)))
+    deadline = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=WAIT_CALL_SECONDS)
+    while True:
+        state = call("agent/state", token=service_token())
+        session = next((s for s in state["sessions"] if s["id"] == session_id), None)
+        if session is None or session["state"] != "running":
+            raise SystemExit(f"refusing: session {session_id} is not running on the Belay page")
+        now = datetime.datetime.now(datetime.UTC)
+        started = _instant(session["started_at"])
+        taken = sum(1 for e in session["events"] if e["kind"] in (EventKind.APPROVED, EventKind.WORK_PENDING))
+        queued = [EventKind(e["kind"]) for e in state["queued"] if e["kind"] in set(EventKind)]
+        expected = {e["name"]: e for e in state["expectations"]}
+        live_due = [_instant(e["expected_at"]) for e in expected.values() if e["state"] not in TERMINAL_RUN_STATES]
+        live_due += [None for r in state["runs"] if r["state"] not in TERMINAL_RUN_STATES and r["name"] not in expected]
+        outcome = wait_outcome(now, started, taken, queued, live_due)
+        if outcome is WaitOutcome.WORK:
+            within = now - started < DRAIN_BUDGET and taken < DRAIN_MAX_IDEAS
+            kinds = None if within else [k.value for k in RESULT_KINDS]
+            claimed = call("agent/dispatch/claim", {"session_id": session_id, "kinds": kinds}, token=service_token())
+            new = [e for e in claimed["events"] if e["id"] not in seen]
+            path = events_file.parent / f"belay-{session_id}-{now:%H%M%S}.events.json"
+            path.write_text(json.dumps(new, indent=2))
+            print(f"claimed {len(new)} event(s) into {path}")
+            say_next(f"{BELAY} start --events {path}; then {BELAY} wait --session {session_id} --events {path}")
+            return
+        if outcome is WaitOutcome.WAIT and now < deadline:
+            time.sleep(WAIT_POLL_SECONDS)
+            continue
+        if outcome is WaitOutcome.WAIT:
+            print(f"still waiting on {len(live_due)} run(s) due before this session's hard stop")
+            say_next(f"{BELAY} wait --session {session_id} --events {events_file}")
+            return
+        later = len([d for d in live_due if d is not None])
+        why = "the session's time is up" if outcome is WaitOutcome.OUT_OF_TIME else "nothing is queued"
+        print(f"drained: {why}; {later} run(s) still going are left to a later session")
+        say_next("the final message (section 7)")
+        return
 
 
 def start(events_file: Path, today: datetime.date) -> None:
@@ -258,6 +357,12 @@ def start(events_file: Path, today: datetime.date) -> None:
     for event in read_events(events_file):
         if event.kind in (EventKind.APPROVED, EventKind.WORK_PENDING):
             line = f"[{event.kind} idea #{event.idea_id}] {idea_step(state.idea(event.idea_id))}"
+        elif event.kind is EventKind.RUN_OVERDUE:
+            line = (
+                f'[run_overdue {event.experiment}] section 6: {BELAY} escalate --title "{event.experiment}: a run is '
+                f'overdue" --body "<which run, its state and expected finish, what its logs show>" '
+                f"--registry-id {event.experiment}"
+            )
         elif event.kind is EventKind.RUN_FINISHED:
             # A finished shared control also concerns every spec that reuses it.
             for experiment in (event.experiment, *sharers(event.experiment)):
@@ -353,6 +458,12 @@ def print_idea_brief(idea: Idea, track: Track, defaulted: bool) -> None:
         'characters>" --opt-set <name>=<value>   (one --opt-set or --model-set per setting)\n'
         f'   or, if the idea needs code: {BELAY} new-idea --idea-id {idea.id} --category "<category>"'
     )
+
+
+def node_grant(state: PageState, registry_id: str) -> int | None:
+    """The maintainer's node grant on the idea behind ``registry_id``, if any."""
+    idea = state.idea_for(registry_id)
+    return None if idea is None else idea.node_grant
 
 
 def same_code(repo: Path, commit: str) -> bool:
@@ -518,8 +629,9 @@ def new_idea(
         text = new_spec_text(registry_id, track, variant, settings, run_suffix(registry_id, jobs), shared)
     spec = write_spec(repo, branch, text, dry_run=dry_run, replace=existing.exists() and not launched)
     commit = require_clean_pushed_head(repo, branch)
-    check_launch(spec, iris_jobs())
-    print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the cap")
+    check_launch(spec, iris_jobs(), state.node_cap, idea.node_grant)
+    cap = f"node grant {idea.node_grant}" if idea.node_grant else f"node cap {state.node_cap}"
+    print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the {cap}")
     entry = load_entry(registry_id) if not dry_run or idea.registry_id else {"name": name or registry_id}
     defaults_text = defaults + (f" (hidden text removed from the comment: {', '.join(hidden)})" if hidden else "")
     if defaulted:
@@ -546,13 +658,20 @@ def new_idea(
     plan = {"summary": entry["name"], "commit": commit, "branch": branch, "track": spec.track.value, "comment": url}
     report_idea(idea.id, {"state": "planned", "plan": plan}, dry_run=dry_run)
     if dry_run:
-        launch_stage(repo, branch, spec, data_runs, None, dry_run=True)
+        launch_stage(repo, branch, spec, data_runs, None, state, dry_run=True)
         return
     trial_id, path = add_trial(
-        registry_id, spec.track, "equal_steps", variant, commit, settings_of(variant_settings(spec)), url or ""
+        registry_id,
+        spec.track,
+        "equal_steps",
+        variant,
+        commit,
+        settings_of(variant_settings(spec)),
+        url or "",
+        idea.node_grant,
     )
     commit_and_push([path], f"Belay registry: {registry_id} {trial_id} planned", dry_run=False)
-    launch_stage(repo, branch, spec, data_runs, trial_id, dry_run=False)
+    launch_stage(repo, branch, spec, data_runs, trial_id, state, dry_run=False)
     body = updated(read_comment(url), title(registry_id, entry["name"], spec.track, "running"), number, section)
     publish_comment(url, body, github_posting=state.github_posting, dry_run=False)
     running = title(registry_id, entry["name"], spec.track, "running")
@@ -600,13 +719,22 @@ def comparison_text(track: Track, stage: Stage, tokens: float | None = None) -> 
 
 
 def launch_stage(
-    repo: Path, branch: str, spec: ExperimentSpec, runs: list[RunSpec], trial_id: str | None, *, dry_run: bool
+    repo: Path,
+    branch: str,
+    spec: ExperimentSpec,
+    runs: list[RunSpec],
+    trial_id: str | None,
+    state: PageState,
+    *,
+    dry_run: bool,
 ) -> dict[str, list[str]]:
     """The one launch path (``new-idea``, ``run-finished`` and ``launch``): submit ``runs`` (controls first) from
     the spec's clean, pushed commit, add variant runs to ``trial_id``, then record each submitted command under the
     spec's ``launched`` and commit that. Returns the commands."""
     require_clean_pushed_head(repo, branch)
-    check_launch(ExperimentSpec(spec.experiment, spec.track, {r.name: r for r in runs}), iris_jobs())
+    stage = ExperimentSpec(spec.experiment, spec.track, {r.name: r for r in runs})
+    check_launch(stage, iris_jobs(), state.node_cap, node_grant(state, spec.experiment))
+    minutes = TRACKS[spec.track].expected_minutes
     commands = {}
     for run in sorted(own_runs(runs), key=lambda r: not r.control):
         run_id = run_name(spec.experiment, run.name)
@@ -615,6 +743,9 @@ def launch_stage(
         if dry_run:
             continue
         subprocess.run(commands[run.name], cwd=repo, check=True)
+        if minutes is not None:
+            due = datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=minutes)
+            expect_finish(run_id, due, dry_run=False)
         if trial_id is not None and not run.control:
             path = add_trial_run(spec.experiment, trial_id, run_id)
             commit_and_push([path], f"Belay registry: {spec.experiment} {run.name} launched", dry_run=False)
@@ -639,7 +770,8 @@ def launch(registry_id: str, run: str, *, print_only: bool, dry_run: bool) -> No
     branch = require_week_branch(repo, datetime.date.today())
     variant = spec.runs[run].variant
     trials = [t for t in load_entry(registry_id).get("trials") or [] if t.get("variant") == variant]
-    launch_stage(repo, branch, spec, [spec.runs[run]], trials[-1]["id"] if trials else None, dry_run=dry_run)
+    trial = trials[-1]["id"] if trials else None
+    launch_stage(repo, branch, spec, [spec.runs[run]], trial, page_state(), dry_run=dry_run)
     say_next("stop (the watcher starts a new session when the run finishes)")
 
 
@@ -895,7 +1027,8 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     new_spec = write_spec(repo, branch, text, dry_run=dry_run, replace=True)
     commit = "dry-run" if dry_run else require_clean_pushed_head(repo, branch)
     started = [r for r in new_spec.runs.values() if r.name in runs]
-    check_launch(ExperimentSpec(new_spec.experiment, new_spec.track, {r.name: r for r in started}), jobs)
+    started_spec = ExperimentSpec(new_spec.experiment, new_spec.track, {r.name: r for r in started})
+    check_launch(started_spec, jobs, nxt.state.node_cap, node_grant(nxt.state, registry_id))
     number = len([t for t in nxt.entry.get("trials") or [] if t.get("comment_url") == nxt.url]) + 1
     if stage is Stage.PROBE:
         pending = "Pending: a timing probe measures the variant's s/step."
@@ -909,17 +1042,24 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     body = updated(read_comment(nxt.url), new_title, number, section)
     publish_comment(nxt.url, body, github_posting=nxt.state.github_posting, dry_run=dry_run)
     if dry_run:
-        launch_stage(repo, branch, new_spec, started, None, dry_run=True)
+        launch_stage(repo, branch, new_spec, started, None, nxt.state, dry_run=True)
         return
     trial_id = None
     if stage is not Stage.PROBE:
         variant = next(r for r in started if not r.control)
         settings = settings_of(variant.flags)
         trial_id, path = add_trial(
-            registry_id, spec.track, "fixed_time", variant.variant, commit, settings, nxt.url or ""
+            registry_id,
+            spec.track,
+            "fixed_time",
+            variant.variant,
+            commit,
+            settings,
+            nxt.url or "",
+            node_grant(nxt.state, registry_id),
         )
         commit_and_push([path], f"Belay registry: {registry_id} {trial_id} planned ({stage})", dry_run=False)
-    launch_stage(repo, branch, new_spec, started, trial_id, dry_run=False)
+    launch_stage(repo, branch, new_spec, started, trial_id, nxt.state, dry_run=False)
     say_next("stop (the watcher starts a new session when the runs finish)")
 
 
@@ -1179,6 +1319,9 @@ def main(argv: list[str]) -> None:
         return p
 
     command("claim")
+    p = command("wait")
+    p.add_argument("--session", default=os.environ.get(SESSION_ENV), help="this session's id (default: its env)")
+    p.add_argument("--events", type=Path, required=True, help="the events file this session last worked through")
     p = command("finish")
     p.add_argument("--session", required=True, help="the session id claim printed")
     p.add_argument("--summary", required=True, help="the final message (RUNBOOK section 7)")
@@ -1247,6 +1390,10 @@ def main(argv: list[str]) -> None:
 
     if args.command == "claim":
         claim()
+    elif args.command == "wait":
+        if not args.session:
+            raise SystemExit(f"refusing: give --session (or set {SESSION_ENV})")
+        wait(args.session, args.events)
     elif args.command == "finish":
         finish(args.session, args.summary)
     elif args.command == "start" and args.check_only:

@@ -14,7 +14,17 @@ from pathlib import Path
 import pytest
 import yaml
 
-from experiments.belay.__main__ import launch, prior_trials_hold, reproduce, score_value, tracks_page_data, write_spec
+from experiments.belay.__main__ import (
+    EventKind,
+    WaitOutcome,
+    launch,
+    prior_trials_hold,
+    reproduce,
+    score_value,
+    tracks_page_data,
+    wait_outcome,
+    write_spec,
+)
 from experiments.belay.analysis import Header, series_from_rows, write_report
 from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
@@ -48,6 +58,7 @@ from experiments.belay.submit import (
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
+NODE_CAP = 8
 SPEC = """experiment: X0001
 track: competitive-d512
 runs:
@@ -125,14 +136,43 @@ def test_launch_refused_from_a_dirty_or_unpushed_tree(repo: Path) -> None:
 def test_launch_refused_for_a_reused_run_name() -> None:
     jobs = [IrisJob("/u/belay-X0001-seed0-coord", "succeeded", "2026-11-01T00:00")]
     with pytest.raises(SystemExit, match="already ran"):
-        check_launch(parse_spec(SPEC), jobs)
+        check_launch(parse_spec(SPEC), jobs, NODE_CAP)
 
 
 def test_launch_held_at_the_node_cap() -> None:
-    jobs = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(CONFIG.node_cap - 1)]
+    jobs = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP - 1)]
     with pytest.raises(SystemExit, match="held"):
-        check_launch(parse_spec(SPEC), jobs)
-    check_launch(parse_spec(SPEC), jobs[:-1])  # two runs fit once one more node is free
+        check_launch(parse_spec(SPEC), jobs, NODE_CAP)
+    check_launch(parse_spec(SPEC), jobs[:-1], NODE_CAP)  # two runs fit once one more node is free
+
+
+def test_a_node_grant_lets_an_idea_past_the_cap_up_to_its_grant() -> None:
+    full = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP)]
+    with pytest.raises(SystemExit, match="soft cap"):
+        check_launch(parse_spec(SPEC), full, NODE_CAP)
+    check_launch(parse_spec(SPEC), full, NODE_CAP, grant=2)  # its two runs fit its grant
+    with pytest.raises(SystemExit, match="node grant 1"):
+        check_launch(parse_spec(SPEC), full, NODE_CAP, grant=1)
+
+
+def test_a_draining_session_waits_only_for_runs_due_before_its_hard_stop() -> None:
+    start = datetime.datetime(2026, 11, 2, 9, 0, tzinfo=datetime.UTC)
+    now = start + datetime.timedelta(minutes=30)
+    soon, tomorrow = now + datetime.timedelta(minutes=20), now + datetime.timedelta(hours=20)
+    assert wait_outcome(now, start, 1, [], [soon]) is WaitOutcome.WAIT
+    assert wait_outcome(now, start, 1, [], [tomorrow]) is WaitOutcome.DRAINED
+    assert wait_outcome(now, start, 1, [EventKind.APPROVED], [tomorrow]) is WaitOutcome.WORK
+
+
+def test_a_draining_session_past_its_budget_takes_only_run_results() -> None:
+    start = datetime.datetime(2026, 11, 2, 9, 0, tzinfo=datetime.UTC)
+    late = start + datetime.timedelta(hours=3, minutes=10)
+    assert wait_outcome(late, start, 2, [EventKind.APPROVED], []) is WaitOutcome.DRAINED
+    assert wait_outcome(late, start, 2, [EventKind.RUN_FINISHED], []) is WaitOutcome.WORK
+    assert wait_outcome(start, start, 10, [EventKind.APPROVED], []) is WaitOutcome.DRAINED  # ten ideas taken
+    assert wait_outcome(start + datetime.timedelta(hours=4), start, 0, [EventKind.RUN_FINISHED], []) is (
+        WaitOutcome.OUT_OF_TIME
+    )
 
 
 def test_a_shared_control_is_not_launched_again_and_takes_no_node() -> None:
@@ -145,8 +185,8 @@ def test_a_shared_control_is_not_launched_again_and_takes_no_node() -> None:
     assert run_id(spec, spec.runs["seed0"]) == "belay-X0002-seed0"
     # The owner's control is running and the cap has room for exactly one more node: the variant alone fits.
     jobs = [IrisJob("/u/belay-X0001-control-coord", "running", "")]
-    jobs += [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(CONFIG.node_cap - 2)]
-    check_launch(spec, jobs)
+    jobs += [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP - 2)]
+    check_launch(spec, jobs, NODE_CAP)
 
 
 def test_score_na_marks_an_entry_with_no_potential_score() -> None:
@@ -392,7 +432,7 @@ def test_run_names_never_repeat_an_earlier_run() -> None:
     suffix = run_suffix("X0001", used)
     assert suffix == "-c"
     spec = parse_spec(new_spec_text("X0001", Track.SPEEDRUN, "v", [("--opt-set", "muonh_decay_power=0.5")], suffix))
-    check_launch(spec, used)  # no reused name
+    check_launch(spec, used, NODE_CAP)  # no reused name
 
 
 @pytest.mark.parametrize("track", [t for t in Track if TRACKS[t].code == WEEKLY_BRANCH and TRACKS[t].launch])

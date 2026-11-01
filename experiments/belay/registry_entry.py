@@ -101,9 +101,17 @@ def create_entry(idea: Idea, name: str, category: str, track: Track, *, dry_run:
 
 
 def add_trial(
-    registry_id: str, track: Track, protocol: str, variant: str, commit: str, settings: dict[str, str], comment_url: str
+    registry_id: str,
+    track: Track,
+    protocol: str,
+    variant: str,
+    commit: str,
+    settings: dict[str, str],
+    comment_url: str,
+    node_grant: int | None = None,
 ) -> tuple[str, Path]:
-    """A new trial of the entry (``protocol`` is ``equal_steps`` or ``fixed_time``); returns its id and the path."""
+    """A new trial of the entry (``protocol`` is ``equal_steps`` or ``fixed_time``); returns its id and the path.
+    ``node_grant`` records a maintainer's node grant the trial ran under."""
     path = entry_path(registry_id)
     entry = yaml.safe_load(path.read_text())
     trials = entry.setdefault("trials", [])
@@ -120,6 +128,8 @@ def add_trial(
         "settings": settings,
         "commit": commit[:10],
     }
+    if node_grant is not None:
+        trial["node_grant"] = node_grant
     trials.append(trial)
     entry["status"] = "running"
     path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))

@@ -244,13 +244,22 @@ def refuse_reused_names(names: list[str], jobs: list[IrisJob]) -> None:
         raise SystemExit(f"refusing: {used} already ran on Iris; a rerun needs a new run key in the spec")
 
 
-def refuse_over_cap(needed: int, jobs: list[IrisJob]) -> None:
-    in_use = nodes_in_use(jobs)
-    if in_use + needed > CONFIG.node_cap:
-        raise SystemExit(
-            f"held: soft cap {CONFIG.node_cap} nodes ({in_use} in use, {needed} needed).\n"
-            "next: stop; the idea stays approved and a later session launches it"
-        )
+def refuse_over_cap(needed: int, jobs: list[IrisJob], cap: int, grant: int | None, experiment: str) -> None:
+    """Hold a launch past the node cap: the global ``cap`` over every Belay run, or for an idea with a maintainer's
+    ``grant``, the grant over that idea's own runs."""
+    if grant is not None:
+        own = nodes_in_use([j for j in jobs if f"/{run_name(experiment, '')}" in j.job_id])
+        if own + needed <= grant:
+            return
+        limit, in_use = f"node grant {grant} for {experiment}", own
+    else:
+        limit, in_use = f"soft cap {cap} nodes", nodes_in_use(jobs)
+        if in_use + needed <= cap:
+            return
+    raise SystemExit(
+        f"held: {limit} ({in_use} in use, {needed} needed).\n"
+        "next: stop; the idea stays approved and a later session launches it"
+    )
 
 
 def track_command(
@@ -282,14 +291,15 @@ def with_launched(text: str, launched: dict[str, list[str]]) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
 
 
-def check_launch(spec: ExperimentSpec, jobs: list[IrisJob]) -> None:
-    """Refuse a spec whose Track has no launch recipe, that reuses a run name, or that would pass the node cap."""
+def check_launch(spec: ExperimentSpec, jobs: list[IrisJob], cap: int, grant: int | None = None) -> None:
+    """Refuse a spec whose Track has no launch recipe or that reuses a run name; hold one that would pass the node
+    cap (``cap``, from the app) or the idea's node ``grant``."""
     baseline = TRACKS[spec.track]
     if baseline.launch is None:
         raise SystemExit(f"refusing: track {spec.track} has no launch recipe; a maintainer runs it")
     own = own_runs(list(spec.runs.values()))
     refuse_reused_names([run_name(spec.experiment, r.name) for r in own], jobs)
-    refuse_over_cap(baseline.nodes * len(own), jobs)
+    refuse_over_cap(baseline.nodes * len(own), jobs, cap, grant, spec.experiment)
 
 
 def settings_of(flags: tuple[str, ...]) -> dict[str, str]:

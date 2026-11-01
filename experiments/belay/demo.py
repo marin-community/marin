@@ -81,7 +81,7 @@ REPOSITORY = CONFIG.repository
 WANDB_PATH = CONFIG.wandb_project
 STORAGE_BUCKET = "marin-us-east-02a"
 CW_ENDPOINT = "https://cwobject.com"
-SESSION_MAX_TURNS = 150
+SESSION_MAX_TURNS = 400
 APP_SCHEMA = "belay"
 PUBLIC_FILES = (
     "boot.js",
@@ -265,7 +265,7 @@ def export_public(directory: Path) -> Path:
     web = APP_DIR / "web"
     version = BUILD.web_version()
     for page in ("index.html", "status.html", "mfu.html"):
-        BUILD.write_page(web / "static.html", directory / page, version, "")
+        BUILD.write_page(web / "static.html", directory / page, version)
     for name in PUBLIC_FILES:
         shutil.copyfile(web / name, directory / name)
     (directory / "public.json").write_text(json.dumps(call("public/state"), indent=1))
@@ -574,21 +574,26 @@ def run_session(
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
         )
-    transcript, summary, cost, turns = _read_transcript(log_path)
+    transcript, summary, usage = _read_transcript(log_path)
     state = "succeeded" if process.returncode == 0 and summary else "failed"
     if not summary:
         summary = f"claude exited with code {process.returncode} without a final message; see the transcript."
     call(
         f"agent/sessions/{session_id}/finish",
-        {"state": state, "summary": summary, "transcript": transcript, "cost_usd": cost, "turns": turns},
+        {"state": state, "summary": summary, "transcript": transcript, **usage},
         token=token,
     )
-    logger.info("session %s: %s ($%.2f, %s turns)", session_id, state, cost or 0, turns)
+    logger.info("session %s: %s (%s turns, %s output tokens)", session_id, state, usage["turns"], usage["output_tokens"])
 
 
-def _read_transcript(log_path: Path) -> tuple[str, str, float | None, int | None]:
-    """A readable transcript from Claude Code's stream-json log, plus the final message, cost and turn count."""
-    lines, summary, cost, turns = [], "", None, None
+def _read_transcript(log_path: Path) -> tuple[str, str, dict[str, int | None]]:
+    """A readable transcript from Claude Code's stream-json log, plus the final message and its usage: turns and
+    input (not read from cache), output and cache-read tokens. Sessions run on a subscription, so no dollar cost."""
+    lines, summary, usage = (
+        [],
+        "",
+        {"turns": None, "input_tokens": None, "output_tokens": None, "cache_read_tokens": None},
+    )
     for raw in log_path.read_text().splitlines():
         try:
             message = json.loads(raw)
@@ -610,9 +615,14 @@ def _read_transcript(log_path: Path) -> tuple[str, str, float | None, int | None
                     lines.append(f"[result] {text[:3000]}")
         elif kind == "result":
             summary = message.get("result") or ""
-            cost = message.get("total_cost_usd")
-            turns = message.get("num_turns")
-    return "\n".join(lines), summary.strip(), cost, turns
+            counts = message.get("usage") or {}
+            usage = {
+                "turns": message.get("num_turns"),
+                "input_tokens": counts.get("input_tokens", 0) + counts.get("cache_creation_input_tokens", 0),
+                "output_tokens": counts.get("output_tokens"),
+                "cache_read_tokens": counts.get("cache_read_input_tokens"),
+            }
+    return "\n".join(lines), summary.strip(), usage
 
 
 class Dispatcher:
