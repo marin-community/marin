@@ -218,6 +218,50 @@ class TestAcpAgentDistributionSelection:
 
         assert json.loads(output.read_text()) == [["--stdio", "--extra"], "test"]
 
+    async def test_pi_acp_setup_rejects_wrong_image_adapter_version(self, temp_dir):
+        image_bin = temp_dir / "bin"
+        image_bin.mkdir()
+        node = shutil.which("node")
+        assert node is not None
+        (image_bin / "node").symlink_to(node)
+        pi = image_bin / "pi"
+        pi.write_text('#!/bin/sh\nprintf "0.80.5\\n"\n')
+        pi.chmod(0o755)
+        adapter_package = temp_dir / "node_modules/pi-acp"
+        (adapter_package / "dist").mkdir(parents=True)
+        (adapter_package / "package.json").write_text(
+            json.dumps({"name": "pi-acp", "version": "0.0.32"})
+        )
+        adapter = adapter_package / "dist/index.js"
+        adapter.write_text("#!/usr/bin/env node\n")
+        adapter.chmod(0o755)
+        (image_bin / "pi-acp").symlink_to(adapter)
+        installed_agent = temp_dir / "installed-agent"
+
+        class LocalEnvironment:
+            async def exec(self, command, **kwargs):
+                completed = subprocess.run(
+                    ["/bin/bash", "-c", command.replace("/installed-agent", str(installed_agent))],
+                    capture_output=True,
+                    text=True,
+                    env={"HOME": str(temp_dir), "PATH": f"{image_bin}:/usr/bin:/bin"},
+                )
+                return SimpleNamespace(
+                    return_code=completed.returncode,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                )
+
+            async def upload_file(self, source_path, target_path):
+                shutil.copyfile(source_path, installed_agent / Path(target_path).name)
+
+        agent = AcpAgent(logs_dir=temp_dir, registry_entry=PI_ACP_REGISTRY_ENTRY)
+
+        with pytest.raises(RuntimeError, match="Image provides pi-acp 0.0.32"):
+            await agent.setup(LocalEnvironment())
+
+        assert not (installed_agent / "acp-launch.sh").exists()
+
     def test_rejects_non_https_binary_archive(self):
         with pytest.raises(ValueError, match="Binary archive URL must use HTTPS"):
             AcpBinaryTarget(

@@ -92,7 +92,7 @@ class Tau3HarborACPRelay(BaseAgent):
         package_dir = Path(__file__).parent
         for filename in ("__init__.py", "acpx.py", "relay.py", "runner.py"):
             await environment.upload_file(
-                package_dir / filename, REMOTE_PACKAGE_ROOT / filename
+                package_dir / filename, str(REMOTE_PACKAGE_ROOT / filename)
             )
 
     async def run(
@@ -105,7 +105,7 @@ class Tau3HarborACPRelay(BaseAgent):
         local_policy = self.logs_dir / "tau3-harbor-acp-policy.md"
         local_policy.parent.mkdir(parents=True, exist_ok=True)
         local_policy.write_text(policy, encoding="utf-8")
-        await environment.upload_file(local_policy, REMOTE_POLICY_PATH)
+        await environment.upload_file(local_policy, str(REMOTE_POLICY_PATH))
 
         runtime = self._resolve_runtime_server()
         summary_path = self.environment_logs_dir / SUMMARY_FILENAME

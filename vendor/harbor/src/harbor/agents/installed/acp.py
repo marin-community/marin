@@ -694,13 +694,36 @@ rm -f "$tmp_archive"
 
         pi = self._pi_companion()
         if pi is not None:
+            registry_entry = self._require_registry_entry()
+            expected_package = f"pi-acp@{registry_entry.version}"
+            if (
+                kind != "npx"
+                or not isinstance(target, AcpPackageDistribution)
+                or target.package != expected_package
+            ):
+                raise ValueError(
+                    f"Image-provided Pi ACP requires the npx distribution {expected_package}"
+                )
             await pi.install(environment)
+            version_script = (
+                "const fs = require('node:fs'), path = require('node:path'); "
+                "const binary = fs.realpathSync(process.argv[1]); "
+                "const packagePath = path.join(path.dirname(binary), '..', 'package.json'); "
+                "console.log(JSON.parse(fs.readFileSync(packagePath, 'utf8')).version);"
+            )
+            result = await self.exec_as_agent(
+                environment,
+                command=f'node -e {shlex.quote(version_script)} "$(command -v pi-acp)"',
+            )
+            installed_version = result.stdout.strip()
+            if installed_version != registry_entry.version:
+                raise RuntimeError(
+                    f"Image provides pi-acp {installed_version}, "
+                    f"but the agent requires {registry_entry.version}"
+                )
             await self.exec_as_agent(
                 environment,
-                command=(
-                    "command -v pi-acp && "
-                    f'{self._RUNNER_VENV_PATH}/bin/python -c "import acp"'
-                ),
+                command=f'{self._RUNNER_VENV_PATH}/bin/python -c "import acp"',
             )
         else:
             await self.exec_as_root(

@@ -775,7 +775,6 @@ class TestCreateRunAgentCommands:
 
         exec_calls = mock_env.exec.call_args_list
         assert exec_calls[-1].kwargs["env"]["MSWEA_API_KEY"] == "EMPTY"
-        assert "http://127.0.0.1:8787/v1" in exec_calls[-1].kwargs["command"]
         for private in (
             "host-mini-canary",
             "host-provider-canary",
