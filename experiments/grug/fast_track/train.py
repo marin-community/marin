@@ -653,6 +653,17 @@ def _apply_mod_thresholds(model: Transformer, previous: Transformer, score_quant
     return eqx.tree_at(lambda t: [stack.stacked.mlp.mod_threshold for stack in t.layer_stacks()], model, per_stack)
 
 
+def mtp_weight_at(cfg: GrugModelConfig, step: jax.Array, decay_steps: int | None) -> jax.Array | None:
+    """The MTP loss weight at ``step``: ``cfg.mtp_weight``, decaying linearly to 0 at ``decay_steps`` and off after
+    (None: constant). None without the MTP head."""
+    if not cfg.mtp_weight:
+        return None
+    weight = jnp.asarray(cfg.mtp_weight, jnp.float32)
+    if decay_steps is None:
+        return weight
+    return weight * jnp.clip(1.0 - step.astype(jnp.float32) / max(decay_steps, 1), 0.0, 1.0)
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -892,8 +903,10 @@ def _loss_and_grads(
     extra_mlp_active: jax.Array | bool = True,
     lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
+    mtp_weight: jax.Array | None = None,
 ):
-    """With ``lm_head_grad_probe_site`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come
+    """``mtp_weight`` is this step's MTP loss weight (``mtp_weight_at``).
+    With ``lm_head_grad_probe_site`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come
     back as the gradients of zeros probes (``model.lm_head_grad_probe``) differentiated next to the params."""
 
     def loss_fn(model, probes):
@@ -911,6 +924,7 @@ def _loss_and_grads(
             extra_mlp_active=extra_mlp_active,
             head_grad_probe=probes.get(GradProbeSite.POST_NORM),
             pre_norm_grad_probe=probes.get(GradProbeSite.PRE_NORM),
+            mtp_weight=mtp_weight,
         )
         if skip is not None:
             metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
@@ -939,6 +953,7 @@ def _accumulated_loss_and_grads(
     z_loss,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_active: jax.Array | bool = True,
+    mtp_weight: jax.Array | None = None,
 ):
     """``_loss_and_grads`` over ``num_microbatches`` equal slices of ``batch``, one at a time: the loss, gradients
     and float metrics are averaged, integer metrics (counts) summed. Every microbatch runs in one ``lax.scan``
@@ -947,7 +962,7 @@ def _accumulated_loss_and_grads(
     micro = reshape_batch_into_microbatches(batch, num_microbatches)
 
     def one(microbatch):
-        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip, extra_mlp_active)
+        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip, extra_mlp_active, mtp_weight=mtp_weight)
 
     shapes = jax.eval_shape(one, jax.tree.map(lambda x: x[0], micro))
     zeros = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype, out_sharding=getattr(s.sharding, "spec", None)), shapes)
@@ -972,8 +987,10 @@ def _make_train_step(
     lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
     token_embed_stats: bool = False,
+    mtp_decay_steps: int | None = None,
 ):
     """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
+    ``mtp_decay_steps``: the step the MTP loss weight reaches 0 at (``mtp_weight_at``).
     ``lm_head_grad_probe_site`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
     ``token_embed_stats`` the ``_token_embed_stats``.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
@@ -996,14 +1013,23 @@ def _make_train_step(
         with jax.named_scope("qb_apply"):
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
         extra_active = state.step >= extra_mlp_start_step
+        mtp_weight = mtp_weight_at(qb_params.config, state.step, mtp_decay_steps)
 
         if grad_accum_microbatches > 1:
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active
+                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active, mtp_weight
             )
         else:
             (loss, summarized_metrics), grads = _loss_and_grads(
-                qb_params, batch, mp, z_loss, layer_skip, extra_active, lm_head_grad_probe_site, lm_head_grad_clip
+                qb_params,
+                batch,
+                mp,
+                z_loss,
+                layer_skip,
+                extra_active,
+                lm_head_grad_probe_site,
+                lm_head_grad_clip,
+                mtp_weight=mtp_weight,
             )
         metrics = {"train/loss": loss, **summarized_metrics}
         with jax.named_scope("opt_update"):
@@ -1618,6 +1644,9 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         lm_head_grad_probe_site=config.model.lm_head_grad_probe_site if config.model.lm_head_grad_probe else None,
         lm_head_grad_clip=config.model.lm_head_grad_clip,
         token_embed_stats=config.model.token_embed_stats,
+        mtp_decay_steps=(
+            None if config.model.mtp_decay_frac is None else int(trainer.num_train_steps * config.model.mtp_decay_frac)
+        ),
     )
 
 

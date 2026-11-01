@@ -487,6 +487,13 @@ class GrugModelConfig:
     threshold is an EMA (``MOD_THRESHOLD_EMA``) of the earlier steps' ``1 - mod_routed_frac`` score quantile,
     set by the trainer, the same rule in training and eval. The routed output is scaled by
     ``2 sigmoid(score - threshold)``, which trains the score. Expert capacity scales by ``mod_routed_frac``."""
+    mtp_weight: float = 0.0
+    """Weight of a depth-1 multi-token-prediction training loss (0: off): predict token t+2 from
+    ``rms_norm(h_t + W_mtp rms_norm(embed(token_{t+1})))`` through the shared lm_head, where ``h_t`` is the
+    lm_head input. Training only; evals score the next-token loss alone."""
+    mtp_decay_frac: float | None = None
+    """With ``mtp_weight``: the weight decays linearly to 0 at this fraction of training and stays off after
+    (None: constant)."""
 
     @property
     def mod_routed_k(self) -> int:
@@ -494,6 +501,10 @@ class GrugModelConfig:
         return round(self.num_experts_per_token / self.mod_routed_frac)
 
     def __post_init__(self) -> None:
+        if self.mtp_weight and self.cplm_plus:
+            raise ValueError("mtp_weight scores the plain vocabulary softmax; it does not combine with cplm_plus")
+        if self.mtp_decay_frac is not None and (not self.mtp_weight or not 0.0 < self.mtp_decay_frac <= 1.0):
+            raise ValueError("mtp_decay_frac needs mtp_weight and 0 < mtp_decay_frac <= 1")
         if self.cplm_plus and self.logit_soft_cap is not None:
             raise ValueError("cplm_plus mixes uncapped vocabulary logits; set logit_soft_cap=None")
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
@@ -1942,6 +1953,7 @@ class Transformer(eqx.Module):
     copy_head: CopyHead | None  # cfg.cplm_plus
     bigram_embed: jax.Array | None  # cfg.attn_res_bigram_rows: the hashed bigram table
     bigram_norm: RMSNorm | None
+    w_mtp: Float[Array, "D D"] | None  # cfg.mtp_weight: the MTP head's next-token-embedding projection
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -2004,6 +2016,14 @@ class Transformer(eqx.Module):
                 else None
             ),
             bigram_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.attn_res_bigram_rows else None,
+            w_mtp=(
+                reshard(
+                    _init_weight(random.fold_in(key, 3), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
+                    P(_FSDP_AXES, None),
+                )
+                if cfg.mtp_weight
+                else None
+            ),
             config=cfg,
         )
 
@@ -2327,8 +2347,10 @@ class Transformer(eqx.Module):
         extra_mlp_active: jax.Array | bool = True,
         head_grad_probe: Float[Array, "B S"] | None = None,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
+        mtp_weight: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        """``train_terms`` adds the training-only objectives (the entropy head's loss); evals leave it off so they
+        """``train_terms`` adds the training-only objectives (the entropy head's and the MTP head's losses, the
+        latter at ``mtp_weight``, the trainer's scheduled weight, else the config's); evals leave it off so they
         score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the lm_head cross-entropy's
         input through ``lm_head_grad_probe``: its gradient is each token's input-gradient norm, and
         ``lm_head_grad_clip`` clips that gradient per token. ``pre_norm_grad_probe`` does the same at the stream
@@ -2373,6 +2395,12 @@ class Transformer(eqx.Module):
             )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
+        mtp_metrics: dict[str, jax.Array] = {}
+        if self.w_mtp is not None and train_terms:
+            weight = jnp.asarray(self.config.mtp_weight if mtp_weight is None else mtp_weight, jnp.float32)
+            mtp_loss = self._mtp_loss(hidden, token_ids, loss_weight, reduction, logsumexp_weight, loss_dtype)
+            loss = loss + (weight * mtp_loss).astype(loss_dtype)
+            mtp_metrics = {"train/aux/mtp_loss": jax.lax.stop_gradient(mtp_loss), "train/aux/mtp_weight": weight}
         entropy_metrics: dict[str, jax.Array] = {}
         if entropy_pred is not None and train_terms:
             target = _vocab_entropy(hidden, self.output_proj, self.config.logit_soft_cap)
@@ -2405,10 +2433,12 @@ class Transformer(eqx.Module):
                 **final_gate_metrics,
                 **entropy_metrics,
                 **copy_metrics,
+                **mtp_metrics,
             }
         summarized_metrics = summarize_router_metrics(router_metrics)
         summarized_metrics.update(final_gate_metrics)
         summarized_metrics.update(entropy_metrics)
+        summarized_metrics.update(mtp_metrics)
         summarized_metrics.update(copy_metrics)
         summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
         summarized_metrics.update(probe_metrics)
@@ -2424,6 +2454,38 @@ class Transformer(eqx.Module):
         summarized_metrics["moe/sender_dropped_assignments"] = router_metrics["sender_capacity_overflow_per_layer"]
         summarized_metrics["moe/receiver_dropped_assignments"] = router_metrics["receiver_capacity_overflow_per_layer"]
         return loss, summarized_metrics
+
+    def _mtp_loss(
+        self,
+        hidden: Float[Array, "B S D"],
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        reduction: str,
+        logsumexp_weight: float | None,
+        loss_dtype: jnp.dtype,
+    ) -> jax.Array:
+        """The depth-1 MTP head's t+2 cross-entropy (``mtp_weight``) from the lm_head input ``hidden``."""
+        assert self.w_mtp is not None
+        seq_len = token_ids.shape[1]
+        next_ids = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1)))
+        next_embed = rms_norm(_embedding_gather(self.token_embed, next_ids).astype(hidden.dtype))
+        mtp_hidden = hidden + jnp.einsum("bsd,de->bse", next_embed, self.w_mtp.astype(hidden.dtype))
+        mtp_hidden = reshard(rms_norm(mtp_hidden), _batch_spec())
+        labels2 = jnp.pad(token_ids[:, 2:], ((0, 0), (0, 2))).astype(jnp.int32)
+        # The last two positions have no t+2 target.
+        weight2 = loss_weight.astype(loss_dtype) * (jnp.arange(seq_len) < seq_len - 2)[None, :].astype(loss_dtype)
+        return fused_linear_softmax_cross_entropy_loss(
+            mtp_hidden,
+            self.output_proj,
+            labels2,
+            weight=weight2,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            dtype=loss_dtype,
+            implementation="xla_fast_bwd",
+            block_sizes=_CE_BLOCK_SIZES,
+            logit_soft_cap=self.config.logit_soft_cap,
+        )
 
     def _copy_mixture_loss(
         self,
