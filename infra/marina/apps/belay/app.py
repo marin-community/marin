@@ -59,7 +59,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "session_identities": ["loom-vm@hai-gcp-models.iam.gserviceaccount.com"],
     # When set, approvers must also hold Marina's admin role.
     "admin_role_required": False,
-    # SHA-256 of the watcher's and sessions' shared token; unset means every agent call is refused.
+    # SHA-256 of an optional shared agent token; unset means no token is accepted (identities still are).
     "service_token_sha256": None,
 }
 # Settings that never leave the server, even to approvers.
@@ -486,6 +486,62 @@ def sync_intake_comments(conn: Connection, comments: list[IntakeComment]) -> int
     return added
 
 
+# Ideas a maintainer may decline: not yet planned or running, and not already closed.
+DECLINABLE_STATES = (IdeaState.PENDING, IdeaState.UPSTREAM, IdeaState.APPROVED)
+
+
+def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[str, str]:
+    """Close an idea without running it; refuses (writing nothing) an unknown idea or one already planned, running
+    or closed."""
+    rows = _rows(conn, "SELECT state FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
+    if not rows:
+        raise HTTPException(404, f"no idea {idea_id}")
+    if rows[0]["state"] not in DECLINABLE_STATES:
+        raise HTTPException(409, f"idea {idea_id} is {rows[0]['state']}; only a waiting idea can be declined")
+    conn.execute(
+        text("UPDATE ideas SET state = 'declined', note = :n, updated_at = now() WHERE id = :id"),
+        {"n": f"Declined by {login}: {note or 'no reason given'}", "id": idea_id},
+    )
+    _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} declined idea #{idea_id}"))
+    return {"state": IdeaState.DECLINED.value}
+
+
+def finish_session(conn: Connection, session_id: str, report: SessionFinish) -> dict[str, str]:
+    """Record a session's report and, unless it succeeded, offer its events once more. A session that is no longer
+    running (finished, or expired as lost) is left as it is, so a retried report changes nothing."""
+    rows = _rows(conn, "SELECT state FROM sessions WHERE id = :id FOR UPDATE", id=session_id)
+    if not rows:
+        raise HTTPException(404, f"no session {session_id}")
+    if rows[0]["state"] != SessionState.RUNNING:
+        return {"state": rows[0]["state"]}
+    conn.execute(
+        text(
+            "UPDATE sessions SET state = :state, ended_at = now(), summary = :summary, "
+            "transcript = :transcript, cost_usd = :cost, turns = :turns WHERE id = :id"
+        ),
+        {
+            "state": report.state.value,
+            "summary": report.summary,
+            "transcript": report.transcript[-TRANSCRIPT_LIMIT:],
+            "cost": report.cost_usd,
+            "turns": report.turns,
+            "id": session_id,
+        },
+    )
+    if report.state is not SessionState.SUCCEEDED:
+        _requeue(conn, session_id)
+    _activity(
+        conn,
+        ActivityPost(
+            kind="session",
+            session_id=session_id,
+            title=f"Session {session_id} {report.state.value}",
+            body=report.summary,
+        ),
+    )
+    return {"state": report.state.value}
+
+
 def _activity(conn: Connection, post: ActivityPost) -> int:
     return conn.execute(
         text(
@@ -741,7 +797,7 @@ def create_api(services: Services) -> RegisteredApi:
             sessions = _rows(
                 conn,
                 "SELECT id, started_at, ended_at, state, summary, cost_usd, turns, "
-                f"length(transcript) AS transcript_bytes FROM sessions ORDER BY started_at DESC LIMIT {RECENT_SESSIONS}",
+                f"length(transcript) AS transcript_chars FROM sessions ORDER BY started_at DESC LIMIT {RECENT_SESSIONS}",
             )
             events = _rows(conn, "SELECT id, at, kind, ref, summary, session_id FROM events ORDER BY id DESC LIMIT 200")
             watcher = _rows(conn, "SELECT * FROM watcher WHERE id = 1")[0]
@@ -835,15 +891,9 @@ def create_api(services: Services) -> RegisteredApi:
 
     @admin.post("/ideas/{idea_id}/decline")
     def decline(idea_id: int, request: Requeue, caller: str = Depends(approver)) -> dict[str, str]:
-        """A maintainer closes an escalated idea without running it."""
+        """A maintainer closes an idea without running it."""
         with engine.begin() as conn:
-            login = approver_login(_settings(conn), caller)
-            conn.execute(
-                text("UPDATE ideas SET state = 'declined', note = :n, updated_at = now() WHERE id = :id"),
-                {"n": f"Declined by {login}: {request.note or 'no reason given'}", "id": idea_id},
-            )
-            _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} declined idea #{idea_id}"))
-        return {"state": IdeaState.DECLINED.value}
+            return decline_idea(conn, idea_id, approver_login(_settings(conn), caller), request.note)
 
     @admin.post("/settings")
     def update_settings(update: SettingsUpdate, caller: str = Depends(approver)) -> dict[str, Any]:
@@ -960,34 +1010,7 @@ def create_api(services: Services) -> RegisteredApi:
     @agent.post("/sessions/{session_id}/finish")
     def finish(session_id: str, report: SessionFinish) -> dict[str, str]:
         with engine.begin() as conn:
-            updated = conn.execute(
-                text(
-                    "UPDATE sessions SET state = :state, ended_at = now(), summary = :summary, "
-                    "transcript = :transcript, cost_usd = :cost, turns = :turns WHERE id = :id"
-                ),
-                {
-                    "state": report.state.value,
-                    "summary": report.summary,
-                    "transcript": report.transcript[-TRANSCRIPT_LIMIT:],
-                    "cost": report.cost_usd,
-                    "turns": report.turns,
-                    "id": session_id,
-                },
-            ).rowcount
-            if not updated:
-                raise HTTPException(404, f"no session {session_id}")
-            if report.state is not SessionState.SUCCEEDED:
-                _requeue(conn, session_id)
-            _activity(
-                conn,
-                ActivityPost(
-                    kind="session",
-                    session_id=session_id,
-                    title=f"Session {session_id} {report.state.value}",
-                    body=report.summary,
-                ),
-            )
-        return {"state": report.state.value}
+            return finish_session(conn, session_id, report)
 
     @agent.post("/ideas/{idea_id}/report")
     def report(idea_id: int, update: IdeaReport) -> dict[str, str]:

@@ -3,6 +3,7 @@
 
 const API = `${BELAY_BASE}api/admin`
 const openBodies = new Set()
+let state = null // the admin state last read from the API
 let busy = false
 let settingsLoaded = false
 
