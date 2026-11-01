@@ -3,19 +3,7 @@
 // data the static export publishes). Loaded after common.js.
 
 let registry = null // the registry's results JSON (ideas with trials, events, potential)
-let trackTable = [] // tracks.json's tracks, generated from config.TRACKS
-let recipeTag = '' // the live recipe's checkpoint tag (config.recipe_tag), from tracks.json
 const checklistView = { sort: 'potential', query: '' }
-const GATE = {
-  win: { icon: '✓', cls: 'won' },
-  noise: { icon: '~', cls: 'noise' },
-  loss: { icon: '✗', cls: 'lost' },
-  running: { icon: '◷', cls: 'run' },
-  none: { icon: '–', cls: 'tested' },
-  na: { icon: '·', cls: 'tested' },
-}
-const SIGN = (v, digits = 4) => `${v > 0 ? '+' : v < 0 ? '\u2212' : '±'}${Math.abs(v).toFixed(digits)}`
-const OUTSIDE = /outside the verdict|not part of the verdict/
 
 const expandedIdeas = new Set()
 const KIND_CLASS = { better: 'won', worse: 'lost', neutral: 'noise' }
@@ -147,43 +135,6 @@ function renderRecent() {
   )
 }
 
-function trackInfo(id) {
-  return trackTable.find((t) => t.track === id) ?? {}
-}
-
-function verdictOf(d, noise) {
-  if (d === undefined || d === null) return 'none'
-  return d <= -noise ? 'win' : d >= noise ? 'loss' : 'noise'
-}
-
-// The registry build shows macro loss as placeholder BPB; gates judge the recorded macro loss (``loss_delta``).
-function counted(trials) {
-  return trials
-    .filter((t) => !OUTSIDE.test(t.note ?? '') && (t.delta ?? []).length)
-    .map((t) => ({ ...t, delta: t.loss_delta ?? t.delta }))
-}
-
-// Gate 2, the 8-minute speedrun: the speedrun track's stages, or a legacy d512 trial from before Tracks existed.
-function speedrunGate(idea, live) {
-  const sr = trackInfo('speedrun')
-  const ours = counted(idea.trials.filter((t) => t.rung === 'speedrun'))
-  const legacy = counted(idea.trials.filter((t) => t.rung === 'd512'))
-  const data = ours.filter((t) => t.protocol === 'equal_steps').at(-1)
-  const time = ours.filter((t) => t.protocol === 'fixed_time').at(-1)
-  if (live) return { kind: 'running', text: 'running', title: '' }
-  if (idea.track && idea.track !== 'speedrun' && !ours.length) return { kind: 'na', text: `n/a (track ${idea.track})`, title: '' }
-  const final = time ?? data ?? legacy.at(-1)
-  if (!final) return { kind: 'none', text: 'not run', title: '' }
-  const d = final.delta[0]
-  const kind = verdictOf(d, sr.noise ?? 0.006)
-  const where = time ? 'equal time' : data ? 'equal data' : `legacy ${final.protocol === 'fixed_time' ? 'fixed time' : 'equal steps'}`
-  const steps = final.steps ? ` · ${final.steps.toLocaleString()}${sr.baseline_steps && (time || data) ? ` vs ${sr.baseline_steps.toLocaleString()}` : ''} steps` : ''
-  const stages = [data, time].filter(Boolean).map(
-    (t) => `${t.protocol === 'fixed_time' ? 'Equal time' : 'Equal data'}: Δ ${SIGN(t.delta[0])}${t.steps ? ` at ${t.steps.toLocaleString()} steps` : ''}${t.step_time_change ? `, step time ${t.step_time_change}` : ''}`,
-  )
-  return { kind, text: `${kind} at ${where}, Δ ${SIGN(d)}${steps}`, title: stages.join('\n') || `${final.variant} (${final.rung}, ${final.date})` }
-}
-
 // Gate 3, hero-scale MFU: the hero-mfu track's relative step-time Δ, else the speedrun step-time cost as a hint.
 function heroGate(idea) {
   const hero = counted(idea.trials.filter((t) => t.rung === 'hero-mfu')).at(-1)
@@ -206,26 +157,12 @@ function scalingGate(idea) {
   return { kind, text: `${parts.join(' · ')} · projection pending`, title: parts.join('\n') }
 }
 
-// The idea's standing in the live recipe: its latest adopted/removed event for the recipe's checkpoint tag.
-function recipeEvent(idea) {
-  return (idea.events ?? []).filter((e) => e.checkpoint === recipeTag && ['adopted', 'removed'].includes(e.type)).at(-1)
-}
-
-function inLiveRecipe(idea) {
-  return recipeEvent(idea)?.type === 'adopted'
-}
-
 function recipeCell(idea) {
   const event = recipeEvent(idea)
   const day = event ? new Date(`${event.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
   if (event?.type === 'adopted') return el('span', { class: 'gate-chip won', title: event.note ?? '' }, el('b', {}, '✓'), ` ${recipeTag}`)
   if (event?.type === 'removed') return el('span', { class: 'gate-chip noise', title: event.note ?? '' }, el('b', {}, '↺'), ` removed at ${day}`)
   return el('span', { class: 'gate-chip tested' }, el('b', {}, '–'))
-}
-
-function gateChip(g) {
-  const look = GATE[g.kind] ?? GATE.none
-  return el('span', { class: `gate-chip ${look.cls}`, title: g.title || g.text }, el('b', {}, look.icon), ` ${g.text}`)
 }
 
 function approvalDate(idea, pageIdea) {
@@ -346,11 +283,10 @@ function render() {
 
 async function refresh() {
   try {
-    const tracksUrl = STATIC ? 'tracks.json' : `${BELAY_BASE}tracks.json`
     ;[state, registry, trackTable] = await Promise.all([
       loadJson('state'),
       loadJson('results'),
-      fetch(tracksUrl).then((r) => r.json()),
+      fetch(asset('tracks.json')).then((r) => r.json()),
     ])
     recipeTag = trackTable.recipe_tag
     trackTable = trackTable.tracks

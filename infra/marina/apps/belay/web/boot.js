@@ -4,5 +4,5 @@ const page = pageName()
 document.getElementById('brand').href = PAGES.front
 renderNav(page)
 const script = document.createElement('script')
-script.src = `${BELAY_BASE}${SCRIPTS[page]}`
+script.src = asset(SCRIPTS[page])
 document.body.append(script)

@@ -32,6 +32,7 @@ import argparse
 import datetime
 import getpass
 import hashlib
+import importlib.util
 import json
 import logging
 import os
@@ -59,6 +60,10 @@ logger = logging.getLogger("belay.demo")
 
 REPO = Path(__file__).resolve().parents[2]
 APP_DIR = REPO / "infra/marina/apps/belay"
+# The app's build script (not a package): its asset versioning also stamps the static export.
+_build_spec = importlib.util.spec_from_file_location("belay_build", APP_DIR / "build.py")
+BUILD = importlib.util.module_from_spec(_build_spec)
+_build_spec.loader.exec_module(BUILD)
 APP_ID = "10534466-6e92-4305-a354-217d0e4f5038"
 HOME = Path.home()
 DEFAULT_STATE_DIR = HOME / ".belay_demo"
@@ -195,9 +200,21 @@ def start_marina(stack: Stack) -> None:
 
 
 def release_app(stack: Stack) -> int:
+    """Release the app from committed source only, so a release never ships a half-edited page."""
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--", str(APP_DIR)],
+        cwd=REPO,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if dirty:
+        raise SystemExit(f"refusing to release: uncommitted changes under {APP_DIR}:\n{dirty}")
     url = f"http://127.0.0.1:{stack.marina_port}"
     try:
-        current = json.loads(stack.marina("apps", "versions", APP_ID, "--url", url, "--json"))["current_version"]
+        current = json.loads(stack.marina("apps", "versions", APP_ID, "--url", url, "--allow-dirty", "--json"))[
+            "current_version"
+        ]
     except subprocess.CalledProcessError:
         current = 0
     out = stack.marina("release", str(APP_DIR), "--base-version", str(current), "--url", url, "--allow-dirty", "--json")
@@ -248,8 +265,9 @@ def export_public(directory: Path) -> Path:
     hosting (GitHub Pages)."""
     directory.mkdir(parents=True, exist_ok=True)
     web = APP_DIR / "web"
+    version = BUILD.web_version()
     for page in ("index.html", "status.html", "mfu.html"):
-        shutil.copyfile(web / "static.html", directory / page)
+        BUILD.write_page(web / "static.html", directory / page, version)
     for name in PUBLIC_FILES:
         shutil.copyfile(web / name, directory / name)
     (directory / "public.json").write_text(json.dumps(call("public/state"), indent=1))

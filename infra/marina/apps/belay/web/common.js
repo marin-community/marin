@@ -8,6 +8,13 @@ const WANDB = 'https://wandb.ai/marin-community/marin_moe/runs/'
 const STATIC = document.body.dataset.static === 'true'
 // The app's root (`/belay/`) for /belay/, /belay/status and /belay/admin; the directory for a static copy.
 const BELAY_BASE = location.pathname.replace(/(status|admin|mfu)(\.html)?\/?$/, '').replace(/[^/]*$/, '')
+// The release's frontend digest, stamped into the page by build.py; asset() adds it to every static file URL.
+const VERSION = document.querySelector('meta[name="belay-version"]').content
+
+function asset(name) {
+  return `${STATIC ? '' : BELAY_BASE}${name}?v=${VERSION}`
+}
+
 const PAGES = {
   front: STATIC ? `${BELAY_BASE}index.html` : BELAY_BASE,
   status: STATIC ? `${BELAY_BASE}status.html` : `${BELAY_BASE}status`,
@@ -270,4 +277,71 @@ function renderNext(next) {
   const box = document.getElementById('next')
   box.dataset.tone = next.tone
   setChildren('next', el('span', { class: 'dot', 'aria-hidden': 'true' }), el('span', {}, next.text))
+}
+
+// Idea gates and live-recipe standing, shared by the front page and the status page. A page sets trackTable and
+// recipeTag from tracks.json before using them.
+let trackTable = [] // tracks.json's tracks, generated from config.TRACKS
+let recipeTag = '' // the live recipe's checkpoint tag (config.recipe_tag), from tracks.json
+
+const GATE = {
+  win: { icon: '✓', cls: 'won' },
+  noise: { icon: '~', cls: 'noise' },
+  loss: { icon: '✗', cls: 'lost' },
+  running: { icon: '◷', cls: 'run' },
+  none: { icon: '–', cls: 'tested' },
+  na: { icon: '·', cls: 'tested' },
+}
+const SIGN = (v, digits = 4) => `${v > 0 ? '+' : v < 0 ? '\u2212' : '±'}${Math.abs(v).toFixed(digits)}`
+const OUTSIDE = /outside the verdict|not part of the verdict/
+
+function trackInfo(id) {
+  return trackTable.find((t) => t.track === id) ?? {}
+}
+
+function verdictOf(d, noise) {
+  if (d === undefined || d === null) return 'none'
+  return d <= -noise ? 'win' : d >= noise ? 'loss' : 'noise'
+}
+
+// The registry build shows macro loss as placeholder BPB; gates judge the recorded macro loss (``loss_delta``).
+function counted(trials) {
+  return trials
+    .filter((t) => !OUTSIDE.test(t.note ?? '') && (t.delta ?? []).length)
+    .map((t) => ({ ...t, delta: t.loss_delta ?? t.delta }))
+}
+
+// Gate 2, the 8-minute speedrun: the speedrun track's stages, or a legacy d512 trial from before Tracks existed.
+function speedrunGate(idea, live) {
+  const sr = trackInfo('speedrun')
+  const ours = counted(idea.trials.filter((t) => t.rung === 'speedrun'))
+  const legacy = counted(idea.trials.filter((t) => t.rung === 'd512'))
+  const data = ours.filter((t) => t.protocol === 'equal_steps').at(-1)
+  const time = ours.filter((t) => t.protocol === 'fixed_time').at(-1)
+  if (live) return { kind: 'running', text: 'running', title: '' }
+  if (idea.track && idea.track !== 'speedrun' && !ours.length) return { kind: 'na', text: `n/a (track ${idea.track})`, title: '' }
+  const final = time ?? data ?? legacy.at(-1)
+  if (!final) return { kind: 'none', text: 'not run', title: '' }
+  const d = final.delta[0]
+  const kind = verdictOf(d, sr.noise ?? 0.006)
+  const where = time ? 'equal time' : data ? 'equal data' : `legacy ${final.protocol === 'fixed_time' ? 'fixed time' : 'equal steps'}`
+  const steps = final.steps ? ` · ${final.steps.toLocaleString()}${sr.baseline_steps && (time || data) ? ` vs ${sr.baseline_steps.toLocaleString()}` : ''} steps` : ''
+  const stages = [data, time].filter(Boolean).map(
+    (t) => `${t.protocol === 'fixed_time' ? 'Equal time' : 'Equal data'}: Δ ${SIGN(t.delta[0])}${t.steps ? ` at ${t.steps.toLocaleString()} steps` : ''}${t.step_time_change ? `, step time ${t.step_time_change}` : ''}`,
+  )
+  return { kind, text: `${kind} at ${where}, Δ ${SIGN(d)}${steps}`, title: stages.join('\n') || `${final.variant} (${final.rung}, ${final.date})` }
+}
+
+// The idea's standing in the live recipe: its latest adopted/removed event for the recipe's checkpoint tag.
+function recipeEvent(idea) {
+  return (idea.events ?? []).filter((e) => e.checkpoint === recipeTag && ['adopted', 'removed'].includes(e.type)).at(-1)
+}
+
+function inLiveRecipe(idea) {
+  return recipeEvent(idea)?.type === 'adopted'
+}
+
+function gateChip(g) {
+  const look = GATE[g.kind] ?? GATE.none
+  return el('span', { class: `gate-chip ${look.cls}`, title: g.title || g.text }, el('b', {}, look.icon), ` ${g.text}`)
 }

@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Marin Belay</title>
-<link rel="stylesheet" href="fonts.css">
-<link rel="stylesheet" href="belay.css">
+<meta name="belay-version" content="__BELAY_VERSION__">
+<link rel="stylesheet" href="fonts.css?v=__BELAY_VERSION__">
+<link rel="stylesheet" href="belay.css?v=__BELAY_VERSION__">
 </head>
 <body data-static="true">
 <header class="topbar">
@@ -25,7 +26,7 @@
         <a href="#kit">Starter kit</a>
         <a href="#tracks">Tracks</a>
         <a href="#logging">Logging</a>
-        <a href="#results">Results</a>
+        <a href="#top-ideas">Top ideas</a>
       </nav>
   <div class="headline" id="progress">
     <div class="title-row">
@@ -280,38 +281,19 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
     </ul>
   </section>
 
-  <section id="results">
+  <section id="top-ideas">
     <div class="sec-head">
-      <h2>Results</h2>
-      <div class="res-summary" id="res-summary"></div>
+      <h2>Top ideas</h2>
+      <a class="top-all" id="top-all" href="status">All ideas and results &rarr; Status</a>
     </div>
-    <div class="res-tools">
-      <div class="search-row">
-        <label class="search" for="q">
-          <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6" style="color:var(--faint)"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" style="color:var(--faint)"/></svg>
-          <input id="q" type="search" placeholder="Search ideas, settings, papers, arXiv ids, run names…" autocomplete="off" aria-label="Search results">
-        </label>
-        <select id="sort" class="sel" aria-label="Sort within categories">
-          <option value="best">Biggest win first</option>
-          <option value="recent">Most recently tested</option>
-          <option value="trials">Most tested</option>
-          <option value="name">A–Z</option>
-        </select>
-        <span class="count" id="res-count"></span>
-      </div>
-      <div class="facets">
-        <div class="facet" id="f-status" role="group" aria-label="Filter by status"><span class="fl">Status</span></div>
-        <div class="facet" id="f-cat" role="group" aria-label="Filter by category"><span class="fl">Category</span></div>
-        <div class="facet" id="f-reach" role="group" aria-label="Filter by scale reached"><span class="fl">Scale</span></div>
-      </div>
-    </div>
-    <div class="groups" id="groups"></div>
+    <p class="top-note">The five highest-potential ideas not in the live recipe, scored 0&ndash;10 from their results so far.</p>
+    <ol class="top-list" id="top-list"></ol>
   </section>
 </main>
 <footer>
   <div class="wrap">
     <span>Marin Belay</span>
-    <span>Results from <code>results.json</code>, built from the <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">Marin Belay experiment registry</a> (<a href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">marin-community/marin#9451</a>); GB200 throughput and the latest-best curve above d512 are estimates.</span>
+    <span>Top ideas and test markers from <code>results.json</code>, built from the <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">Marin Belay experiment registry</a> (<a href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">marin-community/marin#9451</a>); GB200 throughput and the latest-best curve above d512 are estimates.</span>
   </div>
 </footer>
 </template>
@@ -383,7 +365,7 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
 </template>
 <div id="view-root"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script src="common.js"></script>
-<script src="boot.js"></script>
+<script src="common.js?v=__BELAY_VERSION__"></script>
+<script src="boot.js?v=__BELAY_VERSION__"></script>
 </body>
 </html>

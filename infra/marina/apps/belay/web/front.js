@@ -1,5 +1,5 @@
-// Marin Belay front page: the project's public home. Charts, timeline, starter kit, tracks and the searchable
-// results. The results table and the speedrun chart's test markers come from the registry (results.json, built with
+// Marin Belay front page: the project's public home. Charts, timeline, starter kit, tracks and the top ideas by
+// potential. The top ideas and the speedrun chart's test markers come from the registry (results.json, built with
 // `experiments.belay.registry build`); stage 4's fits, points and hero budget come from scaling.json; the accepted
 // records and tracks are measured values kept here. Loaded after common.js.
 
@@ -266,168 +266,18 @@ function startFront(RD, SC, SP, TK) {
     tc.appendChild(card);
   });
 
-  // ---------- Results (built from the #9451 batch reports) ----------
-  const RUNG_IX = { d512: 0, d768: 1, d1024: 2, d1280: 3 };
-  const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
-  const NOISE = 0.002; // BPB
-  const fmtD = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(4);
-  const cls = (v) => (Math.abs(v) < NOISE ? "neutral" : v < 0 ? "better" : "worse");
   const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const STATUS = {
-    in: ["In the recipe", "var(--teal)"], won: ["Won, not adopted", "var(--teal)"], noise: ["Within noise", "var(--slate)"],
-    lost: ["Lost", "var(--worse)"], removed: ["Removed", "var(--amber)"], tested: ["Tested, no Δ", "var(--faint)"],
-  };
-  RD.ideas.forEach((i) => {
-    const deltas = i.trials.filter((t) => t.delta && t.delta.length).map((t) => ({ t, m: mean(t.delta) }));
-    i.best = deltas.length ? deltas.reduce((a, b) => (b.m < a.m ? b : a)) : null;
-    let state = null;
-    i.events.forEach((e) => {
-      if (e.type === "adopted" && !/proposal/i.test(e.candidate || "")) state = "in";
-      if ((e.type === "removed" || e.type === "superseded") && state === "in") state = "removed";
-    });
-    if (!state) state = !i.best ? "tested" : i.best.m <= -NOISE ? "won" : i.best.m < NOISE ? "noise" : "lost";
-    i.status = state;
-    i.closed = i.events.some((e) => e.type === "closed");
-    i.strip = [null, null, null, null];
-    deltas.forEach(({ t, m }) => { const k = RUNG_IX[t.rung]; if (k === undefined) return; if (i.strip[k] === null || m < i.strip[k]) i.strip[k] = m; });
-    i.maxRung = Math.max(-1, ...i.trials.map((t) => RUNG_IX[t.rung] ?? -1));
-    i.last = i.trials.reduce((a, t) => (t.date > a ? t.date : a), "");
-    i.hay = [i.name, i.id, i.summary, i.category, ...(i.tags || []), ...(i.details || []), ...(i.knobs || []),
-      ...(i.papers || []).flatMap((p) => [p.arxiv, p.title]),
-      ...i.trials.flatMap((t) => [t.variant, t.baseline, t.note, t.tuned, ...(t.wandb || []), ...Object.entries(t.settings || {}).map(([k, v]) => `${k} ${v}`)]),
-    ].filter(Boolean).join(" ").toLowerCase();
-  });
-  const counts = (f) => RD.ideas.reduce((c, i) => { const k = f(i); c[k] = (c[k] || 0) + 1; return c; }, {});
-  const nTrials = RD.ideas.reduce((n, i) => n + i.trials.length, 0);
-  const sc = counts((i) => i.status);
-  $("res-summary").innerHTML = `<span><b>${RD.ideas.length}</b> ideas</span><span><b>${nTrials}</b> trials</span>` +
-    `<span><b>${sc.in || 0}</b> in the recipe</span><span><b>${sc.won || 0}</b> won, not adopted</span><span><b>${(sc.noise || 0) + (sc.lost || 0)}</b> within noise or lost</span>` +
-    `<span style="color:var(--faint)">from the ${esc(RD.generated_from)}</span>`;
-
-  const F = { status: null, cat: null, reach: null, q: "", sort: "best" };
-  try { Object.assign(F, JSON.parse(localStorage.getItem("belay-res") || "{}"), { q: "" }); } catch (e) {}
-  const saveF = () => { try { localStorage.setItem("belay-res", JSON.stringify({ status: F.status, cat: F.cat, reach: F.reach, sort: F.sort })); } catch (e) {} };
-  const REACH = { d512: ["d512 only", (i) => i.maxRung <= 0], scale: ["Tested at d768+", (i) => i.maxRung >= 1] };
-  const open = new Set();
-
-  function chipRow(id, items, key) {
-    const box = $(id); box.querySelectorAll(".chip").forEach((n) => n.remove());
-    items.forEach(([val, label, n, color]) => {
-      const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.setAttribute("aria-pressed", String(F[key] === val));
-      b.innerHTML = `${color ? `<span class="dot" style="background:${color}"></span>` : ""}${esc(label)}<span class="n">${n}</span>`;
-      b.addEventListener("click", () => { F[key] = F[key] === val ? null : val; saveF(); drawResults(); });
-      box.appendChild(b);
-    });
-  }
-  function matches(i, skip) {
-    if (skip !== "status" && F.status && i.status !== F.status) return false;
-    if (skip !== "cat" && F.cat && i.category !== F.cat) return false;
-    if (skip !== "reach" && F.reach && !REACH[F.reach][1](i)) return false;
-    if (F.q) { const terms = F.q.toLowerCase().split(/\s+/).filter(Boolean); if (!terms.every((w) => i.hay.includes(w))) return false; }
-    return true;
-  }
-  const sorters = {
-    best: (a, b) => (a.status === "in") !== (b.status === "in") ? (a.status === "in" ? -1 : 1) : (a.best ? a.best.m : 9) - (b.best ? b.best.m : 9),
-    recent: (a, b) => (b.last || "").localeCompare(a.last || ""),
-    trials: (a, b) => b.trials.length - a.trials.length,
-    name: (a, b) => a.name.localeCompare(b.name),
-  };
-  function stripHtml(i) {
-    return `<span class="strip" aria-label="Best result per rung">${i.strip.map((v, k) => {
-      if (v === null) return `<i title="${["d512", "d768", "d1024", "d1280"][k]}: not run"></i>`;
-      return `<i class="${cls(v)}" title="${["d512", "d768", "d1024", "d1280"][k]}: best Δ ${fmtD(v)}"></i>`;
-    }).join("")}</span>`;
-  }
-  function rowHtml(i) {
-    const [sl] = STATUS[i.status];
-    const papers = (i.papers || []).map((p) => p.arxiv ? `arXiv:${p.arxiv}` : p.title).join(" · ");
-    const sub = papers || i.summary || "";
-    const bd = i.best ? `${fmtD(i.best.m)}<small>${esc((i.best.t.variant || "").slice(0, 26))}</small>` : '<span style="color:var(--faint)">–</span>';
-    return `<button type="button" aria-expanded="${open.has(i.id)}" aria-controls="det-${i.id}">
-      <span class="nm"><b>${esc(i.name)}</b>${i.xid ? `<span class="xid">${esc(i.xid)}</span>` : ""}<span class="sm">${esc(sub)}</span></span>
-      <span class="st ${i.status}">${sl}${i.closed && i.status !== "in" ? " · closed" : ""}</span>
-      <span class="bd">${bd}</span>
-      ${stripHtml(i)}
-      <span class="nt">${i.trials.length}</span>
-      <span class="dt">${i.last ? i.last.slice(5) : "–"}</span>
-    </button><div class="detail" id="det-${i.id}" ${open.has(i.id) ? "" : "hidden"}>${open.has(i.id) ? detailHtml(i) : ""}</div>`;
-  }
-  function detailHtml(i) {
-    const papers = (i.papers || []).length ? `<div class="papers" style="margin-top:8px">${i.papers.map((p) => p.arxiv ? `<a href="https://arxiv.org/abs/${esc(p.arxiv)}" target="_blank" rel="noopener">arXiv:${esc(p.arxiv)}</a>${p.title ? ` <span style="color:var(--slate)">${esc(p.title)}</span>` : ""}` : `<span style="color:var(--slate)">${esc(p.title)}</span>`).join("<br>")}</div>` : "";
-    const spec = (i.details || []).length ? `<ul class="spec">${i.details.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : '<div style="color:var(--faint);font-size:13px">No spec recorded.</div>';
-    const knobs = (i.knobs || []).length ? `<div class="knobs">${i.knobs.map((k) => `<code>${esc(k)}</code>`).join("")}<button type="button" class="copy" data-copy="${esc(i.knobs.join(" "))}">Copy</button></div>` : "";
-    const src = i.source ? `proposed by ${esc(i.source)}${i.first_batch ? `, batch ${esc(i.first_batch)}` : ""}` : "";
-    const ev = [`<li><span class="when">batch ${esc(i.first_batch ?? "?")}</span> <span class="what">Proposed</span><span class="why">${src}</span></li>`,
-      ...i.events.map((e) => `<li class="${e.type}"><span class="when">${esc(e.date || "")} · ${e.comment_url ? `<a href="${esc(e.comment_url)}" target="_blank" rel="noopener">batch ${esc(e.batch || "")}</a>` : `batch ${esc(e.batch || "")}`}</span>
-        <span class="what"> ${esc(e.type[0].toUpperCase() + e.type.slice(1))}${e.candidate ? ` · ${esc(e.candidate)}` : ""}</span>
-        ${e.note ? `<span class="why">${esc(e.note)}</span>` : ""}${e.as_adopted ? `<span class="why">as adopted: ${esc(e.as_adopted.join("; "))}</span>` : ""}</li>`)].join("");
-    const rows = i.trials.slice().reverse().map((t) => {
-      const m = t.delta && t.delta.length ? mean(t.delta) : null;
-      const set = Object.entries(t.settings || {}).map(([k, v]) => `${esc(k)}=${esc(v)}`).join(" · ");
-      const wb = (t.wandb || []).map((w) => `<a href="https://wandb.ai/marin-community/marin_moe/runs/${encodeURIComponent(w)}" target="_blank" rel="noopener">${esc(w)}</a>`).join("<br>");
-      return `<tr>
-        <td class="d">${esc(t.date || "")}<br>${t.comment_url ? `<a href="${esc(t.comment_url)}" target="_blank" rel="noopener">b${esc(t.batch || "")}</a>` : esc(t.batch || "")}</td>
-        <td>${esc(t.variant || "")}${set ? `<span class="set" style="display:block">${set}</span>` : ""}${t.tuned ? `<span class="tuned">tuned: ${esc(t.tuned)}</span>` : ""}${t.note ? `<span class="nt2">${esc(t.note)}</span>` : ""}</td>
-        <td class="d">${esc(t.rung || "")}<br><span style="color:var(--faint)">${esc((t.protocol || "").replace("_", " "))}${t.steps ? ` · ${t.steps}` : ""}</span></td>
-        <td style="color:var(--slate)">${esc(t.baseline || "")}</td>
-        <td class="d ${m === null ? "" : cls(m)}">${t.delta && t.delta.length ? t.delta.map(fmtD).join(" / ") : "–"}${t.derived ? ' <span title="computed from reported values" style="color:var(--faint)">*</span>' : ""}</td>
-        <td class="d">${t.loss && t.loss.length ? t.loss.map((x) => x.toFixed(4)).join(" / ") : "–"}${t.step_time_change ? `<br><span style="color:var(--amber)">${esc(t.step_time_change)}</span>` : ""}</td>
-        <td class="d" style="font-size:11.5px">${wb || "–"}</td></tr>`;
-    }).join("");
-    return `<p>${esc(i.summary || "")}</p>
-      <div class="dgrid">
-        <div class="dsec"><h4>Spec${i.xid ? ` · <a class="xlink" href="https://github.com/marin-community/marin/blob/marin_belay_v1_registry/experiments/belay/registry/${esc(i.xid)}-${esc(i.id)}.yaml" target="_blank" rel="noopener">${esc(i.xid)} in the registry</a>` : ""}</h4>${spec}${knobs}${papers}</div>
-        <div class="dsec"><h4>Timeline</h4><ol class="tl">${ev}</ol></div>
-      </div>
-      <div class="dsec"><h4>Trials · newest first · Δ per seed vs the named baseline, negative is better</h4>
-        <div class="trials-wrap"><table class="trials"><thead><tr><th>Date</th><th>Variant and settings</th><th>Rung</th><th>Baseline</th><th>Δ BPB</th><th>BPB</th><th>W&amp;B</th></tr></thead><tbody>${rows || '<tr><td colspan="7" style="color:var(--faint)">No trials with numbers.</td></tr>'}</tbody></table></div>
-      </div>`;
-  }
-  function drawResults() {
-    const st = ["in", "won", "noise", "lost", "removed", "tested"];
-    chipRow("f-status", st.map((k) => [k, STATUS[k][0], RD.ideas.filter((i) => i.status === k && matches(i, "status")).length, STATUS[k][1]]).filter((x) => x[2] || F.status === x[0]), "status");
-    chipRow("f-cat", RD.categories.map((c) => [c, c, RD.ideas.filter((i) => i.category === c && matches(i, "cat")).length]).filter((x) => x[2] || F.cat === x[0]), "cat");
-    chipRow("f-reach", Object.entries(REACH).map(([k, [lab, fn]]) => [k, lab, RD.ideas.filter((i) => fn(i) && matches(i, "reach")).length]), "reach");
-    $("sort").value = F.sort;
-    const hits = RD.ideas.filter((i) => matches(i));
-    $("res-count").textContent = `${hits.length} of ${RD.ideas.length}`;
-    const box = $("groups"); box.innerHTML = "";
-    if (!hits.length) { box.innerHTML = `<div class="empty">No ideas match. Clear a filter or try another search term.</div>`; return; }
-    RD.categories.forEach((c) => {
-      const g = hits.filter((i) => i.category === c).sort(sorters[F.sort]);
-      if (!g.length) return;
-      const sec = document.createElement("div"); sec.className = "group";
-      sec.innerHTML = `<h3>${esc(c)} <span>${g.length}</span></h3><div class="list"><div class="list-head"><span>Idea</span><span>Status</span><span>Best Δ</span><span class="rh"><span>512</span><span>768</span><span>1024</span><span>1280</span></span><span>Trials</span><span>Last</span></div>${g.map((i) => `<div class="row" id="idea-${esc(i.id)}">${rowHtml(i)}</div>`).join("")}</div>`;
-      box.appendChild(sec);
-    });
-  }
-  $("groups").addEventListener("click", (ev) => {
-    const cp = ev.target.closest(".copy");
-    if (cp) { const t = cp.dataset.copy; (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => { cp.textContent = "Copied"; }).catch(() => { cp.textContent = t; }); return; }
-    const btn = ev.target.closest(".row > button"); if (!btn) return;
-    const row = btn.parentElement, id = row.id.slice(5), i = RD.ideas.find((x) => x.id === id);
-    if (open.has(id)) open.delete(id); else open.add(id);
-    row.innerHTML = rowHtml(i);
-    row.querySelector("button").focus();
-  });
-  let qt; $("q").addEventListener("input", (e) => { clearTimeout(qt); qt = setTimeout(() => { F.q = e.target.value.trim(); drawResults(); }, 120); });
-  $("sort").addEventListener("change", (e) => { F.sort = e.target.value; saveF(); drawResults(); });
-  function openFromHash() {
-    const h = location.hash.slice(1); if (!h.startsWith("idea-")) return;
-    const id = h.slice(5); if (!RD.ideas.some((i) => i.id === id)) return;
-    F.status = F.cat = F.reach = null; F.q = ""; $("q").value = ""; open.add(id); drawResults();
-    const n = document.getElementById(h); if (n) n.scrollIntoView({ block: "center" });
-  }
-  window.addEventListener("hashchange", openFromHash);
 
   const draw = () => { drawProgress(); drawScaling(); };
   let progressFrame = 0;
   new ResizeObserver(() => { cancelAnimationFrame(progressFrame); progressFrame = requestAnimationFrame(drawProgress); }).observe($("box-progress"));
-  drawResults(); draw(); openFromHash();
+  draw();
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
   mq.addEventListener && mq.addEventListener("change", draw);
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 }
+
+const TOP_IDEAS = 5
 
 function renderLatest(status) {
   const recent = status.ideas.find((i) => i.result)
@@ -443,21 +293,48 @@ function renderLatest(status) {
   document.getElementById('latest').hidden = false
 }
 
+// The highest-potential ideas not in the live recipe. Ideas scored 10 were adopted, so they are left out too.
+function renderTopIdeas(results, status) {
+  const live = new Set((status?.runs ?? []).filter((r) => !TERMINAL.has(r.state)).map((r) => r.registry_id))
+  const top = results.ideas
+    .filter((idea) => idea.potential && idea.potential.score < 10 && !inLiveRecipe(idea))
+    .sort((a, b) => b.potential.score - a.potential.score || (b.potential.date ?? '').localeCompare(a.potential.date ?? ''))
+    .slice(0, TOP_IDEAS)
+  setChildren(
+    'top-list',
+    top.map((idea) => {
+      const author = idea.intake?.author
+      return el(
+        'li',
+        { class: 'top-row' },
+        el('span', { class: 'xid mono' }, idea.xid),
+        el('span', { class: 'top-name' }, idea.name),
+        el('span', { class: 'top-author' }, author ? link(`https://github.com/${author}`, `@${author}`) : el('span', { class: 'muted' }, 'maintainer')),
+        el('span', { class: 'top-gate' }, gateChip(speedrunGate(idea, live.has(idea.xid)))),
+        el('span', { class: 'score', title: idea.potential.rationale }, `${idea.potential.score}/10`),
+      )
+    }),
+  )
+  document.getElementById('top-all').href = PAGES.status
+}
+
 async function front() {
   showView('front')
   // The section links sit in the top bar, as on the original page, before the page links.
   const sections = document.querySelector('.secnav')
   sections.className = 'nav'
   document.querySelector('.topbar .wrap').insertBefore(sections, document.getElementById('pages'))
-  const scalingUrl = STATIC ? 'scaling.json' : `${BELAY_BASE}scaling.json`
-  const [results, status, scaling, speedrun, trackTable] = await Promise.all([
+  const [results, status, scaling, speedrun, tracks] = await Promise.all([
     loadJson('results'),
     loadJson('state').catch(() => null),
-    fetch(scalingUrl).then((r) => r.json()),
-    fetch(STATIC ? 'speedrun.json' : `${BELAY_BASE}speedrun.json`).then((r) => r.json()),
-    fetch(STATIC ? 'tracks.json' : `${BELAY_BASE}tracks.json`).then((r) => r.json()),
+    fetch(asset('scaling.json')).then((r) => r.json()),
+    fetch(asset('speedrun.json')).then((r) => r.json()),
+    fetch(asset('tracks.json')).then((r) => r.json()),
   ])
-  startFront(results, scaling, speedrun, trackTable.tracks)
+  trackTable = tracks.tracks
+  recipeTag = tracks.recipe_tag
+  startFront(results, scaling, speedrun, trackTable)
+  renderTopIdeas(results, status)
   if (status) {
     state = status
     renderLatest(status)

@@ -188,7 +188,7 @@ function otherTable(other) {
 
 async function mfuPage() {
   showView('mfu')
-  const response = await fetch(STATIC ? 'mfu.json' : `${BELAY_BASE}mfu.json`, { headers: { accept: 'application/json' } })
+  const response = await fetch(asset('mfu.json'), { headers: { accept: 'application/json' } })
   const data = await response.json()
   const h = data.headline
   const latestHero = data.production.runs[data.production.runs.length - 1]
