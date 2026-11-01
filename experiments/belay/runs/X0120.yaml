@@ -1,0 +1,16 @@
+experiment: X0120
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: adam_ademamix_alpha=5.0, adam_ademamix_beta3=0.98
+    flags:
+    - --opt-set
+    - adam_ademamix_alpha=5.0
+    - --opt-set
+    - adam_ademamix_beta3=0.98
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0017-control
