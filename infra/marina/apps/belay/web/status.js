@@ -1,6 +1,6 @@
 // Marin Belay status page: the idea checklist (one row per registry idea, its gates, recipe status and potential;
 // a row expands in place to the agent's thread for it), what is running, the agent log and the activity feed, from
-// the registry results plus the public state (read-only, the same data any anonymous visitor gets). status#X####
+// the registry results plus the public state (read-only, the same data any anonymous visitor gets). #status/X####
 // opens that idea's row. Agent text is rendered by markdown(), which builds DOM text nodes only (no HTML) and links
 // only http(s) URLs. Loaded after common.js.
 
@@ -375,7 +375,7 @@ function checklistRow(r, registryUrl) {
     el(
       'span',
       { class: 'ck-idea', 'data-label': 'Idea' },
-      el('span', { class: 'xid mono' }, el('a', { href: `#${xid}` }, xid)),
+      el('span', { class: 'xid mono' }, el('a', { href: `#status/${xid}` }, xid)),
       ' ',
       link(registryUrl(r.idea), r.idea.name),
       el('span', { class: 'ck-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
@@ -457,7 +457,7 @@ function renderAgentLog() {
           el('span', { class: 'ft' }, t.title),
           when(t.updated_at),
         ),
-        open ? el('div', { class: 'log-body' }, markdown(t.body), el('a', { href: `#${t.registry_id}` }, `${t.registry_id} in the checklist`)) : null,
+        open ? el('div', { class: 'log-body' }, markdown(t.body), el('a', { href: `#status/${t.registry_id}` }, `${t.registry_id} in the checklist`)) : null,
       )
     }),
   )
@@ -494,10 +494,11 @@ function render() {
   setChildren('updated', 'updated ', when(state.now))
 }
 
-// status#X#### (from a #9514 reply, the agent log or the admin page) opens that idea's row and scrolls to it.
+// #status/X#### (from a #9514 reply, the agent log or the admin page) opens that idea's row and scrolls to it;
+// #status/agent-log scrolls to the agent log.
 let linkedRowShown = false
 function openLinkedRow() {
-  const xid = decodeURIComponent(location.hash.slice(1))
+  const xid = route().anchor ?? ''
   if (xid === 'agent-log') document.getElementById('agent-log-block')?.scrollIntoView({ block: 'start' })
   if (!XID.test(xid) || !registry) return
   openRows.add(xid)

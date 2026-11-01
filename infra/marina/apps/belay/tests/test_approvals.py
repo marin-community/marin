@@ -38,6 +38,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import Engine
 
 POSTED = datetime.datetime(2026, 10, 26, 12, 0, tzinfo=datetime.UTC)
 
@@ -160,13 +161,12 @@ def test_decline_refuses_an_unknown_or_running_idea_and_writes_nothing(conn) -> 
     assert decline_idea(conn, idea_id(conn), "ClassicLarry", "diagnostics only") == {"state": "declined"}
 
 
-def test_a_retried_failed_session_report_requeues_once(conn) -> None:
+def test_a_failed_session_report_requeues_its_events(conn) -> None:
     record_intake_comment(conn, comment())
     approve_idea(conn, idea_id(conn), "maintainer")
     conn.execute(text("INSERT INTO sessions (id, state) VALUES ('s1', 'running')"))
     conn.execute(text("UPDATE events SET session_id = 's1'"))
     failed = SessionFinish(state=SessionState.FAILED, summary="crashed")
-    assert finish_session(conn, "s1", failed) == {"state": "failed"}
     assert finish_session(conn, "s1", failed) == {"state": "failed"}
     assert conn.execute(text("SELECT count(*) FROM events WHERE session_id IS NULL")).scalar_one() == 1
 
@@ -177,7 +177,11 @@ def test_a_retried_claim_gets_its_events_back(conn) -> None:
     conn.execute(text("UPDATE settings SET value = 'true' WHERE key = 'dispatch_enabled'"))
     first = claim_events(conn, "s1")
     assert first["launch"] and len(first["events"]) == 1
-    retried = claim_events(conn, "s1")
+    with pytest.raises(HTTPException) as refused:
+        claim_events(conn, "s1")  # without the secret its claim issued
+    assert refused.value.status_code == 403
+    retried = claim_events(conn, "s1", secret=first["session_secret"])
+    assert "session_secret" not in retried
     assert retried["launch"] and [e["id"] for e in retried["events"]] == [e["id"] for e in first["events"]]
 
 
@@ -213,14 +217,14 @@ def test_a_draining_session_takes_only_the_kinds_it_asks_for(conn) -> None:
     record_intake_comment(conn, comment())
     approve_idea(conn, idea_id(conn), "maintainer")
     enable_dispatch(conn)
-    claim_events(conn, "s1")
+    secret = claim_events(conn, "s1")["session_secret"]
     conn.execute(
         text(
             "INSERT INTO events (kind, ref, summary) VALUES "
             "('run_finished', 'belay-X0001-seed0', 'finished'), ('approved', '99', 'another idea')"
         )
     )
-    held = claim_events(conn, "s1", [EventKind.RUN_FINISHED])
+    held = claim_events(conn, "s1", [EventKind.RUN_FINISHED], secret)
     assert [e["kind"] for e in held["events"]] == ["approved", "run_finished"]
     assert conn.execute(text("SELECT kind FROM events WHERE session_id IS NULL")).scalars().all() == ["approved"]
 
@@ -306,3 +310,61 @@ def test_a_finished_session_records_its_token_usage(conn) -> None:
     finish_session(conn, "s1", report)
     row = conn.execute(text("SELECT turns, input_tokens, output_tokens, cache_read_tokens FROM sessions")).one()
     assert tuple(row) == (12, 4_000, 900, 80_000)
+
+
+def api_client(database_url: str, token: str) -> tuple[TestClient, Engine]:
+    """A test app on the ``belay_api_test`` schema whose agent endpoints accept ``token``."""
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA IF EXISTS belay_api_test CASCADE; CREATE SCHEMA belay_api_test"))
+        connection.execute(text("SET search_path TO belay_api_test"))
+        migrate(connection)
+        connection.execute(
+            text("UPDATE settings SET value = CAST(:v AS JSONB) WHERE key = 'service_token_sha256'"),
+            {"v": json.dumps(hashlib.sha256(token.encode()).hexdigest())},
+        )
+        connection.execute(text("UPDATE settings SET value = 'true' WHERE key = 'dispatch_enabled'"))
+        connection.execute(
+            text(
+                "INSERT INTO ideas (id, origin, author, body, posted_at, state) "
+                "VALUES (1, 'maintainer', 'a', 'Try X.', now(), 'approved')"
+            )
+        )
+        connection.execute(text("INSERT INTO events (kind, ref, summary) VALUES ('approved', '1', 'idea #1')"))
+    return TestClient(create_api(_Services(database_url)).app), engine
+
+
+def test_only_the_claiming_session_can_write_into_it(database_url: str) -> None:
+    client, engine = api_client(database_url, "service")
+    agent = {"X-Belay-Token": "service"}
+    secret = client.post("/agent/dispatch/claim", json={"session_id": "s1"}, headers=agent).json()["session_secret"]
+    mine = {**agent, "X-Belay-Session": "s1", "X-Belay-Session-Secret": secret}
+    wrong = {**agent, "X-Belay-Session": "s1", "X-Belay-Session-Secret": "guess"}
+    finish = {"state": "succeeded", "summary": "done"}
+    note = {"note": "planned"}
+    for headers in (agent, wrong):  # missing or wrong secret
+        assert client.post("/agent/ideas/1/report", json=note, headers=headers).status_code == 403
+        assert client.post("/agent/sessions/s1/finish", json=finish, headers=headers).status_code == 403
+        assert client.post("/agent/dispatch/claim", json={"session_id": "s1"}, headers=headers).status_code == 403
+    assert client.post("/agent/threads/X0001", json={"title": "t", "body": "b"}, headers=agent).status_code == 403
+    assert client.post("/agent/ideas/1/report", json=note, headers=mine).status_code == 200
+    assert client.post("/agent/threads/X0001", json={"title": "t", "body": "b"}, headers=mine).status_code == 200
+    assert client.post("/agent/sessions/s2/finish", json=finish, headers=mine).status_code == 403
+    assert client.post("/agent/sessions/s1/finish", json=finish, headers=mine).status_code == 200
+    # A finished session's secret writes nothing more.
+    assert client.post("/agent/ideas/1/report", json=note, headers=mine).status_code == 403
+    with engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA belay_api_test CASCADE"))
+
+
+def test_a_lost_sessions_secret_is_refused(database_url: str) -> None:
+    client, engine = api_client(database_url, "service")
+    agent = {"X-Belay-Token": "service"}
+    secret = client.post("/agent/dispatch/claim", json={"session_id": "s1"}, headers=agent).json()["session_secret"]
+    with engine.begin() as connection:  # past the session timeout: the next check expires it as lost
+        connection.execute(text("UPDATE belay_api_test.sessions SET started_at = now() - interval '2 days'"))
+    mine = {**agent, "X-Belay-Session": "s1", "X-Belay-Session-Secret": secret}
+    refused = client.post("/agent/activity", json={"kind": "note", "title": "late"}, headers=mine)
+    assert refused.status_code == 403 and "lost" in refused.json()["detail"]
+    with engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA belay_api_test CASCADE"))

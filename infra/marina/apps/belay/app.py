@@ -18,6 +18,9 @@ The kernel serves three groups of routes under ``/belay/api``:
 - ``/agent/*``: the watcher's and sessions' event queue, session reports and syncs. The caller must be a Marina
   identity listed in ``session_identities`` (Loom's session service account) or an approver, or send the service
   token in the ``X-Belay-Token`` header, checked against ``service_token_sha256`` (unset: no token is accepted).
+  A session's own writes (its reports, threads, activity, expected finishes, its finish and a drain claim) also need
+  the session id and secret that its ``claim`` issued, in ``X-Belay-Session`` and ``X-Belay-Session-Secret``, while
+  the session is running: another caller with the same identity can only claim, never write into that session.
 """
 
 import datetime
@@ -25,6 +28,7 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 from enum import StrEnum
 from typing import Any
 
@@ -66,6 +70,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 SECRET_SETTINGS = frozenset({"service_token_sha256"})
 ANONYMOUS = "anonymous"
 TOKEN_HEADER = "X-Belay-Token"
+SESSION_HEADER = "X-Belay-Session"
+SESSION_SECRET_HEADER = "X-Belay-Session-Secret"
 PUBLIC_EXCERPT = 600
 PUBLIC_ACTIVITY = 30
 TERMINAL_RUN_STATES = frozenset({"succeeded", "failed", "killed", "worker_failed", "unschedulable"})
@@ -104,7 +110,9 @@ SCHEMA = (
     """CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), ended_at TIMESTAMPTZ, state TEXT NOT NULL,
         summary TEXT, transcript TEXT, turns INTEGER, input_tokens BIGINT, output_tokens BIGINT,
-        cache_read_tokens BIGINT)""",
+        cache_read_tokens BIGINT, secret_sha256 TEXT)""",
+    # Added after the #10829 preview was seeded: its sessions table predates the claim secret.
+    "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_sha256 TEXT",
     """CREATE TABLE IF NOT EXISTS activity (
         id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), kind TEXT NOT NULL, registry_id TEXT,
         idea_id BIGINT, session_id TEXT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', github_url TEXT)""",
@@ -361,6 +369,25 @@ def agent_caller_ok(settings: dict[str, Any], user: str | None, token: str | Non
     return user is not None and user in set(settings["session_identities"]) | _approver_identities(settings)
 
 
+def _sha256(secret: str) -> str:
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def require_session(conn: Connection, session_id: str | None, secret: str | None) -> str:
+    """The calling session's id, when it presents the secret its claim issued and is still running; 403 otherwise
+    (a missing or wrong secret, or a session that finished, failed or was expired as lost)."""
+    if not session_id or not secret:
+        raise HTTPException(403, f"a session write needs {SESSION_HEADER} and {SESSION_SECRET_HEADER} from its claim")
+    _expire_sessions(conn)
+    rows = _rows(conn, "SELECT state, secret_sha256 FROM sessions WHERE id = :id", id=session_id)
+    expected = rows[0]["secret_sha256"] if rows else None
+    if not expected or not hmac.compare_digest(_sha256(secret), expected):
+        raise HTTPException(403, f"wrong secret for session {session_id}")
+    if rows[0]["state"] != SessionState.RUNNING:
+        raise HTTPException(403, f"session {session_id} is {rows[0]['state']}")
+    return session_id
+
+
 def _token_ok(settings: dict[str, Any], token: str | None) -> bool:
     expected = settings["service_token_sha256"]
     if not expected or not token:
@@ -592,13 +619,11 @@ def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[
 
 
 def finish_session(conn: Connection, session_id: str, report: SessionFinish) -> dict[str, str]:
-    """Record a session's report and, unless it succeeded, offer its events once more. A session that is no longer
-    running (finished, or expired as lost) is left as it is, so a retried report changes nothing."""
+    """Record a running session's report and, unless it succeeded, offer its events once more. The caller checked
+    the session's secret (``require_session``), which also refuses a session no longer running."""
     rows = _rows(conn, "SELECT state FROM sessions WHERE id = :id FOR UPDATE", id=session_id)
     if not rows:
         raise HTTPException(404, f"no session {session_id}")
-    if rows[0]["state"] != SessionState.RUNNING:
-        return {"state": rows[0]["state"]}
     conn.execute(
         text(
             "UPDATE sessions SET state = :state, ended_at = now(), summary = :summary, "
@@ -630,26 +655,33 @@ def finish_session(conn: Connection, session_id: str, report: SessionFinish) -> 
     return {"state": report.state.value}
 
 
-def claim_events(conn: Connection, session_id: str, kinds: list[EventKind] | None = None) -> dict[str, Any]:
+def claim_events(
+    conn: Connection, session_id: str, kinds: list[EventKind] | None = None, secret: str | None = None
+) -> dict[str, Any]:
     """Give every undispatched event (of ``kinds``, if given) to a new session, when dispatch is on and no session is
-    active. A session still running (a draining session, or a retried claim) takes the newly queued events too, and
-    gets back every event it holds."""
+    active; a new session gets a ``session_secret`` that its later writes present. An existing session (a draining
+    session, or a retried claim) must present that secret; it takes the newly queued events too, and gets back every
+    event it holds."""
     conn.execute(text("SELECT pg_advisory_xact_lock(4917)"))
     _expire_sessions(conn)
     mine = _rows(conn, "SELECT state FROM sessions WHERE id = :id", id=session_id)
-    if not (mine and mine[0]["state"] == SessionState.RUNNING):
+    if mine:
+        require_session(conn, session_id, secret)
+    else:
         if not _settings(conn)["dispatch_enabled"]:
             return {"launch": False, "reason": "dispatch is off"}
         if _session_active(conn):
             return {"launch": False, "reason": "a session is active"}
     wanted = [k.value for k in kinds] if kinds is not None else [k.value for k in EventKind]
     new = _rows(conn, "SELECT * FROM events WHERE session_id IS NULL AND kind = ANY(:kinds) ORDER BY id", kinds=wanted)
+    issued = None
     if not mine:
         if not new:
             return {"launch": False, "reason": "no queued events"}
+        issued = secrets.token_urlsafe(32)
         conn.execute(
-            text("INSERT INTO sessions (id, state) VALUES (:id, :state)"),
-            {"id": session_id, "state": SessionState.RUNNING},
+            text("INSERT INTO sessions (id, state, secret_sha256) VALUES (:id, :state, :digest)"),
+            {"id": session_id, "state": SessionState.RUNNING, "digest": _sha256(issued)},
         )
     if new:
         conn.execute(
@@ -660,7 +692,8 @@ def claim_events(conn: Connection, session_id: str, kinds: list[EventKind] | Non
         verb = "Started session for" if not mine else "Session took"
         _activity(conn, ActivityPost(kind="dispatch", session_id=session_id, title=f"{verb}: {summary}"))
     events = _rows(conn, "SELECT * FROM events WHERE session_id = :s ORDER BY id", s=session_id)
-    return {"launch": True, "session_id": session_id, "events": _plain(events)}
+    claimed = {"launch": True, "session_id": session_id, "events": _plain(events)}
+    return {**claimed, "session_secret": issued} if issued else claimed
 
 
 def expect_run(conn: Connection, expectation: RunExpectation) -> None:
@@ -971,6 +1004,13 @@ def create_api(services: Services) -> RegisteredApi:
                 401, f"Belay agent endpoints need a Belay session identity, an approver, or {TOKEN_HEADER}."
             )
 
+    def session(
+        x_belay_session: str | None = Header(default=None), x_belay_session_secret: str | None = Header(default=None)
+    ) -> str:
+        """The calling session (``require_session``), for a session's own writes."""
+        with engine.begin() as conn:
+            return require_session(conn, x_belay_session, x_belay_session_secret)
+
     public = APIRouter(prefix="/public")
     admin = APIRouter(prefix="/admin", dependencies=[Depends(approver)])
     agent = APIRouter(prefix="/agent", dependencies=[Depends(service)])
@@ -1213,13 +1253,15 @@ def create_api(services: Services) -> RegisteredApi:
         return {"work_pending": offered, "overdue": overdue}
 
     @agent.post("/dispatch/claim")
-    def claim(request: Claim) -> dict[str, Any]:
+    def claim(request: Claim, x_belay_session_secret: str | None = Header(default=None)) -> dict[str, Any]:
         """Give every undispatched event to a new session, when dispatch is on and no session is active."""
         with engine.begin() as conn:
-            return claim_events(conn, request.session_id, request.kinds)
+            return claim_events(conn, request.session_id, request.kinds, x_belay_session_secret)
 
     @agent.post("/sessions/{session_id}/finish")
-    def finish(session_id: str, report: SessionFinish) -> dict[str, str]:
+    def finish(session_id: str, report: SessionFinish, caller: str = Depends(session)) -> dict[str, str]:
+        if caller != session_id:
+            raise HTTPException(403, f"session {caller} cannot finish session {session_id}")
         with engine.begin() as conn:
             return finish_session(conn, session_id, report)
 
@@ -1231,13 +1273,13 @@ def create_api(services: Services) -> RegisteredApi:
             raise HTTPException(404, f"no thread for {registry_id}")
         return _plain(rows)[0]
 
-    @agent.post("/threads/{registry_id}")
+    @agent.post("/threads/{registry_id}", dependencies=[Depends(session)])
     def post_thread(registry_id: str, post: ThreadPost) -> dict[str, str]:
         with engine.begin() as conn:
             write_thread(conn, registry_id, post)
         return {"registry_id": registry_id}
 
-    @agent.post("/ideas/{idea_id}/report")
+    @agent.post("/ideas/{idea_id}/report", dependencies=[Depends(session)])
     def report(idea_id: int, update: IdeaReport) -> dict[str, str]:
         fields = update.model_dump(exclude_none=True)
         if not fields:
@@ -1255,9 +1297,9 @@ def create_api(services: Services) -> RegisteredApi:
         return {"updated": ", ".join(fields)}
 
     @agent.post("/activity")
-    def post_activity(post: ActivityPost) -> dict[str, int]:
+    def post_activity(post: ActivityPost, caller: str = Depends(session)) -> dict[str, int]:
         with engine.begin() as conn:
-            return {"id": _activity(conn, post)}
+            return {"id": _activity(conn, post.model_copy(update={"session_id": caller}))}
 
     @agent.get("/registry")
     def registry_revision() -> dict[str, str | None]:
@@ -1290,7 +1332,7 @@ def create_api(services: Services) -> RegisteredApi:
             )
         return {**state(), "expectations": _plain(expectations)}
 
-    @agent.post("/runs/expected")
+    @agent.post("/runs/expected", dependencies=[Depends(session)])
     def runs_expected(expectation: RunExpectation) -> dict[str, str]:
         with engine.begin() as conn:
             expect_run(conn, expectation)

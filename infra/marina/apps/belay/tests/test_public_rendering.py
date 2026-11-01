@@ -4,6 +4,7 @@
 """The public agent log renders agent text inert: no element common.js did not build, and links only to http(s)."""
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -64,5 +65,24 @@ def test_script_img_onerror_and_javascript_links_render_inert() -> None:
     text = "".join(n["text"] for n in nodes(body) if "text" in n)
     assert "<script>alert(1)</script>" in text and "<img src=x onerror=alert(1)>" in text  # shown as text
     assert script_link["tag"] == "span" and protocol_relative["tag"] == "span"
-    assert own_page["tag"] == "a" and own_page["attrs"]["href"] == "/belay/status#X0001"
+    assert own_page["tag"] == "a" and own_page["attrs"]["href"] == "/belay/#status/X0001"
     assert https["attrs"]["href"] == "https://example.com/ok"
+
+
+# Marina's canonical applet URL (/a/<id>/) serves only the root document; its redirect to the current revision keeps
+# a fragment and drops a path suffix or query. So every view and every in-page link must be a fragment route.
+OWN_LINK = re.compile(r'href="(?!https?://)([^"]*)"')
+
+
+def test_every_own_link_is_a_fragment_route() -> None:
+    hrefs = OWN_LINK.findall((WEB / "index.html").read_text())
+    assert hrefs
+    paths = [h for h in hrefs if not (h.startswith("#") or h == "./" or "?v=__BELAY_VERSION__" in h)]
+    assert paths == []
+
+
+def test_views_are_chosen_by_the_fragment() -> None:
+    common = (WEB / "common.js").read_text()
+    assert "location.pathname.replace(/[^/]*$/, '')" in common  # the document's directory, never a view path
+    for view in ("status", "mfu", "admin"):
+        assert f"{view}: `${{BELAY_BASE}}#{view}`" in common

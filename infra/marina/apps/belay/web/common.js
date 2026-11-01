@@ -4,8 +4,8 @@
 const REFRESH_MS = 10000
 const TERMINAL = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'unschedulable'])
 const WANDB = 'https://wandb.ai/marin-community/marin_moe/runs/'
-// The app's root (`/a/<id>/`) for the front page, status, mfu and admin.
-const BELAY_BASE = location.pathname.replace(/(status|admin|mfu)\/?$/, '').replace(/[^/]*$/, '')
+// The directory of the one page document: `/a/<id>/v/<rev>/` on Marina, or `/belay/` from `marina dev`.
+const BELAY_BASE = location.pathname.replace(/[^/]*$/, '')
 // The release's frontend digest, stamped into the page by build.py; asset() adds it to every static file URL.
 const VERSION = document.querySelector('meta[name="belay-version"]').content
 
@@ -13,11 +13,16 @@ function asset(name) {
   return `${BELAY_BASE}${name}?v=${VERSION}`
 }
 
+// Every view lives in this one document and the fragment picks it: #status, #status/X0221 (a row), #mfu, #admin.
+// Any other fragment (a front-page section such as #tracks) is the front page. Marina's canonical applet URL serves
+// only the root document, and its redirect to the current revision keeps the fragment but drops a query, so views
+// never use paths or query strings.
+const VIEWS = ['status', 'mfu', 'admin']
 const PAGES = {
   front: BELAY_BASE,
-  status: `${BELAY_BASE}status`,
-  mfu: `${BELAY_BASE}mfu`,
-  admin: `${BELAY_BASE}admin`,
+  status: `${BELAY_BASE}#status`,
+  mfu: `${BELAY_BASE}#mfu`,
+  admin: `${BELAY_BASE}#admin`,
 }
 const SOURCES = {
   results: `${BELAY_BASE}api/public/results`,
@@ -25,11 +30,16 @@ const SOURCES = {
 }
 
 
+// The view and the anchor within it, from the fragment: '#status/X0221' is { page: 'status', anchor: 'X0221' }.
+function route() {
+  const fragment = decodeURIComponent(location.hash.slice(1))
+  const [view, ...rest] = fragment.split('/')
+  if (VIEWS.includes(view)) return { page: view, anchor: rest.join('/') || null }
+  return { page: 'front', anchor: fragment || null }
+}
+
 function pageName() {
-  if (/\/admin\/?$/.test(location.pathname)) return 'admin'
-  if (/\/status(\.html)?\/?$/.test(location.pathname)) return 'status'
-  if (/\/mfu(\.html)?\/?$/.test(location.pathname)) return 'mfu'
-  return 'front'
+  return route().page
 }
 
 // Each page is a <template>; showing one clones it into #view-root, so element ids stay unique.
