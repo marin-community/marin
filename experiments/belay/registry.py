@@ -132,6 +132,8 @@ class Experiment:
     summary: str
     source: Source
     status: Status
+    track: str | None = None
+    """The baseline the idea is built on and compared against (``experiments.belay.config.Track``, e.g. ``moe-d512``)."""
     first_batch: int | None = None
     tags: tuple[str, ...] = ()
     papers: tuple[Paper, ...] = ()
@@ -349,10 +351,12 @@ def main(argv: list[str]) -> None:
     new.add_argument("--category", required=True, choices=CATEGORIES)
     new.add_argument("--summary", required=True)
     new.add_argument("--source", required=True, choices=[s.value for s in Source])
+    new.add_argument("--track", required=True, help="the idea's Track, e.g. competitive-d512")
     new.add_argument("--first-batch", type=int)
     new.add_argument("--intake-url")
     new.add_argument("--intake-author")
     new.add_argument("--approved-by")
+    new.add_argument("--dry-run", action="store_true", help="print the entry instead of writing it")
     args = parser.parse_args(argv)
 
     experiments = load_registry()
@@ -375,10 +379,15 @@ def main(argv: list[str]) -> None:
             summary=args.summary,
             source=Source(args.source),
             status=Status.APPROVED,
+            track=args.track,
             first_batch=args.first_batch,
             intake=intake,
         )
         validate([*experiments, experiment])
+        if args.dry_run:
+            print(f"would write {REGISTRY_DIR / experiment.filename}:")
+            yaml.safe_dump(_plain(experiment), sys.stdout, sort_keys=False, allow_unicode=True, width=120)
+            return
         print(write_experiment(experiment))
 
 
