@@ -9,26 +9,39 @@ For each eval item, with ``n`` its indexed features:
   training document contains. 1.0 means one document holds the whole item.
 * ``corpus_coverage``: the share of the item's features found anywhere.
 
-Features that occur in more than ``COMMON_DOC_LIMIT`` hit documents are dropped
+Features that occur in more than ``--common-doc-limit`` hit documents are dropped
 first: they are common phrases (licence text, boilerplate), not item leaks.
 
-Usage: aggregate.py LOCAL_HITS_DIR BLOOM_DIR OUT_DIR
-LOCAL_HITS_DIR holds ``<source>/hits/*.parquet`` as `scan.py` writes it.
+Usage: aggregate.py BLOOM_DIR OUT_DIR HITS_DIR... --common-doc-limit N
+Each HITS_DIR holds ``<source>/hits/*.parquet`` as `scan.py` writes it.
 """
 
-import sys
+import argparse
 
 import duckdb
 
-COMMON_DOC_LIMIT = 1000
 # An item counts as contaminated when one document holds at least this share of it.
 CONTAMINATED_COVERAGE = 0.5
 
 
 def main() -> None:
-    hits_dir, bloom_dir, out_dir = sys.argv[1:4]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("bloom_dir")
+    parser.add_argument("out_dir")
+    parser.add_argument("hits_dirs", nargs="+")
+    parser.add_argument("--common-doc-limit", type=int, required=True)
+    args = parser.parse_args()
+    bloom_dir, out_dir = args.bloom_dir, args.out_dir
+    hits = " UNION ALL ".join(
+        f"""
+        SELECT regexp_extract(filename, '{d.rstrip("/")}/(.+)/hits/', 1) AS source,
+               regexp_extract(filename, '/hits/([^/]+)$', 1) AS file, id, unnest(hits) AS hash, marked
+        FROM read_parquet('{d.rstrip("/")}/**/hits/*.parquet', filename = true)
+        """
+        for d in args.hits_dirs
+    )
     con = duckdb.connect()
-    con.execute("SET threads TO 4; SET memory_limit = '12GB'")
+    con.execute("SET threads TO 4; SET memory_limit = '12GB'; SET preserve_insertion_order = false")
     con.execute(
         f"""
         CREATE TABLE idx AS
@@ -41,17 +54,12 @@ def main() -> None:
     )
     con.execute("CREATE TABLE item_n AS SELECT eval, eval_id, count(DISTINCT hash) AS n FROM idx GROUP BY ALL")
     con.execute(
-        f"""
-        CREATE TABLE doc_hash AS
-        SELECT regexp_extract(filename, '{hits_dir}/(.+)/hits/', 1) AS source,
-               regexp_extract(filename, '/hits/([^/]+)$', 1) AS file, id, unnest(hits) AS hash, marked
-        FROM read_parquet('{hits_dir}/**/hits/*.parquet', filename = true)
-        """
+        f"CREATE TABLE doc_hash AS {hits}"
     )
     con.execute(
         f"""
         CREATE TABLE common AS
-        SELECT hash FROM doc_hash GROUP BY hash HAVING count(*) > {COMMON_DOC_LIMIT}
+        SELECT hash FROM doc_hash GROUP BY hash HAVING count(*) > {args.common_doc_limit}
         """
     )
     con.execute(
