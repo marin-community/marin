@@ -203,6 +203,8 @@ ladder steps = tokens/param × active params ÷ (batch × 4,096)</pre>
         <p>Integrate the idea into the competitive stack and test it in the 8-minute speedrun. In general, ideas should build on the current recipe (Belay Ckpt Oct 20 2026). Decide whether it replaces, adds to, or adapts existing features, and which optimizer and schedule its new parameters use. The goal is not to Goodhart the speedrun or necessarily set a record, but to show the idea integrates cleanly with the existing stack and holds promise in some area.</p></li>
       <li class="gate"><span class="gn">3</span><h3>Validate hero scale MFU</h3>
         <p>Measure MFU at hero scale on a single GB200 rack. This enables conversion from 300k GB200-hours (2.7e24 hardware FLOPs) to model FLOPs.</p></li>
+      <li class="gate planned"><span class="gn">3b</span><h3>Hero Inference Perf <span class="pill est">planned</span></h3>
+        <p>Measure the recipe's inference throughput and latency at hero scale (decode and prefill); a planned gate, not yet required.</p></li>
       <li class="gate"><span class="gn">4</span><h3>Project hero-scale BPB</h3>
         <p>Predict the pretraining BPB at the achievable FLOP budget. Run a scaling ladder at equal tokens per active parameter from 1e17 to 1e20 FLOPs. The added feature should have a clean scaling rule (e.g. 10% of active parameters on engram, sized at hidden_dim/2, or only on the second half of layers).</p></li>
       <li class="gate wide"><span class="gn">5</span><h3>Assess results</h3>

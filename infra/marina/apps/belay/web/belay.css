@@ -129,6 +129,8 @@ section { padding-block: 52px 4px; }
 .gate .gn { grid-row: span 2; font-family: var(--display); font-stretch: 122%; font-weight: 900; font-size: 14px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--ink); color: var(--bg); }
 .gate h3 { font-size: 19px; font-stretch: 110%; font-weight: 800; align-self: center; }
 .gate.wide { grid-column: 1 / -1; }
+.gate.planned { border-style: dashed; }
+.gate h3 .pill { vertical-align: middle; margin-left: 6px; }
 .gate p { margin: 0; color: var(--slate); font-size: 13.5px; grid-column: 2; }
 
 /* scaling starter kit */
