@@ -11,3 +11,10 @@ runs:
     seed: 0
     variant: speedrun control
     control: true
+launched:
+  control: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --seed 0 --run-id
+    belay-X0151-control --output-path tmp/ttl=30d/belay/runs/belay-X0151-control --submit --target-cluster cw-us-east-02a
+    --priority batch
+  seed0: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --model-set init_std_mult_gates=2
+    --seed 0 --run-id belay-X0151-seed0 --output-path tmp/ttl=30d/belay/runs/belay-X0151-seed0 --submit --target-cluster cw-us-east-02a
+    --priority batch
