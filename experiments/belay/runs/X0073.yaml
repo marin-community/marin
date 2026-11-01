@@ -1,0 +1,13 @@
+experiment: X0073
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: lm_head tanh soft-cap 10
+    flags:
+    - --model-set
+    - logit_soft_cap=10
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
