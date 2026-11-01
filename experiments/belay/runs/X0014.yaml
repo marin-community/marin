@@ -1,0 +1,15 @@
+experiment: X0014
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: gated value embeds on MLA, table LR 0.3x
+    flags:
+    - --opt-set
+    - value_embed_lr_mult=0.3
+    - --model-set
+    - value_embeds=gated
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
