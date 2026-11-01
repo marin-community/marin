@@ -121,6 +121,8 @@ class Event:
     note: str | None = None
     candidate: str | None = None
     as_adopted: str | None = None
+    checkpoint: str | None = None
+    """The recipe tag (``belay-ckpt-<date>``) this event adopts the idea into or removes it from."""
 
 
 @dataclass(frozen=True)
