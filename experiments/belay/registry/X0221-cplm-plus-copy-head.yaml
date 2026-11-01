@@ -48,15 +48,3 @@ trials:
   - -0.0148
   steps: 2308
   baseline: belay-X0221-control-b 3.0458 (same commit, seed 0)
-- id: t003
-  variant: CPLM Plus copy head (cplm_plus=true)
-  rung: speedrun
-  protocol: fixed_time
-  batch: X0221
-  date: '2026-11-01'
-  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6556166051
-  wandb:
-  - belay-X0221-seed1-t-c
-  settings:
-    cplm_plus: 'true'
-  commit: f31320f9f0
