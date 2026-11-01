@@ -41,7 +41,7 @@ function denseGate(idea) {
   const d = t.delta[0]
   const kind = verdictOf(d, trackInfo(t.rung).noise)
   const where = t.protocol === 'fixed_time' ? 'equal time' : 'equal data'
-  return { kind, text: `${kind} at ${where}, Δ ${SIGN(d)} · ${t.rung.replace('vanilla-', '')}`, title: `${t.variant} (${t.rung}, ${t.date})` }
+  return { kind, short: SIGN(d), text: `${kind} at ${where}, Δ ${SIGN(d)} · ${t.rung.replace('vanilla-', '')}`, title: `${t.variant} (${t.rung}, ${t.date})` }
 }
 
 // Gate 2, the 8-minute speedrun: the speedrun track's stages, or a legacy d512 trial from before Tracks existed.
@@ -62,7 +62,7 @@ function speedrunGate(idea, live) {
   const stages = [data, time].filter(Boolean).map(
     (t) => `${t.protocol === 'fixed_time' ? 'Equal time' : 'Equal data'}: Δ ${SIGN(t.delta[0])}${t.steps ? ` at ${t.steps.toLocaleString()} steps` : ''}${t.step_time_change ? `, step time ${t.step_time_change}` : ''}`,
   )
-  return { kind, text: `${kind} at ${where}, Δ ${SIGN(d)}${steps}`, title: stages.join('\n') || `${final.variant} (${final.rung}, ${final.date})` }
+  return { kind, short: SIGN(d), text: `${kind} at ${where}, Δ ${SIGN(d)}${steps}`, title: stages.join('\n') || `${final.variant} (${final.rung}, ${final.date})` }
 }
 
 // The idea's standing in the live recipe: its latest adopted/removed event for the recipe's checkpoint tag.
@@ -74,9 +74,20 @@ function inLiveRecipe(idea) {
   return recipeEvent(idea)?.type === 'adopted'
 }
 
-function gateChip(g) {
+// A gate cell: a compact chip (icon, and Δ for a win or loss) whose details show on hover or keyboard focus, and
+// expand inline on a tap at phone width.
+function gateChip(g, more = null) {
   const look = GATE[g.kind] ?? GATE.none
-  return el('span', { class: `gate-chip ${look.cls}`, title: g.title || g.text }, el('b', {}, look.icon), ` ${g.text}`)
+  const shown = ['win', 'loss'].includes(g.kind) && g.short ? ` ${g.short}` : ''
+  const chip = el('span', { class: `gate-chip ${look.cls}` }, el('b', {}, look.icon), shown)
+  const lines = [g.text, ...(g.title ? g.title.split('\n') : [])].filter((x, i, a) => x && a.indexOf(x) === i)
+  const tip = el('span', { class: 'gate-tip', role: 'tooltip' }, ...lines.map((x) => el('span', {}, x)), more)
+  const cell = el('span', { class: 'gate', tabindex: '0', 'aria-expanded': 'false', 'aria-label': g.text }, chip, tip)
+  cell.addEventListener('click', (e) => {
+    if (e.target.closest('a')) return
+    cell.setAttribute('aria-expanded', String(cell.getAttribute('aria-expanded') !== 'true'))
+  })
+  return cell
 }
 const checklistView = { sort: 'potential', query: '' }
 
@@ -215,7 +226,7 @@ function heroGate(idea) {
   const hero = counted(idea.trials.filter((t) => t.rung === 'hero-mfu')).at(-1)
   if (hero) {
     const d = hero.delta[0]
-    return { kind: verdictOf(d, trackInfo('hero-mfu').noise), text: `s/step ${SIGN(d * 100, 1)}%`, title: hero.variant }
+    return { kind: verdictOf(d, trackInfo('hero-mfu').noise), short: `${SIGN(d * 100, 1)}%`, text: `s/step ${SIGN(d * 100, 1)}%`, title: hero.variant }
   }
   const stc = idea.trials.find((t) => t.rung === 'speedrun' && t.protocol === 'equal_steps' && t.step_time_change)
   return { kind: 'none', text: stc ? `not run · speedrun ${stc.step_time_change} step time` : 'not run', title: '' }
@@ -229,7 +240,8 @@ function scalingGate(idea) {
   const parts = [...latest].map(([r, t]) => `${r} ${SIGN(t.delta[0])}`)
   const worst = [...latest.values()].map((t) => verdictOf(t.delta[0], trackInfo('competitive-d512').noise))
   const kind = worst.includes('loss') ? 'loss' : worst.every((v) => v === 'win') ? 'win' : 'noise'
-  return { kind, text: `${parts.join(' · ')} · projection pending`, title: parts.join('\n') }
+  const last = [...latest.values()].at(-1)
+  return { kind, short: SIGN(last.delta[0]), text: `${parts.join(' · ')} · projection pending`, title: parts.join('\n') }
 }
 
 function recipeCell(idea) {
@@ -313,7 +325,7 @@ function renderChecklist() {
         el('span', { 'data-label': 'Author' }, link(`https://github.com/${r.author}`, `@${r.author}`)),
         el('span', { class: 'mono', 'data-label': 'Date' }, r.date),
         el('span', { 'data-label': 'Dense' }, gateChip(r.dense)),
-        el('span', { 'data-label': 'Speedrun' }, gateChip(r.speedrun)),
+        el('span', { 'data-label': 'Speedrun' }, gateChip(r.speedrun, r.comment ? link(r.comment, '#9451 comment') : null)),
         el('span', { 'data-label': 'Hero MFU' }, gateChip(r.hero)),
         el('span', { 'data-label': 'Projection' }, gateChip(r.scaling)),
         el('span', { 'data-label': 'Recipe' }, recipeCell(r.idea)),
