@@ -3,7 +3,7 @@ track: speedrun
 runs:
   seed0:
     seed: 0
-    variant: init_std_mult_gates=2
+    variant: init_std_mult_gates=2 (sigmoid-gate init x2)
     flags:
     - --model-set
     - init_std_mult_gates=2
@@ -11,4 +11,3 @@ runs:
     seed: 0
     variant: speedrun control
     control: true
-    shared: belay-X0017-control
