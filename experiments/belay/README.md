@@ -20,7 +20,7 @@ uv run python -m experiments.belay.registry new --slug ... --name ... --category
 | `approved` | accepted for testing (an approved intake comment, or a maintainer or agent proposal); no trial yet |
 | `running` | at least one trial in flight |
 | `done` | trials finished, no decision yet |
-| `adopted` | **in the current recipe** (today Belay Ckpt Oct 20 2026, `marin_belay_v1_clean_s7`; see below) |
+| `adopted` | **in the current recipe** (today Belay Ckpt Oct 20 2026, `marin_belay_v1_recipe`; see below) |
 | `removed` | adopted at some point, not in the current checkpoint |
 | `closed` | decided against |
 
@@ -39,7 +39,7 @@ yet.
   no branch per experiment. Older trials ran on batch branches `marin_belay_v1_b<batch>`; their commits still
   reproduce them.
 - **Checkpoints**: an adopted flag is folded into the next recipe branch, which holds only that checkpoint's code
-  (today `marin_belay_v1_clean_s7`).
+  (today `marin_belay_v1_recipe`).
 - **Runs**: W&B runs (project `marin_moe`) are listed in each trial's `wandb`; new runs carry the id in their name.
 - **Discussion**: plans and results are posted to the Belay page and to #9451; trials link to them (`comment_url`).
 
@@ -54,7 +54,8 @@ the entry in as its trials run. There are no weekly issues.
 ## Entry format
 
 Required: `id`, `slug`, `name`, `category` (one of `CATEGORIES` in `registry.py`), `summary`, `source`
-(`intake`, `maintainer`, `agent`, `community`, `baseline`), `status`. Optional: `first_batch`, `tags`, `papers`
+(`intake`, `maintainer`, `agent`, `community`, `baseline`), `status`. Optional: `track` (the baseline the idea runs against, from the intake comment's `Track:` line; set on
+every new entry), `first_batch`, `tags`, `papers`
 (`arxiv` and/or `title`), `details`, `knobs`, `intake` (`url`, `author`, `approved_by`; required for
 `source: intake`), `trials` and `events`. A trial has `id`, `variant`, `rung`, `protocol`, `batch`, `date`, `comment_url`
 and optionally `baseline`, `steps`, `delta` and `loss` (one per seed), `wandb`, `settings`, `commit` (the git SHA it ran, at least 10 characters), `step_time_change`, `tuned`, `note`, `derived`.
