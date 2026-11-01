@@ -52,7 +52,7 @@ trials:
   note: corrected delta about +0.047
 potential:
   score: 1
-  rationale: AttnRes z-loss +0.004 / +0.047 corrected d512; loses
+  rationale: AttnRes z-loss +0.004 / +0.047 corrected d512; loses -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: db296572dd3d

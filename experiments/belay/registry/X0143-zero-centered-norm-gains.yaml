@@ -44,7 +44,7 @@ events:
   note: neutral
 potential:
   score: 3
-  rationale: zero-centered gains with decay +0.0001/+0.0014; neutral
+  rationale: zero-centered gains with decay +0.0001/+0.0014; neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 077b0bc5393a

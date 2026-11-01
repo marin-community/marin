@@ -86,7 +86,7 @@ events:
   note: loses in every variant at d512 fixed time; untied growth not built
 potential:
   score: 1
-  rationale: looped depth loses every variant at fixed time (+0.091, +0.021, +0.034); closed
+  rationale: looped depth loses every variant at fixed time (+0.091, +0.021, +0.034); closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 55b124f93922

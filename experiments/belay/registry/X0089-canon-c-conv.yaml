@@ -45,7 +45,7 @@ events:
   note: neutral over 2 seeds; not stacked
 potential:
   score: 3
-  rationale: Canon-C conv +0.0008/-0.003 at ~-1% ex/s; neutral over 2 seeds
+  rationale: Canon-C conv +0.0008/-0.003 at ~-1% ex/s; neutral over 2 seeds -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 18104f1a2ea4

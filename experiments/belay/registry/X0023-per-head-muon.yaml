@@ -28,7 +28,7 @@ trials:
   - lc1-b03-phm
 potential:
   score: 3
-  rationale: per-head Muon (K3) +0.0018 d512; noise to slight loss
+  rationale: per-head Muon (K3) +0.0018 d512; noise to slight loss -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 2b5518ddf9bc

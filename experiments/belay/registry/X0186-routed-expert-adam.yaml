@@ -37,7 +37,7 @@ events:
   note: Adam for routed experts closed
 potential:
   score: 1
-  rationale: Adam for routed experts +0.037; closed
+  rationale: Adam for routed experts +0.037; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 6145059e465b

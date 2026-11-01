@@ -186,7 +186,7 @@ events:
   note: gain/scale/combine family closed at d512 1x
 potential:
   score: 3
-  rationale: 'gain parameterizations: e^w -0.0026/-0.0002 does not replicate; closed'
+  rationale: 'gain parameterizations: e^w -0.0026/-0.0002 does not replicate; closed -> 3'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: e897c7a8526b

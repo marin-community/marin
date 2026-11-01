@@ -112,8 +112,9 @@ events:
   note: 'Not in the Belay Ckpt Oct 20 2026 config: muon_pre_norm=none (Ckpt 1: in)'
   checkpoint: belay-ckpt-2026-10-20
 potential:
-  score: 7
-  rationale: 'prior (Ckpt 1); retest pending: MuonEq pre-NS norm; ablating it cost +0.006'
+  score: 6
+  rationale: 'prior (Ckpt 1); retest pending: MuonEq ablation +0.0059/+0.006 (small win, equal data, free); earlier -0.002/-0.0039;
+    d768 -0.0017 noise; no equal time -> 6'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 1e6a5dedabdd

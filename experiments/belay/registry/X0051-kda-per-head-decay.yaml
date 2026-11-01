@@ -38,7 +38,7 @@ events:
   note: per-channel forget gate matters
 potential:
   score: 1
-  rationale: per-head KDA decay +0.0129 d512; per-channel decay matters
+  rationale: per-head KDA decay +0.0129 d512; per-channel decay matters -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: e34c1975e088

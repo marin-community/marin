@@ -48,7 +48,7 @@ trials:
   tuned: 0.9 / 0.95 / 0.98
 potential:
   score: 1
-  rationale: MuonH momentum 0.9 +0.0028, 0.98 +0.0337 d512; loses
+  rationale: MuonH momentum 0.9 +0.0028, 0.98 +0.0337 d512; loses -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: df73d3ab7746

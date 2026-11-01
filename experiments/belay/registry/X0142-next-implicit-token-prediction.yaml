@@ -87,7 +87,7 @@ events:
   note: never a clear gain
 potential:
   score: 2
-  rationale: 'NITP monotone toward zero: +0.009/+0.014 at 1, -0.0001/-0.0014 at 0.1'
+  rationale: 'NITP monotone toward zero: +0.009/+0.014 at 1, -0.0001/-0.0014 at 0.1 -> 2'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: ba5e4e1a8ab5

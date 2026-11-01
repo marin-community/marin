@@ -76,7 +76,7 @@ events:
   note: shared per-layer sphere stays
 potential:
   score: 3
-  rationale: per-expert hyperball +0.0034/+0.0018, -0.0008 retest; noise, closed
+  rationale: per-expert hyperball +0.0034/+0.0018, -0.0008 retest; noise, closed -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: de690405283a

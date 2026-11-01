@@ -95,7 +95,7 @@ events:
   note: hurts at every setting; replay line not pursued further
 potential:
   score: 1
-  rationale: head replay hurts at every setting (+0.005 to +0.032); closed
+  rationale: head replay hurts at every setting (+0.005 to +0.032); closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: b2c73a931e9f

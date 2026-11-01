@@ -56,7 +56,7 @@ events:
   note: Momentum warmup closed; overshoot unchanged
 potential:
   score: 3
-  rationale: Muon momentum warmup +0.0012, +0.0004/+0.0019; overshoot unchanged
+  rationale: Muon momentum warmup +0.0012, +0.0004/+0.0019; overshoot unchanged -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: d5695e122d7e

@@ -38,7 +38,7 @@ events:
   note: closed in batch 102 round
 potential:
   score: 1
-  rationale: FoX gate +0.0008 at +43% step; bias 0 NaNs; closed
+  rationale: FoX gate +0.0008 at +43% step; bias 0 NaNs; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: ad87a81af3f1

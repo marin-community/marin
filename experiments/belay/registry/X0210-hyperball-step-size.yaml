@@ -115,7 +115,7 @@ events:
   note: MuonH equal relative step beats both alternatives
 potential:
   score: 1
-  rationale: free hyperball step size +0.007 to +0.054; closed
+  rationale: free hyperball step size +0.007 to +0.054; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 5312418cb526

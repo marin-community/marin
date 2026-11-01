@@ -137,7 +137,7 @@ events:
     (+0.062 / +0.094 with the lambda floor)
 potential:
   score: 1
-  rationale: ReMoE +0.040 eq steps, +0.065 fixed time, +15% step; hedges worse; experts die
+  rationale: ReMoE +0.040 eq steps, +0.065 fixed time, +15% step; hedges worse; experts die -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 3852dfd721e8

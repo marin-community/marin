@@ -60,7 +60,7 @@ events:
   note: push AttnRes stays
 potential:
   score: 1
-  rationale: pull-style AttnRes +0.0093 / +0.0071 d512 and 4% slower; closed
+  rationale: pull-style AttnRes +0.0093 / +0.0071 d512 and 4% slower; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: e0357bf529e6

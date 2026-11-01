@@ -39,7 +39,7 @@ events:
   note: per-channel gate carries information; not pursuing
 potential:
   score: 2
-  rationale: per-head KDA output gate +0.0054 d512 and slower; closed
+  rationale: per-head KDA output gate +0.0054 d512 (outside 0.005 band) and 6% slower unfused; loss -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: c5364bd2803f

@@ -67,7 +67,7 @@ events:
   note: +0.065/+0.034
 potential:
   score: 1
-  rationale: dense router gradient -0.0005/-0.0058 then +0.065/+0.034 on current recipe; closed
+  rationale: dense router gradient -0.0005/-0.0058 then +0.065/+0.034 on current recipe; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 866d47fb2bb4

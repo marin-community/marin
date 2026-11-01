@@ -120,7 +120,7 @@ events:
   note: negative result; no more push variants
 potential:
   score: 1
-  rationale: KDA push decay loses +0.012 to +0.023 and 20-40% slower; closed
+  rationale: KDA push decay loses +0.012 to +0.023 and 20-40% slower; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 77cd0e0b1772

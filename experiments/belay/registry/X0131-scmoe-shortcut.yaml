@@ -46,7 +46,7 @@ events:
   note: +0.038 for 1.7% faster step
 potential:
   score: 1
-  rationale: ScMoE +0.038 for 1.7% faster step; closed
+  rationale: ScMoE +0.038 for 1.7% faster step; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: c127449271d7

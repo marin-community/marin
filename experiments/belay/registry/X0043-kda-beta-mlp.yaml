@@ -119,7 +119,7 @@ events:
   note: all 5 variants neutral; linear beta stays
 potential:
   score: 3
-  rationale: low-rank KDA beta MLP all 5 variants neutral (-0.0004 to +0.0023); closed
+  rationale: low-rank KDA beta MLP all 5 variants neutral (-0.0004 to +0.0023); closed -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 8daaa850fe47

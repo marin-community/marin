@@ -36,7 +36,7 @@ trials:
   note: neutral; loss at fixed time
 potential:
   score: 2
-  rationale: previous-step MLA weights -0.0014 at +8% step; loses at fixed time
+  rationale: previous-step MLA weights -0.0014 at +8% step; loses at fixed time -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 3d6d520356aa

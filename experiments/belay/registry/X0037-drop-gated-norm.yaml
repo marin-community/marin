@@ -86,8 +86,9 @@ events:
   note: 'Not in the Belay Ckpt Oct 20 2026 config: embed_gated_norm=true, final_gated_norm=true (Ckpt 1: false)'
   checkpoint: belay-ckpt-2026-10-20
 potential:
-  score: 5
-  rationale: 'prior (Ckpt 1); retest pending: embed/lm_head GatedNorm off -0.0037, one result, near noise'
+  score: 3
+  rationale: 'prior (Ckpt 1); retest pending: embed/lm_head GatedNorm off -0.0037, +0.0005, +0.0006; every trial inside noise
+    -> 3'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 612c9780ed61

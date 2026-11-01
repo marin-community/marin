@@ -53,8 +53,8 @@ events:
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
   note: closed in batch 102 round
 potential:
-  score: 2
-  rationale: expert init x0.5 +0.0028, x2 +0.0015; closed
+  score: 3
+  rationale: expert init x0.5 +0.0028, x2 +0.0015; inside noise -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: d25326b38a2e

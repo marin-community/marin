@@ -27,7 +27,7 @@ trials:
   note: same math
 potential:
   score: 3
-  rationale: 'shared GEMM under EP all-to-all: same math, only +0.3% ex/s'
+  rationale: 'shared GEMM under EP all-to-all: same math, only +0.3% ex/s -> 3'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 9dc5965c904c

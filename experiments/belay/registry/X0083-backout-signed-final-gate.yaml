@@ -60,7 +60,7 @@ events:
   note: neutral; backout dropped
 potential:
   score: 3
-  rationale: backout +0.0015/-0.0024; adds nothing over key offset; closed
+  rationale: backout +0.0015/-0.0024; adds nothing over key offset; closed -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 483775e36a1f

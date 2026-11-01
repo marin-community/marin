@@ -112,8 +112,9 @@ events:
   note: 'ML runs launch without PGLE: it caused CUDA launch-failure crash loops (about +3% step)'
   candidate: runtime
 potential:
-  score: 6
-  rationale: 'removed: PGLE -2 to -3% step (~-0.0036 fixed time) but CUDA launch-failure crash loops'
+  score: 4
+  rationale: PGLE step -2 to -3% but fixed time -0.0057/-0.0021 (mean in noise); CUDA launch-failure crash loops are the clear
+    fix -> 4
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: a210bfbe5fc7

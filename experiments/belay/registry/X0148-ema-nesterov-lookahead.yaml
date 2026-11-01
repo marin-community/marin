@@ -31,7 +31,7 @@ trials:
   note: per-scale values; mean +0.0004
 potential:
   score: 3
-  rationale: EMA-Nesterov lookahead +0.0016/-0.0007; neutral
+  rationale: EMA-Nesterov lookahead +0.0016/-0.0007; neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 8214f002b75c

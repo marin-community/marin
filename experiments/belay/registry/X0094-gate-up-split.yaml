@@ -46,8 +46,9 @@ events:
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: Belay Ckpt 1 experts are ungated ReLU² (no gate/up pair)
 potential:
-  score: 7
-  rationale: 'removed: same math, +4.9% ex/s (164->154.5 ms with top-k unroll); obsolete once experts went ungated'
+  score: 6
+  rationale: same math, +4.9% ex/s (~-0.008 by step-time rule); equal-time loss run and ladder not done; obsolete with ungated
+    experts -> 6
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 4c28221e8877

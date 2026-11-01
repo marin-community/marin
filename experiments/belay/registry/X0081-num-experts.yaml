@@ -117,8 +117,9 @@ events:
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: Belay Ckpt 1 uses 384 experts
 potential:
-  score: 8
-  rationale: 'removed: 512 experts -0.0113/-0.0092 d512 at +1.5% step, fits d1024; Ckpt 1 uses 384 experts'
+  score: 7
+  rationale: 512 experts -0.0113/-0.0092 equal data at +1.5% step; equal time and ladder loss not run; fits d1024 at +3% step
+    -> 7
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: a51523a1a1f9

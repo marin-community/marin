@@ -47,7 +47,7 @@ events:
   note: neutral on both seeds
 potential:
   score: 3
-  rationale: Newton-Muon on experts -0.0005/-0.0006; neutral
+  rationale: Newton-Muon on experts -0.0005/-0.0006; neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: e5ff11514a9c

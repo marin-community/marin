@@ -126,7 +126,7 @@ trials:
   note: step cost from tail stack, not FLOPs
 potential:
   score: 3
-  rationale: latent-free half-width layer -0.004 to +0.001 at +5% step; noise
+  rationale: latent-free half-width layer -0.004 to +0.001 at +5% step; noise -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 6068dd33ca1e

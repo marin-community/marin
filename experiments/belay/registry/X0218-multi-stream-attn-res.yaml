@@ -483,7 +483,8 @@ trials:
   commit: fb1caabf39
 potential:
   score: 6
-  rationale: MSAR m=4 -0.0104/-0.0147, m=2 -0.0078/-0.0141 eq steps but +18% step; cheap m2embed -0.0067/-0.0067
+  rationale: MSAR m=4 -0.0104/-0.0147 equal data but +18% step; cheap m2embed -0.0067/-0.0067; equal time, ladder, MFU not
+    run -> 6
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 32b24be95998

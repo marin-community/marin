@@ -129,7 +129,7 @@ events:
   note: neutral at every LR where it doesn't hurt, 3-9% slower
 potential:
   score: 2
-  rationale: token-embedding AttnRes queries neutral at best (-0.0028/-0.0012) and 3-9% slower
+  rationale: token-embedding AttnRes queries neutral at best (-0.0028/-0.0012) and 3-9% slower -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: eeffe3af6f40

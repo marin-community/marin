@@ -88,8 +88,9 @@ events:
   note: 'Not in the Belay Ckpt Oct 20 2026 config: router_combine=sigmoid_renorm (not sqrt_softplus_renorm)'
   checkpoint: belay-ckpt-2026-10-20
 potential:
-  score: 8
-  rationale: 'prior (Ckpt 1); retest pending: sqrt-softplus combine won in candidate 9 and held at d768'
+  score: 4
+  rationale: 'prior (Ckpt 1); retest pending: sqrt-softplus standalone -0.0011/-0.0031 (noise, same sign); won only inside
+    cand 9 bundle; no ladder/MFU -> 4'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 6c71a090af9b

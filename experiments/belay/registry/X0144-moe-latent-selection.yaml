@@ -342,8 +342,9 @@ trials:
     write: channels [0,256)
   tuned: write vs read+write selection
 potential:
-  score: 5
-  rationale: first-half channel select -0.0016/-0.0017 d512 while dropping ~2% FLOPs; -0.0008 d768; near noise
+  score: 4
+  rationale: first-half channel select -0.0016/-0.0017 while dropping ~2% FLOPs, d768 -0.0008; consistent sign, inside noise
+    -> 4
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: f5fad76ddbce

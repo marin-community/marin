@@ -74,7 +74,7 @@ events:
   note: neutral, no speed gain at d512
 potential:
   score: 3
-  rationale: AttnRes block cap 4/12 within noise (-0.001 to +0.0005), no speedup; closed
+  rationale: AttnRes block cap 4/12 within noise (-0.001 to +0.0005), no speedup; closed -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 6b19b5e91d65

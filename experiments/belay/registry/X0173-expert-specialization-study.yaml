@@ -276,7 +276,7 @@ trials:
   tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
 potential:
   score: 3
-  rationale: 'specialization study: every-layer ties cost up to +0.04; L0 ties -0.0018/-0.0029 noise'
+  rationale: 'specialization study: every-layer ties cost up to +0.04; L0 ties -0.0018/-0.0029 noise -> 3'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 160baeba6cc9

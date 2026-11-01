@@ -63,7 +63,7 @@ events:
   note: clearly worse
 potential:
   score: 1
-  rationale: PolyNorm experts +0.012 to +0.014; closed
+  rationale: PolyNorm experts +0.012 to +0.014; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 2da665a76375

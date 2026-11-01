@@ -55,7 +55,7 @@ events:
   note: Smaller routed-expert step clearly hurts
 potential:
   score: 1
-  rationale: routed-expert MuonH LR x0.7 +0.009, x0.5 +0.024; closed
+  rationale: routed-expert MuonH LR x0.7 +0.009, x0.5 +0.024; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 16fe850f8bfd

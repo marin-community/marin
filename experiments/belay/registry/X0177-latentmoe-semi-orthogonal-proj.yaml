@@ -84,7 +84,7 @@ events:
   note: 'Projections do real computation: frozen +0.012, Skewon +0.005'
 potential:
   score: 2
-  rationale: 'orthogonal latent projections: frozen +0.012, Stiefel +0.005, MuonH-trained noise; closed'
+  rationale: 'orthogonal latent projections: frozen +0.012, Stiefel +0.005, MuonH-trained noise; closed -> 2'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 6415d9126741

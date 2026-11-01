@@ -31,4 +31,4 @@ potential:
   rationale: 'adopted: GB200 memory/overlap schedule fits recipe on one rack'
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: 1077a54afdaf
+  inputs_digest: ba8232a2c7dc

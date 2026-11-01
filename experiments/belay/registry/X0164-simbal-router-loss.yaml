@@ -31,7 +31,7 @@ trials:
   note: broken as specified; raw loss never falls
 potential:
   score: 0
-  rationale: 'SimBal broken as specified: +0.221/+0.224, raw loss never falls'
+  rationale: 'SimBal broken as specified: +0.221/+0.224, raw loss never falls -> 0'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: e1ad81c3ba85

@@ -37,7 +37,7 @@ trials:
     W2 init: '0'
 potential:
   score: 3
-  rationale: dynamic cross-head mix +0.0018 d512; neutral
+  rationale: dynamic cross-head mix +0.0018 d512; neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 24d6a7208b8c

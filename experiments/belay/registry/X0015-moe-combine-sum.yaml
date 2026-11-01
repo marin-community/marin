@@ -212,7 +212,7 @@ events:
   note: gain/scale/combine family closed; no renorm is loss-neutral
 potential:
   score: 3
-  rationale: renorm sum variants within noise (+0.003 to -0.001); family closed loss-neutral
+  rationale: renorm sum variants within noise (+0.003 to -0.001); family closed loss-neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: e414586874c8

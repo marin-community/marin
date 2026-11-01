@@ -38,7 +38,7 @@ events:
   note: 'parked: NaN from beta cotangent'
 potential:
   score: 1
-  rationale: Kalman write strength NaN at steps 4-31 both seeds; parked
+  rationale: Kalman write strength NaN at steps 4-31 both seeds; parked -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 8bdd54e26093

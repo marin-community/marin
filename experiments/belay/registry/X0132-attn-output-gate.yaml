@@ -132,7 +132,7 @@ events:
   note: per-channel attention gates neutral
 potential:
   score: 3
-  rationale: elementwise attention gate +0.0008 to +0.0017 mean; neutral
+  rationale: elementwise attention gate +0.0008 to +0.0017 mean; neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 13e092726e28

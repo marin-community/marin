@@ -164,7 +164,7 @@ events:
   note: latent stays 0.5d (owner rule)
 potential:
   score: 2
-  rationale: 'owner rule: latent stays 0.5d; no-latent -0.032 d768 at -23% ex/s, latent 384 -0.021 at +14% step'
+  rationale: 'owner rule: latent stays 0.5d; no-latent -0.032 d768 at -23% ex/s, latent 384 -0.021 at +14% step -> 2'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: c07b6c32aff2

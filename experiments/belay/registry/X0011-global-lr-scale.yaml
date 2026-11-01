@@ -284,7 +284,7 @@ trials:
   tuned: MuonH and Adam LR x0.8 / x1.25
 potential:
   score: 1
-  rationale: every global/per-group LR multiplier loses at d512 (+0.002 to +0.022); default LR stays
+  rationale: every global/per-group LR multiplier loses at d512 (+0.002 to +0.022); default LR stays -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 7ceb32b4b7c8

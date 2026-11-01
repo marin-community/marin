@@ -42,7 +42,7 @@ events:
   note: Parameter Golf batch closed with no adoptions
 potential:
   score: 3
-  rationale: per-token MoE output gate +0.0005; neutral
+  rationale: per-token MoE output gate +0.0005; neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 32615933737f

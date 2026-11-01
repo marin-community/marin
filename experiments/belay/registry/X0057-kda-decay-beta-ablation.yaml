@@ -203,7 +203,7 @@ events:
   note: every KDA layer needs decay; beta stays
 potential:
   score: 1
-  rationale: removing KDA decay per layer loses (+0.005 to +0.019); beta removal noise-to-loss; closed
+  rationale: removing KDA decay per layer loses (+0.005 to +0.019); beta removal noise-to-loss; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 871e9dfd93e6

@@ -94,7 +94,7 @@ events:
   note: Lost on candidate 9 and costs 6% step time
 potential:
   score: 2
-  rationale: V-gate -0.0045/-0.005 on cand 6 but +0.0019/+0.0029 on cand 9 at +6% step; closed
+  rationale: V-gate -0.0045/-0.005 on cand 6 but +0.0019/+0.0029 on cand 9 at +6% step; closed -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: c15a952a1f63

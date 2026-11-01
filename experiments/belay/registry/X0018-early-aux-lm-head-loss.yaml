@@ -59,7 +59,7 @@ events:
   note: both aux-loss variants worse; dropped
 potential:
   score: 1
-  rationale: early aux lm_head loss +0.016/+0.014 d512; closed
+  rationale: early aux lm_head loss +0.016/+0.014 d512; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 098916dd276a

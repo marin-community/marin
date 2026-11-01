@@ -61,7 +61,7 @@ events:
   note: neutral; not adopted
 potential:
   score: 3
-  rationale: Muon2 0.0/-0.0014; neutral
+  rationale: Muon2 0.0/-0.0014; neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 4200f755329f

@@ -273,9 +273,9 @@ events:
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: no full-width expert write in Belay Ckpt 1
 potential:
-  score: 7
-  rationale: 'removed: L4,5 full write -0.0175/-0.0167 eq steps, d768 -0.0095/-0.0091; fixed time -0.0022/-0.0065 at +5.7%
-    step'
+  score: 6
+  rationale: L4,5 full write -0.0175/-0.0167 equal data, d768 -0.0095/-0.0091; but equal time -0.0022/-0.0065 at +5.7% step
+    does not hold; MFU not run -> 6
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: ccd26dd9d001

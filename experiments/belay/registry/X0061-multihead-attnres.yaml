@@ -234,7 +234,7 @@ events:
   note: does not carry to d768; not added to recipe
 potential:
   score: 3
-  rationale: multi-head AttnRes -0.0115 did not replicate (-0.003), d768 neutral; closed
+  rationale: multi-head AttnRes -0.0115 did not replicate (-0.003), d768 neutral; closed -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 5416e4bd3e3d

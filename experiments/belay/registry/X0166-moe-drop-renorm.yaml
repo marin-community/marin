@@ -43,8 +43,8 @@ events:
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: Belay Ckpt 1 runs moe_drop_renorm=false
 potential:
-  score: 4
-  rationale: 'removed: drop-aware renorm -0.0014 2-seed mean (part of cand 9); Ckpt 1 ragged dispatch makes it moot'
+  score: 3
+  rationale: drop-aware renorm -0.0014 2-seed mean; inside noise; moot with Ckpt 1 ragged dispatch -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 1c7f627c0ed3

@@ -38,7 +38,7 @@ events:
   note: crashes from memory pressure; --pipeline-depth defaults to 0
 potential:
   score: 4
-  rationale: pipelined loop 195.8->171.2 ms wall-clock but full runs crash ~step 515 on memory; fixable
+  rationale: pipelined loop 195.8->171.2 ms wall-clock but full runs crash ~step 515 on memory; fixable -> 4
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: c461ef55c423

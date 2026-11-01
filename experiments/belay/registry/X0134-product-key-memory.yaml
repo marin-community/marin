@@ -72,7 +72,7 @@ events:
   note: adds little, costs a lot
 potential:
   score: 1
-  rationale: product-key memory -0.002 to -0.005 equal steps at +13-42% step; ~+0.02 to +0.07 fixed time
+  rationale: product-key memory -0.002 to -0.005 equal steps at +13-42% step; ~+0.02 to +0.07 fixed time -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: f28821eddea9

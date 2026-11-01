@@ -42,8 +42,8 @@ events:
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
   note: no-op
 potential:
-  score: 2
-  rationale: skip expert recompute is a no-op (inner checkpoint not operative)
+  score: 3
+  rationale: skip expert recompute -0.0004/+0.0006, no step change; a no-op (inner checkpoint not operative) -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 9b35140661bd

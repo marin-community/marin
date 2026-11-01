@@ -52,8 +52,8 @@ events:
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917013133
   note: Router-aligned component carries information experts use; closed
 potential:
-  score: 2
-  rationale: router-orthogonal expert reads +0.0014 to +0.0022; closed
+  score: 3
+  rationale: router-orthogonal expert reads +0.0014 to +0.0022 over 4 runs; inside noise -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 7189da408c36

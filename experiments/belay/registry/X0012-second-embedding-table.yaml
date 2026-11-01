@@ -89,7 +89,8 @@ trials:
   tuned: vs bigram variants
 potential:
   score: 4
-  rationale: emb2 -0.0078 d512 at -7% ex/s; only -0.004 vs new base, per-layer variant -0.0013; weak equal-data win
+  rationale: emb2 -0.0078 at -7% ex/s on old base, only -0.004/-0.0036/-0.0013 vs newer bases; consistent sign inside noise
+    -> 4
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 70ae1c8e4259

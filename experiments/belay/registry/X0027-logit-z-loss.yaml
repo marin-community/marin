@@ -151,7 +151,7 @@ events:
   note: z-loss 0 taken out of the bundle; lm_head z-loss 1e-4 must stay (maintainer)
 potential:
   score: 1
-  rationale: 'house rule: lm_head z-loss must stay; z-loss 0 only -0.0024 then +0.0008/+0.0009; removed'
+  rationale: 'house rule: lm_head z-loss must stay; z-loss 0 only -0.0024 then +0.0008/+0.0009; removed -> 1'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 34df7f7a99ec

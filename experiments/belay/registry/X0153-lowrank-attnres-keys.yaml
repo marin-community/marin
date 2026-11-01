@@ -45,7 +45,7 @@ trials:
   note: seed mean
 potential:
   score: 3
-  rationale: low-rank AttnRes keys +0.0006/+0.0009; neutral
+  rationale: low-rank AttnRes keys +0.0006/+0.0009; neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 5b660fd1e425

@@ -61,7 +61,7 @@ events:
   note: neither variant helps
 potential:
   score: 2
-  rationale: expert visit bias rows +0.0067/+0.0032, +0.002/-0.0016; closed
+  rationale: expert visit bias rows +0.0067/+0.0032, +0.002/-0.0016; closed -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: f4631e53b078

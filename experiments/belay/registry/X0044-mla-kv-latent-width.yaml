@@ -94,7 +94,7 @@ events:
   note: Narrower KV latent loses; full 512 kept
 potential:
   score: 1
-  rationale: narrower MLA KV latent loses (+0.016, +0.019, +0.005-0.009) d512; closed
+  rationale: narrower MLA KV latent loses (+0.016, +0.019, +0.005-0.009) d512; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 7ae47ca689ac

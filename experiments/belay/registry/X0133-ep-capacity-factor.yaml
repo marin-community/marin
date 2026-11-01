@@ -107,7 +107,7 @@ trials:
   note: drops 0.4-1.1% vs 1.3% at 1.15
 potential:
   score: 3
-  rationale: capacity 1.3 -0.0032/-0.0026 at +4.5% step (net loss fixed time); lower capacity loses
+  rationale: capacity 1.3 -0.0032/-0.0026 at +4.5% step (net loss fixed time); lower capacity loses -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 4af68a9c31fd

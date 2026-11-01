@@ -28,8 +28,8 @@ trials:
   settings:
     warmup: 5%
 potential:
-  score: 2
-  rationale: warmup 5% +0.0044 d512; loss
+  score: 3
+  rationale: warmup 5% +0.0044 single run; inside the d512 noise band -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 7c4190c265d3

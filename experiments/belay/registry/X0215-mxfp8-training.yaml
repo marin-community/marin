@@ -29,4 +29,4 @@ potential:
   rationale: 'adopted: MXFP8 on GB200, 16.83->14.59 s/step (-13%)'
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: fdf53766f002
+  inputs_digest: 8808790e0e46

@@ -69,7 +69,7 @@ events:
   note: uniform top-6 beats learned null routing
 potential:
   score: 2
-  rationale: MoE++ null experts +0.001 to +0.016; closed
+  rationale: MoE++ null experts +0.001 to +0.016; closed -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: fe90284f7224

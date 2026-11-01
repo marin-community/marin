@@ -61,7 +61,7 @@ events:
   note: Both directions lose; q/k want the shared MuonH step; muonh_qk group kept
 potential:
   score: 2
-  rationale: separate q/k MuonH LR loses both ways (+0.0006 to +0.0074); closed
+  rationale: separate q/k MuonH LR loses both ways (+0.0006 to +0.0074); closed -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: f05090b156d5

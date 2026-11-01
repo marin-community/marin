@@ -54,7 +54,7 @@ events:
   note: Shared 0.95 already optimal for routed experts
 potential:
   score: 2
-  rationale: routed-expert momentum 0.98 +0.004, 0.90 +0.005; closed
+  rationale: routed-expert momentum 0.98 +0.004, 0.90 +0.005; closed -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: f828cf0dfb52

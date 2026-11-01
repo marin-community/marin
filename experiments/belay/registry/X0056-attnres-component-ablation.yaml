@@ -179,7 +179,7 @@ trials:
     straight-sum input: router
 potential:
   score: 1
-  rationale: 'ablation: every straight-sum reader loses (+0.001 to +0.028); AttnRes components needed'
+  rationale: 'ablation: every straight-sum reader loses (+0.001 to +0.028); AttnRes components needed -> 1'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 9995296eaabe

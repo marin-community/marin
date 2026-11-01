@@ -201,7 +201,7 @@ events:
 potential:
   score: 4
   rationale: beta1 0.8 -0.0047 4 seeds but bundled with z-loss 0 (house rule); per-category beta1 noise; removed for Ckpt
-    1
+    1 -> 4
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: d17afc111175

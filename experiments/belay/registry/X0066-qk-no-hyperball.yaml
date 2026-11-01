@@ -136,7 +136,7 @@ events:
   note: buys nothing at d512; no d768 run
 potential:
   score: 2
-  rationale: q/k without hyperball loses +0.002 to +0.010 d512; closed
+  rationale: q/k without hyperball loses +0.002 to +0.010 d512; closed -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 49636fd39256

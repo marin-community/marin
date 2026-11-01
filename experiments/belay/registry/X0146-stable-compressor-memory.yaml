@@ -139,7 +139,7 @@ events:
   note: 'closed at d512: same data +0.0023, 2x prefill +0.0030, 8x +0.0039'
 potential:
   score: 2
-  rationale: n-gram stat memory +0.0023 to +0.016 at same data, prefill no better; closed
+  rationale: n-gram stat memory +0.0023 to +0.016 at same data, prefill no better; closed -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 7f18565f2e29

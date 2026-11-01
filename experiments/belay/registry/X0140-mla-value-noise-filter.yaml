@@ -42,7 +42,7 @@ events:
   note: neutral
 potential:
   score: 3
-  rationale: MLA value noise filter +0.0004/+0.001; neutral
+  rationale: MLA value noise filter +0.0004/+0.001; neutral -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: d67634364696

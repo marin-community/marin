@@ -134,7 +134,7 @@ events:
   note: closed as negative in pause summary
 potential:
   score: 1
-  rationale: low-rank router loses in all 6 variants (+0.006 to +0.015); closed
+  rationale: low-rank router loses in all 6 variants (+0.006 to +0.015); closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: ad78d808ccc6

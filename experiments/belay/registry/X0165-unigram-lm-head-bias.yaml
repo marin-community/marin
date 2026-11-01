@@ -29,8 +29,8 @@ events:
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
   note: closed in batch 102 round
 potential:
-  score: 2
-  rationale: log-unigram lm_head bias +0.0025; closed
+  score: 3
+  rationale: log-unigram lm_head bias +0.0025 single run; inside noise -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: bd2f808869c0

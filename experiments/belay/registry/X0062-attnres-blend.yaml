@@ -50,7 +50,7 @@ trials:
     attn_res_blend: dynamic
 potential:
   score: 3
-  rationale: AttnRes blend with residual -0.0011/+0.0004; noise
+  rationale: AttnRes blend with residual -0.0011/+0.0004; noise -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: ad871f10fad3

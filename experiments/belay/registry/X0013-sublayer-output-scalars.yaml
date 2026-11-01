@@ -96,7 +96,7 @@ events:
   note: gain/scale/combine family closed at d512 1x
 potential:
   score: 3
-  rationale: output scalars -0.002 vs 2-seed mean, +0.004 vs fp32 base; family closed as noise
+  rationale: output scalars -0.002 vs 2-seed mean, +0.004 vs fp32 base; family closed as noise -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: d663fb150c77

@@ -135,7 +135,7 @@ events:
   note: n-gram memory branch saturated at candidate 4 at d512 fixed time
 potential:
   score: 2
-  rationale: trigram source +0.0008 at -7% ex/s (~+0.012 fixed time); gated -0.0023/-0.0008; closed
+  rationale: trigram source +0.0008 at -7% ex/s (~+0.012 fixed time); gated -0.0023/-0.0008; closed -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 35f7e1775048

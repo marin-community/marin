@@ -42,7 +42,7 @@ events:
   note: not adopted
 potential:
   score: 2
-  rationale: head-wise Muon +0.0054 (and +0.0018 earlier) d512; closed
+  rationale: head-wise Muon +0.0054 d512 (outside the 0.005 band), +0.0018 earlier; loss -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: f44d02a2f64f

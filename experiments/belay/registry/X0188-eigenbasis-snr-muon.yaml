@@ -186,7 +186,7 @@ trials:
   note: best equal-step, within noise
 potential:
   score: 2
-  rationale: eigenbasis SNR Muon best +0.0011/-0.0025 at +7-10% step; within noise, slower
+  rationale: eigenbasis SNR Muon best +0.0011/-0.0025 at +7-10% step; within noise, slower -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 89f01b41d388

@@ -379,8 +379,8 @@ events:
   note: 'Not in the Belay Ckpt Oct 20 2026 config: value_embeds=none'
   checkpoint: belay-ckpt-2026-10-20
 potential:
-  score: 8
-  rationale: equal-time win Δ −0.0112 at speedrun d512 (step time +1%, within 1%); one seed; flag already in code
+  score: 7
+  rationale: -0.0112 at speedrun equal time (step +1%); one seed; ladder and MFU not run; flag already in code -> 7
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 6ad8806d42cd

@@ -104,7 +104,7 @@ events:
   note: within noise; DC-style follow-up not worth building
 potential:
   score: 3
-  rationale: sliding-window branch in MLA -0.0013 to +0.001; within noise
+  rationale: sliding-window branch in MLA -0.0013 to +0.001; within noise -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 44e4cbc67962

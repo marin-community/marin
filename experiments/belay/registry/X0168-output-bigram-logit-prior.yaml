@@ -47,7 +47,7 @@ trials:
   note: seed mean
 potential:
   score: 2
-  rationale: output bigram logit prior +0.0013 / +0.006; loss
+  rationale: output bigram logit prior +0.0013 and +0.006 seed means; second arm outside the 0.005 band; loss -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 1d712cdf7c18

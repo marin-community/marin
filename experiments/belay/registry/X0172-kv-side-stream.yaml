@@ -67,7 +67,7 @@ events:
   note: no signs of life; transport bottleneck
 potential:
   score: 1
-  rationale: KV side stream +0.065 to +0.079 and 8-12% slower; closed
+  rationale: KV side stream +0.065 to +0.079 and 8-12% slower; closed -> 1
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: cdaf31e07ff4

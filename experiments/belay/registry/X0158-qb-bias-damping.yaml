@@ -45,7 +45,7 @@ trials:
   note: seed mean
 potential:
   score: 3
-  rationale: damped QB bias +0.0007/+0.0017; neutral to worse
+  rationale: damped QB bias +0.0007/+0.0017; neutral to worse -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: eeca809a072c

@@ -60,7 +60,7 @@ events:
   note: neutral; placement at 4 and 6 stays
 potential:
   score: 3
-  rationale: global layer placement neutral (+0.0005, -0.0006); closed
+  rationale: global layer placement neutral (+0.0005, -0.0006); closed -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 72169d018d9f

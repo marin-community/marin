@@ -346,6 +346,7 @@ events:
 potential:
   score: 3
   rationale: read/write latent split flat at fixed total (d512 and d768 data-matched); widening needs -11% ex/s break-even
+    -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: dd735de94249

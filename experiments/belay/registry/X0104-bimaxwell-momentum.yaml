@@ -313,8 +313,8 @@ events:
   note: no Bi-Maxwell momentum in Belay Ckpt 1
 potential:
   score: 6
-  rationale: 'removed: Bi-Maxwell -0.0048/-0.0056 at +1.4% step (net ~-0.003), -0.0054 d768 with decay power; later variants
-    noise'
+  rationale: Bi-Maxwell -0.0048/-0.0056 equal data at +1.4% step, d768 -0.0054; equal time not run (est ~-0.003); later variants
+    noise -> 6
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: d4052fbb4eec

@@ -351,9 +351,8 @@ trials:
   step_time_change: +8.7% (206.4 ms)
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
 potential:
-  score: 9
-  rationale: '4x(64k x256v)+block_v 64: -0.0056/-0.0095 fixed time at ~0 step cost; -0.0064 d768; other fixed-time arms -0.003
-    to -0.006'
+  score: 3
+  rationale: gain tracks added params (4x64x256 vs default); not a like-for-like win (user)
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 08b1eadcc85e

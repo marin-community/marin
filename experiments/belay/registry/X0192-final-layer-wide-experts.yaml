@@ -55,8 +55,8 @@ trials:
   tuned: layer 5 vs layers 4+5
   note: fixed-time cost cancels most
 potential:
-  score: 5
-  rationale: wider final-layer experts -0.007/-0.0089 at +8% step; fixed-time cost cancels most
+  score: 6
+  rationale: wider final-layer experts -0.007/-0.0089 equal data at +8% step; equal time, ladder and MFU not run -> 6
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 1e3404863555

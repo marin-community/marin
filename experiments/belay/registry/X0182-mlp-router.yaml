@@ -34,8 +34,8 @@ events:
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5910006702
   note: Nonlinear residual router slightly worse; linear router hard to beat
 potential:
-  score: 2
-  rationale: tiny-MLP residual router +0.0028/+0.003; closed
+  score: 3
+  rationale: tiny-MLP residual router +0.0028/+0.003; inside noise -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 05334b3a0ff2

@@ -131,7 +131,7 @@ events:
   note: warmup at 0.95 is noise (-0.0027 mean); 0.98 is ~0.02 worse with or without warmup
 potential:
   score: 2
-  rationale: momentum warmup to 0.95 is noise (-0.0027 mean); 0.98 is ~+0.02 with or without warmup
+  rationale: warmup to 0.95 -0.0027 mean at fixed time (noise); 0.98 +0.02 at fixed time and +0.0223 speedrun; loss -> 2
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 0c97be6c1412
