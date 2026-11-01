@@ -482,9 +482,8 @@ events:
   note: 'Not in the Belay Ckpt Oct 20 2026 config: logit_soft_cap=null'
   checkpoint: belay-ckpt-2026-10-20
 potential:
-  score: 5
-  rationale: no result on current recipe yet; Ckpt 1-era wins (d512 -0.024/-0.028, d1024 -0.008) shrank with scale; retest
-    escalated
+  score: 8
+  rationale: equal-time win Δ −0.0217 at speedrun d512; step +1%; one seed; older-recipe d768/d1024 wins
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: 54eeee771a1d
+  inputs_digest: 1388a8922f2d
