@@ -289,7 +289,9 @@ def intake_comments(rocket_times: dict[str, datetime.datetime]) -> list[dict]:
     the cutover also carries ``approved_at``, which queues it. ``rocket_times`` caches each comment's first 🚀."""
     comments = []
     for c in github_json(f"repos/{REPOSITORY}/issues/{INTAKE_ISSUE}/comments?per_page=100"):
-        handled = c["reactions"]["rocket"] > 0 or c["user"]["type"] == "Bot" or c["body"].startswith(BOT_MARK)
+        if c["user"]["type"] == "Bot" or c["body"].startswith(BOT_MARK):
+            continue  # bot and agent comments (tests, archived descriptions) are not suggestions
+        handled = c["reactions"]["rocket"] > 0
         cid = str(c["id"])
         if c["reactions"]["rocket"] > 0 and cid not in rocket_times:
             reactions = github_json(f"repos/{REPOSITORY}/issues/comments/{cid}/reactions?per_page=100")
