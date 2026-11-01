@@ -194,9 +194,11 @@ will not round-trip today, because the child rewrites `Location` against its own
 `/proxy/t/<token>/<name>` prefix without the cluster tag; direct-API endpoints (an
 OpenAI-style `/v1/*` server) are unaffected.
 
-For relay 502s, use the JSON error body to identify the failing path.
-`upstream transport error: client error (Connect)` is emitted by the native proxy
-when it cannot connect to its upstream. Compare `proxy_responses_total` with `scope=total` in Finelog's
+When a task-owned endpoint is unavailable during replacement, the native proxy returns
+503 with `Retry-After: 5`; clients should retry within their operation deadline.
+This includes an expired registration and a transport failure to the old task address.
+Unknown endpoints still return 404. For other relay 502s, use the JSON error body to
+identify the failing path. Compare `proxy_responses_total` with `scope=total` in Finelog's
 `telemetry_v1.iris.rpc` for the hub (`cluster` is empty) and the peer. A peer 502
 increase shows that requests reached the peer proxy, where its upstream is the
 registered endpoint. The `scope=total` counter is exact; per-endpoint series are capped.
