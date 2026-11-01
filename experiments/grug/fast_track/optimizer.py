@@ -288,6 +288,7 @@ ATTN_RES_QUERY_LR_SCALE = 0.1
 KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
 _ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult)$")
+_VALUE_EMBED_TABLE = re.compile(r"(?:^|\.)value_embed$")
 
 
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
@@ -335,6 +336,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     embed_weight_decay: float = 0.0
     """Fixed (not annealed) decoupled decay of ``token_embed``, ``p <- p (1 - adam_lr_t wd) - adam_lr_t u``; needs
     ``embed_optimizer`` ``ademamix`` or ``adam``."""
+    value_embed_lr_mult: float = 0.0
+    """Adam LR multiplier of the value-embedding tables alone (``value_embed``), in their own ``value_embed`` group
+    with the ``adam`` group's decay. 0: off (the tables stay in ``adam`` at ``adam_lr``)."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -412,6 +416,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
                 "embed": embed_at(adam_lr),
             }
+            if self.value_embed_lr_mult:
+                # Added only when on, so the flag-off optimizer state keeps its structure.
+                transforms["value_embed"] = adam_at(adam_lr * self.value_embed_lr_mult, decay=True)
             return optax.multi_transform(
                 {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in transforms.items()}, self.create_mask
             )
@@ -439,6 +446,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
+            if self.value_embed_lr_mult and _VALUE_EMBED_TABLE.search(path_lower):
+                return "value_embed"
             # Inkling rel-pos weights; value embeddings and their mixing weights; small per-layer gates.
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
