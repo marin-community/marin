@@ -35,6 +35,20 @@ the fastest path: in per-call microbenchmarks on one MI300X, XLA's bf16 grouped
 GEMM took 11-28% less time per forward+backward triple than the best Triton
 configuration.
 
+## Multi-node runs
+
+In an allocation of more than one node, the wrapper adds XLA flags that overlap collectives with compute: the latency-hiding scheduler, 8 GiB all-gather and reduce-scatter combine thresholds, up to 4 collectives in flight, pipelined all-reduce, reduce-scatter and all-gather across loop iterations, while-loop double buffering, and starting each collective as early as possible. With data parallelism across nodes, each layer's expert-weight gradients are all-reduced over the network inside the backward layer scan, and without these flags that all-reduce runs with nothing to overlap it. Set any of the flags in `XLA_FLAGS` to override it.
+
+June Snowball (`synthetic_benchmark.py --size full`), EP8 inside each node and data parallelism across nodes, 8 sequences of 4,096 tokens per GPU, `--moe-impl ring_filtered --pooled-transport-capacity-factor 1.1 --attention gpu_pallas_triton_flash --remat-mode save_moe`, step time as the median of steps 2-19:
+
+| Hardware | Nodes | Without the flags | With the flags | Change |
+|---|---|---|---|---|
+| MI350X (`mi3508x`, this wrapper and venv) | 2 | 1.975 s | 1.719-1.720 s | -13% |
+| MI350X | 1 | 1.529-1.534 s | 1.526-1.529 s | none |
+| MI355X (TheRock 7.14 container, JAX 0.11.0) | 2 | 1.902-1.955 s | 1.649-1.656 s | -14% |
+
+A second two-node MI350X run without the flags took 3.026 s, about 1 s slower on every step; its cause is unknown. The flags were tested only with two nodes.
+
 ## Build the venv
 
 The wrapper runs `uv run --no-sync`, so build the venv once on a login node:

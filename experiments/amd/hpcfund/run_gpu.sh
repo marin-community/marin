@@ -13,6 +13,19 @@ export PYTHONUNBUFFERED=1
 # A later --xla_gpu_enable_command_buffer=... in the caller's XLA_FLAGS overrides this.
 export XLA_FLAGS="--xla_gpu_enable_command_buffer= $XLA_FLAGS"
 
+# Across nodes, data parallelism all-reduces each layer's expert gradients over the NICs inside the backward
+# layer scan. These flags let XLA run several collectives at once, move them into the next scan iteration and
+# start them early, so most of that traffic overlaps compute. They are neutral on one node, so only multi-node
+# allocations get them; the caller's XLA_FLAGS still override any of them. README.md has the measurements.
+if [ "${SLURM_JOB_NUM_NODES:-1}" -gt 1 ]; then
+    MULTINODE_XLA_FLAGS="--xla_gpu_enable_latency_hiding_scheduler=true \
+--xla_gpu_all_gather_combine_threshold_bytes=8589934592 --xla_gpu_reduce_scatter_combine_threshold_bytes=8589934592 \
+--xla_gpu_experimental_parallel_collective_overlap_limit=4 --xla_gpu_enable_pipelined_all_reduce=true \
+--xla_gpu_enable_pipelined_reduce_scatter=true --xla_gpu_enable_pipelined_all_gather=true \
+--xla_gpu_enable_while_loop_double_buffering=true --xla_gpu_experimental_collective_start_as_early_as_possible=true"
+    export XLA_FLAGS="$MULTINODE_XLA_FLAGS $XLA_FLAGS"
+fi
+
 # JAX stores XLA's per-fusion autotune results inside --compilation-cache-dir. Reusing them across
 # configurations produced executables 2-3x slower (save_moe at batch 64 took 4.95 s per step against
 # 1.83 s with fresh autotuning) and a false batch-96 regression. `none` still caches compiled
