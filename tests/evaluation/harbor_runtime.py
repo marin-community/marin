@@ -70,8 +70,9 @@ def write_runtime_overlay(path: Path, tmp_path: Path, **overrides: object) -> No
 def run_single_turn_aime_agent(
     tmp_path: Path,
     *,
-    content: str,
+    content: str | None,
     finish_reason: str | None = None,
+    reasoning_content: str | None = None,
     transient_failures: int = 0,
     model_alias: str | None = None,
 ) -> dict[str, object]:
@@ -79,7 +80,10 @@ def run_single_turn_aime_agent(
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     answer_path = tmp_path / "answer.txt"
-    choice: dict[str, object] = {"message": {"content": content}}
+    message: dict[str, object] = {"content": content}
+    if reasoning_content is not None:
+        message["reasoning_content"] = reasoning_content
+    choice: dict[str, object] = {"message": message}
     if finish_reason is not None:
         choice["finish_reason"] = finish_reason
     response_bytes = json.dumps({"choices": [choice]}).encode()
