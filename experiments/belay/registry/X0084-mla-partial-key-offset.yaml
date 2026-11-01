@@ -4,7 +4,7 @@ name: MLA partial key offset
 category: Attention variants
 summary: Take the first half of each MLA head's key channels from the previous token.
 source: agent
-status: adopted
+status: running
 first_batch: 44
 tags:
 - key offset
@@ -82,6 +82,17 @@ trials:
   step_time_change: ~0 (190.3 vs 190.2 ms)
   note: free simplification
   derived: true
+- id: t004
+  variant: mla_key_offset=true
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0084
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562745363
+  wandb: []
+  settings:
+    mla_key_offset: 'true'
+  commit: c4b66cea21
 events:
 - type: adopted
   batch: '51'
