@@ -7,7 +7,8 @@ const KIND_WORD = { better: 'better', worse: 'worse', neutral: 'noise' }
 const STATE_CLASS = { recorded: 'in', running: 'won', planned: 'tested', approved: 'tested', pending: 'tested', declined: 'lost' }
 const STATE_WORD = {
   pending: 'waiting',
-  approved: 'approved',
+  approved: 'approved, queued',
+  upstream: 'approved on GitHub, not queued',
   planned: 'planned',
   running: 'running',
   recorded: 'recorded',

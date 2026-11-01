@@ -37,6 +37,9 @@ class BelayConfig:
     batch_issue: int
     """Where plans and results are posted when GitHub posting is on."""
     page_url: str
+    github_approval_cutover: datetime.datetime
+    """A #9514 comment the intake bot transfers (🚀) after this queues the idea by itself; earlier ones need the
+    admin page's Queue, so the backlog does not flood the queue."""
 
     @property
     def recipe_name(self) -> str:
@@ -63,6 +66,7 @@ PRODUCTION = BelayConfig(
     repository="marin-community/marin",
     batch_issue=9451,
     page_url="https://marina.oa.dev/belay/",
+    github_approval_cutover=datetime.datetime(2026, 11, 1, 8, 26, tzinfo=datetime.UTC),
 )
 
 # The local demo: same rules, but its weekly branches are cut from the demo code branch (which carries the Belay

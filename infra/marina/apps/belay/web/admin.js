@@ -65,8 +65,10 @@ function renderControls() {
 }
 
 function renderPending() {
-  const pending = state.ideas.filter((i) => i.state === 'pending')
-  document.getElementById('pending-n').textContent = String(pending.length)
+  // Pending ideas wait for a decision. "upstream" ideas were approved on GitHub before the cutover, so nothing
+  // queued them; Approve queues one (an idea approved on both paths still runs once).
+  const pending = state.ideas.filter((i) => i.state === 'pending' || i.state === 'upstream')
+  document.getElementById('pending-n').textContent = String(pending.filter((i) => i.state === 'pending').length)
   if (!pending.length) {
     setChildren('pending', el('div', { class: 'none' }, 'Nothing to review'))
     return
@@ -94,15 +96,23 @@ function renderPending() {
               },
             },
             el('b', {}, first),
-            el('small', {}, `${idea.origin === 'intake' ? '#9514' : 'proposal'} · ${idea.author} · `, when(idea.posted_at)),
+            el(
+              'small',
+              {},
+              `${idea.state === 'upstream' ? 'approved on GitHub, not queued · ' : 'not approved · '}`,
+              `${idea.origin === 'intake' ? '#9514' : 'proposal'} · ${idea.author} · `,
+              when(idea.posted_at),
+            ),
           ),
           idea.url ? link(idea.url, '↗') : el('span'),
           el(
             'button',
-            { type: 'button', class: 'btn primary', onclick: () => act(`ideas/${idea.id}/approve`, {}, 'Approved') },
-            'Approve',
+            { type: 'button', class: 'btn primary', onclick: () => act(`ideas/${idea.id}/approve`, {}, 'Approved and queued') },
+            idea.state === 'upstream' ? 'Queue' : 'Approve',
           ),
-          el('button', { type: 'button', class: 'btn', onclick: () => act(`ideas/${idea.id}/dismiss`, {}, 'Dismissed') }, 'Dismiss'),
+          idea.state === 'pending'
+            ? el('button', { type: 'button', class: 'btn', onclick: () => act(`ideas/${idea.id}/dismiss`, {}, 'Dismissed') }, 'Dismiss')
+            : el('span'),
         ),
         expanded ? el('div', { class: 'detail-c' }, markdown(idea.body)) : null,
       )

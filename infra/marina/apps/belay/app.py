@@ -130,7 +130,7 @@ class IdeaState(StrEnum):
     PENDING = "pending"
     """An intake suggestion or maintainer proposal waiting for a maintainer."""
     UPSTREAM = "upstream"
-    """Already approved on GitHub before this page existed; not shown."""
+    """Approved on GitHub before the cutover, so not queued; approving it on the page queues it."""
     DISMISSED = "dismissed"
     APPROVED = "approved"
     """Approved; no session has planned it yet."""
@@ -164,6 +164,9 @@ class IntakeComment(BaseModel):
     url: str
     posted_at: datetime.datetime
     approved_upstream: bool
+    """The intake bot transferred it (🚀): it was approved on GitHub."""
+    approved_at: datetime.datetime | None = None
+    """When the bot transferred it, sent only for approvals after the watcher's cutover; such an approval queues it."""
 
 
 class IntakeSync(BaseModel):
@@ -308,6 +311,81 @@ def _enqueue(conn: Connection, kind: EventKind, ref: str, summary: str, payload:
         text("INSERT INTO events (kind, ref, summary, payload) VALUES (:kind, :ref, :summary, CAST(:payload AS JSONB))"),
         {"kind": kind.value, "ref": ref, "summary": summary, "payload": json.dumps(payload)},
     )
+
+
+GITHUB_APPROVER = "GitHub 👍 (intake bot)"
+
+
+def approve_idea(conn: Connection, idea_id: int, caller: str, at: datetime.datetime | None = None) -> bool:
+    """Approve an idea and queue its one ``approved`` event; False when it is already approved or further along.
+
+    Both approval paths (the admin page and a GitHub 👍 the watcher saw) end here, so an idea approved on both runs
+    once. A pending idea's text freezes here: from now on sessions get the text as it was approved.
+    """
+    rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
+    if not rows:
+        raise HTTPException(404, f"no idea {idea_id}")
+    idea = rows[0]
+    if idea["state"] not in (IdeaState.PENDING, IdeaState.UPSTREAM):
+        return False
+    conn.execute(
+        text(
+            "UPDATE ideas SET state = 'approved', decided_by = :by, decided_at = COALESCE(CAST(:at AS TIMESTAMPTZ), "
+            "now()), updated_at = now() WHERE id = :id"
+        ),
+        {"by": caller, "at": at, "id": idea_id},
+    )
+    label = idea["title"] or idea["body"].strip().splitlines()[0][:90]
+    _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} approved “{label}”"))
+    queued = _rows(conn, "SELECT id FROM events WHERE kind = 'approved' AND ref = :ref", ref=str(idea_id))
+    if not queued:
+        _enqueue(
+            conn,
+            EventKind.APPROVED,
+            str(idea_id),
+            f"idea #{idea_id} approved by {caller}",
+            {
+                "idea_id": idea_id,
+                "origin": idea["origin"],
+                "author": idea["author"],
+                "title": idea["title"],
+                "body": idea["body"],
+                "url": idea["url"],
+                "approved_by": caller,
+            },
+        )
+    return True
+
+
+def sync_intake_comments(conn: Connection, comments: list[IntakeComment]) -> int:
+    """Upsert #9514 comments as ideas, and approve (queue) those the watcher saw approved on GitHub after its
+    cutover. Returns the number of new pending ideas."""
+    added = 0
+    for c in comments:
+        state = IdeaState.UPSTREAM if c.approved_upstream else IdeaState.PENDING
+        inserted = conn.execute(
+            text(
+                "INSERT INTO ideas (origin, comment_id, author, body, url, posted_at, state) "
+                "VALUES ('intake', :cid, :author, :body, :url, :posted_at, :state) "
+                "ON CONFLICT (comment_id) DO UPDATE SET body = CASE WHEN ideas.state = 'pending' "
+                "THEN EXCLUDED.body ELSE ideas.body END RETURNING (xmax = 0)"
+            ),
+            {
+                "cid": c.comment_id,
+                "author": c.author,
+                "body": c.body,
+                "url": c.url,
+                "posted_at": c.posted_at,
+                "state": state.value,
+            },
+        ).scalar_one()
+        if inserted and state is IdeaState.PENDING:
+            added += 1
+            _activity(conn, ActivityPost(kind="intake", title=f"New intake suggestion from {c.author}"))
+        if c.approved_at is not None:
+            idea_id = _rows(conn, "SELECT id FROM ideas WHERE comment_id = :cid", cid=c.comment_id)[0]["id"]
+            approve_idea(conn, idea_id, GITHUB_APPROVER, c.approved_at)
+    return added
 
 
 def _activity(conn: Connection, post: ActivityPost) -> int:
@@ -551,7 +629,7 @@ def create_api(services: Any) -> FastAPI:
         with engine.begin() as conn:
             _expire_sessions(conn)
             settings = _settings(conn)
-            ideas = _rows(conn, "SELECT * FROM ideas WHERE state NOT IN ('upstream') ORDER BY posted_at DESC")
+            ideas = _rows(conn, "SELECT * FROM ideas ORDER BY posted_at DESC")
             runs = _rows(conn, "SELECT * FROM runs ORDER BY submitted_at DESC NULLS LAST")
             activity = _rows(conn, f"SELECT * FROM activity ORDER BY at DESC LIMIT {RECENT_ACTIVITY}")
             sessions = _rows(
@@ -599,40 +677,25 @@ def create_api(services: Any) -> FastAPI:
 
     def _decide(idea_id: int, approve: bool, caller: str) -> dict[str, str]:
         with engine.begin() as conn:
+            if approve:
+                if not approve_idea(conn, idea_id, caller):
+                    raise HTTPException(409, f"idea {idea_id} is already approved or further along")
+                return {"state": IdeaState.APPROVED.value}
             idea = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
             if not idea:
                 raise HTTPException(404, f"no idea {idea_id}")
-            idea = idea[0]
-            if idea["state"] != IdeaState.PENDING:
-                raise HTTPException(409, f"idea {idea_id} is already {idea['state']}")
-            new_state = IdeaState.APPROVED if approve else IdeaState.DISMISSED
+            if idea[0]["state"] != IdeaState.PENDING:
+                raise HTTPException(409, f"idea {idea_id} is already {idea[0]['state']}")
             conn.execute(
                 text(
-                    "UPDATE ideas SET state = :s, decided_by = :by, decided_at = now(), updated_at = now() "
+                    "UPDATE ideas SET state = 'dismissed', decided_by = :by, decided_at = now(), updated_at = now() "
                     "WHERE id = :id"
                 ),
-                {"s": new_state.value, "by": caller, "id": idea_id},
+                {"by": caller, "id": idea_id},
             )
-            label = idea["title"] or idea["body"].strip().splitlines()[0][:90]
-            verb = "approved" if approve else "dismissed"
-            _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} {verb} “{label}”"))
-            if approve:
-                _enqueue(
-                    conn,
-                    EventKind.APPROVED,
-                    str(idea_id),
-                    f"idea #{idea_id} approved by {caller}",
-                    {
-                        "idea_id": idea_id,
-                        "origin": idea["origin"],
-                        "author": idea["author"],
-                        "title": idea["title"],
-                        "body": idea["body"],
-                        "url": idea["url"],
-                        "approved_by": caller,
-                    },
-                )
-        return {"state": new_state.value}
+            label = idea[0]["title"] or idea[0]["body"].strip().splitlines()[0][:90]
+            _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} dismissed “{label}”"))
+        return {"state": IdeaState.DISMISSED.value}
 
     @admin.post("/ideas/{idea_id}/approve")
     def approve(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
@@ -671,31 +734,8 @@ def create_api(services: Any) -> FastAPI:
 
     @agent.post("/sync/intake")
     def sync_intake(sync: IntakeSync) -> dict[str, int]:
-        added = 0
         with engine.begin() as conn:
-            # An idea's text freezes once it leaves `pending`: sessions work from the text that was approved.
-            for c in sync.comments:
-                state = IdeaState.UPSTREAM if c.approved_upstream else IdeaState.PENDING
-                inserted = conn.execute(
-                    text(
-                        "INSERT INTO ideas (origin, comment_id, author, body, url, posted_at, state) "
-                        "VALUES ('intake', :cid, :author, :body, :url, :posted_at, :state) "
-                        "ON CONFLICT (comment_id) DO UPDATE SET body = CASE WHEN ideas.state = 'pending' "
-                        "THEN EXCLUDED.body ELSE ideas.body END RETURNING (xmax = 0)"
-                    ),
-                    {
-                        "cid": c.comment_id,
-                        "author": c.author,
-                        "body": c.body,
-                        "url": c.url,
-                        "posted_at": c.posted_at,
-                        "state": state.value,
-                    },
-                ).scalar_one()
-                if inserted and state is IdeaState.PENDING:
-                    added += 1
-                    _activity(conn, ActivityPost(kind="intake", title=f"New intake suggestion from {c.author}"))
-        return {"new_pending": added}
+            return {"new_pending": sync_intake_comments(conn, sync.comments)}
 
     @agent.post("/sync/runs")
     def sync_runs(sync: RunsSync) -> dict[str, int]:
