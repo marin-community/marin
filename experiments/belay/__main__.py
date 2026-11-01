@@ -31,6 +31,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
+import yaml
+
 from experiments.belay.analysis import Header, fetch_series, report_dir, report_url, write_report
 from experiments.belay.branch import (
     current_branch,
@@ -106,7 +108,9 @@ from experiments.belay.registry_entry import (
     entry_url,
     entry_with_results,
     load_entry,
+    potential_of,
     require_registry_checkout,
+    with_step_time,
 )
 from experiments.belay.results import (
     Measure,
@@ -328,6 +332,7 @@ def write_spec(repo: Path, branch: str, text: str, *, dry_run: bool, replace: bo
 
 
 MAX_NAME = 50
+MAX_RATIONALE = 160
 RETEST = "retest on current recipe"
 MAINTAINER_NOTE = "Maintainer "  # the app's prefix for a re-queue note
 SPECS = Path("experiments/belay/runs")
@@ -722,6 +727,9 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
         results.append(as_result(variant_run, variant, delta, v))
     overall = overall_verdict(verdicts)
     path, text = entry_with_results(registry_id, results)
+    variant_row = rows[run_name(registry_id, stage_pairs(spec, stage)[0][1].name)]
+    if variant_row.time_change is not None:
+        text = with_step_time(text, trial["id"], variant_row.time_change)
     print(f"{'would write' if dry_run else 'writing'} {path.name}:\n{text}")
     if not dry_run:
         path.write_text(text)
@@ -767,8 +775,9 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     if overall is Verdict.WIN:
         adoption = f"See {url}. A maintainer decides on adoption into {CONFIG.recipe_name}."
         escalate(f"{registry_id}: {status}", adoption, idea_id, registry_id, dry_run=dry_run)
+        say_next(f'{BELAY} score {registry_id} --score <0-10> --rationale "<one line>" --model <your model>')
         return
-    say_next("stop")
+    say_next(f'{BELAY} score {registry_id} --score <0-10> --rationale "<one line>" --model <your model>   (section 2d)')
 
 
 @dataclass(frozen=True)
@@ -898,6 +907,23 @@ def write_analysis(
     return [report, report.with_name(f"{trial}_loss.png"), report.with_name(f"{trial}_delta.png")]
 
 
+def score(registry_id: str, value: int, rationale: str, model: str, *, dry_run: bool) -> None:
+    """Record the session's 0-10 potential score for the idea (RUNBOOK section 2d) on its registry entry."""
+    if not 0 <= value <= 10:
+        raise SystemExit("refusing: --score must be 0 to 10")
+    if not rationale or len(rationale) > MAX_RATIONALE:
+        raise SystemExit(f"refusing: --rationale must be one line of at most {MAX_RATIONALE} characters")
+    require_registry_checkout()
+    path = entry_path(registry_id)
+    entry = yaml.safe_load(path.read_text())
+    entry["potential"] = potential_of(entry, value, rationale, model)
+    print(f"{registry_id} potential: {entry['potential']}")
+    if not dry_run:
+        path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
+    commit_and_push([path], f"Belay registry: {registry_id} potential {value}/10", dry_run=dry_run)
+    say_next("stop")
+
+
 # ---------- 3. run failed ----------
 
 
@@ -1002,6 +1028,9 @@ def track_rows() -> list[dict[str, object]]:
                 "metric": baseline.metric,
                 "rule": f"{baseline.rule}, noise {baseline.noise}",
                 "go_ahead": baseline.needs_go_ahead,
+                "noise": baseline.noise,
+                "relative": baseline.rule.value == "relative",
+                "baseline_steps": baseline.baseline_steps,
             }
         )
     return rows
@@ -1055,6 +1084,11 @@ def main(argv: list[str]) -> None:
     p.add_argument("--model-set", action="append", default=[], help="with --finish: the new flag's on value")
     command("run-finished").add_argument("registry_id")
     command("analyze").add_argument("registry_id")
+    p = command("score")
+    p.add_argument("registry_id")
+    p.add_argument("--score", type=int, required=True, dest="value")
+    p.add_argument("--rationale", required=True)
+    p.add_argument("--model", required=True, help="the model that scored it, e.g. claude-opus-5-5")
     p = command("run-failed")
     p.add_argument("registry_id")
     p.add_argument("--run", required=True)
@@ -1091,6 +1125,8 @@ def main(argv: list[str]) -> None:
         code_change_finish(args.registry_id, settings, dry_run=args.dry_run)
     elif args.command == "run-finished":
         run_finished(args.registry_id, dry_run=args.dry_run)
+    elif args.command == "score":
+        score(args.registry_id, args.value, args.rationale, args.model, dry_run=args.dry_run)
     elif args.command == "analyze":
         analyze(args.registry_id, dry_run=args.dry_run)
     elif args.command == "run-failed":

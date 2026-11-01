@@ -8,6 +8,8 @@ calls it there and edits ``experiments/belay/registry/X####-<slug>.yaml`` files,
 """
 
 import datetime
+import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -161,6 +163,27 @@ def entry_with_results(registry_id: str, results: list[RunResult]) -> tuple[Path
         )
     entry["status"] = "done"
     return path, yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120)
+
+
+def with_step_time(text: str, trial_id: str, time_change: float) -> str:
+    """The entry YAML ``text`` with the trial's variant train time relative to its control (``+31%``)."""
+    entry = yaml.safe_load(text)
+    trial = next(t for t in entry["trials"] if t["id"] == trial_id)
+    trial["step_time_change"] = f"{time_change:+.0%}" if round(time_change * 100) else "0%"
+    return yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120)
+
+
+def potential_of(entry: dict, score: int, rationale: str, model: str) -> dict:
+    """The entry's ``potential``: a session's 0-10 score, tied by digest to the results it was given."""
+    inputs = {k: entry.get(k) for k in ("status", "trials", "events")}
+    digest = hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    return {
+        "score": score,
+        "rationale": rationale,
+        "model": model,
+        "date": datetime.date.today().isoformat(),
+        "inputs_digest": digest,
+    }
 
 
 def commit_and_push(paths: list[Path], message: str, *, dry_run: bool) -> None:
