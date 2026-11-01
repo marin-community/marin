@@ -309,6 +309,15 @@ Recreating the control-plane service preserves those containers, and the new
 control plane discovers and adopts them. Do not run `docker compose down` while
 sessions are live because it removes their shared network.
 
+The [startup script](startup-script.sh) disables MPTCP in the host network namespace and persists
+the setting in `/etc/sysctl.d/99-loom-mptcp.conf`. Compose disables MPTCP in
+Caddy's network namespace and sets `GODEBUG=multipathtcp=0`.
+Apply changes to Caddy's environment or sysctls by recreating only its service:
+
+```sh
+docker compose -f /opt/loom/docker-compose.yml up -d --no-deps --force-recreate caddy
+```
+
 To roll back an application release, check out the prior Loom tree, restore its
 numbered `dotenvSecretVersion` when necessary, and run the normal preview and
 update. The separately managed root disk is protected, retained if removed from
