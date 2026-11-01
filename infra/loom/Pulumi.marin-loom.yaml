@@ -369,6 +369,40 @@ config:
         - marin-community/MarinSkyRL
       allowedTools: []
       mcpAccess: *builtinMcpAccess
+    belay:
+      agent: claude
+      description: Run approved Marin Belay ideas through the Belay runbook
+      model: claude-opus-5-5
+      effort: high
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 60
+      # Sessions launch training runs, so one at a time keeps them inside the Belay node cap.
+      maxConcurrent: 1
+      turnBudget: 300
+      prelude: weaver
+      instructionsFile: profiles/belay/AGENTS.md
+      env:
+        <<: *loomIrisUser
+        CLAUDE_CODE_OAUTH_TOKEN: *claudeOauthToken
+        # The training launcher passes this key to each job so the run logs to W&B.
+        WANDB_API_KEY:
+          secretRef: projects/hai-gcp-models/secrets/BELAY_WANDB_API_KEY/versions/latest
+        # Iris requires the submitter's CoreWeave keys on every CoreWeave job (#10475). This Belay key's access
+        # policy limits what Belay runs can read and write.
+        CW_KEY_ID:
+          secretRef: projects/hai-gcp-models/secrets/BELAY_CW_KEY_ID/versions/latest
+        CW_KEY_SECRET:
+          secretRef: projects/hai-gcp-models/secrets/BELAY_CW_KEY_SECRET/versions/latest
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
     slack:
       agent: codex
       description: Slack-triggered Marin conversations and repository work
@@ -496,6 +530,16 @@ config:
       profile: pm
       repo: marin-community/marin
       promptFile: watches/goals.md
+      slackChannels: []
+    # Marin Belay's trigger: a cheap check every 10 minutes; a session runs only when the Belay app has queued
+    # events, then drains the queue before it exits. Disabled until the Belay Marina app (marin#10829) is released.
+    belay:
+      enabled: false
+      every: 10m
+      runTimeoutSeconds: 14400
+      profile: belay
+      repo: marin-community/marin
+      promptFile: watches/belay.md
       slackChannels: []
     # Disabled until an operator selects the jobs and notification destination.
     weekday-job-check:
