@@ -17,6 +17,13 @@ events:
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: 'GB200 one rack: 16.83 → 14.59 s/step (−13%), 28.9% MFU'
   candidate: Belay Ckpt 1
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'hero-scale (GB200) only; H100 ladder runs bf16. In mfl-mp-qall (marin_belay_v1_hero_mfu, 36.8% MFU): fp8_recipe=mxfp8,
+    mxfp8_fused_grad_quant=true, mxfp8_expert_wgrad=true; moe_mxfp8_dispatch=false'
+  checkpoint: belay-ckpt-2026-10-20
 potential:
   score: 10
   rationale: 'adopted: MXFP8 on GB200, 16.83->14.59 s/step (-13%)'
