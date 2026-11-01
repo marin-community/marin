@@ -4,7 +4,7 @@ name: MTP low-weight decaying aux loss
 category: Output head and loss
 summary: Revisit MTP as a low-weight, decaying auxiliary loss computed on a subset of positions, with a block-head variant.
 source: intake
-status: done
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6498753293
@@ -31,6 +31,18 @@ trials:
   steps: 3030
   baseline: belay-X0223-control 3.0459 (same commit, seed 0)
   step_time_change: +8%
+- id: t002
+  variant: depth-1 MTP head, weight 0.1 decayed to 0 by 50%
+  rung: speedrun
+  protocol: fixed_time
+  batch: X0223
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562007895
+  wandb: []
+  settings:
+    mtp_weight: '0.1'
+    mtp_decay_frac: '0.5'
+  commit: 98061ac6fe
 potential:
   score: 6
   rationale: −0.0055 at equal data (small win under ±0.005 rule; tool used ±0.006, escalated); 8% slower, equal time/ladder/MFU
