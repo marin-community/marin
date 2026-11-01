@@ -3,8 +3,11 @@
 
 """Git checks and the weekly branch: every Belay run executes a clean, pushed commit of this week's branch."""
 
+import contextlib
 import datetime
 import subprocess
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 from experiments.belay.config import CONFIG
@@ -100,3 +103,15 @@ def cut_week_branch(repo: Path, today: datetime.date, *, fresh: bool, dry_run: b
             return False
     run_git(repo, ["push", "--quiet", "-u", "origin", target], dry_run=dry_run)
     return True
+
+
+@contextlib.contextmanager
+def temporary_worktree(repo: Path, ref: str) -> Iterator[Path]:
+    """A detached worktree of ``ref``, removed afterwards; for reading or merging without touching ``repo``."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "worktree"
+        git(repo, "worktree", "add", "--quiet", "--detach", str(path), ref)
+        try:
+            yield path
+        finally:
+            git(repo, "worktree", "remove", "--force", str(path))

@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 
 from experiments.belay.branch import current_branch, git
-from experiments.belay.config import CONFIG
+from experiments.belay.config import CONFIG, Track
 from experiments.belay.page import Idea
 from experiments.belay.results import RunResult
 
@@ -55,7 +55,7 @@ def first_paragraph(text: str) -> str:
     return paragraph if len(paragraph) <= MAX_SUMMARY else paragraph[: MAX_SUMMARY - 1].rsplit(" ", 1)[0] + "…"
 
 
-def create_entry(idea: Idea, category: str, *, dry_run: bool) -> tuple[str, Path]:
+def create_entry(idea: Idea, category: str, track: Track, *, dry_run: bool) -> tuple[str, Path]:
     """Allocate the next ``X####`` id for ``idea`` and write its ``approved`` entry; returns the id and path."""
     command = [
         sys.executable,
@@ -71,6 +71,8 @@ def create_entry(idea: Idea, category: str, *, dry_run: bool) -> tuple[str, Path
         first_paragraph(idea.body),
         "--source",
         "intake" if idea.origin == "intake" else "maintainer",
+        "--track",
+        track.value,
     ]
     if idea.url:
         command += ["--intake-url", idea.url, "--intake-author", idea.author, "--approved-by", idea.decided_by or ""]
@@ -86,7 +88,9 @@ def create_entry(idea: Idea, category: str, *, dry_run: bool) -> tuple[str, Path
     return match.group(1), path
 
 
-def add_trial(registry_id: str, variant: str, run_name: str, commit: str, settings: dict[str, str]) -> Path:
+def add_trial(
+    registry_id: str, track: Track, variant: str, run_name: str, commit: str, settings: dict[str, str]
+) -> Path:
     """Add ``run_name`` as a new trial of the entry (or to its existing trial for the same variant and commit)."""
     path = entry_path(registry_id)
     entry = yaml.safe_load(path.read_text())
@@ -96,7 +100,7 @@ def add_trial(registry_id: str, variant: str, run_name: str, commit: str, settin
         trial = {
             "id": f"t{len(trials) + 1:03d}",
             "variant": variant,
-            "rung": CONFIG.rung,
+            "rung": track.value,
             "protocol": "equal_steps",
             "batch": registry_id,
             "date": datetime.date.today().isoformat(),

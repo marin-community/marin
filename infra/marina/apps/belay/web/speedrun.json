@@ -1,6 +1,6 @@
 {
  "recipe": "Belay Ckpt Oct 20 2026",
- "config": "experiments/grug/fast_track/belay_s7.py --ladder s7n (marin_belay_v1_clean_s7), rendered launcher config at d1280L16",
+ "config": "experiments/grug/fast_track/belay_s7.py --ladder s7n (marin_belay_v1_recipe), rendered launcher config at d1280L16",
  "in_recipe": {
   "X0009": {
    "name": "Hashed bigram table as AttnRes source",

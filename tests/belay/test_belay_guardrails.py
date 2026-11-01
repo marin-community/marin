@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Marin Belay guardrails: launches only from a clean, pushed commit of this week's branch, never reusing a run
-name or passing the node cap, and results classified by the fixed win/noise/loss rule."""
+name or passing the node cap; every Track resolves to a real launch or is refused; code changes land only behind
+a default-off flag that leaves the default model unchanged; results follow each Track's fixed rule."""
 
 import datetime
 import subprocess
@@ -11,16 +12,18 @@ from pathlib import Path
 import pytest
 
 from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
-from experiments.belay.config import CONFIG
-from experiments.belay.results import Verdict, overall_verdict, verdict
-from experiments.belay.submit import IrisJob, check_launch, parse_spec
+from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
+from experiments.belay.config import CONFIG, TRACKS, Track
+from experiments.belay.results import Verdict, change, overall_verdict, verdict
+from experiments.belay.submit import IrisJob, check_launch, launch_command, parse_spec
+from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
-SPEC = f"""experiment: X0001
-launcher: {CONFIG.launcher}
+SPEC = """experiment: X0001
+track: competitive-d512
 runs:
-  seed0: {{size: {CONFIG.rung}, seed: 0, variant: v, flags: [--opt-set, muonh_decay_power=0.5]}}
-  control: {{size: {CONFIG.rung}, seed: 0, variant: c, control: true}}
+  seed0: {seed: 0, variant: v, flags: [--opt-set, muonh_decay_power=0.5]}
+  control: {seed: 0, variant: c, control: true}
 """
 
 
@@ -103,17 +106,73 @@ def test_launch_held_at_the_node_cap() -> None:
     check_launch(parse_spec(SPEC), jobs[:-1])  # two runs fit once one more node is free
 
 
+def test_unknown_track_refused() -> None:
+    with pytest.raises(SystemExit, match="not one of"):
+        parse_spec(SPEC.replace("competitive-d512", "competitive-d2048"))
+
+
+@pytest.mark.parametrize("track", list(Track))
+def test_each_track_resolves_to_a_real_launch_or_is_refused(track: Track) -> None:
+    spec = parse_spec(SPEC.replace("competitive-d512", track.value))
+    launch = TRACKS[track].launch
+    if launch is None:
+        with pytest.raises(SystemExit, match="no launch recipe"):
+            launch_command(spec, spec.runs["seed0"])
+        return
+    command = launch_command(spec, spec.runs["seed0"])
+    args = command[command.index("-m") + 2 :]
+    size = args[args.index("--size") + 1]
+    # The launcher itself must accept the track's arguments.
+    if launch[0] == belay_s7.__name__:
+        assert belay_s7.recipe_args(belay_s7.Ladder(args[args.index("--ladder") + 1]), size)
+    else:
+        assert launch[0] == belay_tracks.__name__
+        assert belay_tracks.track_args(belay_tracks.Track(args[args.index("--track") + 1]), size)
+
+
+def test_code_change_refused_outside_the_allowed_paths() -> None:
+    refuse_outside_allowed(["experiments/grug/fast_track/model.py", "tests/grug/test_fast_track_toy.py"])
+    with pytest.raises(SystemExit, match="only"):
+        refuse_outside_allowed(["experiments/grug/fast_track/model.py", "lib/levanter/src/levanter/main.py"])
+    with pytest.raises(SystemExit, match="add a test"):
+        refuse_outside_allowed(["experiments/grug/fast_track/model.py"])
+
+
+def test_code_change_flag_must_be_new_and_default_off() -> None:
+    before = {"GrugModelConfig": {"mla": "True"}, "GrugMoeMuonHConfig": {"lr": "0.02"}}
+    on = {"GrugModelConfig": {"mla": "True", "toy": "True"}, "GrugMoeMuonHConfig": {"lr": "0.02"}}
+    off = {"GrugModelConfig": {"mla": "True", "toy": "False"}, "GrugMoeMuonHConfig": {"lr": "0.02"}}
+    changed = {"GrugModelConfig": {"mla": "False", "toy": "False"}, "GrugMoeMuonHConfig": {"lr": "0.02"}}
+    assert new_flags(before, off) == ["GrugModelConfig.toy"]
+    with pytest.raises(SystemExit, match="must be off"):
+        new_flags(before, on)
+    with pytest.raises(SystemExit, match="existing fields"):
+        new_flags(before, changed)
+    with pytest.raises(SystemExit, match="no new config flag"):
+        new_flags(before, before)
+
+
+def test_code_change_refused_when_flag_off_model_differs() -> None:
+    before = Probe({}, "a" * 64, 0.0)
+    refuse_flag_off_change(before, Probe({}, "a" * 64, 0.0))
+    with pytest.raises(SystemExit, match="differ"):
+        refuse_flag_off_change(before, Probe({}, "b" * 64, 0.0))
+
+
 @pytest.mark.parametrize(
-    ("delta", "expected"),
+    ("track", "variant", "control", "expected"),
     [
-        (-CONFIG.noise, Verdict.WIN),
-        (-CONFIG.noise + 0.0001, Verdict.NOISE),
-        (0.0058, Verdict.NOISE),
-        (CONFIG.noise, Verdict.LOSS),
+        (Track.COMPETITIVE_D512, 2.866, 2.872, Verdict.WIN),
+        (Track.COMPETITIVE_D512, 2.8775, 2.8717, Verdict.NOISE),
+        (Track.VANILLA_D768, 1.420, 1.414, Verdict.LOSS),
+        (Track.HERO_MFU, 11.40, 11.465, Verdict.WIN),  # 0.57% faster
+        (Track.HERO_MFU, 11.44, 11.465, Verdict.NOISE),  # 0.2% faster: rack noise
+        (Track.HERO_MFU, 11.53, 11.465, Verdict.LOSS),
     ],
 )
-def test_verdict_rule(delta: float, expected: Verdict) -> None:
-    assert verdict(delta) is expected
+def test_verdict_rule(track: Track, variant: float, control: float, expected: Verdict) -> None:
+    baseline = TRACKS[track]
+    assert verdict(round(change(variant, control, baseline), 4), baseline) is expected
 
 
 def test_overall_verdict() -> None:
