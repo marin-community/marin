@@ -403,3 +403,10 @@ def test_reproduce_line() -> None:
         "X0221.yaml) · `git checkout 9db6be9125 && uv run python -m experiments.belay launch X0221 --run seed0-b`"
     )
     assert stage_section(1, "equal data", [], line).endswith(line)
+
+
+def test_each_run_launches_at_its_own_seed() -> None:
+    """Regression: the seed-1 confirm ran at seed 0 because the launch used the default seed."""
+    spec = parse_spec(SPEC.replace("seed0: {seed: 0", "seed1-t: {seed: 1"))
+    command = launch_command(spec, spec.runs["seed1-t"])
+    assert command[command.index("--seed") + 1] == "1"
