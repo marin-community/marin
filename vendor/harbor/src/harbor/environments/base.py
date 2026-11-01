@@ -750,7 +750,7 @@ class BaseEnvironment(ABC):
 
     @abstractmethod
     async def stop(self, delete: bool):
-        """Stops the environment and optionally deletes it."""
+        """Stop and reclaim the environment; retention is rejected before allocation."""
 
     async def prepare_logs_for_host(self) -> None:
         """Fix log file permissions so the host process can read them.

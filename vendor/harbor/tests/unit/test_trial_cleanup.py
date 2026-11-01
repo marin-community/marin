@@ -85,14 +85,12 @@ class SlowStopEnvironment(BaseEnvironment):
 
     stop_started: asyncio.Event
     stop_completed: asyncio.Event
-    stop_delete_value: bool | None
     stop_call_count: int
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.stop_started = asyncio.Event()
         self.stop_completed = asyncio.Event()
-        self.stop_delete_value = None
         self.stop_call_count = 0
 
     @staticmethod
@@ -118,7 +116,6 @@ class SlowStopEnvironment(BaseEnvironment):
         proceed = asyncio.Event()
         asyncio.get_event_loop().call_later(0.05, proceed.set)
         await proceed.wait()
-        self.stop_delete_value = delete
         self.stop_completed.set()
 
     async def upload_file(self, source_path, target_path):
@@ -311,27 +308,6 @@ class TestStopShieldedFromCancellation:
             assert trial._is_agent_environment_stopped is True
             assert env.stop_call_count == 1
 
-    async def test_stop_called_with_delete_false(self):
-        """environment.stop() receives the correct delete flag from config."""
-        with tempfile.TemporaryDirectory() as tmp:
-            trial, agent, env = await _make_trial(Path(tmp))
-            trial.config.environment.delete = False
-
-            task = asyncio.create_task(trial.run())
-
-            await agent.running.wait()
-            task.cancel()
-
-            await env.stop_started.wait()
-            task.cancel()
-
-            with pytest.raises(asyncio.CancelledError):
-                await task
-
-            await env.stop_completed.wait()
-            assert env.stop_delete_value is False
-            assert env.stop_call_count == 1
-
 
 class TestStopBoundedByWallClock:
     """A stop() stuck on a dead provider connection must not hold trial
@@ -401,7 +377,6 @@ class TestPrepareLogsForHostCalledDuringTrial:
                 ),
                 environment=EnvironmentConfig(
                     type=EnvironmentType.LOCAL,
-                    delete=False,
                 ),
                 verifier=VerifierConfig(disable=True),
             )
@@ -475,7 +450,6 @@ async def test_output_recovery_failure_is_persisted_as_secondary_exception(
         ),
         environment=EnvironmentConfig(
             type=EnvironmentType.LOCAL,
-            delete=False,
         ),
         verifier=VerifierConfig(disable=True),
     )

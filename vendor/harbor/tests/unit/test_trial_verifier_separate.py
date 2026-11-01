@@ -149,7 +149,7 @@ async def _run_trial(
         trial_name=trial_name,
         trials_dir=trials_dir,
         agent=AgentConfig(name="oracle"),
-        environment=environment or EnvironmentConfig(type="local", delete=False),
+        environment=environment or EnvironmentConfig(type="local"),
         verifier=VerifierConfig(),
     )
     with (
@@ -228,7 +228,6 @@ class TestSingleStepSeparateVerifierLifecycle:
                 fake_create,
                 environment=EnvironmentConfig(
                     type="local",
-                    delete=False,
                     extra_docker_compose=[extra_compose],
                 ),
             )

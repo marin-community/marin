@@ -70,7 +70,11 @@ class EnvironmentFactory:
         return _load_environment_class(type).resource_capabilities()
 
     @classmethod
-    def validate_resource_policies(cls, config: TrialEnvironmentConfig) -> None:
+    def validate_config(cls, config: TrialEnvironmentConfig) -> None:
+        if not config.delete:
+            raise ValueError(
+                "Shellbox environments cannot be retained: --no-delete and environment.delete=false are unsupported"
+            )
         resource_capabilities = cls.resource_capabilities(config.type)
         if resource_capabilities is None:
             return
@@ -94,6 +98,7 @@ class EnvironmentFactory:
         **kwargs,
     ) -> BaseEnvironment:
         """Create the selected Shellbox adapter with its resource policy."""
+        cls.validate_config(config)
         env_constructor_kwargs = {
             "override_cpus": config.override_cpus,
             "override_memory_mb": config.override_memory_mb,

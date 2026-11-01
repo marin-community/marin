@@ -214,10 +214,10 @@ class Job:
 
     @classmethod
     async def create(cls, config: JobConfig) -> "Job":
+        EnvironmentFactory.validate_config(config.environment)
         task_configs, benchmark_metadata = await cls._resolve_task_configs_and_metadata(
             config
         )
-        EnvironmentFactory.validate_resource_policies(config.environment)
         metrics = await cls._resolve_metrics(config, task_configs)
 
         task_download_results = await cls._cache_tasks(task_configs)

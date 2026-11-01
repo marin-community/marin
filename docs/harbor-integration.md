@@ -261,6 +261,8 @@ trusted build infrastructure; they are never run by the evaluation sandbox.
 The primary stays alive for agent commands and verification. Sidecars retain their prepared
 image's ENTRYPOINT/CMD unless Compose explicitly overrides them. The adapter does not build
 images or install a nested container runtime.
+Shellbox adapters reclaim environments at completion. `--no-delete` and
+`environment.delete=false` are rejected before backend allocation.
 
 The agent makes model calls in the trusted Harbor process. Shellbox runs task commands and
 verification in persistent bubblewrap containers. Members share private loopback and retain

@@ -251,11 +251,7 @@ def start(
         bool | None,
         Option(
             "--delete/--no-delete",
-            help=f"Whether to delete the environment after completion (default: {
-                '--delete'
-                if EnvironmentConfig.model_fields['delete'].default
-                else '--no-delete'
-            })",
+            help="Shellbox environments are always deleted; --no-delete is unsupported.",
             rich_help_panel="Environment",
             show_default=False,
         ),
