@@ -483,7 +483,7 @@ events:
   checkpoint: belay-ckpt-2026-10-20
 potential:
   score: 8
-  rationale: 'prior (Ckpt 1); retest pending: cap 10 -0.024/-0.028 d512, -0.019 d768, -0.008 d1024, free; shrinks with scale'
+  rationale: equal-time win d -0.0217 at speedrun (step time +1%, final at stage 1); one seed; Ckpt 1 cap 10
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 1388a8922f2d
