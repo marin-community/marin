@@ -10,10 +10,10 @@ Every rung trains 207 tokens per active parameter (5.456T tokens over the S7 her
 
 Two ladders share the model:
 
-- ``s7l``: the default document-shuffled v16384 cache and the default (linear) LR schedule (``s7l-*`` runs,
+- ``s7l``: the document-shuffled v16384 cache (pinned) and the default (linear) LR schedule (``s7l-*`` runs,
   marin_belay_v1_fp8quality @ 6a3a5fe57a).
-- ``s7n``: the sequence-shuffled v16384 cache, a cosine LR schedule and MuonH decay power 0.7 (``s7n-*`` runs,
-  marin_belay_v1_fp8quality @ a5a8647840).
+- ``s7n``: the sequence-shuffled v16384 cache (the launcher default), a cosine LR schedule and MuonH decay power 0.7
+  (``s7n-*`` runs, marin_belay_v1_fp8quality @ a5a8647840).
 
 Rungs: ``d512``, ``d768``, ``d1024`` (one 8xH100 node each) and ``d1280L16`` (16 layers, batch 1024, four 8xH100
 nodes with experts sharded within each node and data parallel across nodes).
@@ -69,9 +69,9 @@ LADDER_ARGS = (
     "3",
     "--temporary-checkpoints-only",
 )
+# s7l predates the sequence-shuffled default, so it pins the document-shuffled cache.
+S7L_ARGS = ("--train-cache", launch.V16384_CACHE_DIR)
 S7N_ARGS = (
-    "--train-cache",
-    launch.V16384_SEQSHUF_CACHE_DIR,
     "--opt-set",
     "lr_schedule=cosine",
     "--opt-set",
@@ -120,8 +120,7 @@ def recipe_args(ladder: Ladder, rung: str) -> list[str]:
     )
     for setting in settings:
         args += ["--model-set", setting]
-    if ladder is Ladder.S7N:
-        args += S7N_ARGS
+    args += S7N_ARGS if ladder is Ladder.S7N else S7L_ARGS
     return args
 
 

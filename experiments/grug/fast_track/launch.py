@@ -359,7 +359,7 @@ def build_h100_ladder_run(
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     version: str | None = None,
     tokenizer: str = V16384_TOKENIZER,
-    train_cache_dir: str = V16384_CACHE_DIR,
+    train_cache_dir: str = V16384_SEQSHUF_CACHE_DIR,
     vocab_size: int = V16384_VOCAB,
     no_eval: bool = False,
     dense: bool = False,
@@ -833,9 +833,9 @@ def _layer_skip_rule(
 )
 @click.option(
     "--train-cache",
-    default=V16384_CACHE_DIR,
+    default=V16384_SEQSHUF_CACHE_DIR,
     show_default=True,
-    help=f"Flat train cache. {V16384_SEQSHUF_CACHE_DIR} holds the same tokens in sequence-shuffled order.",
+    help=f"Flat train cache. {V16384_CACHE_DIR} holds the same tokens document-shuffled (the s7l and track baselines).",
 )
 @click.option(
     "--expert-axis-size",
