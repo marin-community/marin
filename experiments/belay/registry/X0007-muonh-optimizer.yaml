@@ -33,3 +33,9 @@ events:
   - 'schedule: 1% warmup, linear decay to 0.05x peak'
   - Adam LR = 0.0876 * tokens^-0.346 * D^-0.345 * sqrt(tokens per batch); MuonH LR = 13/3 x Adam LR
   - 'd512, 2384 steps: MuonH 0.0227, Adam 0.0052, beta2 0.996, eps 4.7e-16'
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: MuonH/AdamH optimizer (optimizer.py, adamh.py)'
+  checkpoint: belay-ckpt-2026-10-20

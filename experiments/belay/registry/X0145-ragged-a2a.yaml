@@ -259,3 +259,9 @@ events:
   - 'ragp105: one-shot transport, single process'
   - capacity 1.05
   - drop renorm off
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: moe_implementation=ragged_all_to_all, ragged_transport=one_shot, capacity_factor=1.05'
+  checkpoint: belay-ckpt-2026-10-20

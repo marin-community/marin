@@ -39,3 +39,9 @@ events:
   candidate: runtime (candidate 9/10)
   as_adopted:
   - train step jitted over flat leaves (a99a1ef88b)
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: train.py _flat_train_step (jitted over flat leaves)'
+  checkpoint: belay-ckpt-2026-10-20

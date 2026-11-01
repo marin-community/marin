@@ -35,3 +35,9 @@ events:
   - 'mix: softmax over sources, weighted sum of raw sources'
   - 'query LR: 0.1x Adam LR (own Adam group attn_res_query)'
   - block sums use raw sublayer outputs
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: attn_res=true, attn_res_num_blocks=8'
+  checkpoint: belay-ckpt-2026-10-20

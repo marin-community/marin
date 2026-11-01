@@ -69,3 +69,9 @@ events:
   candidate: candidate 9
   as_adopted:
   - init_std_mult_gates=2
+- type: removed
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'Not in the Belay Ckpt Oct 20 2026 config: init_std_mult_gates=1.0 (Ckpt 1: 2)'
+  checkpoint: belay-ckpt-2026-10-20

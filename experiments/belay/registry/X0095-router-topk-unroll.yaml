@@ -41,3 +41,9 @@ events:
   candidate: runtime (row 3)
   as_adopted:
   - 9 unrolled max/argmax passes instead of lax.top_k
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: model.py _small_top_k (unrolled router top-k)'
+  checkpoint: belay-ckpt-2026-10-20

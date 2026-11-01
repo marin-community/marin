@@ -119,3 +119,9 @@ events:
   candidate: candidate 2
   as_adopted:
   - muonh_decay_power=0.7
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: muonh_decay_power=0.7'
+  checkpoint: belay-ckpt-2026-10-20

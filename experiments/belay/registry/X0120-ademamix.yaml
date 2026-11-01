@@ -265,3 +265,9 @@ events:
   - adam_ademamix_alpha=5.0
   - adam_ademamix_beta3=0.98
   - paper warmup
+- type: removed
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'Not in the Belay Ckpt Oct 20 2026 config: adam_ademamix_alpha=0.0 (Ckpt 1: 5.0)'
+  checkpoint: belay-ckpt-2026-10-20

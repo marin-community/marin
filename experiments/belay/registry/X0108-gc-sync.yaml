@@ -51,3 +51,9 @@ events:
   as_adopted:
   - gc.collect; gc.freeze; gc.disable before loop
   - synchronized collect+freeze every 50 steps
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: train.py gc.freeze/gc.disable with synchronized collection'
+  checkpoint: belay-ckpt-2026-10-20

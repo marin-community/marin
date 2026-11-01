@@ -104,3 +104,9 @@ events:
   as_adopted:
   - 4-tap causal depthwise conv
   - respects document boundaries
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: sconv=true, sconv_sites=[k, attn, mlp]'
+  checkpoint: belay-ckpt-2026-10-20

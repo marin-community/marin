@@ -34,3 +34,9 @@ events:
   - chunked Pallas kernels, chunk 16; state resets at document starts
   - 'output: per-head RMSNorm (shared 128 scale) -> sigmoid(x W_g) gate -> W_o'
   - no positional encoding, no window
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: local_mixer=kda'
+  checkpoint: belay-ckpt-2026-10-20

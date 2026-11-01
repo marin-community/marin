@@ -105,3 +105,9 @@ events:
   candidate: candidate 1
   as_adopted:
   - muon_pre_norm=in
+- type: removed
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'Not in the Belay Ckpt Oct 20 2026 config: muon_pre_norm=none (Ckpt 1: in)'
+  checkpoint: belay-ckpt-2026-10-20

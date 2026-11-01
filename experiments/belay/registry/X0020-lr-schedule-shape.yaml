@@ -552,3 +552,9 @@ events:
   date: '2026-09-30'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
   note: 'Longer warmup closed: early overshoot is a productive edge-of-stability equilibrium'
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: lr_schedule=cosine, muonh_decay_power=0.7'
+  checkpoint: belay-ckpt-2026-10-20
