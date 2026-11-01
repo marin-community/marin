@@ -21,7 +21,6 @@ import argparse
 import datetime
 import importlib.util
 import json
-import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -72,16 +71,15 @@ from experiments.belay.submit import (
     load_spec,
     new_spec_text,
     parse_spec,
-    parse_track,
     run_name,
     setting_fields,
     settings_of,
     spec_path,
+    track_of_comment,
 )
 
 BELAY = "uv run python -m experiments.belay"
 ESCALATED = "Escalated:"
-TRACK_LINE = re.compile(r"^\W*track\W*:\W*([A-Za-z0-9-]+)", re.IGNORECASE | re.MULTILINE)
 PAGE_RESULT_KIND = {Verdict.WIN: "better", Verdict.LOSS: "worse", Verdict.NOISE: "neutral"}
 
 
@@ -188,21 +186,14 @@ def categories() -> list[str]:
     return json.loads((CONFIG.registry_checkout / ENTRIES / "categories.json").read_text())
 
 
-def idea_track(idea: Idea) -> Track:
-    """The Track named on the idea's ``Track:`` line; refuses a missing or unknown one."""
-    match = TRACK_LINE.search(idea.body)
-    if match is None:
-        raise SystemExit(
-            f"refusing: idea #{idea.id} has no Track: line.\n"
-            f'next: {BELAY} escalate --idea-id {idea.id} --title "Idea #{idea.id} has no valid Track" '
-            '--body "The comment needs a Track: line naming one of the tracks in RUNBOOK.md section 9."'
-        )
+def idea_track(idea: Idea) -> tuple[Track, bool]:
+    """The idea's Track and whether it defaulted to speedrun; refuses an unknown one with the escalation to run."""
     try:
-        return parse_track(match.group(1))
+        return track_of_comment(idea.body)
     except SystemExit as refusal:  # add the escalation as the next step
         raise SystemExit(
             f"{refusal}\nnext: {BELAY} escalate --idea-id {idea.id} "
-            f'--title "Idea #{idea.id} has no valid Track" --body "Track {match.group(1)!r} is not in the list."'
+            f'--title "Idea #{idea.id} has an unknown Track" --body "Its Track: line names no track in RUNBOOK.md."'
         ) from None
 
 
@@ -218,9 +209,15 @@ def runnable(idea: Idea, track: Track) -> Baseline:
     return baseline
 
 
-def print_idea_brief(idea: Idea, track: Track, baseline: Baseline) -> None:
+def track_label(track: Track, defaulted: bool) -> str:
+    return f"Track: {track}{' (default)' if defaulted else ''}"
+
+
+def print_idea_brief(idea: Idea, track: Track, defaulted: bool) -> None:
+    baseline = TRACKS[track]
     print(f"idea #{idea.id}: {idea.name}\n\n{idea.body.strip()}\n")
-    print(f"Track {track}: {baseline.description}; judged on {baseline.metric}, noise {baseline.noise}.\n")
+    label = track_label(track, defaulted)
+    print(f"{label}: {baseline.description}; judged on {baseline.metric}, noise {baseline.noise}.\n")
     print("Check 1, house rules: if the idea asks for anything in RUNBOOK.md section 8, run section 6 and stop.")
     print(f"Check 2, category (the best match; 'Unsorted' if none): {', '.join(categories())}")
     print("Check 3, settings: the fields below that make the change. If none does, the idea needs code (section 1b).")
@@ -251,12 +248,12 @@ def write_spec(repo: Path, branch: str, text: str, *, dry_run: bool) -> Experime
     return spec
 
 
-def plan_of(spec: ExperimentSpec, summary: str, commit: str, branch: str) -> Plan:
+def plan_of(spec: ExperimentSpec, summary: str, commit: str, branch: str, track: str) -> Plan:
     runs = [PlanRun(r.name, run_name(spec.experiment, r.name), r.variant, r.seed, r.control) for r in spec.runs.values()]
     baseline = TRACKS[spec.track]
     return Plan(
         summary=summary,
-        protocol=f"track {spec.track}: {baseline.description}; seed {CONFIG.seed}; {baseline.metric}, "
+        protocol=f"{track}: {baseline.description}; seed {CONFIG.seed}; {baseline.metric}, "
         f"noise {baseline.noise} ({baseline.rule})",
         cost=f"{len(runs)} runs x {baseline.nodes} node(s) (8xH100)",
         commit=commit,
@@ -286,10 +283,10 @@ def new_idea(
     idea = state.idea(idea_id)
     if idea.state != "approved" or (idea.note or "").startswith(ESCALATED):
         raise SystemExit(f"refusing: idea #{idea_id} is {idea.state} ({idea.note or 'no note'}).\nnext: stop")
-    track = idea_track(idea)
+    track, defaulted = idea_track(idea)
     runnable(idea, track)
     if category is None:
-        print_idea_brief(idea, track, TRACKS[track])
+        print_idea_brief(idea, track, defaulted)
         return
     if category not in categories():
         raise SystemExit(f"refusing: category {category!r} is not in the list printed by new-idea --idea-id {idea_id}")
@@ -312,7 +309,7 @@ def new_idea(
     commit = require_clean_pushed_head(repo, branch)
     check_launch(spec, iris_jobs())
     print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the cap")
-    plan = plan_of(spec, summary.strip().split("\n\n")[0], commit, branch)
+    plan = plan_of(spec, summary.strip().split("\n\n")[0], commit, branch, track_label(track, defaulted))
     report_idea(idea.id, {"state": "planned", "plan": asdict(plan)}, dry_run=dry_run)
     title = f"Plan: {registry_id} {idea.name}"
     post = Post("plan", title, plan_markdown(registry_id, idea.name, plan), registry_id=registry_id, idea_id=idea.id)

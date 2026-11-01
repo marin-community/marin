@@ -15,7 +15,7 @@ from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
 from experiments.belay.config import CONFIG, TRACKS, Track
 from experiments.belay.results import Verdict, change, overall_verdict, verdict
-from experiments.belay.submit import IrisJob, check_launch, launch_command, parse_spec
+from experiments.belay.submit import IrisJob, check_launch, launch_command, parse_spec, track_of_comment
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
@@ -106,7 +106,11 @@ def test_launch_held_at_the_node_cap() -> None:
     check_launch(parse_spec(SPEC), jobs[:-1])  # two runs fit once one more node is free
 
 
-def test_unknown_track_refused() -> None:
+def test_comment_track_defaults_to_speedrun_and_unknown_is_refused() -> None:
+    assert track_of_comment("Try sqrt-softplus routing.") == (Track.SPEEDRUN, True)
+    assert track_of_comment("**Track:** moe-d768\nTry sqrt-softplus routing.") == (Track.MOE_D768, False)
+    with pytest.raises(SystemExit, match="not one of"):
+        track_of_comment("Track: competitive-d2048\nTry sqrt-softplus routing.")
     with pytest.raises(SystemExit, match="not one of"):
         parse_spec(SPEC.replace("competitive-d512", "competitive-d2048"))
 

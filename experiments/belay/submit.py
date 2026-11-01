@@ -79,6 +79,18 @@ def parse_spec(text: str) -> ExperimentSpec:
     return ExperimentSpec(data["experiment"], parse_track(str(data.get("track"))), runs)
 
 
+TRACK_LINE = re.compile(r"^\W*track\W*:\W*([A-Za-z0-9-]+)", re.IGNORECASE | re.MULTILINE)
+DEFAULT_TRACK = Track.SPEEDRUN
+
+
+def track_of_comment(text: str) -> tuple[Track, bool]:
+    """The Track on a comment's ``Track:`` line, and whether it was defaulted (no such line: ``speedrun``)."""
+    match = TRACK_LINE.search(text)
+    if match is None:
+        return DEFAULT_TRACK, True
+    return parse_track(match.group(1)), False
+
+
 def parse_track(text: str) -> Track:
     if text not in {t.value for t in Track}:
         raise SystemExit(f"refusing: track {text!r} is not one of {', '.join(t.value for t in Track)}")
