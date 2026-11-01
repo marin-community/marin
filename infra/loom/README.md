@@ -215,6 +215,13 @@ it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
 a session land under `/loom/<job>` instead of inheriting the session container's
 `app` OS account.
 
+The `belay` profile runs approved Marin Belay ideas through
+`experiments/belay/RUNBOOK.md` on the `marin_belay_v1_recipe` branch, one
+session at a time. It reads two Belay secrets: `BELAY_WANDB_API_KEY`, a
+`marin-community` W&B service-account key that the training launcher passes to
+each job, and `BELAY_INTAKE_TOKEN`, marin-belay-bot's token, set as `GH_TOKEN`
+because Loom's GitHub App tokens cannot comment on the locked results issue.
+
 Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
 from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
 profiles, which accept a per-launch agent override, and the Claude automation
