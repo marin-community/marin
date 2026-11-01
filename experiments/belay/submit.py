@@ -1,22 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch one Marin Belay run from its committed spec, ``experiments/belay/runs/<experiment_id>.yaml``.
+"""Launch Marin Belay runs from their committed spec, ``experiments/belay/runs/<experiment_id>.yaml``.
 
-A run is fully specified by a pushed commit plus a run name, so every Belay run is reviewable in the diff:
+A run is fully specified by a pushed commit plus a run name, so every Belay run is reviewable in the diff. Sessions
+launch through ``experiments.belay.steps launch`` (``experiments/belay/RUNBOOK.md``); this module holds the checks
+and the launch itself, and its command line launches one run by hand:
 
-    uv run python -m experiments.belay.submit X0221 seed0 --commit <sha> --registry-dir ~/marin_wt_registry_demo
+    uv run python -m experiments.belay.submit X0221 seed0 --commit <sha> --comment-url <where the plan was posted>
 
-The helper refuses a commit that is not the clean, pushed HEAD of a Belay branch, applies the soft node cap
-(Belay's running and pending runs plus this one must fit), names the run ``belay-<id>-<run>``, writes its outputs
-under ``tmp/ttl=30d/belay/runs/``, submits at batch priority by default, and records the commit and run name as a
-trial in the registry entry (committed and pushed on the registry branch). Control runs are recorded as the trial's
-baseline rather than as trials of their own.
+Every launch is refused unless: the checkout is on this week's experiment branch (``CONFIG.week_branch``), that
+branch contains ``CONFIG.base_branch``, ``--commit`` is its clean and pushed HEAD, the registry checkout is on
+``CONFIG.registry_branch``, no run name was used before, and Belay's active runs plus these fit the soft node cap.
+Runs are named ``belay-<id>-<run>``, write under ``CONFIG.output_root``, run on ``CONFIG.cluster`` at
+``CONFIG.band`` priority, and are recorded as trials in the registry entry (committed and pushed on the registry
+branch). Control runs are recorded as the trial's baseline rather than as trials of their own.
 """
 
 import argparse
 import datetime
-import fnmatch
 import getpass
 import itertools
 import re
@@ -28,23 +30,19 @@ from pathlib import Path
 
 import yaml
 
+from experiments.belay.config import CONFIG
+
 RUNS_DIR = Path(__file__).parent / "runs"
-CLUSTER = "cw-us-east-02a"
 RUN_PREFIX = "belay-"
-OUTPUT_ROOT = "tmp/ttl=30d/belay/runs"
-DEFAULT_NODE_CAP = 8
-DEFAULT_BAND = "batch"
-BANDS = ("batch", "interactive", "production")
-# A Belay run must execute code that lives on a Belay experiment or checkpoint branch.
-ALLOWED_BRANCHES = ("marin_belay_v1_w*", "marin_belay_v1_ckpt*", "marin_belay_v1_loomdemo*")
-REGISTRY_BRANCHES = ("marin_belay_v1_registry*",)
+# Longest run key in a spec: W&B caps names at 128 characters and the job tree adds more.
+MAX_RUN_KEY = 12
 # 8xH100 nodes per training run, by rung.
 NODES_BY_SIZE = {"d512": 1, "d768": 1, "d1024": 1, "d1280": 1, "d1280L16": 4}
 # Fixed launcher modules a spec may name; anything else is a code change to review here.
 LAUNCHERS = {
-    "ckpt1": "experiments.grug.fast_track.belay_ckpt1",
-    "s7": "experiments.grug.fast_track.belay_s7",
-    "baseline": "experiments.grug.fast_track.launch",
+    "s7n": ("experiments.grug.fast_track.belay_s7", "--ladder", "s7n"),  # the current recipe, Belay Ckpt Oct 20 2026
+    "ckpt1": ("experiments.grug.fast_track.belay_ckpt1",),
+    "baseline": ("experiments.grug.fast_track.launch",),
 }
 ACTIVE_STATES = ("pending", "running")
 _JOB_LINE = re.compile(r"^(/\S+)\s+(\w+)\s+(\S+)")
@@ -93,6 +91,8 @@ def load_spec(experiment_id: str, runs_dir: Path = RUNS_DIR) -> ExperimentSpec:
         raise ValueError(f"{path}: launcher must be one of {sorted(LAUNCHERS)}, got {launcher!r}")
     runs = {}
     for name, run in data["runs"].items():
+        if len(name) > MAX_RUN_KEY:
+            raise ValueError(f"{path}: run key {name!r} is longer than {MAX_RUN_KEY} characters")
         if run["size"] not in NODES_BY_SIZE:
             raise ValueError(f"{path}: run {name}: size must be one of {sorted(NODES_BY_SIZE)}")
         runs[name] = RunSpec(
@@ -110,8 +110,27 @@ def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def require_pushed_head(repo: Path, commit: str, allowed: tuple[str, ...]) -> str:
-    """The full SHA of ``commit`` after checking it is the clean HEAD of ``repo`` and on an allowed remote branch."""
+def require_week_branch(repo: Path, today: datetime.date) -> str:
+    """This week's experiment branch, after checking ``repo`` is on it and it contains ``CONFIG.base_branch``."""
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    expected = CONFIG.week_branch(today)
+    if branch != expected:
+        raise SystemExit(
+            f"refusing: {repo} is on {branch}, not this week's branch {expected}.\n"
+            "next: uv run python -m experiments.belay.steps week"
+        )
+    _git(repo, "fetch", "--quiet", "origin", CONFIG.base_branch)
+    contains = subprocess.run(["git", "merge-base", "--is-ancestor", f"origin/{CONFIG.base_branch}", "HEAD"], cwd=repo)
+    if contains.returncode != 0:
+        raise SystemExit(
+            f"refusing: {branch} does not contain origin/{CONFIG.base_branch}.\n"
+            "next: uv run python -m experiments.belay.steps week  (merges the base in, or tells you to escalate)"
+        )
+    return branch
+
+
+def require_pushed_head(repo: Path, commit: str, branch: str) -> str:
+    """The full SHA of ``commit`` after checking it is the clean HEAD of ``repo`` and pushed to ``branch``."""
     head = _git(repo, "rev-parse", "HEAD")
     full = _git(repo, "rev-parse", commit)
     if full != head:
@@ -119,12 +138,16 @@ def require_pushed_head(repo: Path, commit: str, allowed: tuple[str, ...]) -> st
     dirty = [line for line in _git(repo, "status", "--porcelain", "--untracked-files=no").splitlines() if line]
     if dirty:
         raise SystemExit(f"refusing: tracked files differ from HEAD: {dirty}")
-    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
     _git(repo, "fetch", "--quiet", "origin", branch)
-    remote = [b.strip().removeprefix("origin/") for b in _git(repo, "branch", "-r", "--contains", full).splitlines()]
-    if not any(fnmatch.fnmatch(b, pattern) for b in remote for pattern in allowed):
-        raise SystemExit(f"refusing: {full[:10]} is not pushed to a branch matching {allowed} (on: {remote})")
+    if _git(repo, "rev-parse", f"origin/{branch}") != full:
+        raise SystemExit(f"refusing: {full[:10]} is not the tip of origin/{branch}.\nnext: git push origin {branch}")
     return full
+
+
+def require_registry_checkout(registry_dir: Path) -> None:
+    branch = _git(registry_dir, "rev-parse", "--abbrev-ref", "HEAD")
+    if branch != CONFIG.registry_branch:
+        raise SystemExit(f"refusing: {registry_dir} is on {branch}, not the registry branch {CONFIG.registry_branch}")
 
 
 def iris_jobs(prefix: str) -> list[tuple[str, str, str]]:
@@ -158,13 +181,13 @@ def nodes_in_use(jobs: list[tuple[str, str, str]], runs_dir: Path = RUNS_DIR) ->
     return total
 
 
-def launch_command(spec: ExperimentSpec, run: RunSpec, name: str, cluster: str, band: str) -> list[str]:
+def launch_command(spec: ExperimentSpec, run: RunSpec, name: str) -> list[str]:
     return [
         "uv",
         "run",
         "python",
         "-m",
-        LAUNCHERS[spec.launcher],
+        *LAUNCHERS[spec.launcher],
         "--size",
         run.size,
         *run.flags,
@@ -173,12 +196,12 @@ def launch_command(spec: ExperimentSpec, run: RunSpec, name: str, cluster: str, 
         "--run-id",
         name,
         "--output-path",
-        f"{OUTPUT_ROOT}/{name}",
+        f"{CONFIG.output_root}/{name}",
         "--submit",
         "--target-cluster",
-        cluster,
+        CONFIG.cluster,
         "--priority",
-        band,
+        CONFIG.band,
     ]
 
 
@@ -242,48 +265,56 @@ def commit_registry(registry_dir: Path, path: Path, message: str) -> None:
     _git(registry_dir, "push", "--quiet", "origin", branch)
 
 
+def submit_runs(
+    repo: Path, spec: ExperimentSpec, runs: list[str], commit: str, comment_url: str, *, dry_run: bool
+) -> list[str]:
+    """Check every launch rule for ``runs`` of ``spec``, then submit each and record it in the registry.
+
+    All checks run before the first submit, so a refusal never leaves half an experiment launched. With
+    ``dry_run`` the checks still run (read-only: git, Iris) and the commands are printed, not run.
+    """
+    branch = require_week_branch(repo, datetime.date.today())
+    full = require_pushed_head(repo, commit, branch)
+    require_registry_checkout(CONFIG.registry_checkout)
+    unknown = [r for r in runs if r not in spec.runs]
+    if unknown:
+        raise SystemExit(f"{spec.experiment} has no run(s) {unknown}; runs: {sorted(spec.runs)}")
+    names = {r: run_name(spec.experiment, r) for r in runs}
+    jobs = iris_jobs(belay_job_prefix())
+    used = [n for n in names.values() if any(job_id.endswith(f"/{n}-coord") for job_id, _, _ in jobs)]
+    if used:
+        raise SystemExit(f"refusing: {used} already ran on Iris; a rerun needs a new run key in the spec")
+    in_use = nodes_in_use(jobs)
+    needed = sum(spec.runs[r].nodes for r in runs)
+    if in_use + needed > CONFIG.node_cap:
+        raise SystemExit(
+            f"held: soft cap {CONFIG.node_cap} nodes ({in_use} in use, {spec.experiment} needs {needed}).\n"
+            "next: stop here; the idea stays approved and a later session launches it"
+        )
+    print(f"checks passed: branch {branch} at {full[:10]}, {in_use}/{CONFIG.node_cap} nodes in use, needs {needed}")
+    for run in runs:
+        command = launch_command(spec, spec.runs[run], names[run])
+        print(f"{'would launch' if dry_run else 'launching'} {names[run]}:\n  {' '.join(command)}")
+        if dry_run:
+            continue
+        subprocess.run(command, cwd=repo, check=True)
+        path = record_trial(CONFIG.registry_checkout, spec, spec.runs[run], names[run], full, comment_url)
+        commit_registry(CONFIG.registry_checkout, path, f"Belay registry: {spec.experiment} {run} submitted")
+        print(f"{names[run]}: submitted; recorded in {path.name}")
+    return list(names.values())
+
+
 def main(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("experiment_id")
     parser.add_argument("run")
     parser.add_argument("--commit", required=True, help="the pushed SHA to run; must be the checked-out HEAD")
-    parser.add_argument("--registry-dir", type=Path, required=True, help="checkout of the registry branch")
-    parser.add_argument("--comment-url", required=True, help="where the batch plan was posted")
-    parser.add_argument("--band", choices=BANDS, default=DEFAULT_BAND)
-    parser.add_argument("--cluster", default=CLUSTER)
-    parser.add_argument("--node-cap", type=int, default=DEFAULT_NODE_CAP)
-    parser.add_argument("--dry-run", action="store_true", help="check and print the launch without submitting")
+    parser.add_argument("--comment-url", required=True, help="where the plan was posted")
+    parser.add_argument("--dry-run", action="store_true", help="run every check and print the launch, submit nothing")
     args = parser.parse_args(argv)
-
     repo = Path(_git(Path.cwd(), "rev-parse", "--show-toplevel"))
-    commit = require_pushed_head(repo, args.commit, ALLOWED_BRANCHES)
-    registry_branch = _git(args.registry_dir, "rev-parse", "--abbrev-ref", "HEAD")
-    if not any(fnmatch.fnmatch(registry_branch, p) for p in REGISTRY_BRANCHES):
-        raise SystemExit(f"refusing: {args.registry_dir} is on {registry_branch}, not a registry branch")
     spec = load_spec(args.experiment_id)
-    if args.run not in spec.runs:
-        raise SystemExit(f"{args.experiment_id} has no run {args.run!r}; runs: {sorted(spec.runs)}")
-    run = spec.runs[args.run]
-    name = run_name(args.experiment_id, args.run)
-
-    jobs = iris_jobs(belay_job_prefix())
-    if any(job_id.endswith(f"/{name}-coord") for job_id, _, _ in jobs):
-        raise SystemExit(f"refusing: {name} already ran; give the rerun a new run name (e.g. {args.run}-r)")
-    in_use = nodes_in_use(jobs)
-    if in_use + run.nodes > args.node_cap:
-        raise SystemExit(
-            f"held: soft cap {args.node_cap} nodes ({in_use} in use, {name} needs {run.nodes}); "
-            "wait for a run to finish"
-        )
-
-    command = launch_command(spec, run, name, args.cluster, args.band)
-    print(f"{name}: {in_use}/{args.node_cap} nodes in use; launching at {commit[:10]}:\n  {' '.join(command)}")
-    if args.dry_run:
-        return
-    subprocess.run(command, cwd=repo, check=True)
-    path = record_trial(args.registry_dir, spec, run, name, commit, args.comment_url)
-    commit_registry(args.registry_dir, path, f"Belay registry: {args.experiment_id} {args.run} submitted ({name})")
-    print(f"{name}: submitted; recorded in {path.name}")
+    submit_runs(repo, spec, [args.run], args.commit, args.comment_url, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

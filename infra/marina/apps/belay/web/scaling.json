@@ -175,7 +175,7 @@
    {
     "rung": "d1280L16",
     "label": "d1280L16",
-    "note": "16 layers · batch 1,024 · 32 GPUs",
+    "note": "16 layers · batch 1,024",
     "run": "s7n-d1280L16",
     "active": 405700000.0,
     "tokens": 83982548992,
@@ -185,11 +185,6 @@
     "gpus": 32
    }
   ],
-  "eight_minute": {
-   "label": "d512, 8 min",
-   "value": null,
-   "note": "not run yet"
-  },
   "note": "Measured Paloma macro BPB, byte-weighted (the Vanilla and Basic MoE cards are token-weighted, so BPB is not directly comparable across cards); wall clock includes compile and eval."
  }
 }
