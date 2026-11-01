@@ -701,6 +701,25 @@ def create_api(services: Any) -> FastAPI:
     def approve(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
         return _decide(idea_id, approve=True, caller=caller)
 
+    @admin.post("/ideas/{idea_id}/requeue")
+    def requeue(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
+        """Clear a session's escalation on an approved idea and offer it to the next session."""
+        with engine.begin() as conn:
+            rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
+            if not rows or rows[0]["state"] != IdeaState.APPROVED:
+                raise HTTPException(409, f"idea {idea_id} is not an approved idea waiting for a session")
+            conn.execute(text("UPDATE ideas SET note = NULL, updated_at = now() WHERE id = :id"), {"id": idea_id})
+            label = rows[0]["title"] or rows[0]["body"].strip().splitlines()[0][:90]
+            _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} re-queued “{label}”"))
+            _enqueue(
+                conn,
+                EventKind.WORK_PENDING,
+                str(idea_id),
+                f"idea #{idea_id} re-queued by {caller}",
+                {"idea_id": idea_id, "title": rows[0]["title"], "body": rows[0]["body"]},
+            )
+        return {"state": IdeaState.APPROVED.value}
+
     @admin.post("/ideas/{idea_id}/dismiss")
     def dismiss(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
         return _decide(idea_id, approve=False, caller=caller)

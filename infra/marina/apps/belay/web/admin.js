@@ -67,7 +67,8 @@ function renderControls() {
 function renderPending() {
   // Pending ideas wait for a decision. "upstream" ideas were approved on GitHub before the cutover, so nothing
   // queued them; Approve queues one (an idea approved on both paths still runs once).
-  const pending = state.ideas.filter((i) => i.state === 'pending' || i.state === 'upstream')
+  const escalated = (i) => i.state === 'approved' && (i.note ?? '').startsWith('Escalated:')
+  const pending = state.ideas.filter((i) => i.state === 'pending' || i.state === 'upstream' || escalated(i))
   document.getElementById('pending-n').textContent = String(pending.filter((i) => i.state === 'pending').length)
   if (!pending.length) {
     setChildren('pending', el('div', { class: 'none' }, 'Nothing to review'))
@@ -99,17 +100,21 @@ function renderPending() {
             el(
               'small',
               {},
-              `${idea.state === 'upstream' ? 'approved on GitHub, not queued · ' : 'not approved · '}`,
+              escalated(idea)
+                ? `${idea.note} · `
+                : `${idea.state === 'upstream' ? 'approved on GitHub, not queued · ' : 'not approved · '}`,
               `${idea.origin === 'intake' ? '#9514' : 'proposal'} · ${idea.author} · `,
               when(idea.posted_at),
             ),
           ),
           idea.url ? link(idea.url, '↗') : el('span'),
-          el(
-            'button',
-            { type: 'button', class: 'btn primary', onclick: () => act(`ideas/${idea.id}/approve`, {}, 'Approved and queued') },
-            idea.state === 'upstream' ? 'Queue' : 'Approve',
-          ),
+          escalated(idea)
+            ? el('button', { type: 'button', class: 'btn primary', onclick: () => act(`ideas/${idea.id}/requeue`, {}, 'Re-queued') }, 'Re-queue')
+            : el(
+                'button',
+                { type: 'button', class: 'btn primary', onclick: () => act(`ideas/${idea.id}/approve`, {}, 'Approved and queued') },
+                idea.state === 'upstream' ? 'Queue' : 'Approve',
+              ),
           idea.state === 'pending'
             ? el('button', { type: 'button', class: 'btn', onclick: () => act(`ideas/${idea.id}/dismiss`, {}, 'Dismissed') }, 'Dismiss')
             : el('span'),
