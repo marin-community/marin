@@ -95,3 +95,9 @@ events:
   - kda_onchip_decay_gate=true
   - kda_onchip_erase_gate=true
   - kda_state_grads=pallas
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: kda_chunk_size=32, kda_onchip_decay_gate=true, kda_state_grads=pallas, kda_state_block_v=64'
+  checkpoint: belay-ckpt-2026-10-20

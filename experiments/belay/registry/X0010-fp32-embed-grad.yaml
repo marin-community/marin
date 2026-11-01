@@ -106,3 +106,9 @@ events:
   candidate: gate-2 recipe
   as_adopted:
   - fp32 scatter-add embedding backward
+- type: adopted
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'In the Belay Ckpt Oct 20 2026 config: always on in code: model.py _embedding_gather custom VJP (fp32 scatter)'
+  checkpoint: belay-ckpt-2026-10-20

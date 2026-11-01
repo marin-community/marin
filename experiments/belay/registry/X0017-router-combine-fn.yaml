@@ -81,3 +81,9 @@ events:
   candidate: candidate 9
   as_adopted:
   - router_combine=sqrt_softplus_renorm
+- type: removed
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'Not in the Belay Ckpt Oct 20 2026 config: router_combine=sigmoid_renorm (not sqrt_softplus_renorm)'
+  checkpoint: belay-ckpt-2026-10-20

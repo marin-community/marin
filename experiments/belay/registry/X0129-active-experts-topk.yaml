@@ -332,3 +332,9 @@ events:
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: Belay Ckpt 1 routes top-10 of 384 (maintainer, 2026-10-12)
   candidate: Belay Ckpt 1
+- type: removed
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'Not in the Belay Ckpt Oct 20 2026 config: num_experts_per_token=8 (Ckpt 1 adopted top-10)'
+  checkpoint: belay-ckpt-2026-10-20

@@ -410,3 +410,10 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
   note: per-head qk_mult variant closed; per-layer scalar is enough
+- type: removed
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'Not in the Belay Ckpt Oct 20 2026 config: qk_mult=1.3 fixed, learnable_qk_mult=false (the baseline value, not the
+    tested 2.5/4 or learnable)'
+  checkpoint: belay-ckpt-2026-10-20

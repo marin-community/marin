@@ -468,6 +468,12 @@ events:
   date: '2026-10-02'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
   note: cap 11 and asymmetric forms flat; keep tanh 10
+- type: removed
+  batch: belay-ckpt-2026-10-20
+  date: '2026-10-20'
+  comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
+  note: 'Not in the Belay Ckpt Oct 20 2026 config: logit_soft_cap=null'
+  checkpoint: belay-ckpt-2026-10-20
 potential:
   score: 5
   rationale: no result on current recipe yet; Ckpt 1-era wins (d512 -0.024/-0.028, d1024 -0.008) shrank with scale; retest
