@@ -172,6 +172,9 @@ def commit_and_push(paths: list[Path], message: str, *, dry_run: bool) -> None:
     validate = [sys.executable, "experiments/belay/registry.py", "validate"]
     subprocess.run(validate, cwd=CONFIG.registry_checkout, check=True)
     git(CONFIG.registry_checkout, "add", *(str(p) for p in paths))
+    if not git(CONFIG.registry_checkout, "status", "--porcelain", *(str(p) for p in paths)):
+        print(f"{', '.join(p.name for p in paths)} unchanged; nothing to push")
+        return
     git(CONFIG.registry_checkout, "commit", "--quiet", "-m", message)
     git(CONFIG.registry_checkout, "push", "--quiet", "origin", CONFIG.registry_branch)
     head = git(CONFIG.registry_checkout, "rev-parse", "HEAD")
