@@ -394,7 +394,8 @@ trials:
   batch: X0021
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562734604
-  wandb: []
+  wandb:
+  - belay-X0021-seed0
   settings:
     qk_mult: '4.0'
     learnable_qk_mult: 'true'
