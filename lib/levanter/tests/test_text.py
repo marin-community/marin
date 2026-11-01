@@ -17,9 +17,11 @@ import haliax as hax
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.cache import build_lm_dataset_cache
 from levanter.data.text.datasets import (
+    CausalLmDataset,
     ChatDataset,
     DatasetComponent,
     LmDataConfig,
+    PaddedTokenSeqDataset,
     UrlDatasetSourceConfig,
     count_corpus_sizes,
     dataset_for_component,
@@ -37,7 +39,7 @@ from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
-from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, write_levanter_cache
+from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, SerialCacheWriter, write_levanter_cache
 
 
 def test_dont_blow_up_without_validation_set():
@@ -55,6 +57,94 @@ def test_dont_blow_up_without_validation_set():
         Pos = hax.Axis("position", 10)
         # mostly just making sure this doesn't blow up
         assert config.validation_sets(Pos) == {}
+
+
+@pytest.mark.parametrize("token_count", [0, 3, 8, 11])
+def test_continuous_validation_retains_partial_sequences_without_changing_training(tmp_path, token_count):
+    tokens = np.arange(1, token_count + 1, dtype=np.int32)
+    with SerialCacheWriter(str(tmp_path), {"input_ids": np.zeros(1, dtype=np.int32)}) as writer:
+        if token_count:
+            writer.write_batch([{"input_ids": tokens}])
+    cache = writer.result()
+    config = LmDataConfig(
+        components={"tiny": DatasetComponent(format=TextLmDatasetFormat(), pack=False)},
+        tokenizer="passthrough",
+        vocab_size=32,
+    )
+    Pos = hax.Axis("position", 8)
+    train = config.build_token_datasets({"tiny": cache}, Pos, split="train")["tiny"].as_sync_dataset()
+    validation = config.build_token_datasets({"tiny": cache}, Pos, split="validation")["tiny"].as_sync_dataset()
+
+    assert len(train) == token_count // 8
+    assert len(validation) == (token_count + 7) // 8
+    for index in range(len(validation)):
+        example = validation[index]
+        real = tokens[index * 8 : (index + 1) * 8]
+        np.testing.assert_array_equal(example.tokens[: len(real)], real)
+        expected_weights = np.zeros(8, dtype=np.float32)
+        expected_weights[: len(real) - 1] = 1
+        np.testing.assert_array_equal(example.loss_weight, expected_weights)
+        segments = np.asarray(example.attn_mask.segment_ids[0])
+        np.testing.assert_array_equal(segments >= 0, np.arange(8) < len(real))
+        for position in range(len(real)):
+            assert bool(example.attn_mask.materialize_mask(8, 8)[position, position])
+        if len(real) < 8:
+            assert not np.asarray(example.attn_mask.materialize_mask(8, 8))[: len(real), len(real) :].any()
+
+
+@pytest.mark.parametrize("block_cross_document_attention", [False, True])
+def test_padded_continuous_validation_preserves_weights_and_document_boundaries(
+    tmp_path, block_cross_document_attention
+):
+    tokens = np.array([1, 3, 2, 4], dtype=np.int32)
+    weights = np.array([0.25, 0.5, 0.75, 1.0], dtype=np.float32)
+    exemplar = {"input_ids": tokens, "weights": weights}
+    with SerialCacheWriter(str(tmp_path), exemplar) as writer:
+        writer.write_batch([exemplar])
+    dataset = CausalLmDataset(
+        PaddedTokenSeqDataset(writer.result(), 8, loss_weights_key="weights"),
+        hax.Axis("position", 8),
+        eos_id=3,
+        block_cross_document_attention=block_cross_document_attention,
+    ).as_sync_dataset()
+
+    example = dataset[0]
+    np.testing.assert_array_equal(example.tokens, [1, 3, 2, 4, 0, 0, 0, 0])
+    np.testing.assert_array_equal(example.loss_weight, [0.25, 0.5, 0.75, 0, 0, 0, 0, 0])
+    expected_segments = [0, 0, 1, 1, -1, -1, -1, -1] if block_cross_document_attention else [0] * 4 + [-1] * 4
+    np.testing.assert_array_equal(example.attn_mask.segment_ids[0], expected_segments)
+
+
+@pytest.mark.parametrize("token_count", [3, 8, 11])
+def test_validation_corpus_stats_count_padded_sequences(tmp_path, local_gpt2_tokenizer_path, token_count):
+    tokens = np.arange(1, token_count + 1, dtype=np.int32)
+    for split in ("train", "validation"):
+        write_levanter_cache([{"input_ids": tokens}], str(tmp_path / split), metadata={})
+    config = LmDataConfig(
+        components={"tiny": DatasetComponent(cache_dir=str(tmp_path), format=TextLmDatasetFormat(), pack=False)},
+        tokenizer=local_gpt2_tokenizer_path,
+    )
+
+    stats = count_corpus_sizes(config, seq_len=8)
+    validation = config.validation_sets(hax.Axis("position", 8))["tiny"].as_sync_dataset()
+
+    assert stats["data/stats/validation/tiny/total_seqs"] == len(validation) == (token_count + 7) // 8
+    assert stats["data/stats/train/tiny/total_seqs"] == token_count // 8
+
+
+@pytest.mark.asyncio
+async def test_padded_continuous_validation_batches_full_and_partial_sequences(tmp_path):
+    tokens = np.arange(11, dtype=np.int32)
+    with SerialCacheWriter(str(tmp_path), {"input_ids": tokens}) as writer:
+        writer.write_batch([{"input_ids": tokens}])
+    dataset = CausalLmDataset(PaddedTokenSeqDataset(writer.result(), 8), hax.Axis("position", 8))
+
+    tail, full, repeated_tail = await dataset.get_batch([1, 0, 1])
+    batched = jax.tree.map(lambda *arrays: jnp.stack(arrays), tail, full, repeated_tail)
+    np.testing.assert_array_equal(
+        batched.tokens, [[8, 9, 10, 0, 0, 0, 0, 0], list(range(8)), [8, 9, 10, 0, 0, 0, 0, 0]]
+    )
+    np.testing.assert_array_equal(batched.loss_weight.sum(axis=1), [2, 7, 2])
 
 
 def test_count_corpus_sizes_handles_empty_train_cache(monkeypatch):
@@ -375,6 +465,7 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
         cache,
         eos_id=None,
         block_cross_document_attention=config.block_cross_document_attention,
+        remainder="drop",
     ).as_sync_dataset()
 
     example = ds[0]
@@ -440,6 +531,7 @@ def test_prebuilt_cache_without_loss_weights(tmp_path):
         cache,
         eos_id=None,
         block_cross_document_attention=config.block_cross_document_attention,
+        remainder="drop",
     ).as_sync_dataset()
 
     example = ds[0]
@@ -485,6 +577,7 @@ def test_dataset_for_component_rejects_preference_format():
             None,  # type: ignore[arg-type]
             eos_id=None,
             block_cross_document_attention=True,
+            remainder="drop",
         )
 
 
@@ -781,7 +874,12 @@ def test_dataset_for_component_chat_unpacked_yields_one_padded_example_per_conve
     cache = _build_train_cache(component, tokenizer)
     Pos = hax.Axis("position", 128)
     ds = dataset_for_component(
-        component, Pos, cache, eos_id=None, block_cross_document_attention=True
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+        remainder="drop",
     ).as_sync_dataset()
 
     # dummy_chat_data holds two conversations; unpacked mode never merges them
@@ -817,7 +915,12 @@ def test_dataset_for_component_text_unpacked_masks_padding(tmp_path):
     cache = _build_train_cache(component, tokenizer)
     Pos = hax.Axis("position", 16)
     ds = dataset_for_component(
-        component, Pos, cache, eos_id=None, block_cross_document_attention=True
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+        remainder="drop",
     ).as_sync_dataset()
 
     assert len(ds) == 2
@@ -896,7 +999,12 @@ def test_build_caches_rebuilds_on_unloadable_cache(tmp_path):
     assert (cache_path / "shard_ledger.json").exists(), "rebuild should restore the ledger"
     Pos = hax.Axis("position", 4)
     ds = dataset_for_component(
-        component, Pos, rebuilt, eos_id=None, block_cross_document_attention=config.block_cross_document_attention
+        component,
+        Pos,
+        rebuilt,
+        eos_id=None,
+        block_cross_document_attention=config.block_cross_document_attention,
+        remainder="drop",
     ).as_sync_dataset()
     np.testing.assert_array_equal(np.asarray(ds[0].tokens), np.array(records[0]["input_ids"], dtype=np.int32))
 
