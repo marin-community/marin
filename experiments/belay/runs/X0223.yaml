@@ -1,0 +1,15 @@
+experiment: X0223
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: depth-1 MTP head, weight 0.1 decayed to 0 by 50%
+    flags:
+    - --model-set
+    - mtp_weight=0.1
+    - --model-set
+    - mtp_decay_frac=0.5
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
