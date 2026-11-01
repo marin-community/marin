@@ -219,7 +219,8 @@ trials:
   batch: X0209
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6563440147
-  wandb: []
+  wandb:
+  - belay-X0209-seed0
   settings:
     kda_beta_group: adam
     init_std_mult_beta: '1'
