@@ -1,82 +1,533 @@
 {
-  "updated": "2026-10-31",
-  "headline": {
+ "updated": "2026-10-31",
+ "headline": {
+  "stage": "S7",
+  "label": "Full Belay architecture (AttnRes + KDA + MLA/Inkling) on one GB200 rack",
+  "step": 11.465,
+  "tps_k": 365.8,
+  "mfu": 36.8,
+  "control_step": 12.206,
+  "run": "mfl-mp-qall",
+  "branch": "marin_belay_v1_mfuladder_allwins"
+ },
+ "flop_note": "Analytic MFU = 3 × forward FLOPs/token ÷ step time ÷ (64 × 2.5 PF/s per rack). Compute-match FLOPs count ~1.18× more (Belay Ckpt 1: 28.9% analytic = 34.2% compute-match). S6/S7 MFU is on their own FLOPs (KDA +12.1%, MLA+Inkling +0.2% over S4); \"at S4 FLOPs\" divides that out. Production rows use the hero's own counter (~1% above analytic).",
+ "ladder": {
+  "title": "One rack: hero → Belay architecture",
+  "setup": "1 rack = 16 nodes × 4 GB200 · batch 1024 × 4096 · 12–30 step runs · each stage builds on the one before",
+  "source": "https://claude.ai/artifact/LNAhYDvbmgrkPbXcUAYV7Y",
+  "s4_flops_per_step": 6.0145e+17,
+  "stages": [
+   {
+    "stage": "S1",
+    "change": "Hero, 128k vocab",
+    "run": "mfl-s1-pgle",
+    "step": 12.6,
+    "tps_k": 332.9,
+    "mfu": 30.7,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder"
+     }
+    ]
+   },
+   {
+    "stage": "S2",
+    "change": "16k vocab",
+    "run": "mfl-s2-pgle2",
+    "step": 12.21,
+    "tps_k": 343.5,
+    "mfu": 30.8,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder"
+     }
+    ]
+   },
+   {
+    "stage": "S3",
+    "change": "MXFP8 (experts + dense, expert wgrads)",
+    "run": "mfl-wg-s3b",
+    "step": 10.12,
+    "tps_k": 414.4,
+    "mfu": 37.1,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_wgrad8",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_wgrad8"
+     }
+    ]
+   },
+   {
+    "stage": "S4",
+    "change": "SwiGLU → ungated ReLU² 4608 (equal params)",
+    "run": "mfl-gn-hwc",
+    "step": 9.196,
+    "tps_k": 456.1,
+    "mfu": 40.9,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_gnorm",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_gnorm"
+     }
+    ]
+   },
+   {
+    "stage": "S4-ft",
+    "change": "Same model in fast_track (bridge)",
+    "run": "mfl-ov-nb",
+    "step": 9.306,
+    "tps_k": 450.7,
+    "mfu": 40.4,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_optov",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_optov"
+     }
+    ]
+   },
+   {
+    "stage": "S5",
+    "change": "Block AttnRes (8 blocks)",
+    "run": "mfl-ov-d5",
+    "step": 10.071,
+    "tps_k": 416.5,
+    "mfu": 37.3,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_optov",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_optov"
+     }
+    ]
+   },
+   {
+    "stage": "S6",
+    "change": "Local SWA GQA → KDA",
+    "run": "mfl-st-s6q140",
+    "step": 11.777,
+    "tps_k": 356.1,
+    "mfu": 35.8,
+    "own_flops_per_step": 6.7424e+17,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_stack",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_stack"
+     }
+    ]
+   },
+   {
     "stage": "S7",
-    "label": "Full Belay architecture (AttnRes + KDA + MLA/Inkling) on one GB200 rack",
+    "change": "Global GQA → MLA + Inkling relpos",
+    "run": "mfl-mp-qall",
     "step": 11.465,
     "tps_k": 365.8,
     "mfu": 36.8,
-    "control_step": 12.206,
-    "run": "mfl-mp-qall",
-    "branch": "marin_belay_v1_mfuladder_allwins"
-  },
-  "flop_note": "Analytic MFU = 3 × forward FLOPs/token ÷ step time ÷ (64 × 2.5 PF/s per rack). Compute-match FLOPs count ~1.18× more (Belay Ckpt 1: 28.9% analytic = 34.2% compute-match). S6/S7 MFU is on their own FLOPs (KDA +12.1%, MLA+Inkling +0.2% over S4); \"at S4 FLOPs\" divides that out. Production rows use the hero's own counter (~1% above analytic).",
-  "ladder": {
-    "title": "One rack: hero → Belay architecture",
-    "setup": "1 rack = 16 nodes × 4 GB200 · batch 1024 × 4096 · 12–30 step runs · each stage builds on the one before",
-    "source": "https://claude.ai/artifact/LNAhYDvbmgrkPbXcUAYV7Y",
-    "s4_flops_per_step": 6.0145e17,
-    "stages": [
-      {"stage": "S1", "change": "Hero, 128k vocab", "run": "mfl-s1-pgle", "step": 12.60, "tps_k": 332.9, "mfu": 30.7, "first": null},
-      {"stage": "S2", "change": "16k vocab", "run": "mfl-s2-pgle2", "step": 12.21, "tps_k": 343.5, "mfu": 30.8, "first": null},
-      {"stage": "S3", "change": "MXFP8 (experts + dense, expert wgrads)", "run": "mfl-wg-s3b", "step": 10.12, "tps_k": 414.4, "mfu": 37.1, "first": {"step": 10.58, "mfu": 35.5, "run": "mfl-s3-pgle", "note": "bf16 expert wgrads"}},
-      {"stage": "S4", "change": "SwiGLU → ungated ReLU² 4608 (equal params)", "run": "mfl-gn-hwc", "step": 9.196, "tps_k": 456.1, "mfu": 40.9, "first": {"step": 9.81, "mfu": 38.3, "run": "mfl-s4-pgle", "note": "Oct 18, bf16 expert wgrads"}},
-      {"stage": "S4-ft", "change": "Same model in fast_track (bridge)", "run": "mfl-ov-nb", "step": 9.306, "tps_k": 450.7, "mfu": 40.4, "first": {"step": 11.30, "mfu": 33.3, "run": "mfl-s4ft-rs140", "note": "Oct 18"}},
-      {"stage": "S5", "change": "Block AttnRes (8 blocks)", "run": "mfl-ov-d5", "step": 10.071, "tps_k": 416.5, "mfu": 37.3, "first": {"step": 12.09, "mfu": 31.1, "run": "mfl-s5-rs120", "note": "Oct 18"}},
-      {"stage": "S6", "change": "Local SWA GQA → KDA", "run": "mfl-st-s6q140", "step": 11.777, "tps_k": 356.1, "mfu": 35.8, "own_flops_per_step": 6.7424e17, "first": {"step": 13.75, "mfu": 30.7, "run": "mfl-s6-sgp", "note": "Oct 18"}},
-      {"stage": "S7", "change": "Global GQA → MLA + Inkling relpos", "run": "mfl-mp-qall", "step": 11.465, "tps_k": 365.8, "mfu": 36.8, "own_flops_per_step": 6.75669e17, "first": {"step": 14.02, "mfu": 30.1, "run": "mfl-s7-p90", "note": "Oct 18"}}
+    "own_flops_per_step": 6.75669e+17,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_allwins",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_allwins"
+     }
     ]
-  },
-  "s7_push": {
-    "title": "S7 push",
-    "note": "Rows from 12.18 s on are wall-clock (dispatch-to-dispatch); earlier rows use W&B throughput/duration, which leaves out 100–200 ms of host time.",
-    "steps": [
-      {"date": "Oct 18", "what": "First tuned S7", "run": "mfl-s7-p90", "step": 14.02, "mfu": 30.1},
-      {"date": "Oct 19", "what": "Consolidated: fused AttnRes, MXFP8 wgrads, host offload, PGLE", "run": "mfl-cons-c7r140", "step": 12.27, "mfu": 34.4},
-      {"date": "Oct 19", "what": "Balanced routing standard, attention w_o in MXFP8, prefetch", "run": "mfl-hm-o7p", "step": 12.19, "mfu": 34.6},
-      {"date": "Oct 20", "what": "Lean KDA fwd, fused GatedNorm, native relpos FA4 fwd", "run": "mfl-st-s7q", "step": 12.062, "mfu": 35.0},
-      {"date": "Oct 21", "what": "Same, wall-clock control", "run": "mfl-pmp-c0", "step": 12.181, "mfu": 34.7, "wall": true},
-      {"date": "Oct 21", "what": "Post-step thread, tuned QuACK GEMM table, capacity 1.05", "run": "mfl-pmp-qcf1", "step": 11.722, "mfu": 36.0, "wall": true},
-      {"date": "Oct 21", "what": "+ split backward (memplan)", "run": "mfl-mp-qall", "step": 11.465, "mfu": 36.8, "wall": true}
-    ],
-    "wins_ms": [
-      {"what": "Tuned QuACK GEMM table", "ms": -310},
-      {"what": "Split backward (memplan)", "ms": -261},
-      {"what": "Post-step thread, lagged wait", "ms": "-94 to -161"},
-      {"what": "Capacity factor 1.05", "ms": -78}
-    ]
-  },
-  "production": {
-    "title": "Production hero (11 GB200 racks)",
-    "setup": "Median MFU on the hero's counter from each cutover's paired trial · 46.1M tokens/step (4,194,304 per rack × 11)",
-    "source": "https://github.com/marin-community/marin/issues/8506",
-    "tokens_per_step": 46137344,
-    "runs": [
-      {"run": "hero-wd-gate-router-p02-step58k", "from_step": 58014, "date": "2026-09-04", "change": "Pooled-wave all-to-all; gate/router weight decay", "mfu": 21.46, "step": 19.8, "note": "MFU = control median from step 81,740; s/step from the Sep 9 plan"},
-      {"run": "hero-ragged_a2a-nccl2307-ep-step81k", "from_step": 81716, "date": "2026-09-09", "change": "Ragged all-to-all EP transport (NCCL 2.30.7 wheel)", "mfu": 23.11, "step": null},
-      {"run": "hero-mix-996f4891-step108k", "from_step": 108000, "date": "2026-09-15", "change": "Data mixture swap", "mfu": 23.03, "step": null},
-      {"run": "hero-nopdl-step108k", "from_step": 108778, "date": "2026-09-15", "change": "PDL-off QuACK launchers, PJRT wheel", "mfu": 23.62, "step": null},
-      {"run": "hero-main-step121638", "from_step": 121638, "date": "2026-09-18", "change": "Cutover to main (e8460b35bd)", "mfu": 24.10, "step": 16.29, "tps_m": 2.83},
-      {"run": "hero-fa4sm100-nomask-step146k", "from_step": 146139, "date": "2026-09-23", "change": "Native SM100 FA4, mask-free ragged MLP, coordinated GC", "mfu": 26.75, "step": 14.67, "tps_m": 3.14},
-      {"run": "hero-mfu30-step231k", "from_step": 231464, "date": "2026-10-09", "change": "MoE optimization stack (#9829–#9834), carry-offload memory budget", "mfu": 29.44, "step": 13.33},
-      {"run": "hero-ctx16k-step257k", "from_step": 257553, "date": "2026-10-14", "change": "16K context, qk_mult 1.48, batch 2816", "mfu": 30.17, "step": 13.96, "note": "30.7% at its trial; 30.17% median at steps 356,531–356,580"},
-      {"run": "hero-gradclip-step356k", "from_step": 356531, "date": "2026-10-30", "change": "Global gradient-norm clip 1.0", "mfu": 30.56, "step": 13.78}
-    ]
-  },
-  "other": {
-    "title": "Other hero-scale measurements (one rack, not deployed)",
-    "rows": [
-      {"what": "grug d6144 (4-of-128 experts, FSDP): + PGLE", "before": "23.70%", "after": "24.8–25.0%", "note": "auto PGLE, config only"},
-      {"what": "grug d6144 chunk-4 uniform", "before": null, "after": "25.59%", "note": "memory-bound ceiling; flag levers all lose"},
-      {"what": "Belay Ckpt 1 recipe: top-10 routed, shared 4608", "before": "16.77 s", "after": "17.11 s", "note": "user choice, +2% step"},
-      {"what": "Belay Ckpt 1 recipe: MXFP8", "before": "16.83 s", "after": "14.74 s · 28.6%", "note": "−12.4% step"},
-      {"what": "Belay Ckpt 1 recipe: no bigram, MXFP8 dispatch + fused grad quant", "before": "14.82 s", "after": "14.59 s · 28.9% (34.2% compute-match)", "note": "lc1-gb200-nbboth"},
-      {"what": "Hero 16K: FP32 saved attention O", "before": "13.16 s · 32.00%", "after": "13.21 s · 31.87%", "note": "+0.4% step, +1.5 GiB; not deployed"}
-    ]
-  },
-  "unsourced": [
-    "s/step for hero-ragged_a2a-nccl2307-ep-step81k, hero-mix-996f4891-step108k and hero-nopdl-step108k (only MFU is recorded)",
-    "The change list of the hero-main-step121638 cutover",
-    "tok/s for production runs without a stated value; shown as 46.1M tokens/step ÷ s/step"
+   }
   ]
+ },
+ "s7_push": {
+  "title": "S7 push",
+  "note": "Rows from 12.18 s on are wall-clock (dispatch-to-dispatch); earlier rows use W&B throughput/duration, which leaves out 100–200 ms of host time.",
+  "steps": [
+   {
+    "date": "Oct 18",
+    "what": "First tuned S7",
+    "run": "mfl-s7-p90",
+    "step": 14.02,
+    "mfu": 30.1,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_ft",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_ft"
+     }
+    ]
+   },
+   {
+    "date": "Oct 19",
+    "what": "Consolidated: fused AttnRes, MXFP8 wgrads, host offload, PGLE",
+    "run": "mfl-cons-c7r140",
+    "step": 12.27,
+    "mfu": 34.4,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_cons",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_cons"
+     }
+    ]
+   },
+   {
+    "date": "Oct 19",
+    "what": "Balanced routing standard, attention w_o in MXFP8, prefetch",
+    "run": "mfl-hm-o7p",
+    "step": 12.19,
+    "mfu": 34.6,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_heromoe",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_heromoe"
+     }
+    ]
+   },
+   {
+    "date": "Oct 20",
+    "what": "Lean KDA fwd, fused GatedNorm, native relpos FA4 fwd",
+    "run": "mfl-st-s7q",
+    "step": 12.062,
+    "mfu": 35.0,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_stack",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_stack"
+     }
+    ]
+   },
+   {
+    "date": "Oct 21",
+    "what": "Same, wall-clock control",
+    "run": "mfl-pmp-c0",
+    "step": 12.181,
+    "mfu": 34.7,
+    "wall": true,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_pipe_mp",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_pipe_mp"
+     }
+    ]
+   },
+   {
+    "date": "Oct 21",
+    "what": "Post-step thread, tuned QuACK GEMM table, capacity 1.05",
+    "run": "mfl-pmp-qcf1",
+    "step": 11.722,
+    "mfu": 36.0,
+    "wall": true,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_pipe_mp",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_pipe_mp"
+     }
+    ]
+   },
+   {
+    "date": "Oct 21",
+    "what": "+ split backward (memplan)",
+    "run": "mfl-mp-qall",
+    "step": 11.465,
+    "mfu": 36.8,
+    "wall": true,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_allwins",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_allwins"
+     }
+    ]
+   }
+  ],
+  "wins_ms": [
+   {
+    "what": "Tuned QuACK GEMM table",
+    "ms": -310,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_quacktune",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_quacktune"
+     }
+    ]
+   },
+   {
+    "what": "Split backward (memplan)",
+    "ms": -261,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_memplan",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_memplan"
+     }
+    ]
+   },
+   {
+    "what": "Post-step thread, lagged wait",
+    "ms": "-94 to -161",
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_pipe",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_pipe"
+     }
+    ]
+   },
+   {
+    "what": "Capacity factor 1.05",
+    "ms": -78,
+    "links": [
+     {
+      "label": "marin_belay_v1_mfuladder_allwins",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_mfuladder_allwins"
+     }
+    ]
+   }
+  ]
+ },
+ "production": {
+  "title": "Production hero (11 GB200 racks)",
+  "setup": "Median MFU on the hero's counter from each cutover's paired trial · 46.1M tokens/step (4,194,304 per rack × 11)",
+  "source": "https://github.com/marin-community/marin/issues/8506",
+  "tokens_per_step": 46137344,
+  "runs": [
+   {
+    "run": "hero-wd-gate-router-p02-step58k",
+    "from_step": 58014,
+    "date": "2026-09-04",
+    "change": "Pooled-wave all-to-all; gate/router weight decay",
+    "mfu": 21.46,
+    "step": 19.8,
+    "note": "MFU = control median from step 81,740; s/step from the Sep 9 plan",
+    "links": [
+     {
+      "label": "023ed7a24d",
+      "url": "https://github.com/marin-community/marin/commit/023ed7a24d"
+     },
+     {
+      "label": "#8884",
+      "url": "https://github.com/marin-community/marin/pull/8884"
+     },
+     {
+      "label": "#8833",
+      "url": "https://github.com/marin-community/marin/pull/8833"
+     }
+    ]
+   },
+   {
+    "run": "hero-ragged_a2a-nccl2307-ep-step81k",
+    "from_step": 81716,
+    "date": "2026-09-09",
+    "change": "Ragged all-to-all EP transport (NCCL 2.30.7 wheel)",
+    "mfu": 23.11,
+    "step": null,
+    "links": [
+     {
+      "label": "04fb348456",
+      "url": "https://github.com/marin-community/marin/commit/04fb348456"
+     },
+     {
+      "label": "#9043",
+      "url": "https://github.com/marin-community/marin/pull/9043"
+     }
+    ]
+   },
+   {
+    "run": "hero-mix-996f4891-step108k",
+    "from_step": 108000,
+    "date": "2026-09-15",
+    "change": "Data mixture swap",
+    "mfu": 23.03,
+    "step": null,
+    "links": [
+     {
+      "label": "0cb3167f39",
+      "url": "https://github.com/marin-community/marin/commit/0cb3167f39"
+     },
+     {
+      "label": "#9162",
+      "url": "https://github.com/marin-community/marin/pull/9162"
+     }
+    ]
+   },
+   {
+    "run": "hero-nopdl-step108k",
+    "from_step": 108778,
+    "date": "2026-09-15",
+    "change": "PDL-off QuACK launchers, PJRT wheel",
+    "mfu": 23.62,
+    "step": null,
+    "links": [
+     {
+      "label": "#9183",
+      "url": "https://github.com/marin-community/marin/pull/9183"
+     },
+     {
+      "label": "#9179",
+      "url": "https://github.com/marin-community/marin/pull/9179"
+     }
+    ]
+   },
+   {
+    "run": "hero-main-step121638",
+    "from_step": 121638,
+    "date": "2026-09-18",
+    "change": "Cutover to main (e8460b35bd)",
+    "mfu": 24.1,
+    "step": 16.29,
+    "tps_m": 2.83,
+    "links": [
+     {
+      "label": "e8460b35bd",
+      "url": "https://github.com/marin-community/marin/commit/e8460b35bd"
+     }
+    ]
+   },
+   {
+    "run": "hero-fa4sm100-nomask-step146k",
+    "from_step": 146139,
+    "date": "2026-09-23",
+    "change": "Native SM100 FA4, mask-free ragged MLP, coordinated GC",
+    "mfu": 26.75,
+    "step": 14.67,
+    "tps_m": 3.14,
+    "links": [
+     {
+      "label": "ad754c6d67",
+      "url": "https://github.com/marin-community/marin/commit/ad754c6d67"
+     },
+     {
+      "label": "#9378",
+      "url": "https://github.com/marin-community/marin/pull/9378"
+     }
+    ]
+   },
+   {
+    "run": "hero-mfu30-step231k",
+    "from_step": 231464,
+    "date": "2026-10-09",
+    "change": "MoE optimization stack (#9829–#9834), carry-offload memory budget",
+    "mfu": 29.44,
+    "step": 13.33,
+    "links": [
+     {
+      "label": "f2bc69bf6c",
+      "url": "https://github.com/marin-community/marin/commit/f2bc69bf6c"
+     },
+     {
+      "label": "#9960",
+      "url": "https://github.com/marin-community/marin/pull/9960"
+     }
+    ]
+   },
+   {
+    "run": "hero-ctx16k-step257k",
+    "from_step": 257553,
+    "date": "2026-10-14",
+    "change": "16K context, qk_mult 1.48, batch 2816",
+    "mfu": 30.17,
+    "step": 13.96,
+    "note": "30.7% at its trial; 30.17% median at steps 356,531–356,580",
+    "links": [
+     {
+      "label": "eadf76a1bc",
+      "url": "https://github.com/marin-community/marin/commit/eadf76a1bc"
+     },
+     {
+      "label": "#10101",
+      "url": "https://github.com/marin-community/marin/pull/10101"
+     }
+    ]
+   },
+   {
+    "run": "hero-gradclip-step356k",
+    "from_step": 356531,
+    "date": "2026-10-30",
+    "change": "Global gradient-norm clip 1.0",
+    "mfu": 30.56,
+    "step": 13.78,
+    "links": [
+     {
+      "label": "8aac0db3d9",
+      "url": "https://github.com/marin-community/marin/commit/8aac0db3d9"
+     },
+     {
+      "label": "#10783",
+      "url": "https://github.com/marin-community/marin/pull/10783"
+     }
+    ]
+   }
+  ]
+ },
+ "other": {
+  "title": "Other hero-scale measurements (one rack, not deployed)",
+  "rows": [
+   {
+    "what": "grug d6144 (4-of-128 experts, FSDP): + PGLE",
+    "before": "23.70%",
+    "after": "24.8–25.0%",
+    "note": "auto PGLE, config only",
+    "links": []
+   },
+   {
+    "what": "grug d6144 chunk-4 uniform",
+    "before": null,
+    "after": "25.59%",
+    "note": "memory-bound ceiling; flag levers all lose",
+    "links": [
+     {
+      "label": "b200-minimal",
+      "url": "https://github.com/marin-community/marin/tree/b200-minimal"
+     }
+    ]
+   },
+   {
+    "what": "Belay Ckpt 1 recipe: top-10 routed, shared 4608",
+    "before": "16.77 s",
+    "after": "17.11 s",
+    "note": "user choice, +2% step",
+    "links": [
+     {
+      "label": "marin_belay_v1_ckpt1",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_ckpt1"
+     }
+    ]
+   },
+   {
+    "what": "Belay Ckpt 1 recipe: MXFP8",
+    "before": "16.83 s",
+    "after": "14.74 s · 28.6%",
+    "note": "−12.4% step",
+    "links": [
+     {
+      "label": "marin_belay_v1_ckpt1",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_ckpt1"
+     }
+    ]
+   },
+   {
+    "what": "Belay Ckpt 1 recipe: no bigram, MXFP8 dispatch + fused grad quant",
+    "before": "14.82 s",
+    "after": "14.59 s · 28.9% (34.2% compute-match)",
+    "note": "lc1-gb200-nbboth",
+    "links": [
+     {
+      "label": "marin_belay_v1_ckpt1",
+      "url": "https://github.com/marin-community/marin/tree/marin_belay_v1_ckpt1"
+     }
+    ]
+   },
+   {
+    "what": "Hero 16K: FP32 saved attention O",
+    "before": "13.16 s · 32.00%",
+    "after": "13.21 s · 31.87%",
+    "note": "+0.4% step, +1.5 GiB; not deployed",
+    "links": [
+     {
+      "label": "larry/hero-attn-fp32o-test",
+      "url": "https://github.com/marin-community/marin/tree/larry/hero-attn-fp32o-test"
+     },
+     {
+      "label": "#10785",
+      "url": "https://github.com/marin-community/marin/issues/10785"
+     }
+    ]
+   }
+  ]
+ },
+ "unsourced": [
+  "s/step for hero-ragged_a2a-nccl2307-ep-step81k, hero-mix-996f4891-step108k and hero-nopdl-step108k (only MFU is recorded)",
+  "The change list of the hero-main-step121638 cutover",
+  "tok/s for production runs without a stated value; shown as 46.1M tokens/step ÷ s/step"
+ ]
 }

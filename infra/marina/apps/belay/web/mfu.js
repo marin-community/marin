@@ -20,6 +20,24 @@ function pct(v, d = 1) {
   return v === null || v === undefined ? '—' : `${v.toFixed(d)}%`
 }
 
+// Small mono links to the branch, commit or PR behind a result.
+function codeLinks(links) {
+  if (!links || !links.length) return null
+  const short = (label) =>
+    label.replace('marin_belay_v1_mfuladder_', '').replace('marin_belay_v1_mfuladder', 'mfuladder').replace('marin_belay_v1_', '')
+  return el(
+    'span',
+    { class: 'code-links' },
+    links.map((l) =>
+      el('a', { href: l.url, target: '_blank', rel: 'noopener', title: l.label }, el('span', { class: 'lfull' }, l.label), el('span', { class: 'lshort' }, short(l.label))),
+    ),
+  )
+}
+
+function runCell(run, links) {
+  return el('td', { class: 'mono muted small run' }, el('span', { class: 'rname' }, run), codeLinks(links))
+}
+
 function num(v, d) {
   return v === null || v === undefined ? el('span', { class: 'muted' }, '—') : v.toFixed(d)
 }
@@ -28,7 +46,7 @@ function atS4(stage, s4Flops) {
   return stage.own_flops_per_step ? (stage.mfu * s4Flops) / stage.own_flops_per_step : null
 }
 
-// Step chart over the ladder stages: latest tuned MFU (solid), first tuned (dashed), S6/S7 at S4 FLOPs (open dots).
+// Step chart over the ladder stages: latest tuned MFU, and S6/S7 at S4 FLOPs (open dots).
 function ladderChart(ladder) {
   const box = document.getElementById('ladder-chart')
   // viewBox width follows the box, so labels stay readable at phone width.
@@ -46,15 +64,8 @@ function ladderChart(ladder) {
     svg('line', { x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v), stroke: 'var(--line)' }, root)
     label(root, M.l - 6, Y(v) + 4, `${v}%`, { 'text-anchor': 'end' })
   }
-  const path = (key) =>
-    stages
-      .map((s, i) => {
-        const v = key === 'latest' ? s.mfu : s.first ? s.first.mfu : s.mfu
-        return `${i ? 'L' : 'M'}${X(i) - half},${Y(v)}H${X(i) + half}`
-      })
-      .join('')
-  svg('path', { d: path('first'), fill: 'none', stroke: 'var(--faint)', 'stroke-width': 1.6, 'stroke-dasharray': '4 3' }, root)
-  svg('path', { d: path('latest'), fill: 'none', stroke: 'var(--rope)', 'stroke-width': 3, 'stroke-linejoin': 'round' }, root)
+  const d = stages.map((s, i) => `${i ? 'L' : 'M'}${X(i) - half},${Y(s.mfu)}H${X(i) + half}`).join('')
+  svg('path', { d, fill: 'none', stroke: 'var(--rope)', 'stroke-width': 3, 'stroke-linejoin': 'round' }, root)
   stages.forEach((s, i) => {
     svg('circle', { cx: X(i), cy: Y(s.mfu), r: 4.5, fill: 'var(--rope)' }, root)
     label(root, X(i), Y(s.mfu) - 9, pct(s.mfu), { 'text-anchor': 'middle', fill: 'var(--ink)', 'font-weight': 600 })
@@ -115,7 +126,7 @@ function ladderTable(ladder) {
         {},
         el('td', { class: 'mono strong' }, s.stage),
         el('td', {}, s.change),
-        el('td', { class: 'mono muted small run' }, s.run),
+        runCell(s.run, s.links),
         el('td', { class: 'r mono' }, num(s.step, 2)),
         el('td', { class: 'r mono hide-sm' }, num(s.tps_k, 1), 'k'),
         el(
@@ -124,7 +135,6 @@ function ladderTable(ladder) {
           pct(s.mfu),
           at4 !== null ? el('small', { class: 'muted' }, ` (${pct(at4)} at S4)`) : null,
         ),
-        el('td', { class: 'r mono muted hide-sm' }, s.first ? `${s.first.step.toFixed(2)} s · ${pct(s.first.mfu)}` : '—'),
       )
     }),
   )
@@ -139,7 +149,7 @@ function pushList(push) {
         { dataset: { wall: String(Boolean(p.wall)) } },
         el('td', { class: 'mono muted small' }, p.date),
         el('td', {}, p.what),
-        el('td', { class: 'mono muted small run' }, p.run),
+        runCell(p.run, p.links),
         el('td', { class: 'r mono' }, p.step.toFixed(2), p.wall ? el('small', { class: 'muted' }, ' wall') : null),
         el('td', { class: 'r mono strong' }, pct(p.mfu)),
       ),
@@ -147,7 +157,7 @@ function pushList(push) {
   )
   setChildren(
     'push-wins',
-    push.wins_ms.map((w) => el('span', { class: 'win' }, el('b', { class: 'mono' }, `${w.ms} ms`), ` ${w.what}`)),
+    push.wins_ms.map((w) => el('span', { class: 'win' }, el('b', { class: 'mono' }, `${w.ms} ms`), ` ${w.what}`, codeLinks(w.links))),
   )
 }
 
@@ -161,7 +171,7 @@ function productionTable(production) {
         { title: r.note ?? '' },
         el('td', { class: 'mono muted small hide-sm' }, r.date),
         el('td', {}, r.change),
-        el('td', { class: 'mono muted small run' }, r.run.replace('hero-', '')),
+        runCell(r.run.replace('hero-', ''), r.links),
         el('td', { class: 'r mono' }, num(r.step, 2)),
         el(
           'td',
@@ -185,7 +195,7 @@ function otherTable(other) {
         el('td', {}, r.what),
         el('td', { class: 'r mono muted' }, r.before ?? '—'),
         el('td', { class: 'r mono strong' }, r.after),
-        el('td', { class: 'muted small' }, r.note),
+        el('td', { class: 'muted small' }, r.note, codeLinks(r.links)),
       ),
     ),
   )

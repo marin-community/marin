@@ -477,7 +477,6 @@ button.line:hover { background: var(--surface-2); }
 .mfu .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--slate); margin-top: 6px; }
 .mfu .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .mfu .legend i.lg-solid { width: 18px; height: 3px; background: var(--rope); }
-.mfu .legend i.lg-dash { width: 18px; height: 0; background: none; border-top: 2px dashed var(--faint); }
 .mfu .legend i.lg-open { width: 9px; height: 9px; background: none; border-radius: 50%; border: 1.5px solid var(--rope); }
 .table-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 4px 14px 8px; overflow-x: auto; }
 .table-card .rungs { min-width: 640px; }
@@ -487,6 +486,11 @@ button.line:hover { background: var(--surface-2); }
 .wins { display: flex; flex-wrap: wrap; gap: 6px; }
 .win { font-size: 12.5px; padding: 4px 10px; border-radius: 99px; background: var(--teal-soft); color: var(--ink); }
 .win b { color: var(--teal); }
+.code-links { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 2px; font-family: var(--mono); font-size: 10.5px; }
+.code-links a { color: var(--rope); text-decoration: none; overflow-wrap: anywhere; }
+.code-links a:hover { text-decoration: underline; }
+.code-links .lshort { display: none; }
+.win .code-links { display: inline-flex; margin: 0 0 0 6px; }
 .unsourced { margin: 0 0 12px; padding-left: 18px; font-size: 13px; color: var(--slate); display: grid; gap: 4px; }
 
 @media (max-width: 820px) {
@@ -514,7 +518,10 @@ button.line:hover { background: var(--surface-2); }
   .pages a { padding: 6px 8px; }
   .kpis-mfu { grid-template-columns: 1fr; }
   .table-card .rungs { min-width: 0; }
-  .table-card .run, .table-card .hide-sm { display: none; }
+  .table-card .hide-sm { display: none; }
+  .table-card td.run { font-size: 10.5px; }
+  .table-card td.run .rname, .code-links .lfull { display: none; }
+  .code-links .lshort { display: inline; }
   .table-card .rungs td:first-child { white-space: nowrap; }
   .kpi-card .v { font-size: 42px; }
   .latest { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
