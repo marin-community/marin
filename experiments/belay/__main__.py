@@ -123,10 +123,12 @@ from experiments.belay.results import (
     verdict,
 )
 from experiments.belay.submit import (
+    ACTIVE_JOB_STATES,
     DEFAULT_TRACK,
     PROBE_SKIP,
     RUN_PREFIX,
     ExperimentSpec,
+    IrisJob,
     RunSpec,
     Stage,
     check_launch,
@@ -137,12 +139,15 @@ from experiments.belay.submit import (
     load_spec,
     new_spec_text,
     next_stage_runs,
+    own_runs,
     parse_spec,
     parse_track,
+    run_id,
     run_name,
     run_suffix,
     setting_fields,
     settings_of,
+    sharers,
     spec_path,
     spec_with_runs,
     stage_runs,
@@ -196,10 +201,11 @@ def finished_run_step(experiment: str, runs: list[PageRun]) -> str:
     """What a finished run of ``experiment`` needs: a ``skip:`` line, section 2, or section 3."""
     if not spec_path(experiment).exists():
         return f"skip: no run spec {experiment}.yaml on this branch, so no session launched it"
-    names = {run_name(experiment, key) for key in load_spec(experiment).runs}
-    failed = [r for r in runs if r.name in names and r.terminal and r.state != "succeeded"]
+    spec = load_spec(experiment)
+    keys = {run_id(spec, run): key for key, run in spec.runs.items()}
+    failed = [r for r in runs if r.name in keys and r.terminal and r.state != "succeeded"]
     if failed:
-        return f"section 3: {BELAY} run-failed {experiment} --run {failed[0].run}"
+        return f"section 3: {BELAY} run-failed {experiment} --run {keys[failed[0].name]}"
     return f"section 2: {BELAY} run-finished {experiment}"
 
 
@@ -218,8 +224,12 @@ def start(events_file: Path, today: datetime.date) -> None:
         if event.kind in (EventKind.APPROVED, EventKind.WORK_PENDING):
             line = f"[{event.kind} idea #{event.idea_id}] {idea_step(state.idea(event.idea_id))}"
         elif event.kind is EventKind.RUN_FINISHED:
-            step = finished_run_step(event.experiment, state.runs_of(event.experiment))
-            line = f"[run_finished {event.experiment}] {step}"
+            # A finished shared control also concerns every spec that reuses it.
+            for experiment in (event.experiment, *sharers(event.experiment)):
+                line = f"[run_finished {experiment}] {finished_run_step(experiment, state.runs)}"
+                if line not in todo:
+                    todo.append(line)
+            continue
         else:
             line = f'[note] section 6: {BELAY} escalate --title "Note for a maintainer" --body "<the note>"'
         if line not in todo:
@@ -308,6 +318,31 @@ def print_idea_brief(idea: Idea, track: Track, defaulted: bool) -> None:
         'characters>" --opt-set <name>=<value>   (one --opt-set or --model-set per setting)\n'
         f'   or, if the idea needs code: {BELAY} new-idea --idea-id {idea.id} --category "<category>"'
     )
+
+
+def same_code(repo: Path, commit: str) -> bool:
+    """Whether ``commit`` and HEAD differ only in run specs."""
+    diff = ["git", "diff", "--quiet", commit, "HEAD", "--", ".", f":(exclude){SPECS}"]
+    return subprocess.run(diff, cwd=repo).returncode == 0
+
+
+def shareable_control(repo: Path, track: Track, jobs: list[IrisJob]) -> str | None:
+    """A stage-1 control on ``track`` at the configured seed that is still pending or running and was launched at
+    the same code as HEAD, for a new spec to reuse instead of launching its own; None when there is none."""
+    active = {j.job_id.rsplit("/", 1)[1].removesuffix("-coord") for j in jobs if j.state in ACTIVE_JOB_STATES}
+    for path in sorted((repo / SPECS).glob("X*.yaml")):
+        spec = parse_spec(path.read_text())
+        if spec.track is not track:
+            continue
+        for control, variant in stage_pairs(spec, Stage.DATA):
+            name = run_id(spec, control)
+            if control.shared is not None or control.seed != CONFIG.seed or name not in active:
+                continue
+            trials = load_entry(spec.experiment).get("trials") or []
+            commit = next((t["commit"] for t in trials if run_id(spec, variant) in (t.get("wandb") or [])), None)
+            if commit is not None and same_code(repo, commit):
+                return name
+    return None
 
 
 def write_spec(repo: Path, branch: str, text: str, *, dry_run: bool, replace: bool = False) -> ExperimentSpec:
@@ -439,7 +474,11 @@ def new_idea(
     if spec_path(registry_id, repo / SPECS).exists():
         text = spec_path(registry_id, repo / SPECS).read_text()  # resuming: the committed spec decides
     else:
-        text = new_spec_text(registry_id, track, variant, settings, run_suffix(registry_id, iris_jobs()))
+        jobs = iris_jobs()
+        shared = shareable_control(repo, track, jobs)
+        if shared is not None:
+            print(f"reusing the running control {shared} (same code and seed)")
+        text = new_spec_text(registry_id, track, variant, settings, run_suffix(registry_id, jobs), shared)
     spec = write_spec(repo, branch, text, dry_run=dry_run)
     commit = require_clean_pushed_head(repo, branch)
     check_launch(spec, iris_jobs())
@@ -504,7 +543,7 @@ def plan_rows(spec: ExperimentSpec, runs: list[RunSpec], commit: str) -> list[Ro
     """Table rows for planned ``runs``: steps, hardware and, where the Track fixes it, the expected time."""
     rows = []
     for run in sorted(runs, key=lambda r: not r.control):
-        name = run_name(spec.experiment, run.name)
+        name = run_id(spec, run)
         label = control_label(spec.track, commit) if run.control else run.variant
         steps = run_steps(spec, run)
         seconds = TRACKS[spec.track].train_seconds
@@ -532,7 +571,7 @@ def launch_stage(
     require_clean_pushed_head(repo, branch)
     check_launch(ExperimentSpec(spec.experiment, spec.track, {r.name: r for r in runs}), iris_jobs())
     commands = {}
-    for run in sorted(runs, key=lambda r: not r.control):
+    for run in sorted(own_runs(runs), key=lambda r: not r.control):
         run_id = run_name(spec.experiment, run.name)
         commands[run.name] = launch_command(spec, run)
         print(f"{'would launch' if dry_run else 'launching'} {run_id}:\n  {shlex.join(commands[run.name])}")
@@ -681,8 +720,8 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     spec = load_spec(registry_id)
     require_registry_checkout()
     state = page_state()
-    names = {run_name(registry_id, r) for r in spec.runs}
-    runs = [r for r in state.runs_of(registry_id) if r.name in names]
+    names = {run_id(spec, r) for r in spec.runs.values()}
+    runs = [r for r in state.runs if r.name in names]
     live = [r.name for r in runs if not r.terminal]
     if live:
         print(f"still running: {live}; the last one to finish starts a new session")
@@ -701,24 +740,24 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     trials = [t for t in entry.get("trials") or [] if t.get("comment_url") == url] if url else entry["trials"]
     if stage is Stage.PROBE:
         probe = next(r for r in stage_runs(spec, Stage.PROBE))
-        s_step = measure(run_name(registry_id, probe.name), baseline.metric, PROBE_SKIP).s_step
+        s_step = measure(run_id(spec, probe), baseline.metric, PROBE_SKIP).s_step
         steps = round(baseline.train_seconds / s_step)
         print(f"timing probe: {s_step:.4f} s/step, so {steps:,} steps make {baseline.train_seconds:g} s")
         note = f"Timing probe: {s_step:.4f} s/step, so the variant trains {steps:,} steps."
-        data_variant = run_name(registry_id, stage_pairs(spec, Stage.DATA)[0][1].name)
+        data_variant = run_id(spec, stage_pairs(spec, Stage.DATA)[0][1])
         data_trial = next(t for t in trials if data_variant in t["wandb"])
         prior = str(verdict(data_trial["delta"][0], baseline))
         nxt = Next(repo, branch, spec, registry_id, Stage.TIME, steps, url, entry, state, note, prior)
         advance(nxt, dry_run=dry_run)
         return
-    trial = next(t for t in trials if run_name(registry_id, stage_pairs(spec, stage)[0][1].name) in t["wandb"])
+    trial = next(t for t in trials if run_id(spec, stage_pairs(spec, stage)[0][1]) in t["wandb"])
     number = trials.index(trial) + 1
     rows: dict[str, Row] = {}
     results: list[RunResult] = []
     verdicts: list[Verdict] = []
     for control_run, variant_run in stage_pairs(spec, stage):
-        control = measure(run_name(registry_id, control_run.name), baseline.metric)
-        variant = measure(run_name(registry_id, variant_run.name), baseline.metric)
+        control = measure(run_id(spec, control_run), baseline.metric)
+        variant = measure(run_id(spec, variant_run), baseline.metric)
         delta, v = compared(control, variant, baseline)
         verdicts.append(v)
         rows[control.name] = measured_row(spec, control_run, control, None, trial["commit"])
@@ -727,7 +766,7 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
         results.append(as_result(variant_run, variant, delta, v))
     overall = overall_verdict(verdicts)
     path, text = entry_with_results(registry_id, results)
-    variant_row = rows[run_name(registry_id, stage_pairs(spec, stage)[0][1].name)]
+    variant_row = rows[run_id(spec, stage_pairs(spec, stage)[0][1])]
     if variant_row.time_change is not None:
         text = with_step_time(text, trial["id"], variant_row.time_change)
     print(f"{'would write' if dry_run else 'writing'} {path.name}:\n{text}")
@@ -738,7 +777,7 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     )
     commit_and_push([path, *report], f"Belay registry: {registry_id} {trial['id']} recorded", dry_run=dry_run)
     pairs = stage_pairs(spec, stage)
-    stage_rows = [rows[run_name(registry_id, r.name)] for pair in pairs for r in pair]
+    stage_rows = [rows[run_id(spec, r)] for pair in pairs for r in pair]
     tokens = measure(stage_rows[0].name, baseline.metric).tokens if stage is Stage.DATA else None
     variant_key = pairs[0][1].name
     notes = [reproduce(registry_id, trial["commit"], variant_key)]
@@ -746,8 +785,8 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     status = f"{overall} at equal time" if stage is Stage.TIME else str(overall)
     run_equal_time = False
     if staged and stage is Stage.DATA:
-        variant_row = rows[run_name(registry_id, variant_key)]
-        control_row = rows[run_name(registry_id, pairs[0][0].name)]
+        variant_row = rows[run_id(spec, pairs[0][1])]
+        control_row = rows[run_id(spec, pairs[0][0])]
         assert variant_row.s_step is not None and control_row.s_step is not None
         rule = after_equal_data(variant_row.s_step / control_row.s_step - 1, overall, baseline.step_time_tolerance)
         notes.insert(0, rule.line)
@@ -857,11 +896,11 @@ def analyze(registry_id: str, *, dry_run: bool) -> None:
     reports: list[Path] = []
     for stage in (Stage.DATA, Stage.TIME):
         for control_run, variant_run in stage_pairs(spec, stage):
-            variant_name = run_name(registry_id, variant_run.name)
+            variant_name = run_id(spec, variant_run)
             trial = next((t for t in entry["trials"] if variant_name in (t.get("wandb") or [])), None)
             if trial is None:
                 continue
-            control = measure(run_name(registry_id, control_run.name), baseline.metric)
+            control = measure(run_id(spec, control_run), baseline.metric)
             variant = measure(variant_name, baseline.metric)
             delta, v = compared(control, variant, baseline)
             results = [as_result(control_run, control, None, None), as_result(variant_run, variant, delta, v)]
@@ -907,8 +946,17 @@ def write_analysis(
     return [report, report.with_name(f"{trial}_loss.png"), report.with_name(f"{trial}_delta.png")]
 
 
-def scored_entry(registry_id: str, value: int, rationale: str, model: str, *, dry_run: bool) -> Path:
-    if not 0 <= value <= 10:
+NOT_SCORED = "na"
+"""``--score na``: the entry is not an idea (a bundle of other entries), so it has no potential score."""
+
+
+def score_value(text: str) -> int | None:
+    """``--score``'s value: 0-10, or None for ``na``."""
+    return None if text == NOT_SCORED else int(text)
+
+
+def scored_entry(registry_id: str, value: int | None, rationale: str, model: str, *, dry_run: bool) -> Path:
+    if value is not None and not 0 <= value <= 10:
         raise SystemExit(f"refusing: {registry_id}: the score must be 0 to 10")
     if not rationale or len(rationale) > MAX_RATIONALE:
         raise SystemExit(
@@ -923,11 +971,12 @@ def scored_entry(registry_id: str, value: int, rationale: str, model: str, *, dr
     return path
 
 
-def score(registry_id: str, value: int, rationale: str, model: str, *, dry_run: bool) -> None:
+def score(registry_id: str, value: int | None, rationale: str, model: str, *, dry_run: bool) -> None:
     """Record the session's 0-10 potential score for the idea (RUNBOOK section 2d) on its registry entry."""
     require_registry_checkout()
     path = scored_entry(registry_id, value, rationale, model, dry_run=dry_run)
-    commit_and_push([path], f"Belay registry: {registry_id} potential {value}/10", dry_run=dry_run)
+    shown = "n/a" if value is None else f"{value}/10"
+    commit_and_push([path], f"Belay registry: {registry_id} potential {shown}", dry_run=dry_run)
     say_next("stop")
 
 
@@ -936,7 +985,7 @@ def score_batch(batch: Path, model: str, *, dry_run: bool) -> None:
     rescore; sessions score one idea at a time)."""
     require_registry_checkout()
     items = json.loads(batch.read_text())
-    paths = [scored_entry(i["id"], int(i["score"]), i["rationale"], model, dry_run=dry_run) for i in items]
+    paths = [scored_entry(i["id"], i["score"], i["rationale"], model, dry_run=dry_run) for i in items]
     commit_and_push(paths, f"Belay registry: potential scores for {len(paths)} ideas ({model})", dry_run=dry_run)
 
 
@@ -946,7 +995,10 @@ def score_batch(batch: Path, model: str, *, dry_run: bool) -> None:
 def run_failed(registry_id: str, run: str, *, dry_run: bool) -> None:
     """Escalate a failed run with its state and log command; never relaunch it."""
     state = page_state()
-    name = run_name(registry_id, run)
+    spec = load_spec(registry_id)
+    if run not in spec.runs:
+        raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(spec.runs)}")
+    name = run_id(spec, spec.runs[run])
     rows = [r for r in state.runs if r.name == name]
     if not rows:
         raise SystemExit(f"refusing: no run {name} on the Belay page")
@@ -1117,9 +1169,9 @@ def main(argv: list[str]) -> None:
     p.add_argument("registry_id", nargs="?")
     p.add_argument(
         "--score",
-        type=int,
         dest="value",
-        help="0-10 by the RUNBOOK 2d rubric (3 noise, 5 no result, 6-9 by win size and validations, 10 adopted)",
+        help="0-10 by the RUNBOOK 2d rubric (3 noise, 5 no result, 6-9 by win size and validations, 10 adopted), "
+        "or na for an entry that is not an idea (a bundle)",
     )
     p.add_argument("--rationale")
     p.add_argument("--batch", type=Path, help="JSON list of {id, score, rationale}, committed together")
@@ -1165,7 +1217,7 @@ def main(argv: list[str]) -> None:
     elif args.command == "score":
         if args.registry_id is None or args.value is None or args.rationale is None:
             raise SystemExit("refusing: give X####, --score and --rationale (or --batch FILE)")
-        score(args.registry_id, args.value, args.rationale, args.model, dry_run=args.dry_run)
+        score(args.registry_id, score_value(args.value), args.rationale, args.model, dry_run=args.dry_run)
     elif args.command == "analyze":
         analyze(args.registry_id, dry_run=args.dry_run)
     elif args.command == "run-failed":

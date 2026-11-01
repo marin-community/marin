@@ -14,7 +14,7 @@ from statistics import median
 import wandb
 
 from experiments.belay.config import CONFIG, TRACKS, Baseline, Rule
-from experiments.belay.submit import ExperimentSpec, run_name
+from experiments.belay.submit import ExperimentSpec, run_id
 
 
 class Verdict(StrEnum):
@@ -144,7 +144,7 @@ def experiment_results(spec: ExperimentSpec) -> list[RunResult]:
     api = wandb.Api()
     finals = {}
     for run in spec.runs.values():
-        name = run_name(spec.experiment, run.name)
+        name = run_id(spec, run)
         matches = list(api.runs(CONFIG.wandb_project, filters={"display_name": name}, order="-created_at"))
         if not matches or matches[0].state != "finished" or matches[0].summary.get(baseline.metric) is None:
             raise SystemExit(f"refusing: {name} has no finished W&B run with {baseline.metric}")
@@ -158,7 +158,7 @@ def experiment_results(spec: ExperimentSpec) -> list[RunResult]:
         delta = None if run.control else round(change(loss, controls[run.seed], baseline), 4)
         results.append(
             RunResult(
-                name=run_name(spec.experiment, run.name),
+                name=run_id(spec, run),
                 variant=run.variant,
                 seed=run.seed,
                 control=run.control,

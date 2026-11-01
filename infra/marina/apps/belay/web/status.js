@@ -321,7 +321,7 @@ function renderChecklist() {
           'span',
           { 'data-label': 'Potential' },
           r.score === null
-            ? el('span', { class: 'muted' }, '–')
+            ? el('span', { class: 'muted', title: r.idea.potential?.rationale ?? '' }, r.idea.potential ? 'n/a' : '–')
             : el('span', { class: 'score', title: `${r.idea.potential.rationale} (${r.idea.potential.model}, ${r.idea.potential.date})` }, `${r.score}/10`),
         ),
       ),

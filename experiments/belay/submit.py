@@ -59,6 +59,8 @@ class RunSpec:
     flags: tuple[str, ...] = ()
     control: bool = False
     stage: Stage = Stage.DATA
+    shared: str | None = None
+    """A control another spec launched at the same code and seed (its run name); this spec reuses that run."""
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,27 @@ def run_name(experiment_id: str, run: str) -> str:
     return f"{RUN_PREFIX}{experiment_id}-{run}"
 
 
+def run_id(spec: ExperimentSpec, run: RunSpec) -> str:
+    """The run's Iris and W&B name: its own, or the shared control's."""
+    return run.shared or run_name(spec.experiment, run.name)
+
+
+def own_runs(runs: list[RunSpec]) -> list[RunSpec]:
+    """The runs this spec launches itself (a shared control is launched by its owner)."""
+    return [r for r in runs if r.shared is None]
+
+
+def sharers(experiment_id: str, runs_dir: Path = RUNS_DIR) -> list[str]:
+    """Experiments whose spec reuses one of ``experiment_id``'s controls."""
+    prefix = run_name(experiment_id, "")
+    out = []
+    for path in sorted(runs_dir.glob("X*.yaml")):
+        spec = parse_spec(path.read_text())
+        if any((r.shared or "").startswith(prefix) for r in spec.runs.values()):
+            out.append(spec.experiment)
+    return out
+
+
 def spec_path(experiment_id: str, runs_dir: Path = RUNS_DIR) -> Path:
     return runs_dir / f"{experiment_id}.yaml"
 
@@ -93,6 +116,7 @@ def parse_spec(text: str) -> ExperimentSpec:
             flags=tuple(str(f) for f in run.get("flags", ())),
             control=bool(run.get("control", False)),
             stage=Stage(run.get("stage", Stage.DATA)),
+            shared=run.get("shared"),
         )
         for name, run in data["runs"].items()
     }
@@ -166,14 +190,22 @@ def run_suffix(experiment_id: str, jobs: list[IrisJob], keys: tuple[str, ...] = 
 
 
 def new_spec_text(
-    experiment_id: str, track: Track, variant: str, settings: list[tuple[str, str]], suffix: str = ""
+    experiment_id: str,
+    track: Track,
+    variant: str,
+    settings: list[tuple[str, str]],
+    suffix: str = "",
+    shared_control: str | None = None,
 ) -> str:
     """The run spec for one variant and its same-commit control on ``track``, after checking every setting.
-    ``suffix`` (from ``run_suffix``) keeps run names unique when the id ran before."""
+    ``suffix`` (from ``run_suffix``) keeps run names unique when the id ran before; ``shared_control`` (from
+    ``shareable_control``) reuses another spec's running control instead of launching one."""
     check_variant(variant, settings)
     flags = [part for setting in settings for part in setting]
     variant_run = {"seed": CONFIG.seed, "variant": variant, "flags": flags}
     control_run = {"seed": CONFIG.seed, "variant": f"{track} control", "control": True}
+    if shared_control is not None:
+        control_run["shared"] = shared_control
     data = {
         "experiment": experiment_id,
         "track": track.value,
@@ -255,8 +287,9 @@ def check_launch(spec: ExperimentSpec, jobs: list[IrisJob]) -> None:
     baseline = TRACKS[spec.track]
     if baseline.launch is None:
         raise SystemExit(f"refusing: track {spec.track} has no launch recipe; a maintainer runs it")
-    refuse_reused_names([run_name(spec.experiment, r) for r in spec.runs], jobs)
-    refuse_over_cap(baseline.nodes * len(spec.runs), jobs)
+    own = own_runs(list(spec.runs.values()))
+    refuse_reused_names([run_name(spec.experiment, r.name) for r in own], jobs)
+    refuse_over_cap(baseline.nodes * len(own), jobs)
 
 
 def settings_of(flags: tuple[str, ...]) -> dict[str, str]:
