@@ -315,7 +315,9 @@ trainer:
   max_ckpts_to_keep: 2
   callbacks: null
   ckpt_interval: 5
-  hf_save_interval: ${trainer.ckpt_interval}
+  # A positive interval also exports intermediate checkpoints, and pruning keeps each
+  # one until its export completes. -1 exports only the terminal checkpoint.
+  hf_save_interval: -1
   export_hf_artifact: false
   hf_upload_mode: latest
   export_path: "${oc.env:HOME}/exports"
