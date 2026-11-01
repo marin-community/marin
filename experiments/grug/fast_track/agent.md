@@ -7,10 +7,10 @@
   or the lc1 GB200 branches. If a flag seems to be missing, port it here; do not move the experiment there.
 - `belay_ckpt1.py --size d512|d768|d1024|d1280` is the Belay Ckpt 1 recipe (`kma` recipe, top-10, one shared
   expert, gated value embeds, 171 tokens/active param). d512 ML studies (e.g. `rx-*`) run its d512 rung.
-- `belay_s7.py --ladder s7l|s7n --size d512|d768|d1024|d1280L16` is the S7 ladder (`baseline` recipe + KDA/MLA
-  +Inkling + Block AttnRes, top-8, two shared experts, 207 tokens/active param). `d1280L16` is 16 layers, batch
+- `belay_s7.py --ladder s7l|s7n --size d512|d768|d1024|d1280` is the S7 ladder (`baseline` recipe + KDA/MLA
+  +Inkling + Block AttnRes, top-8, two shared experts, 207 tokens/active param). `d1280` is 16 layers, batch
   1024 on 4 x 8xH100. `s7l` is the default data and linear schedule (`s7l-*`, `rxf-*` controls); `s7n` adds the
-  sequence-shuffled cache, cosine schedule and MuonH decay power 0.7 (`s7n-*`). d1280 studies run `s7l d1280L16`.
+  sequence-shuffled cache, cosine schedule and MuonH decay power 0.7 (`s7n-*`). d1280 studies run `s7l d1280`.
 - `launch.py` alone gives the plain baseline / `--dense` ladder.
 - Experiment branches off `marin_belay_v1_clean` that merge cleanly into this one when needed:
   `marin_belay_v1_clean_nullexp` (null experts), `marin_belay_v1_clean_threshroute` (threshold routing),

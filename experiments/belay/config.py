@@ -29,8 +29,6 @@ class BelayConfig:
     registry_checkout: Path
     """Local checkout of ``registry_branch`` that the commands write to."""
     seed: int
-    node_cap: int
-    """Soft cap on 8xH100 nodes held by active Belay runs."""
     output_root: str
     wandb_project: str
     repository: str
@@ -62,7 +60,6 @@ PRODUCTION = BelayConfig(
     registry_branch="marin_belay_v1_registry",
     registry_checkout=Path.home() / "marin_wt_registry",
     seed=0,
-    node_cap=8,
     output_root="tmp/ttl=30d/belay/runs",
     wandb_project="marin-community/marin_moe",
     repository="marin-community/marin",
@@ -80,7 +77,7 @@ DEMO = replace(
     week_branch_prefix="marin_belay_v1_loomdemo_w",
     registry_branch="marin_belay_v1_registry_demo",
     registry_checkout=Path.home() / "marin_wt_registry_demo",
-    page_url="http://127.0.0.1:8091/belay/",  # the local Marina for now; marina.oa.dev once the app is released there
+    page_url="http://127.0.0.1:8091/belay/",
 )
 
 CONFIG = PRODUCTION
@@ -107,7 +104,7 @@ class Track(StrEnum):
     COMPETITIVE_D512 = "competitive-d512"
     COMPETITIVE_D768 = "competitive-d768"
     COMPETITIVE_D1024 = "competitive-d1024"
-    COMPETITIVE_D1280L16 = "competitive-d1280L16"
+    COMPETITIVE_D1280 = "competitive-d1280"
     SPEEDRUN = "speedrun"
     HERO_MFU = "hero-mfu"
     CUSTOM = "custom"
@@ -178,6 +175,9 @@ class Baseline:
     """The launcher takes ``--output-path`` (Belay writes under ``CONFIG.output_root``)."""
     seed_run: tuple[str, ...] = ()
     """Extra arguments of a one-off run that must precede the first timed run of a program (an autotune seed)."""
+    expected_minutes: int | None = None
+    """Rough wall time of one run, submission to final eval (an estimate). A session waits only for runs due within
+    its budget; the app flags a run still going well past it. None: no launch recipe."""
 
 
 H100 = "8xH100"
@@ -186,7 +186,12 @@ TRACK_STEPS = {
     "vanilla": {"d512": 720, "d768": 2161, "d1024": 2881, "d1280": 5251},
     "moe": {"d512": 1971, "d768": 5547, "d1024": 7334, "d1280": 13053},
 }
-COMPETITIVE_STEPS = {"d512": 10767, "d768": 30389, "d1024": 39210, "d1280L16": 20023}
+COMPETITIVE_STEPS = {"d512": 10767, "d768": 30389, "d1024": 39210, "d1280": 20023}
+
+
+# Rough wall minutes of one run per rung, submission to final eval (estimates; the overdue check allows 30 more).
+VANILLA_MOE_MINUTES = {"d512": 30, "d768": 90, "d1024": 150, "d1280": 360}
+COMPETITIVE_MINUTES = {"d512": 180, "d768": 720, "d1024": 1080, "d1280": 1440}
 
 
 def _vanilla_or_moe(track: str, size: str) -> Baseline:
@@ -205,12 +210,14 @@ def _vanilla_or_moe(track: str, size: str) -> Baseline:
         needs_go_ahead=False,
         control_name=f"{name} {size}",
         baseline_steps=TRACK_STEPS[track][size],
+        expected_minutes=VANILLA_MOE_MINUTES[size],
     )
 
 
-def _competitive(size: str, nodes: int) -> Baseline:
+def _competitive(size: str, nodes: int, shape: str = "") -> Baseline:
+    """The competitive ladder at ``size``; ``shape`` notes a rung whose shape differs from the default."""
     return Baseline(
-        f"{PRODUCTION.recipe_name} (s7n) at {size}",
+        f"{PRODUCTION.recipe_name} (s7n) at {size}" + (f" ({shape})" if shape else ""),
         WEEKLY_BRANCH,
         (S7, "--ladder", "s7n", "--size", size),
         H100_CLUSTER,
@@ -223,6 +230,7 @@ def _competitive(size: str, nodes: int) -> Baseline:
         needs_go_ahead=False,
         control_name=f"competitive {size}",
         baseline_steps=COMPETITIVE_STEPS[size],
+        expected_minutes=COMPETITIVE_MINUTES[size],
     )
 
 
@@ -240,7 +248,7 @@ TRACKS: dict[Track, Baseline] = {
     Track.COMPETITIVE_D512: _competitive("d512", 1),
     Track.COMPETITIVE_D768: _competitive("d768", 1),
     Track.COMPETITIVE_D1024: _competitive("d1024", 1),
-    Track.COMPETITIVE_D1280L16: _competitive("d1280L16", 4),
+    Track.COMPETITIVE_D1280: _competitive("d1280", 4, "16 layers · batch 1,024 · 4 nodes"),
     Track.SPEEDRUN: Baseline(
         "8-minute d512 run of the current recipe; baseline belay-8min-ckpt-oct20: 3,030 steps, Paloma macro 3.0441, "
         "BPB 1.2590 (measured at 0dd84c79f9)",
@@ -258,6 +266,7 @@ TRACKS: dict[Track, Baseline] = {
         train_seconds=480.0,
         baseline_steps=3030,
         control_name="speedrun d512",
+        expected_minutes=25,
     ),
     # Rack-to-rack step-time noise is about 20-35 ms (0.2-0.3%). A result counts only against a control on the same
     # rack, at the same commit, with the same PGLE profile; a win is a step at least 0.5% faster.
@@ -278,6 +287,7 @@ TRACKS: dict[Track, Baseline] = {
         baseline_steps=30,
         output_path=False,
         seed_run=("--seed-xla-autotune-cache",),
+        expected_minutes=60,
     ),
     Track.CUSTOM: Baseline(
         "The submitter states the baseline",

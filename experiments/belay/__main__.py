@@ -24,10 +24,13 @@ import dataclasses
 import datetime
 import importlib.util
 import json
+import os
+import re
 import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -37,10 +40,11 @@ import yaml
 from experiments.belay.analysis import Header, fetch_series, report_dir, report_url, write_report
 from experiments.belay.branch import (
     current_branch,
-    cut_week_branch,
+    cut_fresh_week,
     git,
     head_contains,
     named_checkout,
+    remote_branch_exists,
     repo_root,
     require_clean_pushed_head,
     require_week_branch,
@@ -50,7 +54,6 @@ from experiments.belay.branch import (
 from experiments.belay.code_change import (
     changed_paths,
     checkout_python,
-    flag_commits,
     new_flags,
     probe,
     refuse_flag_off_change,
@@ -70,12 +73,15 @@ from experiments.belay.config import (
     Track,
 )
 from experiments.belay.page import (
+    SESSION_ENV,
+    TERMINAL_RUN_STATES,
     Idea,
     PageRun,
     PageState,
     Post,
     call,
     comment_times,
+    expect_finish,
     page_state,
     post_activity,
     publish_comment,
@@ -103,6 +109,7 @@ from experiments.belay.registry_entry import (
     ENTRIES,
     add_trial,
     add_trial_run,
+    all_entries,
     comment_url_of,
     commit_and_push,
     create_entry,
@@ -112,6 +119,7 @@ from experiments.belay.registry_entry import (
     entry_with_results,
     load_entry,
     potential_of,
+    record_code_commit,
     require_registry_checkout,
     with_step_time,
 )
@@ -169,7 +177,20 @@ class EventKind(StrEnum):
     APPROVED = "approved"
     WORK_PENDING = "work_pending"
     RUN_FINISHED = "run_finished"
+    RUN_OVERDUE = "run_overdue"
     NOTE = "note"
+
+
+# Events about runs already in flight: a draining session past its budget still takes these, but no new ideas.
+RESULT_KINDS = (EventKind.RUN_FINISHED, EventKind.RUN_OVERDUE)
+# A draining session takes new ideas for this long or this many ideas, then only finishes what is in flight, and
+# exits by the hard stop, under Loom's 4-hour session limit.
+DRAIN_BUDGET = datetime.timedelta(hours=3)
+DRAIN_MAX_IDEAS = 10
+DRAIN_HARD_STOP = datetime.timedelta(hours=3, minutes=45)
+WAIT_POLL_SECONDS = 60
+# One `wait` call returns within this, so it fits in one shell command; the session then runs it again.
+WAIT_CALL_SECONDS = 9 * 60
 
 
 @dataclass(frozen=True)
@@ -234,7 +255,10 @@ def claim() -> None:
     path = Path(tempfile.gettempdir()) / f"belay-{session_id}.events.json"
     path.write_text(json.dumps(claimed["events"], indent=2))
     print(f"session {session_id} claimed {len(claimed['events'])} event(s) into {path}")
-    say_next(f"{BELAY} start --events {path}; at the end, {BELAY} finish --session {session_id} --summary ...")
+    say_next(
+        f"{BELAY} start --events {path}; the drain loop's wait is {BELAY} wait --session {session_id} --events <file>; "
+        f"at the end, {BELAY} finish --session {session_id} --summary ..."
+    )
 
 
 def finish(session_id: str, summary: str) -> None:
@@ -242,6 +266,84 @@ def finish(session_id: str, summary: str) -> None:
     call(f"agent/sessions/{session_id}/finish", {"state": "succeeded", "summary": summary}, token=service_token())
     print(f"session {session_id} finished")
     say_next("stop")
+
+
+class WaitOutcome(StrEnum):
+    WORK = "work"
+    WAIT = "wait"
+    DRAINED = "drained"
+    OUT_OF_TIME = "out_of_time"
+
+
+def wait_outcome(
+    now: datetime.datetime,
+    started: datetime.datetime,
+    ideas_taken: int,
+    queued: list[EventKind],
+    live_due: list[datetime.datetime | None],
+) -> WaitOutcome:
+    """What a draining session does next: take queued work (only run results once past its budget), keep waiting on
+    runs due before its hard stop (``None``: due unknown, so wait), or exit. Runs due later are left to a later
+    session."""
+    if now - started >= DRAIN_HARD_STOP:
+        return WaitOutcome.OUT_OF_TIME
+    taking_ideas = now - started < DRAIN_BUDGET and ideas_taken < DRAIN_MAX_IDEAS
+    if any(taking_ideas or kind in RESULT_KINDS for kind in queued):
+        return WaitOutcome.WORK
+    end = started + DRAIN_HARD_STOP
+    if any(due is None or due <= end for due in live_due):
+        return WaitOutcome.WAIT
+    return WaitOutcome.DRAINED
+
+
+def _instant(iso: str) -> datetime.datetime:
+    return datetime.datetime.fromisoformat(iso)
+
+
+def wait(session_id: str, events_file: Path) -> None:
+    """The drain loop's wait (RUNBOOK section 0b), a plain poll with no model turns: return when queued work (a
+    finished run, or a newly approved idea while within the budget) is claimed into a new events file, or when
+    nothing short is left to wait for."""
+    seen_file = events_file.parent / f"belay-{session_id}.seen.json"
+    seen = set(json.loads(seen_file.read_text())) if seen_file.exists() else set()
+    seen |= {e["id"] for e in json.loads(events_file.read_text()) if "id" in e}
+    seen_file.write_text(json.dumps(sorted(seen)))
+    deadline = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=WAIT_CALL_SECONDS)
+    while True:
+        state = call("agent/state", token=service_token())
+        session = next((s for s in state["sessions"] if s["id"] == session_id), None)
+        if session is None or session["state"] != "running":
+            raise SystemExit(f"refusing: session {session_id} is not running on the Belay page")
+        now = datetime.datetime.now(datetime.UTC)
+        started = _instant(session["started_at"])
+        taken = sum(1 for e in session["events"] if e["kind"] in (EventKind.APPROVED, EventKind.WORK_PENDING))
+        queued = [EventKind(e["kind"]) for e in state["queued"] if e["kind"] in set(EventKind)]
+        expected = {e["name"]: e for e in state["expectations"]}
+        live_due = [_instant(e["expected_at"]) for e in expected.values() if e["state"] not in TERMINAL_RUN_STATES]
+        live_due += [None for r in state["runs"] if r["state"] not in TERMINAL_RUN_STATES and r["name"] not in expected]
+        outcome = wait_outcome(now, started, taken, queued, live_due)
+        if outcome is WaitOutcome.WORK:
+            within = now - started < DRAIN_BUDGET and taken < DRAIN_MAX_IDEAS
+            kinds = None if within else [k.value for k in RESULT_KINDS]
+            claimed = call("agent/dispatch/claim", {"session_id": session_id, "kinds": kinds}, token=service_token())
+            new = [e for e in claimed["events"] if e["id"] not in seen]
+            path = events_file.parent / f"belay-{session_id}-{now:%H%M%S}.events.json"
+            path.write_text(json.dumps(new, indent=2))
+            print(f"claimed {len(new)} event(s) into {path}")
+            say_next(f"{BELAY} start --events {path}; then {BELAY} wait --session {session_id} --events {path}")
+            return
+        if outcome is WaitOutcome.WAIT and now < deadline:
+            time.sleep(WAIT_POLL_SECONDS)
+            continue
+        if outcome is WaitOutcome.WAIT:
+            print(f"still waiting on {len(live_due)} run(s) due before this session's hard stop")
+            say_next(f"{BELAY} wait --session {session_id} --events {events_file}")
+            return
+        later = len([d for d in live_due if d is not None])
+        why = "the session's time is up" if outcome is WaitOutcome.OUT_OF_TIME else "nothing is queued"
+        print(f"drained: {why}; {later} run(s) still going are left to a later session")
+        say_next("the final message (section 7)")
+        return
 
 
 def start(events_file: Path, today: datetime.date) -> None:
@@ -258,6 +360,12 @@ def start(events_file: Path, today: datetime.date) -> None:
     for event in read_events(events_file):
         if event.kind in (EventKind.APPROVED, EventKind.WORK_PENDING):
             line = f"[{event.kind} idea #{event.idea_id}] {idea_step(state.idea(event.idea_id))}"
+        elif event.kind is EventKind.RUN_OVERDUE:
+            line = (
+                f'[run_overdue {event.experiment}] section 6: {BELAY} escalate --title "{event.experiment}: a run is '
+                f'overdue" --body "<which run, its state and expected finish, what its logs show>" '
+                f"--registry-id {event.experiment}"
+            )
         elif event.kind is EventKind.RUN_FINISHED:
             # A finished shared control also concerns every spec that reuses it.
             for experiment in (event.experiment, *sharers(event.experiment)):
@@ -353,6 +461,12 @@ def print_idea_brief(idea: Idea, track: Track, defaulted: bool) -> None:
         'characters>" --opt-set <name>=<value>   (one --opt-set or --model-set per setting)\n'
         f'   or, if the idea needs code: {BELAY} new-idea --idea-id {idea.id} --category "<category>"'
     )
+
+
+def node_grant(state: PageState, registry_id: str) -> int | None:
+    """The maintainer's node grant on the idea behind ``registry_id``, if any."""
+    idea = state.idea_for(registry_id)
+    return None if idea is None else idea.node_grant
 
 
 def same_code(repo: Path, commit: str) -> bool:
@@ -518,8 +632,9 @@ def new_idea(
         text = new_spec_text(registry_id, track, variant, settings, run_suffix(registry_id, jobs), shared)
     spec = write_spec(repo, branch, text, dry_run=dry_run, replace=existing.exists() and not launched)
     commit = require_clean_pushed_head(repo, branch)
-    check_launch(spec, iris_jobs())
-    print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the cap")
+    check_launch(spec, iris_jobs(), state.node_cap, idea.node_grant)
+    cap = f"node grant {idea.node_grant}" if idea.node_grant else f"node cap {state.node_cap}"
+    print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the {cap}")
     entry = load_entry(registry_id) if not dry_run or idea.registry_id else {"name": name or registry_id}
     defaults_text = defaults + (f" (hidden text removed from the comment: {', '.join(hidden)})" if hidden else "")
     if defaulted:
@@ -546,13 +661,20 @@ def new_idea(
     plan = {"summary": entry["name"], "commit": commit, "branch": branch, "track": spec.track.value, "comment": url}
     report_idea(idea.id, {"state": "planned", "plan": plan}, dry_run=dry_run)
     if dry_run:
-        launch_stage(repo, branch, spec, data_runs, None, dry_run=True)
+        launch_stage(repo, branch, spec, data_runs, None, state, dry_run=True)
         return
     trial_id, path = add_trial(
-        registry_id, spec.track, "equal_steps", variant, commit, settings_of(variant_settings(spec)), url or ""
+        registry_id,
+        spec.track,
+        "equal_steps",
+        variant,
+        commit,
+        settings_of(variant_settings(spec)),
+        url or "",
+        idea.node_grant,
     )
     commit_and_push([path], f"Belay registry: {registry_id} {trial_id} planned", dry_run=False)
-    launch_stage(repo, branch, spec, data_runs, trial_id, dry_run=False)
+    launch_stage(repo, branch, spec, data_runs, trial_id, state, dry_run=False)
     body = updated(read_comment(url), title(registry_id, entry["name"], spec.track, "running"), number, section)
     publish_comment(url, body, github_posting=state.github_posting, dry_run=False)
     running = title(registry_id, entry["name"], spec.track, "running")
@@ -600,13 +722,22 @@ def comparison_text(track: Track, stage: Stage, tokens: float | None = None) -> 
 
 
 def launch_stage(
-    repo: Path, branch: str, spec: ExperimentSpec, runs: list[RunSpec], trial_id: str | None, *, dry_run: bool
+    repo: Path,
+    branch: str,
+    spec: ExperimentSpec,
+    runs: list[RunSpec],
+    trial_id: str | None,
+    state: PageState,
+    *,
+    dry_run: bool,
 ) -> dict[str, list[str]]:
     """The one launch path (``new-idea``, ``run-finished`` and ``launch``): submit ``runs`` (controls first) from
     the spec's clean, pushed commit, add variant runs to ``trial_id``, then record each submitted command under the
     spec's ``launched`` and commit that. Returns the commands."""
     require_clean_pushed_head(repo, branch)
-    check_launch(ExperimentSpec(spec.experiment, spec.track, {r.name: r for r in runs}), iris_jobs())
+    stage = ExperimentSpec(spec.experiment, spec.track, {r.name: r for r in runs})
+    check_launch(stage, iris_jobs(), state.node_cap, node_grant(state, spec.experiment))
+    minutes = TRACKS[spec.track].expected_minutes
     commands = {}
     for run in sorted(own_runs(runs), key=lambda r: not r.control):
         run_id = run_name(spec.experiment, run.name)
@@ -615,6 +746,9 @@ def launch_stage(
         if dry_run:
             continue
         subprocess.run(commands[run.name], cwd=repo, check=True)
+        if minutes is not None:
+            due = datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=minutes)
+            expect_finish(run_id, due, dry_run=False)
         if trial_id is not None and not run.control:
             path = add_trial_run(spec.experiment, trial_id, run_id)
             commit_and_push([path], f"Belay registry: {spec.experiment} {run.name} launched", dry_run=False)
@@ -639,7 +773,8 @@ def launch(registry_id: str, run: str, *, print_only: bool, dry_run: bool) -> No
     branch = require_week_branch(repo, datetime.date.today())
     variant = spec.runs[run].variant
     trials = [t for t in load_entry(registry_id).get("trials") or [] if t.get("variant") == variant]
-    launch_stage(repo, branch, spec, [spec.runs[run]], trials[-1]["id"] if trials else None, dry_run=dry_run)
+    trial = trials[-1]["id"] if trials else None
+    launch_stage(repo, branch, spec, [spec.runs[run]], trial, page_state(), dry_run=dry_run)
     say_next("stop (the watcher starts a new session when the run finishes)")
 
 
@@ -671,9 +806,36 @@ def code_checkout(registry_id: str) -> tuple[Path, str]:
     return named_checkout(repo, code), code
 
 
+def apply_recorded_code(repo: Path, registry_id: str) -> list[str]:
+    """Bring back an idea's recorded code-change commits that this branch lacks (it ran on an earlier week's branch),
+    uncommitted, so ``--finish`` gates and commits them; returns their subjects."""
+    recorded = load_entry(registry_id).get("code_commits") or []
+    if not recorded:
+        return []
+    git(repo, "fetch", "--quiet", "origin")
+    here = set(git(repo, "log", "--format=%s", f"origin/{CONFIG.base_branch}..HEAD").splitlines())
+    applied = []
+    for commit in recorded:
+        subject = git(repo, "log", "-1", "--format=%s", commit)
+        if subject in here:
+            continue
+        if subprocess.run(["git", "cherry-pick", "--no-commit", commit], cwd=repo, capture_output=True).returncode:
+            git(repo, "cherry-pick", "--abort")
+            raise SystemExit(
+                f"refusing: {registry_id}'s commit {commit[:10]} ({subject}) does not apply to this branch.\n"
+                f'next: {BELAY} escalate --title "{registry_id}: its code does not apply to the recipe" '
+                f'--body "A maintainer ports it." --registry-id {registry_id}'
+            )
+        applied.append(subject)
+    return applied
+
+
 def code_change_start(registry_id: str) -> None:
     repo, branch = code_checkout(registry_id)
     require_clean_pushed_head(repo, branch)
+    applied = apply_recorded_code(repo, registry_id)
+    if applied:
+        print(f"applied {registry_id}'s recorded code (uncommitted): {'; '.join(applied)}. Check it, then --finish.")
     print(f"{registry_id}: edit {repo} on {branch} (clean, at origin/{branch}).\n{CODE_RULES}")
     say_next(f"{BELAY} code-change {registry_id} --finish --model-set <flag>=<on value>   (or --opt-set)")
 
@@ -715,18 +877,14 @@ def code_change_finish(registry_id: str, settings: list[tuple[str, str]], *, dry
     run_git(repo, ["add", "--", *paths], dry_run=dry_run)
     run_git(repo, ["commit", "--quiet", "-m", message], dry_run=dry_run)
     run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
+    if not dry_run:
+        commit = git(repo, "rev-parse", "HEAD")
+        path = record_code_commit(registry_id, commit, dry_run=False)
+        commit_and_push([path], f"Belay registry: {registry_id} code commit {commit[:10]}", dry_run=False)
     idea = page_state().idea_for(registry_id)
     idea_id = "<N>" if idea is None else idea.id
     flags_text = " ".join(f"{option} {s}" for option, s in settings)
     say_next(f'{BELAY} new-idea --idea-id {idea_id} --category "<category>" --variant "<what changes>" {flags_text}')
-
-
-def report_flags(repo: Path) -> None:
-    """List the flag commits since the base branch, for a maintainer to delete the ones that never won."""
-    commits = flag_commits(repo, f"origin/{CONFIG.base_branch}")
-    print(f"flags added since {CONFIG.base_branch} ({len(commits)}); a maintainer deletes those that never won:")
-    for line in commits:
-        print(f"  {line}")
 
 
 # ---------- 2. run finished ----------
@@ -895,7 +1053,8 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     new_spec = write_spec(repo, branch, text, dry_run=dry_run, replace=True)
     commit = "dry-run" if dry_run else require_clean_pushed_head(repo, branch)
     started = [r for r in new_spec.runs.values() if r.name in runs]
-    check_launch(ExperimentSpec(new_spec.experiment, new_spec.track, {r.name: r for r in started}), jobs)
+    started_spec = ExperimentSpec(new_spec.experiment, new_spec.track, {r.name: r for r in started})
+    check_launch(started_spec, jobs, nxt.state.node_cap, node_grant(nxt.state, registry_id))
     number = len([t for t in nxt.entry.get("trials") or [] if t.get("comment_url") == nxt.url]) + 1
     if stage is Stage.PROBE:
         pending = "Pending: a timing probe measures the variant's s/step."
@@ -909,17 +1068,24 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     body = updated(read_comment(nxt.url), new_title, number, section)
     publish_comment(nxt.url, body, github_posting=nxt.state.github_posting, dry_run=dry_run)
     if dry_run:
-        launch_stage(repo, branch, new_spec, started, None, dry_run=True)
+        launch_stage(repo, branch, new_spec, started, None, nxt.state, dry_run=True)
         return
     trial_id = None
     if stage is not Stage.PROBE:
         variant = next(r for r in started if not r.control)
         settings = settings_of(variant.flags)
         trial_id, path = add_trial(
-            registry_id, spec.track, "fixed_time", variant.variant, commit, settings, nxt.url or ""
+            registry_id,
+            spec.track,
+            "fixed_time",
+            variant.variant,
+            commit,
+            settings,
+            nxt.url or "",
+            node_grant(nxt.state, registry_id),
         )
         commit_and_push([path], f"Belay registry: {registry_id} {trial_id} planned ({stage})", dry_run=False)
-    launch_stage(repo, branch, new_spec, started, trial_id, dry_run=False)
+    launch_stage(repo, branch, new_spec, started, trial_id, nxt.state, dry_run=False)
     say_next("stop (the watcher starts a new session when the runs finish)")
 
 
@@ -1053,18 +1219,104 @@ def run_failed(registry_id: str, run: str, *, dry_run: bool) -> None:
 # ---------- 4. weekly rollover ----------
 
 
-def weekly_rollover(today: datetime.date, *, fresh: bool, dry_run: bool) -> None:
+# A trial note marking a result outside the protocol's verdict (a dropped stage, say).
+OUTSIDE_PROTOCOL = re.compile(r"outside the verdict|not part of the verdict")
+
+
+def final_verdict(entry: dict, noise: float) -> Verdict | None:
+    """The idea's last recorded verdict on its Track: for speedrun the equal-time result, or the equal-data result
+    when that already was equal time; None while a stage is pending or nothing ran."""
+    trials = [t for t in entry.get("trials") or [] if (t.get("loss_delta") or t.get("delta"))]
+    trials = [t for t in trials if not OUTSIDE_PROTOCOL.search(t.get("note") or "")]
+    if not trials:
+        return None
+    last = trials[-1]
+    if last.get("rung") == Track.SPEEDRUN.value and last.get("protocol") == "equal_steps":
+        change = (last.get("step_time_change") or "0%").rstrip("%")
+        if abs(float(change or 0)) > 1:
+            return None  # a stage-2 run decides
+    return verdict(
+        (last.get("loss_delta") or last["delta"])[0], dataclasses.replace(TRACKS[Track.SPEEDRUN], noise=noise)
+    )
+
+
+def carried_ideas(entries: list[dict], state: PageState) -> list[str]:
+    """Registry ids whose code a new weekly branch carries: ideas in progress (approved, planned or running on the
+    page, or a stage still pending) and wins not yet adopted into the live recipe. Losses, noise, declined and closed
+    ideas stay on the old branch; settings-only ideas carry nothing."""
+    in_play = {i.registry_id for i in state.ideas if i.state in ("approved", "planned", "running")}
+    carried = []
+    for entry in entries:
+        if not entry.get("code_commits"):
+            continue
+        marks = [e for e in entry.get("events") or [] if e.get("checkpoint") == CONFIG.recipe_tag]
+        adopted = bool(marks) and marks[-1]["type"] == "adopted"
+        verdict_now = final_verdict(entry, TRACKS[Track.SPEEDRUN].noise)
+        if entry["id"] in in_play or (verdict_now is Verdict.WIN and not adopted) or entry.get("status") == "running":
+            carried.append(entry["id"])
+    return carried
+
+
+def gate_carried(repo: Path, entries: dict[str, dict]) -> None:
+    """The code-change gates for the carried commits on the new base, all together: every new flag defaults off,
+    with every flag off the tiny model matches the base, no flag leaks the future, their tests and pre-commit
+    pass. Raises SystemExit on the first failure."""
+    base = f"origin/{CONFIG.base_branch}"
+    paths = git(repo, "diff", "--name-only", f"{base}..HEAD").splitlines()
+    if not paths:
+        return
+    refuse_outside_allowed(paths)
+    python = checkout_python(repo)
+    with temporary_worktree(repo, base) as before_dir:
+        before = probe(before_dir, [], python)
+    after = probe(repo, [], python)
+    flags = new_flags(before.defaults, after.defaults)
+    refuse_flag_off_change(before, after)
+    names = {f.split(".")[1]: f.split(".")[0] for f in flags}
+    for entry in entries.values():
+        values = {k: v for t in entry.get("trials") or [] for k, v in (t.get("settings") or {}).items() if k in names}
+        model = [f"{k}={v}" for k, v in values.items() if "Model" in names[k]]
+        if model:
+            refuse_leak(probe(repo, model, python))
+    run_tests(repo, paths)
+    run_precommit(repo, paths)
+
+
+def weekly_rollover(today: datetime.date, *, dry_run: bool) -> None:
+    """Cut this week's branch fresh from the recipe and carry only the code of ideas still in play."""
     repo = repo_root()
     target = CONFIG.week_branch(today)
-    if not cut_week_branch(repo, today, fresh=fresh, dry_run=dry_run):
-        print(f"merging {CONFIG.base_branch} into {target} conflicts; aborted, nothing pushed")
+    if remote_branch_exists(repo, target):
+        raise SystemExit(f"refusing: {target} already exists; check it out and run start again")
+    require_registry_checkout()
+    entries = {e["id"]: e for e in all_entries()}
+    carried = carried_ideas(list(entries.values()), page_state())
+    commits = [c for x in carried for c in entries[x]["code_commits"]]
+    git(repo, "fetch", "--quiet", "origin")
+    print(f"carrying {len(carried)} idea(s): {', '.join(carried) or 'none'}")
+    conflict = cut_fresh_week(repo, target, commits, dry_run=dry_run)
+    if conflict is not None:
+        owner = next(x for x in carried if conflict in entries[x]["code_commits"])
+        print(f"carrying {owner} ({conflict[:10]}) onto {CONFIG.base_branch} conflicts; aborted, nothing pushed")
         say_next(
-            f'{BELAY} escalate --title "{target} conflicts with {CONFIG.base_branch}" '
-            '--body "A maintainer resolves the merge, or runs weekly-rollover --fresh."'
+            f'{BELAY} escalate --title "{target}: {owner} does not apply to the recipe" --registry-id {owner} '
+            f'--body "Its commit {conflict[:10]} conflicts with {CONFIG.base_branch}. A maintainer ports it or drops '
+            'it, then reruns weekly-rollover."'
         )
         return
-    print(f"on {target}, which contains origin/{CONFIG.base_branch}")
-    report_flags(repo)
+    if not dry_run:
+        try:
+            gate_carried(repo, {x: entries[x] for x in carried})
+        except SystemExit as failure:  # one carried change fails its gates on the new base: escalate, push nothing
+            git(repo, "reset", "--quiet", "--hard", f"origin/{CONFIG.base_branch}")
+            print(f"the carried code fails its gates on {CONFIG.base_branch}; aborted, nothing pushed:\n{failure}")
+            say_next(
+                f'{BELAY} escalate --title "{target}: carried code fails its gates on the recipe" '
+                '--body "<the gate output above>. A maintainer ports or drops the idea, then reruns weekly-rollover."'
+            )
+            return
+    run_git(repo, ["push", "--quiet", "-u", "origin", target], dry_run=dry_run)
+    print(f"on {target}: origin/{CONFIG.base_branch} plus {len(commits)} carried commit(s)")
     say_next(f"{BELAY} start --events <the same events file>")
 
 
@@ -1085,10 +1337,8 @@ def recipe_change(source: str, today: datetime.date, *, dry_run: bool) -> None:
         name = f"Belay Ckpt {today:%b %d %Y}"
         run_git(recipe, ["tag", "--annotate", tag, "--message", name], dry_run=dry_run)
         run_git(recipe, ["push", "--quiet", "origin", f"HEAD:{CONFIG.recipe_branch}", tag], dry_run=dry_run)
-    report_flags(repo)
     say_next(
-        f'set recipe_tag="{tag}" in experiments/belay/config.py and commit it; at the next weekly rollover, '
-        f"{BELAY} weekly-rollover --fresh"
+        f'set recipe_tag="{tag}" in experiments/belay/config.py and commit it; the next weekly rollover cuts from it'
     )
 
 
@@ -1179,6 +1429,9 @@ def main(argv: list[str]) -> None:
         return p
 
     command("claim")
+    p = command("wait")
+    p.add_argument("--session", default=os.environ.get(SESSION_ENV), help="this session's id (default: its env)")
+    p.add_argument("--events", type=Path, required=True, help="the events file this session last worked through")
     p = command("finish")
     p.add_argument("--session", required=True, help="the session id claim printed")
     p.add_argument("--summary", required=True, help="the final message (RUNBOOK section 7)")
@@ -1226,8 +1479,7 @@ def main(argv: list[str]) -> None:
     p = command("run-failed")
     p.add_argument("registry_id")
     p.add_argument("--run", required=True)
-    p = command("weekly-rollover")
-    p.add_argument("--fresh", action="store_true", help="cut from the base branch instead of last week's branch")
+    command("weekly-rollover")
     p.add_argument("--today", type=datetime.date.fromisoformat, help="pretend date (with --dry-run only)")
     p = command("recipe-change")
     p.add_argument("--from", dest="source", required=True, help="the branch whose tip becomes the new recipe")
@@ -1247,6 +1499,10 @@ def main(argv: list[str]) -> None:
 
     if args.command == "claim":
         claim()
+    elif args.command == "wait":
+        if not args.session:
+            raise SystemExit(f"refusing: give --session (or set {SESSION_ENV})")
+        wait(args.session, args.events)
     elif args.command == "finish":
         finish(args.session, args.summary)
     elif args.command == "start" and args.check_only:
@@ -1276,7 +1532,7 @@ def main(argv: list[str]) -> None:
     elif args.command == "run-failed":
         run_failed(args.registry_id, args.run, dry_run=args.dry_run)
     elif args.command == "weekly-rollover":
-        weekly_rollover(today, fresh=args.fresh, dry_run=args.dry_run)
+        weekly_rollover(today, dry_run=args.dry_run)
     elif args.command == "recipe-change":
         recipe_change(args.source, today, dry_run=args.dry_run)
     elif args.command == "tracks":

@@ -14,12 +14,22 @@ from pathlib import Path
 import pytest
 import yaml
 
-from experiments.belay.__main__ import launch, prior_trials_hold, reproduce, score_value, write_spec
+from experiments.belay.__main__ import (
+    EventKind,
+    WaitOutcome,
+    carried_ideas,
+    launch,
+    prior_trials_hold,
+    reproduce,
+    score_value,
+    wait_outcome,
+    write_spec,
+)
 from experiments.belay.analysis import Header, series_from_rows, write_report
-from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
+from experiments.belay.branch import cut_fresh_week, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
 from experiments.belay.config import CONFIG, TRACKS, WEEKLY_BRANCH, Track
-from experiments.belay.page import publish_comment, read_comment, require_unedited, visible_text
+from experiments.belay.page import Idea, PageState, publish_comment, read_comment, require_unedited, visible_text
 from experiments.belay.posts import (
     Comment,
     Row,
@@ -31,6 +41,7 @@ from experiments.belay.posts import (
     title,
     updated,
 )
+from experiments.belay.registry_entry import comment_url_of, potential_of, with_step_time
 from experiments.belay.results import Verdict, after_equal_data, change, overall_verdict, verdict
 from experiments.belay.submit import (
     IrisJob,
@@ -46,6 +57,7 @@ from experiments.belay.submit import (
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
+NODE_CAP = 8
 SPEC = """experiment: X0001
 track: competitive-d512
 runs:
@@ -62,7 +74,8 @@ def commit_file(repo: Path, name: str, text: str) -> None:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A clone whose origin has the base branch and last week's branch (base plus one commit)."""
+    """A clone whose origin has the base branch and last week's branch: base plus a winning idea's flag commit and a
+    losing idea's flag commit."""
     origin = tmp_path / "origin.git"
     subprocess.run(["git", "init", "--quiet", "--bare", str(origin)], check=True)
     clone = tmp_path / "clone"
@@ -74,22 +87,58 @@ def repo(tmp_path: Path) -> Path:
     git(clone, "push", "--quiet", "origin", CONFIG.base_branch)
     last_week = CONFIG.week_branch(MONDAY - datetime.timedelta(days=7))
     git(clone, "checkout", "--quiet", "-b", last_week)
-    commit_file(clone, "flag.txt", "last week's flag\n")
+    commit_file(clone, "winner.txt", "X0001: winner (default off)\n")
+    commit_file(clone, "loser.txt", "X0002: loser (default off)\n")
     git(clone, "push", "--quiet", "origin", last_week)
     return clone
 
 
-def test_weekly_rollover_keeps_last_weeks_code_and_adds_the_base(repo: Path) -> None:
+def commit_of(repo: Path, path: str) -> str:
+    return git(repo, "log", "-1", "--format=%H", "--", path)
+
+
+def test_a_fresh_week_is_the_recipe_plus_only_the_carried_commits(repo: Path) -> None:
+    winner = commit_of(repo, "winner.txt")
     git(repo, "checkout", "--quiet", CONFIG.base_branch)
     commit_file(repo, "recipe_fix.txt", "fix\n")
     git(repo, "push", "--quiet", "origin", CONFIG.base_branch)
-
-    assert cut_week_branch(repo, MONDAY, fresh=False, dry_run=False)
-
     week = CONFIG.week_branch(MONDAY)
-    assert git(repo, "ls-remote", "--heads", "origin", week)
-    assert (repo / "flag.txt").exists() and (repo / "recipe_fix.txt").exists()
-    assert require_week_branch(repo, MONDAY) == week
+
+    assert cut_fresh_week(repo, week, [winner], dry_run=False) is None
+
+    assert git(repo, "rev-parse", "HEAD~1") == git(repo, "rev-parse", f"origin/{CONFIG.base_branch}")
+    assert (repo / "winner.txt").exists() and (repo / "recipe_fix.txt").exists()
+    assert not (repo / "loser.txt").exists()
+
+
+def test_a_carried_commit_that_conflicts_with_the_recipe_is_refused(repo: Path) -> None:
+    winner = commit_of(repo, "winner.txt")
+    git(repo, "checkout", "--quiet", CONFIG.base_branch)
+    commit_file(repo, "winner.txt", "the recipe changed this file too\n")
+    git(repo, "push", "--quiet", "origin", CONFIG.base_branch)
+
+    assert cut_fresh_week(repo, CONFIG.week_branch(MONDAY), [winner], dry_run=False) == winner
+    assert git(repo, "rev-parse", "HEAD") == git(repo, "rev-parse", f"origin/{CONFIG.base_branch}")
+    assert not git(repo, "ls-remote", "--heads", "origin", CONFIG.week_branch(MONDAY))
+
+
+def test_only_ideas_in_play_are_carried() -> None:
+    def entry(xid: str, delta: float, step: str = "0%", **extra) -> dict:
+        trial = {"rung": "speedrun", "protocol": "equal_steps", "delta": [delta], "step_time_change": step}
+        return {"id": xid, "code_commits": ["c" + xid], "trials": [trial], "events": [], **extra}
+
+    adopted = {"type": "adopted", "checkpoint": CONFIG.recipe_tag}
+    entries = [
+        entry("X0001", -0.012),  # won at equal time, not adopted: carried
+        entry("X0002", +0.020),  # lost: left behind
+        entry("X0003", -0.012, events=[adopted]),  # already in the recipe: nothing to carry
+        entry("X0004", -0.002),  # noise: left behind
+        entry("X0005", -0.012, "+8%"),  # stage 2 pending, and running on the page: carried
+        {"id": "X0006", "trials": [], "events": []},  # settings only: nothing to carry
+    ]
+    running = Idea(5, "intake", "a", None, "b", None, "running", "X0005", None, None, None, None)
+    state = PageState([running], [], False, 8, [], [])
+    assert carried_ideas(entries, state) == ["X0001", "X0005"]
 
 
 def test_launch_refused_off_this_weeks_branch(repo: Path) -> None:
@@ -111,7 +160,7 @@ def test_launch_refused_from_a_dirty_or_unpushed_tree(repo: Path) -> None:
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
     assert require_clean_pushed_head(repo, branch) == git(repo, "rev-parse", "HEAD")
 
-    (repo / "flag.txt").write_text("edited\n")
+    (repo / "winner.txt").write_text("edited\n")
     with pytest.raises(SystemExit, match="differ from HEAD"):
         require_clean_pushed_head(repo, branch)
 
@@ -123,14 +172,43 @@ def test_launch_refused_from_a_dirty_or_unpushed_tree(repo: Path) -> None:
 def test_launch_refused_for_a_reused_run_name() -> None:
     jobs = [IrisJob("/u/belay-X0001-seed0-coord", "succeeded", "2026-11-01T00:00")]
     with pytest.raises(SystemExit, match="already ran"):
-        check_launch(parse_spec(SPEC), jobs)
+        check_launch(parse_spec(SPEC), jobs, NODE_CAP)
 
 
 def test_launch_held_at_the_node_cap() -> None:
-    jobs = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(CONFIG.node_cap - 1)]
+    jobs = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP - 1)]
     with pytest.raises(SystemExit, match="held"):
-        check_launch(parse_spec(SPEC), jobs)
-    check_launch(parse_spec(SPEC), jobs[:-1])  # two runs fit once one more node is free
+        check_launch(parse_spec(SPEC), jobs, NODE_CAP)
+    check_launch(parse_spec(SPEC), jobs[:-1], NODE_CAP)  # two runs fit once one more node is free
+
+
+def test_a_node_grant_lets_an_idea_past_the_cap_up_to_its_grant() -> None:
+    full = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP)]
+    with pytest.raises(SystemExit, match="soft cap"):
+        check_launch(parse_spec(SPEC), full, NODE_CAP)
+    check_launch(parse_spec(SPEC), full, NODE_CAP, grant=2)  # its two runs fit its grant
+    with pytest.raises(SystemExit, match="node grant 1"):
+        check_launch(parse_spec(SPEC), full, NODE_CAP, grant=1)
+
+
+def test_a_draining_session_waits_only_for_runs_due_before_its_hard_stop() -> None:
+    start = datetime.datetime(2026, 11, 2, 9, 0, tzinfo=datetime.UTC)
+    now = start + datetime.timedelta(minutes=30)
+    soon, tomorrow = now + datetime.timedelta(minutes=20), now + datetime.timedelta(hours=20)
+    assert wait_outcome(now, start, 1, [], [soon]) is WaitOutcome.WAIT
+    assert wait_outcome(now, start, 1, [], [tomorrow]) is WaitOutcome.DRAINED
+    assert wait_outcome(now, start, 1, [EventKind.APPROVED], [tomorrow]) is WaitOutcome.WORK
+
+
+def test_a_draining_session_past_its_budget_takes_only_run_results() -> None:
+    start = datetime.datetime(2026, 11, 2, 9, 0, tzinfo=datetime.UTC)
+    late = start + datetime.timedelta(hours=3, minutes=10)
+    assert wait_outcome(late, start, 2, [EventKind.APPROVED], []) is WaitOutcome.DRAINED
+    assert wait_outcome(late, start, 2, [EventKind.RUN_FINISHED], []) is WaitOutcome.WORK
+    assert wait_outcome(start, start, 10, [EventKind.APPROVED], []) is WaitOutcome.DRAINED  # ten ideas taken
+    assert wait_outcome(start + datetime.timedelta(hours=4), start, 0, [EventKind.RUN_FINISHED], []) is (
+        WaitOutcome.OUT_OF_TIME
+    )
 
 
 def test_a_shared_control_is_not_launched_again_and_takes_no_node() -> None:
@@ -143,8 +221,8 @@ def test_a_shared_control_is_not_launched_again_and_takes_no_node() -> None:
     assert run_id(spec, spec.runs["seed0"]) == "belay-X0002-seed0"
     # The owner's control is running and the cap has room for exactly one more node: the variant alone fits.
     jobs = [IrisJob("/u/belay-X0001-control-coord", "running", "")]
-    jobs += [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(CONFIG.node_cap - 2)]
-    check_launch(spec, jobs)
+    jobs += [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP - 2)]
+    check_launch(spec, jobs, NODE_CAP)
 
 
 def test_score_na_marks_an_entry_with_no_potential_score() -> None:
@@ -252,8 +330,9 @@ def test_hidden_text_stripped_before_a_session_reads_it() -> None:
 
 def test_first_spec_on_a_fresh_weekly_branch(repo: Path) -> None:
     """A weekly branch cut fresh from the recipe has no runs/ directory yet; the first spec creates it."""
-    assert cut_week_branch(repo, MONDAY, fresh=True, dry_run=False)
     branch = CONFIG.week_branch(MONDAY)
+    assert cut_fresh_week(repo, branch, [], dry_run=False) is None
+    git(repo, "push", "--quiet", "-u", "origin", branch)
     spec = write_spec(repo, branch, SPEC, dry_run=False)
     assert (repo / "experiments/belay/runs/X0001.yaml").read_text() == SPEC
     assert spec.track is Track.COMPETITIVE_D512
@@ -295,7 +374,7 @@ def test_control_rows_name_and_link_the_control() -> None:
     assert control_label(Track.VANILLA_D512, "abc") == f"control: [Vanilla Track d512]({tracks})"
     hero = "https://github.com/marin-community/marin/tree/abc"
     assert control_label(Track.HERO_MFU, "abc") == f"control: [hero MFU stack mfl-mp-qall]({hero})"
-    assert [hardware(t) for t in (Track.SPEEDRUN, Track.COMPETITIVE_D1280L16, Track.HERO_MFU)] == [
+    assert [hardware(t) for t in (Track.SPEEDRUN, Track.COMPETITIVE_D1280, Track.HERO_MFU)] == [
         "8\u00d7H100",
         "32\u00d7H100",
         "64\u00d7GB200",
@@ -377,7 +456,7 @@ def test_run_names_never_repeat_an_earlier_run() -> None:
     suffix = run_suffix("X0001", used)
     assert suffix == "-c"
     spec = parse_spec(new_spec_text("X0001", Track.SPEEDRUN, "v", [("--opt-set", "muonh_decay_power=0.5")], suffix))
-    check_launch(spec, used)  # no reused name
+    check_launch(spec, used, NODE_CAP)  # no reused name
 
 
 @pytest.mark.parametrize("track", [t for t in Track if TRACKS[t].code == WEEKLY_BRANCH and TRACKS[t].launch])
@@ -432,3 +511,23 @@ def test_each_run_launches_at_its_own_seed() -> None:
 def test_after_equal_data_rule(time_change, stage_1, runs, status, line) -> None:
     rule = after_equal_data(time_change, stage_1, TRACKS[Track.SPEEDRUN].step_time_tolerance)
     assert rule.run_equal_time is runs and rule.final_status == status and line in rule.line
+
+
+def test_potential_is_tied_to_the_results_it_saw() -> None:
+    entry = {"status": "done", "trials": [{"id": "t001", "delta": [-0.0148]}], "events": []}
+    first = potential_of(entry, 8, "equal-time win", "claude-opus-5-5")
+    assert first["score"] == 8 and first["model"] == "claude-opus-5-5"
+    assert potential_of(entry, 7, "other", "m")["inputs_digest"] == first["inputs_digest"]
+    entry["trials"][0]["delta"] = [0.01]
+    assert potential_of(entry, 8, "equal-time win", "m")["inputs_digest"] != first["inputs_digest"]
+    text = yaml.safe_dump({"id": "X1", "trials": [{"id": "t001"}]})
+    assert yaml.safe_load(with_step_time(text, "t001", 0.31))["trials"][0]["step_time_change"] == "+31%"
+
+
+def test_old_batch_report_comments_are_never_the_ideas_comment() -> None:
+    batch = "https://github.com/marin-community/marin/issues/9451#issuecomment-1"
+    ours = "https://github.com/marin-community/marin/issues/9451#issuecomment-2"
+    old = {"trials": [{"id": "t001", "rung": "d512", "comment_url": batch}]}
+    assert comment_url_of(old) is None
+    old["trials"].append({"id": "t002", "rung": "speedrun", "comment_url": ours})
+    assert comment_url_of(old) == ours
