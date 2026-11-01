@@ -7,9 +7,10 @@ Each continuation's sampled reply is decoded, and the answer text is read out of
 :func:`~experiments.post_training.task_data.terminus_answers.answer_text`: flattened from a
 Terminus-2 turn when the reply is one, the plain reply otherwise. The X and R graders then
 run unchanged on that text (decision log 2026-10-24). Per set the report counts the
-reply formats, the replies whose grader extractor finds a candidate answer (a ``\\boxed``
-for math and X output tasks, a valid ``f(...)`` call for X input tasks), and the
-graded-correct ones.
+reply formats, replies containing a ``\\boxed`` answer for math and X output tasks
+or a valid ``f(...)`` call for X input tasks, and the graded-correct ones. The math
+verifier also accepts an unboxed final line, so a correct reply can have
+``candidate_found=False``.
 
     python -m experiments.post_training.probe_sets.grade_continuations \\
         --continuations s3://.../continuations/snowball-B/xr --set P_X=s3://.../x_probe.jsonl \\
@@ -38,7 +39,7 @@ SET_TASK = {"P_X": "X", "P_R": "R", "P_think": "R"}
 
 
 def candidate_found(task_name: str, task: dict[str, Any], text: str) -> bool:
-    """Whether the grader's own extractor finds an answer to grade in ``text``."""
+    """Whether the reply contains a boxed answer or valid X input call."""
     if task_name == "X" and task["direction"] == DIRECTION_INPUT:
         return extract_input_call(text, answer=str(task["answer"])) is not None
     return extract_boxed(text) is not None
