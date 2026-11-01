@@ -16,7 +16,6 @@ const GATE = {
   none: { icon: '–', cls: 'tested' },
   na: { icon: '·', cls: 'tested' },
 }
-const SIGN = signed
 const OUTSIDE = /outside the verdict|not part of the verdict/
 
 function trackInfo(cfg, id) {
@@ -42,7 +41,7 @@ function denseGate(idea, cfg) {
   const d = t.delta[0]
   const kind = verdictOf(d, trackInfo(cfg, t.rung).noise)
   const where = t.protocol === 'fixed_time' ? 'equal time' : 'equal data'
-  return { kind, short: SIGN(d), text: `${kind} at ${where}, Δ ${SIGN(d)} · ${t.rung.replace('vanilla-', '')}`, title: `${t.variant} (${t.rung}, ${t.date})` }
+  return { kind, short: signed(d), text: `${kind} at ${where}, Δ ${signed(d)} · ${t.rung.replace('vanilla-', '')}`, title: `${t.variant} (${t.rung}, ${t.date})` }
 }
 
 // Gate 2, the 8-minute speedrun: the speedrun track's stages, or a legacy d512 trial from before Tracks existed.
@@ -61,9 +60,9 @@ function speedrunGate(idea, live, cfg) {
   const where = time ? 'equal time' : data ? 'equal data' : `legacy ${final.protocol === 'fixed_time' ? 'fixed time' : 'equal steps'}`
   const steps = final.steps ? ` · ${final.steps.toLocaleString()}${sr.baseline_steps && (time || data) ? ` vs ${sr.baseline_steps.toLocaleString()}` : ''} steps` : ''
   const stages = [data, time].filter(Boolean).map(
-    (t) => `${t.protocol === 'fixed_time' ? 'Equal time' : 'Equal data'}: Δ ${SIGN(t.delta[0])}${t.steps ? ` at ${t.steps.toLocaleString()} steps` : ''}${t.step_time_change ? `, step time ${t.step_time_change}` : ''}`,
+    (t) => `${t.protocol === 'fixed_time' ? 'Equal time' : 'Equal data'}: Δ ${signed(t.delta[0])}${t.steps ? ` at ${t.steps.toLocaleString()} steps` : ''}${t.step_time_change ? `, step time ${t.step_time_change}` : ''}`,
   )
-  return { kind, short: SIGN(d), text: `${kind} at ${where}, Δ ${SIGN(d)}${steps}`, title: stages.join('\n') || `${final.variant} (${final.rung}, ${final.date})` }
+  return { kind, short: signed(d), text: `${kind} at ${where}, Δ ${signed(d)}${steps}`, title: stages.join('\n') || `${final.variant} (${final.rung}, ${final.date})` }
 }
 
 // The idea's standing in the live recipe: its latest adopted/removed event for the recipe's checkpoint tag.
@@ -227,7 +226,7 @@ function heroGate(idea, cfg) {
   const hero = counted(idea.trials.filter((t) => t.rung === 'hero-mfu')).at(-1)
   if (hero) {
     const d = hero.delta[0]
-    return { kind: verdictOf(d, trackInfo(cfg, 'hero-mfu').noise), short: `${SIGN(d * 100, 1)}%`, text: `s/step ${SIGN(d * 100, 1)}%`, title: hero.variant }
+    return { kind: verdictOf(d, trackInfo(cfg, 'hero-mfu').noise), short: `${signed(d * 100, 1)}%`, text: `s/step ${signed(d * 100, 1)}%`, title: hero.variant }
   }
   const stc = idea.trials.find((t) => t.rung === 'speedrun' && t.protocol === 'equal_steps' && t.step_time_change)
   return { kind: 'none', text: stc ? `not run · speedrun ${stc.step_time_change} step time` : 'not run', title: '' }
@@ -238,11 +237,11 @@ function scalingGate(idea, cfg) {
   const rungs = counted(idea.trials.filter((t) => t.rung?.startsWith('competitive-') || ['d768', 'd1024', 'd1280'].includes(t.rung)))
   if (!rungs.length) return { kind: 'none', text: 'not run', title: '' }
   const latest = new Map(rungs.map((t) => [t.rung.replace('competitive-', ''), t]))
-  const parts = [...latest].map(([r, t]) => `${r} ${SIGN(t.delta[0])}`)
+  const parts = [...latest].map(([r, t]) => `${r} ${signed(t.delta[0])}`)
   const worst = [...latest.values()].map((t) => verdictOf(t.delta[0], trackInfo(cfg, 'competitive-d512').noise))
   const kind = worst.includes('loss') ? 'loss' : worst.every((v) => v === 'win') ? 'win' : 'noise'
   const last = [...latest.values()].at(-1)
-  return { kind, short: SIGN(last.delta[0]), text: `${parts.join(' · ')} · projection pending`, title: parts.join('\n') }
+  return { kind, short: signed(last.delta[0]), text: `${parts.join(' · ')} · projection pending`, title: parts.join('\n') }
 }
 
 function recipeCell(idea, recipeTag) {

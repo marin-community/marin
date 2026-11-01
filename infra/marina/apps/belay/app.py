@@ -308,6 +308,10 @@ def _label(idea: dict[str, Any], width: int = LABEL_WIDTH) -> str:
     return idea["title"] or idea["body"].strip().splitlines()[0][:width]
 
 
+def _session_active(conn: Connection) -> bool:
+    return bool(_rows(conn, f"SELECT id FROM sessions WHERE state = '{SessionState.RUNNING}'"))
+
+
 def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
@@ -355,9 +359,7 @@ def approver_login(settings: dict[str, Any], identity: str) -> str:
 def offer_pending_work(conn: Connection) -> int:
     """When nothing is running or queued, offer each approved idea no session has taken up (at most hourly);
     an idea a session escalated waits for a maintainer instead."""
-    if _rows(conn, f"SELECT id FROM sessions WHERE state = '{SessionState.RUNNING}'") or _rows(
-        conn, "SELECT ref FROM events WHERE session_id IS NULL"
-    ):
+    if _session_active(conn) or _rows(conn, "SELECT ref FROM events WHERE session_id IS NULL"):
         return 0
     offered = 0
     for idea in _rows(conn, OFFERABLE_IDEAS):
@@ -382,8 +384,8 @@ def offer_pending_work(conn: Connection) -> int:
 def approve_idea(conn: Connection, idea_id: int, caller: str, at: datetime.datetime | None = None) -> bool:
     """Approve an idea and queue its one ``approved`` event; False unless it is pending or upstream.
 
-    Both approval paths (the admin page and a GitHub 👍 the watcher saw) end here, so an idea approved on both runs
-    once. A pending idea's text freezes here: from now on sessions get the text as it was approved.
+    Approving an idea that already has its ``approved`` event queues nothing more, so it runs once. A pending
+    idea's text freezes here: from now on sessions get the text as it was approved.
     """
     rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
     if not rows:
@@ -633,7 +635,7 @@ def _public_activity(ideas: list[dict], runs: list[dict], posts: list[dict]) -> 
         title = _label(i)
         if i["decided_at"] and i["state"] not in UNDECIDED_STATES:
             items.append({"at": i["decided_at"], "kind": "approved", "text": f"Approved: {title}"})
-        if i["state"] == "declined":
+        if i["state"] == IdeaState.DECLINED:
             items.append({"at": i["updated_at"], "kind": "declined", "text": f"Declined: {title}"})
     for r in runs:
         if r["submitted_at"]:
@@ -643,7 +645,7 @@ def _public_activity(ideas: list[dict], runs: list[dict], posts: list[dict]) -> 
     for p in posts:
         idea = by_id.get(p["idea_id"]) or by_registry.get(p["registry_id"])
         label = idea["title"] if idea and idea["title"] else p["registry_id"] or ""
-        if p["kind"] == "plan" and not (idea and idea["state"] == "declined"):
+        if p["kind"] == "plan" and not (idea and idea["state"] == IdeaState.DECLINED):
             items.append(
                 {"at": p["at"], "kind": "plan", "registry_id": p["registry_id"], "text": f"Plan posted: {label}"}
             )
@@ -697,7 +699,7 @@ def _public_idea(idea: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
         "result": idea["result"],
-        "note": idea["note"] if idea["state"] == "declined" else None,
+        "note": idea["note"] if idea["state"] == IdeaState.DECLINED else None,
         "updated_at": _iso(idea["updated_at"]),
     }
 
@@ -756,7 +758,7 @@ def create_api(services: Services) -> RegisteredApi:
                 conn, "SELECT * FROM ideas WHERE state NOT IN ('upstream', 'dismissed') ORDER BY posted_at DESC"
             )
             runs = _rows(conn, "SELECT * FROM runs ORDER BY submitted_at DESC NULLS LAST")
-            active = bool(_rows(conn, f"SELECT id FROM sessions WHERE state = '{SessionState.RUNNING}'"))
+            active = _session_active(conn)
             queued = len(_rows(conn, "SELECT id FROM events WHERE session_id IS NULL"))
             posts = _rows(
                 conn,
@@ -993,7 +995,7 @@ def create_api(services: Services) -> RegisteredApi:
             _expire_sessions(conn)
             if not _settings(conn)["dispatch_enabled"]:
                 return {"launch": False, "reason": "dispatch is off"}
-            if _rows(conn, f"SELECT id FROM sessions WHERE state = '{SessionState.RUNNING}'"):
+            if _session_active(conn):
                 return {"launch": False, "reason": "a session is active"}
             events = _rows(conn, "SELECT * FROM events WHERE session_id IS NULL ORDER BY id")
             if not events:
