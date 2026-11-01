@@ -1,0 +1,15 @@
+experiment: X0217
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: MuonH momentum 0.85->0.98 warmup over 10%
+    flags:
+    - --opt-set
+    - momentum=0.98
+    - --opt-set
+    - muonh_momentum_warmup=0.1
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
