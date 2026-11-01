@@ -1,8 +1,0 @@
-id: X0222
-slug: runbook-dry-run-sample-muonh-decay
-name: 'Runbook dry-run sample: MuonH decay power 0.5'
-category: Optimizers
-summary: Runbook dry-run sample (not to be run). Lower the MuonH decay power from the recipe's 0.7 to 0.5 (--opt-set muonh_decay_power=0.5)
-  at d512, seed 0, against a same-commit control.
-source: maintainer
-status: approved
