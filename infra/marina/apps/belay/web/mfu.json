@@ -10,12 +10,11 @@
   "run": "mfl-mp-qall",
   "branch": "marin_belay_v1_mfuladder_allwins"
  },
- "flop_note": "Analytic MFU = 3 × forward FLOPs/token ÷ step time ÷ (64 × 2.5 PF/s per rack). Compute-match FLOPs count ~1.18× more (Belay Ckpt 1: 28.9% analytic = 34.2% compute-match). S6/S7 MFU is on their own FLOPs (KDA +12.1%, MLA+Inkling +0.2% over S4); \"at S4 FLOPs\" divides that out. Production rows use the hero's own counter (~1% above analytic).",
+ "flop_note": "Analytic MFU = 3 × forward FLOPs/token ÷ step time ÷ (64 × 2.5 PF/s per rack). Compute-match FLOPs count ~1.18× more (Belay Ckpt 1: 28.9% analytic = 34.2% compute-match). S6/S7 MFU is on their own FLOPs (KDA +12.1%, MLA+Inkling +0.2% over S4). Production rows use the hero's own counter (~1% above analytic).",
  "ladder": {
   "title": "One rack: hero → Belay architecture",
   "setup": "1 rack = 16 nodes × 4 GB200 · batch 1024 × 4096 · 12–30 step runs · each stage builds on the one before",
   "source": "https://claude.ai/artifact/LNAhYDvbmgrkPbXcUAYV7Y",
-  "s4_flops_per_step": 6.0145e+17,
   "stages": [
    {
     "stage": "S1",
@@ -108,7 +107,6 @@
     "step": 11.777,
     "tps_k": 356.1,
     "mfu": 35.8,
-    "own_flops_per_step": 6.7424e+17,
     "links": [
      {
       "label": "marin_belay_v1_mfuladder_stack",
@@ -123,7 +121,6 @@
     "step": 11.465,
     "tps_k": 365.8,
     "mfu": 36.8,
-    "own_flops_per_step": 6.75669e+17,
     "links": [
      {
       "label": "marin_belay_v1_mfuladder_allwins",
