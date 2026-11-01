@@ -221,7 +221,7 @@ class TrialLock(BaseModel):
                 )
             ),
             tuple(skill._equality_key() for skill in self.skills),
-            _environment_equality_key(self.environment),
+            _environment_equality_key(self.environment, candidate_model_identity=self.agent.model_name),
             _lock_list_equality_key(self.extra_docker_compose),
             _frozen_value(self.verifier.identity_fingerprint()),
         )
@@ -305,28 +305,6 @@ def _frozen_value(value: Any, exclude: set[str] | None = None) -> Any:
     return value
 
 
-def _kwargs_stripped_frozen_key(
-    model: AgentConfig | EnvironmentConfig,
-    strip_keys: frozenset[str],
-    exclude: set[str],
-) -> Any:
-    """Frozen equality key for a config model, ignoring selected ``kwargs`` keys
-    that are non-replay runtime/provisioning knobs (``_VOLATILE_AGENT_KWARG_KEYS``
-    for the agent, ``TrialConfig._PROVISIONING_ENV_KWARG_KEYS`` for the
-    environment). Those keys change how a trial is served or provisioned, not
-    what it evaluates, so a resume must re-resolve the same lock. The real
-    values still serialize into lock.json; only the comparison ignores them.
-    """
-    if not (model.kwargs and strip_keys.intersection(model.kwargs)):
-        return _frozen_value(model, exclude=exclude)
-    sanitized = model.model_copy(
-        update={
-            "kwargs": {k: v for k, v in model.kwargs.items() if k not in strip_keys}
-        }
-    )
-    return _frozen_value(sanitized, exclude=exclude)
-
-
 def _agent_equality_key(agent: AgentConfig) -> Any:
     sanitized = agent.model_copy(
         update={
@@ -345,12 +323,12 @@ def _agent_equality_key(agent: AgentConfig) -> Any:
     return _frozen_value(sanitized, exclude={"skills", "model_alias"})
 
 
-def _environment_equality_key(environment: EnvironmentConfig) -> Any:
-    return _kwargs_stripped_frozen_key(
-        environment,
-        TrialConfig._PROVISIONING_ENV_KWARG_KEYS,
-        {"extra_docker_compose"},
-    )
+def _environment_equality_key(environment: EnvironmentConfig, *, candidate_model_identity: str | None) -> Any:
+    fingerprint = environment.identity_fingerprint(candidate_model_identity=candidate_model_identity)
+    fingerprint.pop("extra_docker_compose", None)
+    for key in TrialConfig._PROVISIONING_ENV_KWARG_KEYS:
+        fingerprint["kwargs"].pop(key, None)
+    return _frozen_value(fingerprint)
 
 
 def _user_agent_equality_key(

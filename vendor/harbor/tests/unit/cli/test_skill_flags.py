@@ -1,11 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from typer.testing import CliRunner
-
 from harbor.cli.main import app
 from harbor.models.job.config import JobConfig
 from harbor.models.trial.config import TrialConfig
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -41,9 +40,6 @@ def _capture_job_config(monkeypatch, tmp_path: Path) -> list[JobConfig]:
     )
     monkeypatch.setattr(
         "harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None
-    )
-    monkeypatch.setattr(
-        "harbor.cli.jobs._confirm_host_env_access", lambda *_, **__: None
     )
     monkeypatch.setattr("harbor.cli.jobs.print_job_results_tables", lambda _: None)
     return captured
@@ -83,7 +79,6 @@ def test_run_skill_flags_append_to_config_file_agents(
             str(first),
             "--skills",
             str(skills_root),
-            "--yes",
         ],
     )
 

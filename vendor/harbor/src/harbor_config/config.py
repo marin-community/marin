@@ -51,7 +51,7 @@ def apply_overlay(config: JobConfig, overlay: Mapping[str, Any]) -> JobConfig:
     caller overriding an agent list must supply each complete agent entry it
     intends to retain.
     """
-    resolved = _merge_mappings(config.model_dump(mode="json"), overlay)
+    resolved = _merge_mappings(config.model_dump(mode="python"), overlay)
     return JobConfig.model_validate(resolved)
 
 

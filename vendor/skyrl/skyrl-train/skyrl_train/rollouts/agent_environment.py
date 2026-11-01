@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
-from harbor.environments.base import BaseEnvironment, ExecResult
+from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
-from shellbox.machine import HARBOR_EXEC_OUTPUT_LIMIT_BYTES, Command, ExitReason, Machine
+from shellbox.machine import Command, ExitReason, Machine
 
 
 class BorrowedMachineEnvironment(BaseEnvironment):
@@ -56,7 +56,7 @@ class BorrowedMachineEnvironment(BaseEnvironment):
                 cwd=cwd,
                 env=self._merge_env(env) or {},
                 timeout=timeout_sec,
-                output_limit_bytes=HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
+                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
                 user=None if selected_user is None else str(selected_user),
             )
         )

@@ -1,5 +1,4 @@
 import json
-import os
 import shlex
 import tempfile
 import uuid
@@ -7,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from packaging.version import InvalidVersion, Version
 from upath import UPath
 
 from harbor.agents.installed.base import (
@@ -27,12 +25,9 @@ from harbor.literal.rollout_build import (
 from harbor.models.agent.context import AgentContext
 from harbor.llms.vllm_tokenization import tokenize_url
 from harbor.models.agent.name import AgentName
+from harbor.utils.env import validate_task_environment
 
 
-_CURRENT_PI_PACKAGE = "@earendil-works/pi-coding-agent"
-_NODE_VERSION = "22"
-_LEGACY_PI_PACKAGE = "@mariozechner/pi-coding-agent"
-_PI_PACKAGE_RENAME_VERSION = Version("0.74.0")
 _REMOTE_LOG_READ_BLOCK_SIZE = 1024 * 1024
 
 
@@ -58,6 +53,7 @@ class Pi(BaseInstalledAgent):
     _API_KEY_ENV = "HARBOR_PI_API_KEY"
     _ENDPOINT_ENV_PATH = "/tmp/harbor-pi-endpoint.env"
     _CONTEXT_BUDGET_EXTENSION_PATH = "/tmp/harbor-pi-context-budget.js"
+    _MCP_EXTENSION_PATH = "/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"
     _PROVIDER_CONFIG_RELATIVE_PATH = ".pi/agent/models.json"
     _SETTINGS_CONFIG_RELATIVE_PATH = ".pi/agent/settings.json"
     _AUTHENTICATION_FAILURE_MARKER = "HARBOR_PI_MODEL_AUTHENTICATION_ERROR"
@@ -91,7 +87,9 @@ lines.on("close", () => {
   }
   process.exitCode = 1;
 });
-""".replace("__AUTHENTICATION_FAILURE_MARKER__", _AUTHENTICATION_FAILURE_MARKER)
+""".replace(
+            "__AUTHENTICATION_FAILURE_MARKER__", _AUTHENTICATION_FAILURE_MARKER
+        )
         .replace("__CONTEXT_LENGTH_FAILURE_MARKER__", _CONTEXT_LENGTH_FAILURE_MARKER)
         .strip()
     )
@@ -301,8 +299,10 @@ export default function (pi) {
     ) -> None:
         if api_base is not None and (not isinstance(api_base, str) or not api_base):
             raise ValueError("api_base must be a non-empty string")
-        if api_key is not None and (not isinstance(api_key, str) or not api_key):
-            raise ValueError("api_key must be a non-empty string")
+        if api_key not in (None, "", "EMPTY"):
+            raise ValueError(
+                "Pi provider credentials must remain on the host; use api_key='EMPTY' with a model relay"
+            )
         if (
             thinking_format is not None
             and thinking_format not in self._SUPPORTED_THINKING_FORMATS
@@ -321,7 +321,7 @@ export default function (pi) {
             )
 
         self._api_base = api_base
-        self._api_key = api_key or "not-needed"
+        self._api_key = api_key or "EMPTY"
         self._collect_rollout_details = collect_rollout_details
         self.rollout_correlation_id = (
             uuid.uuid4().hex if collect_rollout_details else None
@@ -400,21 +400,49 @@ export default function (pi) {
         return AgentName.PI.value
 
     def get_version_command(self) -> str | None:
-        return f"{self.nvm_shell_command()} && pi --version"
-
-    @staticmethod
-    def nvm_shell_command() -> str:
-        """Return the shell prelude that exposes the NVM-managed Pi executable."""
-        return (
-            'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" && '
-            f"nvm use {_NODE_VERSION} >/dev/null"
-        )
+        return "pi --version"
 
     def hosted_endpoint_env(self) -> dict[str, str]:
         """Return the secret environment required by a registered hosted provider."""
         if self._api_base is None:
             return {}
         return {self._API_KEY_ENV: self._api_key}
+
+    async def configure_mcp_servers(self, environment: BaseEnvironment) -> None:
+        """Configure the image-provided pi-mcp-extension before Pi starts."""
+        if not self.mcp_servers:
+            return
+        servers: dict[str, dict[str, Any]] = {}
+        for server in self.mcp_servers:
+            config: dict[str, Any] = {
+                "transport": server.transport,
+                "lifecycle": "eager",
+            }
+            if server.transport == "stdio":
+                config.update(command=server.command, args=server.args)
+            else:
+                config["url"] = server.url
+            servers[server.name] = config
+        content = shlex.quote(json.dumps({"mcpServers": servers}))
+        extension_path = shlex.quote(self._MCP_EXTENSION_PATH)
+        register_script = """
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const directory = path.join(os.homedir(), '.pi/agent');
+fs.mkdirSync(directory, {recursive: true});
+const settingsPath = path.join(directory, 'settings.json');
+const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+settings.extensions = [...new Set([...(settings.extensions ?? []), process.argv[2]])];
+fs.writeFileSync(settingsPath, JSON.stringify(settings));
+fs.writeFileSync(path.join(directory, 'mcp.json'), process.argv[1]);
+""".strip()
+        await self.exec_as_agent(
+            environment,
+            command=(
+                f"test -r {extension_path} || "
+                "{ echo 'Image does not provide pi-mcp-extension' >&2; exit 1; }; "
+                f"node -e {shlex.quote(register_script)} {content} {extension_path}"
+            ),
+        )
 
     async def configure_hosted_provider(self, environment: BaseEnvironment) -> None:
         """Register this agent's dynamic OpenAI-compatible endpoint with Pi."""
@@ -435,7 +463,6 @@ export default function (pi) {
             command=(
                 "set -euo pipefail; "
                 f"trap 'rm -f {endpoint_path}' EXIT; "
-                f"{self.nvm_shell_command()}; "
                 f". {endpoint_path}; {provider_command}; rm -f {endpoint_path}"
             ),
         )
@@ -443,38 +470,15 @@ export default function (pi) {
     def parse_version(self, stdout: str) -> str:
         return stdout.strip().splitlines()[-1].strip()
 
-    def _package_name(self) -> str:
-        if self._version:
-            try:
-                if Version(self._version) < _PI_PACKAGE_RENAME_VERSION:
-                    return _LEGACY_PI_PACKAGE
-            except InvalidVersion as exc:
-                raise ValueError(
-                    f"Pi version {self._version!r} is not a valid package version"
-                ) from exc
-        return _CURRENT_PI_PACKAGE
-
     async def install(self, environment: BaseEnvironment) -> None:
-        package_name = self._package_name()
-        version_spec = f"@{self._version}" if self._version else "@latest"
-        await self.exec_as_root(
-            environment,
-            command="apt-get update && apt-get install -y curl",
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-        )
-        await self.exec_as_agent(
-            environment,
-            command=(
-                "set -euo pipefail; "
-                "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash && "
-                'export NVM_DIR="$HOME/.nvm" && '
-                '\\. "$NVM_DIR/nvm.sh" || true && '
-                "command -v nvm &>/dev/null || { echo 'Error: NVM failed to load' >&2; exit 1; } && "
-                f"nvm install {_NODE_VERSION} && npm -v && "
-                f"npm install -g --ignore-scripts {package_name}{version_spec} && "
-                "pi --version"
-            ),
-        )
+        """Check the Pi runtime supplied by the environment image."""
+        result = await self.exec_as_agent(environment, command="pi --version")
+        installed_version = self.parse_version(result.stdout)
+        if self._version is not None and installed_version != self._version:
+            raise RuntimeError(
+                f"Image provides Pi {installed_version}, but the agent requires {self._version}"
+            )
+        self._version = installed_version
 
     def _build_register_skills_command(self) -> str | None:
         """Return a shell command that copies skills to Pi's skills directory."""
@@ -559,6 +563,7 @@ export default function (pi) {
         """Upload the endpoint variables without placing their values in a command."""
         if self._api_base is None:
             raise ValueError("api_base is required to stage the endpoint environment")
+        validate_task_environment({"OPENAI_API_KEY": self._api_key})
         contents = (
             f"export {self._API_BASE_ENV}={shlex.quote(self._api_base)}\n"
             f"export {self._API_KEY_ENV}={shlex.quote(self._api_key)}\n"
@@ -605,6 +610,7 @@ export default function (pi) {
         if not provider or not model_id:
             raise ValueError("Model name must be in the format provider/model_name")
 
+        await self.configure_mcp_servers(environment)
         env: dict[str, str] = {}
         keys: list[str] = []
 
@@ -645,7 +651,7 @@ export default function (pi) {
                 keys.append("XAI_API_KEY")
 
         for key in keys:
-            val = os.environ.get(key)
+            val = self._get_env(key)
             if val:
                 env[key] = val
 
@@ -661,7 +667,7 @@ export default function (pi) {
         if skills_command:
             await self.exec_as_agent(environment, command=skills_command)
 
-        runtime_prelude = f"set -e -o pipefail; {self.nvm_shell_command()}; "
+        runtime_prelude = "set -e -o pipefail; "
         if compaction_command is not None:
             runtime_prelude += f"{compaction_command}; "
         if self._api_base is not None:

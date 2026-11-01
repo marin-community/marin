@@ -21,7 +21,6 @@ from marin.evaluation.harbor.driver_config import (
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
 )
-from marin.evaluation.harbor.provenance import vendored_harbor_source
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
     _read_trial,
@@ -40,7 +39,6 @@ _ERROR_TAXONOMY = HarborErrorTaxonomy(
     agent=frozenset({"AgentError", "AgentTimeoutError"}),
     passthrough=frozenset({"PassthroughError"}),
     undecided=frozenset({"VerifierTimeoutError"}),
-    commit="1" * 40,
 )
 
 
@@ -284,6 +282,7 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.open_url", remote_open_url)
     monkeypatch.setattr("finestore.commit.conditional_object", MemoryConditionalObject)
+    monkeypatch.setattr("rigging.filesystem.distributed_lock.conditional_object", MemoryConditionalObject)
 
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
@@ -424,71 +423,6 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     }
 
 
-@pytest.fixture
-def vendored_runtime_workspace(tmp_path):
-    for relative in (
-        "vendor/harbor/src/harbor",
-        "lib/rigging/src/rigging",
-        "lib/finestore/src/finestore",
-        "lib/marin/src/marin/evaluation/harbor",
-    ):
-        directory = tmp_path / relative
-        directory.mkdir(parents=True)
-        (directory / "__init__.py").write_text("runtime = 1\n")
-    (tmp_path / "lib/marin/src/marin/evaluation/harbor/trial_driver.py").write_text("runtime = 1\n")
-    for relative in ("vendor/harbor", "lib/rigging", "lib/finestore"):
-        (tmp_path / relative / "pyproject.toml").write_text('[project]\nname = "example"\n')
-    (tmp_path / "vendor/harbor/UPSTREAM.toml").write_text(
-        'repository = "https://example.org/harbor"\n'
-        f'commit = "{driver_config.HARBOR_SOURCE.commit}"\n'
-        'version = "0.8.1"\n'
-    )
-    (tmp_path / "vendor/harbor/uv.lock").write_text("version = 1\n")
-    return tmp_path
-
-
-@pytest.mark.parametrize(
-    "relative",
-    [
-        "vendor/harbor/src/harbor/__init__.py",
-        "vendor/harbor/pyproject.toml",
-        "vendor/harbor/uv.lock",
-        "lib/rigging/src/rigging/__init__.py",
-        "lib/finestore/src/finestore/__init__.py",
-        "lib/marin/src/marin/evaluation/harbor/trial_driver.py",
-    ],
-)
-def test_vendored_runtime_identity_changes_with_executed_sources(vendored_runtime_workspace, relative, monkeypatch):
-    project = vendored_runtime_workspace / "vendor/harbor"
-    upstream = vendored_harbor_source(project)
-    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: vendored_runtime_workspace)
-    original = driver_config.harbor_runtime_descriptor()
-
-    path = vendored_runtime_workspace / relative
-    path.write_bytes(path.read_bytes() + b"\nchanged\n")
-
-    assert driver_config.harbor_runtime_descriptor() != original
-    assert vendored_harbor_source(project) == upstream
-
-
-@pytest.mark.parametrize(
-    "relative",
-    [
-        "vendor/harbor/src/harbor/__pycache__/__init__.cpython-312.pyc",
-        "vendor/harbor/tests/unit/test_example.py",
-        "vendor/harbor/registry.json",
-    ],
-)
-def test_vendored_runtime_identity_ignores_unexecuted_files(vendored_runtime_workspace, monkeypatch, relative):
-    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: vendored_runtime_workspace)
-    original = driver_config.harbor_runtime_descriptor()
-    path = vendored_runtime_workspace / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"unexecuted")
-
-    assert driver_config.harbor_runtime_descriptor() == original
-
-
 def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):
     terminated_return_codes: list[int | None] = []
     terminate_process_group = driver_config.terminate_process_group
@@ -592,7 +526,10 @@ def test_harbor_driver_classifies_fast_exit_from_unavailable_dependency(tmp_path
 
 
 @pytest.mark.parametrize("dataset_kind", [HarborDatasetKind.HARBOR_REGISTRY, HarborDatasetKind.HUGGING_FACE])
-def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch, dataset_kind):
+@pytest.mark.parametrize("api_key", [None, "candidate-private-key"])
+def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(
+    tmp_path, monkeypatch, dataset_kind, api_key
+):
     captured: dict = {}
 
     def run_driver(config, overlay, driver_env, _backend_state) -> None:
@@ -614,6 +551,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-harbor")
     session = _inference_session()
+    session = replace(session, model=replace(session.model, endpoint=replace(session.model.endpoint, api_key=api_key)))
     judge = _inference_session("https://iris.example/proxy/t/judge/serve.judge/v1", "qwen-judge")
     model = session.model
 
@@ -630,7 +568,11 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         model_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="qwen3-0.6b", location="org/checkpoint"))),
         secret_env_keys=("DAYTONA_API_KEY",),
     )
-    env_vars = {"DAYTONA_API_KEY": "daytona-key"}
+    env_vars = {
+        "DAYTONA_API_KEY": "daytona-key",
+        "DAYTONA_TARGET": "test-target",
+        "DAYTONA_API_URL": "https://daytona.example/api",
+    }
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         env_vars["HF_TOKEN"] = "hf-key"
     outcome = executor(
@@ -655,9 +597,13 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["overlay"].archive_dataset == executor.config.record_dataset
     assert captured["overlay"].dataset_path is None
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
+    assert captured["env"]["DAYTONA_TARGET"] == "test-target"
+    assert captured["env"]["DAYTONA_API_URL"] == "https://daytona.example/api"
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         assert captured["env"]["HF_TOKEN"] == "hf-key"
-    assert "OPENAI_API_KEY" not in captured["env"]
+    assert captured["env"]["OPENAI_API_KEY"] == (model.endpoint.api_key or "EMPTY")
+    if api_key:
+        assert api_key not in json.dumps(asdict(captured["overlay"]))
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
     assert json.loads((tmp_path / "harbor_resume_identity.json").read_text())["model"]["location"] == "org/checkpoint"
 

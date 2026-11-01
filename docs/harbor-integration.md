@@ -6,7 +6,9 @@ server and, when requested, a second shared judge server; gives Harbor their Iri
 finish.
 
 Harbor provides containerized agent benchmarks such as Terminal-Bench, SWE-bench Verified, AIME,
-GAIA, BFCL, and Aider. Trials can run in Daytona or another Harbor-supported sandbox environment.
+GAIA, BFCL, and Aider. Harbor executes tasks only through Marin Shellbox adapters:
+`local` (the default), `daytona`, `qemu` and `shellsim`. Removed provider names and
+custom environment import paths fail validation.
 See [Running Evaluations with Marin](tutorials/run-lm-evals.md) for the model and suite command
 matrix. This page documents Harbor-specific configuration and output behavior.
 
@@ -37,7 +39,9 @@ Responses tool histories to the configured Chat Completions endpoint. It retains
 token IDs and log probabilities when the serving backend returns them.
 
 Aider, SWE-agent, OpenHands, and OpenHands SDK installation is blocked because
-those harnesses require LiteLLM. Use Mini-SWE or Terminus instead. NeMo's
+those harnesses require LiteLLM. Preinstalled Aider execution is also blocked.
+Copilot CLI installation and execution are unsupported because it requires
+GitHub authentication without a guest relay. Use Mini-SWE or Terminus instead. NeMo's
 LiteLLM backend is also unavailable; use its OpenAI backend with a compatible
 endpoint.
 
@@ -109,21 +113,315 @@ Harbor policies pass schema and placeholder effective-job validation before the 
 opens an Iris client.
 
 To resume one Harbor evaluation, pass its object-store results root with `--resume-results-path`
-and the original model, policy, runtime, task limit, and hosted judge settings. Marin rejects the
+and the original model, policy, task limit, and hosted judge settings. Marin rejects the
 resume unless the root's saved model-bound identity matches those inputs. Wait for the original
 Iris group and any earlier retry to end first: two live Harbor drivers must never share a results
 root. Add `--retry-unscored-harbor-trials` to retry known unscored trials while preserving scored
 outcomes and unknown errors.
 
+## Maintained execution types
+
+Harbor's CLI and policies select `environment.type` from `local`, `daytona`,
+`qemu` and `shellsim`. They default to local bubblewrap. Environment classes cannot be loaded
+from a policy or CLI import path. Agent import paths remain a separate trusted
+harness extension.
+
+Daytona uses `DaytonaMachineFactory` for creation, execution, transfers and cleanup.
+It selects a task's registry image when supplied; otherwise Shellbox prepares the
+task's Dockerfile through Daytona's provider image-build service. No Docker daemon
+runs inside the task container. Tasks need Python 3 and `setsid` for command
+supervision and the host model relay.
+
+The Daytona adapter accepts `network_policy` (`mode` and optional
+`value`), `ttl_minutes` and `create_timeout`. Model endpoint settings are supplied
+by the trusted launcher. Snapshot names, automatic snapshot toggles, provider target
+overrides and forced rebuilds are unsupported. Compose tasks must use prepared
+local container groups; Daytona rejects every Compose filename and extra overlay.
+The host entry point resolves `DAYTONA_API_KEY`, `DAYTONA_API_URL` and `DAYTONA_TARGET`
+once and supplies the connection privately. The public API URL defaults to
+`https://app.daytona.io/api`; a live Daytona run requires an explicit target:
+
+```bash
+export DAYTONA_TARGET=us  # Select the region approved for this run.
+```
+
+Missing credentials or a missing target fail before allocation. The adapter does not
+read SDK `.env` authentication, JWT credentials, or environment-based connection overrides.
+
+Checked-in evaluation policies retain their dataset selectors and historical
+provider choices. They are not silently rewritten to another environment.
+A policy or package needing a removed option, a Compose topology on Daytona,
+or an unavailable image fails explicitly. Prepare the task through the supported
+path before launching a new run; preserve historical outputs as Marin artifacts.
+Shellbox's Docker backend remains available to callers such as SkyRL's engine-owned
+machine path; it is not a Harbor execution provider.
+
 ## Credentials
 
 Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.
 They use `DAYTONA_API_KEY` from the launch environment when present, then fall back to the approved
-Google Secret Manager version. `DAYTONA_API_KEY` is the only supported environment override.
+Google Secret Manager version. `DAYTONA_API_KEY` is the only supported credential override.
 
-The generic launcher resolves declared references immediately before Iris submission. The isolated
-Harbor subprocess receives the Daytona key without inheriting the orchestrator's other credentials.
-Do not put resolved credentials in model YAMLs, runner configs, or evaluation artifacts.
+The generic launcher resolves declared references immediately before Iris submission. The Harbor
+subprocess receives the selected backend's credentials, Hugging Face access, and storage credentials
+needed for remote trial results and FineStore archives. It remains a trusted process: `uv --isolated`
+isolates dependencies. The subprocess retains its user identity, filesystem and network access.
+Task containers must not inherit that authority. Do not put resolved credentials in model YAMLs,
+runner configs, or evaluation artifacts. Harbor's `--env-file` configures its trusted harness;
+it does not grant the file's variables to task templates. The Marin launcher binds explicit
+task capabilities and host model authentication. A missing capability fails instead of
+prompting to inherit a host variable. Use the Marin launcher for hosted judge authentication.
+
+## Offline execution through Shellbox
+
+For prepared tasks and private container groups, select Harbor's local bubblewrap adapter:
+
+```yaml
+n_concurrent_trials: 4
+environment:
+  type: local
+agents:
+  - name: terminus-2
+datasets:
+  - path: prepared-tasks
+```
+
+Place this policy beside `prepared-tasks` inside the Marin workspace, then use the shared launcher:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b --harbor-config path/to/policy.yaml --limit 1 --dry-run
+```
+
+Remove `--dry-run` to submit. Each task must set `allow_internet = false`. A single-container task
+names a prebuilt `docker_image` with an immutable `@sha256:` digest and an absolute `workdir`.
+Compose tasks instead provide `environment/shellbox-images.json`, mapping each service to its prepared
+image and working directory:
+
+```json
+{
+  "main": {"image": "registry.example/main@sha256:<64-hex-digest>", "workdir": "/app"},
+  "tau3-runtime": {
+    "image": "registry.example/runtime@sha256:<64-hex-digest>",
+    "workdir": "/app",
+    "agent_logs": "publish"
+  }
+}
+```
+
+Build and push these images during trusted task preparation, preserving each task's inputs. Tau3's
+runtime image includes its task-specific `task_config.json`; one image cannot silently substitute
+another task's configuration. Dockerfiles and Compose build declarations may remain in the source
+artifact. Evaluation reads the prepared references and never executes their build recipes.
+
+The importer produces one Shellbox `TaskSpec` containing named containers and an
+explicit primary named `main`. A task without peers has that same representation
+with one container. Both use `factory.create_task`; startup, readiness, artifact
+transfer and cleanup share the same path.
+
+Build images separately with the task's dependencies, verifier dependencies and terminal utilities
+already installed. Terminus needs Bash and tmux; runtime downloads cannot succeed on this path.
+Tasks using the model relay need Python 3 in their main image.
+Containers with timed readiness checks need Python 3 in their own images to supervise
+individual probes without stopping the container on the first timeout.
+For example, prepare a reviewed tau3 task snapshot on a trusted image builder. These commands
+preserve the runtime's per-task configuration and add Terminus's missing terminal dependencies:
+
+```bash
+TASK_DIR=prepared-tasks/tau3-airline-0
+MAIN_TAG=registry.example/harbor/tau3-airline-0-main:prepared
+RUNTIME_TAG=registry.example/harbor/tau3-airline-0-runtime:prepared
+cp "$TASK_DIR/environment/Dockerfile" "$TASK_DIR/environment/Dockerfile.prepared"
+cat >> "$TASK_DIR/environment/Dockerfile.prepared" <<'DOCKERFILE'
+RUN apt-get update && apt-get install -y --no-install-recommends bash tmux \
+    && rm -rf /var/lib/apt/lists/*
+DOCKERFILE
+docker buildx build --platform linux/amd64 --push --tag "$MAIN_TAG" \
+  --file "$TASK_DIR/environment/Dockerfile.prepared" "$TASK_DIR/environment"
+docker buildx build --platform linux/amd64 --push --tag "$RUNTIME_TAG" \
+  "$TASK_DIR/environment/runtime-server"
+MAIN_DIGEST=$(docker buildx imagetools inspect "$MAIN_TAG" --format '{{.Manifest.Digest}}')
+RUNTIME_DIGEST=$(docker buildx imagetools inspect "$RUNTIME_TAG" --format '{{.Manifest.Digest}}')
+cat > "$TASK_DIR/environment/shellbox-images.json" <<JSON
+{
+  "main": {"image": "$MAIN_TAG@$MAIN_DIGEST", "workdir": "/app"},
+  "tau3-runtime": {
+    "image": "$RUNTIME_TAG@$RUNTIME_DIGEST",
+    "workdir": "/app",
+    "agent_logs": "publish"
+  }
+}
+JSON
+```
+
+Use an existing authenticated registry namespace in place of `registry.example`. Review the source
+Dockerfiles before building, set `allow_internet = false` in the prepared task's `task.toml`, and
+retain the prepared snapshot and manifest as Marin artifacts. These preparation commands require
+trusted build infrastructure; they are never run by the evaluation sandbox.
+The primary stays alive for agent commands and verification. Sidecars retain their prepared
+image's ENTRYPOINT/CMD unless Compose explicitly overrides them. The adapter does not build
+images or install a nested container runtime.
+Shellbox adapters reclaim environments at completion. `--no-delete` and
+`environment.delete=false` are rejected before backend allocation.
+
+The agent makes model calls in the trusted Harbor process. Shellbox runs task commands and
+verification in persistent bubblewrap containers. Members share private loopback and retain
+separate filesystems and PID namespaces. External traffic is denied, including DNS.
+Provider credentials stay in the trusted harness.
+Task environment templates resolve only against explicit task capabilities. They never read the
+driver's ambient environment, including through differently named aliases.
+Image contents and explicit task inputs must themselves be free of production credentials.
+
+The runtime has no independent Docker or other provider execution backend. The prepared local path
+supports image-provided Pi and Pi/ACP agents and the benchmark-owned Tau3 user relay. Other installed
+agents, arbitrary agent imports and custom host mounts are rejected. Its Compose importer supports `main` plus prepared
+sidecars, commands, environment values, exposed TCP ports, readiness checks and `main` dependencies
+on started or healthy services. MCP URLs must name an exposed endpoint inside the container group.
+Unknown Compose fields, published host ports, host networking, extra Compose files and dependencies
+between sidecars fail explicitly.
+
+Containers share only the group's loopback network. External egress remains denied. Tau3's user model
+and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. A trusted host relay forwards only
+chat completions and tokenization to the selected model, fixes its model name, and rejects redirects;
+the upstream endpoint capability and provider authentication stay in the host process.
+Tau3 requires an explicit `--judge-model` in the shared launch command. That hosted model serves
+both the simulated user and verifier assertions; the candidate agent keeps its own model endpoint.
+Without a hosted model, the adapter rejects the task before allocating its container group. A direct
+Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint authentication with
+`harbor.environments.model_relay.host_model_authentication`; the adapter never reads an ambient model key.
+
+The relay starts one Python HTTP helper and exchanges bounded request/response
+frames over a persistent process session. The session uses owned local process
+pipes or Daytona's SDK transport; provider credentials remain on the host.
+
+Installed candidate agents use a separate loopback relay on port 8788 on both local
+and Daytona backends; the simulated-user and verifier relay uses port 8787. Marin resolves installed
+agents through Harbor's agent classes, including Pi, OpenCode, Mini-SWE, and ACP Pi.
+Their provider configuration and environment contain a loopback URL and an `EMPTY`
+key. The candidate endpoint and its authentication remain in the trusted driver;
+the executor supplies the served endpoint's API key only through the driver environment.
+Host-side agents such as Terminus and the AIME agent call their candidate endpoint directly.
+Persisted job and trial JSON redacts Iris bearer URLs; live configurations retain their routes.
+Resumed runs receive a fresh model capability from Marin rather than reusing one from saved JSON.
+
+Both relays authorize only `POST /v1/chat/completions`, `POST /v1/responses`, and
+`POST /tokenize`. They fix the upstream model, reject redirects, and bound request
+and response bodies. Upstream authentication and context-limit errors retain sanitized SDK
+error codes; provider error messages are never forwarded. The Responses route supports non-streaming text input with
+an output-token limit and reasoning options; tools, stored responses, and stateful
+continuations are unsupported.
+The tokenization route uses the configured upstream's server root. For installed
+SDKs requesting streaming chat, the host obtains one non-streaming completion and
+returns bounded SSE frames containing its text, reasoning, tool calls, finish reason,
+and usage. This adds no streaming transport: the guest receives the complete buffered
+response after generation finishes. Tasks using either relay need Python 3.
+
+The recognized Harbor agent-log bind is lowered only when the prepared sidecar declares
+`agent_logs: "publish"`. Before actor commands and artifact downloads, the adapter copies sidecar logs
+into the actor's agent-log directory through the control plane. This preserves tau3's runtime-state
+handoff to its verifier. It does not implement a shared writable volume; actor writes do not flow
+back into the sidecar.
+
+Unsupported task requirements
+fail without falling back to Docker, public networking or a privileged profile. Existing remote
+backend policies remain explicit choices; this adapter does not migrate their tasks automatically.
+
+This boundary protects the trusted driver from task code. Harbor and its dependencies still execute
+in the trusted driver and retain its storage authority. Moving orchestration to TaskCompendium, or
+isolating that driver behind model and artifact brokers, is separate work.
+
+### Local factory settings
+
+Use an isolated Linux worker with working bubblewrap namespaces, `skopeo` and `umoci`.
+The prepared images must use numeric root (`USER 0` or `USER 0:0`) or omit `USER`.
+The adapter accepts `bwrap`, `umoci`, `image_cache`, `cgroup_parent` and `ttl` factory settings.
+Optional `registry_authfile` and `signature_policy` files configure host-side image acquisition;
+they are never mounted into guests. Host mounts are unsupported. The guest has no external
+network route.
+
+An explicitly delegated cgroup v2 `cgroup_parent` enables CPU and memory limits
+across each container's processes and descendants. Use `limit` or `auto` to
+apply the task's declarations. The worker must run within that delegated
+hierarchy; see the [Shellbox delegation instructions](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md#local-backend).
+For example:
+
+```yaml
+environment:
+  type: local
+  cpu_enforcement_policy: limit
+  memory_enforcement_policy: limit
+  kwargs:
+    cgroup_parent: /sys/fs/cgroup/path/to/delegated-worker
+    ttl: 3600
+```
+
+Without delegation, explicitly select `ignore` for declared CPU or memory values;
+`auto` does not silently discard them. Storage quotas, GPU and TPU allocations
+remain unsupported. For a worker without delegation:
+
+```yaml
+environment:
+  type: local
+  cpu_enforcement_policy: ignore
+  memory_enforcement_policy: ignore
+  kwargs:
+    ttl: 3600
+```
+
+Run the policy through the isolated Harbor binary on that worker:
+
+```bash
+uv run --isolated --project vendor/harbor --frozen --extra runtime \
+  harbor run --config local-policy.yaml
+```
+
+Model and judge settings follow the host bindings described above. A command timeout or
+cancellation closes the entire local machine or group. Cleanup preserves the originating
+interruption during startup, commands and file transfers. Local execution shares the host kernel;
+use it for trusted tasks on isolated workers. Iris remains the default production boundary.
+
+The local backend uses the same Docker/OCI image contents; it unpacks the layers
+instead of starting a Docker container. A prepared image can remain local.
+Export the host-built image with Skopeo into an OCI layout tagged `image`, put
+that layout at `<image_cache>/sha256-<platform-manifest-digest>`, and reference
+the same platform manifest digest in `shellbox-images.json`. Shellbox verifies
+the manifest, configuration and every layer before using that cache offline.
+An explicit signature policy still requires registry verification.
+
+To exercise the complete local Tau3 path with a real candidate, simulated user
+and assertion judge, use a prepared task whose canonical reward includes an
+NL assertion, such as `tau3-retail-2` from Tau3 1.0.1. Keep its runtime
+`task_config.json`, instructions and verifier unchanged. Select Terminus 2,
+configure a local tokenizer encoding for a hosted endpoint without `/tokenize`,
+and put the upstream `model_endpoint` and `model_name` in the local environment
+kwargs. The candidate's OpenAI client uses the host endpoint; the runtime and
+verifier receive the loopback relay and an inert key. Supply CPU/memory policies
+as above and omit the unsupported storage declaration from the prepared task.
+
+```bash
+uv run --isolated --project vendor/harbor --frozen --extra runtime \
+  python vendor/harbor/tests/local_tau3_smoke.py local-tau3.json \
+  --api-key-env GLM_BULK_TOKEN
+```
+
+The command retains normal Harbor trial artifacts and checks that Tau2 evaluated
+a real runtime trajectory and returned NL assertion results. A model reward of
+zero is a scored outcome; an infrastructure error or skipped evaluator fails
+the smoke run. Task images contain the same MCP client and terminal dependencies
+used by the candidate. No oracle solution is uploaded.
+
+To inventory a local task snapshot without executing it:
+
+```bash
+uv run python -m experiments.evaluation.audit_harbor_tasks path/to/tasks \
+  --source organization/dataset --revision SNAPSHOT_COMMIT > inventory.json
+```
+
+The report counts task manifests and Compose services, lists fields requiring review, and records
+locations of Docker command references. Source and revision are supplied by the caller. A Compose
+file can be a single-container wrapper; a command reference can be an unused helper. Neither
+establishes a requirement for nested Docker. The inventory does not certify image contents,
+external-access requirements or compatibility with offline execution.
 
 ## Sandbox environment isolation
 
@@ -131,9 +429,11 @@ Keep provider credentials in the harness process. An actor sandbox should receiv
 only its image's configuration, backend runtime defaults and explicitly declared
 task or command variables. Treat task definitions, images, build contexts and
 explicit mounts as trusted inputs: they can deliberately supply credentials.
-An explicit task environment declaration such as `API_KEY = "${HOST_KEY}"`
-resolves against the harness environment and grants that access. A `${HOST_KEY}`
-reference appearing only in a Compose file does not request host forwarding.
+Task, agent, solution and verifier environment templates resolve against an explicit capability
+mapping whose default is empty. They cannot resolve arbitrary host variables. Storage,
+control-plane and model-provider credential keys and known credential values are rejected before
+sandbox commands run. Model clients receive inert keys for a declared relay. Host authentication
+files, GitHub tokens and AWS/Bedrock credentials cannot be forwarded to installed agents.
 Below, persistent variables are explicit `persistent_env` / `--ae` settings;
 Harbor infrastructure values name images, resource limits and log mount paths.
 
@@ -142,24 +442,18 @@ Harbor infrastructure values name images, resource limits and log mount paths.
 | Shellbox local / bubblewrap | Fixed `PATH`, `HOME`, `LANG`, optional hash seed and explicit task/command variables. Task variables take effect inside bubblewrap and reach it through a private inherited descriptor, keeping values out of host process listings. Private `/etc` copies allowlisted runtime files; host startup files, password hashes, private keys, `/opt` contents and sysfs are hidden. Shared program directories and explicit mounts remain trusted inputs. |
 | Shellbox Docker / local gVisor | Image configuration and explicit task/command variables; no host directory mounts or implicit forwarding of host variables in Shellbox. Docker client configuration, including automatic proxy settings, remains an operator-controlled input. `runsc` changes the execution boundary, not credential policy. |
 | Shellbox Daytona | Image/snapshot configuration and explicit task/command variables. The Daytona client keeps its API credentials in the harness; creation forwards only `MachineSpec.env`. |
-| Shellbox Iris | The `SANDBOX` profile excludes parent environment inheritance, workspace bundles, cluster secrets, task tokens, shared caches and service-account tokens. Kubernetes service links are disabled. `secret_env` is an explicit exception for trusted graders and must never be used for actors. |
 | Shellbox QEMU | Image configuration and explicit task/command variables reach the guest over its serial protocol. The QEMU host process uses host runtime settings; these do not become guest variables. No host filesystem is shared with the guest. |
 | Shellbox ShellSim | Simulator defaults and explicit task/command variables in a private virtual filesystem. |
-| Harbor Docker Compose | Explicit task/persistent variables and Harbor infrastructure values. The local Docker client receives only allowlisted connection, login-path and OS runtime variables from the host. Other host variables are unavailable for Compose interpolation. |
-| Harbor Daytona / Modal Compose | Explicit task/persistent variables and Harbor infrastructure values. Compose references alone do not copy host variables into the remote sandbox. |
 
-Iris's legacy `CONTAINER_PROFILE_GVISOR` retains cluster credentials and is for
-trusted workloads. Model-controlled work must use `CONTAINER_PROFILE_SANDBOX`.
-See the [Iris profile reference](https://github.com/marin-community/marin/blob/main/lib/iris/docs/container-profiles.md)
-and the [Shellbox backend reference](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md).
+See the [Shellbox backend reference](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md)
+for each backend's isolation and resource limits.
 
 These contracts describe repository launch paths. They do not certify deployed
 images, existing snapshots, provider-side injected settings or Docker daemon
-configuration. Keep those inputs free of credentials. Local bubblewrap is for
-trusted commands; its `ALLOW` network policy shares the host network. Local
-Docker/gVisor bridge networking can also reach host or cloud metadata services.
-Use denied networking when unnecessary, or Iris's filtered sandbox egress for
-model-controlled workloads on production infrastructure.
+configuration. Keep those inputs free of credentials. Bubblewrap shares the
+worker's kernel and should run on an isolated worker. Its `ALLOW` network policy
+shares the host network. Docker/gVisor bridge networking can also reach host or
+cloud metadata services. Use denied networking and the host relay for task code.
 
 ## Endpoint lifecycle
 
@@ -230,15 +524,29 @@ Runtime values do not change the source-policy digest. Policy kwargs override mo
 the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
 For a Harbor target or simulated user agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
 versions supplied by the policy or model configuration. Preflight includes this pin in the saved
-policy and the saved policy's digest; execution applies the same pin. Pi evaluations install
-version `0.87.0` without resolving npm's `latest` tag.
+policy and the saved policy's digest; execution applies the same pin. The task image must
+provide Pi `0.87.0` on `PATH`; setup verifies the installed version. Pi setup does not install
+Node or npm packages. Historical task images that relied on runtime installation need a
+prepared harness image before they can run again.
+
+ACP Pi uses its own companion pin, `@earendil-works/pi-coding-agent@0.80.5`, with
+`pi-acp@0.0.33`. Its image must expose `node`, `pi`, and `pi-acp` on `PATH` and provide
+`/opt/harbor-acp-venv/bin/python` with `agent-client-protocol`. Every ACP bridge target,
+including Claude Code and Gemini, also requires image-provided `acpx@0.12.0` on `PATH`.
+The Tau3 simulated-user relay requires `python3` with `mcp==1.25.0`. Setup stages launchers,
+endpoint credentials, provider configuration, and ACP session configuration; it does not
+install these dependencies. The Tau3 ACP Pi image does not satisfy the standalone Pi
+`0.87.0` pin.
+
+For Qwen3, set the model's `agent.agent_kwargs.thinking_format` to
+`qwen-chat-template` and `serve.reasoning_parser` to `qwen3`. The latter keeps reasoning
+out of simulated-user messages and structured judge answers. Serve the context window
+declared by the policy; Tau3's ACP policy uses 131,072 tokens.
+
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
-The runtime uses `vendor/harbor/uv.lock`. Its runtime descriptor records the upstream
-revision from `UPSTREAM.toml`, the lock digest, and a digest of the packaged source and local Marin
-libraries. The upstream revision identifies the import base; execution always uses the vendored
-source. Published September cohort labels remain validated against their original runtimes and
-cannot label new vendored runs. Reproduce historical runs from their recorded Marin checkout.
+The runtime uses `vendor/harbor/uv.lock`. Reproduce runs from their recorded Marin checkout
+and artifact provenance, with pinned dataset revisions and policies.
 The vendored package evaluates prebuilt task datasets; dataset generators are omitted.
 See the [vendor maintenance guide](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md)
 for dependency updates and direct evaluation CLI commands.
@@ -246,8 +554,8 @@ for dependency updates and direct evaluation CLI commands.
 ### Trial error taxonomy
 
 Preflight snapshots Harbor's infrastructure, agent, passthrough, and undecided error categories from
-the selected Harbor runtime in the isolated environment. Marin uses that snapshot to classify trial results and records
-the Harbor commit SHA in `record.json`. Undecided errors are known to Harbor but have no default scoring
+the selected Harbor runtime in the isolated environment. Marin uses that snapshot to classify trial results.
+Undecided errors are known to Harbor but have no default scoring
 policy; Marin leaves them ungraded and counts them against the completion gate. Names absent from all
 four categories fail the run as an infrastructure failure, so taxonomy changes cannot silently alter
 scoring or completion coverage.
@@ -290,8 +598,11 @@ Each Harbor evaluation writes:
   and `steps` tables plus the evaluator-neutral `rollouts_v1` conversation table
 - Harbor-native job metadata, trial results, and trajectories preserved as FineStore objects
 
-Harbor writes each verifier-scored trial as it finishes, then adds surviving ungraded attempts and
-job metadata before sealing the archive. Every final trial becomes an agentic `EvalSample`. The
+Harbor preserves each attempt's native result and trajectory as it finishes. At job finalization,
+it writes normalized rows only for the selected final attempts, then adds job metadata and seals
+the archive. Retried attempts retain separate source artifacts and do not contribute sample or
+step rows. A resumed invocation rebuilds the selected tables, including derived rollouts, while
+retaining earlier native attempt artifacts. Every final trial becomes an agentic `EvalSample`. The
 verifier reward is stored as `Grading(method="harbor:verifier")`, and the trajectory is referenced
 by `trajectory_uri`. Marin derives the `rollouts_v1` table from `steps`, normalizing each trajectory's
 participants and ordered message, reasoning, tool-call, and observation parts. Evaldash reads the

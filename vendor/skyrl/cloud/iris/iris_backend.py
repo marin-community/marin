@@ -973,6 +973,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         "DAYTONA_JWT_TOKEN",
         "DAYTONA_ORGANIZATION_ID",
         "DAYTONA_API_URL",
+        "DAYTONA_TARGET",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",

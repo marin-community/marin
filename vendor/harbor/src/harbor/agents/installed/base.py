@@ -8,7 +8,11 @@ from typing import Any, ClassVar, Literal
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
-from harbor.utils.env import parse_bool_env_value
+from harbor.utils.env import (
+    parse_bool_env_value,
+    task_environment_values,
+    validate_task_environment,
+)
 from harbor.utils.templating import render_prompt_template
 
 REQUIRED_MODEL_PRICE_FIELDS = frozenset(
@@ -216,6 +220,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
                 self._flag_kwargs[descriptor.kwarg] = kwargs.pop(descriptor.kwarg)
 
         self._extra_env: dict[str, str] = dict(extra_env) if extra_env else {}
+        validate_task_environment(self._extra_env)
 
         super().__init__(logs_dir, *args, **kwargs)
 
@@ -232,11 +237,17 @@ class BaseInstalledAgent(BaseAgent, ABC):
         self,
         descriptor: CliFlag | EnvVar,
     ) -> Any:
-        """Get the raw value for a descriptor from kwargs, then env_fallback, then default."""
+        """Prefer kwargs and granted capabilities before validated host defaults."""
         if descriptor.kwarg in self._flag_kwargs:
             return self._flag_kwargs[descriptor.kwarg]
+        if descriptor.env_fallback:
+            granted = self._get_env(descriptor.env_fallback)
+            if granted is not None:
+                return granted
         if descriptor.env_fallback and descriptor.env_fallback in os.environ:
-            return os.environ[descriptor.env_fallback]
+            value = os.environ[descriptor.env_fallback]
+            validate_task_environment({descriptor.env_fallback: value})
+            return value
         return descriptor.default
 
     def _resolve_flag_values(self) -> dict[str, Any]:
@@ -291,23 +302,25 @@ class BaseInstalledAgent(BaseAgent, ABC):
         return dict(self._resolved_env_vars)
 
     def _get_env(self, key: str) -> str | None:
-        """Get env var from extra_env (priority) or os.environ."""
-        if key in self._extra_env:
-            return self._extra_env[key]
-        return os.environ.get(key)
+        """Get a task capability, allowing an explicit agent override."""
+        value = self._extra_env.get(key, task_environment_values().get(key))
+        if value is not None:
+            validate_task_environment({key: value})
+        return value
 
     def _has_env(self, key: str) -> bool:
-        """Check if env var exists in extra_env or os.environ."""
-        return key in self._extra_env or key in os.environ
+        return self._get_env(key) is not None
 
     def _get_env_prefixed(self, prefix: str) -> dict[str, str]:
-        """Get all env vars with prefix from extra_env and os.environ (extra_env wins)."""
+        """Get granted task variables with a prefix, applying agent overrides."""
         result: dict[str, str] = {}
-        for key, value in os.environ.items():
+        for key, value in task_environment_values().items():
             if key.startswith(prefix):
+                validate_task_environment({key: value})
                 result[key[len(prefix) :]] = value
         for key, value in self._extra_env.items():
             if key.startswith(prefix):
+                validate_task_environment({key: value})
                 result[key[len(prefix) :]] = value
         return result
 
@@ -348,6 +361,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         if self._extra_env:
             merged_env = dict(env) if env else {}
             merged_env.update(self._extra_env)
+        validate_task_environment(merged_env or {})
 
         self.logger.debug(
             f"Running command: {command}",

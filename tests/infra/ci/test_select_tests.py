@@ -278,15 +278,36 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "skyrl-wheel", "taskforge-unit"]),
         (
             "lib/shellbox/src/shellbox/machine.py",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/shellbox/tests/test_docker_machine.py",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/shellbox/pyproject.toml",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/verifyit/src/verifyit/grading.py",

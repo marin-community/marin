@@ -214,10 +214,10 @@ class Job:
 
     @classmethod
     async def create(cls, config: JobConfig) -> "Job":
+        EnvironmentFactory.validate_config(config.environment)
         task_configs, benchmark_metadata = await cls._resolve_task_configs_and_metadata(
             config
         )
-        EnvironmentFactory.validate_resource_policies(config.environment)
         metrics = await cls._resolve_metrics(config, task_configs)
 
         task_download_results = await cls._cache_tasks(task_configs)
@@ -1088,8 +1088,8 @@ class Job:
         try:
             with bind_telemetry(telemetry):
                 result = await self._run_job()
-                # Finalization adds existing resume results and only the ungraded
-                # attempts that survived into the completed job result.
+                # Rebuild canonical archive rows from the selected final results,
+                # including resumed trials; native retry attempts stay preserved.
                 if archive is not None:
                     await archive.finalize(result.trial_results)
                     await asyncio.to_thread(archive.seal)

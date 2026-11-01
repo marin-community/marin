@@ -15,7 +15,7 @@ class _StubEnv(BaseEnvironment):
 
     @staticmethod
     def type() -> str:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:

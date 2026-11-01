@@ -32,13 +32,35 @@ from harbor.models.task.config import (
 )
 from harbor.models.trial.config import ResourceMode, ServiceVolumeConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor.utils.env import resolve_env_vars
+from harbor.utils.env import resolve_env_vars, validate_task_environment
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
 
 EnvironmentPath = str | PurePath
+EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
 _TRANSFER_TAR_TEMPLATE = ".hb-transfer-{uuid}.tar.gz"
 _ENV_TRANSFER_TAR_DIR = PurePosixPath("/tmp")
+
+BASE_ENVIRONMENT_ARGUMENTS = frozenset(
+    {
+        "environment_dir",
+        "environment_name",
+        "session_id",
+        "trial_paths",
+        "task_env_config",
+        "logger",
+        "override_cpus",
+        "override_memory_mb",
+        "override_storage_mb",
+        "override_gpus",
+        "override_tpu",
+        "cpu_enforcement_policy",
+        "memory_enforcement_policy",
+        "persistent_env",
+        "mounts",
+        "extra_docker_compose",
+    }
+)
 
 
 class HealthcheckError(RuntimeError):
@@ -74,7 +96,7 @@ class BaseEnvironment(ABC):
     The containerized environment the agent interacts with.
     Consists of 1+ container(s).
 
-    Examples of types of environments: Docker, Apptainer, Containerd, Podman
+    Execution is supplied by a maintained Shellbox backend adapter.
     """
 
     environment_dir: Path
@@ -167,6 +189,7 @@ class BaseEnvironment(ABC):
         self._cpu_resource_mode = ResourceMode(cpu_enforcement_policy)
         self._memory_resource_mode = ResourceMode(memory_enforcement_policy)
         self._persistent_env: dict[str, str] = persistent_env or {}
+        validate_task_environment(self._persistent_env)
         self._exec_env_overlays: contextvars.ContextVar[tuple[dict[str, str], ...]] = (
             contextvars.ContextVar(f"harbor_exec_env_overlays_{id(self)}", default=())
         )
@@ -374,6 +397,7 @@ class BaseEnvironment(ABC):
             merged.update(env)
         for scoped_env in overlays:
             merged.update(scoped_env)
+        validate_task_environment(merged)
         return merged or None
 
     @contextlib.contextmanager
@@ -600,8 +624,7 @@ class BaseEnvironment(ABC):
         ``EnvironmentCapabilities`` instance. Accessed during ``__init__``
         by the capability validators, so subclasses that derive
         capabilities from instance state must set up that state before
-        calling ``super().__init__`` (see Modal's ``_compose_mode`` for
-        an example).
+        calling ``super().__init__``.
 
         For backwards compatibility, this default implementation also
         reads the deprecated ``supports_gpus`` / ``can_disable_internet``
@@ -620,8 +643,8 @@ class BaseEnvironment(ABC):
     def resource_capabilities(cls) -> EnvironmentResourceCapabilities | None:
         """Resource policy capabilities without constructing the environment.
 
-        Used by job-level resource policy preflight. Override on built-in
-        providers; return None for unknown custom environments to skip preflight.
+        Used by job-level resource policy preflight. Adapters without explicit
+        resource policy declarations return None.
         """
         return None
 
@@ -645,8 +668,7 @@ class BaseEnvironment(ABC):
         if self._effective_gpus > 0 and not self.capabilities.gpus:
             raise RuntimeError(
                 f"Task requires {self._effective_gpus} GPU(s) but {self.type()} "
-                f"environment does not support GPU allocation. Please use a GPU-capable "
-                f"environment type (e.g., Modal, Docker with nvidia-docker)."
+                f"environment does not support GPU allocation."
             )
 
     def _validate_tpu_support(self):
@@ -661,8 +683,7 @@ class BaseEnvironment(ABC):
             raise RuntimeError(
                 f"Task requires a TPU slice (type={tpu.type}, "
                 f"topology={tpu.topology}) but {self.type()} environment "
-                "does not support TPU allocation. Please use a TPU-capable "
-                "environment type (e.g., GKE)."
+                "does not support TPU allocation."
             )
 
     def _validate_internet_config(self):
@@ -691,8 +712,7 @@ class BaseEnvironment(ABC):
         if self.task_env_config.os == TaskOS.WINDOWS and not self.capabilities.windows:
             raise RuntimeError(
                 f"Task declares [environment].os = 'windows' but the "
-                f"{self.type()} environment does not support Windows containers. "
-                "Use an environment type that does (currently: docker)."
+                f"{self.type()} environment does not support Windows containers."
             )
 
     @classmethod
@@ -730,14 +750,13 @@ class BaseEnvironment(ABC):
 
     @abstractmethod
     async def stop(self, delete: bool):
-        """Stops the environment and optionally deletes it."""
+        """Stop and reclaim the environment; retention is rejected before allocation."""
 
     async def prepare_logs_for_host(self) -> None:
         """Fix log file permissions so the host process can read them.
 
         Called before agent logs are read on the host side (e.g. for trajectory
-        conversion). Mounted environments (Docker on Linux) need to chown files
-        written by the in-container agent user; other environments are no-ops.
+        conversion). Adapters may override this when log permissions require it.
         """
 
     @abstractmethod

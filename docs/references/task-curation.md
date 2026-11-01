@@ -642,7 +642,7 @@ declaration does nothing. An environment placed in a built image also gets a
 generated Dockerfile: the pinned `iris-task` base, `apt-get install` of `apt`,
 `COPY files/ /`, `ENV` lines for `env`, the `dockerfile` fragment's lines, `uv
 pip sync --require-hashes` of the lock and `verifyit`. The build pushes it
-as `ghcr.io/marin-community/iris-task:task-curation-env-<identity[:16]>` and
+as `ghcr.io/marin-community/rollout-images:task-curation-env-<identity[:16]>` and
 records the digest. An image build needs a `docker login` for ghcr.io; every
 build needs, for a CoreWeave `MARIN_PREFIX`, the `CW_KEY_ID` and
 `CW_KEY_SECRET` pair in the environment. Planning a source whose environment

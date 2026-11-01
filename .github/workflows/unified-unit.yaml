@@ -363,11 +363,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Install local sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap umoci busybox-static
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "vendor/harbor/uv.lock"
+      - name: Require local namespace support
+        run: |
+          uv run --isolated --project vendor/harbor --frozen --extra runtime python -c \
+            'from shellbox.backends.local.machine import LocalMachineFactory; LocalMachineFactory()'
       - name: Check Harbor lock and offline runtime
         run: uv run --no-project infra/ci/run_harbor_tests.py
 

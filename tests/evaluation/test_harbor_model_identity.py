@@ -4,6 +4,7 @@
 """Offline regressions for model provenance, resume identity, and request routing."""
 
 import json
+import subprocess
 import tempfile
 import textwrap
 from pathlib import Path
@@ -30,6 +31,25 @@ def test_single_turn_aime_agent_grades_length_finished_response(tmp_path):
     result = run_single_turn_aime_agent(tmp_path, content=content, finish_reason="length")
 
     assert result == {"answer": "137\n", "response": content, "attempts": 1, "models": ["iceball-micro"]}
+
+
+@pytest.mark.parametrize("reasoning_content", [None, "An incomplete derivation suggests \\boxed{137}."])
+def test_single_turn_aime_agent_writes_invalid_answer_when_length_budget_exhausts_before_final_text(
+    tmp_path, reasoning_content
+):
+    result = run_single_turn_aime_agent(
+        tmp_path, content=None, reasoning_content=reasoning_content, finish_reason="length"
+    )
+
+    assert result == {"answer": "-1\n", "response": "", "attempts": 1, "models": ["iceball-micro"]}
+
+
+@pytest.mark.parametrize("finish_reason", [None, "stop"])
+def test_single_turn_aime_agent_rejects_null_final_text_without_length_truncation(tmp_path, finish_reason):
+    with pytest.raises(subprocess.CalledProcessError):
+        run_single_turn_aime_agent(tmp_path, content=None, finish_reason=finish_reason)
+
+    assert not (tmp_path / "answer.txt").exists()
 
 
 def test_single_turn_aime_agent_retries_transient_proxy_failure(tmp_path):
@@ -136,13 +156,13 @@ def test_preflight_policy_identity_ignores_model_and_serving_names():
             path.write_text(
                 json.dumps(
                     {
-                        "environment": {"type": "docker"},
+                        "environment": {"type": "daytona"},
                         "agents": [{"name": "terminus-2", "model_name": model_name, "model_alias": model_alias}],
                         "datasets": [{"path": "dataset"}],
                     }
                 )
             )
             paths.append(path)
-        configs = preflight_harbor_configs([(path, {}) for path in paths])
+        configs = preflight_harbor_configs([(path, {}) for path in paths], judge_model=None)
         assert configs[0].digest == configs[1].digest
         assert configs[0].benchmark.n_attempted == configs[1].benchmark.n_attempted == 1

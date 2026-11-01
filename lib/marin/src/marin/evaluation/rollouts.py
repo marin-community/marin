@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import itertools
 import json
 from collections.abc import Iterable, Iterator
 
+from finestore.admin import drop_table
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -184,19 +186,30 @@ def _step_rows(reader: ReadView) -> Iterator[StepRecord]:
         yield StepRecord(**{name: row.get(name) for name in fields})
 
 
-def _source_snapshot(reader: ReadView) -> dict[str, int]:
-    return {table: reader.max_seq(table) for table in _SOURCE_TABLES}
+def _source_fingerprints(reader: ReadView) -> dict[str, str]:
+    fingerprints = {}
+    for table in _SOURCE_TABLES:
+        source = {
+            "metadata_path": reader.table_metadata_path(table),
+            # Appends and rebuilt tables get fresh row commits; compaction
+            # preserves them even when sealing rewrites the physical shards.
+            "row_commit_upper_bound": max(
+                (shard.row_commit_upper_bound for shard in reader.list_shards(table)), default=0
+            ),
+        }
+        fingerprints[table] = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
+    return fingerprints
 
 
 def normalize_rollouts(root: str, *, writer_id: str) -> None:
     """Idempotently derive the shared ``rollouts`` table from an evaluation archive."""
     reader = ReadView(root)
-    source_snapshot = _source_snapshot(reader)
-    complete = reader.read_blob(_COMPLETE_OBJECT)
-    if complete is not None and json.loads(complete) == {
+    completion = {
         "schema_version": ROLLOUT_SCHEMA_VERSION,
-        "source_max_seq": source_snapshot,
-    }:
+        "source_fingerprints": _source_fingerprints(reader),
+    }
+    complete = reader.read_blob(_COMPLETE_OBJECT)
+    if complete is not None and json.loads(complete) == completion:
         return
     records = itertools.chain(
         (
@@ -206,29 +219,21 @@ def normalize_rollouts(root: str, *, writer_id: str) -> None:
         ),
         rollout_records_from_steps(_step_rows(reader)),
     )
-    first = next(records, None)
-    if first is None:
-        return
     # The evaluator owns its source tables and their conflict policy; register only our output.
     with DataStore.open(root, writer_id=writer_id) as store:
+        if ARCHIVE_ROLLOUTS_TABLE in reader.table_names():
+            drop_table(root, ARCHIVE_ROLLOUTS_TABLE)
         table = store.table(
             ARCHIVE_ROLLOUTS_TABLE,
             schema=rollouts_schema(),
             primary_key=ROLLOUTS_MERGE_KEY,
             schema_version=ROLLOUT_SCHEMA_VERSION,
         )
-        table.append(first.model_dump(mode="json"))
         for record in records:
             table.append(record.model_dump(mode="json"))
         store.write_object(
             _COMPLETE_OBJECT,
-            json.dumps(
-                {
-                    "schema_version": ROLLOUT_SCHEMA_VERSION,
-                    "source_max_seq": source_snapshot,
-                },
-                sort_keys=True,
-            ).encode(),
+            json.dumps(completion, sort_keys=True).encode(),
             metadata={"content_type": "application/json"},
         )
         store.seal()

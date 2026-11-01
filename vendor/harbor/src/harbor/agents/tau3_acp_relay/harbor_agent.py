@@ -71,12 +71,14 @@ class Tau3HarborACPRelay(BaseAgent):
         return "0.1.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
-        install = await environment.exec(
-            "python3 -m pip install --no-cache-dir mcp==1.25.0", user="root"
+        check = await environment.exec(
+            'python3 -c "from mcp import ClientSession; '
+            'from mcp.client.streamable_http import streamablehttp_client"',
+            user="root",
         )
-        if install.return_code != 0:
+        if check.return_code != 0:
             raise Tau3RuntimeInfrastructureError(
-                f"Failed to install MCP client: {install.stderr}"
+                f"Image does not provide the MCP client: {check.stderr}"
             )
 
         prepare = await environment.exec(
@@ -90,7 +92,7 @@ class Tau3HarborACPRelay(BaseAgent):
         package_dir = Path(__file__).parent
         for filename in ("__init__.py", "acpx.py", "relay.py", "runner.py"):
             await environment.upload_file(
-                package_dir / filename, REMOTE_PACKAGE_ROOT / filename
+                package_dir / filename, str(REMOTE_PACKAGE_ROOT / filename)
             )
 
     async def run(
@@ -103,7 +105,7 @@ class Tau3HarborACPRelay(BaseAgent):
         local_policy = self.logs_dir / "tau3-harbor-acp-policy.md"
         local_policy.parent.mkdir(parents=True, exist_ok=True)
         local_policy.write_text(policy, encoding="utf-8")
-        await environment.upload_file(local_policy, REMOTE_POLICY_PATH)
+        await environment.upload_file(local_policy, str(REMOTE_POLICY_PATH))
 
         runtime = self._resolve_runtime_server()
         summary_path = self.environment_logs_dir / SUMMARY_FILENAME
