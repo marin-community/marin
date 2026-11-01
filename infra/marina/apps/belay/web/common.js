@@ -283,6 +283,7 @@ function renderNext(next) {
 // recipeTag from tracks.json before using them.
 let trackTable = [] // tracks.json's tracks, generated from config.TRACKS
 let recipeTag = '' // the live recipe's checkpoint tag (config.recipe_tag), from tracks.json
+let defaultAuthor = '' // config.default_author: credited for internal proposals, from tracks.json
 
 const GATE = {
   win: { icon: '✓', cls: 'won' },
@@ -323,7 +324,7 @@ function speedrunGate(idea, live) {
   const final = time ?? data ?? legacy.at(-1)
   if (!final) return { kind: 'none', text: 'not run', title: '' }
   const d = final.delta[0]
-  const kind = verdictOf(d, sr.noise ?? 0.006)
+  const kind = verdictOf(d, sr.noise)
   const where = time ? 'equal time' : data ? 'equal data' : `legacy ${final.protocol === 'fixed_time' ? 'fixed time' : 'equal steps'}`
   const steps = final.steps ? ` · ${final.steps.toLocaleString()}${sr.baseline_steps && (time || data) ? ` vs ${sr.baseline_steps.toLocaleString()}` : ''} steps` : ''
   const stages = [data, time].filter(Boolean).map(

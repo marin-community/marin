@@ -38,7 +38,7 @@ function detail(idea) {
   const plan = idea.plan
   const runs = ideaRuns(idea)
   const facts = [
-    idea.url ? ['Source', link(idea.url, idea.author ? `#9514 · ${idea.author}` : 'GitHub')] : ['Source', 'maintainer'],
+    idea.url ? ['Source', link(idea.url, idea.author ? `#9514 · ${idea.author}` : 'GitHub')] : ['Source', link(`https://github.com/${defaultAuthor}`, `proposal by @${defaultAuthor}`)],
     plan?.cost ? ['Cost', plan.cost] : null,
     plan?.commit ? ['Code', link(`https://github.com/marin-community/marin/commit/${plan.commit}`, el('code', {}, plan.commit.slice(0, 10)))] : null,
     plan?.spec_url ? ['Spec', link(plan.spec_url, `runs/${idea.registry_id}.yaml`)] : null,
@@ -140,7 +140,7 @@ function heroGate(idea) {
   const hero = counted(idea.trials.filter((t) => t.rung === 'hero-mfu')).at(-1)
   if (hero) {
     const d = hero.delta[0]
-    return { kind: verdictOf(d, trackInfo('hero-mfu').noise ?? 0.005), text: `s/step ${SIGN(d * 100, 1)}%`, title: hero.variant }
+    return { kind: verdictOf(d, trackInfo('hero-mfu').noise), text: `s/step ${SIGN(d * 100, 1)}%`, title: hero.variant }
   }
   const stc = idea.trials.find((t) => t.rung === 'speedrun' && t.protocol === 'equal_steps' && t.step_time_change)
   return { kind: 'none', text: stc ? `not run · speedrun ${stc.step_time_change} step time` : 'not run', title: '' }
@@ -152,7 +152,7 @@ function scalingGate(idea) {
   if (!rungs.length) return { kind: 'none', text: 'not run', title: '' }
   const latest = new Map(rungs.map((t) => [t.rung.replace('competitive-', ''), t]))
   const parts = [...latest].map(([r, t]) => `${r} ${SIGN(t.delta[0])}`)
-  const worst = [...latest.values()].map((t) => verdictOf(t.delta[0], 0.006))
+  const worst = [...latest.values()].map((t) => verdictOf(t.delta[0], trackInfo('competitive-d512').noise))
   const kind = worst.includes('loss') ? 'loss' : worst.every((v) => v === 'win') ? 'win' : 'noise'
   return { kind, text: `${parts.join(' · ')} · projection pending`, title: parts.join('\n') }
 }
@@ -191,7 +191,7 @@ function checklistRows() {
       idea,
       comment,
       date: approvalDate(idea, pageIdea),
-      author: idea.intake?.author ?? null,
+      author: idea.author,
       accepted: inLiveRecipe(idea),
       score: idea.potential?.score ?? null,
       speedrun: speedrunGate(idea, live.has(idea.xid)),
@@ -234,7 +234,7 @@ function renderChecklist() {
           ' ',
           link(registryUrl(r.idea), r.idea.name),
         ),
-        el('span', { 'data-label': 'Author' }, r.author ? link(`https://github.com/${r.author}`, `@${r.author}`) : el('span', { class: 'muted' }, 'maintainer')),
+        el('span', { 'data-label': 'Author' }, link(`https://github.com/${r.author}`, `@${r.author}`)),
         el('span', { class: 'mono', 'data-label': 'Date' }, r.date),
         el('span', { 'data-label': 'Speedrun' }, gateChip(r.speedrun)),
         el('span', { 'data-label': 'Hero MFU' }, gateChip(r.hero)),
@@ -301,6 +301,7 @@ async function refresh() {
       fetch(asset('tracks.json')).then((r) => r.json()),
     ])
     recipeTag = trackTable.recipe_tag
+    defaultAuthor = trackTable.default_author
     trackTable = trackTable.tracks
     render()
   } catch (error) {

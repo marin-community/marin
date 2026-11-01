@@ -40,6 +40,8 @@ class BelayConfig:
     github_approval_cutover: datetime.datetime
     """A #9514 comment the intake bot transfers (🚀) after this queues the idea by itself; earlier ones need the
     admin page's Queue, so the backlog does not flood the queue."""
+    default_author: str
+    """GitHub login credited for ideas with no #9514 comment and no recorded proposer (internal proposals)."""
 
     @property
     def recipe_name(self) -> str:
@@ -67,6 +69,7 @@ PRODUCTION = BelayConfig(
     batch_issue=9451,
     page_url="https://marina.oa.dev/belay/",
     github_approval_cutover=datetime.datetime(2026, 11, 1, 8, 26, tzinfo=datetime.UTC),
+    default_author="ClassicLarry",
 )
 
 # The local demo: same rules, but its weekly branches are cut from the demo code branch (which carries the Belay
@@ -84,8 +87,8 @@ CONFIG = DEMO
 
 
 PALOMA_MACRO = "eval/paloma/macro_loss"
-# d512 seed-to-seed spread of Paloma macro loss (dense and s7n). Only measured at d512; used at every loss rung.
-LOSS_NOISE = 0.006
+# The noise band on Paloma macro loss (maintainer setting, 2026-11-01), used at every loss rung.
+LOSS_NOISE = 0.005
 S7 = "experiments.grug.fast_track.belay_s7"
 TRACKS_MODULE = "experiments.grug.fast_track.belay_tracks"
 

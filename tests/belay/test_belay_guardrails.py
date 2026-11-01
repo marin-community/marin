@@ -196,7 +196,9 @@ def test_code_change_refused_when_flag_off_model_differs() -> None:
     ("track", "variant", "control", "expected"),
     [
         (Track.COMPETITIVE_D512, 2.866, 2.872, Verdict.WIN),
-        (Track.COMPETITIVE_D512, 2.8775, 2.8717, Verdict.NOISE),
+        (Track.COMPETITIVE_D512, 2.8665, 2.8717, Verdict.WIN),  # -0.0052, past the 0.005 band
+        (Track.COMPETITIVE_D512, 2.8760, 2.8717, Verdict.NOISE),  # +0.0043
+        (Track.COMPETITIVE_D512, 2.8775, 2.8717, Verdict.LOSS),  # +0.0058
         (Track.VANILLA_D768, 1.420, 1.414, Verdict.LOSS),
         (Track.HERO_MFU, 11.40, 11.465, Verdict.WIN),  # 0.57% faster
         (Track.HERO_MFU, 11.44, 11.465, Verdict.NOISE),  # 0.2% faster: rack noise

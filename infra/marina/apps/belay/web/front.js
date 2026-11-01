@@ -303,13 +303,13 @@ function renderTopIdeas(results, status) {
   setChildren(
     'top-list',
     top.map((idea) => {
-      const author = idea.intake?.author
+      const author = idea.author
       return el(
         'li',
         { class: 'top-row' },
         el('span', { class: 'xid mono' }, idea.xid),
         el('span', { class: 'top-name' }, idea.name),
-        el('span', { class: 'top-author' }, author ? link(`https://github.com/${author}`, `@${author}`) : el('span', { class: 'muted' }, 'maintainer')),
+        el('span', { class: 'top-author' }, link(`https://github.com/${author}`, `@${author}`)),
         el('span', { class: 'top-gate' }, gateChip(speedrunGate(idea, live.has(idea.xid)))),
         el('span', { class: 'score', title: idea.potential.rationale }, `${idea.potential.score}/10`),
       )
@@ -333,6 +333,7 @@ async function front() {
   ])
   trackTable = tracks.tracks
   recipeTag = tracks.recipe_tag
+  defaultAuthor = tracks.default_author
   startFront(results, scaling, speedrun, trackTable)
   renderTopIdeas(results, status)
   if (status) {

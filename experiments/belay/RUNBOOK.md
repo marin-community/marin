@@ -141,17 +141,21 @@ and one section per stage). Its link is stored on the idea's registry trials (`c
 1. **Run:** `B score X#### --score <0-10> --rationale "<one line>" --model <your model name>`. It stores
    `potential` (score, rationale, model, date, and a digest of the results it saw) on the registry entry. The
    Status page shows it; nothing else writes it.
-2. **Score with this rubric**, from the entry's trials and events (verdict and Δ per gate, step-time cost, how
-   many gates ran, seeds and the noise band, implementation size):
+2. **Score with this rubric**, from the entry's trials and events. A win's validations are equal-time speedrun,
+   the competitive-ladder rungs (scaling) and `hero-mfu` (MFU cost); the noise band is ±0.005 Paloma macro loss.
    | Score | When |
    |---|---|
-   | 0–2 | Clear loss everywhere it ran, or a house-rule problem |
-   | 3–4 | Loss or noise with a plausible fix to try, or no result yet and a weak case |
-   | 5 | Noise or mixed (a win on one gate, a loss on another); or no result yet |
-   | 6–7 | Win at equal data only; or an equal-time win with a heavy step-time or code cost |
-   | 8–9 | Win at equal time with an acceptable cost; 9 if it also held on a second seed or another gate |
-   | 10 | Adopted into the recipe |
-   The rationale names the deciding facts, e.g. "equal-time win Δ −0.015 at d512; 31% slower step; one seed".
+   | 0–2 | Clear loss |
+   | 3 | Noise: no stage beyond ±0.005 |
+   | 4 | Noise with a consistent sign, or mixed results with a clear fix |
+   | 5 | No result yet |
+   | 6 | Small win (−0.005 to −0.010) with one validation (equal data only, or equal time only) |
+   | 7 | Larger win (≤ −0.010) with one validation, or a small win holding at equal time and on one more axis |
+   | 8 | Win holding at equal time **and** on the scaling ladder (or with an acceptable `hero-mfu` cost) |
+   | 9 | Large win holding at equal time, on the scaling ladder **and** on `hero-mfu` |
+   | 10 | Adopted into the live recipe |
+   The rationale names the win size and which validations it passed, e.g. "−0.0148 at equal time; ladder and MFU
+   not run → 7".
 
 ## 2c. launch (reproduce or show one run)
 
@@ -239,7 +243,7 @@ metric and rule. Nothing else spells out a launch.
 
 | Track | Baseline | Metric | Rule |
 |---|---|---|---|
-| `vanilla-d512` … `vanilla-d1280` | Vanilla Track at that rung | Paloma macro loss | Δ = variant − control; ≤ −0.006 win, ≥ +0.006 loss |
+| `vanilla-d512` … `vanilla-d1280` | Vanilla Track at that rung | Paloma macro loss | Δ = variant − control; ≤ −0.005 win, ≥ +0.005 loss |
 | `moe-d512` … `moe-d1280` | Basic MoE at that rung | Paloma macro loss | same |
 | `competitive-d512`, `-d768`, `-d1024`, `-d1280L16` | The current recipe (Belay Ckpt Oct 20 2026) at that rung | Paloma macro loss | same |
 | `speedrun` (the default) | The 8-minute d512 run of the current recipe (`belay-8min-ckpt-oct20`: 3,030 steps, Paloma macro 3.0441) | Paloma macro loss | same |

@@ -364,6 +364,8 @@ def registry_results(registry_dir: Path) -> tuple[str, dict]:
             "build",
             "--placeholder-bpb-ratio",
             PLACEHOLDER_BPB_RATIO,
+            "--default-author",
+            CONFIG.default_author,
         ],
         check=True,
         capture_output=True,
