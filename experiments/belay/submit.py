@@ -108,14 +108,18 @@ def setting_fields() -> list[str]:
     return lines
 
 
-def new_spec_text(experiment_id: str, variant: str, settings: list[tuple[str, str]]) -> str:
-    """The run spec for one variant and its same-commit control, after checking every setting."""
+def check_variant(variant: str, settings: list[tuple[str, str]]) -> None:
     if not settings:
         raise SystemExit("refusing: give at least one --opt-set or --model-set setting")
     if len(variant) > MAX_VARIANT:
         raise SystemExit(f"refusing: --variant is longer than {MAX_VARIANT} characters")
     for option, setting in settings:
         check_setting(option, setting)
+
+
+def new_spec_text(experiment_id: str, variant: str, settings: list[tuple[str, str]]) -> str:
+    """The run spec for one variant and its same-commit control, after checking every setting."""
+    check_variant(variant, settings)
     flags = [part for setting in settings for part in setting]
     variant_run = {"size": CONFIG.rung, "seed": CONFIG.seed, "variant": variant, "flags": flags}
     control_variant = f"{CONFIG.recipe_name} control"

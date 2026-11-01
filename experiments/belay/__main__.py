@@ -52,6 +52,7 @@ from experiments.belay.results import RunResult, Verdict, experiment_results, ov
 from experiments.belay.submit import (
     ExperimentSpec,
     check_launch,
+    check_variant,
     iris_jobs,
     launch_command,
     load_spec,
@@ -241,6 +242,8 @@ def new_idea(
         return
     if category not in categories() or variant is None or not settings:
         raise SystemExit("refusing: give --category (from the list), --variant and at least one --opt-set/--model-set")
+    check_variant(variant, settings)
+    require_clean_pushed_head(repo, branch)  # before any write
     if idea.registry_id is None:
         registry_id, path = create_entry(idea, category, dry_run=dry_run)
         report_idea(idea.id, {"registry_id": registry_id, "registry_url": entry_url(path)}, dry_run=dry_run)
