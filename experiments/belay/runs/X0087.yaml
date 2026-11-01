@@ -1,0 +1,14 @@
+experiment: X0087
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: muon_pre_norm=in
+    flags:
+    - --opt-set
+    - muon_pre_norm=in
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0017-control
