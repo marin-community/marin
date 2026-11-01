@@ -4,7 +4,7 @@ name: MLA partial key offset
 category: Attention variants
 summary: Take the first half of each MLA head's key channels from the previous token.
 source: agent
-status: running
+status: done
 first_batch: 44
 tags:
 - key offset
@@ -94,6 +94,13 @@ trials:
   settings:
     mla_key_offset: 'true'
   commit: c4b66cea21
+  loss:
+  - 3.0502
+  delta:
+  - 0.0051
+  steps: 3030
+  baseline: belay-X0017-control 3.0451 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: '51'
