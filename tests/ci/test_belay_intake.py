@@ -3,12 +3,10 @@
 
 import json
 
-import pytest
-
 from scripts.ci.belay_intake import (
     INTAKE_INDEX,
-    LEGACY_TARGET_ISSUE,
     REGISTRY_DIR,
+    TARGET_ISSUE,
     TRANSFER_BOT,
     IntakeComment,
     Reaction,
@@ -93,30 +91,24 @@ def test_copied_text_cannot_ping_anyone():
     assert "@bob" not in body and "@marin-community" not in body
 
 
-WEEK_ISSUE = 2
 INTAKE_ISSUE = 1
 
 
 class _FakeGitHub:
-    """Issues by number (the intake issue, this week's issue, the legacy issue); posts land on the right one."""
+    """Issues by number (the intake issue and the Belay issue); posts land on the right one."""
 
     repo = "o/r"
 
-    def __init__(self, intake: list[dict], reactions: dict[int, list[dict]], target: list[dict], legacy=()):
+    def __init__(self, intake: list[dict], reactions: dict[int, list[dict]], target: list[dict]):
         self.reactions = reactions
-        self.issues = {INTAKE_ISSUE: list(intake), WEEK_ISSUE: list(target), LEGACY_TARGET_ISSUE: list(legacy)}
-        self.posted: dict[int, list[str]] = {INTAKE_ISSUE: [], WEEK_ISSUE: []}
+        self.issues = {INTAKE_ISSUE: list(intake), TARGET_ISSUE: list(target)}
+        self.posted: dict[int, list[str]] = {INTAKE_ISSUE: [], TARGET_ISSUE: []}
         self.reacted: list[tuple[int, str]] = []
         self.reaction_fetches: list[int] = []
-        self.weekly = [WEEK_ISSUE]
         self.files: dict[str, str] = {
             f"{REGISTRY_DIR}/X0007-older-idea.yaml": "id: X0007\n",
             f"{REGISTRY_DIR}/categories.json": json.dumps(["MoE and routing", "Unsorted"]),
         }
-
-    def open_issues_labeled(self, label: str) -> list[int]:
-        assert label == "belay-weekly"
-        return self.weekly
 
     def issue_comments(self, issue: int) -> list[dict]:
         return self.issues[issue] + [_bot_comment(b) for b in self.posted.get(issue, [])]
@@ -162,13 +154,13 @@ def test_run_copies_once_marks_with_rocket_and_skips_unapproved_reaction_fetches
     github = _FakeGitHub(intake, reactions, target=[])
     assert run(github, intake_issue=INTAKE_ISSUE, approvers=APPROVERS, dry_run=False) == 1
     assert github.reacted == [(10, "rocket")]
-    assert "> idea A" in github.posted[WEEK_ISSUE][0]
+    assert "> idea A" in github.posted[TARGET_ISSUE][0]
     assert github.posted[INTAKE_ISSUE][0].startswith("🤖 Registered as **X0008**")
     assert github.reaction_fetches == [10]
     # A second pass finds the bot's marker for comment 10 and copies nothing.
     intake[0]["reactions"]["rocket"] = 1
     assert run(github, intake_issue=INTAKE_ISSUE, approvers=APPROVERS, dry_run=False) == 0
-    assert len(github.posted[WEEK_ISSUE]) == 1 and len(github.posted[INTAKE_ISSUE]) == 1
+    assert len(github.posted[TARGET_ISSUE]) == 1 and len(github.posted[INTAKE_ISSUE]) == 1
 
 
 def test_run_adds_a_missing_rocket_to_an_already_copied_comment():
@@ -177,7 +169,7 @@ def test_run_adds_a_missing_rocket_to_an_already_copied_comment():
     github = _FakeGitHub([_raw(10, "idea A", thumbs=1)], reactions={}, target=target)
     assert run(github, intake_issue=INTAKE_ISSUE, approvers=APPROVERS, dry_run=False) == 0
     assert github.reacted == [(10, "rocket")]
-    assert github.posted == {INTAKE_ISSUE: [], WEEK_ISSUE: []}  # copied before the registry: no id, no reply
+    assert github.posted == {INTAKE_ISSUE: [], TARGET_ISSUE: []}  # copied before the registry: no id, no reply
 
 
 def test_run_registers_the_next_experiment_id_once():
@@ -192,7 +184,7 @@ def test_run_registers_the_next_experiment_id_once():
     github = _FakeGitHub(intake, reactions, target=[])
     assert run(github, intake_issue=INTAKE_ISSUE, approvers=APPROVERS, dry_run=False) == 1
     assert f"{REGISTRY_DIR}/X0008-sqrt-softplus-router.yaml" in github.files
-    assert github.posted[WEEK_ISSUE][0].startswith("📥 **Intake suggestion X0008**")
+    assert github.posted[TARGET_ISSUE][0].startswith("📥 **Intake suggestion X0008**")
     assert json.loads(github.files[INTAKE_INDEX]) == {"10": "X0008"}
 
 
@@ -209,13 +201,13 @@ def test_next_experiment_id_ignores_other_files():
     assert next_experiment_id([]) == "X0001"
 
 
-def test_a_comment_copied_last_week_or_to_the_legacy_issue_is_not_copied_again():
+def test_a_comment_already_copied_is_not_copied_again():
     approved = _comment(10, (LARRY_ID, "ClassicLarry", "+1", AFTER_EDIT), body="idea A")
     reply = _bot_comment(reply_body(11, "X0009", 5, "o/r"))
     intake = [_raw(10, "idea A", thumbs=1, rocket=1), _raw(11, "idea B", thumbs=1, rocket=1), reply]
-    github = _FakeGitHub(intake, reactions={}, target=[], legacy=[_bot_comment(transfer_body(approved, "L", "X0001"))])
+    github = _FakeGitHub(intake, reactions={}, target=[_bot_comment(transfer_body(approved, "L", "X0001"))])
     assert run(github, intake_issue=INTAKE_ISSUE, approvers=APPROVERS, dry_run=False) == 0
-    assert github.posted == {INTAKE_ISSUE: [], WEEK_ISSUE: []} and github.reaction_fetches == []
+    assert github.posted == {INTAKE_ISSUE: [], TARGET_ISSUE: []} and github.reaction_fetches == []
 
 
 def test_a_copy_without_its_reply_gets_the_reply():
@@ -224,11 +216,4 @@ def test_a_copy_without_its_reply_gets_the_reply():
     github = _FakeGitHub([_raw(10, "idea A", thumbs=1, rocket=1)], reactions={}, target=target)
     github.files[INTAKE_INDEX] = json.dumps({"10": "X0004"})
     assert run(github, intake_issue=INTAKE_ISSUE, approvers=APPROVERS, dry_run=False) == 0
-    assert github.posted[INTAKE_ISSUE] == [reply_body(10, "X0004", WEEK_ISSUE, "o/r")]
-
-
-def test_run_needs_exactly_one_open_weekly_issue():
-    github = _FakeGitHub([], reactions={}, target=[])
-    github.weekly = [2, 3]
-    with pytest.raises(RuntimeError):
-        run(github, intake_issue=INTAKE_ISSUE, approvers=APPROVERS, dry_run=True)
+    assert github.posted[INTAKE_ISSUE] == [reply_body(10, "X0004", TARGET_ISSUE, "o/r")]

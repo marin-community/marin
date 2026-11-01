@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Transfer approved Marin Belay suggestions from the intake issue into the current weekly Belay issue.
+"""Transfer approved Marin Belay suggestions from the intake issue into the Belay issue (#9451).
 
 A comment on the intake issue is approved when an allowlisted user reacts to it with a thumbs-up made after the
 comment's last edit, so editing an approved comment needs a fresh approval. The allowlist holds numeric GitHub user
@@ -11,13 +11,12 @@ ids, not logins: ids never change or get reused, while a login freed by a rename
 An approved comment first gets an experiment id in the Marin Belay registry (``experiments/belay/registry`` on the
 registry branch): the next free ``X####``, with a ``status: approved`` entry built from the comment, recorded in the
 registry's ``intake_ids.json`` so a retried run reuses it. It is then copied (quoted, attributed, headed with its id,
-with @-mentions and marker syntax neutralized) into the week's Belay issue (the one open issue labeled
-``belay-weekly``), the bot replies on the intake issue with the id, and the intake comment gets a rocket reaction.
+with @-mentions and marker syntax neutralized) into the Belay issue, the bot replies on the intake issue with the id,
+and the intake comment gets a rocket reaction.
 
 The copy and the reply each end in a hidden marker naming the intake comment, and only markers in comments posted by
 the workflow's own account count, so quoted text cannot mark other comments as transferred. A comment counts as
-transferred once a reply or a copy carries its marker; the replies live on the intake issue, which never rolls over,
-and copies from before the weekly issues are in ``LEGACY_TARGET_ISSUE``. A later run posts a missing reply or rocket
+transferred once a reply or a copy carries its marker. A later run posts a missing reply or rocket
 if an earlier run stopped part-way. The agent that runs the Belay loop reads only the Belay issues, so only approved
 text reaches it.
 """
@@ -41,9 +40,8 @@ _MARKER_TEMPLATE = "<!-- belay-intake:{} -->"
 _MARKER_RE = re.compile(re.escape(_MARKER_TEMPLATE).replace(r"\{\}", r"(\d+)") + r"\s*\Z")
 _REPLY_MARKER_TEMPLATE = "<!-- belay-intake-reply:{} -->"
 _REPLY_MARKER_RE = re.compile(re.escape(_REPLY_MARKER_TEMPLATE).replace(r"\{\}", r"(\d+)") + r"\s*\Z")
-WEEKLY_LABEL = "belay-weekly"
-# The single Belay issue used before the weekly issues; its transfer markers still count.
-LEGACY_TARGET_ISSUE = 9451
+# The Belay issue: batch plans and results, and the copies of approved intake suggestions.
+TARGET_ISSUE = 9451
 # A zero-width space after "@" keeps copied text from pinging users or teams; one inside "<!--" keeps quoted text
 # from forming an HTML comment (and so a marker).
 _MENTION_RE = re.compile(r"@(?=[A-Za-z0-9-])")
@@ -200,7 +198,7 @@ def reply_body(comment_id: int, experiment_id: str, target_issue: int, repo: str
 
 
 def transfer_body(comment: IntakeComment, approver: str, experiment_id: str) -> str:
-    """The weekly-issue copy of an approved intake comment: id, attribution, the quoted text, and the marker."""
+    """The Belay-issue copy of an approved intake comment: id, attribution, the quoted text, and the marker."""
     text = _MENTION_RE.sub("@" + _ZERO_WIDTH_SPACE, comment.body).replace("<!--", "<" + _ZERO_WIDTH_SPACE + "!--")
     quoted = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
     return (
@@ -243,31 +241,6 @@ class GitHub:
 
     def issue_comments(self, issue: int) -> list[dict]:
         return self._paginate(f"/issues/{issue}/comments")
-
-    def open_issues_labeled(self, label: str) -> list[int]:
-        """Numbers of the open issues (not pull requests) carrying ``label``."""
-        items = self._paginate(f"/issues?labels={label}&state=open")
-        return [item["number"] for item in items if "pull_request" not in item]
-
-    def issue(self, number: int) -> dict:
-        data, _ = self._request("GET", f"{API}/repos/{self._repo}/issues/{number}")
-        assert isinstance(data, dict), data
-        return data
-
-    def create_issue(self, title: str, body: str, labels: list[str]) -> int:
-        data, _ = self._request(
-            "POST", f"{API}/repos/{self._repo}/issues", {"title": title, "body": body, "labels": labels}
-        )
-        assert isinstance(data, dict), data
-        return data["number"]
-
-    def lock(self, number: int) -> None:
-        self._request("PUT", f"{API}/repos/{self._repo}/issues/{number}/lock", {})
-
-    def close(self, number: int) -> None:
-        self._request(
-            "PATCH", f"{API}/repos/{self._repo}/issues/{number}", {"state": "closed", "state_reason": "completed"}
-        )
 
     def comment_reactions(self, comment_id: int) -> list[dict]:
         return self._paginate(f"/issues/comments/{comment_id}/reactions")
@@ -323,20 +296,10 @@ def _to_intake(raw: dict, reactions: list[dict]) -> IntakeComment:
     )
 
 
-def current_weekly_issue(github: GitHub) -> int:
-    """The one open issue labeled ``WEEKLY_LABEL``."""
-    issues = github.open_issues_labeled(WEEKLY_LABEL)
-    if len(issues) != 1:
-        raise RuntimeError(f"expected exactly one open {WEEKLY_LABEL} issue, found {sorted(issues)}")
-    return issues[0]
-
-
 def _transferred(github: GitHub, intake_raw: list[dict], target_issue: int) -> tuple[set[int], set[int]]:
-    """Intake comment ids with a reply on the intake issue, and ids with a copy in this week's or the legacy issue."""
+    """Intake comment ids with a reply on the intake issue, and ids with a copy in the Belay issue."""
     replied = transferred_ids_in(intake_raw, _REPLY_MARKER_RE)
     copied = transferred_ids_in(github.issue_comments(target_issue))
-    if target_issue != LEGACY_TARGET_ISSUE:
-        copied |= transferred_ids_in(github.issue_comments(LEGACY_TARGET_ISSUE))
     return replied, copied
 
 
@@ -355,7 +318,7 @@ def run(github: GitHub, *, intake_issue: int, approvers: frozenset[int], dry_run
     """Register, copy and reply to every approved, not-yet-transferred intake comment, and mark it with a rocket;
     also post a missing reply or rocket for comments already copied. With ``dry_run`` only report. Returns the
     number of comments that were (or, with ``dry_run``, would be) copied."""
-    target_issue = current_weekly_issue(github)
+    target_issue = TARGET_ISSUE
     intake_raw = github.issue_comments(intake_issue)
     replied, copied = _transferred(github, intake_raw, target_issue)
     transferred = replied | copied
