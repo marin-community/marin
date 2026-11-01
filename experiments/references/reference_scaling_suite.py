@@ -7,7 +7,8 @@ End-to-end demonstration of the IsoFLOP scaling suite workflow:
 
   1. **Analysis** — read metrics from 78 existing isoflop sweep checkpoints,
      fit quadratic loss curves at each budget, extract optimal-token minima,
-     fit D* ~ A * C^alpha, save ``isoflop_analysis_result.json``.
+     fit D* ~ A * C^alpha, return scaling fits in the typed artifact result,
+     and write ``fit_curves.json`` for inspection.
   2. **Optimal training** — for each target budget (1e21, 1e22, 1e23 FLOPs) use
      the fitted D*(C) to predict model size, then train with the
      :data:`~experiments.references.completed_adamh.completed_adamh_heuristic`
