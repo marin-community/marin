@@ -155,12 +155,11 @@ function verdictOf(d, noise) {
   return d <= -noise ? 'win' : d >= noise ? 'loss' : 'noise'
 }
 
-// The registry build shows macro loss as placeholder BPB (loss x ratio); gates judge macro loss, so undo it.
+// The registry build shows macro loss as placeholder BPB; gates judge the recorded macro loss (``loss_delta``).
 function counted(trials) {
-  const ratio = registry.placeholder_bpb_ratio ?? 1
   return trials
     .filter((t) => !OUTSIDE.test(t.note ?? '') && (t.delta ?? []).length)
-    .map((t) => ({ ...t, delta: t.delta.map((d) => d / ratio) }))
+    .map((t) => ({ ...t, delta: t.loss_delta ?? t.delta }))
 }
 
 // Gate 2, the 8-minute speedrun: the speedrun track's stages, or a legacy d512 trial from before Tracks existed.
