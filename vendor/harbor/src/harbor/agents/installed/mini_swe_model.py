@@ -91,6 +91,8 @@ class OpenAIModel(OpenRouterModel):
 
     def __init__(self, *, api_base: str | None = None, **kwargs: Any):
         super().__init__(**kwargs)
+        # mini.yaml supplies drop_params as a LiteLLM transport option.
+        self.config.model_kwargs.pop("drop_params", None)
         self.api_base = api_base
         if (
             not self.api_base
