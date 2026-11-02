@@ -11,6 +11,7 @@ import io
 import json
 import shlex
 import subprocess
+import sys
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,7 @@ import pytest
 import requests
 import yaml
 
+from experiments.belay import __main__ as belay_main
 from experiments.belay import page
 from experiments.belay.__main__ import (
     EventKind,
@@ -59,11 +61,13 @@ from experiments.belay.results import Verdict, after_equal_data, change, overall
 from experiments.belay.submit import (
     IrisJob,
     check_launch,
+    launch_band,
     launch_command,
     new_spec_text,
     parse_spec,
     run_id,
     run_suffix,
+    submit_run,
     track_of_comment,
     with_launched,
 )
@@ -149,7 +153,9 @@ def test_only_ideas_in_play_are_carried() -> None:
         entry("X0005", -0.012, "+8%"),  # stage 2 pending, and running on the page: carried
         {"id": "X0006", "trials": [], "events": []},  # settings only: nothing to carry
     ]
-    running = Idea(5, "intake", "a", None, "b", None, "running", "X0005", None, None, None, None, [], None, None)
+    running = Idea(
+        5, "intake", "a", None, "b", None, "running", "X0005", None, None, None, None, [], None, None, None, None
+    )
     state = PageState([running], [], False, 8, [], [])
     assert carried_ideas(entries, state) == ["X0001", "X0005"]
 
@@ -518,7 +524,25 @@ def test_a_local_page_takes_the_service_token(monkeypatch: pytest.MonkeyPatch) -
 
 def intake_idea(url: str | None, reply_url: str | None = None) -> Idea:
     origin = "intake" if url else "proposal"
-    return Idea(3, origin, "someone", None, "b", url, "approved", "X0001", None, None, None, None, [], reply_url, None)
+    return Idea(
+        3,
+        origin,
+        "someone",
+        None,
+        "b",
+        url,
+        "approved",
+        "X0001",
+        None,
+        None,
+        None,
+        None,
+        [],
+        reply_url,
+        None,
+        None,
+        None,
+    )
 
 
 def test_the_intake_reply_is_posted_once_then_edited() -> None:
@@ -614,6 +638,7 @@ def test_launch_print_shows_the_full_command(track: Track, tmp_path: Path, monke
     runs.mkdir(parents=True)
     (runs / "X0001.yaml").write_text(SPEC.replace("competitive-d512", track.value))
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(belay_main, "page_state", lambda: PageState([], [], False, 8, [], []))  # no grant
     launch("X0001", "seed0", print_only=True, dry_run=False)
     printed = shlex.split(capsys.readouterr().out.strip())
     spec = parse_spec(SPEC.replace("competitive-d512", track.value))
@@ -670,3 +695,48 @@ def test_potential_is_tied_to_the_results_it_saw() -> None:
     assert potential_of(entry, 8, "equal-time win", "m")["inputs_digest"] != first["inputs_digest"]
     text = yaml.safe_dump({"id": "X1", "trials": [{"id": "t001"}]})
     assert yaml.safe_load(with_step_time(text, "t001", 0.31))["trials"][0]["step_time_change"] == "+31%"
+
+
+def test_a_priority_grant_raises_the_launch_band() -> None:
+    assert launch_band(Track.SPEEDRUN, None, "X0001") == "batch"
+    assert launch_band(Track.SPEEDRUN, "interactive", "X0001") == "interactive"
+    assert launch_band(Track.MOE_D768, "production", "X0001") == "production"
+    assert launch_band(Track.HERO_MFU, "production", "X0001") == "production"
+
+
+def test_a_priority_grant_below_the_track_band_is_refused() -> None:
+    with pytest.raises(SystemExit, match="below track hero-mfu's band production") as refused:
+        launch_band(Track.HERO_MFU, "interactive", "X0001")
+    assert "escalate --registry-id X0001" in str(refused.value)
+    with pytest.raises(SystemExit, match="not one of"):
+        launch_band(Track.SPEEDRUN, "system", "X0001")
+
+
+def test_the_launch_command_carries_the_granted_band() -> None:
+    spec = parse_spec(SPEC)
+    run = next(r for r in spec.runs.values() if not r.control)
+    granted = launch_command(spec, run, launch_band(spec.track, "interactive", spec.experiment))
+    assert granted[granted.index("--priority") + 1] == "interactive"
+    default = launch_command(spec, run)
+    assert default[default.index("--priority") + 1] == TRACKS[spec.track].band
+    recorded = yaml.safe_load(with_launched(SPEC, {run.name: granted}))["launched"][run.name]
+    assert "--priority interactive" in recorded
+
+
+def test_iris_refusing_the_band_escalates_without_a_retry(tmp_path: Path) -> None:
+    refusal = (
+        "ConnectError: Budget identity loom cannot submit PRODUCTION jobs (max band: INTERACTIVE). "
+        "Resubmit with `--priority interactive`"
+    )
+    command = [sys.executable, "-c", f"import sys; print({refusal!r}, file=sys.stderr); sys.exit(1)"]
+    with pytest.raises(SystemExit, match="priority production not allowed for user loom") as refused:
+        submit_run(command, tmp_path, "X0001")
+    assert "Grant the band in Iris user budgets, or lower the request" in str(refused.value)
+    with pytest.raises(subprocess.CalledProcessError):
+        submit_run([sys.executable, "-c", "import sys; sys.exit(3)"], tmp_path, "X0001")
+
+
+def test_a_post_shows_who_granted_the_priority() -> None:
+    granted = dataclasses.replace(intake_idea(None), priority_grant="interactive", priority_by="ClassicLarry")
+    assert granted.priority_line == "Priority: interactive (granted by @ClassicLarry)"
+    assert intake_idea(None).priority_line is None

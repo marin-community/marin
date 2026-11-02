@@ -14,6 +14,7 @@ import itertools
 import re
 import shlex
 import subprocess
+import sys
 import typing
 from dataclasses import dataclass
 from enum import StrEnum
@@ -21,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from experiments.belay.config import CONFIG, TRACKS, Track
+from experiments.belay.config import CONFIG, PRIORITY_BANDS, TRACKS, Track
 from experiments.grug.fast_track.launch import _parse_as
 from experiments.grug.fast_track.model import GrugModelConfig
 from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
@@ -33,6 +34,8 @@ SETTING_OPTIONS = {"--model-set": GrugModelConfig, "--opt-set": GrugMoeMuonHConf
 MAX_VARIANT = 60
 ACTIVE_JOB_STATES = ("pending", "running")
 _JOB_LINE = re.compile(r"^(/\S+)\s+(\w+)\s+(\S+)")
+# Iris's refusal of a band above the submitting user's max_band (iris.cluster.controller.jobs).
+BAND_REFUSAL = re.compile(r"Budget identity (\S+) cannot submit (\w+) jobs \(max band: (\w+)\)")
 
 
 class Stage(StrEnum):
@@ -269,9 +272,11 @@ def track_command(
     python: str = "uv run python",
     seed: int = CONFIG.seed,
     output_root: str = CONFIG.output_root,
+    band: str | None = None,
 ) -> list[str]:
     """The exact launch of one run on ``track``: its baseline command plus ``flags``, named ``name``, at ``seed``,
-    writing under ``output_root`` (a study passes its own prefix)."""
+    writing under ``output_root`` (a study passes its own prefix), at Iris priority ``band`` (default: the Track's;
+    ``launch_band`` resolves a grant)."""
     baseline = TRACKS[track]
     if baseline.launch is None:
         raise SystemExit(f"refusing: track {track} has no launch recipe; a maintainer runs it")
@@ -279,14 +284,52 @@ def track_command(
     command += ["--seed", str(seed), "--run-id", name]
     if baseline.output_path:
         command += ["--output-path", f"{output_root}/{name}"]
-    command += ["--submit", "--target-cluster", baseline.cluster, "--priority", baseline.band]
+    command += ["--submit", "--target-cluster", baseline.cluster, "--priority", band or baseline.band]
     return command
 
 
-def launch_command(spec: ExperimentSpec, run: RunSpec) -> list[str]:
-    """The run's command, run from the checkout of the Track's code branch (``uv run`` uses that checkout's
-    environment)."""
-    return track_command(spec.track, run_name(spec.experiment, run.name), run.flags, seed=run.seed)
+def launch_command(spec: ExperimentSpec, run: RunSpec, band: str | None = None) -> list[str]:
+    """The run's command at ``band`` (default: the Track's), run from the checkout of the Track's code branch
+    (``uv run`` uses that checkout's environment)."""
+    return track_command(spec.track, run_name(spec.experiment, run.name), run.flags, seed=run.seed, band=band)
+
+
+def launch_band(track: Track, grant: str | None, experiment: str) -> str:
+    """The Iris band ``experiment``'s runs on ``track`` launch at: an approver's ``grant`` when set, else the Track's
+    band. A grant only raises the band; one below the Track's is refused with an escalation."""
+    band = TRACKS[track].band
+    if grant is None:
+        return band
+    if grant not in PRIORITY_BANDS or band not in PRIORITY_BANDS:
+        raise SystemExit(f"refusing: priority {grant!r} for {experiment} is not one of {', '.join(PRIORITY_BANDS)}")
+    if PRIORITY_BANDS.index(grant) < PRIORITY_BANDS.index(band):
+        raise SystemExit(
+            f"refusing: {experiment}'s priority grant {grant} is below track {track}'s band {band}; "
+            "a grant only raises it.\n"
+            f'next: uv run python -m experiments.belay escalate --registry-id {experiment} --title "{experiment}: '
+            f'priority grant {grant} is below the {track} band {band}" --body "Re-queue it with a higher band, or none."'
+        )
+    return grant
+
+
+def submit_run(command: list[str], repo: Path, experiment: str) -> None:
+    """Submit one run; when Iris refuses its band for the submitting user, escalate with Iris's reason instead of
+    retrying lower."""
+    result = subprocess.run(command, cwd=repo, capture_output=True, text=True)
+    print(result.stdout, end="")
+    if result.returncode == 0:
+        return
+    print(result.stderr, end="", file=sys.stderr)
+    refusal = BAND_REFUSAL.search(result.stdout + result.stderr)
+    if refusal is None:
+        raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+    user, band, allowed = refusal.groups()
+    reason = f"priority {band.lower()} not allowed for user {user} (max band {allowed.lower()})"
+    raise SystemExit(
+        f"refusing: {reason}.\n"
+        f'next: uv run python -m experiments.belay escalate --registry-id {experiment} --title "{experiment}: {reason}" '
+        '--body "Grant the band in Iris user budgets, or lower the request (re-queue without a priority grant)."'
+    )
 
 
 def with_launched(text: str, launched: dict[str, list[str]]) -> str:

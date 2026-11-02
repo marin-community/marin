@@ -11,10 +11,12 @@ from collections.abc import Iterator
 import pytest
 from belay.app import (
     DEFAULT_SETTINGS,
+    Approval,
     EventKind,
     IdeaReport,
     IntakeApproval,
     IntakeComment,
+    PriorityBand,
     RunExpectation,
     SessionFinish,
     SessionState,
@@ -214,8 +216,35 @@ def test_an_approval_records_a_study_budget(conn) -> None:
     assert tuple(conn.execute(text("SELECT node_grant, budget_hours FROM ideas")).one()) == (2, 6.0)
 
 
+def test_an_approval_records_a_priority_grant_and_who_granted_it(conn) -> None:
+    record_intake_comment(conn, comment())
+    assert approve_idea(conn, idea_id(conn), "ClassicLarry", priority=PriorityBand.INTERACTIVE)
+    assert tuple(conn.execute(text("SELECT priority_grant, priority_by FROM ideas")).one()) == (
+        "interactive",
+        "ClassicLarry",
+    )
+    title = conn.execute(text("SELECT title FROM activity WHERE kind = 'approval'")).scalar_one()
+    assert title.startswith("ClassicLarry approved") and title.endswith("at interactive priority")
+    requeue_idea(conn, idea_id(conn), "dlwh", "retest", priority=PriorityBand.PRODUCTION)
+    assert tuple(conn.execute(text("SELECT priority_grant, priority_by FROM ideas")).one()) == ("production", "dlwh")
+    requeue_idea(conn, idea_id(conn), "Helw150", "retest again")  # no grant: the earlier one stays
+    assert tuple(conn.execute(text("SELECT priority_grant, priority_by FROM ideas")).one()) == ("production", "dlwh")
+
+
+def test_only_iris_bands_below_system_can_be_granted() -> None:
+    assert Approval.model_validate({"priority": "interactive"}).priority is PriorityBand.INTERACTIVE
+    for band in ("system", "urgent"):
+        with pytest.raises(ValidationError):
+            Approval.model_validate({"priority": band})
+
+
 def test_a_session_report_cannot_grant_nodes_or_hours() -> None:
-    for grant in ({"node_grant": 12}, {"budget_hours": 100.0}):
+    for grant in (
+        {"node_grant": 12},
+        {"budget_hours": 100.0},
+        {"priority_grant": "production"},
+        {"priority": "production"},
+    ):
         with pytest.raises(ValidationError):
             IdeaReport.model_validate({"note": "x", **grant})
 

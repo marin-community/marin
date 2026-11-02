@@ -188,11 +188,13 @@ def check_study(study: Study, budget: Budget | None) -> None:
             raise SystemExit(f"refusing: analysis input {step.input!r} is not a run; runs: {', '.join(study.runs)}")
 
 
-def study_command(study: Study, run: StudyRun) -> list[str]:
-    """The run's launch: its Track's command, with checkpoints saved under the study's prefix."""
+def study_command(study: Study, run: StudyRun, band: str | None = None) -> list[str]:
+    """The run's launch: its Track's command at ``band`` (default: the Track's), with checkpoints saved under the
+    study's prefix."""
     name = run_name(study.experiment, run.name)
     flags = (*run.flags, SAVE_CHECKPOINTS)
-    return track_command(run.track, name, flags, seed=run.seed, output_root=study_prefix(study.experiment))
+    prefix = study_prefix(study.experiment)
+    return track_command(run.track, name, flags, seed=run.seed, output_root=prefix, band=band)
 
 
 def checkpoint_root(study: Study, run: StudyRun) -> str:
@@ -222,7 +224,13 @@ def run_rows(study: Study) -> list[str]:
 
 
 def study_post(
-    study: Study, name: str, status: str, budget: Budget, commit: str, report_url: str | None = None
+    study: Study,
+    name: str,
+    status: str,
+    budget: Budget,
+    commit: str,
+    report_url: str | None = None,
+    priority_line: str | None = None,
 ) -> tuple[str, str]:
     """The study's thread title and body: the question, the runs with their checkpoints, the budget, the analysis
     steps and, once written, the report."""
@@ -235,6 +243,7 @@ def study_post(
         "\n".join(run_rows(study)),
         f"Budget: {budget.nodes} nodes, {budget.hours:g} h; planned {node_hours:g} of "
         f"{budget.nodes * budget.hours:g} node-hours. Spec: [{study.experiment}.yaml]({spec})",
+        *([priority_line] if priority_line else []),
     ]
     for step in study.analysis:
         command = shlex.join(
