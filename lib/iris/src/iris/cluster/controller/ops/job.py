@@ -30,6 +30,7 @@ from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,
 )
+from iris.cluster.egress import format_egress_rule
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
@@ -293,6 +294,7 @@ def insert_job_and_config(
         task_image=request.task_image,
         container_profile=int(request.container_profile),
         egress_policy=int(request.egress_policy),
+        egress_allow_json=[format_egress_rule(rule) for rule in request.egress_allow],
         submit_argv_json=list(request.submit_argv),
         fail_if_exists=bool(request.fail_if_exists),
     )

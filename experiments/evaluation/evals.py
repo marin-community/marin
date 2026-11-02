@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
+from urllib.parse import urlsplit
 
 from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig
@@ -21,7 +22,7 @@ from marin.evaluation.evalchemy.runner import (
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
-from marin.evaluation.harbor.driver_config import ValidatedHarborConfig
+from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef, ModelConfigRef
@@ -46,6 +47,14 @@ _TOGETHER_API_KEY_SECRET: SecretSpec = (
     "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
 )
 _VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API_KEY": _TOGETHER_API_KEY_SECRET})
+# Destinations beyond Iris's base egress allowlist (iris.cluster.egress). The
+# orchestrator job declares them; they take effect on clusters that enforce the
+# allowlist.
+_DAYTONA_EGRESS: tuple[str, ...] = ("app.daytona.io", "*.app.daytona.io")
+# Harbor's dataset registry, a Supabase project (Harbor's HARBOR_SUPABASE_URL).
+_HARBOR_REGISTRY_EGRESS: tuple[str, ...] = ("hlqxxzsirfrgeqasvaps.supabase.co",)
+# MRCR loads tiktoken's o200k_base encoding, which tiktoken downloads at import.
+_EVALCHEMY_EGRESS: Mapping[str, tuple[str, ...]] = MappingProxyType({"mrcr": ("openaipublic.blob.core.windows.net",)})
 
 # Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
 _EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
@@ -57,6 +66,15 @@ class EvalchemyDefinition:
     config_path: Path
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
     family: str | None = None
+    egress_allow: tuple[str, ...] = ()
+
+    def egress_allow_for(self, config: EvalchemyRunConfig) -> tuple[str, ...]:
+        """Egress rules for the evaluation's own downloads and its external judge."""
+        if config.judge is None:
+            return self.egress_allow
+        judge_host = urlsplit(config.judge.base_url).hostname
+        assert judge_host is not None, "EvalchemyJudgeConfig requires a URL with a host"
+        return (*self.egress_allow, judge_host)
 
     def secret_env_for(self, config: EvalchemyRunConfig) -> Mapping[str, SecretSpec]:
         secret_env = dict(self.secret_env)
@@ -166,6 +184,13 @@ class HarborDefinition:
     config_path: Path
     max_eval_instances: int | None = None
     family: str | None = None
+
+    def egress_allow_for(self, config: ValidatedHarborConfig) -> tuple[str, ...]:
+        """Egress rules for the Harbor driver's sandbox service and dataset registry."""
+        rules = _DAYTONA_EGRESS if config.environment == _DAYTONA_ENVIRONMENT_TYPE else ()
+        if config.dataset_kind == HarborDatasetKind.HARBOR_REGISTRY:
+            rules = (*rules, *_HARBOR_REGISTRY_EGRESS)
+        return rules
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
@@ -342,6 +367,7 @@ EVALS: dict[str, EvaluationDefinition] = {
         name=name,
         config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml",
         family=_EVAL_FAMILIES.get(name),
+        egress_allow=_EVALCHEMY_EGRESS.get(name, ()),
     )
     for name in _STANDARD_EVALCHEMY_EVALS
 }

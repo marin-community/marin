@@ -64,6 +64,7 @@ HERO_QB_HIST_BINS = 10_000
 # stayed near 0.923 GiB, while a 125 GB limit let native RSS increase until the cache was full.
 HERO_TENSORSTORE_CACHE_BYTES = 1_000_000_000
 HERO_WATCH_INTERVAL = 10
+HERO_MAX_GRAD_NORM = 1.0
 HERO_MODEL_CONFIG = dataclasses.replace(
     HERO_MODEL,
     qb_estimator=QbEstimator.HIST,
@@ -150,6 +151,7 @@ def hero_grug_trainer_config(
     context_axis_size: int,
     expert_axis_size: int,
     balance_attention_rows: bool,
+    max_grad_norm: float | None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     gc_interval: int | None = None,
 ) -> GrugTrainerConfig:
@@ -160,6 +162,7 @@ def hero_grug_trainer_config(
         gc_interval=gc_interval,
         ema_beta=None,
         z_loss_weight=1e-4,
+        max_grad_norm=max_grad_norm,
         # Keep the MuonH state on pinned host memory so the transport buffers have sufficient HBM.
         offload_opt_state=True,
         master_param_mode=master_param_mode,

@@ -14,7 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     concurrency:
-      group: datakit-tier2-ferry
+      # A run on a branch must not cancel the scheduled run on main.
+      group: datakit-tier2-ferry-${{ github.ref }}
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-tier2-ferry-${{ github.run_id }}-${{ github.run_attempt }}
@@ -103,11 +104,13 @@ jobs:
         id: wait
         shell: bash -l {0}
         run: |
+          # Oct 28 completed in 5h26m after a worker failure and retry.
+          # Leave 14m under the 350m job limit for failure diagnostics.
           uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
-            --timeout 14400 \
+            --timeout 20200 \
             --resource-exhaustion-policy shutdown \
             --github-output
 

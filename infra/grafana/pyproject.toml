@@ -39,6 +39,7 @@ dev = ["pytest >= 8.4", "pyyaml >= 6"]
 # if-necessary (not allow): take prereleases only for packages with no stable
 # release — the marin-* dev wheels — while pinning httpx/pydantic/etc to stable.
 prerelease = "if-necessary"
+constraint-dependencies = ["aiohttp>=3.14.4", "opentelemetry-api>=1.45.1"]
 
 [tool.hatch.build.targets.wheel]
 only-include = ["src"]

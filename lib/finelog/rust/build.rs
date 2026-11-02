@@ -23,7 +23,10 @@ fn main() {
 
     // Retry clones should share large IPC payloads.
     let mut messages = connectrpc_build::CodeGenConfig::default();
-    messages.bytes_fields = vec![".finelog.stats.WriteRowsRequest.arrow_ipc".into()];
+    messages.bytes_fields = vec![(
+        ".finelog.stats.WriteRowsRequest.arrow_ipc".into(),
+        buffa_codegen::BytesRepr::Bytes,
+    )];
     connectrpc_build::Config::new()
         .buffa_config(messages)
         .generate_json(true)

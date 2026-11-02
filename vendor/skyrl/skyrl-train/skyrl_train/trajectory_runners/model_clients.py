@@ -18,6 +18,7 @@ from skyrl_train.inference_engines.base import (
     ChatContinuation,
     InferenceEngineInput,
     InferenceEngineOutput,
+    request_id_for_session,
 )
 from skyrl_train.inference_engines.chat_continuation import (
     CHAT_TOKENIZE_FIELDS,
@@ -330,7 +331,7 @@ class DirectModelClient:
                 # vLLM may include the sampled token outside the natural top K.
                 body["top_logprobs"] = requested_top_k + 1
                 body["return_tokens_as_token_ids"] = True
-            request_id = uuid4().hex
+            request_id = uuid4().hex if session_id is None else request_id_for_session(session_id)
             headers = {"x-request-id": request_id}
             if session_id is not None:
                 headers[SESSION_ID_HEADER] = str(session_id)

@@ -6,6 +6,7 @@ at PP2, checks that exported weights moved while the frozen router bias did
 not, and checks that the exported HF checkpoint reproduces the post-update
 Megatron log-probabilities. The four-H100 test adds disaggregated vLLM
 serving: rollout, PP2 update, weight broadcast, serving readback, rollout.
+The resume test reloads a checkpoint saved with Megatron's CPU optimizer offload.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import asyncio
 import copy
 import math
 import os
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +25,7 @@ from megatron.bridge import AutoBridge
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.transformer.module import Float16Module
 from ray.util.placement_group import placement_group
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from transformers import AutoTokenizer
 
 import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
@@ -499,7 +502,8 @@ def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path):
 
 
 @pytest.mark.vllm
-def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollout(tmp_path):
+@pytest.mark.parametrize("nccl_max_channels", [None, 32])
+def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollout(tmp_path, nccl_max_channels):
     """Rollout, PP2 Megatron update, mixed-dtype broadcast, serving readback, rollout."""
     policy_world_size = 2
     require_hoppers(policy_world_size + ROLLOUT_WORLD_SIZE)
@@ -507,6 +511,9 @@ def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollou
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
     cfg = _config(str(model_path), world_size=policy_world_size, pp=2, ep=1)
+    if nccl_max_channels is not None:
+        cfg.trainer.algorithm.batch_invariant = True
+        cfg.trainer.policy.megatron_config.nccl_max_channels = nccl_max_channels
     initialize_ray(cfg)
     client = grug_engine_client(cfg, str(model_path))
     try:
@@ -632,6 +639,57 @@ def test_grug_megatron_two_gpu_colocated_sleep_sync_preserves_grouped_experts(tm
         )
     finally:
         ray.util.remove_placement_group(shared_pg)
+        ray.shutdown()
+
+
+def _idle_pinned_host_bytes(_worker) -> int:
+    """Pinned host memory that PyTorch's caching allocator holds but no tensor uses."""
+    stats = torch.cuda.host_memory_stats()
+    return stats["allocated_bytes.current"] - stats["active_bytes.current"]
+
+
+def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):
+    """A checkpoint saved with CPU optimizer offload loads, restores the weights, and continues.
+
+    Training from the checkpoint again must repeat the step taken right after saving it, which
+    holds only if the CPU-offloaded masters and moments were restored too. The load must also
+    return the pinned host copies it replaced instead of leaving them cached.
+    """
+    world_size = 2
+    require_hoppers(world_size)
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    write_tiny_checkpoint(model_path)
+    cfg = _config(str(model_path), world_size=world_size, pp=1, ep=1)
+    megatron = cfg.trainer.policy.megatron_config
+    megatron.optimizer_checkpoint_sharding_type = "dp_reshardable"
+    megatron.optimizer_config_kwargs.optimizer_cpu_offload = True
+    megatron.optimizer_config_kwargs.optimizer_offload_fraction = 1.0
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    batch = _padded_batch(tokenizer.pad_token_id)
+    # Megatron restore reads only CoreWeave S3 checkpoints.
+    checkpoint_dir = marin_temp_bucket(1, f"skyrl-gpu-tests/offload-resume/{uuid.uuid4().hex}")
+    initialize_ray(cfg)
+    try:
+        policy = _init_policy(cfg, world_size)
+        _train_step(policy, batch)
+        saved = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+        ray.get(policy.async_run_ray_method("pass_through", "save_checkpoint", checkpoint_dir, tokenizer))
+        _train_step(policy, batch)
+        after_saved_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+
+        ray.get(policy.async_run_ray_method("pass_through", "load_checkpoint", checkpoint_dir))
+        idle_pinned = ray.get([actor.__ray_call__.remote(_idle_pinned_host_bytes) for actor in policy._actor_handlers])
+        restored = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+        _train_step(policy, batch)
+        after_restored_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+
+        assert idle_pinned == [0] * world_size
+
+        for name in PARAMETER_NAMES:
+            torch.testing.assert_close(restored[name], saved[name], rtol=0, atol=0)
+            torch.testing.assert_close(after_restored_step[name], after_saved_step[name], rtol=0, atol=0)
+    finally:
         ray.shutdown()
 
 
