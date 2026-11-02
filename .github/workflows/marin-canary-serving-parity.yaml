@@ -1,0 +1,145 @@
+name: "Marin - Canary - Serving score check"
+
+on:
+  schedule:
+    - cron: '17 12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: serving-score-check-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  arms:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        hardware: [h100, v4]
+    env:
+      RUN_ID: serving-score-${{ github.run_id }}-${{ github.run_attempt }}
+      QUEUE_SECONDS: ${{ github.event_name == 'schedule' && '16200' || '3600' }}
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+      - name: Submit and collect
+        shell: bash -l {0}
+        env:
+          HARDWARE: ${{ matrix.hardware }}
+        run: |
+          set -euo pipefail
+          if [[ "$HARDWARE" == h100 ]]; then
+            WEIGHTS=open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02
+            OUTPUT="s3://marin-us-east-02a/ci/serving-score/$RUN_ID/h100"
+          else
+            WEIGHTS=gs://marin-us-central2/scratch/karan/rsi-merge/parents/S--open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02@50fe2f488aee/
+            OUTPUT="gs://marin-us-central2/ci/serving-score/$RUN_ID/v4"
+          fi
+          .venv/bin/python -m experiments.evaluation.serving_parity.launch \
+            --hardware "$HARDWARE" --name "$RUN_ID-$HARDWARE" \
+            --weights "$WEIGHTS" --output "$OUTPUT" --submit \
+            --scheduling-timeout "$QUEUE_SECONDS" --job-id-file job-id.txt
+          .venv/bin/python -m experiments.evaluation.serving_parity.nightly wait \
+            --job-id-file job-id.txt --hardware "$HARDWARE" --output "$OUTPUT" \
+            --timeout "$((QUEUE_SECONDS + 3720))" --report "$HARDWARE.json"
+      - name: Upload outcome
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: serving-score-${{ matrix.hardware }}
+          path: ${{ matrix.hardware }}.json
+          if-no-files-found: warn
+
+  score-check:
+    needs: arms
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      capacity_alert: ${{ steps.history.outputs.alert }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --all-packages --extra=cpu --no-default-groups
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: serving-score-*
+          merge-multiple: true
+          path: reports
+      - name: Check scores and coverage
+        id: check
+        run: .venv/bin/python -m experiments.evaluation.serving_parity.nightly check reports
+      - name: No capacity
+        if: steps.check.outputs.outcome == 'no_capacity'
+        run: echo '::warning::No capacity; no paired score this run.'
+      - name: Check previous scheduled nights
+        id: history
+        if: github.event_name == 'schedule' && steps.check.outputs.outcome == 'no_capacity'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              ...context.repo, workflow_id: 'marin-canary-serving-parity.yaml',
+              event: 'schedule', per_page: 10
+            });
+            const previous = data.workflow_runs.filter(r => r.id < context.runId).slice(0, 2);
+            let streak = previous.length === 2;
+            for (const run of previous) {
+              if (run.status !== 'completed') { streak = false; break; }
+              const { data: jobs } = await github.rest.actions.listJobsForWorkflowRun({
+                ...context.repo, run_id: run.id, per_page: 100
+              });
+              streak &&= jobs.jobs.some(j => j.name === 'score-check' &&
+                j.steps.some(s => s.name === 'No capacity' && s.conclusion === 'success'));
+            }
+            core.setOutput('alert', String(streak));
+            if (streak) await core.summary.addRaw('No capacity for three consecutive scheduled runs.').write();
+
+  notify-slack:
+    needs: [arms, score-check]
+    if: |
+      always() && github.event_name == 'schedule' && (
+        needs.arms.result == 'failure' || needs.arms.result == 'cancelled' ||
+        needs.score-check.result == 'failure' || needs.score-check.result == 'cancelled' ||
+        needs.score-check.outputs.capacity_alert == 'true'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: "Serving score check: failure or three nights without capacity. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

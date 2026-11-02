@@ -88,6 +88,8 @@ def main() -> None:
     parser.add_argument("--weights", help="Exact June d819 export; TPU uses its verified regional mirror")
     parser.add_argument("--output", required=True, help="Fresh S3 (H100) or GCS (TPU) prefix")
     parser.add_argument("--submit", action="store_true", help="Otherwise print the plan only")
+    parser.add_argument("--scheduling-timeout", type=int, default=3600, help="Queue bound in seconds")
+    parser.add_argument("--job-id-file", type=Path, help="Write submitted job ID for workflow monitoring")
     args = parser.parse_args()
     gpu = args.hardware == "h100"
     weights = H100_WEIGHTS if gpu else V4_WEIGHTS
@@ -113,6 +115,7 @@ def main() -> None:
                 coscheduling=str(coscheduling),
             ),
             indent=2,
+            default=str,
         )
     )
     if not args.submit:
@@ -141,11 +144,13 @@ def main() -> None:
                     },
                 ),
                 timeout=Duration.from_seconds(RUNTIME_SECONDS),
-                scheduling_timeout=Duration.from_seconds(3600),
+                scheduling_timeout=Duration.from_seconds(args.scheduling_timeout),
                 max_retries_failure=0,
                 max_retries_preemption=0,
                 max_task_failures=0,
             )
+            if args.job_id_file:
+                args.job_id_file.write_text(str(job))
             print(job)
 
 
