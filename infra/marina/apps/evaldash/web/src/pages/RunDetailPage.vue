@@ -136,7 +136,11 @@ async function copyPath() {
       <div class="space-y-1.5">
         <div class="flex items-center gap-3 flex-wrap">
           <h2 class="text-lg font-semibold font-mono">{{ data.run_id }}</h2>
-          <StatusChip :status="data.status" />
+          <span class="text-xs text-text-muted">Eval</span><StatusChip :status="data.status" />
+          <template v-if="data.step_status">
+            <span class="text-xs text-text-muted">Step</span>
+            <StatusChip :status="data.step_status === 'SUCCESS' ? 'succeeded' : data.step_status.toLowerCase()" />
+          </template>
           <span
             v-if="data.version"
             class="rounded bg-surface-sunken px-1.5 py-0.5 text-xs font-mono text-text-secondary"

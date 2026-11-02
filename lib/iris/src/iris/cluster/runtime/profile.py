@@ -161,8 +161,11 @@ def build_pyspy_dump_cmd(
     include_locals: bool = False,
     include_native: bool = False,
     subprocesses: bool = True,
+    nonblocking: bool = False,
 ) -> list[str]:
     """Build a py-spy dump command for thread-level stack traces."""
+    if nonblocking and include_native:
+        raise ValueError("py-spy needs to pause the process to unwind native frames")
     cmd = [py_spy_bin, "dump", "--pid", pid]
     if subprocesses:
         cmd.append("--subprocesses")
@@ -170,6 +173,8 @@ def build_pyspy_dump_cmd(
         cmd.append("--locals")
     if include_native:
         cmd.append("--native")
+    if nonblocking:
+        cmd.append("--nonblocking")
     return cmd
 
 
@@ -297,6 +302,7 @@ def capture_threads(
     include_locals: bool = False,
     include_native: bool = False,
     subprocesses: bool = True,
+    nonblocking: bool = False,
 ) -> bytes:
     """Collect thread stacks with py-spy dump and return the raw stdout bytes."""
     cmd = build_pyspy_dump_cmd(
@@ -305,6 +311,7 @@ def capture_threads(
         include_locals=include_locals,
         include_native=include_native,
         subprocesses=subprocesses,
+        nonblocking=nonblocking,
     )
     result = dispatch.exec_profiler(cmd, sample_timeout=THREAD_DUMP_TIMEOUT_SECONDS)
     if result.returncode != 0:

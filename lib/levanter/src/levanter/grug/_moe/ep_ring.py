@@ -5,6 +5,7 @@
 
 import math
 from collections.abc import Callable
+from typing import NamedTuple, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -20,7 +21,141 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     CapacityDrops,
 )
-from levanter.grug._moe.ep_common import _prefix_cap_counts
+from levanter.grug._moe.ep_common import _assignment_sources, _prefix_cap_counts
+
+
+def _select_local_assignments(
+    local_expert: Int[Array, "A"],
+    local_mask: Bool[Array, "A"],
+    *,
+    local_experts: int,
+    logical_capacity: jax.Array,
+    physical_capacity: int,
+) -> tuple[Int[Array, "Elocal"], jax.Array, Int[Array, "C"], Bool[Array, "C"]]:
+    """Pick this shard's assignments in (local expert id, flat position) order under ring's capacity rule.
+
+    ``local_expert`` must be zero where ``local_mask`` is false. Returns the ``ragged_dot`` group sizes, with
+    padding rows attributed to the last expert, the dropped assignment count, the picked flat positions and
+    which of the ``physical_capacity`` picks are valid.
+    """
+    assignments = local_expert.shape[0]
+    # TPU lowers this small-expert count reduction better as a dense compare+sum than as `bincount`.
+    expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
+    counts = jnp.sum(
+        (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask.astype(jnp.int32)[:, None],
+        axis=0,
+        dtype=jnp.int32,
+    )
+    accepted_counts = _prefix_cap_counts(counts, capacity=logical_capacity)
+    accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
+    dropped = jnp.sum(counts, dtype=jnp.int32) - accepted_total
+    valid = jnp.arange(physical_capacity, dtype=jnp.int32) < accepted_total
+
+    # A top_k over (local expert id, flat position) keys avoids a global argsort while preserving the
+    # grouped layout expected by ragged_dot.
+    order_key = local_expert * assignments + jnp.arange(assignments, dtype=jnp.int32)
+    selection_key = jnp.where(local_mask, local_experts * assignments - order_key, -1)
+    _, picked = jax.lax.top_k(selection_key, physical_capacity)
+    # `picked` pads with invalid rows at the end; attribute them to the final expert segment.
+    group_sizes = accepted_counts.at[-1].add(physical_capacity - accepted_total)
+    return group_sizes, dropped, picked, valid
+
+
+def _gather_sum_slots(rows: Float[Array, "P H"], slots: Int[Array, "T K"]) -> Float[Array, "T H"]:
+    """``out[t] = sum_k rows[slots[t, k]]`` with out-of-range slots read as zero, summed in float32."""
+    out = jnp.zeros((slots.shape[0], rows.shape[1]), dtype=jnp.float32)
+    for k in range(slots.shape[1]):
+        out += jnp.take(rows, slots[:, k], axis=0, mode="fill", fill_value=0).astype(jnp.float32)
+    return out.astype(rows.dtype)
+
+
+def _take_valid_rows(
+    x: Float[Array, "T H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"]
+) -> Float[Array, "P H"]:
+    rows = jnp.take(x, slot_token, axis=0)
+    return jnp.where(slot_valid[:, None], rows, jnp.zeros_like(rows))
+
+
+# The dispatch gather and the combine are transposes of each other. Autodiff would turn the gather's transpose,
+# and the combine itself, into scatter-adds over the token buffer, which ROCm runs at about 1.2 TB/s. With the
+# inverse map `slots` both directions are gathers: one reads each token's (at most K) slot rows.
+@jax.custom_vjp
+def _dispatch_rows(
+    x: Float[Array, "T H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"], slots: Int[Array, "T K"]
+) -> Float[Array, "P H"]:
+    return _take_valid_rows(x, slot_token, slot_valid)
+
+
+def _dispatch_rows_fwd(x, slot_token, slot_valid, slots):
+    return _take_valid_rows(x, slot_token, slot_valid), slots
+
+
+def _dispatch_rows_bwd(slots, g):
+    return _gather_sum_slots(g, slots), None, None, None
+
+
+_dispatch_rows.defvjp(_dispatch_rows_fwd, _dispatch_rows_bwd)
+
+
+@jax.custom_vjp
+def _combine_rows(
+    rows: Float[Array, "P H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"], slots: Int[Array, "T K"]
+) -> Float[Array, "T H"]:
+    return _gather_sum_slots(rows, slots)
+
+
+def _combine_rows_fwd(rows, slot_token, slot_valid, slots):
+    return _gather_sum_slots(rows, slots), (slot_token, slot_valid)
+
+
+def _combine_rows_bwd(residuals, g):
+    slot_token, slot_valid = residuals
+    return _take_valid_rows(g, slot_token, slot_valid), None, None, None
+
+
+_combine_rows.defvjp(_combine_rows_fwd, _combine_rows_bwd)
+
+
+class _DispatchCombine(NamedTuple):
+    """Moves rows from the gathered token buffer to this shard's dispatch slots, and sums them back per token.
+
+    ``combine(rows, weights)`` scales each dispatch row by its routing weight before summing it into its token.
+    """
+
+    dispatch: Callable[[Float[Array, "T H"]], Float[Array, "P H"]]
+    combine: Callable[[Float[Array, "P H"], Float[Array, "P"]], Float[Array, "T H"]]
+
+
+# Builds a `_DispatchCombine` from the picked flat assignment positions, their validity, and the gathered
+# token count and top-k.
+_DispatchCombineFactory: TypeAlias = Callable[[Int[Array, "P"], Bool[Array, "P"], int, int], _DispatchCombine]
+
+
+def _scatter_add_dispatch_combine(
+    picked: Int[Array, "P"], valid: Bool[Array, "P"], tokens: int, topk: int
+) -> _DispatchCombine:
+    """Dispatch with a take and combine with a scatter-add; autodiff transposes each into the other."""
+    token = jnp.floor_divide(picked, topk)
+    return _DispatchCombine(
+        dispatch=lambda x: _take_valid_rows(x, token, valid),
+        combine=lambda rows, weights: jnp.zeros((tokens, rows.shape[1]), rows.dtype)
+        .at[token]
+        .add(rows * weights[:, None], mode="drop"),
+    )
+
+
+def _gather_dispatch_combine(
+    picked: Int[Array, "P"], valid: Bool[Array, "P"], tokens: int, topk: int
+) -> _DispatchCombine:
+    """Dispatch and combine, forward and backward, as gathers through the inverse map from assignments to slots."""
+    token = jnp.floor_divide(picked, topk)
+    # The slot holding each (token, k) assignment, or `P` where no valid slot does.
+    assignments = tokens * topk
+    slots = _assignment_sources(jnp.where(valid, picked, assignments), send_size=assignments).reshape(tokens, topk)
+    return _DispatchCombine(
+        dispatch=lambda x: _dispatch_rows(x, token, valid, slots),
+        combine=lambda rows, weights: _combine_rows(rows * weights[:, None], token, valid, slots),
+    )
 
 
 def _moe_mlp_ep_ring_local(
@@ -31,12 +166,16 @@ def _moe_mlp_ep_ring_local(
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
+    make_dispatch_combine: _DispatchCombineFactory,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
-    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
+    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect.
+
+    ``make_dispatch_combine`` chooses how rows move between the gathered token buffer and the dispatch slots.
+    """
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):
@@ -74,43 +213,20 @@ def _moe_mlp_ep_ring_local(
         expert_start = expert_axis * local_experts
         local_expert: jax.Array = expert_flat - expert_start
         local_mask = assignment_valid & jnp.logical_and(local_expert >= 0, local_expert < local_experts)
-
-        # Keep only the assignments this shard will execute, ordered by
-        # (local expert id, original flat position). This avoids the global
-        # argsort + fused takes over all assignments that dominated high-EP
-        # shapes, while preserving the grouped layout expected by ragged_dot.
         local_expert = jnp.where(local_mask, local_expert, 0)
-        # TPU lowers this small-expert count reduction better as a dense
-        # compare+sum than as `bincount`.
-        expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
-        local_mask_i32 = local_mask.astype(jnp.int32)
-        counts = jnp.sum(
-            (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask_i32[:, None],
-            axis=0,
-            dtype=jnp.int32,
+        group_sizes, dropped_local, local_idx, valid = _select_local_assignments(
+            local_expert,
+            local_mask,
+            local_experts=local_experts,
+            logical_capacity=logical_capacity,
+            physical_capacity=physical_capacity,
         )
-        accepted_counts = _prefix_cap_counts(counts, capacity=logical_capacity)
-        accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
-        dropped_local = jnp.sum(counts, dtype=jnp.int32) - accepted_total
-        valid = jnp.arange(physical_capacity, dtype=jnp.int32) < accepted_total
 
-        flat_pos = jnp.arange(assignments, dtype=jnp.int32)
-        order_key = local_expert * assignments + flat_pos
-        max_order_key = local_experts * assignments
-        selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
-        _, local_idx = jax.lax.top_k(selection_key, physical_capacity)
-
-        token_local = jnp.floor_divide(local_idx, topk)
+        dispatch_combine = make_dispatch_combine(local_idx, valid, tokens, topk)
         weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
-        x_take = jnp.take(x_global, token_local, axis=0)
-        x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
-        x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+        x_dispatch = tree_checkpoint_name(dispatch_combine.dispatch(x_global), _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
-    group_sizes = accepted_counts
-    # `local_idx` pads by appending invalid rows at the end; keep GMM segment
-    # boundaries aligned by attributing padding to the final expert segment.
-    group_sizes = group_sizes.at[-1].add(physical_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
@@ -121,8 +237,8 @@ def _moe_mlp_ep_ring_local(
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
-    with jax.named_scope("scatter"):
-        out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+    with jax.named_scope("combine"):
+        out_global = dispatch_combine.combine(out_dispatch, weight_dispatch)
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)

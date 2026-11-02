@@ -232,6 +232,16 @@ async def test_mixture_dataset_restart_rejects_empty_finite_dataset():
         await mixture_ds.get_batch([0])
 
 
+@pytest.mark.parametrize(
+    "start_offsets",
+    [{"ds1": 1, "ds2": 2}, {"ds1": 1, "ds2": 2, "ds3": 3, "typo": 4}],
+    ids=["missing", "extra"],
+)
+def test_mixture_dataset_start_offsets_must_name_exactly_the_active_datasets(start_offsets):
+    with pytest.raises(ValueError, match="start_offsets must name exactly"):
+        MixtureDataset(datasets(), weights(), block_size(), key=key(), start_offsets=start_offsets)
+
+
 @pytest.mark.asyncio
 async def test_mixture_dataset_respects_weights():
     w = weights()

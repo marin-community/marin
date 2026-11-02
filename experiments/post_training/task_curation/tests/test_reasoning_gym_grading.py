@@ -23,7 +23,7 @@ from experiments.post_training.task_curation.tests.local_grader import (
     grade,
     with_verifier_file,
 )
-from experiments.post_training.task_curation.tests.test_reasoning_gym import GENERATED_ROW, PIPELINES
+from experiments.post_training.task_curation.tests.test_reasoning_gym import GENERATED_ROW, RECIPES
 
 pytestmark = [pytest.mark.docker, pytest.mark.timeout(300)]
 
@@ -49,7 +49,7 @@ def generated_task(task_name: str, index: int, **entry_changes) -> tuple[TaskSpe
         "python_hash_seed": 0,
     }
     row = {**GENERATED_ROW, "entry": {**entry, **entry_changes}, "generation": generation}
-    return converted_task(PIPELINES["reasoning_gym_generated"], row), entry["answer"]
+    return converted_task(RECIPES["reasoning_gym_generated"], row), entry["answer"]
 
 
 @pytest.mark.parametrize(("task_name", "index"), [("arc_agi", 0), ("gsm_symbolic", 23)])
@@ -77,7 +77,7 @@ def test_generated_grade_fails_rather_than_scoring_when_generate_cannot_import(m
 
 
 def test_tasktrove_archive_grader_scores_with_the_images_reasoning_gym(machines):
-    pipeline = PIPELINES["tasktrove-reasoning-gym"]
+    pipeline = RECIPES["tasktrove-reasoning-gym"]
     row = {"path": "reasoning-gym-d9f956ecd029.tar.gz", "task_binary": TASKTROVE_ARCHIVE.read_bytes()}
     task = converted_task(pipeline, row)
     assert pipeline.controls is not None

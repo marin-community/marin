@@ -35,7 +35,7 @@ from zephyr.runners import (
 )
 from zephyr.stage_io import _ensure_picklable_exception, _stage_throughput
 from zephyr.stats import WORKER_STATS_INTERVAL
-from zephyr.worker_context import _worker_ctx_var
+from zephyr.worker_context import RunnerSnapshot, _worker_ctx_var
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def _periodic_counter_writer(
         try:
             tmp_path = f"{counter_file}.tmp"
             with open(tmp_path, "wb") as f:
-                cloudpickle.dump(dict(ctx._counters), f)
+                cloudpickle.dump(ctx.get_runner_snapshot(), f)
             os.rename(tmp_path, counter_file)
         except Exception:
             logger.warning("Failed to flush counter file to %s", counter_file, exc_info=True)
@@ -163,8 +163,8 @@ def _execute_shard_subprocess(task_file: str, result_file: str, external_sort_di
         result_or_error = _ensure_picklable_exception(e)
 
     with open(result_file, "wb") as f:
-        counters_out = dict(ctx._counters) if ctx is not None else {}
-        cloudpickle.dump((result_or_error, counters_out), f)
+        snapshot = ctx.get_runner_snapshot() if ctx is not None else RunnerSnapshot()
+        cloudpickle.dump((result_or_error, snapshot), f)
 
 
 def _subprocess_main() -> None:

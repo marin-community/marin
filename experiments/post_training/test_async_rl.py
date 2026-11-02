@@ -9,9 +9,10 @@ from pathlib import Path
 
 import pytest
 from marin.execution.lazy import StepContext
+from marin.rl.skyrl import _launcher_command as launcher_command_for_test
 
 from experiments.post_training import async_rl
-from experiments.post_training.curriculum_rl.launch import SNOWBALL_POLICY
+from experiments.post_training.curriculum_rl.launch import ARMS, SNOWBALL_POLICY, build_arms
 
 COMPOSE_LAUNCH = """
 import json
@@ -25,6 +26,18 @@ print(json.dumps({
     "batch_policy": launch.skyrl.trainer.rollout_buffer.batch_policy,
 }))
 """
+
+
+def _compose_launch(path: Path, script: str, *, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+    command = launcher_command_for_test(str(path))
+    # Exercise the production bootstrap without invoking the job-submission CLI.
+    bootstrap = command[: command.index("marinskyrl")]
+    return subprocess.run(
+        [*bootstrap, "python", "-c", script, str(path)],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def test_launcher_builds_complete_smoke_run(monkeypatch) -> None:
@@ -56,27 +69,62 @@ def test_rollout_overrides_change_the_run_identity(monkeypatch) -> None:
 
 @pytest.mark.timeout(180)  # A cold cache must install the locked CPU-safe launcher dependencies.
 @pytest.mark.parametrize(
-    ("preset", "training_type"),
-    [(async_rl.DEFAULT, "async"), (async_rl.SMOKE_PRESET, "async"), (async_rl.ON_POLICY, "sync")],
-    ids=["default", "smoke", "on-policy"],
+    ("preset", "training_type", "settings"),
+    [
+        (async_rl.DEFAULT, "async", ()),
+        (async_rl.SMOKE_PRESET, "async", ()),
+        (async_rl.ON_POLICY, "sync", ()),
+        (async_rl.DEFAULT, "async", ("trainer.max_steps=3", "trainer.eval_interval=2")),
+    ],
+    ids=["default", "smoke", "on-policy", "off-boundary-terminal"],
 )
-def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, tmp_path, monkeypatch) -> None:
+def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, settings, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
-    run = async_rl.build_run(SNOWBALL_POLICY, preset, version="2026.09.18")
+    run = async_rl.build_run(SNOWBALL_POLICY, preset, version="2026.09.18", settings=settings)
     launch = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args, run.rl.deps))
     path = tmp_path / "launch.yaml"
     path.write_text(launch.launch_config_yaml)
-    project = Path(__file__).resolve().parents[2] / "config/external/MarinSkyRL"
-    # Use Marin's isolated lock so the test exercises the same SDK revision as the launcher.
-    result = subprocess.run(
-        ["uv", "run", "--frozen", "--project", str(project), "python", "-c", COMPOSE_LAUNCH, str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    result = _compose_launch(path, COMPOSE_LAUNCH)
+    assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "entrypoint": "skyrl_train.entrypoints.main_base",
         "training_type": training_type,
         "batch_policy": "rolling",
+    }
+
+
+@pytest.mark.timeout(180)
+def test_snowball_curriculum_smoke_composes_separate_reference_allocation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
+    step = build_arms(specs=(ARMS["naive"],), scale="snowball-smoke", policy=SNOWBALL_POLICY, version="2026.10.15")[
+        "naive"
+    ].rl
+    launch = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    path = tmp_path / "curriculum.yaml"
+    path.write_text(launch.launch_config_yaml)
+    result = _compose_launch(
+        path,
+        """
+import json
+import sys
+from cloud.iris.launch_config import load_launch_config
+
+launch = load_launch_config(sys.argv[1])
+placement = launch.skyrl.trainer.placement
+assert launch.skyrl.trainer.strategy == "megatron"
+assert not placement.colocate_policy_ref
+print(json.dumps({
+    "policy_gpus": placement.policy_num_nodes * placement.policy_num_gpus_per_node,
+    "reference_gpus": placement.ref_num_nodes * placement.ref_num_gpus_per_node,
+    "allocated_gpus": launch.iris.allocation.num_nodes * launch.iris.allocation.gpus_per_node,
+}))
+""",
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.splitlines()[-1]) == {
+        "policy_gpus": 32,
+        "reference_gpus": 16,
+        "allocated_gpus": 56,
     }

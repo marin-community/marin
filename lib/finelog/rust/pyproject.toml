@@ -17,6 +17,7 @@ requires-python = ">=3.12"
 manifest-path = "pyext/Cargo.toml"
 module-name = "finelog_server"
 features = ["pyo3/extension-module"]
+profile = "wheel"
 
 [tool.uv]
 # Rebuild the extension when the Rust sources change, not just pyproject.toml —

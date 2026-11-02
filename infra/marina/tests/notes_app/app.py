@@ -8,7 +8,7 @@ from marina.apps import RegisteredApi, Services, registered_api
 from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, RootModel
 from rigging.server_auth import get_verified_identity
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, text
 
 
 class IdentityResponse(BaseModel):
@@ -68,7 +68,5 @@ def create_api(services: Services) -> RegisteredApi:
     return registered_api(api)
 
 
-def migrate(engine: Engine) -> None:
-    with engine.begin() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS notes"))
-        conn.execute(text("CREATE TABLE notes (id serial PRIMARY KEY, body text NOT NULL)"))
+def migrate(connection: Connection) -> None:
+    connection.execute(text("CREATE TABLE IF NOT EXISTS notes (id serial PRIMARY KEY, body text NOT NULL)"))

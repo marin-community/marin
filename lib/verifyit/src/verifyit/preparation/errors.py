@@ -5,15 +5,13 @@
 
 from dataclasses import dataclass
 
-from harbor_config.errors import ErrorCategory
-
-from verifyit.grade import InvalidTask, Reward, Status
+from verifyit.grade import InvalidTask, PreparationCategory, Reward, Status
 
 
 @dataclass(frozen=True)
 class PreparationFailure:
     status: Status
-    category: ErrorCategory
+    category: PreparationCategory
     error_type: str
     message: str
     stage: str

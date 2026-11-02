@@ -1,0 +1,30 @@
+# Kolibri's pinned plugin requires upstream vLLM 0.29 rather than Marin's default fork.
+name: Aleph-Alpha-Kolibri-1
+location: Aleph-Alpha/Kolibri-1
+revision: e52eb4627d11516b0c01de49210ab5a4e4061444
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 73728
+  vllm_source: upstream
+  vllm_version: 0.29.0
+  vllm_plugin_requirements:
+  - 'aleph-alpha-inference @ git+https://github.com/Aleph-Alpha/aleph-alpha-inference.git@049a6a7bd2405b27d6d280d256bd3d585191c7ae'
+  reasoning_parser: kolibri1
+  tool_call_parser: kolibri1
+  vllm_extra_args:
+  - --kv-cache-dtype
+  - fp8
+  - --enable-prefix-caching
+  - --default-chat-template-kwargs
+  - '{"reasoning_effort":"high"}'
+generation:
+  thinking_off_template_kwargs:
+    reasoning_effort: none
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    extra_body: '{"chat_template_kwargs":{"reasoning_effort":"high"}}'

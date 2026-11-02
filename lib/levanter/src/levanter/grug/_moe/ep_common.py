@@ -3,11 +3,84 @@
 
 """Shared expert-parallel routing helpers for Grug MoE."""
 
+from functools import partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jax.typing import DTypeLike
 from jaxtyping import Array, Bool, Float, Int
+
+from levanter.grug._moe.sonic import sonic_gather_sum_available, sonic_gather_sum_masked
+
+
+def _combine_gather_sum_impl(
+    send_output: Float[Array, "send H"],
+    gather_indices: Int[Array, " assignments"],
+    combine_weights: Float[Array, "Tlocal K"],
+    output_dtype: DTypeLike,
+) -> Float[Array, "Tlocal H"]:
+    tokens_per_shard, topk = combine_weights.shape
+    hidden_dim = send_output.shape[1]
+    gather_indices = gather_indices.reshape(tokens_per_shard, topk)
+    keep = (gather_indices >= 0) & (gather_indices < send_output.shape[0])
+
+    if sonic_gather_sum_available():
+        weights = jnp.where(keep, combine_weights, 0)
+        return sonic_gather_sum_masked(send_output, gather_indices, weights, output_dtype=output_dtype)
+
+    # A Python loop over the top-k routes lets XLA fuse every gather and the float32 sum into one pass; a fori_loop
+    # rereads and rewrites the float32 accumulator once per route (5% of a June Snowball step on MI355X).
+    out = jnp.zeros((tokens_per_shard, hidden_dim), dtype=jnp.float32)
+    for route_index in range(topk):
+        rows = send_output[jnp.minimum(gather_indices[:, route_index], send_output.shape[0] - 1)]
+        rows = jnp.where(keep[:, route_index, None], rows, 0)
+        out = out + rows.astype(jnp.float32) * combine_weights[:, route_index, None].astype(jnp.float32)
+    return out.astype(output_dtype)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(4,))
+def _combine_gather_sum(
+    send_output: Float[Array, "send H"],
+    gather_indices: Int[Array, " assignments"],
+    assignment_sources: Int[Array, " send"],
+    combine_weights: Float[Array, "Tlocal K"],
+    output_dtype: DTypeLike,
+) -> Float[Array, "Tlocal H"]:
+    return _combine_gather_sum_impl(send_output, gather_indices, combine_weights, output_dtype)
+
+
+def _combine_gather_sum_fwd(send_output, gather_indices, assignment_sources, combine_weights, output_dtype):
+    out = _combine_gather_sum_impl(send_output, gather_indices, combine_weights, output_dtype)
+    return out, (send_output, gather_indices, assignment_sources, combine_weights)
+
+
+def _combine_gather_sum_bwd(_output_dtype, residual, cotangent):
+    send_output, gather_indices, assignment_sources, combine_weights = residual
+    tokens_per_shard, topk = combine_weights.shape
+    assignments_per_shard = tokens_per_shard * topk
+    valid = assignment_sources < assignments_per_shard
+    sources = jnp.minimum(assignment_sources, assignments_per_shard - 1)
+    source_tokens = sources // topk
+    source_weights = combine_weights.reshape(-1)[sources].astype(jnp.float32)
+    d_send_output = cotangent[source_tokens].astype(jnp.float32) * source_weights[:, None]
+    d_send_output = jnp.where(valid[:, None], d_send_output, 0).astype(send_output.dtype)
+
+    gather_indices = gather_indices.reshape(tokens_per_shard, topk)
+    keep = (gather_indices >= 0) & (gather_indices < send_output.shape[0])
+    d_combine_weights = jnp.zeros_like(combine_weights)
+
+    def set_route(route_index, d_combine_weights):
+        rows = send_output[jnp.minimum(gather_indices[:, route_index], send_output.shape[0] - 1)]
+        d_weight = jnp.sum(cotangent.astype(jnp.float32) * rows.astype(jnp.float32), axis=1)
+        d_weight = jnp.where(keep[:, route_index], d_weight, 0).astype(combine_weights.dtype)
+        return jax.lax.dynamic_update_slice_in_dim(d_combine_weights, d_weight[:, None], route_index, axis=1)
+
+    d_combine_weights = jax.lax.fori_loop(0, topk, set_route, d_combine_weights)
+    return d_send_output, None, None, d_combine_weights
+
+
+_combine_gather_sum.defvjp(_combine_gather_sum_fwd, _combine_gather_sum_bwd)
 
 
 def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:

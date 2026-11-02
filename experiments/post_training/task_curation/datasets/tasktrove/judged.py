@@ -15,9 +15,8 @@ import re
 from dataclasses import dataclass, field
 
 from taskcompendium.convert.answers import source_defect, unsupported
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.delivery import rewritten_task
-from taskcompendium.convert.tasktrove import archive_file
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -26,13 +25,23 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import VERIFIER_DATA, archive_file
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 
 NUMBERED = re.compile(r"^\s*\d+[.)]\s*")
+DOMAIN_TAGS = (
+    ("Stack Overflow", ("stackexchange", "stackoverflow", "code")),
+    ("Super User", ("stackexchange", "superuser")),
+    ("Unix & Linux", ("stackexchange", "unix", "shell")),
+    ("Tezos", ("stackexchange", "tezos")),
+    ("Code Review", ("stackexchange", "codereview", "code")),
+    ("Glaive", ("code-assistant", "code")),
+    ("general instruction-following", ("general-assistant",)),
+)
 DELIVERY_SENTENCE = (
     "After you have completed your analysis and formulated your answer, you MUST write your final, "
     "comprehensive response into a file named 'response.txt' in the current directory.",
@@ -160,7 +169,7 @@ def convert_judged(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
     instruction = row.data["instruction"]
     if not instruction.strip():
         return source_defect("missing_instruction", "Public instruction is required")
-    verifier_data = archive_file(row.data, "tests/verifier_data.json")
+    verifier_data = archive_file(row.data, VERIFIER_DATA)
     assert verifier_data is not None
     package = verifyit_package(
         JudgeSpec(criteria=criteria, question=question, rubric=RUBRIC_CHECKLIST),
@@ -169,6 +178,14 @@ def convert_judged(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
     )
     prompt = TextMessage(role="user", content=response_instruction(instruction))
     task = conversation_task(row, events=(prompt,), package=package)
+    domain = (
+        ("safety",)
+        if isinstance(data.get("principle"), str)
+        else next(
+            (tags for name, tags in DOMAIN_TAGS if name in str(data.get("judge_system_prompt", ""))), ("freeform",)
+        )
+    )
+    task = task.model_copy(update={"tags": ("judge", "rubric", "no-reference", *domain)})
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
@@ -322,16 +339,16 @@ SOURCES = (
 )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=source.info,
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name=source.name,
                 source=tasktrove_source(source.config),
-                convert=convert_judged,
+                convert=TaskTroveConverter(source.config, convert_judged),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 grader=GRADER_PACKAGES,

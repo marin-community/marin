@@ -50,6 +50,7 @@ def _assert_training_recorded(output_path: str) -> dict:
     return metrics
 
 
+@pytest.mark.tpu
 def test_train_lm():
     with tempfile.TemporaryDirectory() as tmpdir:
         data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)

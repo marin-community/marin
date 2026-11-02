@@ -105,6 +105,23 @@ def test_extracted_candidate_preserves_dataset_partial_credit(dataset, entry, ca
     assert (result.reward, result.status) == (expected, Status.SCORED)
 
 
+@pytest.mark.parametrize("dataset", ["arc_agi", "rearc"])
+def test_arc_grid_scores_after_json_transport(dataset, tests_dir, workspace):
+    entry = {
+        "answer": "1 2\n3 4",
+        "metadata": {"source_dataset": dataset, "output": [[1, 2], [3, 4]]},
+    }
+    (tests_dir / "entry.json").write_text(json.dumps(entry))
+    spec = ReasoningGymSpec(dataset=dataset)
+
+    for candidate, expected in [(entry["answer"], 1.0), ("1 2\n3 5", 0.05), ("not a grid", 0.0)]:
+        direct = grade_reasoning_gym.grade_reasoning_gym_candidate(spec, entry, candidate)
+        answer(workspace, candidate)
+        from_file = grade_reasoning_gym.grade(spec, tests_dir, workspace)
+        assert (direct.reward, direct.status) == (expected, Status.SCORED)
+        assert from_file == direct
+
+
 def test_metadata_evaluated_graph_color_scores_candidates_and_file_outputs(tests_dir, workspace, tmp_path):
     entry = reasoning_gym.create_dataset(
         "graph_color",
@@ -283,3 +300,17 @@ def test_dataset_construction_failure_is_infrastructure(tests_dir, workspace, mo
     spec_path.write_text(render_spec(ReasoningGymSpec(dataset="needle_haystack", params="params.json")))
     reward = run(spec_path, workspace)
     assert (reward.status, reward.reward) == (Status.INFRA_ERROR, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("reply", "reward"),
+    [
+        ("Reasoning.\n\n## Answer\n\n**Richard**\n\n---\nNotes.", 1.0),
+        ("## Answer\nOluwadamiloju\n\n## Explanation\nRichard is the reference.", 0.0),
+        ("## Answer\nOluwadamiloju\n\n## Answer\nRichard", 1.0),
+        ("The answer is Richard.", 0.0),
+    ],
+)
+def test_markdown_answer_section_preserves_the_scorers_exact_answer_contract(tests_dir, workspace, reply, reward):
+    answer(workspace, reply)
+    assert grade(tests_dir, workspace).reward == reward

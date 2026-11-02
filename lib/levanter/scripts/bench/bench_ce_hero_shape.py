@@ -51,6 +51,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss.batched_xla import (
     linear_softmax_cross_entropy_loss_batched_xla,
 )
 from levanter.kernels.pallas.fused_cross_entropy_loss.config import BlockSizes
+from levanter.kernels.pallas.fused_cross_entropy_loss.grad_in_forward import linear_softmax_cross_entropy_weighted_sum
 from levanter.kernels.pallas.fused_cross_entropy_loss.xla import (
     linear_softmax_cross_entropy_loss_xla,
 )
@@ -71,7 +72,7 @@ HERO_B_BLOCK = 1_024
 @dataclass(frozen=True)
 class Variant:
     name: str
-    impl: str = "xla"  # "xla" | "batched_xla"
+    impl: str = "xla"  # "xla" | "batched_xla" | "grad_in_fwd"
     b_block_size: int = HERO_B_BLOCK
     v_block_size: int = HERO_V_BLOCK
     fast_backward: bool = False
@@ -111,6 +112,15 @@ VARIANTS: tuple[Variant, ...] = (
     ),
     # --- the GB10 ladder implementation as shipped, unmodified ---
     Variant("batched_xla", impl="batched_xla", note="existing GB10-keyed ladder; may raise on GB200"),
+    # --- Liger-style: the forward computes both gradients, so value+grad is 3 GEMMs, not 4.
+    # b_block_size is the rows per scan step, each holding [b_block_size, V] fp32 logits.
+    # fwd_s times the loss-only primal, so only total_s is comparable to the other variants.
+    Variant("grad_in_fwd-tb512", impl="grad_in_fwd", b_block_size=512),
+    Variant("grad_in_fwd-tb1024", impl="grad_in_fwd", b_block_size=1024),
+    Variant("grad_in_fwd-tb2048", impl="grad_in_fwd", b_block_size=2048),
+    Variant("grad_in_fwd-tb4096", impl="grad_in_fwd", b_block_size=4096),
+    Variant("grad_in_fwd-tb8192", impl="grad_in_fwd", b_block_size=8192),
+    Variant("grad_in_fwd-tb16384", impl="grad_in_fwd", b_block_size=16384),
 )
 VARIANTS_BY_NAME = {v.name: v for v in VARIANTS}
 
@@ -184,8 +194,33 @@ def _make_inputs(b: int, h: int, v: int, dtype, seed: int):
     return jax.block_until_ready((x, w, labels))
 
 
+def _build_grad_in_forward_fns(token_block: int, labels: jax.Array):
+    """Mean CE through ``linear_softmax_cross_entropy_weighted_sum``, which computes its gradients in the forward.
+
+    Its undifferentiated call returns the scalar mean, so the correctness gate compares means.
+    """
+
+    def mean_loss(x, w):
+        total = linear_softmax_cross_entropy_weighted_sum(
+            x,
+            labels,
+            w,
+            jnp.ones(labels.shape, jnp.float32),
+            logsumexp_weight=None,
+            token_block_size=token_block,
+        )
+        return total / x.shape[0]
+
+    def forward(x, w):
+        return mean_loss(x, w), None
+
+    return jax.jit(forward), jax.jit(jax.value_and_grad(mean_loss, argnums=(0, 1)))
+
+
 def _build_fns(variant: Variant, labels: jax.Array):
     """Return (forward_only_fn, value_and_grad_fn)."""
+    if variant.impl == "grad_in_fwd":
+        return _build_grad_in_forward_fns(variant.b_block_size, labels)
     block_sizes = BlockSizes(b_block_size=variant.b_block_size, v_block_size=variant.v_block_size)
 
     def call(x, w):
@@ -477,10 +512,13 @@ def run_variant(variant: Variant, args) -> Result:
 
     res.bwd_s = res.total_s - res.fwd_s
     one_gemm = _gemm_flops(args.batch, args.hidden, args.vocab)
+    # grad_in_fwd issues 3 GEMMs in all, 2 beyond its timed loss-only primal; the others recompute
+    # the logits in the backward and issue 4.
+    issued_gemms = 3.0 if variant.impl == "grad_in_fwd" else 4.0
     res.fwd_tflops = one_gemm / res.fwd_s / 1e12
-    res.bwd_tflops = 3.0 * one_gemm / res.bwd_s / 1e12 if res.bwd_s > 0 else float("nan")
+    res.bwd_tflops = (issued_gemms - 1.0) * one_gemm / res.bwd_s / 1e12 if res.bwd_s > 0 else float("nan")
     res.total_useful_tflops = 3.0 * one_gemm / res.total_s / 1e12
-    res.total_issued_tflops = 4.0 * one_gemm / res.total_s / 1e12
+    res.total_issued_tflops = issued_gemms * one_gemm / res.total_s / 1e12
 
     stats = device.memory_stats() or {}
     res.peak_hbm_bytes = int(stats.get("peak_bytes_in_use", 0))
@@ -506,13 +544,16 @@ def run_variant(variant: Variant, args) -> Result:
         # Bitwise comparison of the forward against the current production path.
         base_fwd, _ = _build_fns(VARIANTS_BY_NAME["baseline"], labels)
         base_loss, _ = jax.block_until_ready(base_fwd(x, w))
-        base_np = np.asarray(base_loss, dtype=np.float64)
+        # grad_in_fwd returns the mean loss, so its gate compares it with the float32 JAX mean, as
+        # production would reduce the per-token baseline.
+        per_token = loss_np.ndim == 1
+        base_np = np.asarray(base_loss if per_token else jnp.mean(base_loss), dtype=np.float64)
         res.loss_bitwise_equal_vs_baseline = bool(np.array_equal(loss_np, base_np))
         res.loss_max_abs_diff_vs_baseline = float(np.abs(loss_np - base_np).max())
         del base_fwd, base_loss
 
         ref_loss, ref_gx, ref_gw = _fp32_reference(x, labels, w, args.check_chunk)
-        d = np.abs(loss_np - ref_loss)
+        d = np.abs(loss_np - (ref_loss if per_token else ref_loss.mean()))
         res.loss_max_abs_diff_vs_fp32 = float(d.max())
         res.loss_mean_abs_diff_vs_fp32 = float(d.mean())
         res.gx_max_abs_diff, res.gx_rel_rms = _diff(gx, ref_gx)

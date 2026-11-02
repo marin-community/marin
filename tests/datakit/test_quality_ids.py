@@ -34,7 +34,7 @@ from marin.processing.tokenize.attributes import (
 from experiments.datakit.cluster.quality.fast_transformer.artifact import MODEL_CALIB
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibrate_model
 from experiments.datakit.cluster.quality.fast_transformer.data import encode_texts
-from experiments.datakit.cluster.quality.fast_transformer.score import SAMPLE_TEXT_CHARS, score_normalized
+from experiments.datakit.cluster.quality.fast_transformer.score import score_normalized
 from experiments.datakit.cluster.quality.fast_transformer.scorer import load_pooled_scorer, score_bme
 from experiments.datakit.cluster.quality.fast_transformer.train import TrainHParams, train_from_labels
 
@@ -126,7 +126,6 @@ def _score(tmp_path: Path, normalized: NormalizedData, tokenized: TokenizedAttrD
         tokenized=tokenized,
         source=SOURCE,
         model_dir=model_dir,
-        sample_pct=1.0,
         max_workers=1,
     )
 
@@ -168,10 +167,6 @@ def test_quality_output_is_co_partitioned_with_tokenize_and_normalize(
     assert len(set(np.round(scores, 6))) > 1
     assert set(main.column("quality_bucket").to_pylist()) <= set(range(5))
     assert result.counters["ft_quality/scored"] == len(TEXTS)
-
-    samples = pq.read_table(f"{result.samples_output_dir}/{SHARD}")
-    sampled = dict(zip(samples.column("id").to_pylist(), samples.column("text").to_pylist(), strict=True))
-    assert sampled == {i: t[:SAMPLE_TEXT_CHARS] for i, t in zip(norm_ids, norm_texts, strict=True)}
 
     # train == serve: the stage's score for a document is the score the trainer-side
     # path gives for its text, so calibration fitted on label text transfers.
@@ -265,17 +260,17 @@ def test_shard_failing_mid_stream_leaves_no_output_and_is_rescored(
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     normalized = _normalized_fixture(tmp_path)
     tokenized = _tokenize(tmp_path, normalized, gpt2_tokenizer_path)
-    # A file where the samples dir belongs makes the samples writer fail after the
-    # shard's main rows were already handed to the main writer.
-    samples_dir = tmp_path / "quality" / "outputs" / "samples"
-    samples_dir.parent.mkdir(parents=True)
-    samples_dir.write_text("")
+    # A file where the main dir belongs makes the writer fail once the shard's rows
+    # have been scored and handed to it.
+    main_dir = tmp_path / "quality" / "outputs" / "main"
+    main_dir.parent.mkdir(parents=True)
+    main_dir.write_text("")
 
     with pytest.raises(RuntimeError):
         _score(tmp_path, normalized, tokenized, trained_model_dir)
     assert list((tmp_path / "quality").rglob("*.parquet")) == []
 
-    samples_dir.unlink()
+    main_dir.unlink()
     result = _score(tmp_path, normalized, tokenized, trained_model_dir)
 
     main = pq.read_table(f"{result.main_output_dir}/{SHARD}")

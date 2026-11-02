@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the environments the RL data catalog declares, and record each as an artifact under MARIN_PREFIX.
+"""Build registered RL data environments and record each as an artifact under MARIN_PREFIX.
 
 Run with ``python -m experiments.post_training.task_curation.images``. The artifact types and build steps
 live in ``images.build``: an artifact recorded from ``__main__`` would name ``__main__`` as its result
@@ -14,33 +14,27 @@ import click
 from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.post_training.task_curation.environment import Environment, Placement, placement
+from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
+from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
     DEFAULT_REPOSITORY,
     environment_artifact,
     identity_digest,
 )
-from experiments.post_training.task_curation.sources import all_pipelines
 
 
 def declared_environments() -> dict[str, Environment]:
-    """Every environment the catalog declares that the pipeline builds, by identity."""
-    declared = [
-        environment
-        for pipeline in all_pipelines().values()
-        for environment in (pipeline.environment, pipeline.grader)
-        if isinstance(environment, Environment) and placement(environment) != Placement.IMAGE
-    ]
-    return {identity_digest(environment): environment for environment in declared}
+    """Explicitly registered buildable environments, keyed by identity."""
+    return {identity_digest(environment): environment for environment in BUILDABLE_ENVIRONMENTS}
 
 
 @click.command(help=__doc__)
-@click.option("--all", "build_all", is_flag=True, help="Build every environment the catalog declares.")
+@click.option("--all", "build_all", is_flag=True, help="Build every registered environment.")
 @click.option(
     "--identity",
     "identities",
     multiple=True,
-    help="Identity prefix of a declared environment, as in images/env-<identity>; repeat to select several.",
+    help="Identity prefix of a registered environment, as in images/env-<identity>; repeat to select several.",
 )
 @click.option("--repository", default=DEFAULT_REPOSITORY, show_default=True, help="Image repository a build pushes to.")
 def main(build_all: bool, identities: tuple[str, ...], repository: str) -> None:
@@ -51,7 +45,7 @@ def main(build_all: bool, identities: tuple[str, ...], repository: str) -> None:
     for prefix in identities:
         matches = [environment for identity, environment in declared.items() if identity.startswith(prefix)]
         if len(matches) != 1:
-            raise click.UsageError(f"{len(matches)} declared environments have identity prefix {prefix}")
+            raise click.UsageError(f"{len(matches)} registered environments have identity prefix {prefix}")
         selected.extend(matches)
     logging.basicConfig(level=logging.INFO)
     # A workstation reaches the CoreWeave artifact prefix through its ambient CW_KEY_* pair.

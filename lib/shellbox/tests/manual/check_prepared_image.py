@@ -25,9 +25,8 @@ async def check(factory: MachineFactory, spec: MachineSpec) -> bytes:
 
 
 async def main(reference: str, cache: Path, tools: Path, base_bundle: Path, busybox: Path) -> None:
-    skopeo = tools / "usr/bin/skopeo"
     spec = MachineSpec(source=RegistryImage(reference), workdir="/tmp")
-    docker_output = await check(DockerMachineFactory(skopeo=skopeo, image_cache=cache / "oci"), spec)
+    docker_output = await check(DockerMachineFactory(), spec)
     assets = QemuAssets(
         qemu=base_bundle / "qemu-system-x86_64",
         kernel=base_bundle / "vmlinuz",
@@ -44,7 +43,6 @@ async def main(reference: str, cache: Path, tools: Path, base_bundle: Path, busy
             assets=assets,
             bundle_cache=cache / "bundles",
             image_cache=cache / "oci",
-            skopeo=skopeo,
         ),
         spec,
     )

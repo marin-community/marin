@@ -1,0 +1,18 @@
+# Async variant of snowball_mopd_ultra_smoke.yaml; shared model, teacher and context settings live there.
+defaults:
+- snowball_mopd_ultra_smoke
+- _self_
+trainer:
+  algorithm:
+    off_policy_correction: tis
+  rollout_buffer:
+    max_staleness_steps: 1
+    batch_policy: rolling
+    max_in_flight: 96
+teacher_routing:
+  opd:
+    revision: snowball-mopd-ultra-async-smoke-v1
+data:
+  sampling:
+    # Keep the async smoke on seeded shuffled passes, not the sync route quotas.
+    kind: null

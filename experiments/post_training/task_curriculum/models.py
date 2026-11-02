@@ -10,6 +10,8 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from taskcompendium.pipeline.curriculum.alignment import AnchorKind, CurriculumAnchor, CurriculumFacet
+from taskcompendium.pipeline.curriculum.models import CurriculumNode as AtlasCurriculumNode
 
 
 class StrictModel(BaseModel):
@@ -212,24 +214,81 @@ class Curriculum(StrictModel):
         return [section for section in self.sections if isinstance(section, CapabilitySection)]
 
 
-class RoutingFacet(StrEnum):
-    """Semantic-key projection used to route tasks into a curriculum graph."""
-
-    SUBJECT_DOMAIN = "subject_domain"
-    TASK_MECHANIC = "task_mechanic"
-
-
 class CatalogCurriculum(StrictModel):
     """One subject curriculum and its declared graph-routing projection."""
 
-    routing_facet: RoutingFacet
+    routing_facet: CurriculumFacet
     curriculum: Curriculum
+
+    def embedding_anchors(self) -> list[CurriculumAnchor]:
+        """Represent root scopes and individual capability operations for retrieval."""
+        curriculum = self.curriculum
+        facet = self.routing_facet
+        label = "Subject domain" if facet == CurriculumFacet.SUBJECT_DOMAIN else "Task mechanic"
+        roots = [
+            CurriculumAnchor(
+                kind=AnchorKind.SUBJECT,
+                subject_id=curriculum.subject_id,
+                capability_id=None,
+                facet=facet,
+                text=(
+                    f"{label}: {curriculum.subject_name}. {root.name}. {root.scope_text()}. "
+                    f"Includes: {'; '.join(root.includes)}."
+                ),
+            )
+            for root in curriculum.sections
+            if root.parent_id is None
+        ]
+        capabilities = [
+            CurriculumAnchor(
+                kind=AnchorKind.CAPABILITY,
+                subject_id=curriculum.subject_id,
+                capability_id=capability.id,
+                facet=facet,
+                text=f"Task: {capability.name}. {capability.outcome}. Required operations: {included}.",
+            )
+            for capability in curriculum.capability_sections()
+            for included in capability.includes
+        ]
+        return roots + capabilities
+
+    def atlas_nodes(self) -> list[AtlasCurriculumNode]:
+        curriculum = self.curriculum
+        subject_node = f"subject:{curriculum.subject_id}"
+        return [
+            AtlasCurriculumNode(
+                node_id=subject_node,
+                subject_id=curriculum.subject_id,
+                parent_id=None,
+                kind="subject",
+                name=curriculum.subject_name,
+                description="",
+            ),
+            *[
+                AtlasCurriculumNode(
+                    node_id=section.id,
+                    subject_id=curriculum.subject_id,
+                    parent_id=section.parent_id or subject_node,
+                    kind=section.kind.value,
+                    name=section.name,
+                    description=section.scope_text(),
+                )
+                for section in curriculum.sections
+            ],
+        ]
 
 
 class CurriculumCatalog(StrictModel):
     catalog_version: str
     curricula: list[CatalogCurriculum] = Field(min_length=1)
     learning_progression: LearningProgression | None = None
+
+    def embedding_anchors(self) -> list[CurriculumAnchor]:
+        anchors = [anchor for entry in self.curricula for anchor in entry.embedding_anchors()]
+        return list({anchor.anchor_id: anchor for anchor in anchors}.values())
+
+    def atlas_nodes(self) -> list[AtlasCurriculumNode]:
+        return [node for entry in self.curricula for node in entry.atlas_nodes()]
 
     @model_validator(mode="after")
     def validate_catalog(self) -> CurriculumCatalog:

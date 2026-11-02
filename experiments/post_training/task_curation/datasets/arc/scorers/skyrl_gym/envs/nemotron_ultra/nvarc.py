@@ -10,6 +10,7 @@ from typing import Any
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, last_boxed_answer
 from skyrl_gym.envs.nemotron_ultra.sandbox import MAX_VERIFIER_OUTPUT_CHARACTERS, SandboxClient
+from verifyit.modes.extract import unwrap_fence
 
 
 def _valid_grid(value: Any) -> bool:
@@ -25,10 +26,17 @@ def _valid_grid(value: Any) -> bool:
 
 def parse_grid(text: str) -> list[list[int]] | None:
     """Match NVIDIA Board.from_text with the integer color palette."""
-    text = final_answer_text(text)
+    text = unwrap_fence(final_answer_text(text)).strip()
     boxed = last_boxed_answer(text)
     if boxed is not None:
         text = boxed
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    else:
+        if _valid_grid(value):
+            return value
     rows = []
     for line in text.strip().splitlines():
         line = line.strip()

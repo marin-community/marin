@@ -21,7 +21,7 @@ from finelog.client import LogClient
 from finelog.client.log_client import Table
 from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_policy_json
 from finelog.embedded import require_embedded_server
-from rigging.auth import BearerTokenInjector, StaticTokenProvider
+from rigging.auth import BearerTokenInjector, TokenProvider
 
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.stats.tables import (
@@ -75,13 +75,13 @@ def build_log_stack(
     log_service_address: str,
     local_log_dir: Path,
     host: str,
-    worker_token: str | None,
+    worker_token_provider: TokenProvider | None,
 ) -> LogStack:
     """Connect to the log service (starting an in-process server if needed) and resolve tables.
 
     When ``log_service_address`` is empty, start a bundled native ``finelog_server``
     under ``local_log_dir`` and connect to it; otherwise connect to the externally
-    hosted server. ``worker_token``, when set, is attached as a bearer token so the
+    hosted server. ``worker_token_provider``, when set, is attached as a bearer token so the
     log server accepts controller-originated PushLogs/FetchLogs.
     """
     server = None
@@ -98,7 +98,7 @@ def build_log_stack(
         address = f"http://{resolve_external_host(host)}:{server.port}"
         logger.info("Local log server ready at %s (log_dir=%s)", address, local_log_dir)
 
-    interceptors = (BearerTokenInjector(StaticTokenProvider(worker_token), "authorization"),) if worker_token else ()
+    interceptors = (BearerTokenInjector(worker_token_provider, "authorization"),) if worker_token_provider else ()
     client = LogClient.connect(address, interceptors=interceptors)
     return LogStack(
         client=client,

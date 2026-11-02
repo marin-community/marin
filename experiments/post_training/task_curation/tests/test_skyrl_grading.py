@@ -22,7 +22,7 @@ from experiments.post_training.task_curation.tests.local_grader import (
     with_verifier_file,
 )
 from experiments.post_training.task_curation.tests.local_grader import grade as grade_submission
-from experiments.post_training.task_curation.tests.test_skyrl import PIPELINES, ROWS, SUM_SOLUTION
+from experiments.post_training.task_curation.tests.test_skyrl import RECIPES, ROWS, SUM_SOLUTION
 
 pytestmark = pytest.mark.docker
 
@@ -48,7 +48,7 @@ def grade(task: TaskSpec, reply: str, machines: LocalGraderMachines) -> GradeRes
 )
 def test_declared_control_passes_in_the_grader_image(name, control, machines):
     """The source's known solution scores 1, or an empty reply scores 0 where it has none."""
-    pipeline = PIPELINES[name]
+    pipeline = RECIPES[name]
     assert pipeline.controls is not None
     report = run_controls(converted_task(pipeline, ROWS[name]), controls=pipeline.controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
@@ -66,7 +66,7 @@ def test_declared_control_passes_in_the_grader_image(name, control, machines):
 )
 def test_grade_script_fails_rather_than_scoring_when_its_scorer_cannot_import(name, scorer, machines):
     broken = inline_resource(scorer, b"import package_missing_from_the_grader_image\n")
-    task = with_verifier_file(converted_task(PIPELINES[name], ROWS[name]), broken)
+    task = with_verifier_file(converted_task(RECIPES[name], ROWS[name]), broken)
     result = grade(task, f"```python\n{SUM_SOLUTION}\n```", machines)
     assert result.status == Outcome.INFRA_ERROR
     assert result.diagnostics is not None and result.diagnostics["exit_code"] != 0
@@ -84,7 +84,7 @@ def test_ifeval_rewards_the_fraction_of_constraints_a_reply_meets(reply, reward,
             "instruction_kwargs": [{}, {}],
         },
     }
-    result = grade(converted_task(PIPELINES["nemotron_if"], row), reply, machines)
+    result = grade(converted_task(RECIPES["nemotron_if"], row), reply, machines)
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
@@ -97,12 +97,12 @@ def test_ifeval_rewards_the_fraction_of_constraints_a_reply_meets(reply, reward,
 )
 def test_apps_reward_survives_a_program_that_floods_stdout_or_exits(reply, reward, machines):
     row = {**ROWS["apps"], "input_output": json.dumps({"inputs": [[1, 2]], "outputs": [3], "fn_name": "add"})}
-    result = grade(converted_task(PIPELINES["apps"], row), reply, machines)
+    result = grade(converted_task(RECIPES["apps"], row), reply, machines)
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
 def test_lcb_reward_survives_a_program_that_floods_stdout(machines):
     cases = [{"type": "functional", "fn_name": "add", "input": [1, 2], "output": 3}]
     row = {**ROWS["verifiable_code"], "verification_info": {"language": "python", "test_cases": cases}}
-    result = grade(converted_task(PIPELINES["verifiable_code"], row), NOISY_ADD, machines)
+    result = grade(converted_task(RECIPES["verifiable_code"], row), NOISY_ADD, machines)
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)

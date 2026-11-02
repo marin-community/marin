@@ -124,7 +124,7 @@ def load_config() -> CliConfig:
 
     if LOCAL_CONFIG_PATH.exists():
         config_dict = _merge_config_dicts(config_dict, _load_yaml_mapping(LOCAL_CONFIG_PATH))
-    elif DEPRECATED_LOCAL_CONFIG_PATH.exists():
+    elif DEPRECATED_LOCAL_CONFIG_PATH.is_file():
         warnings.warn("Using deprecated .config file. Please rename to .levanter.yaml")
         config_dict = _merge_config_dicts(config_dict, _load_yaml_mapping(DEPRECATED_LOCAL_CONFIG_PATH))
 

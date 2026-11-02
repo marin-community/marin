@@ -8,8 +8,8 @@ the grader packages pin, in ``GENERATOR_PARTS`` parts that workers generate in p
 generates only its sampled rows. Its grader
 (``reasoning_gym_grade.py``) regenerates each entry before scoring, so the scorer sees the generator's
 Python values, and rows whose entry a fresh dataset does not reproduce are rejected.
-``tasktrove-reasoning-gym`` keeps the TaskTrove archive's ``tests/test.sh``, which thresholds the
-scorer's reward at 0.5. Both run with the grader packages (``GRADER_PACKAGES``).
+``tasktrove-reasoning-gym`` uses ``ReasoningGymSpec`` to preserve upstream fractional reward. Both
+run with the grader packages (``GRADER_PACKAGES``).
 The Nemotron Ultra ``reasoning_gym`` component is declared with the other Ultra components.
 """
 
@@ -31,8 +31,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from taskcompendium.convert.tasktrove import ANSWER_PATH, archive_resources, archive_script_grader
-from taskcompendium.grader import grader_config
+from taskcompendium.grader import grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -53,20 +52,22 @@ from taskcompendium.pipeline.models import (
     RawRow,
     Reply,
 )
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from verifyit.spec import DEFAULT_OUTPUT, ReasoningGymSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
     ANSWER_FILE_DELIVERY,
+    TaskTroveConverter,
     tasktrove_source,
 )
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource, process_rows
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
-# The grader lock (``datasets/grader.lock``) pins this wheel by the same hash, so the grader regenerates
-# entries with the code that generated them.
+# The grader packages (``datasets/environments.py``) pin this version, so the grader regenerates entries with
+# the code that generated them.
 GENERATOR_VERSION = "0.1.25"
 GENERATOR_ARCHIVE = f"reasoning_gym-{GENERATOR_VERSION}-py3-none-any.whl"
 GENERATOR_URL = (
@@ -90,8 +91,8 @@ GENERATED_GRADE = grade_script(HERE / "reasoning_gym_grade.py", *shipped_files(H
 
 TASKTROVE_CONFIG = "laion__nemotron-gym-reasoning-gym-v2"
 SCORER_TIMEOUT = 60.0
-ANSWER_FILE_NOTE = f"\nThe runtime writes your final assistant response to {ANSWER_PATH}."
-REWRITE_REASON = f"The grader reads the reply, which the runtime writes to {ANSWER_PATH}"
+ANSWER_FILE_NOTE = f"\nThe runtime writes your final assistant response to {DEFAULT_OUTPUT}."
+REWRITE_REASON = f"The grader reads the reply, which the runtime writes to {DEFAULT_OUTPUT}"
 
 GENERATED_RUBRIC = """
 Read the complete generated question and verify that every grid, rule, sequence, or example required to solve it is
@@ -116,9 +117,8 @@ Procedural generation and unfamiliar puzzles are not defects by themselves.
 Independently work out the answer where feasible; check that the reference actually follows the public problem.
 Passing a reference through its scorer tests mechanics, not its truth.
 
-Compare the public answer format with the named upstream Reasoning Gym scorer. The source grader thresholds the
-scorer's reward at 0.5 into a binary verdict and keeps the scorer's answer parsing. The source fallback is reachable
-only when its source guard and validation permit it.
+Compare the public answer format with the named upstream Reasoning Gym scorer. The grader preserves
+the named scorer's fractional reward and answer parsing without the source's substring fallback.
 
 Flag multiple defensible answers when the named scorer rejects them, hidden assumptions, underspecified
 transformations, or a hidden question different from the public problem.
@@ -187,8 +187,8 @@ def generated_rows(
 ) -> Iterator[tuple[int, dict[str, Any]]]:
     """Run one part of ``generate.py`` with the unpacked generator wheel first on ``PYTHONPATH``.
 
-    Yields the part's rows with their indices in the whole generated source, only those in
-    ``indices`` when given.
+    Yields the requested indices from this part. An irreproducible entry can
+    differ from a full run; callers recovering original data must check its hash.
     """
     arguments = ["rows", generator_version, json.dumps(dict(excluded_generators)), str(part), str(parts)]
     if indices is not None:
@@ -274,7 +274,7 @@ def convert_generated(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
         {"contract": contract},
         environment=required_grader_environment(context),
         timeout=SCORER_TIMEOUT,
-        answer_path=ANSWER_PATH,
+        answer_path=DEFAULT_OUTPUT,
         env={"PYTHONHASHSEED": str(generation["python_hash_seed"])},
     )
     return TaskSpec(
@@ -298,14 +298,14 @@ def generated_golden(task: TaskSpec) -> Reply | None:
 def reply_instruction(instruction: str) -> str:
     """Ask for the answer in the reply where the instruction asked for ``/app/answer.txt``."""
     public = replace_phrases(instruction, ANSWER_FILE_DELIVERY)
-    if public == instruction and ANSWER_PATH in instruction:
+    if public == instruction and DEFAULT_OUTPUT in instruction:
         # Unrecognized wording: keep it, and say where the reply ends up.
         public += ANSWER_FILE_NOTE
     return public
 
 
 def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
-    """A reply task graded by the archive's ``tests/test.sh`` with the grader packages' reasoning-gym release."""
+    """A reply task graded by the upstream scorer, preserving partial credit."""
     instruction, data = row.data.get("instruction"), row.data.get("verifier_data")
     if not isinstance(instruction, str) or not instruction.strip() or not isinstance(data, dict):
         return source_defect("missing_input", "Instruction and entry data are required")
@@ -313,16 +313,13 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
     dataset = metadata.get("source_dataset") if isinstance(metadata, dict) else None
     if not isinstance(dataset, str) or not dataset:
         return unsupported("missing_scorer", "metadata.source_dataset is required")
-    if not isinstance(data.get("answer"), str):
+    if not isinstance(data.get("answer"), str) or not data["answer"].strip():
         return source_defect("invalid_entry", "Entry answer must be a string")
-    grader = archive_script_grader(
-        row.data,
-        required=("tests/verifier.py",),
+    package = verifyit_package(
+        ReasoningGymSpec(dataset=dataset),
+        (inline_resource("entry.json", json.dumps(data).encode()),),
         environment=required_grader_environment(context),
-        answer_path=ANSWER_PATH,
     )
-    if isinstance(grader, ImportRejection):
-        return grader
     task = TaskSpec(
         id=row.id,
         source=row.source,
@@ -330,16 +327,15 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
-        grader=grader,
-        resources=archive_resources(row.data),
+        grader=package.grader,
+        resources=ResourceGroups(verifier=package.resources),
+        tags=("reasoning", "reasoning-gym", dataset.replace("_", "-"), "nemotron"),
     )
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
 def tasktrove_golden(task: TaskSpec) -> Reply:
-    entry = json.loads(
-        resource_bytes(next(item for item in task.resources.verifier if item.path == "verifier_data.json"))
-    )
+    entry = json.loads(resource_bytes(next(item for item in task.resources.verifier if item.path == "entry.json")))
     return answer_reply(task, entry["answer"])
 
 
@@ -347,25 +343,18 @@ GENERATED_CONTROLS = Controls(golden=generated_golden)
 TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:reasoning_gym",
                 title="open-thought/reasoning-gym",
                 origin="MarinSkyRL",
                 family="reasoning-gym",
                 tags=("rlvr", "single-turn", "generator", "gym/reasoning_gym"),
-                verifier=SourceReference(
-                    "reasoning_gym",
-                    "c4daad3876de66d27fa1a5c6405269165f4ccfc5bd85e4fc65108a802f8d6109",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/reasoning_gym"
-                    ),
-                ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="reasoning_gym_generated",
                 source=UrlSource(
                     GENERATOR_URL,
@@ -376,7 +365,6 @@ def sources() -> list[RlDataSource]:
                 ),
                 convert=convert_generated,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=GENERATED_RUBRIC,
                 controls=GENERATED_CONTROLS,
@@ -384,6 +372,7 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-reasoning-gym-v2",
                 title="laion/nemotron-gym-reasoning-gym-v2",
@@ -393,12 +382,11 @@ def sources() -> list[RlDataSource]:
                 count=14259,
                 notes="reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-reasoning-gym",
                 source=tasktrove_source(TASKTROVE_CONFIG),
-                convert=convert_tasktrove,
-                version="1",
-                environment=ShellSim(),
+                convert=TaskTroveConverter(TASKTROVE_CONFIG, convert_tasktrove),
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,

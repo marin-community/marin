@@ -3,18 +3,16 @@
 
 """One row of each kind for the pages to show.
 
-Echo is a Python app, so its journey needs a Postgres: ``MARINA_DATABASE_URL`` names one,
-and the journey kernel serves it the way ``marina dev`` would.
+The journey uses the shared disposable Postgres registry and released source packages.
 
 Nothing here reaches the network: the corpus rows are written directly, and the journey
 searches them with ``grep`` and the wiki listing, neither of which embeds a query.
 """
 
-import os
 
 import pytest
 import sqlalchemy
-from marina.db import database_from_env, engine_for
+from marina.db import DatabaseSpec, engine_for
 
 from echo import app as echo_app
 from echo import schema
@@ -44,14 +42,12 @@ WIKI = {
 
 
 @pytest.fixture(scope="session", autouse=True)
-def echo_corpus() -> None:
+def echo_corpus(marina_database: DatabaseSpec) -> None:
     """Echo's schema, holding one activity chunk and one wiki note."""
-    database = database_from_env(os.environ)
-    if database is None:
-        pytest.skip("set MARINA_DATABASE_URL to a Postgres with pgvector to walk through Echo")
-    engine = engine_for(database, APP)
+    engine = engine_for(marina_database, APP)
     try:
-        echo_app.migrate(engine)
+        with engine.begin() as migration_connection:
+            echo_app.migrate(migration_connection)
         with engine.begin() as conn:
             conn.execute(sqlalchemy.delete(schema.chunks))
             conn.execute(sqlalchemy.delete(schema.wiki_entries))

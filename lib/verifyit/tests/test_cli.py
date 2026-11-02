@@ -2,15 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from verifyit import grade as grade_module
+from verifyit.candidate_file import main as candidate_file_main
 from verifyit.grade import Status, main, scored
 from verifyit.json_comparison import NumericTypePolicy
-from verifyit.spec import FunctionCall, Mode, NumericSpec, PredictedActionSpec, StructuredExactSpec, render_spec
+from verifyit.spec import (
+    ExactSpec,
+    FunctionCall,
+    JsonSchemaSpec,
+    Mode,
+    NumericSpec,
+    PredictedActionSpec,
+    StructuredExactSpec,
+    render_spec,
+)
 
 
 @pytest.mark.parametrize(
@@ -55,6 +66,78 @@ def test_invalid_private_contract_clears_previous_rewards(tmp_path, spec, candid
 
 def _verdict(logs: Path) -> dict:
     return json.loads((logs / "verdict.json").read_text())
+
+
+@pytest.mark.parametrize("candidate,reward", [("12", 1.0), (r"\boxed{12}", 0.0), (None, 0.0)])
+def test_candidate_file_grades_full_text_or_missing_answer(tmp_path, candidate, reward):
+    config = tmp_path / "contract.toml"
+    config.write_text(render_spec(ExactSpec(expected=("12",))))
+    manifest = tmp_path / "resources.json"
+    manifest.write_text("[]")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    if candidate is not None:
+        (workspace / "submission.txt").write_text(candidate)
+    logs = tmp_path / "logs"
+
+    assert (
+        candidate_file_main(
+            [
+                "--spec",
+                str(config),
+                "--answer",
+                "/app/submission.txt",
+                "--workspace",
+                str(workspace),
+                "--logs-dir",
+                str(logs),
+                "--resources-manifest",
+                str(manifest),
+            ]
+        )
+        == 0
+    )
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
+    if candidate is None:
+        assert _verdict(logs)["detail"] == {"reason": "no_output"}
+
+
+def test_candidate_file_module_loads_resources_relative_to_explicit_manifest(tmp_path):
+    config = tmp_path / "contract.toml"
+    config.write_text(render_spec(JsonSchemaSpec(schema="schemas/order.json")))
+    resources = tmp_path / "private"
+    (resources / "schemas").mkdir(parents=True)
+    (resources / "schemas" / "order.json").write_text(json.dumps({"const": {"quantity": 3}}))
+    manifest = resources / "inputs.json"
+    manifest.write_text(json.dumps(["schemas/order.json"]))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "order.txt").write_text('```json\n{"quantity": 3}\n```')
+    logs = tmp_path / "logs"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "verifyit.candidate_file",
+            "--spec",
+            str(config),
+            "--answer",
+            "/app/order.txt",
+            "--workspace",
+            str(workspace),
+            "--logs-dir",
+            str(logs),
+            "--resources-manifest",
+            str(manifest),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
 
 
 def test_malformed_spec_writes_invalid_task_and_exits_zero(tmp_path):

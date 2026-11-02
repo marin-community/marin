@@ -249,7 +249,9 @@ def inference_mesh(num_chips: int, tensor_parallel_size: int) -> MeshConfig:
             num_chips,
             data,
         )
-    return MeshConfig(axes={"replica": 1, "data": data, "model": tensor_parallel_size})
+    # Snowball's explicit PartitionSpecs name both axes even when they do not shard this slice.
+    # Keep them on the serving mesh so its forward pass can reshard tokens and expert weights.
+    return MeshConfig(axes={"replica": 1, "data": data, "model": tensor_parallel_size, "expert": 1, "context": 1})
 
 
 def validate_levanter_dtype(dtype: str) -> str:

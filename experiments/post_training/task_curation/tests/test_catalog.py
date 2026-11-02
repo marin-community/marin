@@ -1,36 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
-from dataclasses import replace
+import shutil
+from collections import Counter
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from taskcompendium.pipeline.inputs import SourceFormat
+from click.testing import CliRunner
+from finestore.rl.curation import CurationCatalog
 
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.count_inputs import parquet_counts
-from experiments.post_training.task_curation.export_catalog import catalog_document, source_row
-from experiments.post_training.task_curation.pipeline import HfSource
-from experiments.post_training.task_curation.source import DataSourceReview, RlDataSource, SourceInfo
-from experiments.post_training.task_curation.sources import all_pipelines
-from experiments.post_training.task_curation.tests import (
-    test_arc,
-    test_nemotron_ultra,
-    test_reasoning_gym,
-    test_skyrl,
-    test_tasktrove_code,
-    test_tasktrove_text,
-)
-
-FAMILY_TESTS = (test_arc, test_nemotron_ultra, test_reasoning_gym, test_skyrl, test_tasktrove_code, test_tasktrove_text)
-
-
-def test_every_declaration_has_a_fixture_row():
-    covered = [name for module in FAMILY_TESTS for name in module.ROWS]
-    assert len(covered) == len(set(covered))
-    assert set(covered) == set(all_pipelines())
+from experiments.post_training.task_curation.driver import main
 
 
 def test_parquet_count_export_identifies_the_counted_input(tmp_path):
@@ -40,43 +23,94 @@ def test_parquet_count_export_identifies_the_counted_input(tmp_path):
     metadata = snapshot / ".cache/huggingface/download/tasks.parquet.metadata"
     metadata.parent.mkdir(parents=True)
     metadata.write_text("pinned-input\nfile-etag\n0\n")
-    count = parquet_counts(snapshot, "pinned-input", "*.parquet")["tasks.parquet"]
-    pipeline = replace(
-        all_pipelines()["math500"],
-        source=HfSource("local/questions", "pinned-input", ("tasks.parquet",), SourceFormat.PARQUET),
-    )
-    source = RlDataSource(
-        info=SourceInfo(id="local:questions", title="Questions", origin="local", count=count),
-        pipeline=pipeline,
-    )
-    row = source_row(source)
-    assert row["task_count"] == 3
-    assert row["dataset_revision"] == row["pipeline"]["revision"] == "pinned-input"
-    assert row["url"] == "https://huggingface.co/datasets/local/questions/tree/pinned-input"
-    assert row["pipeline"]["files"] == ("tasks.parquet",)
-    assert source_row(replace(source, info=replace(source.info, count=None)))["task_count"] is None
+    assert parquet_counts(snapshot, "pinned-input", "*.parquet")["tasks.parquet"] == 3
     with pytest.raises(ValueError, match="expected revision"):
         parquet_counts(snapshot, "another-revision", "*.parquet")
 
 
-def test_catalog_export_is_deterministic_and_keeps_metadata_only_sources():
-    reviewed = RlDataSource(
-        info=SourceInfo(id="local:reviewed", title="Reviewed", origin="local", count=7),
-        review=DataSourceReview(grade="good", evidence_url="https://example.org/review", reviewed_at="2026-10-08"),
+def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubric(tmp_path, monkeypatch, review_server):
+    monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
+    staged = tmp_path / "input"
+    staged.mkdir()
+    (staged / "test.jsonl").write_text(
+        "\n".join(json.dumps({"problem": f"What is {value} plus one?", "answer": str(value + 1)}) for value in range(3))
     )
-    excluded = RlDataSource(info=SourceInfo(id="local:excluded", title="Excluded", origin="local", tags=("excluded",)))
-    document = catalog_document([reviewed, excluded])
-    assert document == catalog_document([excluded, reviewed])
-    rows = json.loads(json.dumps(document))["sources"]
-    assert [(row["id"], row["status"], row["pipeline"]) for row in rows] == [
-        ("local:excluded", "Excluded", None),
-        ("local:reviewed", "Available", None),
+    cache = tmp_path / "cache"
+    args = [
+        "--mode",
+        "full",
+        "--cache-dir",
+        str(cache),
+        "--source",
+        "math500",
+        "--input-root",
+        str(staged),
+        "--max-workers",
+        "1",
+        "--quality-sample-size",
+        "2",
+        "--assessment-sample-size",
+        "2",
+        "--review-mode",
+        "chat",
+        "--model-revision",
+        "fixture",
+        "--review-concurrency",
+        "1",
+        "--base-url",
+        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
+        "--run",
     ]
-    assert rows[1]["quality"] == "good"
-    assert rows[1]["review_url"] == "https://example.org/review"
-    assert (
-        document["revision"]
-        == hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    runner = CliRunner()
+    first = runner.invoke(main, args)
+    assert first.exit_code == 0, first.output
+    root = str(cache / "campaigns/catalog")
+    catalog = CurationCatalog(root)
+    snapshot = catalog.current()
+    source = next(row for row in catalog.sources(snapshot.snapshot_id) if row.declaration.name == "math500")
+    key = source.assessment_key
+    assert key is not None
+    items = list(catalog.items(key))
+    assert len(items) == 2 and all(item.verdict == "good" for item in items)
+    assert source.curation.admission_counts.admitted == 3
+    inventories = [row for row in catalog.sources(snapshot.snapshot_id) if row.declaration.pipeline is None]
+    assert inventories and all(
+        row.assessment_key is None and row.latest_attempt_status == "skipped" for row in inventories
     )
-    changed = replace(reviewed, info=replace(reviewed.info, count=8))
-    assert catalog_document([changed, excluded])["revision"] != document["revision"]
+    packet = catalog.packet(key, items[0].task_id)
+    assert packet["task"]["id"] == items[0].task_id
+
+    calls = Counter(request["tool_choice"]["function"]["name"] for request in review_server.requests)
+    assert calls["review_task"] > 0 and calls["assess_task"] == 2
+    repeated = runner.invoke(main, args)
+    assert repeated.exit_code == 0, repeated.output
+    assert Counter(request["tool_choice"]["function"]["name"] for request in review_server.requests) == calls
+    rubric = tmp_path / "rubric.txt"
+    rubric.write_text("Check whether the requested operation is unambiguous.")
+    changed = runner.invoke(main, [*args, "--assessment-rubric", str(rubric)])
+    assert changed.exit_code == 0, changed.output
+    changed_catalog = CurationCatalog(root)
+    changed_source = next(
+        row for row in changed_catalog.sources(changed_catalog.current().snapshot_id) if row.id == source.id
+    )
+    assert changed_source.assessment_key != key
+    assert Counter(request["tool_choice"]["function"]["name"] for request in review_server.requests) == calls + Counter(
+        {"assess_task": 2}
+    )
+
+    rubric.write_text("Check answer units as well.")
+    review_server.assessment_available = False
+    failed = runner.invoke(main, [*args, "--assessment-rubric", str(rubric)])
+    assert failed.exit_code != 0
+    failed_catalog = CurationCatalog(root)
+    failed_source = next(
+        row for row in failed_catalog.sources(failed_catalog.current().snapshot_id) if row.id == source.id
+    )
+    assert failed_source.assessment_key is None
+    assert failed_source.latest_attempt_status == "failed"
+    assert catalog.packet(key, items[0].task_id) == packet
+
+    attempt = next(catalog.attempts(snapshot.snapshot_id))
+    shutil.rmtree(attempt.paths.inputs_root)
+    shutil.rmtree(attempt.paths.judgments_root)
+    assert CurationCatalog(root).packet(key, items[0].task_id) == packet

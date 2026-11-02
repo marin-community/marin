@@ -58,7 +58,7 @@ uv pip install jax==0.11.0 jaxlib==0.11.0
   1.83 s with fresh autotuning. The wrapper sets
   `JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=none`.
 - With a preallocated allocator pool, steps whose temp buffer is 94-97 GiB
-  (batch 96 with reference attention, or `ring_dedup` with `save_moe` at batch
+  (batch 96 with reference attention, or `ring_filtered` with `save_moe` at batch
   64) can fail with out-of-memory around step 5. XLA returns the temp buffer to
   the pool while the step still runs, and a small buffer allocated in that
   window can land right after it. The next step's temp then no longer fits in

@@ -52,22 +52,38 @@ def write_report(output_path: str, page: str) -> str:
     return path
 
 
-def iter_batches(directory: str, columns: list[str], batch_size: int) -> Iterator[pa.RecordBatch]:
-    """Stream ``columns`` from the parquet files under ``directory`` in sorted file order.
+def parquet_files(directory: str) -> list[str]:
+    """The parquet files directly under ``directory``, sorted.
 
-    Uses a single-level ``*.parquet`` glob: a recursive glob makes s3fs
-    ``HeadObject`` the prefix, which the CW object store rejects.
+    A single-level ``*.parquet`` glob: a recursive glob makes s3fs ``HeadObject``
+    the prefix, which the CW object store rejects.
     """
-    for f in sorted(str(m) for m in StoragePath(f"{directory.rstrip('/')}/*.parquet").glob()):
+    return sorted(str(m) for m in (StoragePath(directory) / "*.parquet").glob())
+
+
+def iter_batches(directory: str, columns: list[str], batch_size: int) -> Iterator[pa.RecordBatch]:
+    """Stream ``columns`` from the parquet files under ``directory`` in sorted file order."""
+    for f in parquet_files(directory):
         with StoragePath(f).open("rb") as fh:
             yield from pq.ParquetFile(fh).iter_batches(batch_size=batch_size, columns=columns)
 
 
-def sample_rows(directory: str, columns: list[str], limit: int) -> list[dict]:
-    """Read up to ``limit`` rows of ``columns`` from the parquet files under ``directory``."""
+def head_rows(path: str, columns: list[str], limit: int) -> list[dict]:
+    """Read the first ``limit`` rows of ``columns`` from one parquet file, streaming batches."""
     out: list[dict] = []
-    for batch in iter_batches(directory, columns, batch_size=min(limit, 4096)):
-        out.extend(batch.to_pylist()[: limit - len(out)])
+    with StoragePath(path).open("rb") as fh:
+        for batch in pq.ParquetFile(fh).iter_batches(batch_size=min(limit, 4096), columns=columns):
+            out.extend(batch.to_pylist()[: limit - len(out)])
+            if len(out) >= limit:
+                break
+    return out
+
+
+def sample_rows(directory: str, columns: list[str], limit: int) -> list[dict]:
+    """Read up to ``limit`` rows of ``columns`` from the parquet files under ``directory``, in file order."""
+    out: list[dict] = []
+    for f in parquet_files(directory):
+        out.extend(head_rows(f, columns, limit - len(out)))
         if len(out) >= limit:
             break
     return out

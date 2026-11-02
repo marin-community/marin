@@ -168,7 +168,7 @@ class WorkerJourney:
                 log_service_address="",
                 local_log_dir=state_dir / "log-server",
                 host=config.host,
-                worker_token=None,
+                worker_token_provider=None,
             ),
             threads=ThreadContainer(name="worker-journey"),
             db=ControllerDB(db_dir=root / "db"),

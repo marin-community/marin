@@ -11,11 +11,13 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, DockerImage, Machine, MachineFactory, MachineSpec, ShellSimBuiltins
+from shellbox.machine import Backend, DockerImage, Machine, MachineFactory, MachineSpec, PackageSpec
 
 from taskcompendium.convert.answers import numeric_answer_task, source_defect
 from taskcompendium.models import (
+    CommandSemantics,
     EnvironmentRequirements,
     ExitCodeReward,
     ScriptGrader,
@@ -44,6 +46,42 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.runtime.resources import inline_resource
 
+
+def response(task_id: str, confidence: str = "high", quality: str = "good") -> dict[str, Any]:
+    verdict = {
+        "task_id": task_id,
+        "quality": quality,
+        "confidence": confidence,
+        "reference_status": "consistent",
+        "defects": [],
+        "evidence": "The prompt supplies two apples and asks for the same count.",
+    }
+    return {
+        "custom_id": task_id,
+        "response": {
+            "status_code": 200,
+            "body": {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-0",
+                                    "type": "function",
+                                    "function": {"name": "review_task", "arguments": json.dumps(verdict)},
+                                }
+                            ],
+                        },
+                    }
+                ],
+            },
+        },
+    }
+
+
 SOURCE_FILES = SourceFiles("fixture/tasks", "1", ("source.jsonl",), SourceFormat.JSONL)
 SVAMP_RUBRIC = ReviewRubric(
     id="arithmetic-word-problems",
@@ -54,7 +92,7 @@ SVAMP_RUBRIC = ReviewRubric(
     ),
 )
 GRADER_IMAGE = "fixture@sha256:" + "b" * 64
-GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, compatible_backends=(Backend.DOCKER,))
+GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)
 
 
 def svamp_row_task(row: RawRow) -> TaskSpec | ImportRejection:
@@ -129,7 +167,7 @@ def review_source(
 ) -> dict[str, Any]:
     """Prepare and review every eligible row, without source-level quality extrapolation."""
     assert isinstance(execution.reviewer, BatchReviewer)
-    prepare_source(staged, output, recipe, limit, execution)
+    prepare_source(staged, output, recipe, limit, execution, num_output_shards=1)
     return audit_prepared_source(output, None, output, recipe, review_config(execution.reviewer), execution).manifest
 
 
@@ -162,16 +200,16 @@ def stage_table(output_path: Path, view: str = "audit") -> pa.Table:
     return pa.Table.from_pylist(rows, schema=table.schema)
 
 
-class ShellSimImages:
+class ShellSimImages(DockerMachineFactory):
     """Stand in for a grader image with a fresh in-memory ShellSim machine and its shell builtins."""
 
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> Machine:
-        return await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins()))
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
 
 
-class UnavailableImages:
+class UnavailableImages(DockerMachineFactory):
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> Machine:

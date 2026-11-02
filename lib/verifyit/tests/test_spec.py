@@ -19,6 +19,7 @@ from verifyit.spec import (
     ReasoningGymSpec,
     StdioSpec,
     StructuredExactSpec,
+    UnsolvableSpec,
     parse_spec,
     render_spec,
     spec_from_table,
@@ -30,6 +31,7 @@ from verifyit.spec import (
 
 def test_round_trip_every_field_kind():
     specs = [
+        UnsolvableSpec(output="/app/final.txt"),
         McqSpec(expected="C", options=5),
         StructuredExactSpec(expected={"values": [None, True, 1, 1.0, {"text": "value"}]}),
         StructuredExactSpec(expected=None, empty_output=EmptyOutputPolicy.GRADE),
@@ -54,6 +56,13 @@ def test_single_string_becomes_tuple_and_none_is_omitted():
     spec = parse_spec('mode = "exact"\nexpected = "42"\n')
     assert spec == ExactSpec(expected=("42",))
     assert "special_judge" not in render_spec(StdioSpec(command="./a.out"))
+
+
+def test_large_repository_test_id_lists_round_trip():
+    # SWE-smith repositories can carry thousands of parametrized PASS_TO_PASS IDs.
+    ids = tuple(f'tests/test_schema.py::test_schema[case-{i}-"quoted"-\\-\n-λ]' for i in range(10_000))
+    spec = PytestSpec(must_pass=ids[:2], must_not_break=ids)
+    assert parse_spec(render_spec(spec)) == spec
 
 
 @pytest.mark.parametrize(
@@ -97,6 +106,7 @@ def test_reasoning_gym_params_roundtrip_and_legacy_default():
 @pytest.mark.parametrize(
     "mode,fields",
     [
+        ("unsolvable", {}),
         ("predicted_action", {"expected_calls": [{"name": "lookup", "arguments": {"id": 1}}]}),
         ("mcq", {"expected": "A"}),
         ("math", {"expected": "1"}),

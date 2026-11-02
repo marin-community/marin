@@ -1,7 +1,7 @@
 # fsutil: browsing Marin's buckets
 
 `fsutil` lists, reads, sizes, copies, and removes objects across every bucket declared in
-`config/*.yaml` — GCS, CoreWeave AI Object Storage, and R2 — from one command, and opens
+`config/*.yaml` — GCS and CoreWeave AI Object Storage — from one command, and opens
 an interactive browser over all of them.
 
 ```bash
@@ -16,14 +16,29 @@ uv run fsutil show gs://marin-us-central2/documents/shard-00000.parquet
 uv run fsutil du s3://marin-us-east-02a/iris/my-job
 uv run fsutil usage s3://marin-us-east-02a -o usage-report.md
 uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
+uv run fsutil cp --remote s3://marin-us-east-02a/my-file hf://buckets/open-athena/marin/my-file
+uv run fsutil cp --remote hf://open-athena/snowball-intermediate/config.json s3://marin-us-east-02a/config.json
 uv run fsutil mv /tmp/run.json gs://marin-us-central2/archive/
 uv run fsutil rsync --dry-run --delete /tmp/checkpoints gs://marin-us-central2/checkpoints
-uv run fsutil verified-copy gs://marin-us-central2/exports/model s3://marin-na/marin/exports/model
+uv run fsutil verified-copy gs://marin-us-central2/exports/model s3://marin-us-east-02a/marin/exports/model
 uv run fsutil hash gs://marin-us-central2/archive/run.json
 uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix s3://marin-us-east-02a/tmp/old-prefix
 ```
 
-Paths are always full URLs — `gs://bucket/key`, `s3://bucket/key`, or a local path.
+Paths are full URLs or local paths. Hugging Face URL prefixes distinguish mutable buckets
+from versioned model and dataset repositories:
+
+| Storage | URL |
+|---------|-----|
+| HF bucket | `hf://buckets/owner/bucket/path` |
+| HF model repository | `hf://owner/model/path` or `hf://models/owner/model/path` |
+| HF dataset repository | `hf://datasets/owner/dataset/path` |
+| GCS bucket | `gs://bucket/path` |
+| S3-compatible bucket | `s3://bucket/path` |
+
+Model and dataset paths can pin a branch, tag, or commit after the repository name,
+such as `hf://open-athena/snowball-intermediate@main/config.json`.
+Buckets have no revisions. An `hf://` URL without a type prefix selects a model repository.
 There is no current bucket to keep track of, and a copy may name a different backend on
 each side.
 
@@ -43,9 +58,15 @@ export CW_KEY_ID=<key-id>
 export CW_KEY_SECRET=<key-secret>
 ```
 
-R2 buckets use `R2_KEY_ID` / `R2_KEY_SECRET` the same way. Either backend also accepts
-the generic `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` pair, which is enough when only
-one of them is in play.
+CoreWeave also accepts the generic `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` pair.
+
+Hugging Face uses `HF_TOKEN` or a token saved by `hf auth login`. For `cp` and `mv`
+with `--remote`, fsutil forwards that token to the Iris job through its environment;
+the token does not appear in the job command. The remote Iris worker uses its
+configured CoreWeave S3 credentials. A new Hugging Face bucket or repository written by
+fsutil is created private. Existing storage keeps its current visibility.
+Creating storage requires permission in the owning user or organization;
+uploading requires write access to the destination.
 
 `fsutil buckets` reports which backends are reachable, so an unconfigured one shows up
 before a command fails against it. A backend with no credentials only breaks commands
@@ -83,8 +104,8 @@ MD5 digest as bytes.
 | `du URL` | Total bytes and object count beneath a prefix |
 | `usage URL [--workers N] [-o REPORT.md]` | Metadata-only prefix breakdown ranked by size and time since the newest write |
 | `find PATTERN` | Paths matching a glob, e.g. `gs://marin-us-central2/x/**/*.json` |
-| `cp SRC ... DST [-r] [-n]` | Copy one or more sources between any backends. `-r` includes directories; `-n` preserves existing destination files |
-| `mv SRC ... DST [-r]` | Move or rename one or more sources. Sources are removed after every copy succeeds |
+| `cp SRC ... DST [-r] [-n] [--remote]` | Copy one or more sources between any backends. `-r` includes directories; `-n` preserves existing destination files |
+| `mv SRC ... DST [-r] [--remote]` | Move or rename one or more sources. Sources are removed after every copy succeeds |
 | `rsync SRC DST [--delete] [--dry-run] [--checksum]` | Synchronize the files beneath two directories or prefixes |
 | `verified-copy SRC DST [--workers N] [--status-prefix URL]` | Publish a verified, restartable prefix with an explicit readiness marker |
 | `hash URL ... [--hex]` | Stream complete files and print MD5 digests in base64 or hexadecimal |
@@ -99,6 +120,12 @@ for a directory. Transfers stream through the machine running `fsutil`, includin
 between two object stores. Quoted glob sources are expanded by the source filesystem. `mv`
 finishes all copies before removing any source. Local-to-local `cp -r` and `mv -r` preserve
 empty directories.
+
+`--remote` submits one small CPU job to the `cw-us-east-02a` Iris cluster, waits for
+completion, and streams the job logs to the local terminal. Both source and
+destination must be storage URLs because local paths on the submitting machine
+are unavailable to the worker. The Iris job ID is printed when submitted; if
+the connection drops, reconnect with `uv run iris --cluster=cw-us-east-02a job logs -f JOB_ID`.
 
 `rsync` compares size and modification time first. For equal-sized local files with different
 times it compares MD5; object stores use provider MD5 metadata when both sides supply it. When
@@ -121,7 +148,7 @@ source store. Object stores cannot atomically rename a prefix, so consumers may 
 objects appear one at a time and must check for the manifest before using the destination.
 
 The command hashes each source object while uploading it. For configured S3-compatible
-destinations such as R2, it uses fixed-size multipart parts, calculates the corresponding
+destinations, it uses fixed-size multipart parts, calculates the corresponding
 content-derived ETag, and compares that value with destination metadata after the upload. Other
 destinations are read back and checked against the source SHA-256. The command records the SHA-256
 and source and staging identities under a sibling `<DST>.verified-copy-status` prefix. A retry skips
@@ -218,10 +245,10 @@ until the file ends; other formats show the bounded preview.
 
 ## Where the bucket list comes from
 
-Buckets and backends are declared in `config/*.yaml` under `data.region_buckets`, and
-each S3-compatible backend's endpoint and credential variables under `data.stores`.
-`fsutil` builds one filesystem per backend from that config, so adding a bucket is a
-config change rather than a code change. The same routing is available to library code
-as `rigging.filesystem.buckets.filesystem_for(url)`, which is the way to reach two S3 backends
-from one process — the process-wide `AWS_*` / `FSSPEC_S3` variables can only describe
-one at a time.
+Buckets are declared in `config/*.yaml` under `data.region_buckets` and
+`data.stores.<backend>.temp_bucket`. Backend endpoints and credential variables
+are declared under `data.stores`.
+`fsutil` builds filesystems from that config, so adding a bucket is a configuration
+change. Python callers can use `rigging.filesystem.buckets.filesystem_for(url)`
+for the same routing. Unregistered S3 buckets use the process-wide `AWS_*` and
+`FSSPEC_S3` settings.

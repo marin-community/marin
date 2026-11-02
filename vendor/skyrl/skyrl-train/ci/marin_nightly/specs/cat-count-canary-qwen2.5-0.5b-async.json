@@ -1,0 +1,156 @@
+{
+  "provenance": {
+    "what": "CatCount learning through Megatron with pretrained Qwen2.5-0.5B-Instruct.",
+    "lane": "async",
+    "runtime_sha": "1f130218e56590075363d59cd94fb97c292d65e0",
+    "learning_rate": 2e-06,
+    "batch_size": 64,
+    "micro_batch": 16,
+    "update_epochs_per_batch": 2,
+    "seeds": [
+      17,
+      23,
+      31,
+      47
+    ],
+    "step_cap_rule": "Fixed 30-step cap; sampled evaluation every five steps; first score >=0.65 stops training.",
+    "marin_sha": "c57ae7b8de8a905dcd89f1b021e1ec351e534001",
+    "step_cap": 30,
+    "staleness": 2,
+    "eval_interval": 5,
+    "log_ratio_observed_maximum": 0.5917172267140303,
+    "seed": 17,
+    "sampled_score_threshold": 0.65,
+    "initial_score_band": [
+      0.1,
+      0.45
+    ],
+    "healthy_minimum_peak_margin": 0.095273,
+    "failing_maximum_peak_margin": -0.115285
+  },
+  "min_train_steps": 5,
+  "max_wall_clock_seconds": 1200,
+  "required_log_patterns": {
+    "successful_head_completion": {
+      "pattern": "Training done!",
+      "minimum": 1
+    },
+    "telemetry": {
+      "pattern": "\\[telemetry\\] .* run_id=",
+      "minimum": 1
+    }
+  },
+  "metric_gates": [
+    {
+      "kind": "eval",
+      "metric": "eval/sampled/train/avg_score",
+      "min_observations": 1,
+      "bounds": {
+        "minimum": 0.1,
+        "maximum": 0.45
+      },
+      "step": 0
+    },
+    {
+      "kind": "eval",
+      "metric": "eval/sampled/train/avg_score",
+      "min_observations": 2,
+      "max_step": 30,
+      "bounds": {
+        "minimum_count": 1,
+        "minimum": 0.65
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "policy/policy_loss",
+      "min_observations": 5
+    },
+    {
+      "kind": "train",
+      "metric": "policy/final_loss",
+      "min_observations": 5
+    },
+    {
+      "kind": "train",
+      "metric": "policy/policy_entropy",
+      "min_observations": 5
+    },
+    {
+      "kind": "train",
+      "metric": "reward/zero_std_group_fraction",
+      "min_observations": 5,
+      "bounds": {
+        "minimum_count": 1,
+        "minimum": 0,
+        "inclusive_minimum": false
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "policy/ppo_clip_ratio",
+      "min_observations": 5,
+      "bounds": {
+        "minimum_count": 1,
+        "minimum": 0,
+        "inclusive_minimum": false
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "policy/ppo_ratio_exact_unit_fraction",
+      "min_observations": 5,
+      "bounds": {
+        "minimum_count": 1,
+        "maximum": 1,
+        "inclusive_maximum": false
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "policy/mismatch/pooled/log_ratio_abs_mean",
+      "min_observations": 5,
+      "bounds": {
+        "minimum": 0,
+        "maximum": 0.8
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "async/staleness_mean",
+      "min_observations": 5,
+      "bounds": {
+        "minimum_count": 1,
+        "minimum": 0,
+        "inclusive_minimum": false
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "environment/exact_n10",
+      "min_observations": 5,
+      "bounds": {
+        "minimum": 0,
+        "maximum": 1
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "environment/exact_n20",
+      "min_observations": 5,
+      "bounds": {
+        "minimum": 0,
+        "maximum": 1
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "policy/dp_weight_checksum_mismatch",
+      "min_observations": 5,
+      "bounds": {
+        "minimum": 0,
+        "maximum": 0
+      }
+    }
+  ]
+}

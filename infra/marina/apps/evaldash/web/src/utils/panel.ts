@@ -1,4 +1,5 @@
 import { INTERVAL_KIND, type IntervalKind, type Meta, type PanelCell, type PanelRow } from '@/types/api'
+import { compareCells } from './ranking'
 
 export function cohortWarning(cohort: string, meta: Meta): string | null {
   if (cohort === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
@@ -22,12 +23,6 @@ export function cellsByModel(rows: PanelRow[]): Record<string, Record<string, Pa
   const out: Record<string, Record<string, PanelCell>> = {}
   for (const row of rows) out[row.model] = row.cells
   return out
-}
-
-// Orders two cells on one benchmark: the higher score first, and on a tie the higher lower bound. The
-// panel's column sort and the fleet-best marker both use this rule, so they cannot disagree.
-export function compareCells(a: PanelCell, b: PanelCell): number {
-  return b.value - a.value || b.low - a.low
 }
 
 // For each benchmark, the model whose cell leads under compareCells across the given rows.

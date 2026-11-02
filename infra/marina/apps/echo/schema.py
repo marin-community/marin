@@ -46,8 +46,7 @@ metadata = MetaData()
 chunks = Table(
     "chunks",
     metadata,
-    # Chunk ids come from the corpus, never a sequence.
-    Column("id", BigInteger, primary_key=True, autoincrement=False),
+    Column("id", BigInteger, Identity(), primary_key=True),
     Column("source", Text, nullable=False),
     Column("kind", Text, nullable=False),
     Column("ref", Text),
@@ -58,6 +57,7 @@ chunks = Table(
     Column("url", Text, nullable=False),
     Column("text", Text),
     Column("hash", Text),
+    Column("sync_hash", Text),
     Column("embedding", Vector(EMBED_DIM)),
     Column(
         "search_document",
@@ -70,6 +70,7 @@ chunks = Table(
     ),
     Column("part", Integer, nullable=False, server_default=text("0")),
     Column("n_parts", Integer, nullable=False, server_default=text("1")),
+    UniqueConstraint("source", "kind", "url", "part", name="chunks_identity"),
     Index("idx_chunks_source_kind", "source", "kind"),
     Index("idx_chunks_date", "date"),
     Index("idx_chunks_url", "url"),

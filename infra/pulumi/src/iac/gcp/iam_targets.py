@@ -26,6 +26,7 @@ def global_iam_args(project: str, config: GcpIamConfig) -> GcpIamArgs:
         service_accounts=config.service_accounts,
         backend_service_iap=(),
         cloud_run_iap=(),
+        principal_directory=principals,
     )
     return merge_iam_grant_sets(
         args,

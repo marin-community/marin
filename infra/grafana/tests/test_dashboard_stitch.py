@@ -12,13 +12,66 @@ FRAGMENT = {"type": "table", "title": "Shared panel", "targets": [{"refId": "A"}
 
 
 def test_stitch_dashboard_merges_fragment_with_local_id_and_grid_pos():
+    grid = {"h": 8, "w": 12, "x": 0, "y": 0}
+    source = {"panels": [{"id": 7, "gridPos": grid, "panelRef": "shared"}]}
+
+    (panel,) = stitch_dashboard(source, {"shared": FRAGMENT})["panels"]
+
+    assert panel == {**FRAGMENT, "id": 7, "gridPos": grid}
+
+
+@pytest.mark.parametrize("parameter_set", ["rl_run", "rl_execution"])
+def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows(parameter_set):
+    columns = [
+        {"selector": "t", "text": "time", "type": "timestamp_epoch"},
+        {"selector": "series", "text": "series", "type": "string"},
+        {"selector": "value", "text": "value", "type": "number"},
+    ]
+    short = {
+        "refId": "A",
+        "targetRef": parameter_set,
+        "url": "/v1/rl/overview" if parameter_set == "rl_run" else "/v1/rl/execution",
+        "view": "spans",
+        "format": "timeseries",
+    }
+    fragment = {"type": "timeseries", "targets": [short]}
     source = {
         "panels": [
-            {"id": 7, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "panelRef": "shared"},
+            {"id": 1, "gridPos": {"y": 0}, "panelRef": "shared"},
+            {
+                "id": 2,
+                "type": "row",
+                "panels": [{"id": 3, "targets": [{**short, "format": "table", "columns": columns[:1]}]}],
+            },
         ]
     }
-    (panel,) = stitch_dashboard(source, {"shared": FRAGMENT})["panels"]
-    assert panel == {**FRAGMENT, "id": 7, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}}
+
+    first, row = stitch_dashboard(source, {"shared": fragment})["panels"]
+
+    params = [
+        {"key": "clusters", "value": "${cluster:csv}"},
+        {"key": "run", "value": "${run}"},
+        {"key": "from", "value": "${__from}"},
+        {"key": "to", "value": "${__to}"},
+        {"key": "bucket_ms", "value": "${__interval_ms}"},
+        {"key": "view", "value": "spans"},
+    ]
+    if parameter_set == "rl_execution":
+        params[2:2] = [{"key": "job", "value": "${job}"}, {"key": "executions", "value": "${execution:csv}"}]
+    expanded = {
+        "refId": "A",
+        "type": "json",
+        "source": "url",
+        "format": "timeseries",
+        "parser": "backend",
+        "url": short["url"],
+        "url_options": {"method": "GET", "params": params},
+        "columns": columns,
+    }
+    assert first["targets"] == [expanded]
+    assert row["panels"] == [{"id": 3, "targets": [{**expanded, "format": "table", "columns": columns[:1]}]}]
+    first["targets"][0]["columns"][0]["selector"] = "changed"
+    assert stitch_dashboard(source, {"shared": fragment})["panels"][0]["targets"] == [expanded]
 
 
 def test_stitch_dashboard_leaves_non_ref_panels_untouched():
@@ -30,7 +83,6 @@ def test_stitch_dashboard_leaves_non_ref_panels_untouched():
 @pytest.mark.parametrize(
     ("link_ref", "expected_title", "expected_url", "expected_include_vars"),
     [
-        ("async_rl", "RL Post-training (async)", "/d/marin-async-rl", True),
         ("cluster_capacity", "Cluster capacity", "/d/marin-cluster-capacity", True),
         ("fleet_accelerators_without_vars", "Fleet accelerators", "/d/marin-accel", False),
         ("fleet_health", "Fleet health", "/d/marin-clusters", True),
@@ -49,13 +101,13 @@ def test_stitch_dashboard_resolves_shared_links(
 
 
 def test_stitch_dashboard_returns_independent_shared_links():
-    source = {"links": [{"linkRef": "async_rl"}], "panels": []}
+    source = {"links": [{"linkRef": "rl_post_training"}], "panels": []}
     first = stitch_dashboard(source, {})
     first["links"][0]["title"] = "changed"
 
     second = stitch_dashboard(source, {})
 
-    assert second["links"][0]["title"] == "RL Post-training (async)"
+    assert second["links"][0]["title"] == "RL Post-training"
 
 
 def test_stitch_dashboard_rejects_an_unknown_fragment_name():

@@ -154,18 +154,21 @@ parent's `env`, and a job's explicit env overrides a cluster's `defaults.task_en
 `-e MARIN_PREFIX gs://…` to a job bound for CoreWeave therefore delivers a `gs://` path to a
 pod holding only S3 credentials.
 
-## Credentials do not travel
+## Storage credentials
 
-Each cluster's task pods carry that cluster's credentials, and only those:
+GCP task Pods use a platform service account. CoreWeave task Pods use the
+submitter's object-storage keys from the job's secret bundle:
 
 | Cluster | Task pods can read |
 | --- | --- |
 | `marin` (GCP) | `gs://` via the `iris-worker` service account |
-| `cw-*` (CoreWeave) | `s3://` via the `iris-task-env` secret (CoreWeave AI Object Storage) |
+| `cw-*` (CoreWeave) | `s3://` via submitted personal CoreWeave credentials, delivered as files |
 
-There is no cross-cloud identity. A job on CoreWeave cannot read `gs://`, and a job on
-`marin` cannot read `s3://marin-us-east-02a` unless it is handed AWS credentials explicitly.
-Every artifact a federated job touches must live in the peer's object store.
+Federation forwards the job environment and secrets, including CoreWeave keys. It does not
+translate service-account identity or storage URLs. A CoreWeave job cannot use
+the GCP worker service account to read `gs://`; a GCP job accessing CoreWeave
+storage needs the object-storage keys and endpoint configuration. Keep artifacts
+in the execution cluster's regional object store to avoid cross-region transfers.
 
 ## Reaching a child's serving endpoint through the parent
 
@@ -197,6 +200,23 @@ when it cannot connect to its upstream. Compare `proxy_responses_total` with `sc
 `telemetry_v1.iris.rpc` for the hub (`cluster` is empty) and the peer. A peer 502
 increase shows that requests reached the peer proxy, where its upstream is the
 registered endpoint. The `scope=total` counter is exact; per-endpoint series are capped.
+
+## Shared budgets
+
+Set `budget_parent` on each child and list those children in the parent's
+`budget_peers`, a subset of its routing peers. Edit limits on the parent;
+child-local budget edits are rejected.
+
+`FederationSync` distributes parent limits and usage from other clusters. Its
+response reports the child's local usage, including direct submissions and child
+jobs. Scheduling adds current local usage to the received totals. `GetUserBudget`
+returns that combined view; `ListUserBudgets` reports local usage.
+
+Children use configured defaults until their first policy arrives. During sync
+outages, clusters keep their last received policy and usage; submissions remain
+available.
+Budgets are soft priority limits, so disconnected clusters can exceed the shared
+limit. Deploy both sides to exchange budget data.
 
 ## Observing federation
 

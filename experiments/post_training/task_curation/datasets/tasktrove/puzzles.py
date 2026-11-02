@@ -11,7 +11,6 @@ import json
 
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.tasktrove import archive_file
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -20,10 +19,14 @@ from verifyit.spec import ExactSpec, MathSpec, MathType, Spec
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
     ANSWER_FILE_DELIVERY,
+    TaskTroveConverter,
     tasktrove_source,
 )
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+
+PUZZLES_CONFIG = "laion__all-puzzles-v2"
 
 ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list", "number", "coords"})
 MATH_ANSWER_TYPES = frozenset({"number", "coords"})
@@ -66,14 +69,17 @@ def convert_puzzle(row: RawRow, _context: ConversionContext) -> TaskSpec | Norma
     task = answer_task(
         row, prompt=replace_phrases(instruction, ANSWER_FILE_DELIVERY), spec=puzzle_spec(expected, answer_type)
     )
+    puzzle_type = str(data.get("ptype", "")).strip().lower().replace("_", "-") or "unknown"
+    task = task.model_copy(update={"tags": ("puzzle", "laion", puzzle_type)})
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
-                id="Task Trove:laion__all-puzzles-v2",
+                id=f"Task Trove:{PUZZLES_CONFIG}",
                 title="laion/all-puzzles-v2",
                 origin="Task Trove",
                 family="math-answer",
@@ -84,12 +90,11 @@ def sources() -> list[RlDataSource]:
                     "fine under the new grader."
                 ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-puzzles",
-                source=tasktrove_source("laion__all-puzzles-v2"),
-                convert=convert_puzzle,
+                source=tasktrove_source(PUZZLES_CONFIG),
+                convert=TaskTroveConverter(PUZZLES_CONFIG, convert_puzzle),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=Controls(golden=reference_reply),

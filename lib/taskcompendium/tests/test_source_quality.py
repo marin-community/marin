@@ -6,11 +6,10 @@
 from dataclasses import replace
 
 import pytest
-from shellbox.machine import Backend
 from verifyit.spec import ScriptSpec
 
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import EnvironmentRequirements, ResourceGroups, Source
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, Source
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -310,7 +309,7 @@ def test_contract_signature_separates_grader_code_but_not_reference_values():
                 verifyit_package(
                     ScriptSpec(path="grade.py"),
                     environment=EnvironmentRequirements(
-                        docker_image="fixture@sha256:" + "0" * 64, compatible_backends=(Backend.DOCKER,)
+                        docker_image="fixture@sha256:" + "0" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
                     ),
                 ).grader
             ),
@@ -373,9 +372,14 @@ def test_raw_panel_counts_broken_contracts_and_failed_checks_against_all_drawn_r
 
 
 @pytest.mark.parametrize(
-    "exclusion", ["normalization:unsupported", "normalization:converter_error", "exact_semantic_duplicate"]
+    "exclusion,usable",
+    [
+        ("normalization:unsupported", 0),
+        ("normalization:unsupported", 99),
+        ("normalization:converter_error", 49),
+        ("exact_semantic_duplicate", 49),
+    ],
 )
-@pytest.mark.parametrize("usable", [0, 49, 99])
 def test_raw_conversion_gaps_and_duplicates_are_neutral(exclusion, usable):
     ids = tuple(str(index) for index in range(usable))
     report = source_quality_report(

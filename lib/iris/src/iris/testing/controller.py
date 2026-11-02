@@ -51,6 +51,7 @@ from iris.cluster.controller.backend import (
     BackendObservationRequest,
     BackendRecoveryRequest,
     BackendRecoveryResult,
+    EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderUnsupportedError,
     ReconcileObservation,
@@ -176,6 +177,12 @@ class FakeProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        return None
+
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
+        return EgressAllowlistMode.OPT_IN
+
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
@@ -217,6 +224,8 @@ class MockController:
         self.backend = Mock()
         self.backend.descriptor = worker_backend_descriptor()
         self.backend.job_feasibility.return_value = None
+        self.backend.validate_job.return_value = None
+        self.backend.egress_allowlist_mode.return_value = EgressAllowlistMode.OPT_IN
         self.backend.runtime_image.return_value = ""
         self.worker_health = WorkerHealthTracker()
         self.backend_observation = BackendObservation()
@@ -311,7 +320,7 @@ def controller_factory(tmp_path) -> Iterator[Callable[..., Controller]]:
             log_service_address="",
             local_log_dir=config.local_state_dir / "log-server",
             host=config.host,
-            worker_token=config.auth.worker_token if config.auth and config.auth.worker_token else None,
+            worker_token_provider=config.auth.worker_token_provider if config.auth else None,
         )
         backend = provider if provider is not None else FakeProvider()
         controller = Controller(

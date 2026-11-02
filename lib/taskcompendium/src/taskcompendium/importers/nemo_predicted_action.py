@@ -3,7 +3,6 @@
 
 """Import pinned NeMo next-action rows as final submissions."""
 
-import hashlib
 import json
 from typing import Any
 
@@ -13,6 +12,7 @@ from verifyit.spec import FunctionCall as CandidateCall
 from verifyit.spec import PredictedActionSpec
 
 from taskcompendium.grader import verifyit_package
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -37,11 +37,6 @@ ARGUMENTS = TypeAdapter(dict[str, JsonValue], config=ConfigDict(strict=True, all
 
 def _arguments(value: str) -> dict[str, JsonValue]:
     return ARGUMENTS.validate_python(json.loads(value, object_pairs_hook=unique_object))
-
-
-def canonical_sha256(row: dict[str, Any]) -> str:
-    document = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
-    return hashlib.sha256(document.encode()).hexdigest()
 
 
 def _expected_calls(value: Any) -> tuple[FunctionCall, ...]:

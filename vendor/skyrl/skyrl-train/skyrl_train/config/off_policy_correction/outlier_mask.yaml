@@ -1,0 +1,6 @@
+rules:
+  - kind: sequence
+    aggregate: extreme_token
+    action: mask
+    low: 1.0e-4
+    high: 100.0

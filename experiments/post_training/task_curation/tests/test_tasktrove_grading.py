@@ -7,6 +7,8 @@ Each test converts an archive kept under ``fixtures/`` and grades it through the
 path. See ``local_grader`` for building the image these tests run.
 """
 
+from typing import cast
+
 import pytest
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import ScriptGrader, TaskSpec
@@ -15,6 +17,7 @@ from taskcompendium.pipeline.models import CheckStatus, WorkspaceFiles
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, math, python_tests
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 from experiments.post_training.task_curation.tests.local_grader import grade
 from experiments.post_training.task_curation.tests.test_tasktrove_text import fixture_files
@@ -22,11 +25,10 @@ from experiments.post_training.task_curation.tests.test_tasktrove_text import fi
 pytestmark = pytest.mark.docker
 
 GRADING_MEMORY_MB = 2048
-PIPELINES = {
-    source.name: source.pipeline
+RECIPES = {
+    source.name: cast(CurationRecipe, source.config)
     for module in (calendar, math, python_tests)
     for source in module.sources()
-    if source.pipeline is not None
 }
 ARCHIVE_GRADERS = [
     ("tasktrove-math_gym", "math_gym"),
@@ -58,7 +60,7 @@ BROKEN_PACKAGE = {"/app/funk_lines/__init__.py": b"raise RuntimeError('__broken_
 
 
 def fixture_task(name: str, fixture: str) -> TaskSpec:
-    return converted_task(PIPELINES[name], tasktrove_row(fixture_files(fixture)))
+    return converted_task(RECIPES[name], tasktrove_row(fixture_files(fixture)))
 
 
 def without_module(task: TaskSpec, module: str) -> TaskSpec:
@@ -77,7 +79,7 @@ def without_module(task: TaskSpec, module: str) -> TaskSpec:
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("name, fixture", ARCHIVE_GRADERS)
 def test_archive_grader_passes_its_golden(machines, name, fixture):
-    controls = PIPELINES[name].controls
+    controls = RECIPES[name].controls
     assert controls is not None
     report = run_controls(fixture_task(name, fixture), controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}

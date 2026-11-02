@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Apply EvalDash database migrations during application startup."""
+"""Apply EvalDash database migrations within the application release transaction."""
 
 import importlib.util
 from pathlib import Path
 
 import sqlalchemy
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Connection
 
 MIGRATIONS = Path(__file__).with_name("migrations")
 MIGRATION_GLOB = "[0-9][0-9][0-9][0-9]_*.py"
@@ -36,18 +36,17 @@ def _lock_migrations(conn: Connection) -> None:
         conn.execute(sqlalchemy.text("SELECT pg_advisory_xact_lock(hashtext(:name))"), {"name": _MIGRATION_LOCK})
 
 
-def apply_migrations(engine: Engine) -> None:
+def apply_migrations(conn: Connection) -> None:
     """Apply each pending numbered migration exactly once in one transaction."""
-    with engine.begin() as conn:
-        _lock_migrations(conn)
-        schema_migrations.create(conn, checkfirst=True)
-        applied = {row[0] for row in conn.execute(sqlalchemy.select(schema_migrations.c.name))}
-        paths = sorted(MIGRATIONS.glob(MIGRATION_GLOB))
-        known = {path.stem for path in paths}
-        if unknown := applied - known:
-            raise RuntimeError(f"EvalDash database has migrations unknown to this build: {sorted(unknown)}")
-        for path in paths:
-            if path.stem in applied:
-                continue
-            _load_migration(path).upgrade(conn)
-            conn.execute(schema_migrations.insert().values(name=path.stem))
+    _lock_migrations(conn)
+    schema_migrations.create(conn, checkfirst=True)
+    applied = {row[0] for row in conn.execute(sqlalchemy.select(schema_migrations.c.name))}
+    paths = sorted(MIGRATIONS.glob(MIGRATION_GLOB))
+    known = {path.stem for path in paths}
+    if unknown := applied - known:
+        raise RuntimeError(f"EvalDash database has migrations unknown to this build: {sorted(unknown)}")
+    for path in paths:
+        if path.stem in applied:
+            continue
+        _load_migration(path).upgrade(conn)
+        conn.execute(schema_migrations.insert().values(name=path.stem))

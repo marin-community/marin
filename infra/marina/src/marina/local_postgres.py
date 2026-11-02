@@ -13,6 +13,7 @@ import sqlalchemy
 
 from marina.journeys import free_port
 
+# Keep the Hub name so CI's Docker registry mirror can fall back on a cache miss.
 POSTGRES_IMAGE = "pgvector/pgvector:0.8.5-pg16-bookworm"
 POSTGRES_PASSWORD = "marina"
 START_TIMEOUT = 60.0

@@ -5,23 +5,30 @@
 
 import asyncio
 import logging
+import stat
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandSemantics,
     DockerImage,
+    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
     Result,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
+from shellbox.process_session import SubprocessSession, acquire_owned
 
 logger = logging.getLogger(__name__)
+IMAGE_PLATFORM = "linux/amd64"
 
 # The parent waits so setsid is not a process-group leader and cannot detach.
 # Keep stdin available because non-interactive shells redirect background jobs to /dev/null.
@@ -123,6 +130,31 @@ async def docker(
     return DockerCommandResult(process.returncode, stdout, stderr)
 
 
+def _exec_arguments(name: str, workdir: str, command: Command) -> list[str]:
+    args = ["exec", "-i"]
+    if directory := command.cwd or workdir:
+        args.extend(("-w", directory))
+    if command.user is not None:
+        args.extend(("--user", command.user))
+    for key, value in command.env.items():
+        args.extend(("-e", f"{key}={value}"))
+    args.extend(
+        (
+            name,
+            "/bin/sh",
+            "-c",
+            START_COMMAND,
+            "shellbox-start",
+            "/bin/sh",
+            "-c",
+            RUN_COMMAND,
+            "shellbox-command",
+            *command.argv,
+        )
+    )
+    return args
+
+
 class DockerMachine:
     """One Docker container with a writable filesystem."""
 
@@ -131,6 +163,56 @@ class DockerMachine:
         self.spec = spec
         self._closed = False
 
+    async def open_process(self, command: Command) -> SubprocessSession:
+        """Keep one docker exec attached to the foreground guest process."""
+        if self._closed:
+            raise RuntimeError("Machine is closed")
+        if not command.argv or command.stdin or command.timeout is not None:
+            raise ValueError("Process sessions require argv and own stdin and their lifetime")
+        if command.output_limit_bytes < 0:
+            raise ValueError("Output limit must be nonnegative")
+        args = ["docker", *_exec_arguments(self.name, self.spec.workdir, command)]
+
+        async def acquire() -> SubprocessSession:
+            process = await asyncio.create_subprocess_exec(
+                *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            group: int | None = None
+
+            async def stop() -> None:
+                try:
+                    if group is not None:
+                        await self._interrupt(group, command.user)
+                    else:
+                        await self.close()
+                except Exception:
+                    await self.close()
+                    raise
+                finally:
+                    if process.returncode is None:
+                        process.kill()
+
+            session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
+            try:
+                assert process.stdout is not None
+                async with asyncio.timeout(INTERRUPT_TIMEOUT):
+                    header = await process.stdout.readuntil(b"\n")
+                value = header.removeprefix(PROCESS_GROUP_PREFIX).rstrip(b"\n")
+                if (
+                    len(header) > PROCESS_GROUP_HEADER_LIMIT_BYTES
+                    or not header.startswith(PROCESS_GROUP_PREFIX)
+                    or not value.isdigit()
+                    or int(value) <= 1
+                ):
+                    raise RuntimeError("Docker exec did not supply a process-group ID")
+                group = int(value)
+                return session
+            except BaseException:
+                await session.close()
+                raise
+
+        return await acquire_owned(asyncio.create_task(acquire()))
+
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
@@ -138,29 +220,8 @@ class DockerMachine:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
-        args = ["exec", "-i"]
-        workdir = command.cwd or self.spec.workdir
-        if workdir:
-            args.extend(("-w", workdir))
-        if command.user is not None:
-            args.extend(("--user", command.user))
-        for key, value in command.env.items():
-            args.extend(("-e", f"{key}={value}"))
+        args = _exec_arguments(self.name, self.spec.workdir, command)
         process_group: asyncio.Future[int] = asyncio.get_running_loop().create_future()
-        args.extend(
-            (
-                self.name,
-                "/bin/sh",
-                "-c",
-                START_COMMAND,
-                "shellbox-start",
-                "/bin/sh",
-                "-c",
-                RUN_COMMAND,
-                "shellbox-command",
-                *command.argv,
-            )
-        )
         try:
             completed = await docker(
                 *args,
@@ -236,6 +297,11 @@ class DockerMachine:
         result = await docker("cp", copy_source, f"{self.name}:{target}")
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
+        if source.is_dir():
+            mode = stat.S_IMODE(source.stat().st_mode)
+            result = await docker("exec", "--user", "0", self.name, "chmod", f"{mode:o}", target)
+            if result.exit_code:
+                raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -258,47 +324,60 @@ class DockerMachineFactory:
 
     backend: Backend = Backend.DOCKER
 
-    def __init__(
-        self,
-        *,
-        skopeo: Path | None = None,
-        image_cache: Path | None = None,
-        authfile: Path | None = None,
-        policy: Path | None = None,
-        runtime: str | None = None,
-    ):
-        self.skopeo = skopeo
-        self.image_cache = image_cache
-        self.authfile = authfile
-        self.policy = policy
+    def __init__(self, *, runtime: str | None = None):
         self.runtime = runtime
 
+    def _check_spec(self, spec: MachineSpec) -> DockerImage | RegistryImage | DockerfileSource:
+        if not isinstance(spec.source, (DockerImage, RegistryImage, DockerfileSource)):
+            raise UnsupportedMachineSpec("Docker requires a DockerImage, RegistryImage or DockerfileSource")
+        return spec.source
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        source = self._check_spec(spec)
+        reference = source.reference if isinstance(source, (DockerImage, RegistryImage)) else None
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=LINUX_PROCESS_CAPABILITIES,
+            image_reference=reference,
+        )
+
     async def create(self, spec: MachineSpec) -> DockerMachine:
-        if isinstance(spec.source, (RegistryImage, DockerfileSource)):
-            if self.image_cache is None or self.skopeo is None:
-                raise UnsupportedMachineSpec("Registry images and Dockerfiles require an image cache and Skopeo")
-            cache = process_image_cache(self.image_cache, self.skopeo, self.authfile, self.policy)
-            image = await asyncio.to_thread(cache.prepare, spec.source)
-            spec = replace(spec, source=image)
-        if isinstance(spec.source, PreparedImage):
-            if self.skopeo is None:
-                raise UnsupportedMachineSpec("Prepared OCI images require a Skopeo path for Docker")
-            reference = await asyncio.to_thread(load_docker_image, spec.source, skopeo=self.skopeo, policy=self.policy)
-            spec = replace(spec, source=DockerImage(reference))
-        if not isinstance(spec.source, DockerImage):
-            raise UnsupportedMachineSpec("Docker requires a DockerImage source")
+        source = self._check_spec(spec)
+        image = source
+        pull = "never"
+        if isinstance(source, RegistryImage):
+            pull = "missing"
+            image = DockerImage(source.reference)
+        elif isinstance(source, DockerfileSource):
+            built = await docker(
+                "build",
+                "--quiet",
+                "--platform",
+                IMAGE_PLATFORM,
+                "-f",
+                str(source.dockerfile),
+                str(source.context),
+            )
+            if built.exit_code:
+                raise RuntimeError(built.stderr.decode(errors="replace"))
+            image = DockerImage(built.stdout.decode().strip())
+        assert isinstance(image, DockerImage)
         name = f"harbor-machine-{uuid.uuid4().hex}"
         args = [
             "run",
             "--rm",
             "--init",
-            "--pull=never",
+            f"--pull={pull}",
             "-d",
             "--name",
             name,
             "--network",
             "none" if spec.network is NetworkPolicy.DENY else "bridge",
         ]
+        if pull == "missing":
+            args.extend(("--platform", IMAGE_PLATFORM))
         if spec.memory_mb is not None:
             args.extend(("--memory", f"{spec.memory_mb}m"))
         if spec.cpus is not None:
@@ -311,7 +390,7 @@ class DockerMachineFactory:
             args.extend(("--runtime", self.runtime))
         for key, value in spec.env.items():
             args.extend(("-e", f"{key}={value}"))
-        args.extend(("--entrypoint", "/bin/sh", spec.source.reference, "-c", "while :; do sleep 3600; done"))
+        args.extend(("--entrypoint", "/bin/sh", image.reference, "-c", "while :; do sleep 3600; done"))
         try:
             result = await docker(*args)
             if result.exit_code:

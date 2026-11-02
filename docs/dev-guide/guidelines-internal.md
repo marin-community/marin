@@ -42,6 +42,12 @@ GCP project access, Iris IAP access, GitHub access, and external-service access
 are separate grants. The onboarding agent can identify a missing grant. Ask
 your manager or a Marin infrastructure maintainer to route the request.
 
+For CoreWeave jobs, IAP login and federation admission are separate checks.
+The submitting identity must also match `auth.allowed_submitters` in each
+target peer's `lib/iris/config/<cluster>.yaml`. A maintainer must roll out that
+peer's controller after changing the allowlist; a successful hub login or
+`cluster status` does not verify permission to submit jobs to the peer.
+
 ### Pulumi operators
 
 Running `pulumi up` for the `marin` GCP stack requires elevated access outside

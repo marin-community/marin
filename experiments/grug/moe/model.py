@@ -40,7 +40,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoeImplementation,
     QBRoutedMoE,
-    resolve_moe_implementation,
+    validate_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, _mesh_axis_size, unshard
@@ -49,6 +49,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
 _GATED_NORM_RANK = 128
+_LONG_LAYER_EVERY = 4
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -78,6 +79,11 @@ def _partition_spec_of(x: jax.Array) -> P | None:
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
+
+
+def long_layer_flags(num_layers: int) -> tuple[bool, ...]:
+    """Return full-attention flags for every fourth layer and the final layer."""
+    return tuple(i % _LONG_LAYER_EVERY == _LONG_LAYER_EVERY - 1 or i == num_layers - 1 for i in range(num_layers))
 
 
 class GrugMoeHfConfig(HfConfig):
@@ -124,6 +130,7 @@ class GrugModelConfig:
     embedding entirely (Q and K go into attention un-rotated). Short layers
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
+    cross_entropy_implementation: str | None = None
     moe_implementation: MoeImplementation | None = None
     capacity_factor: float = 1.0
     remat_mode: RematMode = "recompute_all"
@@ -150,7 +157,7 @@ class GrugModelConfig:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.capacity_factor <= 0:
             raise ValueError("capacity_factor must be positive")
-        resolve_moe_implementation(self.moe_implementation)
+        validate_moe_implementation(self.moe_implementation)
 
     @property
     def Embed(self) -> Axis:
@@ -682,11 +689,8 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
-        num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
-        for i, block in enumerate(self.blocks):
-            is_last = i == num_blocks - 1
-            is_long = i % 4 == 3 or is_last
+        for block, is_long in zip(self.blocks, long_layer_flags(len(self.blocks)), strict=True):
             layer_mask = long_mask if is_long else short_mask
             use_pko = is_long and not cfg.disable_pko
             disable_rope = is_long and cfg.disable_long_rope
@@ -743,6 +747,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation=self.config.cross_entropy_implementation,
         )
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]

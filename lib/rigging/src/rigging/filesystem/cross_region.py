@@ -269,7 +269,8 @@ class CrossRegionGuardedFS:
     Intercepts read operations (``open``, ``cat``, ``cat_file``, ``get_file``,
     ``get``) and records each cross-region read against a shared
     ``TransferBudget``.  Raises ``TransferBudgetExceeded`` when the cumulative
-    cross-region bytes exceed the budget.
+    cross-region bytes exceed the budget. ``cat_file`` charges the requested byte
+    range, clipped to the object size; whole-file operations charge the full size.
 
     Only constructed for GCS filesystems — the entry points (``url_to_fs``,
     ``open_url``, ``filesystem``) decide whether to wrap.
@@ -317,7 +318,7 @@ class CrossRegionGuardedFS:
         return self._fs.open(path, mode, **kwargs)
 
     def cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any) -> bytes:
-        self._guard_read(path)
+        self._guard_read(path, start=start, end=end)
         return self._fs.cat_file(path, start=start, end=end, **kwargs)
 
     def cat(self, path: Any, recursive: bool = False, on_error: str = "raise", **kwargs: Any) -> Any:
@@ -343,12 +344,11 @@ class CrossRegionGuardedFS:
 
     # -- guard logic ---------------------------------------------------------
 
-    def _guard_read(self, path: str) -> None:
+    def _guard_read(self, path: str, *, start: int | None = None, end: int | None = None) -> None:
         if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
             return
 
-        # fsspec strips the protocol, so paths look like "bucket/key".
-        bucket = path.split("/")[0] if "/" in path else path
+        bucket = _bucket_from_gcs_url(path) or path.split("/")[0]
         if not self._is_cross_region(bucket):
             return
 
@@ -359,7 +359,9 @@ class CrossRegionGuardedFS:
             return
 
         if size is not None:
-            self._budget.record(size, f"gs://{path}")
+            range_start, range_end, _ = slice(start, end).indices(size)
+            url = path if _is_gcs_url(path) else f"gs://{path}"
+            self._budget.record(max(0, range_end - range_start), url)
 
     # -- transparent delegation ----------------------------------------------
 

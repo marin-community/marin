@@ -8,6 +8,7 @@ from typing import Any
 
 import pyarrow as pa
 
+from taskcompendium.pipeline.conversion import normalization_columns
 from taskcompendium.pipeline.models import QualityBasis, ReviewStatus, TaskAudit
 from taskcompendium.pipeline.verification import grader_readiness
 
@@ -17,6 +18,7 @@ TASK_SCHEMA = pa.schema(
         ("source_dataset", pa.string()),
         ("source_revision", pa.string()),
         ("source_row", pa.string()),
+        ("original_path", pa.string()),
         ("intended_use", pa.string()),
         (
             "normalization_changes",
@@ -52,8 +54,31 @@ TASK_SCHEMA = pa.schema(
         ("grader_readiness", pa.string()),
         ("admission", pa.string()),
     ],
-    metadata={b"taskcompendium.curation_schema": b"9"},
+    metadata={b"taskcompendium.curation_schema": b"10"},
 )
+
+
+IDENTITY_FIELDS = [
+    ("task_id", pa.string()),
+    ("source_locator", pa.string()),
+    ("raw_input_sha256", pa.string()),
+    ("raw_sha256", pa.string()),
+]
+RAW_SCHEMA = pa.schema(IDENTITY_FIELDS)
+NORMALIZED_COLUMNS = (
+    "task_id",
+    "source_dataset",
+    "source_revision",
+    "source_row",
+    "original_path",
+    "task_json",
+    "normalization_kind",
+    "normalization_reason",
+    "normalization_detail",
+    "normalization_changes",
+)
+
+NORMALIZED_SCHEMA = pa.schema([*(TASK_SCHEMA.field(column) for column in NORMALIZED_COLUMNS), *IDENTITY_FIELDS[1:]])
 
 
 def audit_columns(audit: TaskAudit) -> dict[str, Any]:
@@ -65,19 +90,17 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
     quality_basis = audit.quality_basis
     if quality_basis is None and review is not None and review.status == ReviewStatus.REVIEWED:
         quality_basis = QualityBasis.DIRECT_REVIEW
-    changes = [change.model_dump(mode="json") for change in audit.normalization_changes]
     return {
-        "task_id": audit.task_id,
-        "source_dataset": audit.source.dataset,
-        "source_revision": audit.source.revision,
-        "source_row": audit.source.row,
+        **normalization_columns(
+            audit.task_id,
+            audit.source,
+            audit.normalized,
+            rejection,
+            audit.normalization_changes,
+            audit.raw.get("original_path") if audit.raw is not None else None,
+        ),
         "intended_use": audit.intended_use.value if audit.intended_use is not None else None,
-        "normalization_changes": changes,
-        "task_json": audit.normalized.model_dump_json() if audit.normalized is not None else None,
         "raw_json": json.dumps(audit.raw, ensure_ascii=False, allow_nan=False) if audit.raw is not None else None,
-        "normalization_kind": rejection.kind.value if rejection is not None else None,
-        "normalization_reason": rejection.reason if rejection is not None else None,
-        "normalization_detail": rejection.detail if rejection is not None else None,
         "filter_status": decision.disposition.value if decision is not None else None,
         "filter_reasons": decision.reasons if decision is not None else [],
         "duplicate_of": decision.duplicate_of if decision is not None else None,

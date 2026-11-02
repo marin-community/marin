@@ -73,18 +73,17 @@ class Provenance:
         Strict: raises if git is unavailable, since the content-addressed
         ``tree_hash`` is the reason to build at all.
         """
-        cwd = str(repo_dir) if repo_dir is not None else None
         # `git stash create` captures any dirty state as a transient commit whose
         # tree we deref below — dropping the per-call timestamp a commit hash
         # would carry, so tree_hash stays purely content-addressed. Empty (no
         # output) means a clean tree, so fall back to HEAD.
-        stash = _git(["stash", "create"], cwd)
+        stash = git_output(["stash", "create"], repo_dir)
         ref = stash or "HEAD"
         return cls(
-            tree_hash=_git(["rev-parse", "--short", f"{ref}^{{tree}}"], cwd),
-            base_commit=_git(["rev-parse", "--short", "HEAD"], cwd),
-            dirty=bool(_git(["status", "--porcelain", "--untracked-files=all"], cwd)),
-            branch=_git(["symbolic-ref", "--short", "-q", "HEAD"], cwd, check=False) or None,
+            tree_hash=git_output(["rev-parse", "--short", f"{ref}^{{tree}}"], repo_dir),
+            base_commit=git_output(["rev-parse", "--short", "HEAD"], repo_dir),
+            dirty=bool(git_output(["status", "--porcelain", "--untracked-files=all"], repo_dir)),
+            branch=git_output(["symbolic-ref", "--short", "-q", "HEAD"], repo_dir, check=False) or None,
             built_by=_getuser(),
         )
 
@@ -103,13 +102,11 @@ class Provenance:
         if published is not None:
             return published
 
-        cwd = str(repo_dir) if repo_dir is not None else None
-
         def g(*args: str) -> str:
             # A missing `git` binary (bundle image without git) degrades like being outside
             # a checkout: git fields empty, launch context still captured.
             try:
-                return _git(list(args), cwd, check=False)
+                return git_output(list(args), repo_dir, check=False)
             except FileNotFoundError:
                 return ""
 
@@ -196,8 +193,12 @@ def launch_provenance() -> Provenance:
         return _capture_once()
 
 
-def _git(args: list[str], cwd: str | None, check: bool = True) -> str:
-    result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
+def git_output(args: list[str], cwd: Path | None, *, check: bool = True, timeout: float | None = None) -> str:
+    """Return Git stdout; checked failures raise with stderr."""
+    try:
+        result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f"git {' '.join(args)} timed out after {timeout} seconds") from error
     if check and result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()

@@ -1,10 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sample completed source outputs and gate publication on repeated controls."""
+"""Use sampled controls to skip validation, falling back to checking each task."""
 
-import hashlib
-import inspect
 import json
 import re
 import sys
@@ -15,24 +13,24 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from functools import partial
 from importlib.metadata import distributions
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import shellbox
-import verifyit
+import pyarrow as pa
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import UnsupportedMachineSpec
 from zephyr import counters
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.readers import load_parquet
+from zephyr.writers import write_parquet_file
 
-import taskcompendium
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
+from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     CheckResult,
@@ -51,13 +49,14 @@ from taskcompendium.pipeline.transforms import is_accepted
 from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.runtime.models import RolloutRecord
 
-SOURCE_VERIFICATION_REVISION = "9"
+SOURCE_VERIFICATION_REVISION = "14"
 VERIFICATION_REPORT_FILENAME = "verification.json"
 """The verified stage's report; a rerun at the same output reuses its matching control trials."""
 INFRA_ERROR_RETRIES = 2
 """Extra runs of one attempt whose controls hit an infrastructure error, such as a sandbox that never started."""
 GRADED_CHECK_STATUSES = frozenset({CheckStatus.PASS, *REJECTING_CHECK_STATUSES})
 """Check outcomes that show whether the grader works, so their task counts as checked."""
+TRIAL_CHECKPOINT_SCHEMA = pa.schema([("report_json", pa.string())])
 
 
 @dataclass(frozen=True)
@@ -76,6 +75,7 @@ class SourceVerificationPolicy:
 
 class SourceVerificationStatus(StrEnum):
     PASSED = "passed"
+    VALIDATED = "validated"
     SKIPPED = "skipped"
     REJECTED = "rejected"
     INCONCLUSIVE = "inconclusive"
@@ -136,26 +136,15 @@ class VerifiedSample:
 
 
 def verification_identity(suite: CheckSuite, policy: SourceVerificationPolicy) -> str:
-    """Identify control code, dependencies, configured runtime and repetition policy."""
+    """Identify control revisions, dependencies, configured runtime and repetition policy."""
     function = suite.run
     while isinstance(function, partial):
         function = function.func
-    source_file = inspect.getsourcefile(function)
-    assert source_file is not None, "Verification controls require inspectable implementation code"
-    digest = hashlib.sha256()
-    for module in (taskcompendium, verifyit, shellbox):
-        assert module.__file__ is not None
-        root = Path(module.__file__).parent
-        for path in sorted(root.rglob("*.py")):
-            digest.update(str(path.relative_to(root)).encode())
-            digest.update(path.read_bytes())
     return canonical_sha256(
         {
             "revision": SOURCE_VERIFICATION_REVISION,
             "suite": {"id": suite.id, "revision": suite.revision, "parameters": suite.parameters},
-            "function": {"name": function.__qualname__, "module": function.__module__},
-            "source_sha256": hashlib.sha256(Path(source_file).read_bytes()).hexdigest(),
-            "grading_code_sha256": digest.hexdigest(),
+            "function": callable_identity(function),
             "python": sys.version,
             "dependencies": sorted(
                 (distribution.metadata["Name"], distribution.version) for distribution in distributions()
@@ -167,7 +156,7 @@ def verification_identity(suite: CheckSuite, policy: SourceVerificationPolicy) -
 
 def _reusable_runtime(suite: CheckSuite) -> bool:
     # Online graders do not declare an immutable remote model deployment.
-    if suite.parameters.get("network") == "allow":
+    if suite.parameters.get("network") == "allow" or "judge_base_url" in suite.parameters:
         return False
     # A local QEMU path can change without changing its name. The immutable
     # worker image identifies the packaged kernel, rootfs and QEMU runtime.
@@ -180,10 +169,23 @@ def _reusable_runtime(suite: CheckSuite) -> bool:
 def saved_trials(report_path: str, *, identity: str, attempts: int) -> dict[tuple[str, int], SavedTrial]:
     """Read matching trials and their history without treating a source gate as evidence."""
     path = StoragePath(report_path)
-    if not path.exists():
-        return {}
-    with path.open("rt") as stream:
-        report = json.load(stream)
+    reused = {}
+    if path.exists():
+        report = json.loads(path.read_text())
+        reused.update(_saved_report_trials(report, report_path=report_path, identity=identity, attempts=attempts))
+    for checkpoint in sorted((path.parent / "evidence/control-*.parquet").glob(), key=str):
+        for row in load_parquet(str(checkpoint)):
+            reused.update(
+                _saved_report_trials(
+                    json.loads(row["report_json"]), report_path=report_path, identity=identity, attempts=attempts
+                )
+            )
+    return reused
+
+
+def _saved_report_trials(
+    report: dict[str, Any], *, report_path: str, identity: str, attempts: int
+) -> dict[tuple[str, int], SavedTrial]:
     if report["implementation_revision"] != SOURCE_VERIFICATION_REVISION:
         return {}
     results = [SampleResult.model_validate(value) for value in report["results"]]
@@ -191,6 +193,9 @@ def saved_trials(report_path: str, *, identity: str, attempts: int) -> dict[tupl
         raise ValueError("Verification evidence contains duplicate task results")
     by_task = {result.task_id: result for result in results}
     evidence = [TrialEvidence.model_validate(value) for value in report["evidence"]]
+    evidence_by_task: dict[str, list[TrialEvidence]] = {}
+    for item in evidence:
+        evidence_by_task.setdefault(item.task_id, []).append(item)
     keys = [(item.task_id, item.attempt) for item in evidence]
     if len(set(keys)) != len(keys) or len({item.execution_id for item in evidence}) != len(evidence):
         raise ValueError("Verification evidence must preserve distinct independent executions")
@@ -199,14 +204,12 @@ def saved_trials(report_path: str, *, identity: str, attempts: int) -> dict[tupl
         raise ValueError("Verification evidence does not match its trial membership")
     execution_ids = {item.execution_id for item in evidence}
     for result in results:
-        identities = {
-            (item.task_sha256, item.verification_identity) for item in evidence if item.task_id == result.task_id
-        }
+        identities = {(item.task_sha256, item.verification_identity) for item in evidence_by_task[result.task_id]}
         if len(identities) != 1:
             raise ValueError("Verification trials disagree on their exact task identity")
         for previous in result.previous_trials:
             item = previous.evidence
-            current = next(item for item in evidence if item.task_id == result.task_id)
+            current = evidence_by_task[result.task_id][0]
             if (
                 item.execution_id in execution_ids
                 or item.task_id != result.task_id
@@ -462,6 +465,16 @@ def gate_source_row(
             row = {**row, "filter_status": "reject", "filter_reasons": [*row["filter_reasons"], *sorted(set(failed))]}
     if not is_accepted(row):
         return row
+    if status == SourceVerificationStatus.VALIDATED:
+        if row["task_id"] not in results:
+            raise ValueError(f"Per-task validation omitted a kept row: {row['task_id']}")
+        if row["grader_readiness"] == GraderReadiness.READY:
+            return row
+        return {
+            **row,
+            "filter_status": "defer",
+            "filter_reasons": [*row["filter_reasons"], "task_validation:unavailable"],
+        }
     if status == SourceVerificationStatus.PASSED:
         if row["task_id"] not in results:
             return {**row, "grader_readiness": GraderReadiness.SOURCE_SAMPLED.value}
@@ -507,22 +520,16 @@ def _select_sample(run: _VerificationRun, policy: SourceVerificationPolicy) -> V
     ).results[0]
 
 
-def _with_saved_trials(
-    rows: list[dict[str, Any]], prior: Mapping[tuple[str, int], SavedTrial], attempts: int
-) -> list[dict[str, Any]]:
-    """Attach the saved trials whose exact task digest matches each selected row."""
-    selected = []
-    for row in rows:
-        digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
-        selected.append(
-            {
-                **row,
-                "saved_trials": {
-                    attempt: prior[(digest, attempt)] for attempt in range(attempts) if (digest, attempt) in prior
-                },
-            }
-        )
-    return selected
+def _with_saved_row(
+    row: dict[str, Any], *, prior: Mapping[tuple[str, int], SavedTrial], attempts: int
+) -> dict[str, Any]:
+    if not prior:
+        return {**row, "saved_trials": {}}
+    digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
+    return {
+        **row,
+        "saved_trials": {attempt: prior[(digest, attempt)] for attempt in range(attempts) if (digest, attempt) in prior},
+    }
 
 
 def _run_trials(
@@ -537,17 +544,96 @@ def _run_trials(
         return []
     return execute_phase(
         run.context,
-        Dataset.from_list(_with_saved_trials(sample.rows, prior, policy.attempts)).map(
+        Dataset.from_list(
+            [_with_saved_row(row, prior=prior, attempts=policy.attempts) for row in sample.rows]
+        ).map_shard(
             partial(
-                _verify_sample_with_evidence,
+                _checkpointed_trials,
                 suite=suite,
-                attempts=policy.attempts,
+                policy=policy,
                 identity=identity,
                 report_path=str(run.report_path),
+                phase="sample",
             )
         ),
         telemetry=run.telemetry,
         operation="trials",
+    ).results
+
+
+def _checkpointed_trials(
+    rows: Iterator[dict[str, Any]],
+    shard: ShardInfo,
+    *,
+    suite: CheckSuite,
+    policy: SourceVerificationPolicy,
+    identity: str,
+    report_path: str,
+    phase: str,
+) -> Iterator[VerifiedSample]:
+    verified = [
+        _verify_sample_with_evidence(
+            row, suite=suite, attempts=policy.attempts, identity=identity, report_path=report_path
+        )
+        for row in rows
+    ]
+    new_records = [item for item in verified if any(value.reused_from is None for value in item.evidence)]
+    if not new_records:
+        yield from verified
+        return
+    checkpoint = (
+        StoragePath(report_path).parent / f"evidence/control-{time.time_ns():020d}-{phase}-{shard.shard_idx:05d}.parquet"
+    )
+    write_parquet_file(
+        (
+            {
+                "report_json": json.dumps(
+                    {
+                        "implementation_revision": SOURCE_VERIFICATION_REVISION,
+                        "policy": asdict(policy),
+                        "results": [item.result.model_dump(mode="json")],
+                        "evidence": [value.model_dump(mode="json") for value in item.evidence],
+                    }
+                )
+            }
+            for item in new_records
+        ),
+        str(checkpoint),
+        schema=TRIAL_CHECKPOINT_SCHEMA,
+    )
+    yield from verified
+
+
+def _remaining_trials(
+    run: _VerificationRun,
+    sample: VerificationSample,
+    prior: Mapping[tuple[str, int], SavedTrial],
+    suite: CheckSuite,
+    policy: SourceVerificationPolicy,
+    identity: str,
+    num_shards: int,
+) -> list[VerifiedSample]:
+    selected = frozenset(row["task_id"] for row in sample.rows)
+    return execute_phase(
+        run.context,
+        Dataset.from_files(run.inputs)
+        .load_parquet(columns=["task_id", "task_json", "filter_status"])
+        .filter(is_accepted)
+        .filter(lambda row: row["task_id"] not in selected)
+        .group_by(lambda row: row["task_id"], reducer=lambda _key, rows: rows, num_output_shards=num_shards)
+        .map(partial(_with_saved_row, prior=prior, attempts=policy.attempts))
+        .map_shard(
+            partial(
+                _checkpointed_trials,
+                suite=suite,
+                policy=policy,
+                identity=identity,
+                report_path=str(run.report_path),
+                phase="remaining",
+            )
+        ),
+        telemetry=run.telemetry,
+        operation="remaining_trials",
     ).results
 
 
@@ -569,17 +655,51 @@ def _write_report(
     return report
 
 
-def _gate_rows(run: _VerificationRun, decision: SourceReport, results: list[SampleResult]) -> dict[str, Any]:
+def _gate_with_previous(
+    row: dict[str, Any],
+    *,
+    status: SourceVerificationStatus,
+    results: dict[str, list[CheckResult]],
+    previous: dict[str, dict[str, list[CheckResult]]],
+) -> dict[str, Any]:
+    if row["task_id"] not in results and row["task_id"] in previous and is_accepted(row):
+        digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
+        checks = previous[row["task_id"]].get(digest)
+        if checks is not None:
+            return gate_source_row(row, status=status, results={row["task_id"]: checks})
+    return gate_source_row(row, status=status, results=results)
+
+
+def _gate_rows(
+    run: _VerificationRun,
+    decision: SourceReport,
+    results: list[SampleResult],
+    prior: Mapping[tuple[str, int], SavedTrial],
+) -> dict[str, Any]:
     """Write the gated audit and accepted rows and return manifest counts."""
+    previous: dict[str, dict[str, list[CheckResult]]] = {}
+    for saved in prior.values():
+        checks = [
+            *saved.trial.checks,
+            *(
+                check
+                for item in saved.history
+                for check in item.trial.checks
+                if check.status in REJECTING_CHECK_STATUSES
+            ),
+        ]
+        if any(check.status in REJECTING_CHECK_STATUSES for check in checks):
+            previous.setdefault(saved.evidence.task_id, {}).setdefault(saved.evidence.task_sha256, []).extend(checks)
     result = execute_phase(
         run.context,
         Dataset.from_files(run.inputs)
         .load_parquet()
         .map(
             partial(
-                gate_source_row,
+                _gate_with_previous,
                 status=decision.status,
                 results={result.task_id: sample_result_checks(result) for result in results},
+                previous=previous,
             )
         )
         .map_shard(partial(write_filtered_shard, output=run.output)),
@@ -612,7 +732,7 @@ def verify_source(
     telemetry: PhaseTelemetry | None = None,
     context: ZephyrContext | None = None,
 ) -> dict[str, Any]:
-    """Verify an output sample and retain the full audit when publication is denied.
+    """Validate a sample, then each kept task when the sample cannot justify skipping.
 
     Complete trials that an earlier attempt at ``output_path`` saved are reused.
     """
@@ -629,6 +749,21 @@ def verify_source(
         verified = _run_trials(run, sample, prior, suite, policy, identity)
         results = [item.result for item in verified]
         decision = source_verification_report(sample, results, policy)
+        if sample.rows and decision.status in {SourceVerificationStatus.REJECTED, SourceVerificationStatus.INCONCLUSIVE}:
+            verified.extend(
+                _remaining_trials(run, sample, prior, suite, policy, identity, context.max_workers or max_workers)
+            )
+            if len(verified) != sample.eligible_count:
+                raise ValueError("Per-task validation did not cover every eligible task")
+            results = [item.result for item in verified]
+            population = VerificationSample(sample.eligible_count, [{"task_id": result.task_id} for result in results])
+            decision = source_verification_report(population, results, policy).model_copy(
+                update={"status": SourceVerificationStatus.VALIDATED}
+            )
+            if not decision.counts.checked:
+                decision = decision.model_copy(update={"status": SourceVerificationStatus.INCONCLUSIVE})
+        if not sample.rows:
+            decision = decision.model_copy(update={"status": SourceVerificationStatus.SKIPPED})
         report = _write_report(run, suite, decision, verified)
-        counts = _gate_rows(run, decision, results)
+        counts = _gate_rows(run, decision, results, prior)
     return _write_manifest(run, counts, report)

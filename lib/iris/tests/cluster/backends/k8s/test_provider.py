@@ -3,6 +3,9 @@
 
 """Tests for K8sTaskProvider: sync lifecycle, capacity, scheduling, profiling."""
 
+import base64
+import json
+from configparser import ConfigParser
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -66,6 +69,77 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
     assert result == []
+
+
+@pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.CONTAINER_PROFILE_SANDBOX])
+def test_submitted_credentials_use_attempt_secret_and_are_collected(k8s, profile):
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(require_coreweave_credentials=True, task_outputs=TaskOutputPolicy()),
+        cluster_scan_interval=0.0,
+    )
+    req = make_run_req("/test-user/job/0", attempt_uid="abcdef0123456789")
+    req.container_profile = profile
+    req.egress_policy = (
+        job_pb2.EGRESS_POLICY_NONE if profile == job_pb2.CONTAINER_PROFILE_SANDBOX else job_pb2.EGRESS_POLICY_UNSPECIFIED
+    )
+    req.environment.secrets.update({"custom": "submitted-hf-value", "another": "submitted-api-value"})
+    req.environment.secrets.update({"CW_KEY_ID": "personal-key", "CW_KEY_SECRET": "personal-secret"})
+    req.environment.env_vars.update({"FLAG": "keep", "HF_TOKEN": "explicit-env"})
+    try:
+        assert provider.sync(make_batch(tasks_to_run=[req])) == []
+        pod = k8s.list_json(K8sResource.PODS)[0]
+        assert "submitted-hf-value" not in json.dumps(pod)
+        assert "submitted-api-value" not in json.dumps(pod)
+        container = pod["spec"]["containers"][0]
+        env = {entry["name"]: entry.get("value") for entry in container["env"]}
+        assert env["FLAG"] == "keep"
+        assert env["RIGGING_SECRETS_DIR"] == "/run/rigging/secrets"
+        assert env["HF_TOKEN"] == "explicit-env"
+        volume = next(v for v in pod["spec"]["volumes"] if v["name"] == "job-secrets")
+        secret_name = volume["secret"]["secretName"]
+        assert not any(v.get("secret", {}).get("secretName") == "iris-storage-secrets" for v in pod["spec"]["volumes"])
+        secret = k8s.get_json(K8sResource.SECRETS, secret_name)
+        assert base64.b64decode(secret["data"]["custom"]).decode() == "submitted-hf-value"
+        assert secret["metadata"]["ownerReferences"][0]["uid"] == pod["metadata"]["uid"]
+        if profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+            uploader = next(c for c in pod["spec"]["containers"] if c["name"] == "output-uploader")
+            mount = next(m for m in uploader["volumeMounts"] if m["name"] == "job-storage-secrets")
+            projection = next(v["secret"] for v in pod["spec"]["volumes"] if v["name"] == mount["name"])
+            assert projection["items"] == [{"key": ".aws-credentials", "path": ".aws-credentials"}]
+            assert projection["secretName"] == secret_name
+            credentials = ConfigParser(interpolation=None)
+            credentials.read_string(base64.b64decode(secret["data"][".aws-credentials"]).decode())
+            assert credentials["default"]["aws_access_key_id"] == "personal-key"
+            assert credentials["default"]["aws_secret_access_key"] == "personal-secret"
+            assert "personal-secret" not in json.dumps(pod)
+        assert not any(
+            mount["name"] == "job-secrets"
+            for sidecar in pod["spec"]["containers"][1:]
+            for mount in sidecar.get("volumeMounts", [])
+        )
+        provider.sync(make_batch())
+        provider.collect_garbage()
+        assert k8s.get_json(K8sResource.SECRETS, secret_name) is None
+    finally:
+        provider.close()
+
+
+def test_redispatch_finishes_credential_delivery_after_pod_creation(provider, k8s):
+    req = make_run_req("/test-user/job/0", attempt_uid="abcdef0123456789")
+    req.environment.secrets["custom"] = "submitted-token"
+    k8s.inject_failure("get_json", KubectlError("interrupted after Pod creation"))
+    result = provider.sync(make_batch(tasks_to_run=[req]))
+    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert len(k8s.list_json(K8sResource.PODS)) == 1
+    assert k8s.list_json(K8sResource.SECRETS) == []
+
+    assert provider.sync(make_batch(tasks_to_run=[req])) == []
+    assert len(k8s.list_json(K8sResource.PODS)) == 1
+    assert len(k8s.list_json(K8sResource.SECRETS)) == 1
+    secret = k8s.list_json(K8sResource.SECRETS)[0]
+    assert base64.b64decode(secret["data"]["custom"]).decode() == "submitted-token"
 
 
 def test_sync_releases_output_uploader_after_task_container_exits(k8s):
@@ -1344,6 +1418,38 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
     assert k8s.get_json(K8sResource.CONFIGMAPS, "recent-succeeded-pod-wf") is not None
 
 
+def test_gc_retains_old_pod_until_after_output_uploader_finishes(provider, k8s):
+    now = datetime.now(UTC)
+    task_id = JobName.from_wire("/completed-after-long-run/0")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+    pod_name = _pod_name(task_id, 0)
+    populate_pod(k8s, pod_name, "Running", labels={_LABEL_TASK_HASH: _task_hash(task_id.to_wire())})
+    pod = k8s.get_json(K8sResource.PODS, pod_name)
+    pod["metadata"]["creationTimestamp"] = (now - timedelta(hours=11)).isoformat()
+    pod["status"]["containerStatuses"] = [
+        {
+            "name": "task",
+            "state": {"terminated": {"exitCode": 0, "finishedAt": (now - timedelta(hours=2)).isoformat()}},
+        },
+        {"name": "output-uploader", "state": {"running": {}}},
+    ]
+    batch = make_batch(running_tasks=[entry])
+
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
+    pod["status"]["phase"] = "Succeeded"
+    pod["status"]["containerStatuses"][1]["state"] = {
+        "terminated": {"exitCode": 0, "finishedAt": (now - timedelta(seconds=30)).isoformat()}
+    }
+
+    provider.collect_garbage()
+
+    assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
+    pod["status"]["containerStatuses"][1]["state"]["terminated"]["finishedAt"] = (now - timedelta(hours=2)).isoformat()
+    provider.collect_garbage()
+    assert k8s.get_json(K8sResource.PODS, pod_name) is None
+
+
 def test_gc_cleans_up_deferred_configmaps(provider, k8s):
     """GC deletes configmaps after the control loop tears down a stray pod."""
     task_id = "/deferred-job/0"
@@ -1648,6 +1754,64 @@ def test_gc_sweeps_crashed_gang_pods_on_short_retention(provider, k8s):
     assert k8s.get_json(K8sResource.PODS, "crashed-gang-pod") is None
     assert k8s.get_json(K8sResource.WORKLOADS, group) is None
     assert k8s.get_json(K8sResource.PODS, "plain-failed-pod") is not None, "1h retention for plain pods must hold"
+
+
+def test_gc_gang_retention_starts_after_container_finishes(provider, k8s):
+    now = datetime.now(UTC)
+    created = (now - timedelta(hours=2)).isoformat()
+    name = "recently-finished-gang-pod"
+    group = "recently-finished-gang"
+    _seed_gang_pod(k8s, name, group, created)
+    pod = k8s.get_json(K8sResource.PODS, name)
+    pod["status"]["containerStatuses"] = [
+        {"name": "task", "state": {"terminated": {"finishedAt": (now - timedelta(seconds=30)).isoformat()}}}
+    ]
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider.collect_garbage()
+    assert k8s.get_json(K8sResource.PODS, name) is not None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is not None
+
+    pod["status"]["containerStatuses"][0]["state"]["terminated"]["finishedAt"] = (now - timedelta(minutes=2)).isoformat()
+    provider.collect_garbage()
+    assert k8s.get_json(K8sResource.PODS, name) is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
+
+
+def test_gc_retains_old_gang_pod_after_recent_init_failure(provider, k8s):
+    now = datetime.now(UTC)
+    task_id = JobName.from_wire("/failed-during-staging/0")
+    pod_name = _pod_name(task_id, 0)
+    group = "failed-during-staging"
+    populate_pod(
+        k8s,
+        pod_name,
+        "Failed",
+        labels={_LABEL_TASK_HASH: _task_hash(task_id.to_wire()), _KUEUE_POD_GROUP_NAME: group},
+    )
+    pod = k8s.get_json(K8sResource.PODS, pod_name)
+    pod["metadata"]["creationTimestamp"] = (now - timedelta(hours=2)).isoformat()
+    pod["status"]["initContainerStatuses"] = [
+        {
+            "name": "stage-workdir",
+            "state": {
+                "terminated": {
+                    "exitCode": 1,
+                    "reason": "Error",
+                    "message": "download failed",
+                    "finishedAt": (now - timedelta(seconds=30)).isoformat(),
+                }
+            },
+        }
+    ]
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider.collect_garbage()
+
+    assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+    update = provider.sync(make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)]))[0]
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
+    assert update.terminal_reason == "Init:Error stage-workdir: download failed"
 
 
 def test_gc_skips_gang_with_active_sibling(provider, k8s):

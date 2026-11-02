@@ -1,0 +1,9 @@
+rules:
+  - kind: sequence
+    aggregate: geometric
+    action: mask
+    low: 0.99
+    high: 1.01
+  - kind: token
+    action: truncate
+    high: 2.0

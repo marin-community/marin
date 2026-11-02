@@ -2,10 +2,10 @@
 
 We use snapshot tests to ensure that our HTML-to-text conversion is working as expected.
 
-There is one split per source format: `web`, `wiki`, `ar5iv`, `stackexchange`, and `dclm_hq`. Each
+There is one split per source format: `web`, `wiki`, `stackexchange`, and `dclm_hq`. Each
 split has an `inputs/` directory of source documents and an `expected/` directory of markdown. The
 `web` split nests its markdown one level deeper, under `expected/resiliparse/`, because the
-extractor is part of the snapshot's identity. `tests/test_snapshot.py` asserts on the first four;
+extractor is part of the snapshot's identity. `tests/test_snapshot.py` asserts on the first three;
 `dclm_hq` has stored snapshots that `generate_expected.py` regenerates but no test compares.
 
 ## Running the tests

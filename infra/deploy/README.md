@@ -28,9 +28,15 @@ application projects that are not registered here.
 
 Changes on `main` deploy automatically through `ops-pulumi-rollout.yaml`. Dispatch
 that workflow to redeploy the current `main` revision with the production identity
-and GitHub-held service secrets. Run the command locally only to deploy an unmerged
-checkout or investigate a rollout with operator credentials; it targets the same
-production stack.
+and GitHub-held service secrets. Local commands use operator credentials and
+target the same production stacks. Services other than Marina also permit
+deploying an unmerged checkout.
+
+Marina production updates require a clean checkout at the current remote main;
+use its main-branch workflow for a redeploy and local previews for branch work.
+This also applies to direct `pulumi up` on the `marin-marina` stack. Every Marina
+application uses `marina release` to publish its Postgres package independently;
+a runtime rollout updates the kernel and installed dependencies.
 
 Finelog Kubernetes deployments add revision rollback support:
 

@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 from marina.journeys import Journey
+from playwright.sync_api import expect
 
 
 def test_cleanup_report_explains_the_pipeline(journey: Journey) -> None:
@@ -42,3 +43,37 @@ def test_shell_knows_the_app_and_the_caller(journey: Journey) -> None:
     apps = cast(dict[str, Any], journey.api("/api/marina/apps"))
     assert any(app["name"] == "tasktrove" for app in apps["apps"])
     assert journey.api("/api/marina/me") == {"user": "anonymous", "role": "admin"}
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_app_switcher_handles_a_large_directory(journey: Journey, width: int) -> None:
+    apps = [
+        {"name": f"app-{i}", "title": f"Research tool {i}", "description": "Inspect experiments.", "path": f"/app-{i}/"}
+        for i in range(30)
+    ]
+    apps.append({"name": "tasktrove", "title": "TaskTrove", "description": "Browse tasks.", "path": "/tasktrove/"})
+    page = journey.page
+    page.route("**/api/marina/apps", lambda route: route.fulfill(json={"apps": apps}))
+    page.set_viewport_size({"width": width, "height": 900})
+    journey.visit("/")
+    launcher = page.get_by_role("button", name="Open apps")
+    launcher.click()
+    search = page.get_by_role("searchbox", name="Find an app")
+    expect(search).to_be_focused()
+    links = page.get_by_role("navigation", name="Apps", exact=True).get_by_role("link")
+    expect(links).to_have_count(31)
+    search.fill("tool 29")
+    expect(links).to_have_count(1)
+    expect(links).to_have_attribute("href", "/app-29/")
+    search.fill("missing app")
+    expect(links).to_have_count(0)
+    page.keyboard.press("Escape")
+    expect(page.get_by_role("dialog")).not_to_be_visible()
+    expect(launcher).to_be_focused()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    launcher.click()
+    search.fill("TaskTrove")
+    expect(links).to_have_attribute("aria-current", "page")
+    links.click()
+    expect(page.get_by_role("button", name="Open apps")).to_be_visible()
+    expect(page.get_by_role("dialog")).not_to_be_visible()

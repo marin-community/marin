@@ -757,6 +757,34 @@ class TestZoneRouting:
 class TestCommittedBudgetRouting:
     """Tests for two-phase routing with committed budgets."""
 
+    @pytest.mark.parametrize(
+        ("preferred_region", "expected_group"),
+        [("europe-west4", "preferred"), ("asia-east1", "primary")],
+    )
+    def test_soft_region_constraint_prefers_match_or_falls_back(self, preferred_region: str, expected_group: str):
+        primary = ScalingGroup(
+            make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"]),
+            make_mock_platform(),
+        )
+        preferred = ScalingGroup(
+            make_scale_group_config(name="preferred", max_slices=5, priority=20, zones=["europe-west4-a"]),
+            make_mock_platform(),
+        )
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].constraints.append(
+            Constraint.create(
+                key=WellKnownAttribute.REGION,
+                op=ConstraintOp.EQ,
+                value=preferred_region,
+                mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+            )
+        )
+
+        result = route_demand([primary, preferred], demand)
+
+        assert result.routed_entries == {expected_group: demand}
+        assert result.unmet_entries == []
+
     def test_committed_budget_retains_demand_for_requesting_group(self):
         """Demand sticks to a group with requesting slices even when a fresh group is available."""
         config_v6e = make_scale_group_config(name="v6e", max_slices=30, priority=10, num_vms=4)

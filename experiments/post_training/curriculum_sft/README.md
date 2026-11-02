@@ -56,12 +56,11 @@ experiment CLI still requires `--version`, which the generation graph does not u
 step with a changed recipe serves its cached output, so bump `SOLUTIONS_VERSION` after changing
 only the solve settings, and both versions after changing problem generation.
 
-Training and evaluation run on `cw-rno2a` with `MARIN_PREFIX` set to the `ttl=7d` trial prefix.
+Training and evaluation run on `cw-rno2a` using the cluster's configured output prefix.
 `math_trial.py` adopts the solved chat artifacts from the source prefix at `SOLUTIONS_VERSION`:
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --no-wait --job-name curriculum-math-sft-<version> \
-  -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=7d/curriculum-math-20260924 \
   -- uv run python experiments/post_training/curriculum_sft/math_trial.py \
   --stage train --learning-rate 1e-5 --warmup 1 --version <version> --run
 ```

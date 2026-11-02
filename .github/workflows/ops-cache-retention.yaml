@@ -1,0 +1,31 @@
+name: Build-cache retention
+
+on:
+  schedule:
+    - cron: "37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+concurrency:
+  group: ops-cache-retention
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [iris-cache, finelog-cache]
+    steps:
+      # The action deletes at most 100 versions per run. Hourly passes drain
+      # the existing backlog while keeping ahead of new cache snapshots.
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.package }}
+          package-type: container
+          min-versions-to-keep: 10
+          delete-only-untagged-versions: "true"

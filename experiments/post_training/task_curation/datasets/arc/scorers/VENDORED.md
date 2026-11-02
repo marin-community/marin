@@ -6,7 +6,7 @@ relative paths, together with the package markers, `aime/utils.py` and `answer_e
 
 | File | Upstream | Note |
 | --- | --- | --- |
-| `skyrl_gym/envs/nemotron_ultra/nvarc.py` | [`nemotron_ultra/nvarc.py`](https://github.com/marin-community/MarinSkyRL/blob/d8b6e8c163def3660e9d3072c1c174226a1709fa/skyrl-gym/skyrl_gym/envs/nemotron_ultra/nvarc.py) at MarinSkyRL `d8b6e8c163def3660e9d3072c1c174226a1709fa` | Unchanged. |
+| `skyrl_gym/envs/nemotron_ultra/nvarc.py` | [`nemotron_ultra/nvarc.py`](https://github.com/marin-community/MarinSkyRL/blob/d8b6e8c163def3660e9d3072c1c174226a1709fa/skyrl-gym/skyrl_gym/envs/nemotron_ultra/nvarc.py) at MarinSkyRL `d8b6e8c163def3660e9d3072c1c174226a1709fa` | Patched so transductive answers accept the first Markdown code fence and rectangular JSON arrays, in addition to the upstream whitespace and compact-row forms. Uses `verifyit.modes.extract.unwrap_fence` from the grader packages. |
 | `skyrl_gym/envs/nemotron_ultra/sandbox.py` | [`nemotron_ultra/sandbox.py`](https://github.com/marin-community/MarinSkyRL/blob/d8b6e8c163def3660e9d3072c1c174226a1709fa/skyrl-gym/skyrl_gym/envs/nemotron_ultra/sandbox.py) at the same revision | Unchanged. `nvarc.py` imports its output limit and client type; importing it needs `requests`. |
 | `local_sandbox.py` | none | Ours. `LocalSandbox.execute` replaces the NeMo Skills sandbox server: it runs the program with `python -c` under a timeout and returns the server's response fields. |
 

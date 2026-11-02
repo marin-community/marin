@@ -15,7 +15,7 @@ from pydantic import JsonValue, ValidationError
 
 from taskcompendium.chat import chat_conversation
 from taskcompendium.convert.answers import source_defect
-from taskcompendium.convert.conversation import conversation_task
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import GraderPackage
 from taskcompendium.models import ConversationEvent, ConversationInput, NoGrader, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import ImportRejection, RawRow

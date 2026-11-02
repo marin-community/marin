@@ -1,9 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from threading import Event
 from unittest.mock import MagicMock, patch
 
+import fsspec
 import pytest
 from botocore.exceptions import ClientError
 from rigging.filesystem.conditional_object import (
@@ -13,6 +17,8 @@ from rigging.filesystem.conditional_object import (
     UnsupportedConditionalWrite,
     conditional_object,
 )
+from rigging.filesystem.factory import filesystem
+from rigging.filesystem.s3_compat import configure_fsspec_s3
 
 
 def test_local_conditional_object_rejects_stale_version(tmp_path):
@@ -30,6 +36,52 @@ def test_local_conditional_object_rejects_stale_version(tmp_path):
     with pytest.raises(ConditionalWriteError):
         second.write(b"three", expected_version=stale.version)
     assert conditional_object(path).read().data == b"two"
+
+
+@pytest.mark.parametrize("competing_creator", [False, True])
+def test_local_conditional_create_publishes_complete_object(tmp_path, monkeypatch, competing_creator):
+    path = str(tmp_path / "HEAD")
+    first = conditional_object(path)
+    second = conditional_object(path)
+    opened, resume = Event(), Event()
+    real_open = open
+
+    def pause_before_first_write(filename, mode):
+        handle = real_open(filename, mode)
+        if mode in ("a+b", "xb") and not opened.is_set():
+            opened.set()
+            assert resume.wait(10)
+        return handle
+
+    monkeypatch.setattr("rigging.filesystem.conditional_object.open", pause_before_first_write, raising=False)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        writer = pool.submit(first.write, b"first", expected_version=None)
+        assert opened.wait(10)
+        try:
+            # An unfinished first write must not expose an empty object to a reader.
+            assert second.read() is None
+            assert second.version() is None
+            if competing_creator:
+                second.write(b"winner", expected_version=None)
+        finally:
+            resume.set()
+        if competing_creator:
+            with pytest.raises(ConditionalWriteError):
+                writer.result()
+        else:
+            writer.result()
+    result = second.read()
+    assert result.data == (b"winner" if competing_creator else b"first")
+
+
+def test_local_conditional_update_does_not_recreate_missing_object(tmp_path):
+    path = tmp_path / "HEAD"
+    obj = conditional_object(str(path))
+    version = obj.write(b"original", expected_version=None)
+    path.unlink()
+    with pytest.raises(ConditionalWriteError):
+        obj.write(b"stale", expected_version=version)
+    assert obj.read() is None
 
 
 def test_conditional_object_rejects_backend_without_compare_and_swap():
@@ -70,6 +122,49 @@ def test_s3_conditional_object_sends_the_etag_precondition(monkeypatch):
     client.put_object.assert_called_once_with(Bucket="bucket", Key="HEAD", Body=b"two", IfMatch='"v1"')
 
 
+def test_configured_credentials_reach_both_s3_clients_without_env_export(monkeypatch, tmp_path):
+    for name in ("AWS_ENDPOINT_URL", "AWS_REGION", "AWS_DEFAULT_REGION", "FSSPEC_S3"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ambient-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "unrelated-session-token")
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setitem(fsspec.config.conf, "s3", {})
+    configure_fsspec_s3("https://objects.example.com", key="configured-key", secret="configured-secret")
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "ambient-key"
+    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "ambient-secret"
+    client = MagicMock()
+    client.head_object.return_value = {"ETag": '"v1"'}
+    session = MagicMock()
+    session.create_client.return_value = client
+    captured = {}
+
+    def create_filesystem(_protocol, **options):
+        captured.update(options)
+        return MagicMock()
+
+    monkeypatch.setattr(fsspec, "filesystem", create_filesystem)
+    S3ConditionalObject._client.cache_clear()
+    try:
+        with patch("botocore.session.get_session", return_value=session):
+            assert conditional_object("s3://bucket/HEAD").version() == '"v1"'
+        filesystem("s3")
+        assert session.create_client.call_args.kwargs["aws_access_key_id"] == "configured-key"
+        assert session.create_client.call_args.kwargs["aws_secret_access_key"] == "configured-secret"
+        assert "aws_session_token" not in session.create_client.call_args.kwargs
+        assert captured["key"] == "configured-key"
+        assert captured["secret"] == "configured-secret"
+        assert "token" not in captured
+        monkeypatch.setitem(fsspec.config.conf, "s3", {})
+        captured.clear()
+        filesystem("s3", key="explicit-key", secret="explicit-secret")
+        assert captured["key"] == "explicit-key"
+        assert captured["secret"] == "explicit-secret"
+        assert "token" not in captured
+    finally:
+        S3ConditionalObject._client.cache_clear()
+
+
 def test_s3_conditional_object_requires_absence_for_creation(monkeypatch):
     client = MagicMock()
     client.put_object.return_value = {"ETag": '"v1"'}
@@ -86,6 +181,29 @@ def test_s3_conditional_object_maps_missing_head_to_no_version(monkeypatch):
     monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
 
     assert S3ConditionalObject("s3://bucket/HEAD").version() is None
+
+
+@pytest.mark.parametrize("operation", ["read", "version"])
+def test_s3_conditional_object_retries_spurious_path_style_response(monkeypatch, operation):
+    client = MagicMock()
+    error = ClientError(
+        {"Error": {"Code": "PathStyleRequestNotAllowed", "Message": "use virtual-host addressing"}},
+        "GetObject" if operation == "read" else "HeadObject",
+    )
+    if operation == "read":
+        client.get_object.side_effect = [error, {"Body": BytesIO(b"one"), "ETag": '"v1"'}]
+    else:
+        client.head_object.side_effect = [error, {"ETag": '"v1"'}]
+    monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
+
+    result = getattr(S3ConditionalObject("s3://bucket/HEAD"), operation)()
+
+    if operation == "read":
+        assert result is not None
+        assert result.data == b"one"
+    else:
+        assert result == '"v1"'
 
 
 def test_s3_conditional_object_maps_precondition_failure(monkeypatch):

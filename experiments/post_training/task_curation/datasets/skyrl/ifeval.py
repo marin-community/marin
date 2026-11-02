@@ -18,26 +18,17 @@ from typing import Any
 
 from pydantic import ValidationError
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from taskcompendium.convert.tasktrove import ANSWER_PATH
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow
+from verifyit.spec import DEFAULT_OUTPUT
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
-
-IFEVAL_VERIFIER = SourceReference(
-    "ifeval",
-    "c7600581c6ff27b8ebdc5a02954952c77e15b520f8d6da7edb69839dc9948158",
-    (
-        "https://github.com/marin-community/MarinSkyRL/tree/"
-        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/ifeval"
-    ),
-)
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -148,7 +139,7 @@ def ifeval_task(
         {"constraints": normalized},
         environment=required_grader_environment(context),
         timeout=GRADER_TIMEOUT,
-        answer_path=ANSWER_PATH,
+        answer_path=DEFAULT_OUTPUT,
     )
     return conversation_task(row, events=events, package=package, evidence=evidence)
 
@@ -185,18 +176,18 @@ def convert_rlvr_ifeval(row: RawRow, context: ConversionContext) -> TaskSpec | I
 CONTROLS = Controls()
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:nemotron_if",
                 title="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
                 origin="MarinSkyRL",
                 family="instruction-following",
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/ifeval"),
-                verifier=IFEVAL_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="nemotron_if",
                 source=HfSource(
                     "nvidia/Llama-Nemotron-Post-Training-Dataset",
@@ -206,24 +197,22 @@ def sources() -> list[RlDataSource]:
                 ),
                 convert=convert_nemotron_if,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:rlvr_ifeval",
                 title="allenai/RLVR-IFeval",
                 origin="MarinSkyRL",
                 family="instruction-following",
                 tags=("rlvr", "single-turn", "license:odc-by", "gym/ifeval"),
-                verifier=IFEVAL_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="rlvr_ifeval",
                 source=HfSource(
                     "allenai/RLVR-IFeval",
@@ -233,12 +222,10 @@ def sources() -> list[RlDataSource]:
                 ),
                 convert=convert_rlvr_ifeval,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
     ]

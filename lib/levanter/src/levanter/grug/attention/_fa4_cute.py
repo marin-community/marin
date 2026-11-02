@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import equinox as eqx
 import jax
+import numpy as np
 from jax import shard_map
 from jax import numpy as jnp
 from jax.sharding import PartitionSpec as P
@@ -262,6 +263,7 @@ def _fa4_cute_attention_forward_sharded(
         )
 
     sequence_axes = q_dims[1]
+    shards = math.prod(mesh.shape[axis] for axis in sequence_axes)
     # Return Q's own spec, including length-1 axes: explicit sharding compares axis names, so an
     # output that drops them cannot be combined with the caller's activations.
     q_spec = tuple(partition_spec_of(q))
@@ -277,23 +279,55 @@ def _fa4_cute_attention_forward_sharded(
         check_vma=False,
     )
     def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
-        q_offset = jnp.zeros((1,), dtype=jnp.int32)
-        if sequence_axes:
-            # shard_map's transpose sums partial dK/dV for replicated K/V. Local fp32
-            # accumulators are cast to the K/V dtype before this sum, so gradient rounding
-            # error can grow with the context degree.
-            shard_index = jax.lax.axis_index(sequence_axes).astype(jnp.int32)
-            q_offset = jnp.reshape(shard_index * q_local.shape[1], (1,))
-        return fa4_cute_attention_forward(
-            q_local,
-            k_local,
-            v_local,
-            lower_bounds_local,
-            valid_local,
-            sm_scale=sm_scale,
-            kernel_config=kernel_config,
-            q_offset=q_offset,
+        def _run(q_rows, lower_bounds_rows, valid_rows, first_position):
+            return fa4_cute_attention_forward(
+                q_rows,
+                k_local,
+                v_local,
+                lower_bounds_rows,
+                valid_rows,
+                sm_scale=sm_scale,
+                kernel_config=kernel_config,
+                q_offset=jnp.reshape(first_position, (1,)).astype(jnp.int32),
+            )
+
+        if not sequence_axes:
+            return _run(q_local, lower_bounds_local, valid_local, 0)
+        # shard_map's transpose sums partial dK/dV for replicated K/V. Each shard runs two kernels
+        # below, and each casts its fp32 accumulators to the K/V dtype before the local and
+        # cross-shard sums, so gradient rounding error grows with twice the context degree.
+        #
+        # Causal attention costs more for later queries, so the shard holding the end of the
+        # sequence would set the pace. Shard c holds positions [cL, (c+1)L); it keeps the first half
+        # of its queries and swaps the second half with the mirror shard N-1-c, whose second half is
+        # as late as shard c's first half is early. Every shard then attends one early and one
+        # matching late block, and the outputs swap back afterwards.
+        shard_index = jax.lax.axis_index(sequence_axes).astype(jnp.int32)
+        local_len = q_local.shape[1]
+        # Every shard splits at the same row, so the swapped halves match in shape even for odd L.
+        split = local_len - local_len // 2
+        # ppermute takes its axes, and numbers shards, in mesh order; sequence position follows Q's spec order.
+        permute_axes = tuple(sorted(sequence_axes, key=mesh.axis_names.index))
+
+        def _permute_index(shard: int) -> int:
+            coords = dict(zip(sequence_axes, np.unravel_index(shard, [mesh.shape[a] for a in sequence_axes])))
+            return int(np.ravel_multi_index([coords[a] for a in permute_axes], [mesh.shape[a] for a in permute_axes]))
+
+        mirror = [(_permute_index(shard), _permute_index(shards - 1 - shard)) for shard in range(shards)]
+
+        def _swap_late(x):
+            return jax.lax.ppermute(x[:, split:], permute_axes, mirror)
+
+        early = _run(
+            q_local[:, :split], lower_bounds_local[:, :split], valid_local[:, :split], shard_index * local_len
         )
+        late = _run(
+            _swap_late(q_local),
+            _swap_late(lower_bounds_local),
+            _swap_late(valid_local),
+            (shards - 1 - shard_index) * local_len + split,
+        )
+        return jnp.concatenate([early, jax.lax.ppermute(late, permute_axes, mirror)], axis=1)
 
     return _local_fa4_attention(q, k, v, lower_bounds, valid)
 

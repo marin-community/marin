@@ -4,7 +4,7 @@
 // One origin serves many apps, each under `/{app}/`, and this is what tells a
 // reader which one they are in and how to reach the others. The bar and agent
 // panel are kernel UI. The app owns the main content and puts its navigation in
-// the `nav` slot beside the switcher.
+// the `nav` slot below the title.
 //
 // The shell reads the app directory, caller identity, and this app's agent
 // configuration from the kernel.
@@ -12,20 +12,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import AgentPanel from './AgentPanel.vue'
+import AppBar from './AppBar.vue'
+import type { DirectoryApp } from './AppBar.vue'
 import { provideAgentContext } from './agentContext'
 import type { AgentPanelConfig } from './loomAgent'
 
 const props = defineProps<{ app: string }>()
 
-/** One app the kernel serves. */
-interface App {
-  name: string
-  title: string
-  description: string
-  path: string
-}
-
-const apps = ref<App[]>([])
+const apps = ref<DirectoryApp[]>([])
 const user = ref('')
 const agentConfig = ref<AgentPanelConfig>({ enabled: false })
 const agentContext = provideAgentContext()
@@ -57,7 +51,7 @@ onMounted(async () => {
   updatePanelMode()
   panelMedia.addEventListener('change', updatePanelMode)
   const [listed, me, configured] = await Promise.all([
-    read<{ apps: App[] }>('/api/marina/apps'),
+    read<{ apps: DirectoryApp[] }>('/api/marina/apps'),
     read<{ user: string }>('/api/marina/me'),
     read<AgentPanelConfig>(`/api/marina/agent/config?app=${encodeURIComponent(props.app)}`),
   ])
@@ -75,122 +69,36 @@ function closePanel() {
 </script>
 
 <template>
-  <header class="bar">
-    <a class="wordmark" href="/">Marina</a>
-    <nav class="apps" aria-label="Apps">
-      <a
-        v-for="app in apps"
-        :key="app.name"
-        :href="app.path"
-        :title="app.description"
-        :aria-current="app.name === props.app ? 'page' : undefined"
-        >{{ app.title }}</a
-      >
-    </nav>
-    <nav class="own" aria-label="This app">
-      <slot name="nav" />
-    </nav>
-    <button
-      v-if="canAsk"
-      ref="launcher"
-      class="ask"
-      type="button"
-      :aria-expanded="panelOpen"
-      @click="panelOpen = !panelOpen"
-    >
-      Ask Marina
-    </button>
-    <span v-if="who" class="who" :title="user">{{ who }}</span>
-  </header>
-  <div class="shell-body" :class="{ 'agent-open': panelOpen }">
-    <!-- The page below the bar is the app's: it owns its own width and padding. -->
-    <main :inert="panelOpen && modalPanel">
-      <slot />
-    </main>
-    <button v-if="panelOpen && modalPanel" class="scrim" type="button" aria-label="Close agent panel" @click="closePanel" />
-    <AgentPanel
-      v-if="panelOpen && agentContext"
-      :key="`${props.app}:${agentContext.contextKey}`"
-      :app="props.app"
-      :app-title="appTitle"
-      :config="agentConfig"
-      :context="agentContext"
-      :modal="modalPanel"
-      @close="closePanel"
-    />
+  <div class="marina-shell" :class="{ 'agent-open': panelOpen }">
+    <AppBar :title="appTitle" :app="app" :apps="apps">
+      <template v-if="$slots.nav" #nav><slot name="nav" /></template>
+      <template #actions>
+        <button v-if="canAsk" ref="launcher" class="ask" type="button"
+          :aria-expanded="panelOpen" @click="panelOpen = !panelOpen">Ask Marina</button>
+        <span v-if="who" class="who" :title="user">{{ who }}</span>
+      </template>
+    </AppBar>
+    <div class="shell-body" :class="{ 'agent-open': panelOpen }">
+      <!-- The page below the bar is the app's: it owns its own width and padding. -->
+      <main :inert="panelOpen && modalPanel">
+        <slot />
+      </main>
+      <button v-if="panelOpen && modalPanel" class="scrim" type="button" aria-label="Close agent panel" @click="closePanel" />
+      <AgentPanel
+        v-if="panelOpen && agentContext"
+        :key="`${props.app}:${agentContext.contextKey}`"
+        :app="props.app"
+        :app-title="appTitle"
+        :config="agentConfig"
+        :context="agentContext"
+        :modal="modalPanel"
+        @close="closePanel"
+      />
+    </div>
   </div>
 </template>
 
 <style scoped>
-.bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem 1rem;
-  flex-wrap: wrap;
-  padding: 0.5rem 1.25rem;
-  border-bottom: 1px solid var(--edge);
-  background: var(--panel);
-}
-
-.wordmark {
-  color: var(--ink);
-  text-decoration: none;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  flex: none;
-}
-
-/* The switcher scrolls sideways rather than wrapping: on a phone it is one line
- * of names under a fixed wordmark, and a wrapping list would push the app's own
- * navigation off the first screen. */
-.apps {
-  display: flex;
-  gap: 0.9rem;
-  font-size: 0.9rem;
-  overflow-x: auto;
-  scrollbar-width: none;
-  padding: 0.15rem 0;
-  min-width: 0;
-}
-.apps::-webkit-scrollbar { display: none; }
-.apps a {
-  color: var(--muted);
-  text-decoration: none;
-  white-space: nowrap;
-}
-.apps a:hover { color: var(--ink); }
-.apps a[aria-current='page'] {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-/* The app's own navigation, set off from the switcher by a rule rather than by
- * a second bar, so the two rows of links never read as one.
- *
- * `:slotted` because the links are the app's markup: slot content carries the
- * app's scope and not this component's, so an unqualified `.own a` would miss
- * every one of them. */
-.own {
-  display: flex;
-  gap: 0.9rem;
-  font-size: 0.9rem;
-  flex-wrap: wrap;
-}
-.own:not(:empty) {
-  border-left: 1px solid var(--edge);
-  padding-left: 1rem;
-}
-.own :slotted(a) {
-  color: var(--muted);
-  text-decoration: none;
-  white-space: nowrap;
-}
-.own :slotted(a:hover) { color: var(--ink); }
-.own :slotted(a[aria-current='page']) {
-  color: var(--ink);
-  border-bottom: 2px solid var(--mark);
-}
-
 .who {
   flex: none;
   font: 0.78rem var(--mono);
@@ -201,7 +109,6 @@ function closePanel() {
 }
 
 .ask {
-  margin-left: auto;
   border-color: var(--mark);
   background: transparent;
   color: var(--mark);
@@ -214,12 +121,17 @@ function closePanel() {
 .scrim { display: none; }
 
 @media (min-width: 80rem) {
+  .marina-shell.agent-open {
+    height: 100dvh;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
   .shell-body.agent-open {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 28rem;
     align-items: start;
   }
-  .shell-body.agent-open > main { max-height: calc(100vh - 3.35rem); overflow: auto; }
+  .shell-body.agent-open > main { height: 100%; overflow: auto; }
 }
 
 @media (max-width: 79.99rem) {
@@ -235,7 +147,6 @@ function closePanel() {
 }
 
 @media (max-width: 40rem) {
-  .bar { padding: 0.5rem 0.9rem; }
-  .ask { margin-left: 0; }
+  .who { display: none; }
 }
 </style>

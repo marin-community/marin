@@ -125,13 +125,15 @@ def test_discovery_uses_selected_checkpoint_paths(tmp_path, spec, model):
     incomplete.mkdir()
     (incomplete / "manifest.json").write_text("{}")
     paths = [str(tmp_path / "old/v1/checkpoints/step-6000"), str(tmp_path / "active/v1/checkpoints/step-18000")]
-    requests = discover_requests(paths, spec, model, "a" * 40, target_cluster="test")
+    requests = discover_requests(paths, spec, model, "a" * 40, first_step=0, target_cluster="test")
     assert [(row.checkpoint.run_id, row.checkpoint.step) for row in requests] == [
         ("old", 6000),
         ("active", 18000),
     ]
     assert all(row.checkpoint.timestamp == "2026-09-12T10:00:00+00:00" for row in requests)
     assert requests[0].checkpoint.metadata_digest == digest({**metadata, "step": 6000})
+    later = discover_requests(paths, spec, model, "a" * 40, first_step=12000, target_cluster="test")
+    assert [(row.checkpoint.run_id, row.checkpoint.step) for row in later] == [("active", 18000)]
 
 
 @eqx.filter_jit

@@ -93,8 +93,36 @@ def merge_counter_entries(entries: Iterable[tuple[str, CounterEntry]]) -> tuple[
 
 
 @dataclass
+class InputProgress:
+    """Rows consumed from the current input, with an optional known total."""
+
+    completed: int
+    total: int | None
+
+
+@dataclass(frozen=True)
+class RunnerSnapshot:
+    """Detached counters and input progress from one runner."""
+
+    counters: dict[str, CounterEntry] = field(default_factory=dict)
+    input_progress: InputProgress | None = None
+
+
+@dataclass(frozen=True)
+class ShardProgress:
+    """Live progress for one runner's current shard and input."""
+
+    stage_generation: int
+    attempt: int
+    elapsed_seconds: float
+    records_in: int
+    input_rows_completed: int | None
+    input_rows_total: int | None
+
+
+@dataclass
 class CounterSnapshot:
-    """Bundled counter values and monotonically increasing generation tag.
+    """Counter values, per-shard progress, and a monotonic generation tag.
 
     The generation increments on every snapshot, so each heartbeat and
     report_result carries a unique tag.  The coordinator uses strict
@@ -105,6 +133,7 @@ class CounterSnapshot:
 
     counters: dict[str, CounterEntry]
     generation: int
+    shards: dict[int, ShardProgress] = field(default_factory=dict)
 
     @staticmethod
     def empty(generation: int = 0) -> "CounterSnapshot":
@@ -120,6 +149,7 @@ class WorkerContext(Protocol):
     def set_aggregation(self, name: str, agg: Aggregation) -> None: ...
     def current_stage_name(self) -> str: ...
     def get_counter_snapshot(self) -> CounterSnapshot: ...
+    def set_input_progress(self, progress: InputProgress) -> None: ...
 
 
 _worker_ctx_var: ContextVar[WorkerContext | None] = ContextVar("zephyr_worker_ctx", default=None)

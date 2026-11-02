@@ -30,10 +30,15 @@ both sync and async clients.
 """
 
 import json
+import logging
 import os
+import tempfile
+import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, cast
 
 import google.auth
@@ -45,8 +50,11 @@ import google.auth.jwt
 import google.auth.transport.requests
 import google.oauth2.credentials
 import google.oauth2.id_token
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 
 _REFRESH_MARGIN_SECONDS = 300
+_RENEWAL_RETRY_INTERVAL = 30.0
 
 # Impersonation mints the ID token through the IAM Credentials API, which needs
 # the cloud-platform scope on the source (user) credentials.
@@ -112,13 +120,98 @@ class TokenProvider(Protocol):
 
 
 class StaticTokenProvider:
-    """Returns a fixed token. Useful for testing and worker auth."""
+    """Returns a fixed token for credentials managed by the caller."""
 
     def __init__(self, token: str):
         self._token = token
 
     def get_token(self) -> str | None:
         return self._token
+
+
+class RefreshingTokenProvider:
+    """Renew a JWT before expiry, serializing concurrent callers.
+
+    ``refresh`` exchanges the current credential for a replacement. The issuer
+    verifies credentials; decoded expiry claims here only schedule renewal.
+    A private cache preserves renewed credentials across process restarts.
+    """
+
+    def __init__(
+        self,
+        token: str,
+        refresh: Callable[[str], str],
+        *,
+        refresh_margin: float = _REFRESH_MARGIN_SECONDS,
+        cache_path: Path | None = None,
+        now: Callable[[], float] = time.time,
+    ):
+        self._refresh = refresh
+        self._margin = refresh_margin
+        self._cache_path = cache_path
+        self._now = now
+        self._lock = threading.Lock()
+        self._retry_at = 0.0
+        claims = google.auth.jwt.decode(token, verify=False)
+        if cache_path is not None and cache_path.exists():
+            cached = cache_path.read_text().strip()
+            cached_claims = google.auth.jwt.decode(cached, verify=False)
+            if all(cached_claims.get(k) == claims.get(k) for k in ("iss", "aud", "sub")):
+                if cached_claims["exp"] > claims["exp"]:
+                    token, claims = cached, cached_claims
+        self._token = token
+        self._expires_at = float(claims["exp"])
+
+    def get_token(self) -> str:
+        with self._lock:
+            now = self._now()
+            if now < self._expires_at - self._margin or now < min(self._retry_at, self._expires_at):
+                return self._token
+            try:
+                token = self._refresh(self._token)
+            except (ConnectError, OSError) as exc:
+                retryable = not isinstance(exc, ConnectError) or exc.code in (
+                    Code.UNAVAILABLE,
+                    Code.INTERNAL,
+                    Code.DEADLINE_EXCEEDED,
+                    Code.RESOURCE_EXHAUSTED,
+                )
+                if not retryable or self._now() >= self._expires_at:
+                    raise
+                # Keep serving the still-valid credential during a short issuer
+                # outage, without making every concurrent RPC retry renewal.
+                self._retry_at = self._now() + _RENEWAL_RETRY_INTERVAL
+                logging.getLogger(__name__).warning(
+                    "Token renewal failed; retrying while current token is valid: %s", type(exc).__name__
+                )
+                return self._token
+            expires_at = float(google.auth.jwt.decode(token, verify=False)["exp"])
+            if expires_at <= max(self._expires_at, self._now() + self._margin):
+                raise ValueError("Token renewal did not extend the credential beyond its refresh window")
+            if self._cache_path is not None:
+                self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode="w", dir=self._cache_path.parent, delete=False) as stream:
+                    temporary = Path(stream.name)
+                    try:
+                        stream.write(token)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                        temporary.replace(self._cache_path)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+            self._token = token
+            self._expires_at = expires_at
+            self._retry_at = 0.0
+            return token
+
+    def run(self, stop: threading.Event) -> None:
+        """Renew even when the client has no outgoing application requests."""
+        while not stop.is_set():
+            try:
+                self.get_token()
+            except (ConnectError, OSError):
+                logging.getLogger(__name__).exception("Credential renewal failed")
+            stop.wait(_RENEWAL_RETRY_INTERVAL)
 
 
 class GcpAccessTokenProvider:

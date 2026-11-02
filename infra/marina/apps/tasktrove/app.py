@@ -196,6 +196,9 @@ class TaskStore:
         )
 
     def _filter_row_group(self, row_group: int, columns: list[str]) -> pa.Table:
+        cached = self._row_groups.get(row_group)
+        if cached is not None:
+            return cached.select(columns)
         with self._fs.open(self._tasks_path, "rb") as handle:
             return pq.ParquetFile(handle).read_row_group(row_group, columns=columns)
 
