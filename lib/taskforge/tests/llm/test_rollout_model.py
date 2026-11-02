@@ -40,6 +40,7 @@ from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
+from taskforge.llm.test_support import fake_source
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import (
     assemble,
@@ -51,7 +52,7 @@ from taskforge.spec.draft import (
     rollout_engine,
     rollout_limits,
 )
-from tests.conftest import ListLedger, fake_source
+from tests.conftest import ListLedger
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 
 POLICY = LLMPolicy(max_continuations=0)
@@ -147,7 +148,7 @@ def steps(result: GradedRollout) -> tuple[RolloutStep, ...]:
 
 @pytest.fixture
 async def fake_client(fake_glm, fast_provider):
-    async with GlmClient(fake_source(fake_glm), replace(fast_provider, max_attempts=1)) as client:
+    async with GlmClient(fake_source(fake_glm.base_url), replace(fast_provider, max_attempts=1)) as client:
         yield client
 
 

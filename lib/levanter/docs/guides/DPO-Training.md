@@ -169,6 +169,15 @@ hf_save_steps: 1000
 - **Merged checkpoints** fold LoRA weights into the base model and save a
   standard HuggingFace checkpoint ready for direct inference.
 
+### Full-model HF Exports
+
+For full-model DPO with `reference.type: separate` and no adapter,
+`hf_save_steps` specifies an interval in completed optimizer updates. Setting it to `2` exports
+after updates 2, 4, 6, and so on, plus the final update. Export directories keep
+zero-based step names: completed update `N` writes `step-(N-1)`, so those updates
+write `step-1`, `step-3`, and `step-5`.
+The final export is written once when the last update falls on the interval.
+
 ### Reference Eval Cache
 
 Set `reference_eval_cache.mode: build_or_load` to precompute validation-set

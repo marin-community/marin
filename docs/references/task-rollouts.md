@@ -62,6 +62,17 @@ A grader with an environment requires a `verifier_machine` selection, except a j
 Every other grader requires `verifier_machine=None`.
 Each attempt creates a fresh verifier machine from that selection.
 
+SkyRL accepts Parquet rows with a `task_spec` JSON column. Its dataset loader turns
+each canonical `TaskSpec` into a `TaskRolloutSpec` when it loads the data, using
+`environment.task_sessions.task_spec` from the training configuration for limits,
+harness selection and verifier machines. The curation
+[task-selection artifact](task-curation.md#final-task-selection) uses the
+assistant-prefix harness for `structure-closure` tasks and Shellbox for the other
+families. Image graders use the configured image verifier backend; package
+graders use the configured local verifier. The inventory artifact contains the
+task and private grader, so changing rollout resources or deadlines does not
+rewrite the task Parquet.
+
 `RolloutEngine.check(spec)` rejects a spec before any machine starts, and `run_task` calls it again. It checks the
 factory identifiers, the supported requirements, and the machines that engine grading needs: task resources,
 and a `file` or `workspace_state` answer that the engine grades, need a task machine. It rejects a graded
@@ -113,15 +124,15 @@ not read it.
 
 ### Assistant prefills
 
-`PrefillHarness` continues the final assistant text in `ConversationInput.events` once. Register it
+`AssistantPrefixHarness` continues the final assistant text in `ConversationInput.events` once. Register it
 and select it explicitly with `TaskRolloutSpec.harness`:
 
 ```python
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
 
-engine = RolloutEngine({}, {"prefill": PrefillHarness()})
+engine = RolloutEngine({}, {"assistant_prefix": AssistantPrefixHarness()})
 spec = TaskRolloutSpec(
-    task=task, harness="prefill", limits=limits, task_machine=None, verifier_machine=None
+    task=task, harness="assistant_prefix", limits=limits, task_machine=None, verifier_machine=None
 )
 ```
 

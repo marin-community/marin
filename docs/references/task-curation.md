@@ -63,7 +63,7 @@ release and vectors stay in object storage.
 | Shared embedding pass and inference | [embedding.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/embedding.py), [HarrierEmbedder](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/processing/embeddings/harrier.py) |
 | Curriculum anchors, ranking and task joins | [curriculum models](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curriculum/models.py), [alignment.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/alignment.py): `CurriculumVectors`, `TaskMatches`; [task_alignment.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/task_alignment.py): `TaskAlignment` |
 | Full release and compact coverage | [embedding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/embedding.py): release publication; [coverage.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/coverage.py); [EmbeddingSpec, AlignmentRelease, CurriculumCoverage](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/models.py) |
-| Atlas import and serving | [curriculum loader](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/load_curriculum.py), [grade loader](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/load.py), [curriculum API](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/server/curriculum.py), [Atlas reference](rl-data-atlas.md) |
+| Atlas import and serving | [curriculum loader](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/load_curriculum.py), [grade loader](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/load.py), [curriculum API](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/curriculum.py), [Atlas reference](rl-data-atlas.md) |
 
 ## Storage and publication
 
@@ -122,6 +122,79 @@ same artifact root:
 MARIN_PREFIX=s3://marin-us-east-02a/marin \
   uv run python -m experiments.post_training.task_curation.images --all
 ```
+
+## Final task selection
+
+`--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
+The implementation is
+[`inventory.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py).
+It depends on the recipe's admitted source artifacts and a pinned heldout
+Parquet. Selection reads only `final/*.parquet` from training sources whose
+manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
+the training population.
+
+For the current task-to-training recipe, see the [quick RL loop](../recipes/quick-rl-loop.md).
+
+The recipe contains an explicit source allowlist and family quotas. For example,
+this small recipe selects 100 calendar tasks from two admitted sources:
+
+```json
+{
+  "name": "calendar-trial",
+  "version": "2026.10.23.1",
+  "sources": {
+    "Task Trove:laion__nemotron-gym-agent-calendar-v2": "calendar",
+    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
+  },
+  "family_limits": {"calendar": 100},
+  "heldout": {
+    "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
+    "version": "2026.10.23.1",
+    "rows": 910
+  },
+  "validation_per_family": 20,
+  "seed": 20261023
+}
+```
+
+The retained S3 heldout input contains all 910 original Snowball development
+tasks, with string columns `lowered_task_spec` (TaskSpec 0.27) and `teacher_route`.
+Its pinned upstream is
+[`cb728a7` on Hugging Face](https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/tree/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3).
+
+Use `--selection recipe.json` alongside the normal FULL campaign options, or
+select again from the campaign's saved admitted corpus:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.driver \
+  --corpus s3://marin-us-east-02a/marin/rl-data/campaigns/RUN/corpus.json \
+  --selection recipe.json --run
+```
+
+Omit `--run` to print the artifact and its dependencies. Source IDs in the recipe
+must all be present in the campaign or saved corpus. Optional `source_limits`
+must cover every source and sum to each family quota. Changing quotas, the seed,
+source artifacts, the source allowlist or the heldout input requires a new recipe version.
+The output lives under the active artifact root at
+`rl-data/task-selection/<name>/<version>`; `--cache-dir` selects a local root.
+
+Before sampling, selection removes matches against the **complete** heldout set
+by task ID, public semantics or exact conversation context. It deduplicates
+eligible training contracts with TaskCompendium's shared identity rules, retaining
+distinct private script and closure contracts. Each source-quota group, or family
+when source quotas are omitted, is sampled without replacement in seeded task-ID
+order. Quotas must fit the eligible population;
+a shortfall fails before publishing the training files. These rules provide
+exact overlap checks, not semantic decontamination.
+
+The artifact contains `train.parquet`, the per-family evaluation sample in
+`validation.parquet`, the complete exclusion set in `full_validation.parquet`,
+and `summary.json` with the recipe, source paths, eligible/overlap/duplicate/selected
+counts and evaluation IDs. Each Parquet has a `task_spec` JSON column. Source
+TaskSpecs retain their private graders and resources. The historical structural
+heldout tasks use the shared closure converter. SkyRL chooses rollout limits,
+harnesses and verifier backends when it loads these canonical tasks.
 
 ## Dataset-owned invocation
 

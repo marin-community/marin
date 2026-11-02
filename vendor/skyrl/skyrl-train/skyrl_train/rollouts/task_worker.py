@@ -33,6 +33,7 @@ from rolloutengine.models import (
     TaskRolloutSpec,
 )
 from rolloutengine.engine import RolloutEngine
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
@@ -363,7 +364,6 @@ class TaskRolloutWorker:
                 harbor.concurrent_trials if concurrent_harbor_tasks is None else concurrent_harbor_tasks
             )
         )
-        self.harbor_eval_slots = nullcontext() if harbor is None else asyncio.Semaphore(harbor.concurrent_trials)
         self.error_handling = ErrorHandlingConfig.from_mapping(trajectory_runner_cfg.get("error_handling", {}))
         self.projection = replace(
             projection,
@@ -399,7 +399,9 @@ class TaskRolloutWorker:
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
-        if is_shell_harness(lowered.harness):
+        if lowered.harness == ASSISTANT_PREFIX_HARNESS:
+            harnesses[lowered.harness] = AssistantPrefixHarness()
+        elif is_shell_harness(lowered.harness):
             harnesses[lowered.harness] = shell_harness(lowered.harness)
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
@@ -472,13 +474,7 @@ class TaskRolloutWorker:
                 )
 
             engine = engines[index]
-            harbor_slots = (
-                nullcontext()
-                if harbor is None
-                else self.harbor_eval_slots
-                if phase == "eval"
-                else self.harbor_task_slots
-            )
+            harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
             retries = 0
             while True:
                 try:

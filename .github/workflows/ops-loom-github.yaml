@@ -89,9 +89,9 @@ jobs:
           title: "Triage issue #${{ github.event.issue.number }}"
           goal: >-
             Triage ${{ github.repository }} issue #${{ github.event.issue.number }}.
-            Read the issue and apply the fix-issue skill if it is actionable.
+            Read the issue and use manage-pr with its issue-fixes reference if actionable.
             For a simple question, answer on the issue. For a concrete small fix,
-            follow the full commit and PR workflow. For larger work, report a
+            follow the manage-pr workflow. For larger work, report a
             concrete plan on the issue. Publish a typed result.
           base: main
           github-issue: ${{ github.event.issue.number }}
@@ -130,7 +130,7 @@ jobs:
             Address all actionable comments in review
             ${{ github.event.review.id }} of ${{ github.repository }} PR
             #${{ github.event.pull_request.number }}. Follow AGENTS.md and the
-            commit skill, run relevant checks, push fixes to the existing branch,
+            manage-pr skill, run relevant checks, push fixes to the existing branch,
             and post one concise 🤖 reply with the result. Publish a typed result.
           base: ${{ github.event.pull_request.head.sha }}
           github-issue: ${{ github.event.pull_request.number }}
@@ -138,7 +138,7 @@ jobs:
   deslop:
     # A posted holistic review packet on an agent-generated pull request, or a
     # maintainer review containing "deslop", launches one session that applies
-    # the packet's mechanical items and the noslop skill as a single commit.
+    # the packet's mechanical items and the simplify-code skill as a single commit.
     if: >-
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request != null &&
@@ -178,9 +178,9 @@ jobs:
             Deslop ${{ github.repository }} PR
             #${{ github.event.issue.number || github.event.pull_request.number }}
             following the "Deslop follow-through" section of the
-            review-pr-holistic skill. Read the holistic review packet or
+            review-pr skill in holistic mode. Read the holistic review packet or
             review ${{ github.event.comment.id || github.event.review.id }},
-            apply only its mechanical items, run the noslop skill, run the
+            apply only its mechanical items, run the simplify-code skill, run the
             checks the skill names, push one commit whose subject starts with
             Deslop, and post one concise 🤖 reply ending with the deslop
             marker. Publish a typed result.
