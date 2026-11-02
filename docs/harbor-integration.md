@@ -10,6 +10,11 @@ GAIA, BFCL, and Aider. Trials can run in Daytona or another Harbor-supported san
 See [Running Evaluations with Marin](tutorials/run-lm-evals.md) for the model and suite command
 matrix. This page documents Harbor-specific configuration and output behavior.
 
+The Marin driver records the model's original location in Harbor's `agents[0].model_name`,
+with a `hosted_vllm/` provider prefix, and puts the live serving name in `model_alias`.
+Agents route requests through `model_alias`; results and trial resume identity use `model_name`.
+SOTOPIA uses the original location, without the provider prefix, to match the comparison cohort.
+
 Harbor uses the OpenAI SDK for inference. In Terminus agent kwargs, set
 `llm_backend="openai"` and supply an OpenAI-compatible `api_base` for providers
 other than OpenAI. Set `model_info.max_input_tokens` and
@@ -223,6 +228,10 @@ through an isolated subprocess CLI for two calls:
 
 Runtime values do not change the source-policy digest. Policy kwargs override model-catalog kwargs;
 the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
+For a Harbor target or simulated user agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
+versions supplied by the policy or model configuration. Preflight includes this pin in the saved
+policy and the saved policy's digest; execution applies the same pin. Pi evaluations install
+version `0.87.0` without resolving npm's `latest` tag.
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
 The runtime uses `vendor/harbor/uv.lock`. Its runtime descriptor records the upstream

@@ -733,6 +733,8 @@ class EnvironmentSpec:
     Default environment variables (automatically set if not overridden):
     - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
+    - DO_NOT_TRACK, VLLM_NO_USAGE_STATS, RAY_USAGE_STATS_ENABLED and
+      WANDB_ERROR_REPORTING opt out of library telemetry sent to vendors
     - NCCL_DEBUG: "WARN" for GPU jobs (preserves errors without INFO log volume)
     - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
       at submission (or forwarded from this process's own env when re-submitting inside
@@ -771,6 +773,13 @@ class EnvironmentSpec:
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
+            # Opt out of telemetry that libraries send to their vendors: usage
+            # stats from vLLM and Ray, Hugging Face Hub and other tools that honor
+            # DO_NOT_TRACK, and W&B's own crash reports. W&B run logging is unaffected.
+            "DO_NOT_TRACK": "1",
+            "VLLM_NO_USAGE_STATS": "1",
+            "RAY_USAGE_STATS_ENABLED": "0",
+            "WANDB_ERROR_REPORTING": "false",
             # Launch provenance: a task running from a git-less bundle inherits the
             # submitter's identity via Provenance.capture(); transitive, since a task
             # re-submitting captures this same env value.

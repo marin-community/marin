@@ -201,6 +201,23 @@ when it cannot connect to its upstream. Compare `proxy_responses_total` with `sc
 increase shows that requests reached the peer proxy, where its upstream is the
 registered endpoint. The `scope=total` counter is exact; per-endpoint series are capped.
 
+## Shared budgets
+
+Set `budget_parent` on each child and list those children in the parent's
+`budget_peers`, a subset of its routing peers. Edit limits on the parent;
+child-local budget edits are rejected.
+
+`FederationSync` distributes parent limits and usage from other clusters. Its
+response reports the child's local usage, including direct submissions and child
+jobs. Scheduling adds current local usage to the received totals. `GetUserBudget`
+returns that combined view; `ListUserBudgets` reports local usage.
+
+Children use configured defaults until their first policy arrives. During sync
+outages, clusters keep their last received policy and usage; submissions remain
+available.
+Budgets are soft priority limits, so disconnected clusters can exceed the shared
+limit. Deploy both sides to exchange budget data.
+
 ## Observing federation
 
 There is no `iris peers` command. Reachability, advertised shapes, and free capacity come

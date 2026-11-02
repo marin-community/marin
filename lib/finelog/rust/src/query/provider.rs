@@ -19,7 +19,7 @@
 //! An object-backed table instead snapshots exact object references planned
 //! from an immutable `TableSnapshot`. Those objects are immutable and never
 //! unlinked while referenced, so the scan prunes by the pinned metadata first
-//! and localizes only the objects it selected.
+//! and reads selected objects from the cache or backing store.
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,13 +42,11 @@ use futures::{stream, StreamExt, TryStreamExt};
 use crate::errors::StatsError;
 use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
-use crate::store::object_store::{ObjectId, ObjectStore};
+use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
+use crate::store::object_store::{
+    CacheMode, ObjectId, ObjectStore, QueryCacheAdmission, ScanSource,
+};
 use crate::store::table::query_view::SegmentObjectMap;
-
-/// Tail bytes fetched per remote Parquet file when reading its footer. Large
-/// enough to cover the metadata of a target-size object in one ranged GET; a
-/// larger footer falls back to a second fetch.
-const REMOTE_FOOTER_SIZE_HINT: usize = 512 * 1024;
 
 /// Concurrent exact existence probes for selected uncached source objects.
 const MAX_PARALLEL_SOURCE_PROBES: usize = 32;
@@ -108,16 +106,19 @@ impl ObjectSources {
     ///
     /// Resolve the segments `paths` names into what this scan reads: the
     /// cache file when one exists, otherwise the object's remote URL —
-    /// the query proceeds against the remote while a background fill (bounded
-    /// by the store's fetch semaphore) materializes the cache for the next
-    /// scan. A store whose provider cannot serve remote scans localizes
-    /// synchronously, and a source that exists nowhere fails the scan: its
-    /// rows are part of the answer.
+    /// the query proceeds against the remote while admitted background fills
+    /// materialize the cache for later scans. Reuse and the shared query budget
+    /// gate those fills before the store's fetch semaphore. A source that exists
+    /// nowhere fails the scan: its rows are part of the answer.
     ///
     /// Artifacts never block a query. A cached bundle or projection is used; an
-    /// uncached one is warmed in the background and this scan reads the source
+    /// uncached one may be warmed in the background and this scan reads the source
     /// Parquet — matching the fail-open behavior of a corrupt bundle.
-    async fn resolve(&self, paths: &[String]) -> DFResult<ResolvedScan> {
+    async fn resolve(
+        &self,
+        paths: &[String],
+        admission: &QueryCacheAdmission,
+    ) -> DFResult<ResolvedScan> {
         let external = |error| datafusion::error::DataFusionError::External(Box::new(error));
         let mut resolved = ResolvedScan::default();
         let mut remote_sources: Vec<ObjectId> = Vec::new();
@@ -127,26 +128,17 @@ impl ObjectSources {
             };
             match self
                 .store
-                .cached_path(&objects.source)
+                .scan_source(&objects.source, CacheMode::Query(admission))
                 .await
                 .map_err(external)?
             {
-                Some(local) => resolved.local.push(local.to_string_lossy().into_owned()),
-                None => match self.store.remote_scan_url(&objects.source.id) {
-                    Some(url) => {
-                        self.store.warm(&objects.source);
-                        resolved.remote.push(url);
-                        remote_sources.push(objects.source.id.clone());
-                    }
-                    None => {
-                        let local = self
-                            .store
-                            .local_path(&objects.source)
-                            .await
-                            .map_err(external)?;
-                        resolved.local.push(local.to_string_lossy().into_owned());
-                    }
-                },
+                ScanSource::Local(local) => {
+                    resolved.local.push(local.to_string_lossy().into_owned())
+                }
+                ScanSource::Remote(url) => {
+                    resolved.remote.push(url);
+                    remote_sources.push(objects.source.id.clone());
+                }
             }
             for reference in objects
                 .artifacts
@@ -158,15 +150,10 @@ impl ObjectSources {
                 else {
                     continue;
                 };
-                if self
-                    .store
-                    .cached_path(&artifact)
+                self.store
+                    .scan_source(&artifact, CacheMode::Query(admission))
                     .await
-                    .map_err(external)?
-                    .is_none()
-                {
-                    self.store.warm(&artifact);
-                }
+                    .map_err(external)?;
             }
         }
         self.verify_remote_sources_exist(&remote_sources)
@@ -666,7 +653,15 @@ impl TableProvider for NamespaceProvider {
                         .scan(state, projection, filters, limit)
                         .await?
                 } else if let Some(sources) = &self.object_sources {
-                    let resolved = sources.resolve(&segment_paths).await?;
+                    let admission = state
+                        .config()
+                        .get_extension::<QueryCacheAdmission>()
+                        .ok_or_else(|| {
+                            datafusion::error::DataFusionError::Internal(
+                                "query cache admission is missing from SessionConfig".into(),
+                            )
+                        })?;
+                    let resolved = sources.resolve(&segment_paths, &admission).await?;
                     let mut plans: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
                     if !resolved.local.is_empty() {
                         plans.push(

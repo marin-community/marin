@@ -30,6 +30,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline, Duration
 
+from marin.inference.auxiliary import build_auxiliary_app
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.broker import InferenceBroker
 from marin.inference.chat_template_protocol import protocol_for_chat_template
@@ -44,6 +45,7 @@ from marin.inference.config import (
     VllmEngineConfig,
 )
 from marin.inference.dashboard_server import (
+    BackgroundServer,
     ServingInfo,
     bind_serving_socket,
     build_dashboard_app,
@@ -729,6 +731,24 @@ def _start_direct_inference(
         _terminate_job(job)
 
 
+@contextlib.contextmanager
+def _worker_auxiliary_endpoint(
+    worker_id: str, model: RunningModel, request_timeout_seconds: float
+) -> Iterator[tuple[str, BackgroundServer]]:
+    job_info = get_job_info()
+    assert job_info is not None
+    app = build_auxiliary_app(upstream_base_url=_server_root(model), request_timeout_seconds=request_timeout_seconds)
+    with bind_serving_socket(job_info.advertise_host, 0) as sock:
+        address = f"http://{job_info.advertise_host}:{sock.getsockname()[1]}"
+        with (
+            serve_app_background(app, sock, name="inference-auxiliary") as server,
+            iris_ctx().registry.registered(
+                f"/serve/{worker_id}-auxiliary", address, {}, access=EndpointAccess.ENDPOINT_ACCESS_LINK
+            ),
+        ):
+            yield address, server
+
+
 def _run_broker_worker(
     worker_id: str,
     model: ServedModelConfig,
@@ -738,14 +758,16 @@ def _run_broker_worker(
     broker: InferenceRequestProvider,
 ) -> None:
     configure_logging()
-    with _prepared_local_inference(model, engine, iris) as local_session:
+    with (
+        _prepared_local_inference(model, engine, iris) as local_session,
+        _worker_auxiliary_endpoint(worker_id, local_session.model, broker_config.worker.request_timeout_seconds) as (
+            auxiliary_url,
+            auxiliary_server,
+        ),
+    ):
         tensor_parallel_size = cast(int, local_session.tensor_parallel_size)
         broker.register_worker(
-            worker_id,
-            InferenceWorkerMetadata(
-                tensor_parallel_size=tensor_parallel_size,
-                backend_name=local_session.backend_name,
-            ),
+            worker_id, InferenceWorkerMetadata(tensor_parallel_size, local_session.backend_name, auxiliary_url)
         )
         worker = InferenceWorker(
             broker=broker,
@@ -756,6 +778,8 @@ def _run_broker_worker(
         with run_inference_worker(worker, max_in_flight=broker_config.worker.max_in_flight):
             while True:
                 local_session.check_alive()
+                if not auxiliary_server.is_alive():
+                    raise RuntimeError("Inference auxiliary server stopped")
                 time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
@@ -768,10 +792,10 @@ def _submit_broker_workers(
     iris = config.iris
     client = current_client()
     jobs: list[JobHandle] = []
-    for worker_index in range(config.instances):
-        worker_id = f"inference-worker-{run_id}-{worker_index}"
-        jobs.append(
-            client.submit(
+    with contextlib.ExitStack() as cleanup:
+        for worker_index in range(config.instances):
+            worker_id = f"inference-worker-{run_id}-{worker_index}"
+            job = client.submit(
                 JobRequest(
                     name=worker_id,
                     entrypoint=Entrypoint.from_callable(
@@ -786,7 +810,9 @@ def _submit_broker_workers(
                     priority=iris.priority,
                 )
             )
-        )
+            cleanup.callback(_terminate_job, job)
+            jobs.append(job)
+        cleanup.pop_all()
     return jobs
 
 
@@ -926,13 +952,11 @@ def _start_brokered_inference(
             ) from exc
         raise
     finally:
-        for job in worker_jobs:
-            _terminate_job(job)
-        if broker_group is not None:
-            try:
-                broker_group.shutdown()
-            except Exception:
-                logger.warning("Failed to shut down inference broker actor", exc_info=True)
+        with contextlib.ExitStack() as cleanup:
+            if broker_group is not None:
+                cleanup.callback(broker_group.shutdown)
+            for job in worker_jobs:
+                cleanup.callback(_terminate_job, job)
 
 
 @contextlib.contextmanager
@@ -961,5 +985,6 @@ def _watch_broker_workers(jobs: list[JobHandle], broker: InferenceRequestProvide
 def _terminate_job(job: JobHandle) -> None:
     try:
         job.terminate()
-    except Exception:
-        logger.warning("Failed to terminate inference job job_id=%s", job.job_id, exc_info=True)
+    except Exception as exc:
+        # Cancellation timeouts must not be mistaken for retryable startup timeouts.
+        raise RuntimeError(f"Failed to terminate inference job job_id={job.job_id}") from exc
