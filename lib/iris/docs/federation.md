@@ -220,10 +220,9 @@ limit. Deploy both sides to exchange budget data.
 
 ## Observing federation
 
-Peer RPCs have a 60-second default deadline; heartbeat, launch, and debug calls
-retain their operation-specific limits. A failed status sync leaves the cursor
-unchanged and retries on a later cycle, allowing pending handoffs to proceed.
-Heartbeat runs separately, so fresh reachability does not prove sync is advancing.
+Peer calls default to a 60-second deadline unless the operation sets its own.
+A status-sync RPC that times out retries from the same cursor on the next peer cycle.
+Heartbeat runs separately and can remain healthy while sync stalls.
 
 There is no `iris peers` command. Reachability, advertised shapes, and free capacity come
 from the `ListPeers` RPC; handoff state lives in the parent's `federated_jobs` table.

@@ -31,8 +31,7 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
-# Sync and cancel share the peer's delivery loop. Bound calls without an explicit
-# deadline so a stalled response cannot stop subsequent handoffs indefinitely.
+# Sync and cancel must return so the peer loop can deliver later handoffs.
 _PEER_RPC_TIMEOUT_MS = 60_000
 
 # A handoff carries a full request and a peer's cold boot can outrun the default
