@@ -52,6 +52,11 @@ def aggregate(
     con.execute(
         "UPDATE idx SET eval = regexp_extract(eval_id, '^(uncheatable-[a-z0-9_]+)-\\d+$', 1) WHERE eval_id LIKE 'uncheatable-%'"
     )
+    # Artificial Analysis ids are ``<eval>-<record>``, and eval names hold no dash.
+    con.execute(
+        "UPDATE idx SET eval = split_part(eval_id, '-', 1) "
+        "WHERE eval_id NOT LIKE '%-test-%' AND eval_id NOT LIKE 'uncheatable-%'"
+    )
     con.execute("CREATE TABLE item_n AS SELECT eval, eval_id, count(DISTINCT hash) AS n FROM idx GROUP BY ALL")
     # Each hit list holds distinct features, so a feature's row count is its document count.
     # Counting first keeps only the rare features' rows; common ones hold most of the hits.
