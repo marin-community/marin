@@ -20,6 +20,7 @@ Marin application code).
 
 import ast
 import fnmatch
+import hashlib
 import io
 import json
 import os
@@ -46,6 +47,8 @@ MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
 LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
 HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
+TASKFORGE_PROMPT_ALLOWLIST = ROOT_DIR / "lib/taskforge/prompt_literals_allowed.txt"
+PROMPT_LITERAL_CHARS = 200
 
 EXCLUDE_PATTERNS = [
     # Vendored runtimes retain upstream formatting and license notices.
@@ -826,6 +829,54 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Pyrefly type checker", result.returncode, output)
 
 
+def _long_literals(source: str) -> list[tuple[int, str]]:
+    """Each string literal of ``PROMPT_LITERAL_CHARS`` or more characters in ``source``, as its line and the sha256 of
+    its text (an f-string's text is its literal parts). A string statement, such as a docstring, does not count."""
+    tree = ast.parse(source)
+    docstrings = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Expr)}
+    in_fstrings = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr) for part in node.values}
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            text = "".join(part.value for part in node.values if isinstance(part, ast.Constant))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstrings or id(node) in in_fstrings:
+                continue
+            text = node.value
+        else:
+            continue
+        if len(text) >= PROMPT_LITERAL_CHARS:
+            found.append((node.lineno, hashlib.sha256(text.encode()).hexdigest()[:16]))
+    return found
+
+
+def check_taskforge_prompt_literals(files: list[pathlib.Path], fix: bool) -> int:
+    """Refuse a long string literal in Taskforge code: prompt text belongs in ``taskforge/defaults/prompts``.
+
+    ``TASKFORGE_PROMPT_ALLOWLIST`` lists the literals still in code, one ``<path> <sha256 prefix>`` per line, so a
+    new or edited literal fails until it moves to a prompt file or is listed.
+    """
+    allowed = set()
+    for line in TASKFORGE_PROMPT_ALLOWLIST.read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            path, fingerprint = line.split()[:2]
+            allowed.add((path, fingerprint))
+    found = []
+    for file_path in files:
+        relative = str(file_path.relative_to(ROOT_DIR))
+        for line_no, fingerprint in _long_literals(file_path.read_text()):
+            if (relative, fingerprint) not in allowed:
+                found.append(f"  - {relative}:{line_no} (allowlist entry: {relative} {fingerprint})\n")
+    if found:
+        output = (
+            f"String literals of {PROMPT_LITERAL_CHARS}+ characters; move the text to "
+            f"lib/taskforge/src/taskforge/defaults/prompts/ or list it in "
+            f"{TASKFORGE_PROMPT_ALLOWLIST.relative_to(ROOT_DIR)}:\n" + "".join(found)
+        )
+        return _record("Taskforge prompt literals", 1, output)
+    return _record("Taskforge prompt literals", 0)
+
+
 @dataclass
 class PrecommitConfig:
     patterns: list[str]
@@ -892,6 +943,13 @@ PRECOMMIT_CONFIGS = [
             check_toml_yaml,
             check_trailing_whitespace,
             check_eof_newline,
+        ],
+    ),
+    PrecommitConfig(
+        patterns=["lib/taskforge/src/**/*.py"],
+        exclude_patterns=["lib/taskforge/src/taskforge/defaults/**", "lib/taskforge/src/taskforge/policy.py"],
+        checks=[
+            check_taskforge_prompt_literals,
         ],
     ),
     PrecommitConfig(

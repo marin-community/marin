@@ -1,0 +1,52 @@
+# Taskforge string literals of 200+ characters still in code, one "<path> <sha256 prefix>" per line, for the
+# taskforge_prompt_literals check in infra/pre-commit.py. Prompt text belongs in
+# lib/taskforge/src/taskforge/defaults/prompts/; remove an entry when its literal moves there.
+
+# The agentic flavour's prompts and tool text; they move with Rav's AgenticConfig prompts (PR16).
+lib/taskforge/src/taskforge/agentic/agent.py 9876bf1a976dfce1
+lib/taskforge/src/taskforge/agentic/prompts.py 8c6a6709738187d4
+lib/taskforge/src/taskforge/agentic/prompts.py 4ccdd0952d54e9c6
+lib/taskforge/src/taskforge/agentic/prompts.py a8466e7d134c3d7d
+lib/taskforge/src/taskforge/agentic/prompts.py c6afec1c1e182d8c
+lib/taskforge/src/taskforge/agentic/tools.py f83a56e2fc97ea3e
+
+# The standard template's step prompts. A step's source is its memo key and the template is quoted in the
+# author's request, so this text stays in the steps.
+lib/taskforge/src/taskforge/stage40_build_with_program/template/standard.py ae323da5369cea45
+lib/taskforge/src/taskforge/stage40_build_with_program/template/standard.py c60dbad1a6273980
+lib/taskforge/src/taskforge/stage40_build_with_program/template/standard.py 3dbe1f169e67b72f
+lib/taskforge/src/taskforge/stage40_build_with_program/template/standard.py 84a53f8b524755ac
+
+# The build SDK's constants and step prompts (research, machine facts, grader contract) and its schema
+# descriptions, covered by SDK_VERSION; left for the next PR.
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py e46f65efd15c99c8
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py fe82745c642cb88f
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py b565e7bf53c291e7
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py ae1174382a80afc8
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py d4767789876fa115
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py 99f1a5e9b667a9de
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py 0e6c2c674776dc2e
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py ca7aa12b55001989
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py 0070c60d0e88c799
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py 6a459d9b7b22ef8f
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py 7ea742ee119d05cd
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py 56d8f1778cb14842
+lib/taskforge/src/taskforge/stage40_build_with_program/sdk.py fc7b1da8f4a9f75f
+
+# The control writer's prompt and schema descriptions; the prompt becomes ValidationPlan.controls (PR12/13).
+lib/taskforge/src/taskforge/stage50_validate/control_drafts.py 049cf0d088a3ebd1
+lib/taskforge/src/taskforge/stage50_validate/control_drafts.py d449249efc906348
+lib/taskforge/src/taskforge/stage50_validate/control_drafts.py 63b78882320ce27e
+lib/taskforge/src/taskforge/stage50_validate/control_drafts.py 3e860b5b8427b461
+
+# Tool descriptions and tool-call errors the model reads as part of a tool's schema or result.
+lib/taskforge/src/taskforge/llm/agent.py 024ddf39a29b24f6
+lib/taskforge/src/taskforge/llm/web.py 5ec106dc8ae5ab39
+lib/taskforge/src/taskforge/stage40_build_with_program/agentic_author.py 7b86ff06903abd5a
+lib/taskforge/src/taskforge/stage40_build_with_program/agentic_author.py 4c55e87ad62dee6d
+lib/taskforge/src/taskforge/stage40_build_with_program/agentic_author.py 4ad4cc7e32a26cbd
+
+# Not prompt text: a build script and refusal messages raised to the program or the loader.
+lib/taskforge/src/taskforge/sandbox/image_builder.py bc73ede1faccd670
+lib/taskforge/src/taskforge/spec/draft.py 8be336222b0fef56
+lib/taskforge/src/taskforge/stage30_author/loader.py c12c5596602b2c94
