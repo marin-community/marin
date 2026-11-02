@@ -237,8 +237,7 @@ def test_flash_attention_sharded_over_batch_and_heads_matches_reference():
 
             assert all(g.sharding.spec == sharding.spec for g in grads)
             np.testing.assert_allclose(np.asarray(actual_loss), np.asarray(expected_loss), atol=1e-3, rtol=1e-5)
-            for name, got, want in zip("qkv", grads, expected_grads, strict=True):
-                np.testing.assert_allclose(np.asarray(got), np.asarray(want), atol=1e-4, rtol=1e-4, err_msg=f"d{name}")
+            _assert_gradients_match(grads, expected_grads, tol=TOLERANCE[jnp.float32])
 
         check(segment_id_loss, packed, [window], cotangents[:1])
         # Padding queries attend only to themselves under precomputed bounds, so they get no cotangent.
