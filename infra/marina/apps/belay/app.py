@@ -98,6 +98,7 @@ SCHEMA = (
         body TEXT NOT NULL, url TEXT, posted_at TIMESTAMPTZ NOT NULL, state TEXT NOT NULL, title TEXT,
         registry_id TEXT, registry_url TEXT, decided_by TEXT, decided_at TIMESTAMPTZ, plan JSONB, result JSONB,
         note TEXT, node_grant INTEGER, hidden_removed JSONB, reply_url TEXT, budget_hours DOUBLE PRECISION,
+        priority_grant TEXT, priority_by TEXT,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
     """CREATE TABLE IF NOT EXISTS runs (
         name TEXT PRIMARY KEY, job_id TEXT NOT NULL, registry_id TEXT, run TEXT, state TEXT NOT NULL,
@@ -115,6 +116,8 @@ SCHEMA = (
     "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_sha256 TEXT",
     # An ideas table created before study budgets existed lacks this column.
     "ALTER TABLE ideas ADD COLUMN IF NOT EXISTS budget_hours DOUBLE PRECISION",
+    "ALTER TABLE ideas ADD COLUMN IF NOT EXISTS priority_grant TEXT",
+    "ALTER TABLE ideas ADD COLUMN IF NOT EXISTS priority_by TEXT",
     """CREATE TABLE IF NOT EXISTS activity (
         id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), kind TEXT NOT NULL, registry_id TEXT,
         idea_id BIGINT, session_id TEXT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', github_url TEXT)""",
@@ -155,6 +158,15 @@ ON CONFLICT (name) DO UPDATE SET
     ),
     updated_at = now()
 """
+
+
+class PriorityBand(StrEnum):
+    """Iris priority bands an approver may grant an idea's runs, lowest first. A grant only raises a run above its
+    Track's band (the tooling refuses a lower one); ``system`` is Iris's own and never granted."""
+
+    BATCH = "batch"
+    INTERACTIVE = "interactive"
+    PRODUCTION = "production"
 
 
 class IdeaState(StrEnum):
@@ -260,6 +272,8 @@ class MaintainerNote(BaseModel):
     nodes: int | None = Field(default=None, ge=1)
     hours: float | None = Field(default=None, gt=0)
     """A study's budget hours (custom track): with the node grant, the most its runs may use."""
+    priority: PriorityBand | None = None
+    """An Iris priority band for the idea's runs, above its Track's band; None keeps the Track's band."""
 
 
 class Approval(BaseModel):
@@ -267,6 +281,8 @@ class Approval(BaseModel):
     """A node grant: this idea's launches may hold up to this many nodes, past the global cap."""
     hours: float | None = Field(default=None, gt=0)
     """A study's budget hours (custom track): with the node grant, the most its runs may use."""
+    priority: PriorityBand | None = None
+    """An Iris priority band for the idea's runs, above its Track's band; None keeps the Track's band."""
 
 
 class IntakeApproval(BaseModel):
@@ -282,6 +298,8 @@ class IntakeApproval(BaseModel):
     nodes: int | None = Field(default=None, ge=1)
     hours: float | None = Field(default=None, gt=0)
     """A study's budget hours (custom track): with the node grant, the most its runs may use."""
+    priority: PriorityBand | None = None
+    """An Iris priority band for the idea's runs, above its Track's band; None keeps the Track's band."""
 
 
 class RunExpectation(BaseModel):
@@ -480,8 +498,20 @@ def offer_pending_work(conn: Connection) -> int:
     return offered
 
 
+# A grant of a priority band records who granted it; no grant keeps any earlier one.
+PRIORITY_ASSIGNMENT = (
+    "priority_grant = COALESCE(CAST(:priority AS TEXT), priority_grant), "
+    "priority_by = CASE WHEN CAST(:priority AS TEXT) IS NULL THEN priority_by ELSE :by END"
+)
+
+
 def approve_idea(
-    conn: Connection, idea_id: int, caller: str, node_grant: int | None = None, budget_hours: float | None = None
+    conn: Connection,
+    idea_id: int,
+    caller: str,
+    node_grant: int | None = None,
+    budget_hours: float | None = None,
+    priority: PriorityBand | None = None,
 ) -> bool:
     """Approve an idea and queue its one ``approved`` event; False unless it is pending.
 
@@ -498,12 +528,14 @@ def approve_idea(
         text(
             "UPDATE ideas SET state = 'approved', decided_by = :by, decided_at = now(), "
             "node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), "
-            "budget_hours = COALESCE(CAST(:hours AS DOUBLE PRECISION), budget_hours), updated_at = now() WHERE id = :id"
+            "budget_hours = COALESCE(CAST(:hours AS DOUBLE PRECISION), budget_hours), "
+            f"{PRIORITY_ASSIGNMENT}, updated_at = now() WHERE id = :id"
         ),
-        {"by": caller, "grant": node_grant, "hours": budget_hours, "id": idea_id},
+        {"by": caller, "grant": node_grant, "hours": budget_hours, "priority": priority, "id": idea_id},
     )
     grant = f" with up to {node_grant} nodes" if node_grant else ""
     grant += f" for {budget_hours:g} h" if budget_hours else ""
+    grant += f" at {priority} priority" if priority else ""
     _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} approved “{_label(idea)}”{grant}"))
     queued = _rows(conn, "SELECT id FROM events WHERE kind = 'approved' AND ref = :ref", ref=str(idea_id))
     if not queued:
@@ -764,13 +796,20 @@ def approve_intake_comment(conn: Connection, comment: IntakeApproval, login: str
     idea = _rows(conn, "SELECT id, state, registry_id FROM ideas WHERE comment_id = :c", c=comment.comment_id)[0]
     if idea["state"] == IdeaState.RECORDED:
         raise HTTPException(409, f"already run as {idea['registry_id']}")
-    if not approve_idea(conn, idea["id"], login, node_grant=comment.nodes, budget_hours=comment.hours):
+    grants = {"node_grant": comment.nodes, "budget_hours": comment.hours, "priority": comment.priority}
+    if not approve_idea(conn, idea["id"], login, **grants):
         raise HTTPException(409, f"idea {idea['id']} is already {idea['state']}")
     return {"state": IdeaState.APPROVED.value, "idea_id": idea["id"]}
 
 
 def requeue_idea(
-    conn: Connection, idea_id: int, login: str, note: str, nodes: int | None = None, hours: float | None = None
+    conn: Connection,
+    idea_id: int,
+    login: str,
+    note: str,
+    nodes: int | None = None,
+    hours: float | None = None,
+    priority: PriorityBand | None = None,
 ) -> dict[str, str]:
     """Keep the maintainer's note (and any node grant) for the session and offer the idea to the next session. A
     retried re-queue whose event is still unclaimed queues nothing more."""
@@ -781,9 +820,17 @@ def requeue_idea(
         text(
             "UPDATE ideas SET state = 'approved', note = :n, "
             "node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), "
-            "budget_hours = COALESCE(CAST(:hours AS DOUBLE PRECISION), budget_hours), updated_at = now() WHERE id = :id"
+            "budget_hours = COALESCE(CAST(:hours AS DOUBLE PRECISION), budget_hours), "
+            f"{PRIORITY_ASSIGNMENT}, updated_at = now() WHERE id = :id"
         ),
-        {"n": f"Maintainer {login}: {note}" if note else None, "grant": nodes, "hours": hours, "id": idea_id},
+        {
+            "n": f"Maintainer {login}: {note}" if note else None,
+            "grant": nodes,
+            "hours": hours,
+            "priority": priority,
+            "by": login,
+            "id": idea_id,
+        },
     )
     waiting = _rows(
         conn,
@@ -793,7 +840,8 @@ def requeue_idea(
     )
     if waiting:
         return {"state": IdeaState.APPROVED.value}
-    _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} re-queued “{_label(rows[0])}”"))
+    at = f" at {priority} priority" if priority else ""
+    _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} re-queued “{_label(rows[0])}”{at}"))
     _enqueue(
         conn,
         EventKind.WORK_PENDING,
@@ -970,6 +1018,9 @@ def _public_idea(idea: dict[str, Any]) -> dict[str, Any]:
         ),
         "result": idea["result"],
         "note": idea["note"] if idea["state"] == IdeaState.DECLINED else None,
+        "priority": (
+            {"band": idea["priority_grant"], "granted_by": idea["priority_by"]} if idea["priority_grant"] else None
+        ),
         "updated_at": _iso(idea["updated_at"]),
     }
 
@@ -1140,9 +1191,10 @@ def create_api(services: Services) -> RegisteredApi:
     def approve(idea_id: int, approval: Approval | None = None, caller: str = Depends(approver)) -> dict[str, str]:
         grant = approval.nodes if approval is not None else None
         hours = approval.hours if approval is not None else None
+        priority = approval.priority if approval is not None else None
         with engine.begin() as conn:
             login = approver_login(_settings(conn), caller)
-            if not approve_idea(conn, idea_id, login, node_grant=grant, budget_hours=hours):
+            if not approve_idea(conn, idea_id, login, node_grant=grant, budget_hours=hours, priority=priority):
                 raise HTTPException(409, f"idea {idea_id} is not waiting for approval")
         return {"state": IdeaState.APPROVED.value}
 
@@ -1171,7 +1223,7 @@ def create_api(services: Services) -> RegisteredApi:
         """A maintainer's answer to an escalation, or a rerun of an idea that already has results."""
         with engine.begin() as conn:
             login = approver_login(_settings(conn), caller)
-            return requeue_idea(conn, idea_id, login, request.note, request.nodes, request.hours)
+            return requeue_idea(conn, idea_id, login, request.note, request.nodes, request.hours, request.priority)
 
     @admin.post("/ideas/{idea_id}/decline")
     def decline(idea_id: int, request: MaintainerNote, caller: str = Depends(approver)) -> dict[str, str]:

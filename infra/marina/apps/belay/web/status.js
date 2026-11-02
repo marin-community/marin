@@ -294,6 +294,7 @@ function checklistRows(cfg) {
       idea,
       comment,
       thread: (state.threads ?? []).find((t) => t.registry_id === idea.xid),
+      pageIdea,
       date: approvalDate(idea, pageIdea),
       author: idea.author,
       accepted: inLiveRecipe(idea, cfg.recipe_tag),
@@ -336,6 +337,14 @@ function analysisLinks(idea, cfg) {
     .map((t) => link(`${REGISTRY_BLOB}/analysis/${idea.xid}/${t.id}.md`, `${idea.xid} ${t.id}`))
 }
 
+// A priority band an approver granted the idea's runs, above its Track's: "priority: interactive (granted by @x)".
+function priorityGrant(pageIdea) {
+  const grant = pageIdea?.priority
+  if (!grant) return null
+  const by = grant.granted_by ? ` (granted by @${grant.granted_by})` : ''
+  return el('span', { class: 'kvp' }, el('span', { class: 'k' }, 'Priority'), `${grant.band}${by}`)
+}
+
 function threadDetail(r, cfg) {
   const analyses = analysisLinks(r.idea, cfg)
   return el(
@@ -347,6 +356,7 @@ function threadDetail(r, cfg) {
     el(
       'div',
       { class: 'kv' },
+      priorityGrant(r.pageIdea),
       analyses.length ? el('span', { class: 'kvp' }, el('span', { class: 'k' }, 'Analysis'), ...analyses.flatMap((a, i) => (i ? [' · ', a] : [a]))) : null,
       r.comment ? el('span', { class: 'kvp' }, el('span', { class: 'k' }, 'Earlier post'), link(r.comment, 'GitHub ↗')) : null,
     ),
@@ -385,6 +395,7 @@ function checklistRow(r, registryUrl) {
       ' ',
       link(registryUrl(r.idea), r.idea.name),
       studyChip(r.idea),
+      r.pageIdea?.priority ? el('span', { class: 'gate-chip run', title: `granted by @${r.pageIdea.priority.granted_by}` }, r.pageIdea.priority.band) : null,
       el('span', { class: 'ck-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
     ),
     el('span', { 'data-label': 'Author' }, link(`https://github.com/${r.author}`, `@${r.author}`)),

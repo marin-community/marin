@@ -97,8 +97,24 @@ function hoursInput() {
   })
 }
 
-function grantOf(nodes, hours) {
-  return { ...(nodes.value ? { nodes: Number(nodes.value) } : {}), ...(hours.value ? { hours: Number(hours.value) } : {}) }
+// An optional Iris priority band for the idea's runs, above its Track's band (the empty choice keeps the Track's).
+const PRIORITY_BANDS = ['batch', 'interactive', 'production']
+
+function priorityInput() {
+  return el(
+    'select',
+    { class: 'priority-in', title: "Iris priority for this idea's runs; only raises the Track's band", 'aria-label': 'Priority' },
+    el('option', { value: '' }, 'track band'),
+    ...PRIORITY_BANDS.map((band) => el('option', { value: band }, band)),
+  )
+}
+
+function grantOf(nodes, hours, priority) {
+  return {
+    ...(nodes.value ? { nodes: Number(nodes.value) } : {}),
+    ...(hours.value ? { hours: Number(hours.value) } : {}),
+    ...(priority.value ? { priority: priority.value } : {}),
+  }
 }
 
 function renderPending() {
@@ -175,16 +191,19 @@ function storedText(text, removed) {
   )
 }
 
-// A primary action with its node-grant and study-hours fields: the action gets ``{nodes, hours}`` as filled.
+// A primary action with its grant fields (nodes, study hours, priority): the action gets those that are filled.
 function approveWithGrant(label, run) {
   const nodes = nodesInput()
   const hours = hoursInput()
+  const priority = priorityInput()
+  const grant = () => grantOf(nodes, hours, priority)
   return el(
     'span',
     { class: 'grant' },
     nodes,
     hours,
-    el('button', { type: 'button', class: 'btn primary', onclick: () => run(grantOf(nodes, hours)) }, label),
+    priority,
+    el('button', { type: 'button', class: 'btn primary', onclick: () => run(grant()) }, label),
   )
 }
 
