@@ -10,6 +10,7 @@ import asyncio
 import itertools
 import json
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from taskforge.llm.client import ModelRequestRejected, ModelUnavailable
@@ -184,6 +185,18 @@ def test_a_root_holding_results_of_another_prompt_refuses_to_start(ideas, tmp_pa
     with pytest.raises(ProvenanceMismatch, match=CAPABILITY_ID):
         run(other, ideas, out, spec(verification_rule="Grade everything with code."))
     assert other.requests == []
+
+
+def test_a_root_written_by_another_driver_commit_with_the_same_prompts_resumes(ideas, tmp_path):  # noqa: F811
+    model = ScriptedModel()
+    model.reply(null_then_proposed_plan())
+    model.reply(filled_document(ideas[CAPABILITY_ID], 2))
+    out = OutputRoot(str(tmp_path / "run"))
+    run(model, ideas, out)
+
+    other = ScriptedModel()
+    rerun = run(other, ideas, out, replace(spec(), git_sha="1" * 40))
+    assert rerun.ran == 0 and other.requests == []
 
 
 def test_the_circuit_breaker_halts_a_shard_whose_capabilities_keep_failing(ideas, tmp_path):  # noqa: F811

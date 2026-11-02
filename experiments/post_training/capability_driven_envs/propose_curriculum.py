@@ -348,6 +348,13 @@ class Provenance:
     def record(self, idea: CapabilityIdea) -> dict[str, object]:
         return json.loads(json.dumps({**asdict(self), "capability_hash": idea.capability_hash}))
 
+    def resume_key(self, idea: CapabilityIdea) -> dict[str, object]:
+        """The part of a record that must match for a result to count as done.
+
+        ``git_sha`` is recorded but not compared, so a driver fix can resume a run whose prompts are unchanged.
+        """
+        return {k: v for k, v in self.record(idea).items() if k != "git_sha"}
+
 
 @dataclass(frozen=True)
 class ShardSpec:
@@ -400,7 +407,8 @@ async def done_capabilities(out: OutputRoot, ideas: Mapping[str, CapabilityIdea]
         capability_id = path.rsplit("/", 2)[-2]
         recorded = json.loads(text).get("provenance")
         idea = ideas.get(capability_id)
-        if idea is None or recorded != provenance.record(idea):
+        key = None if idea is None else provenance.resume_key(idea)
+        if idea is None or {k: v for k, v in (recorded or {}).items() if k != "git_sha"} != key:
             mismatched.append(f"{capability_id}: {recorded}")
         done.add(capability_id)
     if mismatched:

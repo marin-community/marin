@@ -278,8 +278,7 @@ def plan_prompt(idea: CapabilityIdea, n: int, environments: frozenset[Environmen
     return f"""Design a portfolio of exactly {n} genuinely different task proposals for this capability.
 Diversity means different workflows, artifacts, failure modes, and reasoning, not renamed entities or
 numbers. Choose environment and verification on validity, not to fill a Cartesian-product quota;
-choose each slot's verification by the verification rule: code unless the answer cannot be stated as
-fields. Use
+choose each slot's verification by the verification rule in the system prompt. Use
 an environment only where the capability's work is actually done in it: a capability whose records
 are pure reasoning (derivations, judgements, calculations a person does on paper) belongs in
 reasoning, and shell or container slots added for variety are a defect.
