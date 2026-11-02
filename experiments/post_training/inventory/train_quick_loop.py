@@ -47,14 +47,12 @@ JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 
 def training_recipe(steps: int) -> dict:
     """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
-    plan = SNOWBALL_RECIPE.role_plan
     preset = replace(
         DEFAULT,
         label="snowball-100k",
         max_steps=steps,
         eval_interval=steps,
         max_staleness_steps=0,
-        generation_workers=plan.train_batch_size,
         request_window_tokens=REQUEST_WINDOW_TOKENS,
         max_new_tokens=MAX_NEW_TOKENS,
         batch_policy="full_batch",

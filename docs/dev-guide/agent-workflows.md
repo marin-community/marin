@@ -46,7 +46,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `review-grant` | Verifying decrypted identities and roles, obtaining confirmation, and applying the approved change | Never approves or merges before confirmation |
 | `trace-pulumi-diff` | Read-only attribution of pending infrastructure changes | Never applies or refreshes state |
 | `onboard-marin` | Local developer readiness and identification of missing access | Does not grant access or launch compute without the required authorization |
-| `marina-applet` | Marina application build, validation, release, data, and lifecycle | Application releases are separate from Marina runtime deployment |
+| `marina-app` | Marina application build, validation, release, data, and lifecycle | Application releases are separate from Marina runtime deployment |
 
 ## Implementation and publication
 

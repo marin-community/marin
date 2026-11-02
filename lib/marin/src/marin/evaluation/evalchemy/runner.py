@@ -203,6 +203,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
                 for task in config.tasks
             ],
             "out_path": output_dir,
+            "judge_protocol": config.judge.protocol if config.judge is not None else "default",
             "apply_chat_template": config.apply_chat_template,
             "chat_tokenizer_backend": config.chat_tokenizer_backend,
             "debug": config.debug,

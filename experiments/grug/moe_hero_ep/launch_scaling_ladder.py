@@ -14,13 +14,13 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d1024    2     2048    15276  every 5%    final only    128B    162M    4.0B    2.7e20
     d1536    6     6144    15128  every 5%    final only    381B    481M   11.5B    1.8e21
     d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
-    d6144   11     2816   390251  every 3000  every 6k       18T     23B     535B    2.7e24
+    d6144   11      704   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
 At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step (the d6144
-hero trained at 4K with batch 11264 until step 257553). Eval batch is 64 x racks (one sequence per
-device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
-analytic estimate (forward+backward, including attention and the latent-MoE correction), with the
-d6144 run counted at 4K throughout.
+hero trained at 4K with batch 11264 until step 257553 and at 16K with batch 2816 until step 372000).
+Eval batch is 64 x racks (one sequence per device). Tokens/steps hold 791 tokens per active parameter
+(18T at d6144); FLOPs are the levanter analytic estimate (forward+backward, including attention and the
+latent-MoE correction), with the d6144 run counted at 4K throughout.
 
 Changelog:
     2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
@@ -34,6 +34,11 @@ Changelog:
         hero-ragged_a2a-nccl2307-ep-step81k restarts that fork on the NCCL 2.30.7 PJRT wheel (#9062).
     2026-10-14 (#9615): the hero trains at 16K context with qk_mult 1.48 from step 257553.
         hero-ctx16k-step257k forks hero-mfu30-step231k at permanent step 257553 (see ``trigger_hero.sh``).
+    2026-10-30 (#10677, PR #10783): the hero clips the global gradient norm at 1.0 in the train step.
+        hero-gradclip-step356k forks hero-ctx16k-step257k at permanent step 356531 (see ``trigger_hero.sh``).
+    2026-11-02 (#8435): the hero trains at 65K context with qk_mult 1.66 and receiver capacity factor 1.5
+        from step 372000. hero-ctx65k-step372k forks hero-gradclip-step356k at permanent step 372000
+        (see ``trigger_hero.sh``).
 """
 
 import dataclasses
@@ -71,6 +76,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_INITIAL_SEQ_LEN,
+    HERO_MAX_GRAD_NORM,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -116,9 +122,12 @@ HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 
 # The context lengths the d6144 hero trained at before its current one, oldest first, each with the
 # step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
-HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (HarrierContextPhase(end_step=257_553, seq_len=4096),)
+HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (
+    HarrierContextPhase(end_step=257_553, seq_len=4096),
+    HarrierContextPhase(end_step=372_000, seq_len=16384),
+)
 # The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
-HERO_FLOPS_BASELINE_TOTAL: float | None = 1.7792877262736668e24
+HERO_FLOPS_BASELINE_TOTAL: float | None = 2.6276788418873884e24
 
 
 def _hero_flops_baseline(
@@ -297,6 +306,7 @@ def build_ladder_run(
         training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
+        max_grad_norm=HERO_MAX_GRAD_NORM if size == "d6144" else None,
         gc_interval=100,
     )
     train_resources = ResourceConfig.with_gpu(
