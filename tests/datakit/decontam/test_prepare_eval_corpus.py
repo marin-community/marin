@@ -28,7 +28,7 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
     AARecordType,
     _aa_records,
     _iter_aa_rows,
-    _lmh_doc_text,
+    _lmh_doc_views,
 )
 
 # A rendered prompt embeds the passage (as lm-eval-harness doc_to_text does).
@@ -42,6 +42,10 @@ def _prompt(doc: dict) -> str:
 
 def _target(doc: dict) -> str:
     return str(doc.get("answer", ""))
+
+
+def _lmh_doc_text(doc: dict, prompt_fn, target_fn) -> str:
+    return "\n\n".join(text for _, text in _lmh_doc_views(doc, prompt_fn, target_fn))
 
 
 def test_lmh_passage_doc_drops_passage_keeps_qa():
@@ -59,12 +63,16 @@ def test_lmh_passage_doc_drops_passage_keeps_qa():
     assert "C" in text  # answer kept
 
 
-def test_lmh_non_passage_doc_unchanged():
-    """No passage field → doc_to_text (the question) is kept as before."""
-    doc = {"question": "What is the sum of two and two", "answer": "4"}
-    text = _lmh_doc_text(doc, _prompt, _target)
-    assert "What is the sum of two and two" in text
-    assert "4" in text
+def test_lmh_non_passage_doc_indexes_the_prompt_and_the_raw_fields_as_separate_records():
+    doc = {"question": "Which planet is largest", "choices": ["Mars", "Jupiter"], "answer": "1"}
+
+    views = _lmh_doc_views(doc, lambda d: f"{d['question']}\nA. Mars\nB. Jupiter\nAnswer:", _target)
+
+    assert views == [
+        ("", "Which planet is largest\nA. Mars\nB. Jupiter\nAnswer:\n\n1"),
+        # Choices follow the question on single lines, as dataset copies print them.
+        ("-fields", "1\nWhich planet is largest\nMars\nJupiter"),
+    ]
 
 
 @pytest.mark.parametrize("field", sorted(_PASSAGE_FIELDS))
@@ -332,7 +340,8 @@ def test_lmh_artifacts_are_stored_below_the_versioned_corpus_root(tmp_path, monk
 
     artifact_path = tmp_path / prepare_eval_corpus.EVALS_RELATIVE / "lmh/example-task/eval.parquet"
     assert artifact_path.exists()
-    assert manifest["artifacts"] == [{"task": "example-task", "artifact": "example-task/eval.parquet", "records": 1}]
+    # One doc gives a prompt record and a raw-field record.
+    assert manifest["artifacts"] == [{"task": "example-task", "artifact": "example-task/eval.parquet", "records": 2}]
     assert manifest["required_tasks"] == {"example-task": ["example-task"]}
 
 

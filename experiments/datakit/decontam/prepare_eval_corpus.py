@@ -98,7 +98,7 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v5"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v6"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
 LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
@@ -121,12 +121,12 @@ def _lmh_output_root() -> str:
     return f"{marin_prefix()}/{LMH_EVALS_RELATIVE}"
 
 
-# Bump when the LMH text-extraction policy (`_lmh_doc_text`) changes. Written to a
+# Bump when the LMH text-extraction policy (`_lmh_doc_views`) changes. Written to a
 # `.extraction_version` sidecar next to each `lmh/<task>/eval.parquet`; the prepare
 # step rewrites (does not skip) any shard whose sidecar doesn't match. Without this,
 # a policy change like the cluster-B passage drop (marin#6852) never reaches an
 # already-staged corpus — the bloom keeps reading the old passage-bearing text.
-_LMH_EXTRACTION_VERSION = "2-passage-drop"
+_LMH_EXTRACTION_VERSION = "3-split-views"
 _LMH_VERSION_SIDECAR = ".extraction_version"
 
 
@@ -355,32 +355,51 @@ _PASSAGE_FIELDS: frozenset[str] = frozenset(
 )
 
 
-def _lmh_doc_text(doc: Any, prompt_fn: Callable, target_fn: Callable) -> str:
-    """Indexed eval text for one lm-eval-harness doc.
+# Suffix of the record id for an lm-eval doc's raw-field view (see `_lmh_doc_views`).
+LMH_FIELDS_ID_SUFFIX = "-fields"
 
-    Passage-bearing docs (a field in :data:`_PASSAGE_FIELDS`) index only
-    question + answer (drop the passage field and ``doc_to_text``, which renders
-    it). Non-passage docs are unchanged: ``doc_to_text`` (question) +
-    ``doc_to_target`` (answer) + every raw string field.
+
+def _field_lines(record: dict[str, Any], exclude: frozenset[str]) -> str:
+    """String fields in key order, then the items of string-list fields, one per line.
+
+    Lists usually hold answer choices, so they follow the question, as they do in
+    copies of the dataset. Keys whose lowercase name is in *exclude* are skipped.
+    """
+    keys = [k for k in sorted(record) if k.lower() not in exclude]
+    lines = [record[k] for k in keys if isinstance(record[k], str) and record[k].strip()]
+    for k in keys:
+        value = record[k]
+        if isinstance(value, list) and all(isinstance(x, str) for x in value):
+            lines.extend(x for x in value if x.strip())
+    return "\n".join(lines)
+
+
+def _lmh_doc_views(doc: Any, prompt_fn: Callable, target_fn: Callable) -> list[tuple[str, str]]:
+    """Indexed eval records for one lm-eval-harness doc, as ``(id_suffix, text)`` pairs.
+
+    A copy of an eval item in training data usually follows one rendering: the
+    harness prompt (``doc_to_text`` + ``doc_to_target``, with lettered choices) or
+    the raw dataset fields. Each rendering is its own record so the decon item
+    rule can match a copy of either one; joined, a copy of one rendering holds only
+    part of the record. Passage-bearing docs (a field in :data:`_PASSAGE_FIELDS`)
+    give one record, the answer and the raw fields without the passage, since
+    ``doc_to_text`` renders the passage.
     """
     has_passage = isinstance(doc, dict) and any(k.lower() in _PASSAGE_FIELDS for k in doc)
-    parts: list[str] = []
-    if not has_passage:
-        try:
-            prompt = prompt_fn(doc) or ""
-        except Exception:
-            prompt = ""
-        if prompt:
-            parts.append(str(prompt))
     try:
-        target = target_fn(doc) or ""
+        target = str(target_fn(doc) or "")
     except Exception:
         target = ""
-    if target:
-        parts.append(str(target))
-    if isinstance(doc, dict):
-        parts.append(_concat_strings(doc, exclude=_PASSAGE_FIELDS if has_passage else frozenset()))
-    return "\n\n".join(p for p in parts if p.strip())
+    fields = _field_lines(doc, _PASSAGE_FIELDS if has_passage else frozenset()) if isinstance(doc, dict) else ""
+    if has_passage:
+        text = "\n\n".join(p for p in (target, fields) if p.strip())
+        return [("", text)] if text else []
+    try:
+        prompt = str(prompt_fn(doc) or "")
+    except Exception:
+        prompt = ""
+    views = [("", "\n\n".join(p for p in (prompt, target) if p.strip())), (LMH_FIELDS_ID_SUFFIX, fields)]
+    return [(suffix, text) for suffix, text in views if text.strip()]
 
 
 _PARQUET_SCHEMA = pa.schema([("id", pa.string()), ("text", pa.string())])
@@ -912,10 +931,8 @@ def _prepare_lmh() -> dict[str, Any]:
 
             def rows(task=task, docs=docs, split=split, name=child_name) -> Iterator[dict]:
                 for i, doc in enumerate(docs):
-                    text = _lmh_doc_text(doc, task.doc_to_text, task.doc_to_target)
-                    if not text:
-                        continue
-                    yield {"id": f"{name}-{split}-{i}", "text": text}
+                    for suffix, text in _lmh_doc_views(doc, task.doc_to_text, task.doc_to_target):
+                        yield {"id": f"{name}-{split}-{i}{suffix}", "text": text}
 
             try:
                 n = _write_parquet(out_path, rows())
