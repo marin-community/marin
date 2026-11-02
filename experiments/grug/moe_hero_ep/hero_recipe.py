@@ -111,12 +111,7 @@ def validated_batch_axis_size(
 
 
 def validate_model_split(model: GrugModelConfig, *, context_axis_size: int, expert_axis_size: int) -> None:
-    """Reject a sequence or expert-bank split that ``model`` cannot take.
-
-    Each would otherwise fail after the rack is allocated and the workspace is built: an indivisible
-    sequence in the context-sharded forward, a bank not divisible by the expert axis in `moe_mlp`, and one
-    not divisible by the (expert, context) storage split in parameter init.
-    """
+    """Validate sequence and expert-bank divisibility for the mesh."""
     if model.max_seq_len % context_axis_size:
         raise ValueError(f"context_axis_size={context_axis_size} must divide max_seq_len={model.max_seq_len}")
     bank_shards = expert_axis_size * context_axis_size

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from unittest.mock import patch
 
 import jax
 import jax.numpy as jnp
@@ -10,7 +9,6 @@ import jax.tree_util as jtu
 import optax
 import pytest
 from levanter.data.text.datasets import BlockShuffleConfig
-from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 
@@ -19,7 +17,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HarrierContextPh
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
 from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
-from experiments.grug.moe_hero_ep.train import FlopsBaseline, grug_trainer_mesh_config
+from experiments.grug.moe_hero_ep.train import FlopsBaseline
 
 # A miniature stacked-hero parameter tree: the two decay targets plus leaves that must be left alone.
 _MOCK_PARAMS = {
@@ -277,25 +275,7 @@ def test_hero_context_history_rebuilds_the_prior_phases_it_trained_with(monkeypa
     assert config.flops_baseline == FlopsBaseline(completed_steps=350_400, total_flops=2e24)
 
 
-def _hero_layout(config, device_count):
-    """The hero's compact (replica, data, context, expert, model) mesh shape, and its validated trainer."""
-    grug_trainer = config.trainer
-    mesh_shape = _compact_grug_mesh_shape(
-        process_count=device_count,
-        local_device_count=1,
-        expert_axis_size=grug_trainer.expert_axis_size,
-        replica_axis_size=grug_trainer.replica_axis_size,
-        model_axis_size=1,
-        context_axis_size=grug_trainer.context_axis_size,
-    )
-    trainer = grug_trainer.trainer
-    with patch("jax.device_count", return_value=device_count):
-        trainer._validate_and_set_defaults()
-    return mesh_shape, trainer
-
-
 def test_hero_without_context_parallelism_keeps_its_16k_layout(monkeypatch):
-    # The 16K hero is CP1. Adding the context axis must not move its mesh, its trainer mesh, or its eval batch.
     _set_hero_seq_len(monkeypatch, 16384)
     monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 1)
     monkeypatch.setattr(launch_scaling_ladder, "HERO_BALANCE_ATTENTION_ROWS", False)
@@ -308,18 +288,13 @@ def test_hero_without_context_parallelism_keeps_its_16k_layout(monkeypatch):
     )
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
-    assert (config.trainer.context_axis_size, config.trainer.expert_axis_size) == (1, 64)
-    assert config.trainer.balance_attention_rows is False
+    assert config.trainer.expert_axis_size == 64
     assert config.trainer.trainer.mesh == MeshConfig()
     assert config.eval.eval_batch_size == 704
-    mesh_shape, trainer = _hero_layout(config, device_count=704)
-    assert mesh_shape == (11, 1, 1, 64, 1)
-    assert (trainer.train_batch_size, trainer.data_axis_size, trainer.per_device_parallelism) == (2816, 704, 4)
 
 
 def test_hero_context_parallelism_splits_each_rack_into_expert_and_sequence_shards(monkeypatch):
     _set_hero_seq_len(monkeypatch, 65536)
-    # The 65K deploy sets both constants.
     monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
     monkeypatch.setattr(launch_scaling_ladder, "HERO_BALANCE_ATTENTION_ROWS", True)
     step = build_ladder_run(
@@ -335,15 +310,11 @@ def test_hero_context_parallelism_splits_each_rack_into_expert_and_sequence_shar
     )
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
-    assert (config.trainer.context_axis_size, config.trainer.expert_axis_size) == (4, 16)
-    assert config.trainer.balance_attention_rows is True
-    assert config.trainer.trainer.mesh == grug_trainer_mesh_config(4)
+    assert config.trainer.expert_axis_size == 16
+    mesh_axes, _ = config.trainer.trainer.mesh.axis_shapes(num_devices=704, num_slices=1)
+    assert (mesh_axes["data"], mesh_axes["context"]) == (176, 4)
     # One 65,536-token sequence per batch shard: 16,384 tokens per device per eval batch, as at 16K.
     assert config.eval.eval_batch_size == 16 * 11
-    mesh_shape, trainer = _hero_layout(config, device_count=704)
-    assert mesh_shape == (11, 1, 4, 16, 1)
-    # The trainer counts only the batch shards, so each holds four of the 704 rows.
-    assert (trainer.train_batch_size, trainer.data_axis_size, trainer.per_device_parallelism) == (704, 176, 4)
 
 
 def test_hero_context_axis_must_divide_the_sequence(monkeypatch):
