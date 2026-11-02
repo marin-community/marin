@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, reshard, use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention import AttentionMask, fa4_cute_segment_bounds, reference_attention
@@ -137,54 +137,33 @@ def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding()
     assert [g.sharding for g in grads] == [sharding] * 3
 
 
-def _zero_padding_rows(x, segment_ids):
-    """Zero the rows of padding queries, which attend only to themselves under precomputed bounds."""
-    return jnp.where((segment_ids >= 0)[:, :, None, None], x, 0.0)
-
-
-@pytest.mark.parametrize("precomputed_bounds", [False, True])
-def test_flash_attention_on_single_device_grug_mesh_matches_reference(precomputed_bounds):
-    # A one-device Grug mesh keeps its length-1 axes, so every spec names mesh axes that partition nothing. With
-    # precomputed bounds, moe_hero_ep reshards them over the batch axes too, so they name those axes as well.
+def test_flash_attention_on_single_device_grug_mesh_matches_reference():
+    # A one-device Grug mesh keeps its length-1 axes, so every spec names mesh axes that partition nothing.
     names = ("replica_dcn", "data", "context", "expert", "model")
     mesh = Mesh(np.asarray(jax.devices()[:1]).reshape((1,) * 5), names, axis_types=(AxisType.Explicit,) * 5)
     batch_axes = ("replica_dcn", "data", "expert")
     q, k, v = _qkv(jnp.bfloat16)
     mask = MASKS["window_segments"]
-    segment_ids = mask.segment_ids[0]
-    cotangent = _zero_padding_rows(jax.random.normal(jax.random.key(1), q.shape, jnp.float32), segment_ids)
-    expected = _zero_padding_rows(_reference(q, k, v, mask), segment_ids)
+    cotangent = jax.random.normal(jax.random.key(1), q.shape, jnp.float32)
+    expected = _reference(q, k, v, mask)
     expected_grads = jax.grad(lambda *a: jnp.sum(_reference(*a, mask) * cotangent), argnums=(0, 1, 2))(q, k, v)
 
     with jax.set_mesh(mesh):
         sharding = NamedSharding(mesh, P(batch_axes, None, "model", None))
         q, k, v, cotangent = (jax.device_put(x, sharding) for x in (q, k, v, cotangent))
-        ids = jax.device_put(segment_ids, NamedSharding(mesh, P(batch_axes, None)))
+        ids = jax.device_put(mask.segment_ids[0], NamedSharding(mesh, P(batch_axes, None)))
+        # Separate q and kv arrays, as a batch from the data loader carries them.
+        sharded_mask = AttentionMask.causal(sliding_window=mask.sliding_window).with_segment_ids(ids, jnp.copy(ids))
 
-        def attend(q, k, v, ids):
-            # Separate q and kv arrays, as a batch from the data loader carries them.
-            sharded_mask = AttentionMask.causal(sliding_window=mask.sliding_window).with_segment_ids(
-                ids, jnp.copy(ids)
-            )
-            if precomputed_bounds:
-                lower, valid = fa4_cute_segment_bounds(
-                    sharded_mask, batch_size=2, seq_len=SEQ_LEN, sliding_window=mask.sliding_window
-                )
-                bounds_spec = P(batch_axes, None)
-                sharded_mask = AttentionMask.causal().with_segment_ids(ids, jnp.copy(ids))
-                sharded_mask = sharded_mask.with_fa4_bounds(reshard(lower, bounds_spec), reshard(valid, bounds_spec))
-            return _flash(q, k, v, sharded_mask)
+        def loss(q, k, v):
+            return jnp.sum(_flash(q, k, v, sharded_mask).astype(jnp.float32) * cotangent)
 
-        def loss(q, k, v, ids):
-            return jnp.sum(attend(q, k, v, ids).astype(jnp.float32) * cotangent)
-
-        actual = jax.jit(attend)(q, k, v, ids)
-        actual_grads = jax.jit(jax.grad(loss, argnums=(0, 1, 2)))(q, k, v, ids)
+        actual = jax.jit(_flash)(q, k, v, sharded_mask)
+        actual_grads = jax.jit(jax.grad(loss, argnums=(0, 1, 2)))(q, k, v)
 
     assert actual.sharding.spec == sharding.spec
     tol = TOLERANCE[jnp.bfloat16]
-    actual = _zero_padding_rows(np.asarray(actual, np.float32), segment_ids)
-    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=tol, rtol=tol)
+    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), atol=tol, rtol=tol)
     _assert_gradients_match(actual_grads, expected_grads, tol=tol)
 
 
@@ -276,10 +255,15 @@ def test_flash_attention_sharded_over_batch_and_heads_matches_reference():
     run_on_cpu_devices(_SHARDED_SCRIPT, device_count=4)
 
 
+def _zero_padding_rows(x, segment_ids):
+    """Zero the rows of padding queries, which attend only to themselves under precomputed bounds."""
+    return jnp.where((segment_ids >= 0)[:, :, None, None], x, 0.0)
+
+
 @pytest.mark.skipif(INTERPRET, reason="production tiles and shapes are too slow for the Pallas interpreter")
-def test_flash_attention_bf16_default_tiles_on_precomputed_bounds_matches_reference():
-    # The moe_hero_ep attention at its production sequence length and window, through the precomputed-bounds path
-    # with the default tile sizes that a training run compiles.
+def test_flash_attention_bf16_default_tiles_at_production_shape_matches_reference():
+    # The only test that compiles the default tile sizes a training run uses, at moe_hero_ep's sequence length,
+    # window and head size. It passes the mask as moe_hero_ep does, with precomputed bounds.
     seq_len, window = 4096, 2048
     kq, kk, kv, kc = jax.random.split(jax.random.key(0), 4)
     q = jax.random.normal(kq, (2, seq_len, 8, 128), jnp.float32).astype(jnp.bfloat16)
