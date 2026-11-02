@@ -126,7 +126,7 @@ kubernetes_provider:
   namespace: iris
   node_health:
     storage:
-      scratch: s3://marin-rno2a/tmp/ttl=1d/iris-node-health/cw-rno2a
+      scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-rno2a
       minimum_healthy_nodes: 2
     max_cordoned_nodes: 1
   host_network: true                # Required for NCCL/IB multi-host traffic
@@ -156,8 +156,8 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    MARIN_PREFIX: s3://marin-rno2a/marin
-    MARIN_TEMP_PREFIX: s3://marin-rno2a
+    # Durable outputs and the shared CoreWeave scratch bucket are both in US-EAST-08A.
+    MARIN_PREFIX: s3://marin-us-east-08a/marin
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
     # back to the host ethernet PF that carries the node IP. The exact PF name

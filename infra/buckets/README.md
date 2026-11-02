@@ -107,8 +107,9 @@ incomplete multipart uploads after seven days.
 
 The default shared scratch bucket for CoreWeave clusters is declared as
 `data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`, separately from the region
-mirror set. Permanent east-region artifacts remain in `marin-us-east-02a`; `hero-checkpoints`
-is reserved for hero checkpoints.
+mirror set. Lifecycle rules expire only its `tmp/ttl=Nd/` prefixes, so RNO2A durable outputs
+under `marin/` persist. Other permanent east-region artifacts remain in `marin-us-east-02a`;
+`hero-checkpoints` is reserved for hero checkpoints.
 
 CoreWeave bucket access policies preserve S3 access for principals in the Open Athena organization.
 Only `marin-us-east-02a` denies every principal the `s3:DeleteObject` and
@@ -118,10 +119,10 @@ live access policy; Pulumi replaces the complete bucket policy.
 
 `marin-rno2a` is the RNO2A regional data bucket. It uses the same organization access policy,
 multipart cleanup, and `tmp/ttl=Nd/` lifecycle rules as the other regional buckets. RNO2A task
-configuration selects this bucket for both durable outputs and scratch with `MARIN_PREFIX`
-and `MARIN_TEMP_PREFIX`; it does not need a separate scratch bucket. Apply the bucket stack
-before deploying that task configuration. Existing RNO2A controller state and Finelog archives
-keep their `marin-us-east-02a` paths until a verified migration preserves their referenced objects.
+configuration does not select it: tasks write durable outputs under `s3://marin-us-east-08a/marin`
+and scratch to the shared CoreWeave temp bucket. Existing RNO2A controller state and Finelog
+archives keep their `marin-us-east-02a` paths until a verified migration preserves their
+referenced objects.
 
 ## Automation boundary
 

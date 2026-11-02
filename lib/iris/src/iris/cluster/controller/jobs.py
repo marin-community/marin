@@ -31,6 +31,7 @@ from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, 
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import (
     BackendCapability,
+    BackendKind,
     BackendObservation,
     EgressAllowlistMode,
     JobFeasibilityRequest,
@@ -813,6 +814,12 @@ def _prepare_job_slot(
             needs_drain = _replace_finished_job(cur, launch.job_id, record_tombstone=record_tombstone)
         elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
             if not is_job_finished(existing_state):
+                if dependencies.runtime.backend.descriptor.kind is BackendKind.KUBERNETES:
+                    raise ConnectError(
+                        Code.FAILED_PRECONDITION,
+                        f"Cannot recreate active Kubernetes job {launch.job_id}: cancel it, verify its pods have "
+                        "disappeared, then submit the replacement",
+                    )
                 ops.job.cancel(cur, job_id=launch.job_id, reason="Replaced by new submission")
                 needs_drain = True
             else:
@@ -1038,7 +1045,7 @@ def get_job_status(
         dependencies,
         job,
         summary,
-        _get_autoscaler_pending_hints(dependencies) if job.state == job_pb2.JOB_STATE_PENDING else {},
+        _get_autoscaler_pending_hints(dependencies) if _job_awaits_placement(job, summary) else {},
         has_children=has_children,
         parent_job_id=job.parent_job_id.to_wire() if job.parent_job_id else "",
         resources=resource_spec_from_job_row(job),
@@ -1153,6 +1160,14 @@ def complete_job(
     return job_pb2.Empty()
 
 
+def _job_awaits_placement(job: JobStatusRow, summary: TaskJobSummary | None) -> bool:
+    return job.state == job_pb2.JOB_STATE_PENDING or (
+        job.state == job_pb2.JOB_STATE_RUNNING
+        and summary is not None
+        and summary.task_state_counts.get(job_pb2.TASK_STATE_PENDING, 0) > 0
+    )
+
+
 def _job_to_proto(
     dependencies: JobDependencies,
     job: JobStatusRow,
@@ -1171,13 +1186,17 @@ def _job_to_proto(
         pending_reason = _federated_pending_reason(
             job.cluster, handoff_state, current_peer_status, dependencies.runtime.federation.peer_reachable(job.cluster)
         )
-    elif job.state == job_pb2.JOB_STATE_PENDING:
+    elif _job_awaits_placement(job, task_summary):
         sched_reason = dependencies.runtime.get_job_scheduling_diagnostics(job.job_id.to_wire())
-        pending_reason = sched_reason or "Pending scheduler feedback"
+        pending_reason = sched_reason or ("Pending scheduler feedback" if job.state == job_pb2.JOB_STATE_PENDING else "")
         hint = autoscaler_pending_hints.get(job.job_id.to_wire())
         if hint is not None:
             scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
-            pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
+            autoscaler_reason = f"Autoscaler: {scaling_prefix}{hint.message}"
+            if pending_reason:
+                pending_reason = f"Scheduler: {pending_reason}\n\n{autoscaler_reason}"
+            else:
+                pending_reason = autoscaler_reason
 
     proto_job = job_pb2.JobStatus(
         job_id=job.job_id.to_wire(),
@@ -1261,7 +1280,7 @@ def list_jobs(
         federated_ids = [j.job_id for j in page if is_federated(j.cluster)]
         handoffs = reads.handoff_states(q, federated_ids)
 
-    has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in page)
+    has_pending = any(_job_awaits_placement(j, summaries.get(j.job_id)) for j in page)
     autoscaler_pending_hints = _get_autoscaler_pending_hints(dependencies) if has_pending else {}
     all_jobs = _jobs_to_protos(
         dependencies, page, summaries, autoscaler_pending_hints, has_children=children, handoff_states=handoffs
