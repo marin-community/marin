@@ -79,6 +79,7 @@ HERO_16K_MODEL_CONFIG = with_transport_remat_mode(
     dataclasses.replace(HERO_MODEL_CONFIG, max_seq_len=16384, capacity_factor=1.15, qk_mult=1.48)
 )
 HERO_EVAL_SEQ_LENS = (4096, 16384, 65536)
+CHECKPOINT_EVAL_MAX_RETRIES = 3
 
 
 @dataclass(frozen=True)
@@ -179,7 +180,8 @@ def run_checkpoint_eval(config: CheckpointEvalConfig) -> None:
         local_entrypoint=_evaluate_checkpoint_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
-        max_retries_failure=0,
+        # The eval keeps no state, so a retry after a gang bootstrap failure repeats it from the start.
+        max_retries_failure=CHECKPOINT_EVAL_MAX_RETRIES,
     )
 
 
