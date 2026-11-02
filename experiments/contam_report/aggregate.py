@@ -72,8 +72,9 @@ def aggregate(
     con.execute(f"CREATE TABLE hash_docs AS SELECT hash, count(*) AS docs FROM ({hits}) GROUP BY hash")
     con.execute(f"COPY hash_docs TO '{out_dir}/hash_docs.parquet'")
     con.execute(f"CREATE TABLE common AS SELECT hash FROM hash_docs WHERE docs > {common_doc_limit}")
-    con.execute(f"CREATE TABLE doc_hash AS SELECT * FROM ({hits}) WHERE hash NOT IN (SELECT hash FROM common)")
-    if drop_dir is not None:
+    if drop_dir is None:
+        con.execute("CREATE TABLE drop_set (source VARCHAR, hash UBIGINT)")
+    else:
         # Drop sets live at ``<drop_dir>/<source>/*.parquet``, plus ``<drop_dir>/_global``.
         d = drop_dir.rstrip("/")
         con.execute(
@@ -83,12 +84,15 @@ def aggregate(
             FROM read_parquet('{d}/**/*.parquet', filename = true)
             """
         )
-        con.execute(
-            """
-            DELETE FROM doc_hash d USING drop_set s
-            WHERE s.hash = d.hash AND (s.source = d.source OR s.source = '_global')
-            """
-        )
+    con.execute(
+        f"""
+        CREATE TABLE doc_hash AS
+        SELECT h.* FROM ({hits}) h
+        ANTI JOIN common c ON c.hash = h.hash
+        ANTI JOIN (SELECT hash FROM drop_set WHERE source = '_global') g ON g.hash = h.hash
+        ANTI JOIN drop_set s ON s.hash = h.hash AND s.source = h.source
+        """
+    )
     # Hit lists and the index hold distinct pairs, so count(*) counts distinct features.
     con.execute(
         """
