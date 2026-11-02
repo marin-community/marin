@@ -298,10 +298,41 @@ def _load_bloom(bloom_path: str) -> dupekit.Bloom:
 _JSON_ESCAPES = (("\\n", "\n"), ("\\t", "\t"), ('\\"', '"'), ("\\'", "'"), ("\\\\", "\\"))
 
 
+# The item rule unescapes huge records in pieces of at most this many characters,
+# cut at whitespace, so it never copies a whole multi-GB record.
+_UNESCAPE_PIECE_CHARS = 16 * 1024 * 1024
+_WHITESPACE_PATTERN = re.compile(r"\s")
+
+
 def _json_unescaped(text: str) -> str:
     for escaped, plain in _JSON_ESCAPES:
         text = text.replace(escaped, plain)
     return text
+
+
+def _whitespace_pieces(text: str, size: int) -> Iterator[str]:
+    """Split *text* at whitespace into pieces of about *size* characters."""
+    start = 0
+    while len(text) - start > size:
+        cut = _WHITESPACE_PATTERN.search(text, start + size)
+        if cut is None:
+            break
+        yield text[start : cut.start()]
+        start = cut.end()
+    yield text[start:]
+
+
+def _unescaped_paragraphs(text: str, delimiter: str) -> Iterator[str]:
+    """Yield the paragraphs that JSON unescaping changes, after unescaping them.
+
+    Paragraphs without a backslash are unchanged, so callers that already scanned
+    *text* lose nothing by skipping them.
+    """
+    for paragraph in _iter_paragraphs(text, delimiter):
+        if "\\" not in paragraph:
+            continue
+        for piece in _whitespace_pieces(paragraph, _UNESCAPE_PIECE_CHARS):
+            yield from _iter_paragraphs(_json_unescaped(piece), delimiter)
 
 
 @dataclass(frozen=True)
@@ -491,8 +522,8 @@ class _ParagraphOverlap(NamedTuple):
     matched_hashes: list[int]
     feature_count: int
     has_ngrams: bool
-    bloom_hits: list[int]
-    """Every feature hash that hits the filter, including drop-set hashes."""
+    bloom_hits: set[int]
+    """Every distinct feature hash that hits the filter, including drop-set hashes."""
 
 
 class _DocumentScan(NamedTuple):
@@ -510,7 +541,7 @@ def _paragraph_overlap_matches_and_presence(
     """Return overlap after drop filtering and n-gram presence before filtering."""
     if ngram is None:
         h = _bloom_hash(paragraph)
-        bloom_hits = [h] if h in bf else []
+        bloom_hits = {h} if h in bf else set()
         if h in drop_hashes:
             return _ParagraphOverlap(0.0, [], 0, False, bloom_hits)
         return _ParagraphOverlap(1.0 if bloom_hits else 0.0, bloom_hits, 1, False, bloom_hits)
@@ -518,7 +549,7 @@ def _paragraph_overlap_matches_and_presence(
     has_ngram_features = False
     feature_count = 0
     matched: list[int] = []
-    bloom_hits: list[int] = []
+    bloom_hits: set[int] = set()
     features: Iterator[str]
     if len(paragraph) < LARGE_TEXT_STREAMING_THRESHOLD:
         tokens = paragraph.split()
@@ -534,7 +565,7 @@ def _paragraph_overlap_matches_and_presence(
         hash_value = _bloom_hash(feature)
         in_filter = hash_value in bf
         if in_filter:
-            bloom_hits.append(hash_value)
+            bloom_hits.add(hash_value)
         if hash_value in drop_hashes:
             continue
         feature_count += 1
@@ -897,9 +928,9 @@ def _matched_items(
     """
     if not scan.bloom_hits:
         return []
-    hits = scan.bloom_hits
-    if "\\" in text:
-        hits = hits | _scan_document(_json_unescaped(text), bf, ngram).bloom_hits
+    hits = set(scan.bloom_hits)
+    for paragraph in _unescaped_paragraphs(text, ngram.paragraph_delimiter):
+        hits.update(_paragraph_overlap_matches_and_presence(paragraph, bf, ngram).bloom_hits)
     return index.matched_eval_ids(hits - drop_hashes)
 
 

@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from marin.datakit import decon
 from marin.datakit.decon import (
     EvalBloom,
     ItemMatchConfig,
@@ -939,7 +940,10 @@ def test_item_rule_marks_eval_item_diluted_in_a_long_paragraph(tmp_path: Path):
     assert with_items["doc"]["matched_eval_ids"] == ["quiz-1"]
 
 
-def test_item_rule_matches_a_copy_stored_in_a_json_string(tmp_path: Path):
+@pytest.mark.parametrize("piece_chars", [16 * 1024 * 1024, len(_FILLER)], ids=["whole", "pieces"])
+def test_item_rule_matches_a_copy_stored_in_a_json_string(tmp_path: Path, monkeypatch, piece_chars: int):
+    # Filler-sized pieces cut the record around the copy, the way a multi-GB record is cut.
+    monkeypatch.setattr(decon, "_UNESCAPE_PIECE_CHARS", piece_chars)
     item = "def add(a, b):\n    Return the sum of two integers a and b without overflow checks\n    return a + b"
     # json.dumps writes each line break as a literal backslash-n joined to the token before it.
     record = {"id": "doc", "partition_id": 0, "text": f"{_FILLER} {json.dumps({'prompt': item})} {_FILLER}"}
