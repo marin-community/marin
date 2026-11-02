@@ -18,9 +18,11 @@ from jax.sharding import PartitionSpec
 
 import haliax as hax
 
+from levanter.layers.stacked import ArrayStacked
+
 
 def is_scanned_stack(x: object) -> bool:
-    return isinstance(x, (hax.nn.Stacked, hax.nn.ArrayStacked))
+    return isinstance(x, (hax.nn.Stacked, ArrayStacked))
 
 
 def safe_sharding_constraint(x, sharding):
