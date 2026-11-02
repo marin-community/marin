@@ -24,6 +24,7 @@ test = [
     "pytest-timeout",
     "marin-shellbox[daytona,shellsim]",
     "transformers>=4.48",
+    "jinja2>=3.1",
 ]
 
 [tool.hatch.build.targets.wheel]

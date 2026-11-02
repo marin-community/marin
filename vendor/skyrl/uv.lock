@@ -3051,6 +3051,7 @@ provides-extras = ["evaluation"]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "../../lib/shellbox" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },

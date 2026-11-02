@@ -3,9 +3,10 @@
 
 """Serve a pinned Qwen model and evaluate published TaskSpec corpora.
 
-Run with --config RUN.json --dataset CORPUS --output RESULTS and --accelerator gpu
-on the same cluster as the corpus and result storage. The run config supplies the
-Hugging Face model/tokenizer names and immutable revisions.
+Invoke inside an Iris job with --config RUN.json --dataset CORPUS --output RESULTS
+and --accelerator gpu, near the corpus and result storage. The run config supplies
+the Hugging Face model/tokenizer names and immutable revisions. Judge tasks also
+need --judge-endpoint and the credential named by --judge-api-key-env.
 """
 
 import argparse
@@ -14,7 +15,7 @@ from dataclasses import replace
 from enum import StrEnum
 
 from fray.types import ANY_REGION, ResourceConfig, create_environment
-from iris.cli.connect import open_iris_client
+from iris.client.client import iris_ctx
 from iris.cluster.types import ResourceSpec
 from marin.inference.config import (
     BrokerConfig,
@@ -26,11 +27,18 @@ from marin.inference.config import (
     VllmLauncherType,
 )
 from marin.inference.iris import remote_inference
-from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import require_secret
 from rolloutengine.evaluation.runner import EvaluationRunConfig
 
-from experiments.evaluation.task_driver import SOLVER_API_KEY, SOLVER_ENDPOINT, WORKER_TIMEOUT, submit_evaluation
+from experiments.evaluation.task_driver import (
+    JUDGE_API_KEY,
+    JUDGE_ENDPOINT,
+    SOLVER_API_KEY,
+    SOLVER_ENDPOINT,
+    WORKER_TIMEOUT,
+    submit_evaluation,
+)
 
 _VLLM_TIMEOUT = 1800
 _TPU_VLLM_WORKER_ENV_VARS = (
@@ -111,8 +119,19 @@ def main() -> None:
     parser.add_argument("--dataset", action="append", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--judge-endpoint", help="Explicit judge endpoint for the configured judge deployment.")
+    parser.add_argument("--judge-api-key-env", default="VERIFYIT_JUDGE_API_KEY")
     args = parser.parse_args()
     config = EvaluationRunConfig.model_validate_json(StoragePath(args.config).read_text())
+    if (config.judge is not None) != (args.judge_endpoint is not None):
+        parser.error("The run's judge identity and --judge-endpoint must be supplied together")
+    secrets = {}
+    if args.judge_endpoint:
+        secrets[JUDGE_ENDPOINT] = args.judge_endpoint
+        secrets[JUDGE_API_KEY] = require_secret(args.judge_api_key_env)
+    client = iris_ctx().client
+    if client is None:
+        raise RuntimeError("Qwen evaluation must run inside an Iris job with a controller client")
     inference = QWEN3_GPU_INFERENCE if args.accelerator is Accelerator.GPU else QWEN3_TPU_INFERENCE
     inference = replace(
         inference,
@@ -129,18 +148,17 @@ def main() -> None:
     )
     with remote_inference(inference) as session:
         endpoint = session.model.endpoint
-        with open_iris_client(cluster_name=args.cluster, workspace=find_project_root()) as client:
-            job = submit_evaluation(
-                client,
-                tuple(args.dataset),
-                args.output,
-                config,
-                name=f"qwen-task-eval-{uuid.uuid4().hex[:8]}",
-                resources=ResourceSpec(cpu=4, memory="32g", disk="64g"),
-                timeout=WORKER_TIMEOUT,
-                secrets={SOLVER_ENDPOINT: endpoint.base_url, SOLVER_API_KEY: endpoint.api_key or "unused"},
-            )
-            job.wait(timeout=WORKER_TIMEOUT, stream_logs=True)
+        job = submit_evaluation(
+            client,
+            tuple(args.dataset),
+            args.output,
+            config,
+            name=f"qwen-task-eval-{uuid.uuid4().hex[:8]}",
+            resources=ResourceSpec(cpu=4, memory="32g", disk="64g"),
+            timeout=WORKER_TIMEOUT,
+            secrets={**secrets, SOLVER_ENDPOINT: endpoint.base_url, SOLVER_API_KEY: endpoint.api_key or "unused"},
+        )
+        job.wait(timeout=WORKER_TIMEOUT, stream_logs=True)
 
 
 if __name__ == "__main__":

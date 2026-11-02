@@ -4,6 +4,7 @@
 """Exercise driver recovery through HTTP, FineStore, and Iris RPC boundaries."""
 
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -12,7 +13,7 @@ import openai
 import pytest
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
-from iris.client.client import IrisClient
+from iris.client.client import IrisClient, IrisContext, Job, iris_ctx_scope
 from iris.cluster.client import remote_client
 from iris.cluster.types import ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
@@ -20,6 +21,7 @@ from rolloutengine.evaluation.runner import (
     ATTEMPTS_TABLE,
     EvaluationInfrastructureError,
     EvaluationRunConfig,
+    JudgeIdentity,
     ModelIdentity,
 )
 from rolloutengine.models import RolloutLimits
@@ -34,6 +36,7 @@ from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast
 from zephyr.context import ZephyrContext
 
+from experiments.evals import served_qwen3
 from experiments.evaluation import task_driver
 from experiments.evaluation.task_driver import SOLVER_API_KEY, SOLVER_ENDPOINT, execute_with_retries, submit_evaluation
 
@@ -211,7 +214,8 @@ def test_permanent_endpoint_errors_propagate_without_retry(
     assert [(row["retry"], row["outcome"]) for row in terminal] == [(0, "infra_error")]
 
 
-def test_submission_serializes_iris_timeout_and_separates_connection_secrets(monkeypatch, driver_config):
+@pytest.fixture
+def iris_submission(monkeypatch):
     requests = []
 
     def launch(request, **_kwargs):
@@ -223,18 +227,23 @@ def test_submission_serializes_iris_timeout_and_separates_connection_secrets(mon
         "ControllerServiceClientSync",
         lambda **_kwargs: SimpleNamespace(launch_job=launch, close=lambda: None),
     )
-    connections = {SOLVER_ENDPOINT: "https://solver.invalid/scoped/secret-token", SOLVER_API_KEY: "secret-solver-key"}
     with IrisClient.remote("http://controller.invalid") as client:
-        job = submit_evaluation(
-            client,
-            ("s3://fixture/corpus",),
-            "s3://fixture/results",
-            driver_config,
-            name="evaluation",
-            resources=ResourceSpec(cpu=2, memory="4g", disk="8g"),
-            timeout=73,
-            secrets=connections,
-        )
+        yield client, requests
+
+
+def test_submission_serializes_iris_timeout_and_separates_connection_secrets(iris_submission, driver_config):
+    client, requests = iris_submission
+    connections = {SOLVER_ENDPOINT: "https://solver.invalid/scoped/secret-token", SOLVER_API_KEY: "secret-solver-key"}
+    job = submit_evaluation(
+        client,
+        ("s3://fixture/corpus",),
+        "s3://fixture/results",
+        driver_config,
+        name="evaluation",
+        resources=ResourceSpec(cpu=2, memory="4g", disk="8g"),
+        timeout=73,
+        secrets=connections,
+    )
     (request,) = requests
     assert job.job_id.to_wire() == request.name
     assert request.timeout.milliseconds == 73_000
@@ -243,3 +252,50 @@ def test_submission_serializes_iris_timeout_and_separates_connection_secrets(mon
     for name, value in connections.items():
         assert request.environment.secrets[name] == value
         assert value.encode() not in request.entrypoint.SerializeToString()
+
+
+def test_served_cli_submits_through_task_client_with_private_judge_connection(
+    tmp_path, monkeypatch, iris_submission, driver_config
+):
+    client, requests = iris_submission
+    config = driver_config.model_copy(
+        update={"judge": JudgeIdentity(deployment="judge-pin", models={"judge": "revision"}, default_model="judge")}
+    )
+    config_path = tmp_path / "run.json"
+    config_path.write_text(config.model_dump_json())
+    endpoint = SimpleNamespace(base_url="http://solver.invalid/scoped/private-token", api_key="private-solver-key")
+    monkeypatch.setattr(
+        served_qwen3,
+        "remote_inference",
+        lambda _config: nullcontext(SimpleNamespace(model=SimpleNamespace(endpoint=endpoint))),
+    )
+    monkeypatch.setattr(Job, "wait", lambda *_args, **_kwargs: None)
+    monkeypatch.setenv("TEST_EVALUATION_JUDGE_KEY", "private-judge-key")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "served_qwen3",
+            "--config",
+            str(config_path),
+            "--dataset",
+            "s3://fixture/corpus",
+            "--output",
+            "s3://fixture/results",
+            "--judge-endpoint",
+            "http://judge.invalid/private-token",
+            "--judge-api-key-env",
+            "TEST_EVALUATION_JUDGE_KEY",
+        ],
+    )
+    with iris_ctx_scope(IrisContext(job_id=None, client=client)):
+        served_qwen3.main()
+    (request,) = requests
+    expected_secrets = {
+        SOLVER_ENDPOINT: endpoint.base_url,
+        SOLVER_API_KEY: endpoint.api_key,
+        task_driver.JUDGE_ENDPOINT: "http://judge.invalid/private-token",
+        task_driver.JUDGE_API_KEY: "private-judge-key",
+    }
+    for name, secret in expected_secrets.items():
+        assert request.environment.secrets[name] == secret
+        assert secret.encode() not in request.entrypoint.SerializeToString()

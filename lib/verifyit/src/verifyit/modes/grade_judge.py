@@ -438,6 +438,14 @@ def _label_completion(
             request,
         )
         if spec.completion_policy is JudgeCompletionPolicy.CONTENT:
+            if len(response.choices) != 1:
+                raise GradingInfraError(
+                    "judge must return exactly one completion choice",
+                    judge_request=request,
+                    judge_response=response.model_dump(mode="json"),
+                    requested_model=model,
+                    transport_attempts=attempts,
+                )
             choice = response.choices[0]
             return _LabelCompletion(
                 choice.message.content or "",

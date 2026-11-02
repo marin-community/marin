@@ -54,6 +54,7 @@ from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
+    JudgeCompletionPolicy,
     JudgeSpec,
 )
 from zephyr.context import ZephyrContext
@@ -538,6 +539,7 @@ def convert_judged_row(row, _context):
         },
         label_scan="whole",
         label_case="upper",
+        completion_policy=JudgeCompletionPolicy.CONTENT,
     )
     task = answer_task(row, prompt=row.data["prompt"], spec=judge, evidence=row.data)
     if row.data.get("scripted"):
@@ -555,27 +557,30 @@ def convert_judged_row(row, _context):
     return task.model_copy(update={"tags": ("eval",)})
 
 
-@pytest.fixture
-def judge_endpoint(monkeypatch):
+@pytest.fixture(params=["http-503"])
+def judge_endpoint(monkeypatch, request):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
-            body = (
-                {"error": {"message": "fixture unavailable"}}
-                if len(requests) == 1
-                else {
-                    "id": "judge-response",
-                    "object": "chat.completion",
-                    "created": 0,
-                    "model": "judge-served-revision",
-                    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "A"}}],
-                }
-            )
+            body = {
+                "id": "judge-response",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "judge-served-revision",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "A"}}],
+            }
+            status = 200
+            if len(requests) == 1:
+                if request.param == "http-503":
+                    body = {"error": {"message": "fixture unavailable"}}
+                    status = 503
+                else:
+                    body["choices"] = []
             payload = json.dumps(body).encode()
-            self.send_response(503 if len(requests) == 1 else 200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
@@ -588,7 +593,7 @@ def judge_endpoint(monkeypatch):
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        yield requests, JudgeConnection(f"http://127.0.0.1:{server.server_port}/v1", "private-judge-key")
+        yield requests, JudgeConnection(f"http://127.0.0.1:{server.server_port}/v1", "private-judge-key"), request.param
     finally:
         server.shutdown()
         thread.join()
@@ -596,6 +601,7 @@ def judge_endpoint(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("judge_endpoint", ["http-503", "empty-choices"], indirect=True)
 async def test_driver_judge_identity_pins_explicit_and_default_models_across_failed_attempt_resume(
     tmp_path, run_config, judge_endpoint, monkeypatch
 ):
@@ -608,7 +614,7 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
         ],
         converter=convert_judged_row,
     )
-    judge_requests, connection = judge_endpoint
+    judge_requests, connection, failure_kind = judge_endpoint
     config = run_config.model_copy(
         update={
             "concurrency": 1,
@@ -640,7 +646,14 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
     assert len(failed) == 1
     failed_raw = json.loads(reader.read_blob(failed[0]["result_blob"]))
     assert failed_raw["grade"]["reward"] is None
-    assert "fixture unavailable" in json.dumps(failed_raw["grade"]["detail"])
+    detail = failed_raw["grade"]["detail"]
+    if failure_kind == "empty-choices":
+        assert detail["judge_response"]["id"] == "judge-response"
+        assert detail["judge_response"]["choices"] == []
+        assert detail["judge_request"] == judge_requests[0]
+    else:
+        assert "fixture unavailable" in json.dumps(detail)
+    assert connection.api_key not in json.dumps(failed_raw)
     assert [request["model"] for request in judge_requests] == ["source-judge", "run-default"]
     await run_evaluation((corpus,), output, config, model, machine_factories={}, judge_connection=connection)
     assert [request["model"] for request in judge_requests] == [
@@ -689,7 +702,7 @@ async def test_driver_unmapped_judge_model_is_rejected_before_generation(
         [{"prompt": "unmapped judge", "model": source_model, "scripted": scripted}],
         converter=convert_judged_row,
     )
-    judge_requests, connection = judge_endpoint
+    judge_requests, connection, _ = judge_endpoint
     config = run_config.model_copy(
         update={"judge": JudgeIdentity(deployment="fixture", models={"different": "revision"})}
     )

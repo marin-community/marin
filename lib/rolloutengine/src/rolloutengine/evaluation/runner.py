@@ -71,7 +71,7 @@ from rolloutengine.models import (
 
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
-DRIVER_REVISION = "2026.11.02.1"
+DRIVER_REVISION = "2026.11.02.2"
 
 
 class EvaluationInfrastructureError(RuntimeError):
