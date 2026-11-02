@@ -7,12 +7,14 @@ disk (datasets.load_dataset refuses a remote URI under HF_HUB_OFFLINE=1 → Offl
 """
 
 from pathlib import Path
+import json
 
 import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from cloud.iris.rl_data import resolve_rl_train_data, resolve_rl_train_data_with_sources
+from cloud.iris.task_runtime import materialize_data_sources
 from infra.rl_data.nemotron_ultra_swe import _tar_bytes
 
 
@@ -55,7 +57,7 @@ def test_parquet_remote_uri_staged_to_local(tmp_path):
     assert staged.read_bytes() == b"PARQUET-BYTES"
 
 
-def test_remote_task_parquet_is_staged_and_extracted(tmp_path):
+def test_remote_task_parquet_is_staged_and_extracted(tmp_path, monkeypatch):
     archive = _tar_bytes(
         {
             "instruction.md": (b"Repair the project.\n", 0o644),
@@ -75,3 +77,9 @@ def test_remote_task_parquet_is_staged_and_extracted(tmp_path):
     task_root = Path(out[0])
     assert task_root.is_dir()
     assert (task_root / "task-one" / "instruction.md").read_text() == "Repair the project.\n"
+
+    monkeypatch.setenv("SCRATCH", str(tmp_path / "worker"))
+    materialize_data_sources(json.dumps([remote]), data_kind="tasks")
+    worker_roots = list((tmp_path / "worker" / "tasks").glob("remote-*/task-one/instruction.md"))
+    assert len(worker_roots) == 1
+    assert worker_roots[0].read_text() == "Repair the project.\n"

@@ -260,7 +260,7 @@ async def test_sdk_stream_yields_before_completion_and_retains_exact_tokens(tmp_
                                 ],
                                 "provider_specific_fields": {"token_ids": [10 + index]},
                             },
-                            "finish_reason": None,
+                            "finish_reason": "tool_calls" if index == 1 else None,
                             "logprobs": {
                                 "content": [{"token": content, "logprob": -0.25}]
                             },

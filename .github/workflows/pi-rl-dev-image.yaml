@@ -1,0 +1,27 @@
+name: Pi RL development image
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pi-rl-dev-image.yaml"
+      - "docker/pi-rl/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build pinned development image without publishing
+        run: docker build --file docker/pi-rl/Dockerfile --tag pi-rl:ci-${{ github.sha }} docker/pi-rl
+      - name: Check preinstalled Pi and recorder dependency offline
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            pi-rl:ci-${{ github.sha }} sh -eu -c '
+              test "$(node --version)" = v22.19.0
+              test "$(pi --version)" = 1.3.0
+              test -f /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.lazy.js
+            '

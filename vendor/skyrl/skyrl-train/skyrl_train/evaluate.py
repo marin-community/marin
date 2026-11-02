@@ -130,7 +130,7 @@ async def _collect_evaluation_rollouts(
                 1,
                 get_sampling_params_for_backend(cfg.generator.backend, cfg.generator.eval_sampling_params),
                 "eval",
-                global_step,
+                global_step if global_step is not None else 0,
             )
             request = replace(
                 request,

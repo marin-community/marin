@@ -1,0 +1,13 @@
+{
+  "physical_trials": [
+    {"repetition": 0, "model_turns": 2, "verifier_grade": 1.0, "judge_score": 1},
+    {"repetition": 1, "model_turns": 2, "verifier_grade": 0.0, "judge_score": 0},
+    {"repetition": 2, "model_turns": 2, "verifier_grade": 1.0, "judge_score": 1},
+    {"repetition": 3, "model_turns": 2, "verifier_grade": 1.0, "judge_score": 1}
+  ],
+  "model_calls": 8,
+  "unique_judge_requests": 4,
+  "informative_judge_group": true,
+  "exact_served_tokens_checked": true,
+  "optimizer_step": false
+}

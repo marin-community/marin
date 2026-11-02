@@ -51,6 +51,8 @@ async def run_harbor_trial(
     backend: AgentInferenceBackend,
     complete: AgentCompletion,
     evidence_dir: Path,
+    *,
+    teacher_complete: AgentCompletion | None = None,
 ) -> TrialResult:
     """Let Harbor own setup, verification and cleanup while the engine serves tokens."""
     if not isinstance(trial.agent, BaseInstalledAgent):
@@ -60,7 +62,9 @@ async def run_harbor_trial(
         raise ValueError("Harbor training requires rollout capture to be enabled")
     evidence_dir.mkdir(parents=True, exist_ok=True)
     trace_path = evidence_dir / "turns.jsonl"
-    with backend.session(correlation_id, recorded_completion(complete, trace_path)):
+    with backend.session(
+        correlation_id, recorded_completion(complete, trace_path), teacher_complete=teacher_complete
+    ):
         return await trial.run()
 
 

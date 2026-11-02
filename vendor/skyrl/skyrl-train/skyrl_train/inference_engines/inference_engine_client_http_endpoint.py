@@ -46,6 +46,7 @@ _SERVER_CREATED_TIME = int(time.time())
 # Global state to hold the inference engine client and backend
 _global_inference_engine_client: Optional[InferenceHTTPBackend] = None
 _global_uvicorn_server: Optional[uvicorn.Server] = None
+_additional_model_names: frozenset[str] = frozenset()
 
 
 # Mirrors vLLM's nested OpenAI error response shape.
@@ -136,12 +137,17 @@ def is_engine_error_response(response: Dict[str, Any]) -> bool:
     return "error" in response or response.get("object", "") == "error"
 
 
-def set_global_state(inference_engine_client: InferenceHTTPBackend, uvicorn_server: uvicorn.Server | None):
-    """Set the global inference engine client."""
-    global _global_inference_engine_client
-    global _global_uvicorn_server
+def set_global_state(
+    inference_engine_client: InferenceHTTPBackend | None,
+    uvicorn_server: uvicorn.Server | None,
+    *,
+    additional_model_names: frozenset[str] = frozenset(),
+):
+    """Set the bridge backend and any explicitly registered independent models."""
+    global _global_inference_engine_client, _global_uvicorn_server, _additional_model_names
     _global_inference_engine_client = inference_engine_client
     _global_uvicorn_server = uvicorn_server
+    _additional_model_names = additional_model_names
 
 
 def _validate_backend_model(model: Optional[str]) -> Optional[ErrorResponse]:
@@ -153,7 +159,7 @@ def _validate_backend_model(model: Optional[str]) -> Optional[ErrorResponse]:
                 code=HTTPStatus.INTERNAL_SERVER_ERROR.value,
             ),
         )
-    if model is not None and _global_inference_engine_client.model_name != model:
+    if model is not None and model not in {_global_inference_engine_client.model_name, *_additional_model_names}:
         # `served_model_name` is supported in generator.engine_init_kwargs. Both
         # vllm_engine.py and InferenceEngineClient use it for Harbor/LiteLLM compatibility.
         return ErrorResponse(

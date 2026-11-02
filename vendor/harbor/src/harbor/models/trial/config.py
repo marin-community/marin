@@ -1,4 +1,7 @@
 from harbor_config.models.trial.config import AgentConfig as AgentConfig
+from harbor_config.models.trial.pi import PiAgentConfig as PiAgentConfig
+from harbor_config.models.trial.pi import PiDaggerPlan as PiDaggerPlan
+from harbor_config.models.trial.pi import PiCritiquePlan as PiCritiquePlan
 from harbor_config.models.trial.config import (
     ArtifactAuthorityConfig as ArtifactAuthorityConfig,
 )

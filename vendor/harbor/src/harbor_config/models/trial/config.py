@@ -23,6 +23,7 @@ from harbor_config.models.bridge import BridgeConfig
 from harbor_config.models.environment_type import EnvironmentType
 from harbor_config.models.task.config import ArtifactConfig, MCPServerConfig, TpuSpec
 from harbor_config.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
+from harbor_config.models.trial.pi import PiAgentConfig
 
 DEFAULT_TRIAL_CLEANUP_GRACE_SEC = 30.0
 
@@ -108,6 +109,7 @@ class AgentConfig(BaseModel):
         ),
     )
     kwargs: dict[str, Any] = Field(default_factory=dict)
+    pi: PiAgentConfig | None = None
     env: dict[str, str] = Field(default_factory=dict)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     # When True (default; preserves current behavior) the host-side agent logs are
@@ -171,6 +173,18 @@ class AgentConfig(BaseModel):
     def set_default_name(self):
         if self.name is None and self.import_path is None:
             self.name = AgentName.ORACLE.value
+        if self.pi is not None and (
+            self.name != AgentName.PI.value or self.import_path is not None
+        ):
+            raise ValueError("Pi capability config requires the named Pi agent")
+        if "dagger_plan" in self.kwargs:
+            raise ValueError("Pi DAgger must use the typed AgentConfig.pi capability")
+        if "critique_plan" in self.kwargs or "critique" in self.kwargs:
+            raise ValueError("Pi critique must use the typed AgentConfig.pi capability")
+        if self.pi is not None and "collect_rollout_details" in self.kwargs:
+            raise ValueError(
+                "Pi capture is selected by AgentConfig.pi, not an agent kwarg"
+            )
         return self
 
 
@@ -453,9 +467,8 @@ class TrialConfig(BaseModel):
         if not isinstance(other, TrialConfig):
             return NotImplemented
 
-        return self.model_dump(exclude=self.EQUALITY_EXCLUDED_FIELDS) == (
-            other.model_dump(exclude=self.EQUALITY_EXCLUDED_FIELDS)
-        )
+        excluded = set(self.EQUALITY_EXCLUDED_FIELDS)
+        return self.model_dump(exclude=excluded) == other.model_dump(exclude=excluded)
 
     # Agent-config keys that describe HOW a trial is SERVED at runtime (which
     # served-model alias / endpoint / sampling-transport knobs the agent dials)
