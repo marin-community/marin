@@ -218,7 +218,6 @@ async def _render_chat_prompt(
 
 
 def _reasoning_marker_tokens(tokenizer: PreTrainedTokenizerBase) -> dict[int, str]:
-    """Map each reasoning marker that is one token to its text."""
     markers = {}
     for pair in REASONING_DELIMITERS:
         for marker in pair:

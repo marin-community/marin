@@ -383,7 +383,6 @@ def _trajectory_groups(output: TrajectoryBatch, batch_size: int) -> list[list[in
 def _reasoning_span_evidence(
     output: TrajectoryBatch, batch_size: int
 ) -> tuple[list[int], list[list[int]], list[float]]:
-    """Per-row violation counts, violation token positions, and marker charges; empty when absent."""
     violations = output.get("reasoning_span_violations") or [0] * batch_size
     violation_tokens = output.get("reasoning_span_violation_tokens") or [[] for _ in range(batch_size)]
     token_penalties = output.get("reasoning_span_token_penalties") or [0.0] * batch_size
@@ -414,7 +413,7 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
         or len(loop_advantages) != batch_size
     ):
         raise ValueError("shaped outputs must retain outcomes, loop spans, and loop advantages for every generated row")
-    # Marker penalties share the loop channel; report them as reasoning-span charges, not loop credit.
+    # Exclude marker penalties from loop credit metrics.
     loop_advantages = [list(row) for row in loop_advantages]
     for index, penalty in enumerate(token_penalties):
         for position in violation_tokens[index] if penalty else ():

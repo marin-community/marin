@@ -358,7 +358,6 @@ def concatenate_trajectory_batches(
                 for response_ids in output["response_ids"]:
                     token_level_shaping_concat.append([0.0] * len(response_ids))
 
-    # Loop credit, including reasoning-span marker penalties; batches that did not shape rewards add zeros.
     loop_advantages_concat = None
     if any(output.get("loop_advantages") is not None for output in trajectory_batches):
         loop_advantages_concat = [
@@ -367,7 +366,6 @@ def concatenate_trajectory_batches(
             for row in (output.get("loop_advantages") or [[0.0] * len(ids) for ids in output["response_ids"]])
         ]
 
-    # Reasoning-span evidence and marker charges; batches that lack them add zeros.
     has_reasoning_spans = any(output.get("reasoning_span_violations") is not None for output in trajectory_batches)
 
     has_span_tags = [
