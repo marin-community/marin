@@ -13,17 +13,14 @@ import pytest
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _machine_spec, _prepare_machine
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
-from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
     Command,
     ExecutionRequirements,
     MachineSpec,
     NetworkPolicy,
-    UnsupportedMachineSpec,
 )
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
@@ -34,7 +31,6 @@ from taskcompendium.models import (
     Grader,
     PlainText,
     ResourceGroups,
-    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
@@ -44,12 +40,8 @@ from verifyit.spec import JudgeSpec, NumericSpec
 from taskforge.sandbox import factories
 from taskforge.sandbox.factories import (
     MachineHost,
-    MachineRole,
-    RefusalReason,
-    container_backend,
     grading_environment,
     machine_factories,
-    task_refusals,
     warm_local_python,
 )
 from taskforge.spec import draft
@@ -82,11 +74,6 @@ def selection(backend: Backend, **update) -> MachineRuntimeSpec:
     return MachineRuntimeSpec(**(fields | update))
 
 
-LOCKED = EnvironmentRequirements(
-    command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="gs://bucket/env/uv.lock"
-)
-
-
 @dataclass(frozen=True)
 class FakeFactory:
     """A factory for a backend whose shellbox module installs only on Linux; it accepts every machine."""
@@ -103,15 +90,6 @@ class FakeFactory:
 GVISOR = IrisMachineFactory(controller_url="http://127.0.0.1:9")
 SHELLSIM = ShellSimMachineFactory()
 IRIS = {Backend.SHELLSIM.value: SHELLSIM, Backend.GVISOR.value: GVISOR, Backend.LOCAL.value: FakeFactory(Backend.LOCAL)}
-LAPTOP = {Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: DockerMachineFactory()}
-
-
-def script_grader(
-    environment: EnvironmentRequirements = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE
-    )
-) -> ScriptGrader:
-    return ScriptGrader(argv=("sh", "/tests/grade.sh"), environment=environment)
 
 
 def lowered(
@@ -148,67 +126,6 @@ def lowered(
         verifier_machine=verifier_machine,
         limits=LIMITS,
     )
-
-
-def reasons(spec: TaskRolloutSpec, machines) -> set[tuple[RefusalReason, MachineRole]]:
-    return {(refusal.reason, refusal.where) for refusal in task_refusals(spec, machines)}
-
-
-def test_shellsim_and_machineless_tasks_run_everywhere():
-    for machines in (IRIS, LAPTOP):
-        assert reasons(lowered(None), machines) == set()
-        assert reasons(lowered(selection(Backend.SHELLSIM)), machines) == set()
-
-
-def test_shellsim_accepts_a_storage_limit_and_refuses_a_cpu_limit():
-    assert reasons(lowered(selection(Backend.SHELLSIM, storage_mb=64)), LAPTOP) == set()
-    [refusal] = task_refusals(lowered(selection(Backend.SHELLSIM, cpus=2)), LAPTOP)
-    assert (refusal.reason, refusal.where) == (RefusalReason.UNSUPPORTED, MachineRole.TASK)
-    assert "CPU" in refusal.detail
-
-
-def test_image_tasks_run_on_each_hosts_container_backend():
-    for host, machines in ((MachineHost.IRIS, IRIS), (MachineHost.LAPTOP, LAPTOP)):
-        spec = lowered(selection(container_backend(host), network=NetworkPolicy.ALLOW), image=IMAGE)
-        assert reasons(spec, machines) == set()
-    # A draft lowered on the laptop names a backend Iris has no factory for.
-    [refusal] = task_refusals(lowered(selection(Backend.DOCKER), image=IMAGE), IRIS)
-    assert (refusal.reason, refusal.where) == (RefusalReason.NO_FACTORY, MachineRole.TASK)
-    assert refusal.detail.startswith("docker:")
-
-
-def test_a_network_task_on_a_deny_policy_is_refused_with_the_factorys_message():
-    spec = lowered(selection(Backend.GVISOR), image=IMAGE, capabilities=(*SHELL, "network"))
-    with pytest.raises(UnsupportedMachineSpec) as rejected:
-        GVISOR.check_environment(spec.task.environment_requirements, MachineSpec(source=RegistryImage(IMAGE)))
-
-    assert [(r.reason, r.where, r.detail) for r in task_refusals(spec, IRIS)] == [
-        (RefusalReason.UNSUPPORTED, MachineRole.TASK, f"gvisor: {rejected.value}")
-    ]
-    allowed = lowered(
-        selection(Backend.GVISOR, network=NetworkPolicy.ALLOW),
-        image=IMAGE,
-        capabilities=spec.task.environment_requirements.capabilities,
-    )
-    assert reasons(allowed, IRIS) == set()
-
-
-def test_image_must_match_whether_the_backend_takes_one():
-    assert reasons(lowered(selection(Backend.SHELLSIM), image=IMAGE), IRIS) == {
-        (RefusalReason.UNSUPPORTED, MachineRole.TASK)
-    }
-    assert reasons(lowered(selection(Backend.GVISOR)), IRIS) == {(RefusalReason.UNSUPPORTED, MachineRole.TASK)}
-
-
-def test_verifier_machine_is_checked_against_its_own_backend():
-    spec = lowered(
-        selection(Backend.SHELLSIM),
-        grader=script_grader(),
-        verifier_machine=selection(Backend.GVISOR, gpus=1),
-    )
-    [refusal] = task_refusals(spec, IRIS)
-    assert (refusal.reason, refusal.where) == (RefusalReason.UNSUPPORTED, MachineRole.VERIFIER)
-    assert "GPU" in refusal.detail
 
 
 def test_a_judge_takes_no_verifier_machine_whatever_environment_its_grader_names():

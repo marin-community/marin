@@ -152,8 +152,8 @@ spec, so a move of either is a single-site change.
   and a `shortcut` control, so its coverage never rests on extraction controls, which pin today's
   answer parser. `validate_controls(task, controls)` checks a set against its task.
 - `sandbox.factories.machine_factories(backends, controller_url)` returns exactly the requested
-  factories, keyed by shellbox `Backend` value, and raises if one is unavailable. Before a trial
-  starts, `task_refusals(spec, factories)` asks each factory to check its machine requirements.
+  factories, keyed by shellbox `Backend` value, and raises if one is unavailable. `spec.draft.lower`
+  checks a spec's machines against them through `RolloutEngine.check` before any machine starts.
   `warm_local_python(factories)` can warm the local backend's CPython cache in a background thread.
 
 Task-specific grading is the task's own code, private in `resources.verifier`, run by a
