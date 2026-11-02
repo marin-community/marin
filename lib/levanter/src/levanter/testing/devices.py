@@ -15,7 +15,6 @@ from jax.extend.backend import clear_backends
 def use_cpu_devices(device_count: int) -> Iterator[None]:
     """Run with exactly this many CPU devices, then restore JAX's configuration.
 
-    Resets backend clients and compilation caches, as in JAX's backend tests.
     Arrays and meshes must be created inside the context and stay within it.
     Backend configuration is process-wide, so this cannot run in parallel threads.
     """
