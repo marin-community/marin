@@ -21,7 +21,6 @@ from iris.rpc import job_pb2
 from rigging.secrets import SECRETS_DIR_ENV
 
 from taskforge.sandbox.image_builder import (
-    BLANKED_ENV,
     BUILD_SCRIPT,
     BUILD_SETUP_FAILED_EXIT,
     REGISTRY_CREDENTIAL_ENV,
@@ -32,7 +31,7 @@ from taskforge.sandbox.image_builder import (
     submit_job,
     wait_succeeded,
 )
-from taskforge.sandbox.image_push import ARCHIVE_URI_ENV, REGISTRY_AUTH_ENV, archive_request
+from taskforge.sandbox.image_push import ARCHIVE_URI_ENV, REGISTRY_AUTH_SECRET, archive_request
 
 PASSWORD = "registry-password"
 CREDENTIAL_JSON = json.dumps({"registry": "registry.example", "user": "publisher", "password": PASSWORD})
@@ -72,16 +71,20 @@ def in_a_coordinator_task(request) -> Iterator[dict[str, str]]:
     set_job_info(None)
 
 
-def submitted_env(cluster: RecordingCluster, name: str, env: dict[str, str]) -> dict[str, str]:
+def submit(
+    cluster: RecordingCluster, name: str, env: dict[str, str], secrets: dict[str, str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Submit an image job through ``cluster`` and return the environment and secrets it recorded."""
     submit_job(
         IrisClient(cast(ClusterClient, cluster)),
         name=name,
         entrypoint=Entrypoint(command=["bash", "-c", "true"]),
         image="docker.io/library/bash:5",
         env=env,
+        secrets=secrets,
         target_cluster="cw-us-east-02a",
     )
-    return cluster.env_vars[name]
+    return cluster.env_vars[name], cluster.secrets[name]
 
 
 def test_the_credential_parses_from_its_secret_json_and_hides_its_password():
@@ -119,20 +122,16 @@ def test_image_jobs_only_receive_explicit_secrets_and_storage_credentials(in_a_c
     (tmp_path / "CW_KEY_SECRET").write_text("storage-secret")
     monkeypatch.setenv(SECRETS_DIR_ENV, str(tmp_path))
     cluster = RecordingCluster()
-    build = submitted_env(cluster, "taskforge-image-build-x", {"DESTINATION": "registry.example/r:t"})
-    push = submitted_env(cluster, "taskforge-image-push-x", {REGISTRY_AUTH_ENV: "push-auth"})
+    build_env, build_secrets = submit(cluster, "taskforge-image-build-x", {"DESTINATION": "registry.example/r:t"}, {})
+    push_env, push_secrets = submit(cluster, "taskforge-image-push-x", {}, {REGISTRY_AUTH_SECRET: "push-auth"})
 
-    for env in (build, push):
-        assert {name: env[name] for name in [*in_a_coordinator_task, *BLANKED_ENV]} == dict.fromkeys(
-            [*in_a_coordinator_task, *BLANKED_ENV], ""
-        )
-        assert not any(PASSWORD in value or GLM_TOKEN in value for value in env.values())
-        assert env["CW_KEY_ID"] == "storage-id"
-        assert env["CW_KEY_SECRET"] == "storage-secret"
-    assert all(not secrets for secrets in cluster.secrets.values())
-    assert build["DESTINATION"] == "registry.example/r:t"
-    assert REGISTRY_AUTH_ENV not in build
-    assert push[REGISTRY_AUTH_ENV] == "push-auth"
+    storage = {"CW_KEY_ID": "storage-id", "CW_KEY_SECRET": "storage-secret"}
+    for env in (build_env, push_env):
+        assert {name: env[name] for name in in_a_coordinator_task} == dict.fromkeys(in_a_coordinator_task, "")
+        assert not any(PASSWORD in value or GLM_TOKEN in value or "storage-" in value for value in env.values())
+    assert build_env["DESTINATION"] == "registry.example/r:t"
+    assert build_secrets == storage
+    assert push_secrets == {**storage, REGISTRY_AUTH_SECRET: "push-auth"}
 
 
 @dataclass(frozen=True)
@@ -213,10 +212,11 @@ def test_registry_readback_failure_is_a_host_failure(monkeypatch, failure):
         manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag")
 
 
-def test_archive_request_uses_the_submitters_coreweave_credentials(monkeypatch):
+def test_archive_request_uses_the_coreweave_credentials_of_the_jobs_secret_files(monkeypatch, tmp_path):
+    (tmp_path / "CW_KEY_ID").write_text("storage-id")
+    (tmp_path / "CW_KEY_SECRET").write_text("storage-secret")
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(tmp_path))
     monkeypatch.setenv(ARCHIVE_URI_ENV, "s3://task-bucket/build/output.tar.zst")
-    monkeypatch.setenv("CW_KEY_ID", "storage-id")
-    monkeypatch.setenv("CW_KEY_SECRET", "storage-secret")
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL", "AWS_REGION"):
         monkeypatch.delenv(name, raising=False)
 

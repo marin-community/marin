@@ -19,8 +19,8 @@ never shares a container with the model-authored Dockerfile.
    that Iris's own uploader sidecar writes to the cluster's temporary bucket, recording the sha256.
 2. The push job runs ``image_push`` in a fresh, pinned Python image. It downloads that
    archive, checks the sha256 Iris recorded, re-fetches and checks ``crane``, and pushes
-   ``image.tar`` under a tag unique to this publish. The credential travels in the job's
-   environment as ``REGISTRY_AUTH``, which Iris redacts from job descriptions and does not log.
+   ``image.tar`` under a tag unique to this publish. The credential is the job's Iris secret
+   ``REGISTRY_AUTH``, delivered as a file, never in its environment or pod spec.
    No code from the build runs in this job; ``crane`` parsing the untrusted tarball is the
    remaining surface.
 3. The submitter reads the manifest back by that tag, takes its digest from the bytes, checks the
@@ -37,22 +37,22 @@ The builder takes the credential at construction and reads no secret store itsel
 a host without ``gcloud`` or Google credentials, such as a coordinator in an Iris task. The
 credential is the Secret Manager secret ``SECRET_NAME``, a JSON object with ``registry``, ``user``
 and ``password``. ``registry_credential_json`` reads it with ``gcloud`` and is for laptops only:
-``scripts/build_image_job.py`` parses its result in process, and whoever launches a coordinator
-job reads it at submit time and passes the JSON text in the job's environment, conventionally as
-``REGISTRY_CREDENTIAL_ENV``, from which ``build_process`` constructs the builder. That name holds
-the word "credential", so Iris redacts its value from job descriptions.
+``scripts/build_image_job.py`` parses its result in process. A coordinator job receives it as the
+Iris secret ``REGISTRY_CREDENTIAL_ENV``, a file under ``rigging.secrets.SECRETS_DIR``
+(``iris job run --secret TASKFORGE_REGISTRY_CREDENTIAL REGISTRY_CREDENTIAL_SOURCE``, which the
+submitting client resolves), and reads it with ``rigging.secrets.require_secret``.
 
-Iris copies a parent task's explicit environment into every job the task submits, so a builder in
-a coordinator task would hand that variable, with the coordinator's other secrets, to the build
-job. ``submit_job`` therefore blanks inherited variables and disables mounted-secret inheritance.
-It explicitly passes only CoreWeave storage credentials to both jobs, and the push job alone
-receives the registry credential, as ``REGISTRY_AUTH``.
+Iris copies a parent task's explicit environment into every job the task submits, and by default
+its mounted secrets too. ``submit_job`` therefore blanks inherited variables and isolates the
+secret map: both jobs receive only the CoreWeave storage credentials as Iris secrets, and the push
+job alone also receives the registry credential, as the secret ``REGISTRY_AUTH``.
 
 The registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
-there is no short-lived scoped token to hand the push job instead. Exposure that remains: the
-coordinator's and the push job's pod specs carry the credential (cluster operators can read them),
-and both image jobs carry the submitter's CoreWeave storage credentials for output archives.
-The build's RUN steps can read those storage credentials.
+there is no short-lived scoped token to hand the push job instead. Exposure that remains: secret
+values persist in the controller database, and both image jobs carry the submitter's CoreWeave
+storage credentials, which Iris requires on every CoreWeave job and the output uploader uses. The
+build's RUN steps can read those storage credentials from the mounted secret files; a key scoped
+to the output-archive prefix would narrow that, and none exists yet.
 """
 
 import asyncio
@@ -119,11 +119,11 @@ MANIFEST_TYPES = (
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
 )
-# Iris copies the submitter's HF_TOKEN and WANDB_API_KEY into every job unless overridden.
-BLANKED_ENV = ("HF_TOKEN", "WANDB_API_KEY")
 REGISTRY_CREDENTIAL_ENV = "TASKFORGE_REGISTRY_CREDENTIAL"
-"""The variable a coordinator job carries the credential JSON in; "credential" makes Iris redact it."""
+"""The Iris secret name a coordinator job receives the credential JSON under."""
 CREDENTIAL_FIELDS = ("registry", "user", "password")
+REGISTRY_CREDENTIAL_SOURCE = f"gcp-secret://projects/{SECRET_PROJECT}/secrets/{SECRET_NAME}/versions/{SECRET_VERSION}"
+"""The credential's ``rigging.secrets`` source reference, for ``iris job run --secret``."""
 
 # Runs under bash in BUILD_IMAGE. kaniko replaces the container's root filesystem while it builds,
 # so it is exec'd last; its exit code is the job's. The EXIT trap marks failures before exec.
@@ -163,9 +163,9 @@ class RegistryCredential:
             raise ValueError(f"the registry credential is not a JSON object of strings {', '.join(CREDENTIAL_FIELDS)}")
         return cls(registry=value["registry"], user=value["user"], password=value["password"])
 
-    def docker_config(self) -> bytes:
+    def docker_config(self) -> str:
         auth = base64.b64encode(f"{self.user}:{self.password}".encode()).decode()
-        return json.dumps({"auths": {self.registry: {"auth": auth}}}).encode()
+        return json.dumps({"auths": {self.registry: {"auth": auth}}})
 
 
 def registry_credential_json() -> str:
@@ -245,12 +245,20 @@ def output_archive(job: Job) -> TaskOutputArchive:
 
 
 def submit_job(
-    client: IrisClient, *, name: str, entrypoint: Entrypoint, image: str, env: dict[str, str], target_cluster: str
+    client: IrisClient,
+    *,
+    name: str,
+    entrypoint: Entrypoint,
+    image: str,
+    env: dict[str, str],
+    secrets: dict[str, str],
+    target_cluster: str,
 ) -> Job:
     """Submit an image job with explicit values and the storage credentials it needs.
 
-    Inherited environment values are blanked and mounted-secret inheritance is disabled.
-    Only the submitter's CoreWeave storage credentials and explicit ``env`` values are passed.
+    Inherited environment values are blanked and mounted-secret inheritance is disabled. The job
+    receives explicit ``env`` values, and as Iris secrets (files) only ``secrets`` and the
+    submitter's CoreWeave storage credentials.
     """
     job_info = get_job_info()
     inherited = {} if job_info is None else dict.fromkeys(job_info.env, "")
@@ -260,7 +268,8 @@ def submit_job(
         name=name,
         environment=EnvironmentSpec(
             setup_scripts=[],
-            env_vars={**inherited, **dict.fromkeys(BLANKED_ENV, ""), **storage, **env},
+            env_vars={**inherited, **env},
+            secrets={**storage, **secrets},
             secret_behavior=SecretBehavior.ISOLATE,
         ),
         resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
@@ -335,6 +344,7 @@ class IrisImageBuilder:
                         "BUILD_SETUP_FAILED_EXIT": str(BUILD_SETUP_FAILED_EXIT),
                         "DESTINATION": destination,
                     },
+                    secrets={},
                     target_cluster=self.target_cluster,
                 )
                 jobs.append(build_job)
@@ -357,8 +367,8 @@ class IrisImageBuilder:
                         image_push.ARCHIVE_URI_ENV: archive.uri,
                         image_push.ARCHIVE_SHA256_ENV: archive.sha256,
                         image_push.DESTINATION_ENV: destination,
-                        image_push.REGISTRY_AUTH_ENV: base64.b64encode(credential.docker_config()).decode(),
                     },
+                    secrets={image_push.REGISTRY_AUTH_SECRET: credential.docker_config()},
                     target_cluster=self.target_cluster,
                 )
                 jobs.append(push_job)
