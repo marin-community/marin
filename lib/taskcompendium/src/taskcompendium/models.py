@@ -58,6 +58,16 @@ class AnswerType(StrEnum):
     NATIVE_ACTION = "native_action"
 
 
+class ReasoningMarkupPolicy(StrEnum):
+    """How a malformed reasoning span in a model reply affects the task's grade.
+
+    GRADE scores the attempt as usual. REJECT grades it as a reward-0 submission failure.
+    """
+
+    GRADE = "grade"
+    REJECT = "reject"
+
+
 class Source(BaseModel):
     """Pinned provenance for the source row and the importer that converted it."""
 
@@ -877,6 +887,7 @@ class TaskSpec(BaseModel):
     answer_type: AnswerType
     answer_format: AnswerFormat
     grader: Grader
+    reasoning_markup: ReasoningMarkupPolicy = ReasoningMarkupPolicy.GRADE
     source: Source
     schema_version: str = SCHEMA_VERSION
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
