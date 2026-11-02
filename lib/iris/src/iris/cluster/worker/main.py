@@ -13,9 +13,11 @@ from rigging.log_setup import configure_logging
 
 from iris.cluster.config import SshConfig
 from iris.cluster.config import WorkerConfig as WorkerWireConfig
+from iris.cluster.egress import BASE_EGRESS_ALLOWLIST, parse_egress_rules, rule_domains
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.provenance import provenance_from_env
 from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.worker.egress_dns import EGRESS_DNS_DIRNAME, EgressDnsFilters, read_host_resolver
 from iris.cluster.worker.env_probe import detect_gcp_zone
 from iris.cluster.worker.worker import Worker, worker_config_from_wire
 
@@ -70,9 +72,16 @@ def serve(worker_config: str):
 
     config = worker_config_from_wire(wire, resolve_image=resolve_image)
 
+    assert config.cache_dir is not None  # the wire config always names one
     container_runtime = DockerRuntime(cache_dir=config.cache_dir, capacity_type=config.capacity_type)
+    egress_dns = EgressDnsFilters(
+        # Docker mounts each task's resolv.conf from here, so it must be a host path, as cache_dir is.
+        state_root=config.cache_dir / EGRESS_DNS_DIRNAME,
+        domains=[*BASE_EGRESS_ALLOWLIST, *rule_domains(parse_egress_rules(config.egress_allow))],
+        host_resolver=read_host_resolver(),
+    )
 
-    worker = Worker(config, container_runtime=container_runtime)
+    worker = Worker(config, container_runtime=container_runtime, egress_dns=egress_dns)
 
     click.echo(f"Starting Iris worker on {config.host}:{config.port}")
     click.echo(f"  Cache dir: {config.cache_dir}")

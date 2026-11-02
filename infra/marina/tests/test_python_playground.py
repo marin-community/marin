@@ -21,8 +21,8 @@ from marina.db import UrlDatabase, engine_for
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from infra.marina.applets.python_playground.cli import APPLET_ID, cli, directory_archive
-from infra.marina.applets.python_playground.server import app as playground
+from infra.marina.apps.python_playground.cli import APPLET_ID, cli, directory_archive
+from infra.marina.apps.python_playground.server import app as playground
 
 
 @dataclass

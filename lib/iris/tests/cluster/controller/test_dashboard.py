@@ -249,7 +249,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
             job = reads.get_job_detail(tx, job_id)
         if job is None:
             return None
-        if job.state != job_pb2.JOB_STATE_PENDING:
+        if job.state not in (job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING):
             return None
         dc = device_counts_from_json(job.res_device_json)
         req = JobRequirements(
@@ -945,6 +945,56 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
     )
     pending_reason = job_resp.get("job", {}).get("pendingReason", "")
     assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" in pending_reason
+
+
+def test_running_job_reports_placement_reason_for_pending_workers(
+    client_with_autoscaler, service_with_autoscaler, state, mock_autoscaler
+):
+    worker_id = register_worker(state, "busy", "h1:8080", make_worker_metadata(memory_bytes=32 * 1024**3))
+    register_worker(state, "fallback", "h2:8080", make_worker_metadata(memory_bytes=16 * 1024**3))
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name="store-workers",
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=32 * 1024**3),
+        replicas=2,
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    job_id = submit_job(state, "store-workers", request)
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=job_id.task(0), worker_id=worker_id)], health=state._health)
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[TaskUpdate(task_id=job_id.task(0), attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+                )
+            ],
+            health=state._health,
+            now=Timestamp.now(),
+        )
+
+    detail = rpc_post(client_with_autoscaler, "GetJobStatus", {"jobId": job_id.to_wire()})["job"]
+    listed = rpc_post(client_with_autoscaler, "ListJobs")["jobs"][0]
+
+    assert detail["state"] == "JOB_STATE_RUNNING"
+    assert detail["taskStateCounts"]["pending"] == 1
+    assert "Insufficient memory" in detail["pendingReason"]
+    assert "Insufficient memory" in listed["pendingReason"]
+
+    mock_autoscaler.get_pending_hints.return_value = {
+        job_id.to_wire(): PendingHint(message="Waiting for more worker capacity", is_scaling_up=True)
+    }
+    _publish_backend_observation(service_with_autoscaler._controller, state)
+    detail = rpc_post(client_with_autoscaler, "GetJobStatus", {"jobId": job_id.to_wire()})["job"]
+    listed = rpc_post(client_with_autoscaler, "ListJobs")["jobs"][0]
+    assert "Waiting for more worker capacity" in detail["pendingReason"]
+    assert "Waiting for more worker capacity" in listed["pendingReason"]
+
+    set_task_state(state, job_id.task(1), job_pb2.TASK_STATE_RUNNING)
+    no_pending = rpc_post(client_with_autoscaler, "GetJobStatus", {"jobId": job_id.to_wire()})["job"]
+    assert no_pending.get("pendingReason", "") == ""
 
 
 def test_list_jobs_shows_passive_autoscaler_wait_hint(

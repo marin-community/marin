@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import httpx
 import pytest
 from harbor.agents.terminus_2.terminus_2 import Terminus2
 
@@ -37,7 +38,7 @@ async def test_acount_total_tokens_probes_run_concurrently_not_serialized() -> N
             release.set()
         await release.wait()
         in_flight -= 1
-        return SimpleNamespace(status_code=200, json=lambda: {"count": 7})
+        return httpx.Response(200, json={"count": 7}, request=httpx.Request("POST", url))
 
     fake_async_client = SimpleNamespace(post=_barrier_post)
 

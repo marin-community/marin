@@ -165,9 +165,10 @@ explicitly requested treatments launched in the same scheduling window. If the
 decision depends on elapsed time, interleave additional control trials among
 the treatments to measure scheduling noise.
 
-If the request includes continuous monitoring, use `babysit-zephyr`. A failed
-or preempted arm measures infrastructure reliability and carries no performance
-result. Use `debug` only for a stated repeated fault.
+If the request includes continuous monitoring, use `use-iris` with its Zephyr
+monitoring reference. A failed or preempted arm measures infrastructure
+reliability and carries no performance result. Use `use-iris` troubleshooting
+for a stated repeated fault.
 
 ## Collect execution IDs
 
@@ -310,8 +311,7 @@ Benchmark outputs expire under their seven-day temporary prefix.
 
 ## Related guidance
 
-- `babysit-zephyr` monitors every control and treatment job through terminal
-  state.
-- `debug` investigates repeated failures or unexplained infrastructure churn.
+- `use-iris` supplies Zephyr monitoring through terminal state and
+  troubleshooting for repeated failures or unexplained infrastructure churn.
 - `lib/zephyr/OPS.md` documents coordinator queries and straggler diagnosis.
 - `lib/iris/OPS.md` documents job summaries, task attempts, and Finelog access.

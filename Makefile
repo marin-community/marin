@@ -108,7 +108,7 @@ install_node:
 		brew install node; \
 	elif command -v apt-get > /dev/null 2>&1; then \
 		echo "Installing Node.js via apt..."; \
-		curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && \
+		curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && \
 		sudo apt-get install -y nodejs; \
 	else \
 		echo "Cannot auto-install Node.js. Please install manually: https://nodejs.org/"; \
