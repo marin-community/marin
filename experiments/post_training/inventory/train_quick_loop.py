@@ -45,14 +45,18 @@ EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 
 
+# Arm D of the fixed-runtime comparison: consume groups up to two updates old.
+MAX_STALENESS_STEPS = 2
+
+
 def training_recipe(steps: int) -> dict:
-    """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
+    """Use the maintained Snowball geometry with bounded-async RLOO-N updates."""
     preset = replace(
         DEFAULT,
         label="snowball-100k",
         max_steps=steps,
         eval_interval=steps,
-        max_staleness_steps=0,
+        max_staleness_steps=MAX_STALENESS_STEPS,
         request_window_tokens=REQUEST_WINDOW_TOKENS,
         max_new_tokens=MAX_NEW_TOKENS,
         batch_policy="full_batch",
