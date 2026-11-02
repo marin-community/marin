@@ -38,10 +38,6 @@ REQUIRED_HEADINGS = (
 
 RESEARCH_CITATION = re.compile(r"research\[(\d+)\]")
 
-DOCUMENT_REPAIR_PROMPT = """Your previous reply, shown above, is not a valid proposal document:
-{error}
-Write the corrected document in full, keeping all valid content and changing only what the error requires."""
-
 
 class SourceKind(StrEnum):
     CAPABILITY = "capability"
@@ -69,15 +65,6 @@ class SolverMachine(StrEnum):
     SHELLSIM = "shellsim"
     CPYTHON = "cpython"
     PACKAGES = "packages"
-
-
-SOLVER_MACHINE_RULE = f"""solver_machine is `null` for a container task, which runs in its own image, and \
-otherwise the solver's machine: `{SolverMachine.NONE}` (reasoning tasks only) when the solver needs no tools \
-and no files, only the instructions and a reply; `{SolverMachine.SHELLSIM}` when reading, shell tools or a \
-short Python script are enough; `{SolverMachine.CPYTHON}` when solving needs more computation than ShellSim's \
-few seconds of Python, or a real clock; `{SolverMachine.PACKAGES}` when solving also needs PyPI packages \
-(numpy, pandas, ...) and no system packages. The build keeps the machine the proposal declares."""
-"""The rule for the ``solver_machine`` header value, for prompts that write or revise a proposal."""
 
 
 class Verification(StrEnum):

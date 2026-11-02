@@ -25,6 +25,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.llm.client import Completion
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient
 from taskforge.llm.policy import LLMPolicy
@@ -66,7 +67,9 @@ def test_every_proposed_slot_parses_on_its_first_request(
 
     async def go():
         async with GlmClient(live_endpoint, GLM_PROVIDER) as client:
-            return await propose_tasks(client, {capability_id: idea}, SLOTS, frozenset(Environment), policy)
+            return await propose_tasks(
+                client, {capability_id: idea}, SLOTS, frozenset(Environment), policy, DEFAULT_POLICY.proposer
+            )
 
     started = time.monotonic()
     proposed = asyncio.run(go())

@@ -8,17 +8,18 @@ import pytest
 pytest.importorskip("taskforge")
 
 import asyncio
+import hashlib
 import json
 import re
 from pathlib import Path
 
 from pydantic import ValidationError
 from taskforge.capability import capability_idea_record
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.llm.client import FinishReason, ModelRequestRejected
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError, response_format
 from taskforge.stage10_proposal.model import (
-    DOCUMENT_REPAIR_PROMPT,
     Environment,
     ResearchNeed,
     SolverMachine,
@@ -32,16 +33,18 @@ from experiments.post_training.capability_driven_envs.catalog import (
     load_capability_ideas,
 )
 from experiments.post_training.capability_driven_envs.proposal_source import (
-    RESEARCH_DECISION_CRITERION,
     CapabilitySource,
     SlotStatus,
     author_proposal,
     checked_proposal,
     document_template,
     plan_prompt,
+    plan_request,
     proposal_prompt,
     slot_plan_type,
+    solver_machine_rule,
     source_ref,
+    system_prompt,
 )
 from experiments.post_training.capability_driven_envs.tests.scripted_model import ScriptedModel
 
@@ -62,6 +65,7 @@ EDGE = {"dependent_id": CAPABILITY_ID, "prerequisite_id": "d01.algebra.exact-lin
 CATALOG_VERSION = "v3"
 ALL_ENVIRONMENTS = frozenset(Environment)
 NO_CONTAINER = frozenset({Environment.REASONING, Environment.SHELLSIM})
+PROPOSER = DEFAULT_POLICY.proposer
 
 
 @pytest.fixture
@@ -168,11 +172,12 @@ def test_plan_and_proposal_prompts_share_the_research_criterion_and_the_catalog_
     idea = ideas[CAPABILITY_ID]
     portfolio = slot_plan_type(1, NO_CONTAINER).model_validate(plan([slot(1, "reasoning", "code")], []))
 
-    planning = plan_prompt(idea, 1, NO_CONTAINER)
-    authoring = proposal_prompt(idea, portfolio, portfolio.slots[0], f"{CAPABILITY_ID}/1")
+    planning = plan_prompt(PROPOSER, idea, 1, NO_CONTAINER)
+    authoring = proposal_prompt(PROPOSER, idea, portfolio, portfolio.slots[0], f"{CAPABILITY_ID}/1")
 
-    assert RESEARCH_DECISION_CRITERION in planning
-    assert " ".join(RESEARCH_DECISION_CRITERION.split()) in " ".join(authoring.split())
+    criterion = PROPOSER.research_criterion.render()
+    assert criterion in planning
+    assert " ".join(criterion.split()) in " ".join(authoring.split())
     for prompt in (planning, authoring):
         record = prompt.split("CAPABILITY RECORD:\n")[1].split("\n\nPORTFOLIO:")[0]
         assert json.loads(record) == capability_idea_record(idea)
@@ -213,7 +218,7 @@ def author(model: ScriptedModel, idea) -> SlotOutcome:
     two_slots = slot_plan_type(2, ALL_ENVIRONMENTS).model_validate(
         plan([slot(1, "shellsim", "code"), slot(2, "reasoning", "code")], [])
     )
-    return asyncio.run(author_proposal(model, LLMPolicy(), idea, two_slots, two_slots.slots[0]))
+    return asyncio.run(author_proposal(model, LLMPolicy(), PROPOSER, idea, two_slots, two_slots.slots[0]))
 
 
 def test_author_request_carries_the_document_schema_with_continuations_off(ideas):
@@ -259,7 +264,7 @@ def test_consistency_error_gets_one_schema_repair(ideas):
     assert repair.messages == [
         *outcome.request,
         {"role": "assistant", "content": uncited},
-        {"role": "user", "content": DOCUMENT_REPAIR_PROMPT.format(error=outcome.repair_error)},
+        {"role": "user", "content": PROPOSER.repair.render(error=outcome.repair_error)},
     ]
 
 
@@ -298,7 +303,9 @@ def test_a_plan_slot_the_host_cannot_run_is_repaired_before_any_document_is_writ
     model.reply(json.dumps(plan([slot(1, "shellsim", "code")], [])))
     model.reply(filled_document(idea, 1))
 
-    batch: ProposalBatch = asyncio.run(propose_all(CapabilitySource(model, LLMPolicy(), NO_CONTAINER), idea, 1))
+    batch: ProposalBatch = asyncio.run(
+        propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, NO_CONTAINER), idea, 1)
+    )
 
     repair_prompt = model.requests[1].messages[-2]["content"]
     assert isinstance(repair_prompt, str) and "slot 1 is proposed in container" in repair_prompt
@@ -313,7 +320,7 @@ def test_a_plan_still_invalid_after_its_repair_raises_before_any_document_is_wri
     model.reply(unrunnable)
 
     with pytest.raises(StructuredOutputError, match="slot 1 is proposed in container"):
-        asyncio.run(propose_all(CapabilitySource(model, LLMPolicy(), NO_CONTAINER), ideas[CAPABILITY_ID], 1))
+        asyncio.run(propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, NO_CONTAINER), ideas[CAPABILITY_ID], 1))
     assert len(model.requests) == 2
 
 
@@ -323,7 +330,9 @@ def test_propose_returns_one_outcome_per_slot_in_order_without_calling_the_model
     model.reply(json.dumps(plan([slot(1, "reasoning", "judge", "null"), slot(2, "shellsim", "code")], [])))
     model.reply(filled_document(idea, 2))
 
-    batch: ProposalBatch = asyncio.run(propose_all(CapabilitySource(model, LLMPolicy(), ALL_ENVIRONMENTS), idea, 2))
+    batch: ProposalBatch = asyncio.run(
+        propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, ALL_ENVIRONMENTS), idea, 2)
+    )
 
     assert len(model.requests) == 2
     assert model.requests[0].fields == {"response_format": response_format(slot_plan_type(2, ALL_ENVIRONMENTS))}
@@ -332,3 +341,35 @@ def test_propose_returns_one_outcome_per_slot_in_order_without_calling_the_model
     assert [p.header.null_reason for p in batch.proposals] == ["no grader", None]
     assert batch.slots[0].completions == () and len(batch.slots[1].completions) == 1
     assert len(batch.planning) == 1 and batch.failures == ()
+
+
+# Each sha256 was computed at e2ee276627 (the head of #10301) from the module constant or prompt function the
+# prompt file replaced, with the same inputs. A prompt edit changes what the proposer is sent: update the sha with
+# the edit and say why in the PR.
+BASE_PROPOSER_SHAS = {
+    "system": "32e8d0ae4b6a66f72ea307f195bf40b1aea0ba1165db4c668b3098db1bdee69a",
+    "solver_machine_rule": "7bce7f0f64fb7a5144fb7f035bf424662be504a88a0ab9dec474a8bea0bb3a4f",
+    "research_criterion": "61fb8832425aeee952a529a36955f336ba0183505f3336780980e8083aa2e555",
+    "repair": "9325cb99a650f0dc02cadd620581d02c40514db7e3aff894c7bc0b737a9c0b8a",
+    "plan": "6dfaa02a726f664fad7d7a78d82dbb6254ff31d66ee428bc700bda465a819569",
+    "write": "0a3efb682fe5863715299fb2c64b23f72d8ab193ea84414938f3408307dabed4",
+    "plan_request": "997ff176f2d7e151bb4f6904eafa4089c44f2a97e1f2b9be0c53903d5e930328",
+}
+
+
+def test_default_proposer_prompts_render_the_text_sent_before_prompts_were_files(ideas):
+    idea = ideas[CAPABILITY_ID]
+    portfolio = slot_plan_type(2, NO_CONTAINER).model_validate(
+        plan([slot(1, "reasoning", "code"), slot(2, "shellsim", "judge")], [])
+    )
+    rendered = {
+        "system": system_prompt(PROPOSER),
+        "solver_machine_rule": solver_machine_rule(PROPOSER),
+        "research_criterion": PROPOSER.research_criterion.render(),
+        "repair": PROPOSER.repair.render(error="E"),
+        "plan": plan_prompt(PROPOSER, idea, 2, NO_CONTAINER),
+        "write": proposal_prompt(PROPOSER, idea, portfolio, portfolio.slots[1], f"{CAPABILITY_ID}/2"),
+        "plan_request": json.dumps(list(plan_request(PROPOSER, idea, 2, NO_CONTAINER)), sort_keys=True),
+    }
+
+    assert {name: hashlib.sha256(text.encode()).hexdigest() for name, text in rendered.items()} == BASE_PROPOSER_SHAS
