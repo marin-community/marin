@@ -189,16 +189,23 @@ class DocumentPatch:
     shapes: Counter
     inserted_spans: int
     merged_pairs: int
+    extra_end_turns: int
+    """Turns with more ``<|end_think|>`` than ``<|start_think|>`` tokens: the stray-close form the models emit."""
+
+
+def has_extra_end(content: np.ndarray, spans: SpanTokens) -> bool:
+    return int(np.sum(content == spans.end_think)) > int(np.sum(content == spans.start_think))
 
 
 def patch_document(tokens: np.ndarray, loss_weight: np.ndarray, spans: SpanTokens, *, repair: bool) -> DocumentPatch:
     """Classify each assistant turn of one rendered conversation and, for ``/think`` with ``repair``, fix its spans."""
     shapes: Counter = Counter()
     turns = assistant_turns(tokens, spans)
+    extra_end = sum(has_extra_end(tokens[start:end], spans) for start, end in turns)
     if not repair or conversation_mode(tokens, spans) != Mode.THINK:
         for start, end in turns:
             shapes[turn_shape(tokens[start:end], spans)] += 1
-        return DocumentPatch(tokens, loss_weight, shapes, 0, 0)
+        return DocumentPatch(tokens, loss_weight, shapes, 0, 0, extra_end)
 
     pieces_tokens: list[np.ndarray] = []
     pieces_weight: list[np.ndarray] = []
@@ -229,7 +236,9 @@ def patch_document(tokens: np.ndarray, loss_weight: np.ndarray, spans: SpanToken
         cursor = end
     pieces_tokens.append(tokens[cursor:])
     pieces_weight.append(loss_weight[cursor:])
-    return DocumentPatch(np.concatenate(pieces_tokens), np.concatenate(pieces_weight), shapes, inserted, merged)
+    return DocumentPatch(
+        np.concatenate(pieces_tokens), np.concatenate(pieces_weight), shapes, inserted, merged, extra_end
+    )
 
 
 @dataclass(frozen=True)
@@ -240,6 +249,8 @@ class RowReport:
     """Assistant turns of ``/think`` documents by ``TurnShape``."""
     other_turns: Counter
     """Assistant turns of every other document by ``TurnShape``."""
+    extra_end_turns: Counter
+    """Turns with a stray ``<|end_think|>`` by ``Mode``; the patch leaves them unchanged."""
     inserted_spans: int
     merged_pairs: int
     length_delta: int
@@ -269,6 +280,7 @@ def patch_row(
     documents: Counter = Counter()
     think_turns: Counter = Counter()
     other_turns: Counter = Counter()
+    extra_end_turns: Counter = Counter()
     inserted = merged = 0
     out_tokens: list[np.ndarray] = []
     out_weight: list[np.ndarray] = []
@@ -284,6 +296,7 @@ def patch_row(
         documents[mode] += 1
         patch = patch_document(tokens[start:end], loss_weight[start:end], spans, repair=repair)
         (think_turns if mode == Mode.THINK else other_turns).update(patch.shapes)
+        extra_end_turns[mode] += patch.extra_end_turns
         inserted += patch.inserted_spans
         merged += patch.merged_pairs
         out_tokens.append(patch.tokens)
@@ -307,6 +320,7 @@ def patch_row(
         documents,
         think_turns,
         other_turns,
+        extra_end_turns,
         inserted,
         merged,
         delta,
@@ -330,6 +344,7 @@ class SpanSummary:
     documents: dict[str, int]
     think_turns: dict[str, int]
     other_turns: dict[str, int]
+    extra_end_turns: dict[str, int]
     inserted_spans: int
     merged_pairs: int
     rows_trimmed: int
@@ -345,6 +360,7 @@ class SpanSummary:
             documents=dict(sum((r.documents for r in reports), Counter())),
             think_turns=dict(sum((r.think_turns for r in reports), Counter())),
             other_turns=dict(sum((r.other_turns for r in reports), Counter())),
+            extra_end_turns=dict(sum((r.extra_end_turns for r in reports), Counter())),
             inserted_spans=sum(r.inserted_spans for r in reports),
             merged_pairs=sum(r.merged_pairs for r in reports),
             rows_trimmed=sum(r.length_delta > 0 for r in reports),
@@ -361,6 +377,7 @@ class SpanSummary:
             documents=dict(sum((Counter(s.documents) for s in summaries), Counter())),
             think_turns=dict(sum((Counter(s.think_turns) for s in summaries), Counter())),
             other_turns=dict(sum((Counter(s.other_turns) for s in summaries), Counter())),
+            extra_end_turns=dict(sum((Counter(s.extra_end_turns) for s in summaries), Counter())),
             inserted_spans=sum(s.inserted_spans for s in summaries),
             merged_pairs=sum(s.merged_pairs for s in summaries),
             rows_trimmed=sum(s.rows_trimmed for s in summaries),

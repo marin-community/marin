@@ -70,7 +70,10 @@ def conversation() -> list[Message]:
         tool_call("cat", '{"path": "a.py"}'),
         tool_reply("cat", "print(1)"),
         Message.from_role_and_content(Role.ASSISTANT, "Two files; one prints.").with_channel("analysis"),
-        Message.from_role_and_content(Role.ASSISTANT, "a.py prints 1 and b.py is empty.").with_channel("final"),
+        # A literal stray close after the prose, the form #10400 describes; it is counted and left in place.
+        Message.from_role_and_content(Role.ASSISTANT, "a.py prints 1 and b.py is empty.<|end_think|>").with_channel(
+            "final"
+        ),
         Message.from_role_and_content(Role.USER, "Thanks."),
         Message.from_role_and_content(Role.ASSISTANT, "You're welcome.").with_channel("final"),
     ]
@@ -102,7 +105,7 @@ def test_patched_tokens_match_retokenized_target_format(tokenizer, spans):
         TurnShape.ONE_SPAN: 1,
         TurnShape.ZERO_SPAN_TEXT: 1,
     }
-    assert (patch.inserted_spans, patch.merged_pairs) == (2, 1)
+    assert (patch.inserted_spans, patch.merged_pairs, patch.extra_end_turns) == (2, 1, 1)
     assert len(patch.loss_weight) == len(patch.tokens)
 
 
@@ -184,6 +187,7 @@ def test_rows_keep_their_length_through_padding_and_trimming(tokenizer, spans):
     patched, summary = patch_batch(batch, spans, repair=True)
     assert patched.tokens.shape == batch.tokens.shape
     assert summary.rows_trimmed == 1 and summary.rows_padded == 0
+    assert summary.extra_end_turns == {Mode.THINK: 1}
     assert summary.max_length_delta == growth
     assert summary.think_turns == {
         TurnShape.ADJACENT_SPANS: 1,
