@@ -51,6 +51,17 @@ Key files:
 
 Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`. Focus on the latest attempt.
 
+## Coordinator startup
+
+`ZephyrContext.coordinator_ready_timeout` limits the wait for the coordinator
+actor to register. The default is 15 minutes; the Datakit reference pipeline's
+shared pool allows 30 minutes for scheduling and dependency setup. On Iris,
+Fray checks the child job's state during this wait and reports terminal failures
+promptly.
+If the deadline expires while the child is still setting up, Zephyr cancels that
+child. Inspect the coordinator task logs before increasing the limit for another
+caller; a longer wait does not make dependency setup faster.
+
 ## Observability
 
 ### Iris CLI

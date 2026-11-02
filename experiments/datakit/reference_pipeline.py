@@ -1164,6 +1164,7 @@ def reference_datakit_steps(
 
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
+SHARED_POOL_COORDINATOR_READY_TIMEOUT = 30 * 60
 
 QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2_marin"
 """Pooled fast-transformer scorer directory, relative to ``MARIN_PREFIX``."""
@@ -1178,6 +1179,7 @@ def shared_zephyr_context(scale: PipelineScale, name: str = "datakit-reference")
         name=name,
         resources=scale.pool.worker,
         coordinator_resources=scale.pool.coordinator,
+        coordinator_ready_timeout=SHARED_POOL_COORDINATOR_READY_TIMEOUT,
         max_workers=scale.pool.n_workers,
         stage_runner_factory=SubprocessRunner,
     )

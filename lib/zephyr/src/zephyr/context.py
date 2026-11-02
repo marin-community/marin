@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 # ceiling. Additional shards are pulled by these long-lived replicas.
 MAX_IRIS_WORKER_REPLICAS = 1_000
 MAX_EXECUTION_NAME_LENGTH = 64
+DEFAULT_COORDINATOR_READY_TIMEOUT = 15 * 60
 
 
 class IntraShardExecution(enum.StrEnum):
@@ -231,6 +232,7 @@ class ZephyrContext:
             are reread.
         resources: CPU, memory, and device resources for each worker.
         coordinator_resources: Resources for the coordinator actor.
+        coordinator_ready_timeout: Maximum wait for the coordinator actor to register.
         chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
         name: Name prefix for actor groups.
         no_workers_timeout: Maximum wait for a live worker during one stage.
@@ -253,6 +255,7 @@ class ZephyrContext:
     coordinator_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=0.1, ram="4g", preemptible=False)
     )
+    coordinator_ready_timeout: float = DEFAULT_COORDINATOR_READY_TIMEOUT
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
@@ -392,7 +395,7 @@ class ZephyrContext:
             actor_config=ActorConfig(max_concurrency=100),
         )
         try:
-            coordinator = coordinator_group.wait_ready(count=1)[0]
+            coordinator = coordinator_group.wait_ready(count=1, timeout=self.coordinator_ready_timeout)[0]
         except Exception:
             with suppress(Exception):
                 coordinator_group.shutdown()

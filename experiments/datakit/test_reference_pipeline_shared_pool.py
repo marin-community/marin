@@ -7,10 +7,20 @@ import threading
 import time
 
 import pytest
+from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from marin.execution.step_spec import StepSpec
+from zephyr.coordinator import ZephyrCoordinator
+from zephyr.dataset import Dataset
 
 from experiments.datakit import reference_pipeline
-from experiments.datakit.reference_pipeline import DatakitSteps, run_reference_steps
+from experiments.datakit.reference_pipeline import (
+    DatakitSteps,
+    PipelineScale,
+    PoolConfig,
+    run_reference_steps,
+    shared_zephyr_context,
+)
 
 
 class _RecordingPool:
@@ -31,6 +41,36 @@ class _RecordingPool:
         if not self.stopped.is_set():
             self.events.append("pool-stop")
             self.stopped.set()
+
+
+def test_shared_pool_accepts_coordinator_registration_after_fray_default(tmp_path, monkeypatch):
+    client = LocalClient()
+    create_group = client.create_actor_group
+
+    def create_group_with_delayed_coordinator(actor_class, *args, **kwargs):
+        group = create_group(actor_class, *args, **kwargs)
+        if actor_class is ZephyrCoordinator:
+            wait_ready = group.wait_ready
+
+            def delayed_wait_ready(count=None, timeout=300.0):
+                if timeout < 901:
+                    raise TimeoutError("coordinator setup exceeded the actor readiness deadline")
+                return wait_ready(count=count, timeout=timeout)
+
+            monkeypatch.setattr(group, "wait_ready", delayed_wait_ready)
+        return group
+
+    monkeypatch.setattr(client, "create_actor_group", create_group_with_delayed_coordinator)
+    worker = ResourceConfig(cpu=1, ram="1g")
+    scale = PipelineScale(pool=PoolConfig(n_workers=1, worker=worker, task=worker))
+    context = shared_zephyr_context(scale)
+    context.client = client
+    context.chunk_storage_prefix = str(tmp_path)
+
+    with context:
+        result = context.execute(Dataset.from_list([1]).map(lambda value: value + 1))
+
+    assert result.results == [2]
 
 
 def test_shared_pool_is_held_only_between_normalize_and_its_last_stage(tmp_path, monkeypatch):
