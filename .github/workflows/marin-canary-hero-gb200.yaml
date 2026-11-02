@@ -5,13 +5,10 @@ name: "Marin - Canary - Hero GB200"
 # from a pinned permanent hero checkpoint so every run trains on the same
 # weights and batches. One dropless eval runs after the last update.
 #
-# The canary waits in the Iris queue at batch priority, the band of the
-# hero-completions sampler, so neither preempts the other. This workflow does
-# not wait for it. Each run first settles the previous canary:
-#   - still waiting for a rack: cancel it, so that day is skipped;
-#   - training: leave it and skip today's submission;
-#   - finished: score it against the run before it, or alert if it failed.
-# Results therefore arrive with the next day's run.
+# The canary queues at batch priority, the band of the hero-completions
+# sampler, so neither preempts the other. If no rack is free within five hours
+# the job is cancelled and the day is skipped: a warning, no Slack or Loom.
+# A healthy run then holds the rack for about 20 minutes.
 #
 # One rack does not exercise cross-rack collectives or checkpoint recovery.
 on:
@@ -23,20 +20,18 @@ permissions:
   contents: read
   id-token: write  # Google WIF and Loom federation OIDC
 
-concurrency:
-  group: canary-hero-gb200
-  cancel-in-progress: false
-
 jobs:
   hero-canary:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # GitHub's limit for a hosted runner: the queue wait, the run and diagnostics fit inside it.
+    timeout-minutes: 360
     outputs:
-      outcome: ${{ steps.settle.outputs.outcome }}
+      resource_exhausted: ${{ steps.wait.outputs.resource_exhausted }}
+    concurrency:
+      group: canary-hero-gb200
+      cancel-in-progress: false
     env:
       RUN_ID: hero-canary-${{ github.run_id }}-${{ github.run_attempt }}
-      # Jobs submitted by github-iris live under /runner/.
-      JOB_PREFIX: /runner/hero-canary-
       # Re-pin only when the hero's checkpoint layout or context length changes;
       # the report compares runs from the same checkpoint only.
       HERO_CANARY_CHECKPOINT: s3://marin-us-east-02a/marin/grug/hero-gradclip-step356k/2026.08.19.2/checkpoints/step-372000
@@ -47,8 +42,10 @@ jobs:
       HERO_SCHEDULE_STEPS: "390251"
       # Unique per concurrent gang; the hero itself uses 32614.
       IRIS_PORT_JAX: "32650"
-      # Backstop if a settle step is ever missed: queue wait plus run, from coordinator start.
-      CANARY_TIMEOUT: "90000"
+      # Five hours for the training job to start before the day is skipped.
+      QUEUE_WAIT_TIMEOUT: "18000"
+      # Backstop if this workflow dies: queue wait plus run, from coordinator start.
+      CANARY_TIMEOUT: "21600"
       TARGET_CLUSTER: cw-us-east-08a
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin_moe
@@ -75,31 +72,8 @@ jobs:
           workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
           service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
 
-      - name: Settle the previous canary
-        id: settle
-        run: |
-          .venv/bin/python scripts/ci/hero_canary_settle.py \
-            --iris-config "$IRIS_CONFIG" \
-            --job-prefix "$JOB_PREFIX" \
-            --github-output
-
-      - name: Report the previous canary
-        id: report
-        if: steps.settle.outputs.outcome == 'succeeded'
-        run: |
-          .venv/bin/python scripts/ci/hero_canary_report.py \
-            --run-id "${{ steps.settle.outputs.run_id }}" \
-            --entity "$WANDB_ENTITY" \
-            --project "$WANDB_PROJECT" \
-            --start-step "$HERO_CANARY_START_STEP" \
-            --steps "$HERO_CANARY_STEPS" \
-            --checkpoint "$HERO_CANARY_CHECKPOINT"
-        env:
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-
-      - name: Submit today's canary
+      - name: Submit hero canary
         id: submit
-        if: always() && steps.settle.outputs.submit == 'true'
         run: |
           set -euo pipefail
           end_step=$((HERO_CANARY_START_STEP + HERO_CANARY_STEPS))
@@ -129,7 +103,8 @@ jobs:
             echo "iris job run produced no job id" >&2
             exit 1
           fi
-          echo "Submitted $JOB_ID; the next run of this workflow settles it." >> "$GITHUB_STEP_SUMMARY"
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Submitted job: $JOB_ID"
         env:
           # CoreWeave peers reject a handoff unless the submitter supplies its
           # own object-storage credentials.
@@ -137,21 +112,55 @@ jobs:
           CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
-      - name: Capture diagnostics for the failed canary
-        if: steps.settle.outputs.outcome == 'failed' || steps.report.outcome == 'failure'
+      # A training job that has not started within QUEUE_WAIT_TIMEOUT is
+      # cancelled and reported as resource exhaustion. Once it starts, this
+      # step timeout is the wall clock.
+      - name: Wait for hero canary
+        id: wait
+        timeout-minutes: 340
+        run: |
+          uv run python scripts/ci/iris_monitor.py wait \
+            --job-id "${{ steps.submit.outputs.job_id }}" \
+            --iris-config "$IRIS_CONFIG" \
+            --poll-interval 60 \
+            --child-wait-timeout "$QUEUE_WAIT_TIMEOUT" \
+            --child-wait-timeout-policy shutdown \
+            --resource-exhaustion-policy shutdown \
+            --github-output
+
+      - name: Report hero canary metrics
+        if: steps.wait.outputs.resource_exhausted != 'true'
+        run: |
+          .venv/bin/python scripts/ci/hero_canary_report.py \
+            --run-id "$RUN_ID" \
+            --entity "$WANDB_ENTITY" \
+            --project "$WANDB_PROJECT" \
+            --start-step "$HERO_CANARY_START_STEP" \
+            --steps "$HERO_CANARY_STEPS" \
+            --checkpoint "$HERO_CANARY_CHECKPOINT"
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+
+      - name: Note a skipped day
+        if: steps.wait.outputs.resource_exhausted == 'true'
+        run: |
+          echo "::notice title=Hero canary skipped::No GB200 rack was free within $((QUEUE_WAIT_TIMEOUT / 3600)) hours."
+          echo "Skipped: no GB200 rack was free within $((QUEUE_WAIT_TIMEOUT / 3600)) hours." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture failure diagnostics
+        if: failure() || cancelled()
         continue-on-error: true
         env:
-          JOB_ID: ${{ steps.settle.outputs.job_id }}
-          PREV_RUN_ID: ${{ steps.settle.outputs.run_id }}
+          JOB_ID: ${{ steps.submit.outputs.job_id }}
           DIAG_DIR: ${{ github.workspace }}/hero-canary-diagnostics
         run: |
           mkdir -p "$DIAG_DIR"
           .venv/bin/iris --config="$IRIS_CONFIG" job list --prefix "$JOB_ID" > "$DIAG_DIR/jobs.txt" 2>&1 || true
           .venv/bin/iris --config="$IRIS_CONFIG" job logs "$JOB_ID" --tail --max-lines 2000 > "$DIAG_DIR/coordinator.log" 2>&1 || true
-          .venv/bin/iris --config="$IRIS_CONFIG" job logs "$JOB_ID/grug-train-$PREV_RUN_ID" --tail --max-lines 5000 > "$DIAG_DIR/train.log" 2>&1 || true
+          .venv/bin/iris --config="$IRIS_CONFIG" job logs "$JOB_ID/grug-train-$RUN_ID" --tail --max-lines 5000 > "$DIAG_DIR/train.log" 2>&1 || true
 
       - name: Upload diagnostics
-        if: steps.settle.outputs.outcome == 'failed' || steps.report.outcome == 'failure'
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: hero-canary-diagnostics-${{ github.run_id }}
@@ -160,24 +169,18 @@ jobs:
           if-no-files-found: ignore
 
       - name: Launch Loom triage
-        if: github.event_name == 'schedule' && (steps.settle.outputs.outcome == 'failed' || steps.report.outcome == 'failure')
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
         uses: ./.github/actions/loom-canary-triage
         timeout-minutes: 5
         with:
           profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
           lane: hero-gb200
-          job-id: ${{ steps.settle.outputs.job_id }}
-          run-id: ${{ steps.settle.outputs.run_id }}
+          job-id: ${{ steps.submit.outputs.job_id }}
+          run-id: ${{ env.RUN_ID }}
           iris-config: ${{ env.IRIS_CONFIG }}
           wandb-entity: ${{ env.WANDB_ENTITY }}
           wandb-project: ${{ env.WANDB_PROJECT }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-      - name: Fail on a failed previous canary
-        if: steps.settle.outputs.outcome == 'failed'
-        run: |
-          echo "The previous hero canary ${{ steps.settle.outputs.job_id }} failed." >&2
-          exit 1
 
   # Separate job so Slack always fires, even if the main job is force-killed.
   notify-slack:

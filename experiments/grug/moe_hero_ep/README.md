@@ -357,10 +357,9 @@ sees the same weights and batches. One dropless eval runs after the last update;
 equals `--num-steps` for that reason. A run holds the rack for about 20 minutes.
 
 The workflow submits at 11:00 UTC at `batch` priority, the band of the hero-completions sampler,
-so neither preempts the other, and does not wait for the run. The next day's workflow settles it
-with [`hero_canary_settle.py`](../../../scripts/ci/hero_canary_settle.py): a canary still waiting
-for a rack is cancelled and that day is skipped; a canary still training is left running and that
-day's submission is skipped; a finished canary is scored, and a failed one alerts.
+so neither preempts the other. If the training job has not started within five hours,
+`iris_monitor.py wait --child-wait-timeout-policy shutdown` cancels it and the day is skipped with
+a warning; a failed run alerts through Slack and Loom.
 
 [`hero_canary_report.py`](../../../scripts/ci/hero_canary_report.py) drops 4 warmup steps and
 reports median step time, MFU and tokens/s, peak HBM, drop fraction, final train loss and dropless
