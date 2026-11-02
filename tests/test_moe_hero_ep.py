@@ -462,11 +462,24 @@ def test_expert_bank_requires_context_divisibility():
         )
 
 
-def test_expert_bank_override_must_support_three_waves():
+def test_pooled_wave_expert_bank_must_support_three_waves():
     with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
         launch.build_diagnostic_run(
-            run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, context_axis_size=1, version="dev"
+            run_id="bad-waves",
+            dp_racks=1,
+            num_steps=1,
+            num_experts=256,
+            context_axis_size=1,
+            moe_implementation="fixed_pooled_wave_all_to_all",
+            version="dev",
         )
+
+
+def test_ragged_expert_bank_ignores_the_pooled_wave_count():
+    # Only the pooled-wave transport splits local experts into waves; 4 local experts are fine for ragged.
+    launch.build_diagnostic_run(
+        run_id="ragged-waves", dp_racks=1, num_steps=1, num_experts=256, context_axis_size=1, version="dev"
+    )
 
 
 def _runtime_env_config(

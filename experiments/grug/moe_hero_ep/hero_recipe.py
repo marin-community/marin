@@ -121,7 +121,7 @@ def validate_model_split(model: GrugModelConfig, *, context_axis_size: int, expe
             f"context ({context_axis_size}) = {bank_shards}, the expert bank's storage split"
         )
     local_experts = model.num_experts // expert_axis_size
-    if local_experts % model.num_expert_waves != 0:
+    if model.moe_implementation == "fixed_pooled_wave_all_to_all" and local_experts % model.num_expert_waves != 0:
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
         )

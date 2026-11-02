@@ -372,7 +372,8 @@ def build_diagnostic_run(
     show_default=True,
     help=(
         "Override the routed expert count. The count must be divisible by --expert-axis-size * --context-axis-size, "
-        f"and the local expert count must support {HERO_MODEL_CONFIG.num_expert_waves} waves."
+        "and with the pooled-wave transport the local expert count must split into its "
+        f"{HERO_MODEL_CONFIG.num_expert_waves} waves."
     ),
 )
 @click.option(
