@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from taskcompendium.grading_result import GradeResult, Outcome
 
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind, Ledger
 from taskforge.llm.client import Completion, FinishReason, Usage
@@ -117,7 +118,7 @@ async def author_call(
     def builds(context: AuthorContext, proposal: TaskProposal) -> SessionBuild:
         return build
 
-    author = AgenticAuthor(CONFIG, model, LLMPolicy(), ledger, builds)
+    author = AgenticAuthor(CONFIG, model, LLMPolicy(), ledger, builds, DEFAULT_POLICY.author)
     return await author(AuthorContext(WORKPIECE, round_no, workpiece), proposal, revision, {})
 
 
@@ -348,7 +349,7 @@ async def test_a_grader_crediting_the_empty_answer_fails_the_build_in_the_grader
 async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, proposal, ledger):
     one_shot_workpiece, agentic_workpiece = tmp_path / "one_shot" / "workpiece", tmp_path / "agentic" / "workpiece"
     one_shot_model = ScriptedModel(answer(json.dumps({"notes": "n", "source": PROGRAM})))
-    await GlmAuthor(one_shot_model, SAMPLING, ledger)(
+    await GlmAuthor(one_shot_model, SAMPLING, ledger, DEFAULT_POLICY.author)(
         AuthorContext(WORKPIECE, 0, one_shot_workpiece), proposal, None, {}
     )
     await author(
@@ -748,7 +749,7 @@ def test_build_failure_reenters_the_session_only_within_its_bounds(
     """The coordinator revises a build failure in the same round; a revision in the next round reads round 0."""
     workpiece = tmp_path / "workpiece"
     previous = prior_session(workpiece, stop, last_prompt, turns_total)
-    plan = plan_session(workpiece, round_no, proposal, FAILURE, CONFIG)
+    plan = plan_session(workpiece, round_no, proposal, FAILURE, CONFIG, DEFAULT_POLICY.author)
     assert plan.mode is mode and plan.seed == previous / "workspace"
     revision_turn = str(plan.messages[-1]["content"])
     assert plan.messages[-1]["role"] == "user" and "fixtures: KeyError 'rows'" in revision_turn
@@ -791,7 +792,7 @@ def test_relaunch_starts_a_handoff_from_an_interrupted_session_workspace(tmp_pat
     interrupted = agentic(workpiece, 0, 0) / "workspace"
     interrupted.mkdir(parents=True)
     (interrupted / "program.py").write_text("# half done\n")
-    plan = plan_session(workpiece, 0, proposal, None, CONFIG)
+    plan = plan_session(workpiece, 0, proposal, None, CONFIG, DEFAULT_POLICY.author)
     assert plan.mode is SessionMode.HANDOFF and plan.seed == interrupted and plan.turns == 48
     assert "ended without a submission (interrupted)" in str(plan.messages[-1]["content"])
 

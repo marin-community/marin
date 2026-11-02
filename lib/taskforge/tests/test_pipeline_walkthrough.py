@@ -27,6 +27,7 @@ from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, Tas
 from verifyit.spec import NumericSpec
 
 from taskforge import content_hash
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
@@ -1342,7 +1343,7 @@ def agentic_author(model: ScriptedModel, root: Path) -> AgenticAuthor:
 
         return SessionBuild(builder, store, SERVICES, root / "sessions.jsonl", in_process_loader)
 
-    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.ledger, builds)
+    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.ledger, builds, DEFAULT_POLICY.author)
 
 
 class RecordingValidate:

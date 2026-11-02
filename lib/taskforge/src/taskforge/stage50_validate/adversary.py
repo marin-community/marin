@@ -84,6 +84,7 @@ from taskforge.llm.agent import (
 from taskforge.llm.client import Completion, FinishReason, ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
+from taskforge.policy import AdversaryPrompts, Prompt
 from taskforge.sandbox.host_failures import machine_lost
 from taskforge.spec.controls import (
     Control,
@@ -95,18 +96,15 @@ from taskforge.spec.controls import (
 )
 from taskforge.spec.draft import GRADER_RESOURCE_ROOT
 from taskforge.stage50_validate.adversary_prompts import (
-    BRIEF_TEMPLATE,
     GRADER_LINE_MARKER,
     NO_CONTROLS,
     NO_EXAMPLES,
     NO_SHORTCUT_LINE,
     NO_VERIFIER_FILES,
     SHORTCUT_PREFIX,
-    SUBMIT_DESCRIPTION,
     TOOLS_SUBMIT_ONLY,
     TOOLS_WITH_SHELL,
     VERIFIER_FAILED,
-    WHITEBOX_HEADER,
     WHITEBOX_LINE_CLAUSE,
 )
 from taskforge.stage50_validate.classify import classify
@@ -164,6 +162,7 @@ class AdversaryPolicy:
         sampling: The adversary's sampling policy; an agent loop has no continuation.
         mode: What the adversary knows of the grader.
         min_probes: Shortcut candidates the brief asks for before a verdict, capped below the budget.
+        prompts: The brief, the white-box header and the ``submit`` tool's description.
     """
 
     k: int
@@ -173,6 +172,7 @@ class AdversaryPolicy:
     sampling: LLMPolicy
     mode: AdversaryMode
     min_probes: int
+    prompts: AdversaryPrompts
 
     def __post_init__(self) -> None:
         if (
@@ -317,7 +317,7 @@ def control_view(control: Control) -> dict[str, Any]:
     }
 
 
-def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
+def whitebox_context(task: TaskSpec, controls: Sequence[Control], header: Prompt) -> str:
     """The white-box section of the brief: the grader, the controls with their expected rewards, the example answers."""
     source = grader_source(task)
     spec = json.dumps(source["grader_spec"], indent=1, ensure_ascii=False)
@@ -345,7 +345,7 @@ def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
     examples = [message for message in conversation_messages(task.context.events) if message.get("role") == "assistant"]
     example_text = "\n\n".join(json.dumps(m, ensure_ascii=False) for m in examples) if examples else NO_EXAMPLES
     return (
-        f"{WHITEBOX_HEADER}\n\n## Grader specification\n```json\n{spec}\n```\n\n## Grader source\n\n{files}\n\n"
+        f"{header.render()}\n\n## Grader specification\n```json\n{spec}\n```\n\n## Grader source\n\n{files}\n\n"
         f"## Controls with expected rewards\n\n{control_text}\n\n"
         f"## Example answers in the task's conversation\n\n{example_text}"
     )
@@ -354,14 +354,16 @@ def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
 def adversary_brief(spec: TaskRolloutSpec, controls: Sequence[Control], policy: AdversaryPolicy) -> str:
     """The brief of an adversary on ``spec``: the white-box section of ``controls`` only in ``WHITEBOX`` mode."""
     whitebox = policy.mode is AdversaryMode.WHITEBOX
-    context = whitebox_context(spec.task, controls) if whitebox else ""
-    return BRIEF_TEMPLATE.format(
+    context = whitebox_context(spec.task, controls, policy.prompts.whitebox) if whitebox else ""
+    return policy.prompts.brief.render(
         tools=TOOLS_WITH_SHELL if spec.task_machine is not None else TOOLS_SUBMIT_ONLY,
         submissions="unlimited" if policy.submissions is None else policy.submissions,
         probes=(
             policy.min_probes if policy.submissions is None else min(policy.min_probes, max(policy.submissions - 1, 1))
         ),
         context=f"{PREAMBLE_SEPARATOR}{context}{PREAMBLE_SEPARATOR}" if context else " ",
+        no_shortcut=NO_SHORTCUT_LINE,
+        shortcut_prefix=SHORTCUT_PREFIX,
         line_clause=WHITEBOX_LINE_CLAUSE if whitebox else "",
     )
 
@@ -670,7 +672,7 @@ async def _agent_attempt(
         async with deadline, attempt_machine(spec, settings, run_id) as machine:
             verifier = Verifier(spec, settings, submission_plan, machine, policy.submissions)
             submit = AgentTool(
-                SUBMIT_TOOL_NAME, SUBMIT_DESCRIPTION, submit_parameters(machine is not None), verifier.submit
+                SUBMIT_TOOL_NAME, policy.prompts.submit.render(), submit_parameters(machine is not None), verifier.submit
             )
             tools: tuple[AgentTool, ...] = (submit,)
             if machine is not None:

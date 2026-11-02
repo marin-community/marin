@@ -98,6 +98,7 @@ from taskforge.llm.agent import (
 from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavailable, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
+from taskforge.policy import AuthorPolicy
 from taskforge.spec import draft as draft_module
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author.author import (
@@ -119,7 +120,6 @@ from taskforge.stage40_build_with_program.failure_text import BuildCrash, failur
 from taskforge.stage40_build_with_program.glm_author import (
     AUTHOR_STEP,
     RECORD_FILE,
-    REVISION_PROMPT,
     author_messages,
     sdk_reference,
 )
@@ -176,47 +176,6 @@ HOST_RETRY_BACKOFF = 5.0
 SESSION_ORIGIN = "author_session"
 GRADE_INSTRUCTION = "(instruction)"
 """The instruction the template's grader step grades against."""
-
-
-LENGTH_NUDGE = (
-    "Your reply was cut off at the {limit}-token output limit before it made a tool call, so nothing ran. Take a "
-    "smaller step: reason briefly, then call one tool (read one part of a file, or edit one step), and continue "
-    "from its result."
-)
-NUDGE = (
-    "The session ends only with submit: a reply without a tool call hands nothing in. Continue with the tools, "
-    f"and call submit with the path of the program ({PROGRAM_FILE}) when it is ready."
-)
-AGENTIC_SECTION = f"""
-
-# This session
-
-You work in a workspace through tools; you do not reply with the program. The workspace holds:
-- `{PROGRAM_FILE}`: a copy of the template module. Adapt it to the proposal; it is what you submit.
-- `{PROPOSAL_PATH}`: the proposal. `{SDK_PATH}` and `{TEMPLATE_PATH}`: the SDK reference and the template \
-(read-only; `read_reference` reads them too).
-- `{NOTES_PATH}`: your notes. If this session runs out of turns, a fresh session starts from this workspace \
-and reads them.
-
-The loop: adapt `{PROGRAM_FILE}` with `edit_file`, check it with `run_loader`, run it with `run_build`, \
-read the failure, fix the step it names, and run it again. The step store reruns only the steps you changed \
-and the steps after them, so a rerun costs the edited steps alone. Once it builds, grade a wrong answer or \
-two against the built task with `run_grade_candidate`, then `submit` the program. `{SDK_PATH}` lists every \
-name, keyword argument and field the program may use: read it instead of probing, since a step that raises \
-to print module names, fields or schemas spends a run and shows less than the reference. Never rewrite the whole \
-module in one call; edit the step you are fixing (`write_file` takes at most {WRITE_CHARS} characters). The \
-session ends only with `submit`: a reply without a tool call hands nothing in. You have {{turns}} turns.
-You write the solver instruction yourself as a string in the `instructions` step: it follows the \
-instruction rule above (format as requirements, never grader behaviour), and `run_build` reports one that \
-names the grading on its `instruction:` line; rewrite it before you submit.
-"""
-SEED_NOTE = """\
-This is a fresh session continuing earlier work. The workspace holds `{program}` as last edited, \
-`{notes}` and the files the earlier session left. {submitted}Read them before you change anything.
-"""
-HANDOFF_PROMPT = "The earlier session ended without a submission ({reason})."
-NO_REVISION_PROMPT = "Continue from the earlier session's workspace: finish the program and submit it."
-EDIT_AND_SUBMIT = f"Edit `{PROGRAM_FILE}` in the workspace, run it with `run_build`, and submit it."
 
 
 @dataclass(frozen=True)
@@ -551,15 +510,16 @@ class AuthorSession:
 
     # --- workspace ---------------------------------------------------------------------------
 
-    def prepare(self, seed: Path | None) -> None:
-        """Lay out the workspace: a copy of ``seed`` (an earlier session's workspace), or the template."""
+    def prepare(self, seed: Path | None, reference: str) -> None:
+        """Lay out the workspace: a copy of ``seed`` (an earlier session's workspace), or the template, with the SDK
+        ``reference``."""
         if seed is not None:
             shutil.copytree(seed, self.workspace)
         else:
             _write_text(self.workspace / PROGRAM_FILE, _template_source())
             _write_text(self.workspace / NOTES_PATH, "")
         _write_text(self.workspace / PROPOSAL_PATH, render(self.proposal))
-        _write_text(self.workspace / SDK_PATH, sdk_reference())
+        _write_text(self.workspace / SDK_PATH, reference)
         _write_text(self.workspace / TEMPLATE_PATH, _template_source())
 
     def path(self, raw: str, *, write: bool = False) -> Path:
@@ -989,6 +949,7 @@ async def drive(
     session: AuthorSession,
     plan: SessionPlan,
     config: AgenticAuthorConfig,
+    prompts: AuthorPolicy,
     client: ModelClient,
     policy: LLMPolicy,
     ledger: Ledger,
@@ -1058,12 +1019,12 @@ async def drive(
             break
         if run.stop is AgentStop.LENGTH:
             length_nudges += 1
-            nudge: Message = {"role": "user", "content": LENGTH_NUDGE.format(limit=config.turn_max_tokens)}
+            nudge: Message = {"role": "user", "content": prompts.length_nudge.render(limit=config.turn_max_tokens)}
             conversation.append(nudge)
             transcript.append(_user_entry(nudge))
             continue
         nudges += 1
-        nudge = {"role": "user", "content": NUDGE}
+        nudge = {"role": "user", "content": prompts.nudge.render(program=PROGRAM_FILE)}
         conversation.append(nudge)
         transcript.append(_user_entry(nudge))
     return SessionResult(
@@ -1161,20 +1122,24 @@ def session_record(session_id: str, plan: SessionPlan, session: AuthorSession, r
 # --- the author stage ------------------------------------------------------------------------------
 
 
-def opening_messages(proposal: TaskProposal, turns: int | None) -> list[Message]:
+def opening_messages(proposal: TaskProposal, prompts: AuthorPolicy, turns: int | None) -> list[Message]:
     """The one-shot author's rules, proposal, SDK reference and template, with the agentic section added."""
-    system, user = author_messages(proposal)
-    return [
-        {
-            **system,
-            "content": f"{system['content']}{AGENTIC_SECTION.format(turns="unlimited" if turns is None else turns)}",
-        },
-        user,
-    ]
+    system, user = author_messages(proposal, prompts)
+    section = prompts.session.render(
+        program=PROGRAM_FILE,
+        proposal=PROPOSAL_PATH,
+        sdk=SDK_PATH,
+        template=TEMPLATE_PATH,
+        notes=NOTES_PATH,
+        write_chars=WRITE_CHARS,
+        turns="unlimited" if turns is None else turns,
+    )
+    return [{**system, "content": f"{system['content']}{section}"}, user]
 
 
-def _revision_text(revision: Revision) -> str:
-    return f"{REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)}\n{EDIT_AND_SUBMIT}"
+def _revision_text(prompts: AuthorPolicy, revision: Revision) -> str:
+    revise = prompts.revision.render(kind=revision.kind, detail=revision.detail)
+    return f"{revise}\n{prompts.edit_and_submit.render(program=PROGRAM_FILE)}"
 
 
 def _submitted(session_dir: Path) -> bool:
@@ -1183,10 +1148,10 @@ def _submitted(session_dir: Path) -> bool:
     return record.exists() and _read_json(record)["status"] == AuthorStatus.ACCEPTED
 
 
-def _seed_message(previous: Path, lead: str) -> Message:
+def _seed_message(prompts: AuthorPolicy, previous: Path, lead: str) -> Message:
     submitted = previous / SUBMIT_FILE
     notes = _read_json(submitted).get("notes", "") if submitted.exists() else ""
-    note = SEED_NOTE.format(
+    note = prompts.seed.render(
         program=PROGRAM_FILE,
         notes=NOTES_PATH,
         submitted=f"Its submission notes: {notes}\n" if notes else "",
@@ -1195,20 +1160,25 @@ def _seed_message(previous: Path, lead: str) -> Message:
 
 
 def plan_session(
-    workpiece_dir: Path, round_no: int, proposal: TaskProposal, revision: Revision | None, config: AgenticAuthorConfig
+    workpiece_dir: Path,
+    round_no: int,
+    proposal: TaskProposal,
+    revision: Revision | None,
+    config: AgenticAuthorConfig,
+    prompts: AuthorPolicy,
 ) -> SessionPlan:
     """Which session round ``round_no`` runs next (see the module docstring)."""
-    opening = opening_messages(proposal, config.turns)
+    opening = opening_messages(proposal, prompts, config.turns)
     sessions = _round_dir(workpiece_dir, round_no) / AGENTIC_DIR
     if _numbered(sessions):
         previous = sessions / str(_numbered(sessions)[-1])
         if not _submitted(previous):
             record = previous / AUTHOR_RECORD
             reason = _read_json(record).get("stop_reason", "unsubmitted") if record.exists() else "interrupted"
-            lead = HANDOFF_PROMPT.format(reason=reason)
+            lead = prompts.handoff.render(reason=reason)
             if revision is not None:
-                lead = f"{lead}\n\n{_revision_text(revision)}"
-            seed = _seed_message(previous, lead)
+                lead = f"{lead}\n\n{_revision_text(prompts, revision)}"
+            seed = _seed_message(prompts, previous, lead)
             return SessionPlan(SessionMode.HANDOFF, previous / WORKSPACE_DIR, (*opening, seed), 3, config.turns, 0, None)
     elif round_no == 0:
         return SessionPlan(SessionMode.FRESH, None, tuple(opening), 2, config.turns, 0, None)
@@ -1225,7 +1195,7 @@ def plan_session(
         and (bounds.max_turns_used is None or prior["turns_total"] <= bounds.max_turns_used)
     ):
         conversation = json.loads((previous / CONVERSATION_FILE).read_text())
-        message: Message = {"role": "user", "content": _revision_text(revision)}
+        message: Message = {"role": "user", "content": _revision_text(prompts, revision)}
         return SessionPlan(
             SessionMode.SAME_SESSION,
             previous / WORKSPACE_DIR,
@@ -1235,8 +1205,8 @@ def plan_session(
             prior["turns_total"],
             str(previous.relative_to(workpiece_dir)),
         )
-    lead = NO_REVISION_PROMPT if revision is None else _revision_text(revision)
-    seed = _seed_message(previous, lead)
+    lead = prompts.no_revision.render() if revision is None else _revision_text(prompts, revision)
+    seed = _seed_message(prompts, previous, lead)
     return SessionPlan(SessionMode.REVISION, previous / WORKSPACE_DIR, (*opening, seed), 3, config.turns, 0, None)
 
 
@@ -1259,6 +1229,7 @@ class AgenticAuthor:
         policy: The sampling policy of every turn; ``max_tokens`` and ``max_continuations`` come from ``config``.
         ledger: Where the sessions' turns and tool calls are recorded.
         builds: How the sessions of a call build and grade, for the call's workpiece, round and proposal.
+        prompts: The text of the sessions' turns.
     """
 
     config: AgenticAuthorConfig
@@ -1266,6 +1237,7 @@ class AgenticAuthor:
     policy: LLMPolicy
     ledger: Ledger
     builds: SessionBuilds
+    prompts: AuthorPolicy
 
     async def __call__(
         self,
@@ -1305,15 +1277,17 @@ class AgenticAuthor:
         revision: Revision | None,
     ) -> SessionOutcome:
         """Persist one session in ``agentic/<k>/`` before returning its submission or hold."""
-        plan = plan_session(context.workpiece_dir, context.round, proposal, revision, self.config)
+        plan = plan_session(context.workpiece_dir, context.round, proposal, revision, self.config, self.prompts)
         sessions = _round_dir(context.workpiece_dir, context.round) / AGENTIC_DIR
         k = len(_numbered(sessions))
         session_dir = sessions / str(k)
         session_id = f"{context.round}.{k}"
         session = AuthorSession(session_dir, context.workpiece_id, context.round, proposal, build, session_id)
-        session.prepare(plan.seed)
+        session.prepare(plan.seed, sdk_reference(self.prompts.grading_reference))
         try:
-            result = await drive(session, plan, self.config, self.client, self.policy, self.ledger, session_id)
+            result = await drive(
+                session, plan, self.config, self.prompts, self.client, self.policy, self.ledger, session_id
+            )
         except AgentInterrupted as error:
             _write_json(session_dir / CONVERSATION_FILE, list(error.run.messages))
             _write_json(session_dir / TRANSCRIPT_FILE, [_turn_entry(i, turn) for i, turn in enumerate(error.run.turns)])
