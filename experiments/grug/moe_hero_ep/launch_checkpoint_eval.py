@@ -43,6 +43,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_EP_NODES,
@@ -235,7 +236,10 @@ def build_checkpoint_eval(
             # The eval never saves; the checkpointer only needs a path inside this run's own tree.
             checkpointer=CheckpointerConfig(base_path=prefix_join(ctx.output_path, "checkpoints")),
         )
-        val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
+        if ctx.is_fingerprint:
+            val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
+        else:
+            val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
         data = LmDataConfig(
             tokenizer=marin_tokenizer,
             cache_dir=None,
