@@ -321,6 +321,8 @@ def iter_log_rows(
     One query scans every source so DuckDB parallelizes across files and row
     groups; matching rows stream back in batches.
     """
+    if not sources:
+        return
     cursor = con.execute(
         """
         SELECT key, epoch_ms, data
