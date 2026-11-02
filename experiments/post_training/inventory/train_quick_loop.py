@@ -49,7 +49,7 @@ JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 MAX_STALENESS_STEPS = 2
 
 
-def training_recipe(steps: int, reasoning_span_target: str) -> dict:
+def training_recipe(steps: int, reasoning_span_penalty: float, reasoning_span_target: str) -> dict:
     """Use the maintained Snowball geometry with bounded-async RLOO-N updates."""
     preset = replace(
         DEFAULT,
@@ -97,7 +97,9 @@ def training_recipe(steps: int, reasoning_span_target: str) -> dict:
         eval_sampling_params={"seed": SEED},
         vllm_attention_backend="TRITON_ATTN",
         enable_prefix_caching=False,
-        trajectory_reward_shaping={"reasoning_span": {"target": reasoning_span_target}},
+        trajectory_reward_shaping={
+            "reasoning_span": {"penalty": reasoning_span_penalty, "target": reasoning_span_target}
+        },
     )
     trainer["policy"]["optimizer_config"].update(
         lr=1e-6,
@@ -115,6 +117,7 @@ def build_run(
     *,
     selection: ArtifactStep[Artifact],
     steps: int = DEFAULT_STEPS,
+    reasoning_span_penalty: float = 0.1,
     reasoning_span_target: str = "rollout",
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
@@ -129,7 +132,9 @@ def build_run(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
-            config_yaml=yaml.safe_dump(training_recipe(steps, reasoning_span_target), sort_keys=False),
+            config_yaml=yaml.safe_dump(
+                training_recipe(steps, reasoning_span_penalty, reasoning_span_target), sort_keys=False
+            ),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=MODEL_ID,
@@ -173,6 +178,13 @@ def build_run(
 )
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
 @click.option(
+    "--reasoning-span-penalty",
+    type=click.FloatRange(min=0.0),
+    default=0.1,
+    show_default=True,
+    help="Charge for a malformed reasoning span; 0 still records the violation rate.",
+)
+@click.option(
     "--reasoning-span-target",
     type=click.Choice(["rollout", "marker"]),
     default="rollout",
@@ -180,7 +192,9 @@ def build_run(
     help="Charge a malformed reasoning span to the reply's reward or to the token where the span goes wrong.",
 )
 @rl_build_options
-def main(selection_uri: str, steps: int, reasoning_span_target: str) -> ArtifactStep[SkyRLRun]:
+def main(
+    selection_uri: str, steps: int, reasoning_span_penalty: float, reasoning_span_target: str
+) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
@@ -196,6 +210,7 @@ def main(selection_uri: str, steps: int, reasoning_span_target: str) -> Artifact
         resolve_version(name, None),
         selection=selection,
         steps=steps,
+        reasoning_span_penalty=reasoning_span_penalty,
         reasoning_span_target=reasoning_span_target,
     )
 
