@@ -23,7 +23,7 @@ from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.scan import BlockFoldable, BlockSeq, ScanCheckpointPolicy, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, HFCompatConfig
 from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers.normalization import RmsNormConfig
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
@@ -91,8 +91,8 @@ class Olmo3Config(HFCompatConfig):
             self.num_heads % self.num_kv_heads == 0
         ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["Olmo3Config"]:  # type: ignore
-        return HFCheckpointConverter(
+    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HfLmCheckpointConverter["Olmo3Config"]:  # type: ignore
+        return HfLmCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=True,

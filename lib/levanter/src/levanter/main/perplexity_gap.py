@@ -39,7 +39,7 @@ from levanter.analysis.perplexity_gap import (
     tokenize_text_with_byte_spans,
     write_report_files,
 )
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, HFCompatConfig
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
@@ -343,7 +343,7 @@ def _resolved_model_spec(spec: GapFinderModelConfig) -> GapFinderModelConfig:
     if model is None:
         if not spec.checkpoint_is_hf:
             raise ValueError("Native checkpoints require an explicit model config.")
-        model = HFCheckpointConverter.from_hf(
+        model = HfLmCheckpointConverter.from_hf(
             spec.checkpoint_path,
             trust_remote_code=spec.trust_remote_code,
         ).config_from_hf_checkpoint(spec.checkpoint_path)

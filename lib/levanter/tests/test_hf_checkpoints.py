@@ -9,8 +9,9 @@ import sys
 import tempfile
 import threading
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Self
 from unittest.mock import patch
 
 import equinox as eqx
@@ -25,7 +26,7 @@ import safetensors
 import transformers
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
-from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
+from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict, with_prefix
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import Entrypoint
 from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV, MultiGpuHook
@@ -36,6 +37,7 @@ from levanter.testing.helpers import skip_if_no_torch
 from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
 from transformers import GPT2Config as HfGpt2Config
+from transformers import ViTConfig as HfViTConfig
 
 import levanter.compat.hf_export as hf_export
 import levanter.compat.hf_checkpoints as hf_checkpoints
@@ -43,6 +45,9 @@ from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
     ModelWithHfSerializationMixin,
+    VisionModelWithHfSerializationMixin,
+    HfLmCheckpointConverter,
+    HfVisionCheckpointConverter,
     RepoRef,
     _causal_lm_architecture_name,
     _convert_to_jnp,
@@ -573,3 +578,82 @@ def test_save_pretrained_writes_transformers4_and_5_rope_keys(tmp_path):
         "high_freq_factor": 4.0,
         "original_max_position_embeddings": 8192,
     }
+
+
+@dataclass(frozen=True)
+class TinyVisionConfig:
+    width: int = 2
+
+    def to_hf_config(self, config_overrides: dict | None = None) -> HfViTConfig:
+        return HfViTConfig(**{"hidden_size": self.width, **(config_overrides or {})})
+
+    @classmethod
+    def from_hf_config(cls, config: HfViTConfig) -> Self:
+        return cls(width=config.hidden_size)
+
+
+class TinyVisionModel(ModuleWithStateDictSerialization, VisionModelWithHfSerializationMixin[TinyVisionConfig]):
+    vision_config: TinyVisionConfig = eqx.field(static=True)
+    weight: jax.Array
+    position_buffer: jax.Array
+
+    @classmethod
+    def init(cls, config: TinyVisionConfig, *, key) -> Self:
+        return cls(config, jax.random.normal(key, (config.width, 3)), jnp.arange(config.width, dtype=jnp.float32))
+
+    @property
+    def config(self) -> TinyVisionConfig:
+        return self.vision_config
+
+    def __call__(self, pixels):
+        return self.weight @ pixels + self.position_buffer
+
+    def from_state_dict(self, state_dict, prefix=None):
+        return replace(self, weight=jnp.asarray(state_dict[with_prefix(prefix, "weight")]))
+
+    def to_state_dict(self, prefix=None):
+        # Position buffers are reconstructed by initialization, as in HF checkpoints.
+        return {with_prefix(prefix, "weight"): self.weight}
+
+
+@pytest.mark.parametrize("prefix", [None, "vision_model"])
+def test_vision_converter_restores_weights_and_missing_buffers(tmp_path, prefix):
+    config = TinyVisionConfig(width=2)
+    config.to_hf_config().save_pretrained(tmp_path)
+    weights = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
+    safetensors.numpy.save_file({with_prefix(prefix, "weight"): weights}, str(tmp_path / SAFE_TENSORS_MODEL))
+    converter = HfVisionCheckpointConverter(
+        TinyVisionConfig, reference_checkpoint=RepoRef(str(tmp_path)), HfConfigClass=HfViTConfig, ignore_prefix=prefix
+    )
+    pixels = jnp.array([2, 3, 4], dtype=jnp.float32)
+    expected = np.array([20, 48], dtype=np.float32)
+    with use_test_mesh():
+        loaded = converter.load_pretrained(TinyVisionModel)
+        np.testing.assert_allclose(eqx.filter_jit(lambda model: model(pixels))(loaded), expected)
+        exported = tmp_path / "exported"
+        converter.save_pretrained(loaded, str(exported), save_reference_code=False)
+        restored = converter.load_pretrained(TinyVisionModel, ref=RepoRef(str(exported)))
+        np.testing.assert_allclose(eqx.filter_jit(lambda model: model(pixels))(restored), expected)
+    np.testing.assert_array_equal(safetensors.numpy.load_file(exported / SAFE_TENSORS_MODEL)["weight"], weights)
+
+
+@pytest.mark.parametrize("resize", [False, True])
+def test_lm_converter_preserves_or_resizes_checkpoint_vocabulary(tmp_path, local_gpt2_tokenizer_path, resize):
+    config = Gpt2Config(max_seq_len=8, hidden_dim=8, num_layers=1, num_heads=1, use_flash_attention=False)
+    converter = HfLmCheckpointConverter(Gpt2Config, HfConfigClass=HfGpt2Config, tokenizer=local_gpt2_tokenizer_path)
+    checkpoint_vocab = converter.Vocab.resize(converter.Vocab.size + 3)
+    with use_test_mesh():
+        original = Gpt2LMHeadModel.init(checkpoint_vocab, config, key=PRNGKey(7))
+        converter.save_pretrained(original, str(tmp_path), save_reference_code=False)
+        if resize:
+            loaded = converter.load_pretrained(
+                Gpt2LMHeadModel, ref=str(tmp_path), resize_vocab_to_match_tokenizer=True
+            )
+        else:
+            loaded = converter.load_pretrained(Gpt2LMHeadModel, ref=str(tmp_path))
+    expected_size = converter.Vocab.size if resize else checkpoint_vocab.size
+    assert loaded.Vocab.size == expected_size
+    np.testing.assert_array_equal(
+        loaded.embeddings.token_embeddings.weight.array,
+        original.embeddings.token_embeddings.weight.array[:expected_size],
+    )
