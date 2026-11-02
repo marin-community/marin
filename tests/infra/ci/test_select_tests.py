@@ -154,6 +154,40 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
 
 
 @pytest.mark.parametrize(
+    "changed_file",
+    [
+        "lib/rolloutengine/src/rolloutengine/engine.py",
+        "lib/shellbox/src/shellbox/machine.py",
+        "lib/taskcompendium/src/taskcompendium/models.py",
+    ],
+)
+def test_standalone_rollout_dependencies_select_marin_and_experiment_consumers(
+    tmp_path: Path, changed_file: str
+) -> None:
+    write(tmp_path, "lib/taskcompendium/src/taskcompendium/models.py", "TASK = 1\n")
+    write(tmp_path, "lib/shellbox/src/shellbox/machine.py", "MACHINE = 1\n")
+    write(
+        tmp_path,
+        "lib/rolloutengine/src/rolloutengine/engine.py",
+        "from taskcompendium.models import TASK\nfrom shellbox.machine import MACHINE\n",
+    )
+    write(tmp_path, "lib/marin/src/marin/rollouts/evaluation.py", "from rolloutengine.engine import TASK\n")
+    write(tmp_path, "tests/evaluation/test_task_rollouts.py", "from marin.rollouts.evaluation import TASK\n")
+    write(tmp_path, "experiments/evaluation/task_driver.py", "from marin.rollouts.evaluation import TASK\n")
+    write(
+        tmp_path, "experiments/evaluation/test_task_driver.py", "from experiments.evaluation.task_driver import TASK\n"
+    )
+    write(tmp_path, "tests/test_unrelated.py", "def test_other():\n    assert True\n")
+
+    matrix = select_matrix([changed_file], tmp_path)
+
+    assert leg_paths(matrix, "marin") == [
+        "experiments/evaluation/test_task_driver.py",
+        "tests/evaluation/test_task_rollouts.py",
+    ]
+
+
+@pytest.mark.parametrize(
     "changed_files, run_all_tests",
     [
         ([], True),

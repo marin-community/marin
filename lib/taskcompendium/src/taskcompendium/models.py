@@ -43,7 +43,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.29"
+SCHEMA_VERSION = "0.30"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
@@ -914,6 +914,7 @@ class TaskSpec(BaseModel):
     schema_version: str = SCHEMA_VERSION
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
+    labels: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":

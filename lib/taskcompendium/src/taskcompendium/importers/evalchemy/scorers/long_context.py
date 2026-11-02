@@ -8,7 +8,6 @@ and grading are pure; model-tokenizer eligibility belongs to the evaluation run.
 """
 
 import re
-from collections.abc import Mapping, Sequence
 from difflib import SequenceMatcher
 
 from verifyit.grade import InvalidTask, Reward, scored
@@ -32,33 +31,6 @@ def mrcr_bin(total_tokens: int) -> int | None:
             return upper
         lower = upper + 1
     return None
-
-
-def interleave_mrcr_indices(
-    cells: Mapping[tuple[int, int], Sequence[int]],
-    max_context: int,
-    limit: int | None = None,
-) -> list[int]:
-    """Interleave full source-order cells by bin then needles, applying the cap afterwards."""
-    desired = [
-        (upper, needles) for upper in MRCR_BIN_UPPER_BOUNDS if upper <= max_context for needles in MRCR_NEEDLE_COUNTS
-    ]
-    if not desired:
-        raise ValueError("MRCR requires at least an 8192-token context bin")
-    missing = [cell for cell in desired if not cells.get(cell)]
-    if missing:
-        raise ValueError(f"Pinned MRCR dataset has no examples for requested cells: {missing}")
-    rounds = max(len(cells[cell]) for cell in desired)
-    ordered = [cells[cell][position] for position in range(rounds) for cell in desired if position < len(cells[cell])]
-    return ordered if limit is None else ordered[:limit]
-
-
-def graphwalks_output_budget(answer_tokens: int) -> int:
-    """Retain the source's gold-dependent output allowance without shortening it to fit."""
-    return GRAPHWALKS_OUTPUT_BUDGET_MULTIPLIER * max(
-        GRAPHWALKS_MIN_OUTPUT_TOKENS,
-        answer_tokens + GRAPHWALKS_REASONING_RESERVE,
-    )
 
 
 def grade_nonce_similarity(expected: str, nonce: str, response: str) -> Reward:

@@ -29,7 +29,7 @@ from finestore.store import DataStore
 from openai import APIError, APIStatusError
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
-from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_protocol
+from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_protocol, text_prompt
 from taskcompendium.evaluation.metrics import likelihood_metrics
 from taskcompendium.evaluation.response import completion_text
 from taskcompendium.evaluation.selection import (
@@ -54,7 +54,7 @@ from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.evaluation.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
+from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.models import (
     GradedRolloutInterrupted,
@@ -71,7 +71,8 @@ from rolloutengine.models import (
 
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
-DRIVER_REVISION = "2026.11.02.2"
+# Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
+EVALUATION_EXECUTION_REVISION = "2026.11.02.3"
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -178,7 +179,7 @@ def _sample(
         task=protocol.benchmark,
         doc_id=task.id,
         kind=SampleKind.GENERATION,
-        prompt_text=case.item.operation.context if isinstance(case.item.operation, TextGeneration) else None,
+        prompt_text=text_prompt(task) if isinstance(case.item.operation, TextGeneration) else None,
         prompt_messages=(
             None
             if isinstance(case.item.operation, TextGeneration)
@@ -284,7 +285,7 @@ async def _score_likelihood(
     try:
         async with asyncio.timeout(timeout):
             for request in requests:
-                results.append(await scorer(request, seed=attempt.seed))
+                results.append(await scorer(request.context, request.continuation, seed=attempt.seed))
     except InvalidLikelihoodRequest as failure:
         outcome = Outcome.INVALID_TASK
         error = str(failure)
@@ -527,7 +528,7 @@ async def run_evaluation(
             raise ValueError(f"Text generation requires an explicit completion transport: {protocol.benchmark}")
     run = {
         "schema_version": 1,
-        "driver_revision": DRIVER_REVISION,
+        "driver_revision": EVALUATION_EXECUTION_REVISION,
         "config": config.model_dump(mode="json"),
         "datasets": [
             {

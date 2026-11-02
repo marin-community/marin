@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A raw-text transport for source benchmarks that do not use chat templates."""
+"""A raw-text completion transport without chat template rendering."""
 
 from dataclasses import dataclass
 from typing import Any

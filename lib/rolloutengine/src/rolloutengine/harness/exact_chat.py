@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One chat generation using the benchmark's exact conversation prefix."""
+"""One generation from the task's exact conversation prefix."""
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,7 +18,7 @@ EXACT_CHAT_HARNESS = "exact_chat"
 
 @dataclass(frozen=True)
 class ExactChatHarness:
-    """Keep the source prompt unchanged; sampling is supplied by the evaluation protocol."""
+    """Keep the task conversation unchanged and use the caller's sampling options."""
 
     options: dict[str, Any] = field(default_factory=dict)
 
@@ -31,7 +31,7 @@ class ExactChatHarness:
         if task.answer_type not in CONVERSATION_ANSWERS:
             raise ValueError("Exact chat requires a conversation answer")
         if task.final_tools or task.interaction_tools or task.tool_bindings:
-            raise ValueError("Exact chat evaluation does not execute tools")
+            raise ValueError("Exact chat does not execute tools")
 
     async def run(self, context: HarnessContext, session: ModelSession) -> None:
         await session.start(Prompt(tuple(conversation_messages(context.task.context.events)), dict(self.options)))

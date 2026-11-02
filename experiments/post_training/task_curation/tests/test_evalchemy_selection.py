@@ -16,6 +16,8 @@ import pytest
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
+from marin.rollouts.evaluation import EvaluationRunConfig, ModelIdentity, run_evaluation
+from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from shellbox.machine import PackageSpec
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, select_cases
 from taskcompendium.evaluation.spec import (
@@ -47,8 +49,11 @@ from transformers import PreTrainedTokenizerFast
 from verifyit.spec import ExactSpec
 from zephyr.context import ZephyrContext
 
-from rolloutengine.evaluation.runner import EvaluationRunConfig, ModelIdentity, run_evaluation
-from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
+from experiments.post_training.task_curation.datasets.evalchemy.long_context import (
+    GRAPHWALKS_COHORT,
+    GRAPHWALKS_CONTEXT_POLICY,
+    MRCR_COHORT,
+)
 
 
 class WordTokenizer:
@@ -117,11 +122,14 @@ def selection_task(row, context, *, convert):
 def publish_fixture(tmp_path: Path, benchmark: str, rows: list[dict], *, context_window: int | None = None):
     if benchmark == "MRCR":
         converter, item_builder, reader = convert_mrcr, mrcr_item, read_mrcr
-        context_policy = ContextPolicy(kind="mrcr", max_context=73728)
+        cohort = MRCR_COHORT
+        context_policy = ContextPolicy()
+        context_window = min(context_window or 73728, 73728)
         metric_name, max_tokens, enable_thinking = "accuracy", 4096, False
     elif benchmark == "GraphWalks":
         converter, item_builder, reader = convert_graphwalks, graphwalks_item, None
-        context_policy = ContextPolicy(kind="graphwalks", max_context=None)
+        cohort = GRAPHWALKS_COHORT
+        context_policy = GRAPHWALKS_CONTEXT_POLICY
         metric_name, max_tokens, enable_thinking = "f1", 131072, True
     else:
         raise ValueError(f"Unknown selection fixture benchmark: {benchmark}")
@@ -149,6 +157,7 @@ def publish_fixture(tmp_path: Path, benchmark: str, rows: list[dict], *, context
         summary=SummaryKind.MEAN,
         expected_population=len(rows),
         context_window=context_window,
+        cohort=cohort,
         context_policy=context_policy,
     )
     environment = EnvironmentRequirements(
@@ -245,8 +254,8 @@ def test_mrcr_selects_interleaved_cohort_and_preserves_history_and_safe_output_c
         (1, "source_limit"),
         (4, "source_limit"),
         (6, "source_limit"),
-        (7, "official_bin"),
-        (8, "official_bin"),
+        (7, "group_filter"),
+        (8, "group_filter"),
     ]
     assert len(decisions) == len(rows)
     expected = json.loads(rows[0]["prompt"])
@@ -271,7 +280,7 @@ def test_mrcr_records_every_exclusion_when_no_official_bin_fits(interleaved_mrcr
         )
     )
     assert [decision.record.source_row for decision in decisions] == [f"{filename}:{i}" for i in range(len(rows))]
-    assert all(decision.case is None and decision.record.reason == "official_bin" for decision in decisions)
+    assert all(decision.case is None and decision.record.reason == "group_filter" for decision in decisions)
 
 
 def test_mrcr_refills_cohort_after_served_context_exclusion(refill_mrcr):
@@ -332,7 +341,7 @@ def test_protocol_context_cap_precedes_bin_selection_and_per_prompt_budget(
         (f"{filename}:2", budget),
     ]
     assert all(decision.record.context_window == effective_window for decision in decisions)
-    assert [decision.record.reason for decision in decisions[3:]] == ["official_bin"] * 3
+    assert [decision.record.reason for decision in decisions[3:]] == ["group_filter"] * 3
 
 
 def test_graphwalks_filters_before_limit_and_retains_reference_dependent_budgets(graph_corpus):

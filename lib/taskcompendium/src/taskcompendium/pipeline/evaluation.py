@@ -10,7 +10,6 @@ import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
 from taskcompendium.evaluation.corpus import (
@@ -22,6 +21,7 @@ from taskcompendium.evaluation.corpus import (
     ItemBuilder,
     canonical_task,
     file_sha256,
+    parquet_rows,
     source_order,
     validate_item,
     validate_task_item,
@@ -31,7 +31,7 @@ from taskcompendium.pipeline.inputs import SourceFileOverride
 from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
 from taskcompendium.pipeline.source_processing import ConversionResult, SourceProcessingMode, run_source_pipeline
 
-ITEM_SCHEMA = pa.schema([("task_id", pa.string()), ("evaluation_json", pa.string())])
+ITEM_SCHEMA = pa.schema([("task_id", pa.string()), ("source_row", pa.string()), ("evaluation_json", pa.string())])
 
 
 def _publish_shard(
@@ -51,7 +51,7 @@ def _publish_shard(
 
     def rows() -> Iterator[dict[str, str]]:
         nonlocal count, first, last
-        for row in load_parquet(path):
+        for row in parquet_rows(source):
             task = canonical_task(
                 row, source_dataset=source_dataset, source_revision=source_revision, importer_revision=importer_revision
             )
@@ -65,7 +65,7 @@ def _publish_shard(
             first = first or item.source_row
             last = item.source_row
             count += 1
-            yield {"task_id": task.id, "evaluation_json": item.model_dump_json()}
+            yield {"task_id": task.id, "source_row": task.source.row, "evaluation_json": item.model_dump_json()}
 
     write_parquet_file(rows(), str(destination), schema=ITEM_SCHEMA)
     return EvaluationShard(

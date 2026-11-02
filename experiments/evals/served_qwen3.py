@@ -27,9 +27,9 @@ from marin.inference.config import (
     VllmLauncherType,
 )
 from marin.inference.iris import remote_inference
+from marin.rollouts.evaluation import EvaluationRunConfig
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
-from rolloutengine.evaluation.runner import EvaluationRunConfig
 
 from experiments.evaluation.task_driver import (
     JUDGE_API_KEY,

@@ -3,9 +3,8 @@
 
 """Token-boundary likelihood scoring through an OpenAI-compatible completion endpoint.
 
-Pair encoding, context truncation and echoed logprob reduction preserve Marin's
-Evalchemy endpoint backend and lm-evaluation-harness v0.4.12 (MIT). Unlike a
-local tensor forward pass, an echoed prompt must retain the last target token.
+Pair encoding and echoed logprob reduction follow lm-evaluation-harness v0.4.12
+(MIT). An echoed prompt must retain the last target token.
 """
 
 import json
@@ -15,20 +14,17 @@ from typing import Any, Protocol
 
 from openai import AsyncOpenAI
 from openai.types.completion import Completion
-from taskcompendium.evaluation.spec import LikelihoodRequest
 
 from rolloutengine.models import TokenUsage
 
 
 class Tokenizer(Protocol):
-    eos_token_id: int
-
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]: ...
 
 
 @dataclass(frozen=True)
 class EncodedLikelihood:
-    """The exact endpoint input and source truncation evidence for one continuation."""
+    """The exact endpoint input and truncation evidence for one continuation."""
 
     prompt_token_ids: tuple[int, ...]
     context_tokens: int
@@ -47,7 +43,7 @@ class LikelihoodScore:
 
 
 class LikelihoodTransportError(ValueError):
-    """A malformed echoed response with the exact request and response retained for the archive."""
+    """A malformed echoed response with the exact request and response retained for the caller."""
 
     def __init__(self, message: str, *, request: dict[str, Any], prepared: EncodedLikelihood, response: Completion):
         super().__init__(message)
@@ -56,13 +52,13 @@ class LikelihoodTransportError(ValueError):
         try:
             json.dumps(decoded, allow_nan=False)
         except ValueError:
-            # An invalid numeric response must itself survive the strict JSON archive.
+            # Preserve invalid numeric evidence while keeping the structured response JSON-safe.
             self.evidence["response_json"] = json.dumps(decoded, allow_nan=True)
             self.evidence["response"] = json.loads(response.model_dump_json())
 
 
 class LikelihoodScorer(Protocol):
-    async def __call__(self, request: LikelihoodRequest, *, seed: int | None) -> LikelihoodScore: ...
+    async def __call__(self, context: str, continuation: str, *, seed: int | None) -> LikelihoodScore: ...
 
 
 class InvalidLikelihoodRequest(ValueError):
@@ -70,10 +66,9 @@ class InvalidLikelihoodRequest(ValueError):
 
 
 def encode_pair(
-    tokenizer: Tokenizer, request: LikelihoodRequest, *, prefix_token_id: int
+    tokenizer: Tokenizer, context: str, continuation: str, *, prefix_token_id: int
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
     """Move trailing context whitespace into the jointly encoded continuation."""
-    context, continuation = request.context, request.continuation
     if not context:
         return (prefix_token_id,), tuple(tokenizer.encode(continuation, add_special_tokens=False))
     spaces = len(context) - len(context.rstrip())
@@ -87,10 +82,9 @@ def encode_pair(
 
 @dataclass(frozen=True)
 class VllmLikelihood:
-    """Score full continuation tokens with the legacy endpoint's one-token output reserve.
+    """Score full continuation tokens with a one-token output reserve.
 
     The caller owns the client and pins the tokenizer revision and prefix token.
-    The source prefix is an explicit override, otherwise BOS when present, then EOS.
     """
 
     client: AsyncOpenAI
@@ -99,24 +93,26 @@ class VllmLikelihood:
     context_size: int
     prefix_token_id: int
 
-    def prepare(self, request: LikelihoodRequest) -> EncodedLikelihood:
-        context, continuation = encode_pair(self.tokenizer, request, prefix_token_id=self.prefix_token_id)
+    def prepare(self, context: str, continuation: str) -> EncodedLikelihood:
+        context_tokens, continuation_tokens = encode_pair(
+            self.tokenizer, context, continuation, prefix_token_id=self.prefix_token_id
+        )
         maximum_prompt = self.context_size - 1
-        removed = max(0, len(context) + len(continuation) - maximum_prompt)
-        retained_context = len(context) - removed
-        if not continuation or retained_context < 1:
+        removed = max(0, len(context_tokens) + len(continuation_tokens) - maximum_prompt)
+        retained_context = len(context_tokens) - removed
+        if not continuation_tokens or retained_context < 1:
             raise InvalidLikelihoodRequest(
                 "Likelihood scoring requires a nonempty continuation and a retained context token"
             )
         return EncodedLikelihood(
-            prompt_token_ids=(context + continuation)[-maximum_prompt:],
+            prompt_token_ids=(context_tokens + continuation_tokens)[-maximum_prompt:],
             context_tokens=retained_context,
-            continuation_tokens=len(continuation),
+            continuation_tokens=len(continuation_tokens),
             truncated_context_tokens=removed,
         )
 
-    async def __call__(self, request: LikelihoodRequest, *, seed: int | None) -> LikelihoodScore:
-        prepared = self.prepare(request)
+    async def __call__(self, context: str, continuation: str, *, seed: int | None) -> LikelihoodScore:
+        prepared = self.prepare(context, continuation)
         payload = {
             "model": self.model,
             "prompt": list(prepared.prompt_token_ids),

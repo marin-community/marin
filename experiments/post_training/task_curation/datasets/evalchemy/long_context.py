@@ -4,13 +4,20 @@
 """Full pinned long-context populations and run-time eligibility policy."""
 
 from taskcompendium.evaluation.spec import (
+    CohortOrder,
+    CohortPolicy,
     ContextPolicy,
     EvaluationProtocol,
+    LimitStage,
     Metric,
     MetricKind,
     OperationKind,
+    OutputBudget,
+    OutputFit,
+    PrefixProbe,
     Sampling,
     SummaryKind,
+    TaskGroup,
     TrialPolicy,
 )
 from taskcompendium.importers.evalchemy.grader import scorer_revision
@@ -21,6 +28,16 @@ from taskcompendium.importers.evalchemy.long_context import (
     graphwalks_item,
     mrcr_item,
     read_mrcr,
+)
+from taskcompendium.importers.evalchemy.scorers.long_context import (
+    GRAPHWALKS_CONTEXT_MARGIN,
+    GRAPHWALKS_MIN_OUTPUT_TOKENS,
+    GRAPHWALKS_OUTPUT_BUDGET_MULTIPLIER,
+    GRAPHWALKS_PREFIX_CHARS_PER_TOKEN,
+    GRAPHWALKS_PREFIX_TOKEN_MARGIN,
+    GRAPHWALKS_REASONING_RESERVE,
+    MRCR_BIN_UPPER_BOUNDS,
+    MRCR_NEEDLE_COUNTS,
 )
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
@@ -42,6 +59,33 @@ MRCR_FILES = (
 )
 GRAPHWALKS_REVISION = "be6cc6ecf9b4d495b07d1ff53d2a16598e90fed7"
 GRAPHWALKS_FILES = ("graphwalks_128k_and_shorter.parquet", "graphwalks_256k_to_1mil.parquet")
+MRCR_COHORT = CohortPolicy(
+    groups=tuple(
+        TaskGroup(
+            labels={"mrcr.bin_upper": str(upper), "mrcr.needles": str(needles)},
+            minimum_context=upper,
+        )
+        for upper in MRCR_BIN_UPPER_BOUNDS
+        for needles in MRCR_NEEDLE_COUNTS
+    ),
+    order=CohortOrder.ROUND_ROBIN,
+    limit_stage=LimitStage.ELIGIBLE,
+)
+GRAPHWALKS_COHORT = CohortPolicy(limit_stage=LimitStage.ELIGIBLE)
+GRAPHWALKS_CONTEXT_POLICY = ContextPolicy(
+    output_fit=OutputFit.REQUIRE,
+    context_reserve=GRAPHWALKS_CONTEXT_MARGIN,
+    output_budget=OutputBudget(
+        minimum=GRAPHWALKS_MIN_OUTPUT_TOKENS,
+        reserve=GRAPHWALKS_REASONING_RESERVE,
+        multiplier=GRAPHWALKS_OUTPUT_BUDGET_MULTIPLIER,
+    ),
+    prefix_probe=PrefixProbe(
+        message_index=0,
+        characters_per_token=GRAPHWALKS_PREFIX_CHARS_PER_TOKEN,
+        token_margin=GRAPHWALKS_PREFIX_TOKEN_MARGIN,
+    ),
+)
 
 
 def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
@@ -84,7 +128,8 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
                 expected_population=MRCR_SOURCE_POPULATION,
-                context_policy=ContextPolicy(kind="mrcr", max_context=max_context),
+                context_window=max_context,
+                cohort=MRCR_COHORT,
             ),
             mrcr_item,
         ),
@@ -140,7 +185,8 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     primary_metric="f1",
                     summary=SummaryKind.MEAN,
                     expected_population=1150,
-                    context_policy=ContextPolicy(kind="graphwalks", max_context=None),
+                    cohort=GRAPHWALKS_COHORT,
+                    context_policy=GRAPHWALKS_CONTEXT_POLICY,
                 ),
                 graphwalks_item,
             ),

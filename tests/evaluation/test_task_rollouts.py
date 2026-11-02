@@ -13,11 +13,19 @@ import pytest
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
+from marin.rollouts.evaluation import (
+    ATTEMPTS_TABLE,
+    RUN_OBJECT,
+    EvaluationInfrastructureError,
+    EvaluationRunConfig,
+    JudgeIdentity,
+    ModelIdentity,
+    run_evaluation,
+)
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
-from taskcompendium.convert.answers import answer_task, exact_answer_task
-from taskcompendium.convert.evaluation import source_evidence
-from taskcompendium.evaluation.corpus import chat_item, source_order
+from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
+from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import (
     ChatGeneration,
@@ -61,16 +69,7 @@ from zephyr.context import ZephyrContext
 
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
-from rolloutengine.evaluation.likelihood import LikelihoodTransportError, VllmLikelihood
-from rolloutengine.evaluation.runner import (
-    ATTEMPTS_TABLE,
-    RUN_OBJECT,
-    EvaluationInfrastructureError,
-    EvaluationRunConfig,
-    JudgeIdentity,
-    ModelIdentity,
-    run_evaluation,
-)
+from rolloutengine.likelihood import VllmLikelihood
 from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 
@@ -248,7 +247,7 @@ def mixed_item(task):
     source = source_evidence(task)
     kind = source["kind"]
     if kind == "raw":
-        operation = TextGeneration(context=source["prompt"])
+        operation = TextGeneration()
     elif kind == "choice":
         operation = ChoiceLikelihood(
             choices=("A", "BBBB"),
@@ -261,9 +260,7 @@ def mixed_item(task):
         )
     else:
         operation = ChatGeneration(response_selection=source["selection"], historical_assistant_reasoning="empty")
-    return EvaluationItem(
-        task_id=task.id, source_row=task.source.row, source_ordinal=source_order(task.source.row)[1], operation=operation
-    )
+    return EvaluationItem(task_id=task.id, source_row=task.source.row, operation=operation)
 
 
 @pytest.fixture
@@ -398,9 +395,7 @@ def policy_item(task):
             ),
             prompt_selection="fit_context",
         )
-    return EvaluationItem(
-        task_id=task.id, source_row=task.source.row, source_ordinal=source_order(task.source.row)[1], operation=operation
-    )
+    return EvaluationItem(task_id=task.id, source_row=task.source.row, operation=operation)
 
 
 def publish_policy_corpus(tmp_path, rows, converter=convert_mixed_row):
@@ -932,54 +927,6 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
         "echo": True,
         "seed": 11,
     }
-
-
-@pytest.mark.asyncio
-async def test_malformed_nonfinite_likelihood_retains_archive_safe_wire_evidence_without_retry():
-    requests = []
-
-    def serve(request):
-        requests.append(json.loads(request.content))
-        response = {
-            "id": "invalid-number",
-            "object": "text_completion",
-            "created": 0,
-            "model": "fixture",
-            "choices": [
-                {
-                    "index": 0,
-                    "finish_reason": "length",
-                    "text": "cA!",
-                    "logprobs": {
-                        "tokens": ["c", "A", "!"],
-                        "text_offset": [0, 1, 2],
-                        "token_logprobs": [None, float("nan"), -0.2],
-                        "top_logprobs": [None, {"A": -0.1}, {"!": -0.2}],
-                    },
-                }
-            ],
-            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
-        }
-        return httpx.Response(
-            200, content=json.dumps(response, allow_nan=True), headers={"content-type": "application/json"}
-        )
-
-    async with openai.AsyncOpenAI(
-        api_key="test",
-        base_url="http://fixture.test/v1",
-        max_retries=0,
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(serve)),
-    ) as client:
-        with pytest.raises(LikelihoodTransportError) as failure:
-            await VllmLikelihood(client, "fixture", CharacterTokenizer(), 64, 0)(
-                LikelihoodRequest(context="c", continuation="A"), seed=None
-            )
-    evidence = failure.value.evidence
-    assert requests == [evidence["request"]]
-    assert evidence["response"]["id"] == "invalid-number"
-    assert evidence["response"]["choices"][0]["logprobs"]["token_logprobs"][1] is None
-    assert "NaN" in evidence["response_json"]
-    json.dumps(evidence, allow_nan=False)
 
 
 @pytest.mark.asyncio

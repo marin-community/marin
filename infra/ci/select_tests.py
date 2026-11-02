@@ -61,6 +61,9 @@ class SourceRoot:
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
+    SourceRoot("lib/rolloutengine/src/rolloutengine", "lib/rolloutengine/src"),
+    SourceRoot("lib/shellbox/src/shellbox", "lib/shellbox/src"),
+    SourceRoot("lib/taskcompendium/src/taskcompendium", "lib/taskcompendium/src"),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("infra/shellsim", "."),
@@ -100,7 +103,6 @@ UV_PACKAGE: dict[str, str] = {
 
 UV_EXTRAS: dict[str, list[str]] = {
     "marin": ["cpu", "dedup"],
-    "rolloutengine": ["evaluation"],
     "iac": ["deploy"],
     "verifyit": ["all"],
 }

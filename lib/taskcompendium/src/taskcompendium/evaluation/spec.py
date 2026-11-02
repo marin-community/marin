@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationInput
 
-EVALUATION_SCHEMA_VERSION = 2
+EVALUATION_SCHEMA_VERSION = 3
 type ResponseSelection = Literal["combine", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning"]
 
 
@@ -49,7 +49,6 @@ class ChatGeneration(EvaluationModel):
 
 class TextGeneration(EvaluationModel):
     kind: Literal[OperationKind.TEXT_GENERATION] = OperationKind.TEXT_GENERATION
-    context: str
 
 
 class LikelihoodRequest(EvaluationModel):
@@ -87,40 +86,75 @@ Operation = Annotated[
 ]
 
 
-class MRCRContextSelection(EvaluationModel):
-    """Official o200k counts select benchmark bins; served prompt counts still govern transport."""
-
-    kind: Literal["mrcr"] = "mrcr"
-    official_tokens: int = Field(ge=0)
-    bin_upper: int | None = Field(gt=0)
-    needles: Literal[2, 4, 8]
+class CohortOrder(StrEnum):
+    SOURCE = "source"
+    ROUND_ROBIN = "round_robin"
 
 
-class GraphWalksContextSelection(EvaluationModel):
-    """Private gold text supplies the source's served-tokenizer output budget."""
+class LimitStage(StrEnum):
+    CANDIDATES = "candidates"
+    ELIGIBLE = "eligible"
 
-    kind: Literal["graphwalks"] = "graphwalks"
-    prompt_chars: int = Field(ge=0)
-    gold_output: str
+
+class TaskGroup(EvaluationModel):
+    """Match task annotations; declaration order defines round-robin group order."""
+
+    tags: tuple[str, ...] = ()
+    labels: dict[str, str] = Field(default_factory=dict)
+    minimum_context: int | None = Field(default=None, gt=0)
+
+
+class CohortPolicy(EvaluationModel):
+    groups: tuple[TaskGroup, ...] = ()
+    order: CohortOrder = CohortOrder.SOURCE
+    limit_stage: LimitStage = LimitStage.CANDIDATES
+
+
+class OutputFit(StrEnum):
+    SHRINK = "shrink"
+    REQUIRE = "require"
+
+
+class OutputBudget(EvaluationModel):
+    """Multiply the larger of the minimum and reference-token count plus reserve."""
+
+    minimum: int = Field(gt=0)
+    reserve: int = Field(ge=0)
+    multiplier: int = Field(gt=0)
+
+
+class PrefixProbe(EvaluationModel):
+    message_index: int = Field(ge=0)
+    characters_per_token: int = Field(gt=0)
+    token_margin: int = Field(ge=0)
 
 
 class ContextPolicy(EvaluationModel):
-    """Select eligible source rows before applying the run's row limit and trials."""
+    """Resolve a generation budget and admit prompts using the run's tokenizer."""
 
-    kind: Literal["mrcr", "graphwalks"]
-    max_context: int | None = Field(gt=0)
+    output_fit: OutputFit = OutputFit.SHRINK
+    context_reserve: int = Field(default=64, ge=0)
+    output_budget: OutputBudget | None = None
+    prefix_probe: PrefixProbe | None = None
 
-
-ContextSelection = Annotated[MRCRContextSelection | GraphWalksContextSelection, Field(discriminator="kind")]
+    @model_validator(mode="after")
+    def check_prefix_probe(self) -> "ContextPolicy":
+        if self.prefix_probe is not None and self.output_fit is not OutputFit.REQUIRE:
+            raise ValueError("Prefix probes require a fixed output allowance")
+        return self
 
 
 class EvaluationItem(EvaluationModel):
     task_id: str
     source_row: str
-    source_ordinal: int = Field(ge=0)
     operation: Operation
     groups: dict[str, str] = Field(default_factory=dict)
-    context_selection: ContextSelection | None = None
+    reference_text: str | None = None
+    prompt_characters: int | None = Field(default=None, ge=0)
+
+    @property
+    def source_ordinal(self) -> int:
+        return int(self.source_row.rsplit(":", 1)[1])
 
 
 class Sampling(EvaluationModel):
@@ -198,7 +232,7 @@ class LikelihoodMetric(EvaluationModel):
 class EvaluationProtocol(EvaluationModel):
     """The immutable benchmark settings needed to execute and interpret individual attempts."""
 
-    schema_version: Literal[2] = EVALUATION_SCHEMA_VERSION
+    schema_version: Literal[3] = EVALUATION_SCHEMA_VERSION
     benchmark: str
     version: str
     operation: OperationKind
@@ -209,6 +243,7 @@ class EvaluationProtocol(EvaluationModel):
     summary: SummaryKind
     expected_population: int = Field(gt=0)
     context_window: int | None = Field(default=None, gt=0)
+    cohort: CohortPolicy = Field(default_factory=CohortPolicy)
     context_policy: ContextPolicy | None = None
     likelihood_metrics: tuple[LikelihoodMetric, ...] = ()
 

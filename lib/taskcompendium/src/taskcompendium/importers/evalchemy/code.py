@@ -16,8 +16,8 @@ import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.adapters import completion
 
+from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.code import THREAD_ENVIRONMENT
-from taskcompendium.convert.evaluation import source_evidence
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationItem, TextGeneration
@@ -111,7 +111,7 @@ def python_item(task: TaskSpec, *, completion: bool) -> EvaluationItem:
     item = chat_item(task)
     row = source_evidence(task)
     if completion:
-        item = item.model_copy(update={"operation": TextGeneration(context=row["prompt"])})
+        item = item.model_copy(update={"operation": TextGeneration()})
     return item.model_copy(
         update={"groups": {"direction": row["direction"]} if "direction" in row else {"language": "python"}}
     )

@@ -19,10 +19,8 @@ import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import ExactSpec
 
-from taskcompendium.convert.answers import answer_task
-from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.answers import answer_task, source_evidence
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation.corpus import source_order
 from taskcompendium.evaluation.spec import (
     ChoiceLikelihood,
     ContinuationLikelihood,
@@ -242,7 +240,6 @@ def choice_item(task: TaskSpec, *, subject: str = "") -> EvaluationItem:
     return EvaluationItem(
         task_id=task.id,
         source_row=task.source.row,
-        source_ordinal=source_order(task.source.row)[1],
         operation=ChoiceLikelihood.model_validate(source_evidence(task)["operation"]),
         groups={"subject": subject} if subject else {},
     )
@@ -281,7 +278,6 @@ def continuation_item(task: TaskSpec) -> EvaluationItem:
     return EvaluationItem(
         task_id=task.id,
         source_row=task.source.row,
-        source_ordinal=source_order(task.source.row)[1],
         operation=ContinuationLikelihood.model_validate(source_evidence(task)["operation"]),
     )
 
@@ -332,7 +328,7 @@ def compile_generation_documents(
         document = generation_document(doc, template.name)
         yield {
             "document": doc,
-            "operation": TextGeneration(context=prefix + document.prompt).model_dump(mode="json"),
+            "prompt": prefix + document.prompt,
             "references": document.references,
             "profile": template.name,
             "fewshot_indices": indices,
@@ -350,10 +346,9 @@ def read_generation_file(
 
 
 def convert_generation_document(row: RawRow, context: ConversionContext, *, benchmark: str) -> TaskSpec:
-    operation = TextGeneration.model_validate(row.data["operation"])
     task = conversation_task(
         row,
-        events=(TextMessage(role="user", content=operation.context),),
+        events=(TextMessage(role="user", content=row.data["prompt"]),),
         package=source_package(
             "harness_generation",
             {
@@ -381,6 +376,5 @@ def generation_item(task: TaskSpec) -> EvaluationItem:
     return EvaluationItem(
         task_id=task.id,
         source_row=task.source.row,
-        source_ordinal=source_order(task.source.row)[1],
-        operation=TextGeneration.model_validate(source_evidence(task)["operation"]),
+        operation=TextGeneration(),
     )

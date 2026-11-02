@@ -12,9 +12,8 @@ from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
 
-from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation.corpus import source_order
 from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem
 from taskcompendium.importers.evalchemy.grader import source_package
 from taskcompendium.importers.evalchemy.scorers.nupa_preparation import NupaAnswerFormat
@@ -150,7 +149,6 @@ def nupa_item(task: TaskSpec) -> EvaluationItem:
     return EvaluationItem(
         task_id=task.id,
         source_row=task.source.row,
-        source_ordinal=source_order(task.source.row)[1],
         operation=ChatGeneration(),
         groups={
             "source_id": source["id"],

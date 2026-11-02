@@ -5,15 +5,16 @@
 
 import hashlib
 import json
+from bisect import bisect_left
 from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any, Literal
 
+import pyarrow.parquet as pq
 from pydantic import Field, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path
 from rigging.filesystem.storage_path import StoragePath
-from zephyr.readers import load_parquet
 
 from taskcompendium.evaluation.spec import (
     ChatGeneration,
@@ -23,7 +24,7 @@ from taskcompendium.evaluation.spec import (
     ResponseSelection,
     TextGeneration,
 )
-from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
+from taskcompendium.models import TaskSpec, TextMessage
 
 MANIFEST_FILENAME = "evaluation_manifest.json"
 PROTOCOL_FILENAME = "protocol.json"
@@ -80,16 +81,64 @@ class EvaluationCase:
     item: EvaluationItem
 
 
+@dataclass(frozen=True)
+class TaskRow:
+    """Queryable task annotations and its location in an immutable corpus."""
+
+    task_id: str
+    source_row: str
+    tags: tuple[str, ...]
+    labels: dict[str, str]
+    shard: int
+    position: int
+
+
+TASK_INDEX_COLUMNS = ("task_id", "source_dataset", "source_revision", "source_row", "tags", "labels")
+ITEM_INDEX_COLUMNS = ("task_id", "source_row")
+
+
+def parquet_rows(
+    path: StoragePath, *, columns: tuple[str, ...] | None = None, positions: Collection[int] | None = None
+) -> Iterator[dict[str, Any]]:
+    """Read bounded batches, skipping row groups without requested row positions."""
+    selected = sorted(positions) if positions is not None else None
+    payload = columns is None or bool({"task_json", "evaluation_json"}.intersection(columns))
+    batch_size = 1 if payload else 4096
+    with path.open("rb") as stream:
+        parquet = pq.ParquetFile(stream)
+        start = 0
+        for group in range(parquet.num_row_groups):
+            end = start + parquet.metadata.row_group(group).num_rows
+            wanted = None
+            if selected is not None:
+                wanted = frozenset(selected[bisect_left(selected, start) : bisect_left(selected, end)])
+                if not wanted:
+                    start = end
+                    continue
+            offset = start
+            for batch in parquet.iter_batches(batch_size=batch_size, columns=columns, row_groups=[group]):
+                if wanted is None:
+                    yield from batch.to_pylist()
+                else:
+                    for index in range(len(batch)):
+                        if offset + index in wanted:
+                            yield batch.slice(index, 1).to_pylist()[0]
+                offset += len(batch)
+            start = end
+
+
 def source_order(locator: str) -> tuple[str, int]:
     file, index = locator.rsplit(":", 1)
-    return file, int(index)
+    ordinal = int(index)
+    if not file or ordinal < 0:
+        raise ValueError(f"Invalid source locator: {locator}")
+    return file, ordinal
 
 
 def chat_item(task: TaskSpec, *, response_selection: ResponseSelection = "combine") -> EvaluationItem:
     return EvaluationItem(
         task_id=task.id,
         source_row=task.source.row,
-        source_ordinal=source_order(task.source.row)[1],
         operation=ChatGeneration(response_selection=response_selection),
     )
 
@@ -120,33 +169,34 @@ def canonical_task(
         raise ValueError("Evaluation task provenance differs from its corpus")
     if "eval" not in task.tags:
         raise ValueError(f"Evaluation task lacks its eval tag: {task.id}")
+    if tuple(row["tags"]) != task.tags or dict(row["labels"]) != task.labels:
+        raise ValueError(f"Evaluation annotations differ from its canonical task: {task.id}")
     return task
 
 
 def validate_item(item: EvaluationItem, protocol: EvaluationProtocol) -> None:
     if item.operation.kind != protocol.operation:
         raise ValueError(f"Evaluation operation differs from its protocol: {item.task_id}")
-    if item.source_ordinal != source_order(item.source_row)[1]:
-        raise ValueError(f"Evaluation ordinal differs from its source locator: {item.task_id}")
-    policy, selection = protocol.context_policy, item.context_selection
-    if (policy is None) != (selection is None) or (
-        policy is not None and selection is not None and policy.kind != selection.kind
-    ):
-        raise ValueError(f"Evaluation context metadata differs from its policy: {item.task_id}")
+    source_order(item.source_row)
+    policy = protocol.context_policy
+    if policy is not None and policy.output_budget is not None and item.reference_text is None:
+        raise ValueError(f"Evaluation output budget requires reference text: {item.task_id}")
+    if policy is not None and policy.prefix_probe is not None and item.prompt_characters is None:
+        raise ValueError(f"Evaluation prefix probe requires a source character count: {item.task_id}")
+
+
+def text_prompt(task: TaskSpec) -> str:
+    """Return the canonical raw prompt, requiring exactly one user text message."""
+    events = task.context.events
+    if len(events) != 1 or not isinstance(events[0], TextMessage) or events[0].role != "user":
+        raise ValueError(f"Raw evaluation requires one canonical user text message: {task.id}")
+    return events[0].content
 
 
 def validate_task_item(task: TaskSpec, item: EvaluationItem) -> None:
     if not isinstance(item.operation, TextGeneration):
         return
-    context = task.context
-    if (
-        not isinstance(context, ConversationInput)
-        or len(context.events) != 1
-        or not isinstance(context.events[0], TextMessage)
-        or context.events[0].role != "user"
-        or context.events[0].content != item.operation.context
-    ):
-        raise ValueError(f"Raw evaluation prompt differs from its canonical task: {task.id}")
+    text_prompt(task)
 
 
 def evaluation_protocol(root: str) -> tuple[EvaluationProtocol, EvaluationManifest]:
@@ -179,10 +229,10 @@ def _shard_items(path: StoragePath, shard: EvaluationShard, protocol: Evaluation
     previous: tuple[str, int] | None = None
     count = 0
     first = last = ""
-    for row in load_parquet(str(path / shard.items.path)):
+    for row in parquet_rows(path / shard.items.path):
         item = EvaluationItem.model_validate_json(row["evaluation_json"])
         validate_item(item, protocol)
-        if item.task_id != row["task_id"]:
+        if (item.task_id, item.source_row) != (row["task_id"], row["source_row"]):
             raise ValueError("Evaluation sidecar row changed its task identity")
         order = source_order(item.source_row)
         if previous is not None and order <= previous:
@@ -206,33 +256,101 @@ def evaluation_items(root: str) -> Iterator[EvaluationItem]:
         yield from _shard_items(path, shard, protocol)
 
 
-def evaluation_cases(root: str, *, source_rows: Collection[str] | None = None) -> Iterator[EvaluationCase]:
-    """Verify complete shard joins while decoding task payloads only for the requested source rows."""
-    protocol, manifest = evaluation_protocol(root)
-    path = StoragePath(root)
-    selected = frozenset(source_rows) if source_rows is not None else None
-    for shard in sorted(manifest.shards, key=lambda shard: source_order(shard.first_source_row)):
-        if file_sha256(path / shard.tasks.path) != shard.tasks.sha256:
-            raise ValueError(f"Evaluation corpus file changed after publication: {shard.tasks.path}")
-        for task_row, item in zip(
-            load_parquet(str(path / shard.tasks.path)), _shard_items(path, shard, protocol), strict=True
-        ):
-            if (
-                task_row["task_id"],
-                task_row["source_row"],
-                task_row["source_dataset"],
-                task_row["source_revision"],
-            ) != (item.task_id, item.source_row, manifest.source_dataset, manifest.source_revision):
-                raise ValueError("Evaluation sidecar does not match its canonical row")
-            if selected is not None and item.source_row not in selected:
+class EvaluationCorpus:
+    """One immutable read session, retaining small annotations and verified file identities."""
+
+    def __init__(self, root: str):
+        self.path = StoragePath(root)
+        self.protocol, self.manifest = evaluation_protocol(root)
+        self.shards = sorted(self.manifest.shards, key=lambda shard: source_order(shard.first_source_row))
+        self._rows: tuple[TaskRow, ...] | None = None
+
+    def rows(self) -> tuple[TaskRow, ...]:
+        """Verify the complete identity join without reading either JSON payload column."""
+        if self._rows is not None:
+            return self._rows
+        rows = []
+        for index, shard in enumerate(self.shards):
+            for file in (shard.tasks, shard.items):
+                if file_sha256(self.path / file.path) != file.sha256:
+                    raise ValueError(f"Evaluation corpus file changed after publication: {file.path}")
+            previous = None
+            first = last = ""
+            count = 0
+            for position, (task, item) in enumerate(
+                zip(
+                    parquet_rows(self.path / shard.tasks.path, columns=TASK_INDEX_COLUMNS),
+                    parquet_rows(self.path / shard.items.path, columns=ITEM_INDEX_COLUMNS),
+                    strict=True,
+                )
+            ):
+                if (task["task_id"], task["source_row"], task["source_dataset"], task["source_revision"]) != (
+                    item["task_id"],
+                    item["source_row"],
+                    self.manifest.source_dataset,
+                    self.manifest.source_revision,
+                ):
+                    raise ValueError("Evaluation sidecar does not match its canonical row")
+                order = source_order(task["source_row"])
+                if previous is not None and order <= previous:
+                    raise ValueError("Evaluation corpus is not in source order")
+                previous = order
+                first = first or task["source_row"]
+                last = task["source_row"]
+                count += 1
+                rows.append(
+                    TaskRow(
+                        task["task_id"], task["source_row"], tuple(task["tags"]), dict(task["labels"]), index, position
+                    )
+                )
+            if count != shard.rows or (first, last) != (shard.first_source_row, shard.last_source_row):
+                raise ValueError("Evaluation shard population or source bounds differ from its manifest")
+        self._rows = tuple(rows)
+        return self._rows
+
+    def cases(self, *, source_rows: Collection[str] | None = None) -> Iterator[EvaluationCase]:
+        """Decode bounded selected payloads after verifying their complete projected identity join."""
+        selected = frozenset(source_rows) if source_rows is not None else None
+        rows = self.rows()
+        for index, shard in enumerate(self.shards):
+            requested = [row for row in rows if row.shard == index and (selected is None or row.source_row in selected)]
+            if not requested:
                 continue
-            task = canonical_task(
-                task_row,
-                source_dataset=manifest.source_dataset,
-                source_revision=manifest.source_revision,
-                importer_revision=manifest.importer_revision,
-            )
-            if (task.id, task.source.row) != (item.task_id, item.source_row):
-                raise ValueError("Evaluation sidecar does not match its canonical task")
-            validate_task_item(task, item)
-            yield EvaluationCase(task, item)
+            positions = [row.position for row in requested]
+            for projected, task_row, item_row in zip(
+                requested,
+                parquet_rows(self.path / shard.tasks.path, positions=positions),
+                parquet_rows(self.path / shard.items.path, positions=positions),
+                strict=True,
+            ):
+                task = canonical_task(
+                    task_row,
+                    source_dataset=self.manifest.source_dataset,
+                    source_revision=self.manifest.source_revision,
+                    importer_revision=self.manifest.importer_revision,
+                )
+                item = EvaluationItem.model_validate_json(item_row["evaluation_json"])
+                validate_item(item, self.protocol)
+                if (task.id, task.source.row) != (item.task_id, item.source_row) or (
+                    task.id,
+                    task.source.row,
+                    task.tags,
+                    task.labels,
+                ) != (projected.task_id, projected.source_row, projected.tags, projected.labels):
+                    raise ValueError("Evaluation sidecar does not match its canonical task")
+                validate_task_item(task, item)
+                yield EvaluationCase(task, item)
+
+
+def task_rows(root: str, *, tags: Collection[str] = (), labels: Mapping[str, str] | None = None) -> Iterator[TaskRow]:
+    """Query projected task annotations without decoding canonical tasks or evaluation inputs."""
+    for row in EvaluationCorpus(root).rows():
+        if all(tag in row.tags for tag in tags) and all(
+            row.labels.get(key) == value for key, value in (labels or {}).items()
+        ):
+            yield row
+
+
+def evaluation_cases(root: str, *, source_rows: Collection[str] | None = None) -> Iterator[EvaluationCase]:
+    """Verify corpus identities and decode only requested canonical tasks and evaluation inputs."""
+    yield from EvaluationCorpus(root).cases(source_rows=source_rows)

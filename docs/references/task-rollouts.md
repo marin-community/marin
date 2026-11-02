@@ -5,7 +5,7 @@
 The engine holds the machine factories and the harnesses; each run passes the model, the policy under rollout.
 The caller owns concurrency, retries, group grading, and training projections.
 The [evaluation driver](evaluation-tasks.md),
-`rolloutengine.evaluation.runner.run_evaluation`, supplies that caller for
+`marin.rollouts.evaluation.run_evaluation`, supplies that caller for
 published evaluation corpora and writes raw FineStore attempts. Its CLI is
 `experiments.evaluation.task_driver`. TaskCompendium supplies corpus metadata and
 selection policy; consumers compute summaries from the raw observations.
@@ -32,7 +32,7 @@ flowchart TD
 
 ## Task and runtime specs
 
-`TaskSpec` contains the task definition: public context, tools, output paths, answer type, answer format, grader, environment requirements, resources, source, and tags.
+`TaskSpec` contains the task definition: public context, tools, output paths, answer type, answer format, grader, environment requirements, resources, source, tags, and labels.
 Its `environment_requirements` includes capabilities, an optional digest-pinned Docker image, workdir, setup commands, environment variables, and named tool-provider contracts.
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, declares separate requirements in `grader.environment`.
 

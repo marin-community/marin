@@ -17,7 +17,7 @@ from iris.client.client import IrisClient, IrisContext, Job, iris_ctx_scope
 from iris.cluster.client import remote_client
 from iris.cluster.types import ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
-from rolloutengine.evaluation.runner import (
+from marin.rollouts.evaluation import (
     ATTEMPTS_TABLE,
     EvaluationInfrastructureError,
     EvaluationRunConfig,

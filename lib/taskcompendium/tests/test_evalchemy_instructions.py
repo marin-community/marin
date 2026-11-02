@@ -74,8 +74,6 @@ def test_instruction_publication_preserves_prompt_channel_and_private_constraint
         client.shutdown()
     assert case.task.context.events == (TextMessage(role="user", content=prompt),)
     assert case.item.operation.kind == operation
-    if profile is InstructionProfile.HARNESS:
-        assert case.item.operation.context == prompt
     assert not case.task.resources.worker
     private = {resource.path: resource_bytes(resource) for resource in case.task.resources.verifier}
     assert json.loads(private["config.json"]) == {

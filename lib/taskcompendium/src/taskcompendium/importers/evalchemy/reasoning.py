@@ -12,7 +12,7 @@ from typing import Any
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.readers import load_parquet
 
-from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (

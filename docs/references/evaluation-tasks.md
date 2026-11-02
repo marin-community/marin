@@ -1,8 +1,8 @@
 # Evaluation tasks
 
 Evaluation corpora pair canonical `TaskSpec` rows with a benchmark protocol and
-per-row execution inputs. RolloutEngine executes the corpus and writes raw
-attempts to FineStore. Evaldash summary computation and raw-archive ingestion
+per-row execution inputs. Marin's evaluation application executes the corpus and
+writes raw attempts to FineStore. Evaldash summary computation and raw-archive ingestion
 remain separate work; this path produces no headline score or legacy
 `record.json`.
 
@@ -10,12 +10,13 @@ remain separate work; this path produces no headline score or legacy
 
 | Owner | Responsibility |
 | --- | --- |
-| `experiments/post_training/task_curation/` | Pinned acquisition, environment declarations, artifact graphs, and the `EvalDataset` binding |
+| `experiments/post_training/task_curation/` | Pinned acquisition, environments, artifact graphs, and dataset-specific cohort and budget declarations |
 | `taskcompendium.importers.evalchemy` | Source parsing, prompts, conversion, item builders, rubrics, and source grading programs |
 | `taskcompendium.evaluation` | Typed metadata, corpus readers, response policy, and pure cohort selection |
 | `taskcompendium.pipeline.evaluation` | Population-preserving corpus publication |
 | `verifyit` | Shared comparisons, mathematical equivalence, judge transport, and structured verdicts |
-| `rolloutengine.evaluation` | Generation and likelihood execution, grading, attempt bookkeeping, and FineStore writes |
+| `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, and resume |
+| `rolloutengine` | Single-attempt execution, harnesses, and chat, completion, and likelihood transport |
 | `experiments.evaluation.task_driver` | CLI, endpoint and credential binding, retry/backoff, Shellbox factories, and Iris submission |
 | Shellbox | Machine isolation, resource access, and outer execution deadlines |
 
@@ -25,17 +26,33 @@ live in `datasets/evalchemy/`; the shared catalog is
 `experiments.post_training.task_curation.sources.all_sources()`.
 
 Import `EvaluationProtocol`, `EvaluationItem`, `OperationKind`, and `SummaryKind`
-from `taskcompendium.evaluation.spec`. The protocol's `schema_version` is `2`,
+from `taskcompendium.evaluation.spec`. The protocol's `schema_version` is `3`,
 independent of TaskSpec and corpus-manifest schema versions. It records sampling,
 trial seeds, metric meanings, summary semantics, context policy, and the expected
 full source population. `EvaluationItem` joins each task to its original source
-position and stores operation inputs, grouping, and selection metadata.
+position and stores additional operation inputs, summary groups, and private
+reference text when needed. Raw-generation prompts come from TaskSpec's context.
+
+TaskSpec tags and string-valued labels are projected into normalized Parquet.
+`task_rows(root, tags=("eval",), labels={...})` queries those columns without
+decoding conversations or grader resources. A protocol's `CohortPolicy` matches
+ordered `TaskGroup` declarations against those annotations, in source or
+round-robin order. Groups can require a minimum model context. Missing active
+groups and overlapping group matches fail rather than changing the cohort.
+
+Dataset-specific declarations live beside their recipes. MRCR declares its
+bin/needle label groups there; neither the generic schema nor the selector knows
+MRCR. GraphWalks declares a reference-token output budget and prefix probe using
+generic `ContextPolicy` fields. Reference counts use the run's pinned tokenizer.
 
 Operations distinguish chat generation, raw-text generation, choice likelihood,
 and continuation likelihood. Chat preserves the source conversation without an
 added submission instruction. Likelihood preserves context/continuation token
-boundaries and source normalization. Row eligibility precedes the run's source
-limit and trial expansion. Context selection records exclusions and token
+boundaries and source normalization. Ordinary protocols limit candidate rows
+before context preflight. Protocols with `LimitStage.ELIGIBLE`, including MRCR
+and GraphWalks, refill after context exclusions until the eligible-row limit is
+met or candidates are exhausted. Both apply limits before trial expansion.
+Context selection records exclusions and token
 budgets; it never silently truncates an oversized chat prompt.
 
 Use CalVer for authored recipe and protocol revisions. Keep upstream commit
@@ -62,7 +79,7 @@ source overrides use the curation CLI's `--input-file` and `--input` options;
 their byte hashes enter artifact identity.
 
 Create `run-config.json` using `EvaluationRunConfig` from
-`rolloutengine.evaluation.runner`. Replace model, tokenizer, and serving fields
+`marin.rollouts.evaluation`. Replace model, tokenizer, and serving fields
 with the identities of the actual endpoint:
 
 ```json
@@ -89,16 +106,18 @@ with the identities of the actual endpoint:
 ```bash
 uv run --package marin-core --group test python \
   -m experiments.evaluation.task_driver --local \
-  --dataset scratch/eval-curation/evalchemy-math500 \
+  --dataset "$CORPUS_ROOT" \
   --config run-config.json --endpoint-file endpoint.txt \
   --output scratch/eval-run
 ```
 
-`endpoint.txt` contains the OpenAI-compatible base URL. Supply its credential in
+Set `CORPUS_ROOT` to the completed corpus root reported by curation, rather than
+assuming a path beneath its output directory. `endpoint.txt` contains the
+OpenAI-compatible base URL. Supply its credential in
 `OPENAI_API_KEY`, or select another variable with `--api-key-env`. Repeat
 `--dataset` for mixed-corpus runs; `source_limit` applies separately to each
-corpus before trial expansion. Standalone library callers install
-`marin-rolloutengine[evaluation]` and supply clients and machine factories to
+corpus before trial expansion. Library callers install `marin-core` and supply
+clients and machine factories to
 `run_evaluation`.
 
 Concurrency defaults to 64 attempts across generation and grading. The explicit
@@ -146,15 +165,17 @@ process exit. Shellbox provides the sandbox and bounds the whole grader command.
 
 | Corpus file | Contract |
 | --- | --- |
-| `normalize/*.parquet` | Canonical tasks in the conversion `task_json` column |
+| `normalize/*.parquet` | Canonical tasks in `task_json`, with projected identities, tags and labels |
 | `evaluation/*.parquet` | `EvaluationItem` rows keyed by task ID and original source position |
 | `protocol.json` | Versioned benchmark execution and interpretation policy |
 | `manifest.json` | Conversion provenance and row accounting |
 | `evaluation_manifest.json` | Completion marker binding protocol, population, provenance, and shard hashes |
 
-`evaluation_cases(root)` in `taskcompendium.evaluation.corpus` verifies these
-bindings and streams joined tasks. `evaluation_items(root)` reads sidecars
-without decoding large TaskSpecs. Duplicate rows at different source positions
+`EvaluationCorpus` in `taskcompendium.evaluation.corpus` verifies hashes and the
+complete projected identity join once per read session. It decodes requested
+tasks in bounded batches and skips unrelated Parquet row groups.
+`evaluation_cases(root)` streams joined tasks; `evaluation_items(root)` streams
+sidecars without decoding TaskSpecs. Duplicate rows at different source positions
 remain distinct. Publication checks the full expected population independently
 of run-time sampling; MRCR's pinned source population is 2,400 rows.
 
@@ -172,7 +193,10 @@ backoff between passes; each pass processes all supplied corpora before
 reporting retryable failures. Solver SDK retries are disabled. Verifyit handles
 judge HTTP retries separately under the source's transport policy.
 
-Resume rejects changed model, driver, corpus, protocol, or run settings. Consumers
+Resume rejects changed model, execution revision, corpus, protocol, or run settings.
+The application-owned execution revision prevents terminal grades from different
+execution semantics being mixed; it is independent of library release versions.
+Consumers
 must select the latest terminal physical attempt for each dataset snapshot,
 source row, and trial to avoid counting retries twice. Terminal rows have
 `phase="finished"`; choose the highest `retry` index. Rows left at

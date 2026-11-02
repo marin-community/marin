@@ -41,7 +41,7 @@ evaluation protocol sidecars. See [evaluation tasks](../../../docs/references/ev
 for declarations, outputs and the standard evaluation driver.
 `evaluation.py` binds `EvalDataset` recipes to
 `taskcompendium.pipeline.evaluation.publish_evaluation_corpus`. Evaluation
-protocols use schema version 2 from `taskcompendium.evaluation.spec`; source
+protocols use schema version 3 from `taskcompendium.evaluation.spec`; source
 adapters live under `taskcompendium.importers` and `taskcompendium.convert`,
 including reusable benchmark modules in `taskcompendium.importers.evalchemy`.
 

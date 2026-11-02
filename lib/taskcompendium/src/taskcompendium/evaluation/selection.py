@@ -1,36 +1,31 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Select a reproducible evaluation cohort without truncating canonical prompts."""
+"""Select reproducible cohorts from task annotations and declarative token budgets."""
 
-from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from itertools import zip_longest
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_cases, evaluation_items
+from taskcompendium.evaluation.corpus import EvaluationCase, EvaluationCorpus, TaskRow, source_order, text_prompt
 from taskcompendium.evaluation.spec import (
     ChatGeneration,
+    CohortOrder,
+    CohortPolicy,
+    ContextPolicy,
     EvaluationProtocol,
-    GraphWalksContextSelection,
-    MRCRContextSelection,
+    LimitStage,
+    OutputFit,
     TextGeneration,
-)
-from taskcompendium.importers.evalchemy.scorers.long_context import (
-    GRAPHWALKS_CONTEXT_MARGIN,
-    GRAPHWALKS_PREFIX_CHARS_PER_TOKEN,
-    GRAPHWALKS_PREFIX_TOKEN_MARGIN,
-    graphwalks_output_budget,
-    interleave_mrcr_indices,
 )
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import conversation_messages
 
 SELECTIONS_TABLE = "evaluation_selection"
-CONTEXT_MARGIN = 64
 
 
 class EvaluationTokenizer(Protocol):
@@ -88,8 +83,8 @@ def prompt_variant(
         raise ValueError("Prompt selection requires the run's pinned tokenizer")
     for variant in sorted(operation.variants, key=lambda variant: variant.fewshot, reverse=True):
         text = "".join(message["content"] for message in conversation_messages(variant.context.events))
-        # The source stops reducing examples at zero shots. Ordinary context preflight
-        # then lowers the output cap or excludes a prompt that cannot fit at all.
+        # Zero shots is the source's final fallback; rendered-chat preflight still
+        # reduces its output budget or excludes it when no output token can fit.
         if variant.fewshot == 0 or len(tokenizer.encode(text, add_special_tokens=False)) < context_window - max_tokens:
             return case.task.model_copy(update={"context": variant.context})
     raise ValueError(f"No declared prompt variant fits the model context: {case.task.id}")
@@ -101,16 +96,18 @@ def prompt_tokens(
     tokenizer: EvaluationTokenizer,
     *,
     prefix_chars: int | None = None,
+    prefix_message: int = 0,
 ) -> int:
     operation = case.item.operation
     if isinstance(operation, TextGeneration):
-        return len(tokenizer.encode(operation.context, add_special_tokens=False))
+        prompt = text_prompt(case.task)
+        return len(tokenizer.encode(prompt if prefix_chars is None else prompt[:prefix_chars], add_special_tokens=False))
     assert isinstance(operation, ChatGeneration)
     assert protocol.sampling is not None
     messages = wire_messages(conversation_messages(case.task.context.events), operation)
     if prefix_chars is not None:
-        (message,) = messages
-        messages = [{**message, "content": message["content"][:prefix_chars]}]
+        message = messages[prefix_message]
+        messages[prefix_message] = {**message, "content": message["content"][:prefix_chars]}
     return len(
         tokenizer.apply_chat_template(
             messages,
@@ -145,43 +142,48 @@ def _context_decision(
     )
     if protocol.sampling is None:
         return SelectionDecision(record, case)
-    maximum = min(max_tokens, protocol.sampling.max_tokens or max_tokens)
-    case = replace(case, task=prompt_variant(case, context_window, maximum, tokenizer))
+    cap = min(max_tokens, protocol.sampling.max_tokens or max_tokens)
+    case = replace(case, task=prompt_variant(case, context_window, cap, tokenizer))
     if tokenizer is None:
         if protocol.context_policy is not None:
             raise ValueError("Context-selected evaluations require the served model's pinned tokenizer")
-        return SelectionDecision(record.model_copy(update={"max_tokens": maximum}), case)
-    metadata = case.item.context_selection
-    if isinstance(metadata, GraphWalksContextSelection):
-        reference_tokens = len(tokenizer.encode(metadata.gold_output, add_special_tokens=False))
-        maximum = graphwalks_output_budget(reference_tokens)
+        return SelectionDecision(record.model_copy(update={"max_tokens": cap}), case)
+    policy = protocol.context_policy or ContextPolicy()
+    maximum = cap
+    if policy.output_budget is not None:
+        assert case.item.reference_text is not None
+        reference_tokens = len(tokenizer.encode(case.item.reference_text, add_special_tokens=False))
+        budget = policy.output_budget
+        maximum = budget.multiplier * max(budget.minimum, reference_tokens + budget.reserve)
         record = record.model_copy(update={"reference_tokens": reference_tokens})
-        if maximum > min(max_tokens, protocol.sampling.max_tokens or max_tokens):
+        if maximum > cap and policy.output_fit is OutputFit.REQUIRE:
             return SelectionDecision(
                 record.model_copy(
-                    update={
-                        "status": SelectionStatus.EXCLUDED,
-                        "reason": "output_cap",
-                        "max_tokens": maximum,
-                    }
+                    update={"status": SelectionStatus.EXCLUDED, "reason": "output_cap", "max_tokens": maximum}
                 ),
                 None,
             )
-        allowance = context_window - maximum - GRAPHWALKS_CONTEXT_MARGIN
-        if allowance <= 0:
-            return SelectionDecision(
-                record.model_copy(
-                    update={
-                        "status": SelectionStatus.EXCLUDED,
-                        "reason": "context_window",
-                        "max_tokens": maximum,
-                    }
-                ),
-                None,
+        maximum = min(maximum, cap)
+    allowance = context_window - maximum - policy.context_reserve
+    if policy.output_fit is OutputFit.REQUIRE and allowance <= 0:
+        return SelectionDecision(
+            record.model_copy(
+                update={"status": SelectionStatus.EXCLUDED, "reason": "context_window", "max_tokens": maximum}
+            ),
+            None,
+        )
+    probe = policy.prefix_probe
+    if probe is not None:
+        assert case.item.prompt_characters is not None
+        if case.item.prompt_characters > allowance * probe.characters_per_token:
+            prefix = prompt_tokens(
+                case,
+                protocol,
+                tokenizer,
+                prefix_chars=allowance * probe.characters_per_token,
+                prefix_message=probe.message_index,
             )
-        if metadata.prompt_chars > allowance * GRAPHWALKS_PREFIX_CHARS_PER_TOKEN:
-            prefix = prompt_tokens(case, protocol, tokenizer, prefix_chars=allowance * GRAPHWALKS_PREFIX_CHARS_PER_TOKEN)
-            if prefix > allowance + GRAPHWALKS_PREFIX_TOKEN_MARGIN:
+            if prefix > allowance + probe.token_margin:
                 return SelectionDecision(
                     record.model_copy(
                         update={
@@ -193,7 +195,8 @@ def _context_decision(
                     ),
                     None,
                 )
-        size = prompt_tokens(case, protocol, tokenizer)
+    size = prompt_tokens(case, protocol, tokenizer)
+    if policy.output_fit is OutputFit.REQUIRE:
         if size > allowance:
             return SelectionDecision(
                 record.model_copy(
@@ -207,8 +210,7 @@ def _context_decision(
                 None,
             )
     else:
-        size = prompt_tokens(case, protocol, tokenizer)
-        maximum = min(maximum, context_window - size - CONTEXT_MARGIN)
+        maximum = min(maximum, context_window - size - policy.context_reserve)
         if maximum < 1:
             return SelectionDecision(
                 record.model_copy(
@@ -224,71 +226,30 @@ def _context_decision(
     return SelectionDecision(record.model_copy(update={"max_tokens": maximum, "prompt_tokens": size}), case)
 
 
-def _mrcr_cases(
-    root: str,
-    protocol: EvaluationProtocol,
-    dataset_id: str,
-    context_window: int,
-    max_tokens: int,
-    limit: int | None,
-    tokenizer: EvaluationTokenizer | None,
-) -> Iterator[SelectionDecision]:
-    items = list(evaluation_items(root))
-    cells: dict[tuple[int, int], list[int]] = defaultdict(list)
-    for index, item in enumerate(items):
-        metadata = item.context_selection
-        assert isinstance(metadata, MRCRContextSelection)
-        if metadata.bin_upper is not None:
-            cells[(metadata.bin_upper, metadata.needles)].append(index)
-    ordered = (
-        interleave_mrcr_indices(cells, context_window) if any(upper <= context_window for upper, _ in cells) else []
-    )
-    ranks = {items[index].source_row: rank for rank, index in enumerate(ordered)}
-    decisions: dict[str, Selection] = {}
-    eligible: list[str] = []
-    batch_size = limit or max(1, len(ordered))
-    for offset in range(0, len(ordered), batch_size):
-        batch = {items[index].source_row for index in ordered[offset : offset + batch_size]}
-        for case in evaluation_cases(root, source_rows=batch):
-            decision = _context_decision(
-                case, protocol, dataset_id, context_window, max_tokens, tokenizer, ranks[case.item.source_row]
-            )
-            decisions[case.item.source_row] = decision.record
-            if decision.case is not None:
-                eligible.append(case.item.source_row)
-        if limit is not None and len(eligible) >= limit:
-            break
-    # Keep only small decisions while preflighting; decode the selected TaskSpecs for execution.
-    eligible.sort(key=ranks.__getitem__)
-    selected_rows = frozenset(eligible if limit is None else eligible[:limit])
-    cases = evaluation_cases(root, source_rows=selected_rows)
-    for item in items:
-        record = decisions.get(item.source_row)
-        if item.source_row in selected_rows:
-            case = next(cases)
-            assert case.item.source_row == item.source_row and record is not None
-            yield SelectionDecision(record, case)
-        elif record is not None and record.status is SelectionStatus.EXCLUDED:
-            yield SelectionDecision(record, None)
-        else:
-            rank = ranks.get(item.source_row)
-            yield SelectionDecision(
-                Selection(
-                    dataset=dataset_id,
-                    source_row=item.source_row,
-                    source_ordinal=item.source_ordinal,
-                    status=(
-                        SelectionStatus.EXCLUDED if rank is None or record is not None else SelectionStatus.UNINSPECTED
-                    ),
-                    reason="official_bin" if rank is None else "source_limit",
-                    rank=rank,
-                    context_window=context_window,
-                    max_tokens=record.max_tokens if record is not None else None,
-                    prompt_tokens=record.prompt_tokens if record is not None else None,
-                    reference_tokens=None,
-                ),
-                None,
-            )
+def _candidate_rows(rows: Sequence[TaskRow], policy: CohortPolicy, context_window: int) -> list[TaskRow]:
+    if not policy.groups:
+        return list(rows)
+    groups = [
+        group for group in policy.groups if group.minimum_context is None or group.minimum_context <= context_window
+    ]
+    cells: list[list[TaskRow]] = [[] for _ in groups]
+    for row in rows:
+        matches = [
+            index
+            for index, group in enumerate(groups)
+            if all(tag in row.tags for tag in group.tags)
+            and all(row.labels.get(key) == value for key, value in group.labels.items())
+        ]
+        if len(matches) > 1:
+            raise ValueError(f"Task matches overlapping cohort groups: {row.source_row}")
+        if matches:
+            cells[matches[0]].append(row)
+    missing = [group for group, cell in zip(groups, cells, strict=True) if not cell]
+    if missing:
+        raise ValueError(f"Evaluation corpus has no examples for requested groups: {missing}")
+    if policy.order is CohortOrder.SOURCE:
+        return sorted((row for cell in cells for row in cell), key=lambda row: source_order(row.source_row))
+    return [row for cohort_round in zip_longest(*cells) for row in cohort_round if row is not None]
 
 
 def select_cases(
@@ -301,47 +262,81 @@ def select_cases(
     limit: int | None,
     tokenizer: EvaluationTokenizer | None,
 ) -> Iterator[SelectionDecision]:
-    """Yield source-order decisions, retaining MRCR's interleaved cohort rank separately."""
+    """Yield a full source-order ledger with task-group ordering and the declared limit stage."""
+    corpus = EvaluationCorpus(root)
+    if protocol.fingerprint != corpus.protocol.fingerprint:
+        raise ValueError("Selection protocol differs from its published corpus")
     if protocol.context_window is not None:
         context_window = min(context_window, protocol.context_window)
-    policy = protocol.context_policy
-    if policy is not None and policy.max_context is not None:
-        context_window = min(context_window, policy.max_context)
-    selected_rows: set[str] | None = None
-    if policy is not None and policy.kind == "mrcr":
-        yield from _mrcr_cases(root, protocol, dataset_id, context_window, max_tokens, limit, tokenizer)
-        return
-    elif policy is None:
-        selected_rows = set()
-        for index, item in enumerate(evaluation_items(root)):
-            if limit is not None and index >= limit:
+    rows = corpus.rows()
+    policy = protocol.cohort
+    ordered = _candidate_rows(rows, policy, context_window)
+    ranks = {row.source_row: rank for rank, row in enumerate(ordered)}
+    candidates = ordered[:limit] if policy.limit_stage is LimitStage.CANDIDATES and limit is not None else ordered
+    decisions: dict[str, Selection] = {}
+    variants: dict[str, int] = {}
+    eligible: list[str] = []
+    batch_size = limit or max(1, len(candidates))
+    for offset in range(0, len(candidates), batch_size):
+        batch = {row.source_row for row in candidates[offset : offset + batch_size]}
+        for case in corpus.cases(source_rows=batch):
+            rank = ranks[case.item.source_row]
+            if policy.order is CohortOrder.SOURCE and policy.limit_stage is LimitStage.ELIGIBLE:
+                rank = len(eligible)
+            decision = _context_decision(case, protocol, dataset_id, context_window, max_tokens, tokenizer, rank)
+            decisions[case.item.source_row] = decision.record
+            if decision.case is not None:
+                eligible.append(case.item.source_row)
+                operation = case.item.operation
+                if isinstance(operation, ChatGeneration) and operation.prompt_selection == "fit_context":
+                    variants[case.item.source_row] = next(
+                        index
+                        for index, variant in enumerate(operation.variants)
+                        if variant.context == decision.case.task.context
+                    )
+            if (
+                policy.order is CohortOrder.SOURCE
+                and policy.limit_stage is LimitStage.ELIGIBLE
+                and limit is not None
+                and len(eligible) >= limit
+            ):
                 break
-            selected_rows.add(item.source_row)
-    cases = evaluation_cases(root, source_rows=selected_rows)
-    selected = 0
-    for index, item in enumerate(evaluation_items(root)):
-        rank = selected if policy is not None else index
-        if limit is not None and rank >= limit:
+        if limit is not None and len(eligible) >= limit:
+            break
+    eligible.sort(key=ranks.__getitem__)
+    selected = frozenset(eligible if limit is None else eligible[:limit])
+    cases = corpus.cases(source_rows=selected)
+    for row in rows:
+        record = decisions.get(row.source_row)
+        if row.source_row in selected:
+            case = next(cases)
+            assert case.item.source_row == row.source_row and record is not None
+            if row.source_row in variants:
+                operation = case.item.operation
+                assert isinstance(operation, ChatGeneration)
+                case = replace(
+                    case,
+                    task=case.task.model_copy(update={"context": operation.variants[variants[row.source_row]].context}),
+                )
+            yield SelectionDecision(record, case)
+        elif record is not None and record.status is SelectionStatus.EXCLUDED:
+            yield SelectionDecision(record, None)
+        else:
+            rank = ranks.get(row.source_row)
             yield SelectionDecision(
                 Selection(
                     dataset=dataset_id,
-                    source_row=item.source_row,
-                    source_ordinal=item.source_ordinal,
-                    status=SelectionStatus.UNINSPECTED,
-                    reason="source_limit",
-                    rank=None,
+                    source_row=row.source_row,
+                    source_ordinal=source_order(row.source_row)[1],
+                    status=(
+                        SelectionStatus.EXCLUDED if rank is None or record is not None else SelectionStatus.UNINSPECTED
+                    ),
+                    reason="group_filter" if rank is None else "source_limit",
+                    rank=rank if policy.order is CohortOrder.ROUND_ROBIN else None,
                     context_window=context_window,
-                    max_tokens=None,
-                    prompt_tokens=None,
-                    reference_tokens=None,
+                    max_tokens=record.max_tokens if record is not None else None,
+                    prompt_tokens=record.prompt_tokens if record is not None else None,
+                    reference_tokens=record.reference_tokens if record is not None else None,
                 ),
                 None,
             )
-            continue
-        case = next(cases)
-        if case.item.source_row != item.source_row:
-            raise ValueError("Evaluation metadata and canonical tasks have different source positions")
-        decision = _context_decision(case, protocol, dataset_id, context_window, max_tokens, tokenizer, rank or 0)
-        if decision.case is not None:
-            selected += 1
-        yield decision

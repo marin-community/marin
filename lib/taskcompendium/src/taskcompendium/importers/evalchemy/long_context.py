@@ -9,15 +9,10 @@ from functools import cache
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 
-from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
-from taskcompendium.evaluation.spec import (
-    ChatGeneration,
-    EvaluationItem,
-    GraphWalksContextSelection,
-    MRCRContextSelection,
-)
+from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem
 from taskcompendium.importers.evalchemy.grader import source_package
 from taskcompendium.importers.evalchemy.scorers.long_context import FINAL_ANSWER_PREFIX, mrcr_bin
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
@@ -76,6 +71,10 @@ def convert_mrcr(row: RawRow, context: ConversionContext) -> TaskSpec:
                 events=tuple(TextMessage(role=message["role"], content=message["content"]) for message in messages)
             ),
             "tags": ("eval", "source:evalchemy", "benchmark:MRCR", "long-context"),
+            "labels": {
+                "mrcr.needles": str(data["n_needles"]),
+                **({"mrcr.bin_upper": str(data["mrcr_bin_upper"])} if data["mrcr_bin_upper"] is not None else {}),
+            },
         }
     )
 
@@ -85,11 +84,6 @@ def mrcr_item(task: TaskSpec) -> EvaluationItem:
     return chat_item(task).model_copy(
         update={
             "operation": ChatGeneration(historical_assistant_reasoning="empty"),
-            "context_selection": MRCRContextSelection(
-                official_tokens=row["official_tokens"],
-                bin_upper=row["mrcr_bin_upper"],
-                needles=row["n_needles"],
-            ),
             "groups": {"cell": f"{row['mrcr_bin_upper']}_{row['n_needles']}needle"},
         }
     )
@@ -113,10 +107,8 @@ def graphwalks_item(task: TaskSpec) -> EvaluationItem:
     row = source_evidence(task)
     return chat_item(task).model_copy(
         update={
-            "context_selection": GraphWalksContextSelection(
-                prompt_chars=row["prompt_chars"],
-                gold_output=FINAL_ANSWER_PREFIX + " [" + ", ".join(row["answer_nodes"]) + "]",
-            ),
+            "prompt_characters": row["prompt_chars"],
+            "reference_text": FINAL_ANSWER_PREFIX + " [" + ", ".join(row["answer_nodes"]) + "]",
             "groups": {"problem_type": row["problem_type"]},
         }
     )

@@ -28,10 +28,12 @@ flowchart LR
 
 ## Evaluation corpora
 
-`taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 2),
+`taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 3),
 `EvaluationItem`, operation kinds, and consumer summary semantics.
 `taskcompendium.evaluation.corpus` verifies and reads published corpora;
-`taskcompendium.evaluation.selection` selects eligible source rows.
+`taskcompendium.evaluation.selection` selects cohorts using projected task tags
+and labels, ordered groups, and tokenizer-dependent context budgets. Dataset
+declarations supply source-specific groups and budget parameters.
 `taskcompendium.pipeline.evaluation` publishes the full pinned population with
 conversion provenance and shard hashes. These metadata schemas are independent
 of the TaskSpec schema below.
@@ -42,7 +44,7 @@ live in `taskcompendium.importers.evalchemy`. Experiment-owned `EvalDataset` dec
 bind them to acquisition and environment recipes. Verifyit supplies shared
 scoring and judge transport; Shellbox isolates executable graders.
 
-`rolloutengine.evaluation` executes generation and likelihood operations and
+`marin.rollouts.evaluation` executes generation and likelihood operations and
 writes raw FineStore attempts. Evaldash summary computation and raw-archive
 ingestion remain separate work. See [evaluation tasks](../../docs/references/evaluation-tasks.md)
 for publication, execution, and retry/resume contracts.
@@ -64,9 +66,10 @@ for publication, execution, and retry/resume contracts.
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
-| `schema_version` | Version of the serialized spec: `0.28`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.30`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
+| `labels` | String-valued annotations for queries and cohort selection. Tags and labels are also projected into normalized Parquet. |
 
 A task has one final result. TaskSpec does not define ordered task stages or stage-reward aggregation.
 
@@ -426,6 +429,5 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.28` adds `FinalAction.normal_submission` for private unsolvability labels while
-preserving the normal answer presentation. Reconvert
+Schema `0.30` adds queryable task labels. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.

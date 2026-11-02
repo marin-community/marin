@@ -6255,6 +6255,7 @@ dependencies = [
     { name = "marin-levanter", extra = ["serve"] },
     { name = "marin-rigging", extra = ["prometheus"] },
     { name = "marin-rolloutengine" },
+    { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "marin-zephyr" },
     { name = "markdownify" },
     { name = "mcp" },
@@ -6330,7 +6331,6 @@ vizier = [
 dev = [
     { name = "click" },
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
-    { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "mkdocs" },
     { name = "mkdocs-git-authors-plugin" },
@@ -6376,7 +6376,6 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
-    { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "plotly" },
     { name = "pytest" },
@@ -6424,6 +6423,7 @@ requires-dist = [
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
     { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "markdownify", specifier = ">=0.14.1" },
     { name = "mcp", specifier = ">=2" },
@@ -6470,7 +6470,6 @@ provides-extras = ["gpu", "tpu", "cpu", "vizier", "dedup", "datakit"]
 dev = [
     { name = "click", specifier = ">=8.0" },
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
-    { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "mkdocs", specifier = ">=1.5.0" },
     { name = "mkdocs-git-authors-plugin", specifier = ">=0.9.0" },
@@ -6516,7 +6515,6 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
-    { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "plotly" },
     { name = "pytest", specifier = ">=8.3.2" },
@@ -7561,41 +7559,28 @@ dependencies = [
     { name = "pydantic" },
 ]
 
-[package.optional-dependencies]
-evaluation = [
-    { name = "marin-finestore" },
-    { name = "marin-taskcompendium", extra = ["pipeline"] },
-]
-
 [package.dev-dependencies]
 test = [
-    { name = "jinja2" },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
-    { name = "transformers" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "marin-finestore", marker = "extra == 'evaluation'", editable = "lib/finestore" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
-    { name = "marin-taskcompendium", extras = ["pipeline"], marker = "extra == 'evaluation'", editable = "lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },
     { name = "pydantic", specifier = ">=2" },
 ]
-provides-extras = ["evaluation"]
 
 [package.metadata.requires-dev]
 test = [
-    { name = "jinja2", specifier = ">=3.1" },
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "lib/shellbox" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
-    { name = "transformers", specifier = ">=4.48" },
 ]
 
 [[package]]

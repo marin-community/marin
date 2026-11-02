@@ -13,8 +13,7 @@ import random
 
 from rigging.filesystem.storage_path import StoragePath
 
-from taskcompendium.convert.answers import answer_task
-from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.answers import answer_task, source_evidence
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationItem
 from taskcompendium.importers.evalchemy.judge_prompts import simpleqa_spec

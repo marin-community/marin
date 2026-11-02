@@ -36,7 +36,5 @@ def convert_instructions(row: RawRow, context: ConversionContext, *, profile: In
 def instruction_item(task: TaskSpec, *, profile: InstructionProfile) -> EvaluationItem:
     item = chat_item(task)
     if profile is InstructionProfile.HARNESS:
-        (message,) = task.context.events
-        assert message.content is not None
-        return item.model_copy(update={"operation": TextGeneration(context=message.content)})
+        return item.model_copy(update={"operation": TextGeneration()})
     return item
