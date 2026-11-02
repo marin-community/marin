@@ -10,9 +10,11 @@ For each eval item, with ``n`` its indexed features:
 * ``corpus_coverage``: the share of the item's features found anywhere.
 
 Features that occur in more than ``--common-doc-limit`` hit documents are dropped
-first: they are common phrases (licence text, boilerplate), not item leaks.
+first: they are common phrases (licence text, boilerplate), not item leaks. With
+``--drop-dir``, each source's decon drop set and the global one are dropped too,
+as the decon item rule drops them, so coverage matches that rule.
 
-Usage: aggregate.py BLOOM_DIR OUT_DIR HITS_DIR... --common-doc-limit N [--threads T] [--memory-limit M]
+Usage: aggregate.py BLOOM_DIR OUT_DIR HITS_DIR... --common-doc-limit N [--drop-dir D] [--threads T] [--memory-limit M]
 Each HITS_DIR holds ``<source>/hits/*.parquet`` as `scan.py` writes it.
 """
 
@@ -25,7 +27,13 @@ CONTAMINATED_COVERAGE = 0.5
 
 
 def aggregate(
-    bloom_dir: str, out_dir: str, hits_dirs: list[str], common_doc_limit: int, threads: int, memory_limit: str
+    bloom_dir: str,
+    out_dir: str,
+    hits_dirs: list[str],
+    common_doc_limit: int,
+    threads: int,
+    memory_limit: str,
+    drop_dir: str | None = None,
 ) -> str:
     """Write ``items.parquet``, ``doc_item.parquet`` and ``hash_docs.parquet`` to OUT_DIR; return a summary."""
     hits = " UNION ALL ".join(
@@ -64,6 +72,22 @@ def aggregate(
     con.execute(f"COPY hash_docs TO '{out_dir}/hash_docs.parquet'")
     con.execute(f"CREATE TABLE common AS SELECT hash FROM hash_docs WHERE docs > {common_doc_limit}")
     con.execute(f"CREATE TABLE doc_hash AS SELECT * FROM ({hits}) WHERE hash NOT IN (SELECT hash FROM common)")
+    if drop_dir is not None:
+        # Drop sets live at ``<drop_dir>/<source>/*.parquet``, plus ``<drop_dir>/_global``.
+        d = drop_dir.rstrip("/")
+        con.execute(
+            f"""
+            CREATE TABLE drop_set AS
+            SELECT DISTINCT regexp_extract(filename, '{d}/(.+)/[^/]+\\.parquet$', 1) AS source, hash
+            FROM read_parquet('{d}/**/*.parquet', filename = true)
+            """
+        )
+        con.execute(
+            """
+            DELETE FROM doc_hash d USING drop_set s
+            WHERE s.hash = d.hash AND (s.source = d.source OR s.source = '_global')
+            """
+        )
     # Hit lists and the index hold distinct pairs, so count(*) counts distinct features.
     con.execute(
         """
@@ -125,10 +149,17 @@ def main() -> None:
     parser.add_argument("--common-doc-limit", type=int, required=True)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--memory-limit", default="12GB")
+    parser.add_argument("--drop-dir")
     args = parser.parse_args()
     print(
         aggregate(
-            args.bloom_dir, args.out_dir, args.hits_dirs, args.common_doc_limit, args.threads, args.memory_limit
+            args.bloom_dir,
+            args.out_dir,
+            args.hits_dirs,
+            args.common_doc_limit,
+            args.threads,
+            args.memory_limit,
+            args.drop_dir,
         )
     )
 

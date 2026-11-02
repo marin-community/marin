@@ -6,9 +6,10 @@
 The full scan's hits are ~300k small files and the aggregation needs more memory
 than a dev worker has. This job copies the hits and the Bloom index to local
 disk, aggregates once per common-feature limit, and uploads each result to
-``OUT_PREFIX/limit_<N>/``.
+``OUT_PREFIX/limit_<N>/``. With ``--drop-url`` it also drops the decon drop sets
+there, as the decon item rule does (see `aggregate.py`).
 
-Usage: aggregate_job.py BLOOM_URL OUT_PREFIX HITS_URL... --common-doc-limit N [N ...]
+Usage: aggregate_job.py BLOOM_URL OUT_PREFIX HITS_URL... --common-doc-limit N [N ...] [--drop-url URL]
 """
 
 import argparse
@@ -47,6 +48,7 @@ def main() -> None:
     parser.add_argument("--common-doc-limit", type=int, nargs="+", required=True)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--memory-limit", default="40GB")
+    parser.add_argument("--drop-url")
     args = parser.parse_args()
     work = tempfile.mkdtemp(prefix="contam-aggregate-")
     bloom_dir = os.path.join(work, "bloom")
@@ -58,11 +60,15 @@ def main() -> None:
         local = os.path.join(work, "hits", os.path.basename(url.rstrip("/")))
         fetch_tree(url, local)
         hits_dirs.append(local)
+    drop_dir = None
+    if args.drop_url:
+        drop_dir = os.path.join(work, "drop")
+        fetch_tree(args.drop_url, drop_dir)
     for limit in args.common_doc_limit:
         out_dir = os.path.join(work, f"limit_{limit}")
         os.makedirs(out_dir)
         start = time.time()
-        summary = aggregate(bloom_dir, out_dir, hits_dirs, limit, args.threads, args.memory_limit)
+        summary = aggregate(bloom_dir, out_dir, hits_dirs, limit, args.threads, args.memory_limit, drop_dir)
         print(f"limit {limit} after {time.time() - start:.0f}s\n{summary}", flush=True)
         out_fs, out_path = filesystem_for(f"{args.out_prefix.rstrip('/')}/limit_{limit}")
         for name in OUTPUTS:
