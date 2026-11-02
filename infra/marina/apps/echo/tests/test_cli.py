@@ -382,10 +382,32 @@ def test_refused_work_log_add_warns_once_per_agent_session(monkeypatch, tmp_path
     args.func(args)
     next_session = capsys.readouterr()
 
+    refused = [
+        "Work-log entry not written: POST /work_log -> 403: caller lacks IAP access",
+        "Later work-log adds in this agent session are skipped.",
+    ]
     assert len(posts) == 2
-    assert first.err and not first.out
-    assert (repeat.out, repeat.err) == ("", "")
-    assert next_session.err
+    assert (first.out, first.err.splitlines()) == ("", refused)
+    assert (repeat.out, repeat.err.splitlines()) == (
+        "",
+        [
+            "Work-log entry not written: Echo refused an earlier entry in this session. "
+            f"Delete {tmp_path / 'echo-work-log-denied-session-a'} after fixing access."
+        ],
+    )
+    assert (next_session.out, next_session.err.splitlines()) == ("", refused)
+
+
+def test_access_denied_exits_with_its_message_outside_work_log_add(monkeypatch):
+    monkeypatch.setattr(cli, "bearer_token", lambda: "token")
+    monkeypatch.setattr(
+        cli.requests, "request", lambda method, url, **options: http_response(403, {"detail": "caller lacks IAP access"})
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        cli.request("GET", "/work_log")
+
+    assert raised.value.code == "GET /work_log -> 403: caller lacks IAP access"
 
 
 def test_work_log_add_server_error_fails_without_skipping_later_adds(monkeypatch, tmp_path, capsys):
@@ -408,10 +430,11 @@ def test_work_log_add_server_error_fails_without_skipping_later_adds(monkeypatch
     )
 
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO("Run 81 reached 20.2% MFU.\n"))
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as raised:
         args.func(args)
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO("Run 81 reached 20.2% MFU.\n"))
     args.func(args)
 
+    assert raised.value.code == "POST /work_log -> 500: database unavailable"
     assert posts == [{"project": "grug-moe", "title": "20% MFU", "body": "Run 81 reached 20.2% MFU.\n"}] * 2
-    assert "4783" in capsys.readouterr().out
+    assert capsys.readouterr().out == "logged #4783\n"

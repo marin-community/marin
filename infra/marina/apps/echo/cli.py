@@ -79,8 +79,12 @@ AGENT_SESSION_ENV_VARS = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
 WORK_LOG_DENIAL_DIR = Path(tempfile.gettempdir())
 
 
-class EchoAccessDenied(Exception):
-    """The caller has no credentials for Marina, or Marina refuses the ones it has."""
+class EchoAccessDenied(SystemExit):
+    """The caller has no credentials for Marina, or Marina refuses the ones it has.
+
+    A ``SystemExit``, so every command (and ``search_benchmark``) still exits with the message;
+    ``work-log add`` catches it to warn instead.
+    """
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -503,6 +507,11 @@ def cmd_work_log_add(args: argparse.Namespace) -> None:
     # Echo, so an agent does not retry or debug access at every milestone.
     marker = work_log_denial_marker()
     if marker is not None and marker.exists():
+        print(
+            "Work-log entry not written: Echo refused an earlier entry in this session. "
+            f"Delete {marker} after fixing access.",
+            file=sys.stderr,
+        )
         return
     body = {"project": args.project, "title": args.title, "body": read_body(args.body) if args.body else None}
     try:
@@ -652,10 +661,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    try:
-        args.func(args)
-    except EchoAccessDenied as error:
-        raise SystemExit(str(error)) from error
+    args.func(args)
 
 
 if __name__ == "__main__":

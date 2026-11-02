@@ -47,6 +47,7 @@ service-account credentials. See
 [Echo setup and access](../../../infra/marina/apps/echo/README.md).
 
 If Echo refuses a write because the caller has no credentials or no IAP access,
-`add` prints one warning and exits 0. In a Claude Code or Codex session, later
-`add` calls in that session do nothing. Do not retry the write, change
-credentials, or debug access for the work log. Continue the task.
+`add` prints a warning and exits 0. In a Claude Code or Codex session, later
+`add` calls in that session skip Echo and print a one-line notice. Do not retry
+the write, change credentials, or debug access for the work log. Continue the
+task.
