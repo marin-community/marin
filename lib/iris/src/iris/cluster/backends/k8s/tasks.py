@@ -863,9 +863,11 @@ def _topology_request_annotations(
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
-_HOST_PORT_BLOCK_START = 10_000
+# Avoid the kubelet (10250) and stay below Linux's default ephemeral range
+# (32768+). Kubernetes hostPort reservations handle conflicts between Pods.
+_HOST_PORT_BLOCK_START = 20_000
 _HOST_PORT_BLOCK_SIZE = 16
-_HOST_PORT_BLOCKS = 1_250  # Keep named services below Linux's default ephemeral range (32768+).
+_HOST_PORT_BLOCKS = 750
 
 
 def _reserved_host_ports(task_id: str, names: Sequence[str]) -> dict[str, int]:

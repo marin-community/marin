@@ -480,6 +480,14 @@ def test_host_network_tasks_on_one_node_reserve_distinct_service_ports():
     assert allocations[0].isdisjoint(allocations[1])
 
 
+def test_host_network_port_block_does_not_claim_kubelet():
+    request = make_run_req("/job/940")
+    request.ports.extend(f"service_{i:02}" for i in range(11))
+    manifest = _build_pod_manifest(request, pod_config(host_network=True))
+    host_ports = {port["hostPort"] for port in manifest["spec"]["containers"][0]["ports"]}
+    assert 10250 not in host_ports
+
+
 def test_build_pod_manifest_gpu_host_network_requests_rdma():
     req = make_run_req("/test-job/0")
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))

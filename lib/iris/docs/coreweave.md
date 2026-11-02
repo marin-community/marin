@@ -102,10 +102,11 @@ also request `rdma/ib` and use `ClusterFirstWithHostNet`. Coscheduled jobs add
 Kueue topology annotations derived from
 `kubernetes_provider.kueue.topologies`, or from the CoreWeave defaults when the
 map is empty. Named ports requested by host-networked tasks are assigned a
-stable per-task block below the default ephemeral range and declared as
-Kubernetes `hostPort`s. This makes the scheduler reserve them across Pods on
-the same node; if two tasks hash to the same block, Kubernetes places them on
-separate nodes rather than letting both processes bind the same port. Each
+stable per-task block in ports 20000–31999, outside kubelet's port 10250
+and below Linux's default ephemeral range. Kubernetes `hostPort` declarations
+reserve the ports across Pods on the same node. If two tasks hash to the same
+block, Kubernetes places them on separate nodes instead of letting both
+processes bind the same port. Each
 task can request at most 16 named ports. Pods without host networking keep
 kernel-selected ports inside their separate network namespaces.
 
