@@ -1,0 +1,22 @@
+{
+  "proposer.system": "prompts/proposer/system.md",
+  "proposer.plan": "prompts/proposer/plan.md",
+  "proposer.write": "prompts/proposer/write.md",
+  "proposer.repair": "prompts/proposer/repair.md",
+  "proposer.research_criterion": "prompts/proposer/research_criterion.md",
+  "proposer.solver_machine_rule": "prompts/proposer/solver_machine_rule.md",
+  "author.system": "prompts/author/system.md",
+  "author.user": "prompts/author/user.md",
+  "author.revision": "prompts/author/revision.md",
+  "author.grading_reference": "prompts/author/grading_reference.md",
+  "author.session": "prompts/author/session.md",
+  "author.seed": "prompts/author/seed.md",
+  "author.handoff": "prompts/author/handoff.md",
+  "author.no_revision": "prompts/author/no_revision.md",
+  "author.edit_and_submit": "prompts/author/edit_and_submit.md",
+  "author.length_nudge": "prompts/author/length_nudge.md",
+  "author.nudge": "prompts/author/nudge.md",
+  "adversary.brief": "prompts/adversary/brief.md",
+  "adversary.whitebox": "prompts/adversary/whitebox.md",
+  "adversary.submit": "prompts/adversary/submit.md"
+}
