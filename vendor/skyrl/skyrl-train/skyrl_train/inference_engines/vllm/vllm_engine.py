@@ -1943,9 +1943,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         request_id = headers.get("x-request-id") or uuid4().hex
         exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
 
-        # Apply configured sampling params from generator config.
-        # Harbor requests may include their own sampling params; we override
-        # with the SkyRL generator config so rollout exploration is consistent.
+        # Evaluation requests override training defaults, including greedy temperature zero.
+        # Requests for rollout logprobs must still match the training distribution.
         apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
 
         # 1. Build request

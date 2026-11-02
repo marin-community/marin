@@ -64,6 +64,7 @@ def grug_engine_client(
         seed=23,
         vllm_v1_disable_multiproc=True,
         enable_prefix_caching=False,
+        enable_chunked_prefill=cfg.generator.enable_chunked_prefill,
         enforce_eager=cfg.generator.enforce_eager,
         engine_init_timeout_seconds=cfg.generator.engine_init_timeout_seconds,
         shared_pg=shared_pg,
