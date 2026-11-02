@@ -65,7 +65,7 @@ async def execute(
     api_key: str,
     judge_connection: JudgeConnection | None,
 ) -> None:
-    """Resolve the pinned tokenizer and endpoint transports once for the run."""
+    """Evaluate the supplied corpora and persist raw results, retaining completed attempts on resume."""
     configure_coreweave_s3()
     config = execution_config(config)
     tokenizer = AutoTokenizer.from_pretrained(

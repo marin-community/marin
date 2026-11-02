@@ -176,11 +176,9 @@ def _sympy_expression(string: str):
 
 
 def _sympy_is_equiv(candidate: str, reference: str) -> bool:
-    """Parse both sides and simplify the difference, as the reference does.
+    """Return symbolic equivalence under the pinned Minerva comparison.
 
-    Identical strings need only one parse, but still take the difference: a
-    parsed relation such as ``a\\leq b`` cannot be subtracted from itself and so
-    scores 0.
+    Identical relation strings such as ``a\\leq b`` score 0 under this comparison.
     """
 
     if threading.current_thread() is not threading.main_thread():

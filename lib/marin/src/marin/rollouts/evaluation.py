@@ -28,6 +28,21 @@ from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from openai import APIError, APIStatusError
 from pydantic import BaseModel, ConfigDict, Field
+from rolloutengine.engine import RolloutEngine
+from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
+from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
+from rolloutengine.models import (
+    GradedRolloutInterrupted,
+    MachineRuntimeSpec,
+    Model,
+    ModelRequest,
+    ModelResponseError,
+    ModelTurn,
+    Rollout,
+    RolloutLimits,
+    TaskRolloutSpec,
+    TraceMode,
+)
 from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_protocol, text_prompt
 from taskcompendium.evaluation.metrics import likelihood_metrics
@@ -52,22 +67,6 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge, judge_spec
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
-
-from rolloutengine.engine import RolloutEngine
-from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
-from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
-from rolloutengine.models import (
-    GradedRolloutInterrupted,
-    MachineRuntimeSpec,
-    Model,
-    ModelRequest,
-    ModelResponseError,
-    ModelTurn,
-    Rollout,
-    RolloutLimits,
-    TaskRolloutSpec,
-    TraceMode,
-)
 
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"

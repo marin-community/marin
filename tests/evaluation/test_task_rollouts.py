@@ -22,6 +22,11 @@ from marin.rollouts.evaluation import (
     ModelIdentity,
     run_evaluation,
 )
+from rolloutengine.chat import ChatModel
+from rolloutengine.completion import CompletionModel
+from rolloutengine.likelihood import VllmLikelihood
+from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
+from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
@@ -66,12 +71,6 @@ from verifyit.spec import (
     JudgeSpec,
 )
 from zephyr.context import ZephyrContext
-
-from rolloutengine.chat import ChatModel
-from rolloutengine.completion import CompletionModel
-from rolloutengine.likelihood import VllmLikelihood
-from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
-from rolloutengine.test_support import machine_runtime
 
 
 def convert(row: RawRow, _context: ConversionContext):
