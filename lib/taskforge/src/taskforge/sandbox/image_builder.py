@@ -394,8 +394,8 @@ def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed]) -> None
         raise ImageJobFailed(f"job {job.job_id} did not end within its scheduling and execution timeouts") from error
     if status.state == JobState.SUCCEEDED:
         return
-    host_failed = status.state in HOST_JOB_STATES or any(
-        task.exit_code == BUILD_SETUP_FAILED_EXIT for task in status.tasks
-    )
+    # The controller's JobStatus carries aggregate counts only: no per-task statuses and a job-level
+    # exit code of 0, so the build's exit code is read from its one task.
+    host_failed = status.state in HOST_JOB_STATES or job.task(0).status().exit_code == BUILD_SETUP_FAILED_EXIT
     error = ImageJobFailed if host_failed else failed
     raise error(f"job {job.job_id} ended {status.state}: {status.error_message}")

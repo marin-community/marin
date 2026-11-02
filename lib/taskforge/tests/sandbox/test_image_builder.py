@@ -137,13 +137,19 @@ def test_image_jobs_only_receive_explicit_secrets_and_storage_credentials(in_a_c
 
 @dataclass(frozen=True)
 class EndedStatus:
+    """What the controller's ``GetJobStatus`` returns: aggregates only, no tasks and a job exit code of 0."""
+
     state: JobState
     error_message: str
-    tasks: tuple[SimpleNamespace, ...]
+    exit_code: int = 0
+    tasks: tuple[object, ...] = ()
 
 
 class EndedJob:
-    """A ``Job`` whose ``wait`` returns at once with ``state``, or raises ``TimeoutError`` for ``None``."""
+    """A ``Job`` whose ``wait`` returns at once with ``state``, or raises ``TimeoutError`` for ``None``.
+
+    The task's exit code is only visible through ``task(0).status()``, as on a real controller.
+    """
 
     job_id = "/alice/taskforge-image-build-x"
 
@@ -154,7 +160,11 @@ class EndedJob:
     def wait(self, **kwargs: object) -> EndedStatus:
         if self.state is None:
             raise TimeoutError("still running")
-        return EndedStatus(self.state, "the job's log tail", (SimpleNamespace(exit_code=self.exit_code),))
+        return EndedStatus(self.state, "the job's log tail")
+
+    def task(self, index: int) -> SimpleNamespace:
+        assert index == 0
+        return SimpleNamespace(status=lambda: SimpleNamespace(exit_code=self.exit_code))
 
 
 @pytest.mark.parametrize("state", [JobState.UNSCHEDULABLE, JobState.WORKER_FAILED, JobState.KILLED, None])
