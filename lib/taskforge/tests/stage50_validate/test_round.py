@@ -7,14 +7,14 @@ the adversary trials."""
 import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
-from rolloutengine.models import Model, ModelRequest, ModelTurn, RolloutLimits
+from rolloutengine.models import Model, ModelRequest, ModelTurn, Rollout, RolloutLimits
 from shellbox.machine import Backend, MachineSpec, MachineTerminated
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import AnswerType, PlainText, Source
 from verifyit.spec import ExactSpec
@@ -44,10 +44,20 @@ from taskforge.stage40_build_with_program.step_store import (
     RLEnvBuildStepKey,
     RLEnvBuildStepStore,
 )
-from taskforge.stage50_validate.adversary import AdversaryMode, AdversaryPolicy, Claim, ClaimKind
+from taskforge.stage50_validate.adversary import (
+    FALSE_ACCEPT,
+    FALSE_REJECT,
+    AdversaryMode,
+    AdversaryPolicy,
+    Defect,
+    SearchReport,
+    Submission,
+    SubmissionRecord,
+    trial_outcome,
+)
 from taskforge.stage50_validate.control_drafts import CONTROLS_STEP
 from taskforge.stage50_validate.controls import ControlVerdict
-from taskforge.stage50_validate.outcome import Cause
+from taskforge.stage50_validate.outcome import Cause, Ungraded
 from taskforge.stage50_validate.round import (
     EarlyDecision,
     LoweringStatus,
@@ -60,6 +70,8 @@ from taskforge.stage50_validate.round import (
     write_validation,
 )
 from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff
+from taskforge.stage60_review.decision import Accept, BandOutcome, Hold, Modify
+from taskforge.stage60_review.rules import BandRules, default_review
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 from tests.stage40_build_with_program.conftest import PROPOSAL
 
@@ -132,13 +144,13 @@ def built_draft(store_root: Path) -> TaskDraft:
 
 def adversary_policy(k: int, submissions: int = 3, mode: AdversaryMode = AdversaryMode.BLACKBOX) -> AdversaryPolicy:
     return AdversaryPolicy(
+        spec=FALSE_ACCEPT,
         k=k,
         submissions=submissions,
-        repair_submissions=1,
         max_turns=6,
         sampling=LLMPolicy(max_continuations=0),
         mode=mode,
-        min_probes=3,
+        min_probes=1,
         prompts=DEFAULT_POLICY.adversary,
     )
 
@@ -182,7 +194,7 @@ def round_settings(
         max_retries=1,
         retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=2.0, jitter=0.0),
         sampling=LLMPolicy(),
-        adversary=adversary or adversary_policy(k=0),
+        adversary=(adversary,) if adversary else (),
         ledger=ledger,
     )
 
@@ -263,7 +275,7 @@ class UncalledClient:
 
     @property
     def model(self) -> str:
-        return "uncalled"
+        return "adversary"
 
     async def complete(
         self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
@@ -292,7 +304,7 @@ class AdversaryScript:
     ``release`` before its reply numbered ``hold_at`` when that is given, and keeps every conversation it was sent.
     """
 
-    turns: tuple[Submit | str, ...]
+    turns: tuple[Submit | SearchReport | str | Exception, ...]
     hold_at: int | None = None
     release: asyncio.Event = field(default_factory=asyncio.Event)
     called: asyncio.Event = field(default_factory=asyncio.Event)
@@ -314,10 +326,19 @@ class AdversaryScript:
             self.held.set()
             await self.release.wait()
         turn = self.turns[index]
+        if isinstance(turn, Exception):
+            raise turn
         if isinstance(turn, Submit):
             call = ToolCall(f"call-{index}", "submit", json.dumps({"reply": turn.reply}))
             return Completion("", "", (call,), FinishReason.TOOL_CALLS, USAGE, 0.1, 0.01, 0.09, 0, ())
         self.answered.set()
+        if isinstance(turn, SearchReport):
+            call = ToolCall(
+                f"call-{index}",
+                "finish_search",
+                json.dumps({"defects": [asdict(defect) for defect in turn.defects], "summary": turn.summary}),
+            )
+            return Completion("", "", (call,), FinishReason.TOOL_CALLS, USAGE, 0.1, 0.01, 0.09, 0, ())
         return Completion(turn, "", (), FinishReason.STOP, USAGE, 0.1, 0.01, 0.09, 0, ())
 
     async def complete_structured[T: BaseModel](
@@ -326,7 +347,7 @@ class AdversaryScript:
         raise AssertionError("an adversary makes no structured call")
 
 
-PROBES = (Submit("41"), Submit("42"), "I submitted the honest answer.\nNO_SHORTCUT")
+PROBES = (Submit("41"), Submit("42"), SearchReport((), "No findings"))
 
 
 @dataclass
@@ -543,14 +564,14 @@ async def test_adversary_trials_start_once_lowering_and_controls_exist_and_wait_
     controls_ended = max(entry.ended for entry in ledger.entries if entry.step == CONTROLS_STEP)
     adversary_trials = [e for e in ledger.entries if e.kind is EntryKind.TRIAL and e.step.startswith("adversary/")]
     solver_trials = [e for e in ledger.entries if e.kind is EntryKind.TRIAL and e.step.startswith("solver/")]
-    assert [e.step for e in adversary_trials] == ["adversary/0/0"]
+    assert [e.step for e in adversary_trials] == ["adversary/false_accept-0/0"]
     assert adversary_trials[0].started >= controls_ended
     assert adversary_trials[0].ended < solver_trials[0].ended
     # The white-box brief holds this round's controls.
     system = str(adversary.requests[0][0]["content"])
     assert all(f"control {control_id}" in system for control_id in CONTROL_IDS)
     (trial,) = result.adversary
-    assert (trial.status, trial.claim) == (TrialStatus.GRADED, Claim(ClaimKind.NO_SHORTCUT, "", ""))
+    assert (trial.status, trial.report) == (TrialStatus.GRADED, SearchReport((), "No findings"))
     # validation.json holds the adversary field without the attempt files it names.
     write_validation(context.round_dir, result)
     for name in evidence_files(result):
@@ -562,7 +583,9 @@ async def test_each_submission_is_graded_as_a_control_and_recorded_with_its_rewa
     glm_client, fake_glm, ledger, tmp_path
 ):
     fake_glm.stream(content=controls_reply("41"))
-    adversary = AdversaryScript((Submit("41"), Submit("42"), "SHORTCUT: it accepts 42.\ngrader line: expected 42"))
+    adversary = AdversaryScript(
+        (Submit("41"), Submit("42"), SearchReport((Defect((2,), "it accepts 42.", True),), "Found defect"))
+    )
     context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
 
     result = await validate_round(
@@ -572,7 +595,7 @@ async def test_each_submission_is_graded_as_a_control_and_recorded_with_its_rewa
     (trial,) = result.adversary
     graded = [(s.ordinal, s.status, s.reward, s.passed) for s in trial.submissions]
     assert graded == [(1, GradeStatus.GRADED, 0.0, False), (2, GradeStatus.GRADED, 1.0, True)]
-    assert trial.claim == Claim(ClaimKind.SHORTCUT, "it accepts 42.", "expected 42")
+    assert trial.report == SearchReport((Defect((2,), "it accepts 42.", True),), "Found defect")
     for submission in trial.submissions:
         grading = json.loads((context.round_dir / submission.attempt_file).read_bytes())
         assert grading["grade"]["reward"] == submission.reward
@@ -583,7 +606,7 @@ async def test_each_submission_is_graded_as_a_control_and_recorded_with_its_rewa
 
 async def test_the_submission_budget_grades_no_submission_past_it(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
-    adversary = AdversaryScript((Submit("40"), Submit("41"), Submit("42"), "NO_SHORTCUT"))
+    adversary = AdversaryScript((Submit("40"), Submit("41"), Submit("42"), SearchReport((), "No findings")))
     context, settings = round_context(tmp_path), round_settings(
         ledger, k=1, adversary=adversary_policy(k=1, submissions=2)
     )
@@ -619,10 +642,10 @@ async def test_a_relaunch_reruns_only_a_missing_adversary_attempt(glm_client, fa
     )
 
     steps = trial_steps(ledger, recorded)
-    assert {step for step in steps if not step.startswith("control/s")} == {"adversary/1/1"}
+    assert {step for step in steps if not step.startswith("control/s")} == {"adversary/false_accept-1/1"}
     assert again.adversary[0] == first.adversary[0]
     rerun, before = again.adversary[1], first.adversary[1]
-    assert rerun.attempt_file.endswith("adversary/1/attempt-1.json")
+    assert rerun.attempt_file.endswith("adversary/false_accept-1/attempt-1.json")
     assert [(s.ordinal, s.reward) for s in rerun.submissions] == [(s.ordinal, s.reward) for s in before.submissions]
     assert (again.solver, again.controls) == (first.solver, first.controls)
 
@@ -645,7 +668,7 @@ async def test_an_adversary_attempt_deadline_records_an_ungraded_retry(glm_clien
 
     (trial,) = result.adversary
     assert (trial.status, trial.cause) == (TrialStatus.UNGRADED, Cause.ATTEMPT_TIMEOUT)
-    assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
+    assert trial.attempt_file.endswith("adversary/false_accept-0/attempt-1.json")
     assert (context.round_dir / trial.attempt_file).exists()
 
 
@@ -662,15 +685,15 @@ async def test_an_adversary_attempt_cancelled_in_flight_leaves_no_attempt_file(g
     with pytest.raises(asyncio.CancelledError):
         await running
 
-    assert not list(context.round_dir.rglob("adversary/0/attempt-*"))
+    assert not list(context.round_dir.rglob("adversary/false_accept-0/attempt-*"))
     # The cancelled attempt's graded submission stays, so the rerun is numbered after it.
-    assert list(context.round_dir.rglob("adversary/0/submissions/0/control/s1/attempt-0.json"))
+    assert list(context.round_dir.rglob("adversary/false_accept-0/submissions/0/control/s1/attempt-0.json"))
     result = await validate_round(
         built_draft(tmp_path / "store"), context, settings, SolverModel(), UncalledClient(), AdversaryScript(PROBES)
     )
     (trial,) = result.adversary
     assert trial.status is TrialStatus.GRADED
-    assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
+    assert trial.attempt_file.endswith("adversary/false_accept-0/attempt-1.json")
 
 
 async def test_a_violated_control_with_a_modify_round_left_cancels_the_held_trials_and_names_them(
@@ -696,7 +719,7 @@ async def test_a_violated_control_with_a_modify_round_left_cancels_the_held_tria
 
     result = await asyncio.wait_for(running, timeout=30)
 
-    assert result.early == EarlyDecision(VIOLATED_CONTROL, ("solver/0", "solver/1", "adversary/0"))
+    assert result.early == EarlyDecision(VIOLATED_CONTROL, ("solver/0", "solver/1", "adversary/false_accept-0"))
     assert result.solver is not None and result.solver.trials == () and result.solver.ungraded == {}
     assert result.adversary == ()
     verdicts = {c.id: c.verdict for c in result.controls}
@@ -802,7 +825,7 @@ class FailedVerifierFactory(FixtureImageFactory):
         raise MachineTerminated("verifier worker disappeared")
 
 
-async def test_an_adversary_verifier_outage_remains_ungraded_and_retries(glm_client, fake_glm, ledger, tmp_path):
+async def test_an_adversary_verifier_outage_holds_after_bounded_retries(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     context = round_context(tmp_path)
     settings = round_settings(ledger, k=1, adversary=adversary_policy(k=1))
@@ -825,13 +848,179 @@ async def test_an_adversary_verifier_outage_remains_ungraded_and_retries(glm_cli
     )
     built = built_draft(tmp_path / "store")
     built = replace(built, task=built.task.model_copy(update={"grader": package.grader}))
-    adversary = AdversaryScript((Submit("42"), "NO_SHORTCUT"))
+    adversary = AdversaryScript((Submit("42"), SearchReport((), "No findings")))
 
     result = await validate_round(built, context, settings, SolverModel(), glm_client, adversary)
 
     (trial,) = result.adversary
     assert (trial.status, trial.cause) == (TrialStatus.UNGRADED, Cause.MACHINE_TERMINATED)
-    assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
+    assert trial.attempt_file.endswith("adversary/false_accept-0/attempt-1.json")
     assert all(s.status == GradeStatus.UNAVAILABLE for s in trial.submissions)
     first = json.loads((context.round_dir / Path(trial.attempt_file).with_name("attempt-0.json")).read_bytes())
     assert first["cause"] == Cause.MACHINE_TERMINATED
+
+
+ALL_SOLVE_RATES = BandRules(0, 1, frozenset({BandOutcome.IN_BAND}))
+
+
+@pytest.mark.parametrize("spec", [FALSE_ACCEPT, FALSE_REJECT])
+@pytest.mark.parametrize("actionable", [True, False])
+async def test_defects_use_same_contract_without_second_review(glm_client, fake_glm, ledger, tmp_path, spec, actionable):
+    fake_glm.stream(content=controls_reply("41"))
+    built = built_draft(tmp_path / "store")
+    settings = round_settings(ledger, adversary=replace(adversary_policy(k=1), spec=spec))
+    context = round_context(tmp_path)
+    report = SearchReport(
+        (Defect((1,), "Candidate exposes a defect", actionable), Defect((2,), "Informational observation", False)),
+        "Completed search",
+    )
+    checked = await validate_round(
+        built,
+        context,
+        settings,
+        SolverModel(),
+        glm_client,
+        AdversaryScript((Submit("41"), Submit("42"), report)),
+    )
+    verdict = await default_review(checked, band=ALL_SOLVE_RATES)
+    assert isinstance(verdict, Modify if actionable else Accept)
+    if isinstance(verdict, Modify):
+        assert len(verdict.findings) == 1 and "Candidate exposes a defect" in verdict.findings[0]
+    (trial,) = checked.adversary
+    assert trial.name == spec.name and trial.report == report
+    assert len(fake_glm.requests) == 1  # Controls only; no second-review model call.
+    saved_search = (context.round_dir / trial.attempt_file).read_bytes()
+    resumed = await validate_round(
+        built, context, settings, SolverModel(allowed=frozenset()), UncalledClient(), UncalledClient()
+    )
+    assert type(await default_review(resumed, band=ALL_SOLVE_RATES)) is type(verdict)
+    assert (context.round_dir / trial.attempt_file).read_bytes() == saved_search
+
+
+@pytest.mark.parametrize("ending", ["No findings", SearchReport((Defect((99,), "unknown candidate", True),), "invalid")])
+async def test_prose_or_invalid_claim_never_completes_a_search(glm_client, fake_glm, ledger, tmp_path, ending):
+    fake_glm.stream(content=controls_reply("41"))
+    settings = round_settings(ledger, adversary=replace(adversary_policy(k=1), max_turns=2))
+    checked = await validate_round(
+        built_draft(tmp_path / "store"),
+        round_context(tmp_path),
+        settings,
+        SolverModel(),
+        glm_client,
+        AdversaryScript((Submit("41"), ending)),
+    )
+    (trial,) = checked.adversary
+    assert trial.status is TrialStatus.UNGRADED and trial.report is None
+    assert not isinstance(await default_review(checked, band=ALL_SOLVE_RATES), Accept)
+
+
+async def test_each_roster_spec_runs_under_its_own_name_brief_and_budgets(glm_client, fake_glm, ledger, tmp_path):
+    fake_glm.stream(content=controls_reply("41"))
+    policies = (
+        replace(adversary_policy(k=1, submissions=1), max_turns=2),
+        replace(adversary_policy(k=2, submissions=3), spec=FALSE_REJECT),
+    )
+    settings = replace(round_settings(ledger), adversary=policies)
+    adversary = AdversaryScript((Submit("41"), SearchReport((), "No findings")))
+    checked = await validate_round(
+        built_draft(tmp_path / "store"), round_context(tmp_path), settings, SolverModel(), glm_client, adversary
+    )
+    assert [(trial.trial, trial.name) for trial in checked.adversary] == [
+        ("false_accept-0", "false_accept"),
+        ("false_reject-0", "false_reject"),
+        ("false_reject-1", "false_reject"),
+    ]
+    assert all(trial.status is TrialStatus.GRADED and len(trial.submissions) == 1 for trial in checked.adversary)
+    assert len({trial.submissions[0].attempt_file for trial in checked.adversary}) == 3
+    systems = {str(request[0]["content"]) for request in adversary.requests}
+    assert sorted(FALSE_ACCEPT.brief in system for system in systems) == [False, True]
+    assert sorted(FALSE_REJECT.brief in system for system in systems) == [False, True]
+
+
+async def test_interrupted_search_retains_evidence_and_explicit_resume_starts_a_new_attempt(
+    glm_client, fake_glm, ledger, tmp_path
+):
+    fake_glm.stream(content=controls_reply("41"))
+    context = round_context(tmp_path)
+    settings = replace(round_settings(ledger, adversary=adversary_policy(k=1)), max_retries=0)
+    built = built_draft(tmp_path / "store")
+    checked = await validate_round(
+        built,
+        context,
+        settings,
+        SolverModel(),
+        glm_client,
+        AdversaryScript((Submit("41"), ModelUnavailable("request interrupted", ()))),
+    )
+    (trial,) = checked.adversary
+    path = context.round_dir / trial.attempt_file
+    original = path.read_bytes()
+    saved = json.loads(original)
+    assert trial.status is TrialStatus.UNGRADED and trial.cause is Cause.MODEL_UNAVAILABLE
+    assert saved["adversary"]["submissions"][0]["reply"] == "41"
+    messages = saved["rollout"]["conversations"][0]["messages"]
+    assert json.loads(next(message["content"] for message in messages if message["role"] == "tool"))["submission"] == 1
+    assert isinstance(await default_review(checked, band=ALL_SOLVE_RATES), Hold)
+
+    # Explicit resume grants another attempt, retaining the original failed search and its evidence.
+    resumed = await validate_round(
+        built,
+        replace(context, validation_pass=2),
+        settings,
+        SolverModel(allowed=frozenset()),
+        UncalledClient(),
+        AdversaryScript(PROBES),
+    )
+    assert isinstance(await default_review(resumed, band=ALL_SOLVE_RATES), Accept)
+    assert resumed.adversary[0].attempt_file.endswith("attempt-1.json")
+    assert path.read_bytes() == original
+    assert len(list(path.parent.glob("attempt-*.json"))) == 2
+
+
+@pytest.mark.parametrize(
+    "causes,stop,expected",
+    [
+        ((Cause.BUDGET_EXHAUSTED, Cause.MODEL_UNAVAILABLE), "stop", Cause.MODEL_UNAVAILABLE),
+        ((Cause.INVALID_TASK, Cause.MODEL_UNAVAILABLE), "stop", Cause.MODEL_UNAVAILABLE),
+        ((Cause.MODEL_UNAVAILABLE, Cause.INVALID_TASK), "max_turns", Cause.MODEL_UNAVAILABLE),
+        ((Cause.INVALID_TASK,), "max_turns", Cause.BUDGET_EXHAUSTED),
+        ((Cause.INVALID_TASK,), "stop", Cause.INVALID_TASK),
+    ],
+)
+def test_search_failure_precedence_accounts_for_every_submission(causes, stop, expected):
+    rollout = Rollout("search", (), stop)
+    submissions = tuple(
+        Submission(
+            SubmissionRecord(
+                index, None, f"s{index}", "candidate", (), GradeResult(GradeStatus.UNAVAILABLE, None), False, 0.0
+            ),
+            Ungraded(cause, str(cause), rollout, None),
+        )
+        for index, cause in enumerate(causes, 1)
+    )
+
+    outcome = trial_outcome(rollout, submissions)
+
+    assert isinstance(outcome, Ungraded) and outcome.cause is expected
+
+
+async def test_a_deadline_after_tool_progress_retains_the_attempt(glm_client, fake_glm, ledger, tmp_path):
+    fake_glm.stream(content=controls_reply("41"))
+    context = round_context(tmp_path)
+    settings = round_settings(ledger, k=1, adversary=adversary_policy(k=1))
+    settings = replace(
+        settings,
+        engine=replace(settings.engine, limits=settings.engine.limits.model_copy(update={"attempt_timeout": 0.5})),
+    )
+    checked = await validate_round(
+        built_draft(tmp_path / "store"),
+        context,
+        settings,
+        SolverModel(),
+        glm_client,
+        AdversaryScript((Submit("41"), "unused"), hold_at=1),
+    )
+    (trial,) = checked.adversary
+    assert trial.status is TrialStatus.UNGRADED and trial.cause is Cause.ATTEMPT_TIMEOUT
+    assert trial.attempt_file.endswith("attempt-1.json")
+    assert isinstance(await default_review(checked, band=ALL_SOLVE_RATES), Hold)

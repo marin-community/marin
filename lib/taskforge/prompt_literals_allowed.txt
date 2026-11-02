@@ -4,10 +4,12 @@
 
 # The agentic flavour's prompts and tool text; they move with Rav's AgenticConfig prompts (PR16).
 lib/taskforge/src/taskforge/agentic/agent.py 9876bf1a976dfce1
-lib/taskforge/src/taskforge/agentic/prompts.py 8c6a6709738187d4
+lib/taskforge/src/taskforge/agentic/prompts.py 3c5ab1e86f6ffd7f
 lib/taskforge/src/taskforge/agentic/prompts.py 4ccdd0952d54e9c6
+lib/taskforge/src/taskforge/agentic/prompts.py 4eb199ae11e1b4df
+lib/taskforge/src/taskforge/agentic/prompts.py 6295a96e7d717031
+lib/taskforge/src/taskforge/agentic/prompts.py 6b558223dacb3ec5
 lib/taskforge/src/taskforge/agentic/prompts.py a8466e7d134c3d7d
-lib/taskforge/src/taskforge/agentic/prompts.py c6afec1c1e182d8c
 lib/taskforge/src/taskforge/agentic/tools.py f83a56e2fc97ea3e
 
 # The standard template's step prompts. A step's source is its memo key and the template is quoted in the

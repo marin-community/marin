@@ -174,8 +174,8 @@ class SingleTurnAimeAgent(BaseAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        assert self.model_name is not None
-        served_model = self.model_name.split("/", maxsplit=1)[-1]
+        assert self.model_alias is not None
+        served_model = self.model_alias.split("/", maxsplit=1)[-1]
         content = await asyncio.to_thread(
             _completion_content,
             api_base=self._api_base,

@@ -248,7 +248,9 @@ fn cache_stats_of(runtime: &RuntimeEnv) -> MetadataCacheStats {
 /// [`shared_runtime_env`]) so a pathological query fails cleanly rather than
 /// OOM-killing the server.
 pub fn make_ctx() -> SessionContext {
-    let mut cfg = SessionConfig::new();
+    let mut cfg = SessionConfig::new().with_extension(Arc::new(
+        crate::store::object_store::QueryCacheAdmission::default(),
+    ));
     cfg.options_mut().sql_parser.map_string_types_to_utf8view = false;
     cfg.options_mut().sql_parser.dialect = Dialect::DuckDB;
     cfg.options_mut().execution.parquet.pushdown_filters = true;

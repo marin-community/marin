@@ -18,5 +18,8 @@
   "author.nudge": "prompts/author/nudge.md",
   "adversary.brief": "prompts/adversary/brief.md",
   "adversary.whitebox": "prompts/adversary/whitebox.md",
-  "adversary.submit": "prompts/adversary/submit.md"
+  "adversary.submit": "prompts/adversary/submit.md",
+  "adversary.false_accept": "prompts/adversary/false_accept.md",
+  "adversary.false_reject": "prompts/adversary/false_reject.md",
+  "adversary.shortcut": "prompts/adversary/shortcut.md"
 }

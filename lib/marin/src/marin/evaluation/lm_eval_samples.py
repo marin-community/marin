@@ -404,9 +404,9 @@ class _TaskCoverageAccumulator:
     n_benchmark: int | None = None
     n_attempted: int | None = None
     score_from_aggregate: bool = False
-    graded: dict[str, list[_GradedSampleSummary]] = field(default_factory=dict)
-    first: dict[str, _GradedSampleSummary] = field(default_factory=dict)
-    seen: set[str] = field(default_factory=set)
+    graded: dict[tuple[str, str], list[_GradedSampleSummary]] = field(default_factory=dict)
+    first: dict[tuple[str, str], _GradedSampleSummary] = field(default_factory=dict)
+    seen: set[tuple[str, str]] = field(default_factory=set)
     any_metrics: bool = False
 
     def _summary(self, sample: EvalSample) -> _GradedSampleSummary:
@@ -419,14 +419,15 @@ class _TaskCoverageAccumulator:
             infrastructure_error=_is_infrastructure_error(sample),
         )
 
-    def add(self, sample: EvalSample) -> None:
+    def add(self, sample: EvalSample, trial_id: str = "") -> None:
         summary = self._summary(sample)
-        self.seen.add(sample.doc_id)
+        key = (sample.doc_id, trial_id)
+        self.seen.add(key)
         self.any_metrics = self.any_metrics or bool(sample.metrics)
-        self.first.setdefault(sample.doc_id, summary)
+        self.first.setdefault(key, summary)
         if sample.grading is None and not summary.infrastructure_error:
             return
-        self.graded.setdefault(sample.doc_id, []).append(summary)
+        self.graded.setdefault(key, []).append(summary)
 
     def result(self) -> TaskCoverage:
         headline = primary_filter(
@@ -450,7 +451,9 @@ class _TaskCoverageAccumulator:
         errors = {UNGRADED_ERROR: ungraded} if ungraded else {}
         if infrastructure_errors:
             errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
-        extent = _document_extent(self.seen)
+        extent = (
+            None if any(trial_id for _, trial_id in self.seen) else _document_extent({doc_id for doc_id, _ in self.seen})
+        )
         if self.n_attempted is not None and extent is not None and extent > self.n_attempted:
             raise ValueError(f"sample document extent {extent} exceeds intended count {self.n_attempted}")
         return TaskCoverage(
@@ -464,13 +467,13 @@ class _TaskCoverageAccumulator:
 
 
 def task_coverage(
-    samples: Sequence[EvalSample],
+    samples: Sequence[tuple[EvalSample, str]],
     *,
     n_benchmark: int | None = None,
     n_attempted: int | None = None,
     score_from_aggregate: bool = False,
 ) -> TaskCoverage:
-    """Compute one task's coverage from its normalized samples.
+    """Compute coverage from (sample, trial ID) pairs without merging independent repetitions.
 
     Ungraded documents and failed requests are unscored. Empty model completions remain scored and
     count as unanswered. For tasks with several extraction filters, coverage uses the filter chosen
@@ -482,8 +485,8 @@ def task_coverage(
     accumulator = _TaskCoverageAccumulator(
         n_benchmark=n_benchmark, n_attempted=n_attempted, score_from_aggregate=score_from_aggregate
     )
-    for sample in samples:
-        accumulator.add(sample)
+    for sample, trial_id in samples:
+        accumulator.add(sample, trial_id)
     return accumulator.result()
 
 
@@ -588,7 +591,24 @@ def _evalchemy_contract_summary(
     for directory, result in results_by_directory.items():
         outcomes = result.get("task_outcomes", {})
         for leaf, outcome in outcomes.items():
-            count = outcome.get(SCORED_COUNT_METRIC)
+            count = outcome.get("scored_sample_count")
+            if count is None:
+                count = outcome.get(SCORED_COUNT_METRIC)
+            expected_samples = outcome.get("expected_sample_count")
+            expected_examples = outcome.get("expected_count")
+            benchmark = benchmarks.get(directory, {}).get(leaf)
+            if benchmark is not None and expected_samples is not None:
+                if not isinstance(expected_samples, int) or expected_samples < 0:
+                    raise ValueError(f"{directory}/{leaf}: invalid expected_sample_count")
+                n_benchmark = benchmark.n_benchmark
+                if expected_examples and expected_samples != expected_examples:
+                    if expected_samples % expected_examples:
+                        raise ValueError(f"{directory}/{leaf}: nonuniform trial counts lack a benchmark denominator")
+                    if n_benchmark is not None:
+                        n_benchmark *= expected_samples // expected_examples
+                benchmarks[directory][leaf] = benchmark.model_copy(
+                    update={"n_attempted": expected_samples, "n_benchmark": n_benchmark}
+                )
             if (
                 (outcome.get("status") == "succeeded" or _has_partial_evalchemy_scores(result))
                 and isinstance(count, int)
@@ -913,11 +933,11 @@ def summarize_native_eval_samples(
     table = reader.scan(ARCHIVE_SAMPLES_TABLE)
     if table is None and any(entry.n_attempted for entry in coverage.values()):
         raise FileNotFoundError(f"archive at {out_path!r} contains no normalized evaluation samples")
-    by_task: dict[str, list[EvalSample]] = {}
+    by_task: dict[str, list[tuple[EvalSample, str]]] = {}
     if table is not None:
         for row in table.to_pylist(maps_as_pydicts="strict"):
             sample = sample_from_archive_row(row)
-            by_task.setdefault(sample.task, []).append(sample)
+            by_task.setdefault(sample.task, []).append((sample, row["trial_id"] or ""))
 
     benchmarks_by_task = {
         _task_key(directory, leaf, len(values)): benchmark
@@ -1011,7 +1031,7 @@ def _add_lm_eval_rows(
                 ),
             )
             if coverage is not None:
-                coverage.add(sample)
+                coverage.add(sample, trial_id)
             count += 1
     if not count:
         logger.warning("samples file %s is empty; skipping archive export", filename)

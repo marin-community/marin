@@ -1,21 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The adversary's verdict markers and the short text its brief is filled with.
+"""The short text the adversary's brief and tools are filled with.
 
-``AdversaryPrompts.brief`` is the brief of both modes; ``stage50_validate.adversary.adversary_brief`` fills it with
-these. A white-box brief adds ``AdversaryPrompts.whitebox`` and the grader, the controls and the example answers as
-its ``context``, and ``WHITEBOX_LINE_CLAUSE`` to the verdict line, so the two modes differ only in what the adversary
-knows.
+``AdversaryPrompts.brief`` is the brief of every adversary and both modes; ``stage50_validate.adversary.adversary_brief``
+fills it, with an ``AdversarySpec``'s ``brief`` as its ``goal``. Every adversary reports through the same
+``finish_search`` contract, so the goal is the only text that differs between them. The default specs' goals are
+``AdversaryPrompts.false_accept``, ``false_reject`` and ``shortcut``. A white-box brief adds
+``AdversaryPrompts.whitebox`` and the grader, the controls and the example answers as its ``context``.
 """
 
-NO_SHORTCUT_LINE = "NO_SHORTCUT"
-SHORTCUT_PREFIX = "SHORTCUT:"
-GRADER_LINE_MARKER = "grader line:"
-
-TOOLS_WITH_SHELL = "two tools. `shell` runs commands in a private copy of the task's workspace that only you see"
-TOOLS_SUBMIT_ONLY = "one tool"
-WHITEBOX_LINE_CLAUSE = f", then `{GRADER_LINE_MARKER}` and the exact grader line or expression your submission defeats"
+TOOLS_WITH_SHELL = "`submit`, `finish_search`, and `shell` in a private copy of the task workspace"
+TOOLS_SUBMIT_ONLY = "`submit` and `finish_search`"
 NO_VERIFIER_FILES = "(no verifier files: the grader is the specification alone)"
 NO_CONTROLS = "(no controls recorded)"
 NO_EXAMPLES = "(none beyond the task text)"

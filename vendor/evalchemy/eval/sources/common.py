@@ -27,6 +27,8 @@ class SourceOptions:
     encode: Callable[[str], list[int]] | None = None
     model_name: str | None = None
     tokenizer_encode: Callable[[str], list[int]] | None = None
+    prompt_token_count: Callable[[Any], int] | None = None
+    chat_template: Mapping[str, Any] = field(default_factory=dict)
 
 
 def text_specs(

@@ -109,15 +109,21 @@ class AdversaryPrompts:
     """The validation adversary's text.
 
     Attributes:
-        brief: The brief of both modes. Fields: ``tools``, ``context``, ``submissions``, ``probes``,
-            ``no_shortcut``, ``shortcut_prefix`` and ``line_clause``.
+        brief: The brief of every adversary and both modes. Fields: ``goal``, ``tools``, ``context``,
+            ``submissions`` and ``probes``.
         whitebox: The header of the white-box section.
         submit: The ``submit`` tool's description.
+        false_accept: The ``FALSE_ACCEPT`` adversary's goal.
+        false_reject: The ``FALSE_REJECT`` adversary's goal.
+        shortcut: The ``SHORTCUT`` adversary's goal.
     """
 
     brief: Prompt
     whitebox: Prompt
     submit: Prompt
+    false_accept: Prompt
+    false_reject: Prompt
+    shortcut: Prompt
 
 
 @dataclass(frozen=True)

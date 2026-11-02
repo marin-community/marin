@@ -28,7 +28,7 @@ from taskforge.stage40_build_with_program.agentic_author import (
     opening_messages,
 )
 from taskforge.stage40_build_with_program.glm_author import author_messages, sdk_reference
-from taskforge.stage50_validate.adversary_prompts import NO_SHORTCUT_LINE, SHORTCUT_PREFIX, TOOLS_WITH_SHELL
+from taskforge.stage50_validate.adversary_prompts import TOOLS_WITH_SHELL
 from tests.stage40_build_with_program.conftest import PROPOSAL
 
 AUTHOR = DEFAULT_POLICY.author
@@ -95,23 +95,29 @@ BASE_RENDERS: dict[str, tuple[Callable[[], object], str]] = {
     ),
     "adversary.brief": (
         lambda: ADVERSARY.brief.render(
-            tools=TOOLS_WITH_SHELL,
-            context=" ",
-            submissions=3,
-            probes=2,
-            no_shortcut=NO_SHORTCUT_LINE,
-            shortcut_prefix=SHORTCUT_PREFIX,
-            line_clause="",
+            goal=ADVERSARY.false_accept.render(), tools=TOOLS_WITH_SHELL, context=" ", submissions=3, probes=2
         ),
-        "e89c2f9afdd21c4ecbe3f6ad9f3f12e4bc6234609f02b89f5b5e2875d39cb164",
+        "c516a670c4f88055f35cf4375a8e9eba0bfc5a30ca16b8137831d4172ddcf5fb",
     ),
     "adversary.whitebox": (
         lambda: ADVERSARY.whitebox.render(),
-        "2c1bf2c15549dc3f29a0f56c0b64cf6609d5a60eb52b63aef03356b1e181ee7d",
+        "7be383e6a4a1d8e0a8d46617e579a07add87b8e12e7b8f51151a433f657cc1dc",
     ),
     "adversary.submit": (
         lambda: ADVERSARY.submit.render(),
         "530fae48386fefb8ad927e978707bf6dbfa2969cebc794ab3c28e826a4ca905f",
+    ),
+    "adversary.false_accept": (
+        lambda: ADVERSARY.false_accept.render(),
+        "335366c7b781fe66ac12fea2b71b13bf0a1ec6c5db532508a3e7a7709f5daca2",
+    ),
+    "adversary.false_reject": (
+        lambda: ADVERSARY.false_reject.render(),
+        "ca52a2ec49c4d29f1a2606c04827179711adb2457b81b46903239867271befb8",
+    ),
+    "adversary.shortcut": (
+        lambda: ADVERSARY.shortcut.render(),
+        "2cddcc0670cb99cf1ef3063941ef271dbd4d805e0873ee02d8168a7c38c78b92",
     ),
     # The whole requests: the author's, and the agentic author's opening, which appends `author.session`.
     "sdk_reference": (

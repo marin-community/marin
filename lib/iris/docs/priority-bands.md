@@ -88,6 +88,8 @@ Per-user budget tracking lives in
 exceeds their budget, INTERACTIVE submissions are silently downgraded to BATCH.
 SYSTEM and PRODUCTION are exempt.
 
+See [shared budgets](federation.md#shared-budgets) for federation configuration.
+
 ### Max-band caps and unlisted users
 
 Each user who is listed in the cluster config's `user_budgets` tier list has a
