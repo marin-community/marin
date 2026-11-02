@@ -388,9 +388,19 @@ def coordinator(
     budget: WorkpieceBudget = BUDGET,
     digest: str = UNUSED_MODEL_DIGEST,
     research: ResearchRequirement = ResearchRequirement.OFF,
+    policy_digest: str = DEFAULT_POLICY.digest,
 ) -> StageCoordinator:
     return StageCoordinator(
-        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, research, digest
+        stages,
+        budget,
+        root,
+        JsonEventStore(root),
+        UnusedModel(),
+        SAMPLING,
+        SERVICES,
+        research,
+        digest,
+        policy_digest,
     )
 
 
@@ -496,31 +506,34 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 
 
 OFF = ResearchRequirement.OFF
+POLICY = DEFAULT_POLICY.digest
 
 
 @pytest.mark.parametrize(
-    ("proposal", "budget", "digest", "research", "refusal"),
+    ("proposal", "budget", "digest", "research", "policy_digest", "refusal"),
     [
         (
             replace(PROPOSAL, body=PROPOSAL.body.replace("Multiply", "Add")),
             BUDGET,
             UNUSED_MODEL_DIGEST,
             OFF,
+            POLICY,
             "opened for proposal",
         ),
-        (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, OFF, "opened under budget"),
-        (PROPOSAL, BUDGET, "another-model", OFF, "opened with model digest"),
-        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, ResearchRequirement.ENFORCED, "opened with research off"),
+        (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, OFF, POLICY, "opened under budget"),
+        (PROPOSAL, BUDGET, "another-model", OFF, POLICY, "opened with model digest"),
+        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, ResearchRequirement.ENFORCED, POLICY, "opened with research off"),
+        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, OFF, "another-policy", "opened with policy digest"),
     ],
-    ids=["proposal", "budget", "model digest", "research"],
+    ids=["proposal", "budget", "model digest", "research", "policy digest"],
 )
-async def test_a_relaunch_with_another_proposal_budget_model_digest_or_research_is_refused(
-    tmp_path, proposal, budget, digest, research, refusal
+async def test_a_relaunch_with_another_proposal_budget_model_research_or_policy_is_refused(
+    tmp_path, proposal, budget, digest, research, policy_digest, refusal
 ):
     await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL, InMemoryEventLog())
     before = tree_bytes(tmp_path)
 
-    relaunch = coordinator(tmp_path, budget=budget, digest=digest, research=research)
+    relaunch = coordinator(tmp_path, budget=budget, digest=digest, research=research, policy_digest=policy_digest)
     with pytest.raises(ValueError, match=f"{WORKPIECE} was {refusal}"):
         await run_workpiece(relaunch, WORKPIECE, proposal, InMemoryEventLog())
     assert tree_bytes(tmp_path) == before

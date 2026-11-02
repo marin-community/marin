@@ -46,7 +46,8 @@ TRIAGE_REJECTED = "triage rejected the proposal"
 
 class EventKind(StrEnum):
     OPENED = "opened"
-    """digest: the proposal's. attrs: budget_digest, model_digest (the coordinator's, part of every step key)."""
+    """digest: the proposal's. attrs: budget_digest, model_digest (the coordinator's, part of every step key),
+    research, policy_digest (the ``Policy.digest`` of the stages' prompts)."""
     RESUMED = "resumed"
     """An explicit relaunch of ABANDONED, with the current budget_digest."""
     TRIAGED = "triaged"

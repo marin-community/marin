@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.models import TaskSpec
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
@@ -167,6 +168,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         services=services,
         research=ResearchRequirement.OFF,
         model_digest=build_model_digest(model, sampling, services),
+        policy_digest=DEFAULT_POLICY.digest,
     )
 
     assert await run_workpiece(coordinator, WORKPIECE, proposal, InMemoryEventLog()) is Terminal.ACCEPTED
