@@ -49,7 +49,7 @@ POLICY = "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalche
 def evaluate(model, output: StoragePath, timeout: float) -> list[dict]:
     """Use the existing campaign evaluator, retaining its logs and FineStore samples."""
     config = dataclasses.replace(
-        evalchemy_run_config("gsm8k-0shot", load_evalchemy_config(POLICY)),
+        evalchemy_run_config("gsm8k-0shot", load_evalchemy_config(Path(POLICY))),
         apply_chat_template=True,
         max_length=8192,
         max_eval_instances=ITEM_COUNT,
