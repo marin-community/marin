@@ -319,7 +319,9 @@ def iter_log_rows(
     """Yield ``(key, epoch_ms, data)`` for in-window task log lines that mention ``gs://``.
 
     One query scans every source so DuckDB parallelizes across files and row
-    groups; matching rows stream back in batches.
+    groups; matching rows stream back in batches. Only the hub's own rows are
+    kept (``cluster IS NULL``): rows forwarded from other clusters belong to
+    attempts that are not in this controller's checkpoint.
     """
     if not sources:
         return
@@ -328,6 +330,7 @@ def iter_log_rows(
         SELECT key, epoch_ms, data
         FROM read_parquet(?)
         WHERE epoch_ms >= ? AND epoch_ms < ?
+          AND cluster IS NULL
           AND key LIKE '/%:%'
           AND data LIKE '%gs://%'
         """,

@@ -90,16 +90,24 @@ def test_analyze_report_is_independent_of_how_rows_split_across_segments(tmp_pat
     assert sample_times == sorted({row[1] for row in rows if EUROPE_BUCKET_PATH in row[2]}, reverse=True)[:50]
 
 
-def test_iter_log_rows_streams_in_window_task_rows_that_mention_gs_across_sources(tmp_path: Path) -> None:
+def test_iter_log_rows_streams_in_window_hub_task_rows_that_mention_gs_across_sources(tmp_path: Path) -> None:
     in_window = (f"{TASK_ID}:0", WINDOW.start_ms + 1, f"Reading {EUROPE_BUCKET_PATH}")
     sources = []
     for name, rows in {
-        "seg-a": [in_window, (f"{TASK_ID}:0", WINDOW.start_ms - 1, f"Reading {EUROPE_BUCKET_PATH}")],
-        "seg-b": [(f"{TASK_ID}:0", WINDOW.start_ms + 2, "no paths here"), ("worker-log", WINDOW.start_ms + 3, "gs://x")],
+        "seg-a": [
+            (*in_window, None),
+            (f"{TASK_ID}:0", WINDOW.start_ms - 1, f"Reading {EUROPE_BUCKET_PATH}", None),
+            (f"{TASK_ID}:0", WINDOW.start_ms + 4, f"Reading {EUROPE_BUCKET_PATH}", "cw-rno2a"),
+        ],
+        "seg-b": [
+            (f"{TASK_ID}:0", WINDOW.start_ms + 2, "no paths here", None),
+            ("worker-log", WINDOW.start_ms + 3, "gs://x", None),
+        ],
     }.items():
         path = tmp_path / f"{name}.parquet"
-        keys, times, data = zip(*rows, strict=True)
-        pq.write_table(pa.table({"key": keys, "epoch_ms": times, "data": data}), path)
+        keys, times, data, clusters = zip(*rows, strict=True)
+        table = pa.table({"key": keys, "epoch_ms": times, "data": data, "cluster": pa.array(clusters, pa.string())})
+        pq.write_table(table, path)
         sources.append(str(path))
 
     with duckdb.connect() as con:
