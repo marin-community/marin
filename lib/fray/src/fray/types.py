@@ -172,6 +172,7 @@ TpuType = Literal[
 TpuFamily = Literal["v4", "v5e", "v5p", "v6e"]
 
 GpuType = Literal[
+    "GB200",
     "A10",
     "A100-40G",
     "A100-80G",

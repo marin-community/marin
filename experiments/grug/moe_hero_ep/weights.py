@@ -11,6 +11,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import tensorstore as ts
+from jax.typing import DTypeLike
 from levanter.tensorstore_serialization import build_kvstore_spec
 from rigging.filesystem.storage_path import StoragePath
 
@@ -20,6 +21,13 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
 logger = logging.getLogger(__name__)
 PENDING_QB_BETAS_KEY = "pending_qb_betas"
+
+
+def cast_weights(model: Transformer, dtype: DTypeLike) -> Transformer:
+    """Cast learned weights while preserving authoritative FP32 routing control."""
+    bias = model.stacked_blocks.stacked.mlp.router_bias
+    rounded = jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) else x, model)
+    return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.router_bias, rounded, bias)
 
 
 def restore_weights(
