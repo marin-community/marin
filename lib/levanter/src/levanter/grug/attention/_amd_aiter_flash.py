@@ -13,13 +13,10 @@ point and are rejected.
 
 import importlib
 
-from jax import shard_map
-from jax.sharding import PartitionSpec as P
-from jax.sharding import get_abstract_mesh
 from jaxtyping import Array, Float
 
 from levanter.grug.attention._core import AttentionMask
-from levanter.sharding import partition_spec_of, partitioned_dims
+from levanter.grug.attention._per_shard_kernel import run_self_attention_per_shard
 
 # The non-deterministic backward accumulates dQ with atomics, as FlashAttention's default training path does.
 DETERMINISTIC_BACKWARD = False
@@ -63,25 +60,4 @@ def aiter_flash_attention(
         (out,) = flash_attn_func(q, k, v, causal=True, window_size=window, deterministic=DETERMINISTIC_BACKWARD)
         return out
 
-    mesh = get_abstract_mesh()
-    if mesh is None or mesh.empty:
-        return run(q, k, v)
-    q_dims = partitioned_dims(q, mesh)
-    if q_dims[1] or q_dims[3]:
-        raise ValueError(f"gpu_aiter_flash needs unsharded sequence and head_dim, got {partition_spec_of(q)}")
-    for name, x in (("k", k), ("v", v)):
-        if partitioned_dims(x, mesh) != q_dims:
-            raise ValueError(
-                f"gpu_aiter_flash needs {name} sharded like q, got q={partition_spec_of(q)} "
-                f"{name}={partition_spec_of(x)}"
-            )
-    if not any(q_dims):
-        return run(q, k, v)
-    q_spec = tuple(partition_spec_of(q))
-    q_spec = P(*q_spec, *((None,) * (q.ndim - len(q_spec))))
-
-    @shard_map(mesh=mesh, out_specs=q_spec, check_vma=False)
-    def _local(q_local, k_local, v_local):
-        return run(q_local, k_local, v_local)
-
-    return _local(q, k, v)
+    return run_self_attention_per_shard("gpu_aiter_flash", run, q, k, v)
