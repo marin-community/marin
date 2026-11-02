@@ -49,22 +49,22 @@ June Snowball (`synthetic_benchmark.py --size full`), EP8 inside each node and d
 
 In both two-node MI350X jobs, the second run without the flags was slower on every step (2.134 s and 3.026 s); the cause is unknown, and the table uses the first run of each job. Peak memory rises by at most 1 GiB.
 
-Each flag's share, from two MI355X nodes: removing one flag from the full set of nine changes the 1.720 s step as follows.
+Each flag's share, from two MI355X nodes: removing one flag from the full set of nine changes the step as follows. With all nine flags, five runs took 1.707-1.740 s (median 1.725 s); each removal is a single run.
 
 | Flag removed | Step | Change |
 |---|---|---|
 | `--xla_gpu_enable_latency_hiding_scheduler` | 2.065 s | +20% |
 | `--xla_gpu_experimental_parallel_collective_overlap_limit=4` | 1.964 s | +14% |
-| `--xla_gpu_experimental_collective_start_as_early_as_possible` | 1.793 s | +4.2% |
-| `--xla_gpu_enable_pipelined_all_reduce` | 1.768 s | +2.8% |
-| `--xla_gpu_enable_while_loop_double_buffering` | 1.752 s | +1.9% |
+| `--xla_gpu_experimental_collective_start_as_early_as_possible` | 1.793 s | +3.9% |
+| `--xla_gpu_enable_pipelined_all_reduce` | 1.768 s | +2.5% |
+| `--xla_gpu_enable_while_loop_double_buffering` | 1.752 s | +1.6% |
 | `--xla_gpu_enable_pipelined_all_gather` | 1.729 s | none |
 | `--xla_gpu_enable_pipelined_reduce_scatter` | 1.719 s | none |
 | 8 GiB all-gather and reduce-scatter combine thresholds | 1.715 s | none |
 
 The wrapper keeps the first five. With the overlap limit at 1, the other flags give no gain (1.964 s against 1.955-1.971 s without flags).
 
-On GB200, more than one collective in flight silently corrupted training with Grug's ragged all-to-all transport and the layer-carry offload, so the NVIDIA EP hero forces the limit to 1 (`experiments/grug/moe_hero_ep/train.py`). Here, per-step losses and capacity-drop rates with the flags stay within the spread of repeated runs without them (losses within 3e-4). These runs use synthetic tokens and an untrained router, which detect such races poorly; check loss and drop-rate parity from a trained checkpoint before a long run, or set `--xla_gpu_experimental_parallel_collective_overlap_limit=1` in `XLA_FLAGS` to rule it out at the cost of the gain.
+On GB200, more than one collective in flight silently corrupted training with Grug's ragged all-to-all transport and the layer-carry offload, so the NVIDIA EP hero forces the limit to 1 (`experiments/grug/moe_hero_ep/train.py`). Here, two runs with the five flags and two without differ in per-step loss by at most 2.7e-4 and in capacity-drop rate by at most 0.4 points; the two runs without the flags already differ from each other by 1.5e-4 and 0.3 points. These runs use synthetic tokens and an untrained router, which detect such races poorly; check loss and drop-rate parity from a trained checkpoint before a long run, or set `--xla_gpu_experimental_parallel_collective_overlap_limit=1` in `XLA_FLAGS` to rule it out at the cost of the gain.
 
 The flags were measured only with this layout on two nodes. Cross-node FSDP and EP16 runs also get them through the wrapper, but were not measured with them.
 
