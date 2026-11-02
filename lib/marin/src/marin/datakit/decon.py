@@ -12,9 +12,11 @@ consumable by :func:`marin.processing.classification.consolidate.consolidate`):
 
     id                       : string         — matches source document id
     partition_id             : int            — source partition index (from sorted file order)
-    contaminated             : bool           — one paragraph meets the overlap and evidence thresholds
+    contaminated             : bool           — one paragraph meets the overlap and evidence thresholds,
+                                                or the item rule matches an eval item
     max_overlap              : float          — highest paragraph overlap fraction in [0, 1]
-    matched_hashes           : list[uint64]   — bloom-hit hashes that caused the mark
+    matched_hashes           : list[uint64]   — bloom-hit hashes that caused a paragraph mark
+    matched_eval_ids         : list[string]   — eval items the item rule matched (see ItemMatchConfig)
 
 The overlap score does not apply the minimum-evidence gate. Use ``contaminated``
 to select marked records.
@@ -37,6 +39,7 @@ The bloom can also be built once and shared across many corpus marks via
 :func:`decon_to_parquet` as ``prebuilt_bloom_dir`` to skip the inline build.
 """
 
+import dataclasses
 import functools
 import hashlib
 import json
@@ -52,7 +55,9 @@ from itertools import chain, islice
 from typing import Any, NamedTuple
 
 import dupekit
+import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel
@@ -85,7 +90,7 @@ logger = logging.getLogger(__name__)
 # unrelated complete document. With the default blank-line policy, a record-level
 # n-gram fallback keeps records matchable when all paragraphs are short.
 FEATURE_FILTER_VERSION = 4
-DECON_ATTRIBUTES_VERSION = 5
+DECON_ATTRIBUTES_VERSION = 6
 BLOOM_BUILD_VERSION = 2
 # v5 keeps the v4 logical shards and bounds physical tasks by the worker count.
 DROP_SET_BUILD_VERSION = 5
@@ -99,6 +104,39 @@ DEFAULT_DROP_SET_STAGE_PARTITIONS = 4_000
 LARGE_TEXT_STREAMING_THRESHOLD = 1024 * 1024
 DEFAULT_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="4g")
 _TOKEN_PATTERN = re.compile(r"\S+")
+
+
+@dataclass(frozen=True, kw_only=True)
+class ItemMatchConfig:
+    """Mark a record that holds most of one eval item's n-grams, wherever they sit in it.
+
+    The paragraph rule scores each paragraph by the share of *its* n-grams that hit
+    the filter, so eval text inside a long paragraph (a JSON line, a code file, a
+    quiz page) scores low. This rule scores each eval item instead: the share of
+    the item's indexed n-grams that the record contains. Surrounding text cannot
+    dilute it (marin#6852).
+
+    Attributes:
+        threshold: Minimum share of an item's indexed n-grams that the record must
+            contain.
+        min_matched_features: Minimum number of distinct n-grams of that item that
+            the record must contain.
+        threshold_overrides: ``(eval_id_prefix, threshold)`` pairs. An item whose
+            ``eval_id`` starts with a prefix uses that threshold; the longest
+            matching prefix wins. Use a lower threshold for evals whose items pair
+            a question with a long answer that copies often omit.
+    """
+
+    threshold: float
+    min_matched_features: int
+    threshold_overrides: tuple[tuple[str, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        for value in (self.threshold, *(t for _, t in self.threshold_overrides)):
+            if not 0 < value <= 1:
+                raise ValueError(f"item thresholds must be in (0, 1], got {value}")
+        if self.min_matched_features < 1:
+            raise ValueError("min_matched_features must be at least 1")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -119,6 +157,8 @@ class NGramConfig:
             both dilutes isolated-line coincidences (precision) and lets short-line
             / inline-embedded eval text be matched (recall). ``"\n"`` instead treats
             each line as its own paragraph. See marin#6852.
+        item_match: Optional item rule (:class:`ItemMatchConfig`). A record is
+            marked when either the paragraph rule or the item rule matches.
     """
 
     ngram_length: int = 13
@@ -126,6 +166,7 @@ class NGramConfig:
     overlap_threshold: float = 0.5
     min_matched_features: int
     paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER
+    item_match: ItemMatchConfig | None = None
 
     def __post_init__(self) -> None:
         if self.min_matched_features < 1:
@@ -250,6 +291,76 @@ def _load_bloom(bloom_path: str) -> dupekit.Bloom:
             fh.write(StoragePath(bloom_path).read_bytes())
         os.replace(partial_path, local_path)
     return dupekit.Bloom.load(local_path)
+
+
+# JSON string escapes that split eval text into different whitespace tokens when
+# a record stores it inside a JSON line or a code string literal.
+_JSON_ESCAPES = (("\\n", "\n"), ("\\t", "\t"), ('\\"', '"'), ("\\'", "'"), ("\\\\", "\\"))
+
+
+def _json_unescaped(text: str) -> str:
+    for escaped, plain in _JSON_ESCAPES:
+        text = text.replace(escaped, plain)
+    return text
+
+
+@dataclass(frozen=True)
+class _ItemIndex:
+    """Exact ``hash → eval item`` lookup for :class:`ItemMatchConfig`.
+
+    ``hashes`` holds one entry per indexed ``(hash, eval_id)`` pair, sorted, with
+    the item number of each in ``items``. Bloom false positives are absent from
+    the index, so they never count toward an item.
+    """
+
+    hashes: np.ndarray
+    items: np.ndarray
+    sizes: np.ndarray
+    thresholds: np.ndarray
+    eval_ids: tuple[str, ...]
+    min_matched_features: int
+
+    def matched_eval_ids(self, hits: set[int]) -> list[str]:
+        """Return the items whose share of indexed n-grams among *hits* meets their threshold."""
+        if not hits:
+            return []
+        query = np.fromiter(hits, dtype=np.uint64, count=len(hits))
+        lo = np.searchsorted(self.hashes, query, side="left")
+        hi = np.searchsorted(self.hashes, query, side="right")
+        present = hi > lo
+        if not present.any():
+            return []
+        rows = np.concatenate([np.arange(a, b) for a, b in zip(lo[present], hi[present], strict=True)])
+        items, counts = np.unique(self.items[rows], return_counts=True)
+        # The tolerance keeps an exact share (for example 1 of 2 at 0.5) on the matching side.
+        meets = (counts >= self.min_matched_features) & (counts >= self.thresholds[items] * self.sizes[items] - 1e-9)
+        return sorted(self.eval_ids[i] for i in items[meets])
+
+
+def _item_threshold(eval_id: str, config: ItemMatchConfig) -> float:
+    matches = [(len(prefix), value) for prefix, value in config.threshold_overrides if eval_id.startswith(prefix)]
+    return max(matches)[1] if matches else config.threshold
+
+
+@functools.cache
+def _load_item_index(index_path: str, config: ItemMatchConfig) -> _ItemIndex:
+    """Load the eval hash index once per process for the item rule."""
+    with StoragePath(index_path).open("rb") as source:
+        table = pq.read_table(source, columns=["hash", "eval_id"])
+    encoded = pc.dictionary_encode(table.column("eval_id")).combine_chunks()
+    eval_ids = tuple(encoded.dictionary.to_pylist())
+    items = encoded.indices.to_numpy().astype(np.int32)
+    hashes = table.column("hash").to_numpy().astype(np.uint64)
+    order = np.argsort(hashes, kind="stable")
+    return _ItemIndex(
+        hashes=hashes[order],
+        items=items[order],
+        # Index rows are distinct (hash, eval_id) pairs, so a row count is an item's n-gram count.
+        sizes=np.bincount(items, minlength=len(eval_ids)),
+        thresholds=np.array([_item_threshold(eval_id, config) for eval_id in eval_ids]),
+        eval_ids=eval_ids,
+        min_matched_features=config.min_matched_features,
+    )
 
 
 def _has_alpha(ngram: str) -> bool:
@@ -380,6 +491,14 @@ class _ParagraphOverlap(NamedTuple):
     matched_hashes: list[int]
     feature_count: int
     has_ngrams: bool
+    bloom_hits: list[int]
+    """Every feature hash that hits the filter, including drop-set hashes."""
+
+
+class _DocumentScan(NamedTuple):
+    max_score: float
+    matched_hashes: list[int]
+    bloom_hits: set[int]
 
 
 def _paragraph_overlap_matches_and_presence(
@@ -391,13 +510,15 @@ def _paragraph_overlap_matches_and_presence(
     """Return overlap after drop filtering and n-gram presence before filtering."""
     if ngram is None:
         h = _bloom_hash(paragraph)
+        bloom_hits = [h] if h in bf else []
         if h in drop_hashes:
-            return _ParagraphOverlap(0.0, [], 0, False)
-        return _ParagraphOverlap(1.0, [h], 1, False) if h in bf else _ParagraphOverlap(0.0, [], 1, False)
+            return _ParagraphOverlap(0.0, [], 0, False, bloom_hits)
+        return _ParagraphOverlap(1.0 if bloom_hits else 0.0, bloom_hits, 1, False, bloom_hits)
 
     has_ngram_features = False
     feature_count = 0
     matched: list[int] = []
+    bloom_hits: list[int] = []
     features: Iterator[str]
     if len(paragraph) < LARGE_TEXT_STREAMING_THRESHOLD:
         tokens = paragraph.split()
@@ -411,14 +532,17 @@ def _paragraph_overlap_matches_and_presence(
     for feature in features:
         has_ngram_features = short_exact is None
         hash_value = _bloom_hash(feature)
+        in_filter = hash_value in bf
+        if in_filter:
+            bloom_hits.append(hash_value)
         if hash_value in drop_hashes:
             continue
         feature_count += 1
-        if hash_value in bf:
+        if in_filter:
             matched.append(hash_value)
     if feature_count == 0:
-        return _ParagraphOverlap(0.0, [], feature_count, has_ngram_features)
-    return _ParagraphOverlap(len(matched) / feature_count, matched, feature_count, has_ngram_features)
+        return _ParagraphOverlap(0.0, [], feature_count, has_ngram_features, bloom_hits)
+    return _ParagraphOverlap(len(matched) / feature_count, matched, feature_count, has_ngram_features, bloom_hits)
 
 
 def _document_overlap_and_matches(
@@ -428,6 +552,17 @@ def _document_overlap_and_matches(
     drop_hashes: frozenset[int] = frozenset(),
 ) -> tuple[float, list[int]]:
     """Return the highest overlap and the hashes that cause a document mark."""
+    scan = _scan_document(text, bf, ngram, drop_hashes)
+    return scan.max_score, scan.matched_hashes
+
+
+def _scan_document(
+    text: str,
+    bf: Container[int],
+    ngram: NGramConfig | None,
+    drop_hashes: frozenset[int] = frozenset(),
+) -> _DocumentScan:
+    """Score each paragraph, and collect every filter hit for the item rule."""
     minimum = ngram.min_matched_features if ngram is not None else 1
     threshold = ngram.overlap_threshold if ngram is not None else 0.0
     delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
@@ -446,11 +581,13 @@ def _document_overlap_and_matches(
     has_paragraph_ngrams = False
     document_ngram_feature_count = 0
     document_ngram_hits: set[int] = set()
+    bloom_hits: set[int] = set()
 
     for paragraph in paragraphs:
-        score, hits, feature_count, paragraph_has_ngrams = _paragraph_overlap_matches_and_presence(
+        score, hits, feature_count, paragraph_has_ngrams, paragraph_bloom_hits = _paragraph_overlap_matches_and_presence(
             paragraph, bf, ngram, drop_hashes
         )
+        bloom_hits.update(paragraph_bloom_hits)
         if ngram is not None and paragraph_has_ngrams:
             has_paragraph_ngrams = True
             document_ngram_feature_count += feature_count
@@ -477,16 +614,17 @@ def _document_overlap_and_matches(
             or _short_exact_feature(text, ngram.ngram_length) is not None
         )
         if use_record_fallback:
-            score, hits, feature_count, _has_ngrams = _paragraph_overlap_matches_and_presence(
+            score, hits, feature_count, _has_ngrams, record_bloom_hits = _paragraph_overlap_matches_and_presence(
                 text, bf, ngram, drop_hashes
             )
+            bloom_hits.update(record_bloom_hits)
             max_score = max(max_score, score)
             distinct_hits = len(set(hits))
             complete_single_feature_document = feature_count == 1 and score == 1.0
             if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
                 matched.update(hits)
 
-    return max_score, sorted(matched)
+    return _DocumentScan(max_score, sorted(matched), bloom_hits)
 
 
 def _record_feature_status(text: str, ngram: NGramConfig | None) -> tuple[bool, bool]:
@@ -726,6 +864,7 @@ _OUTPUT_SCHEMA = pa.schema(
         pa.field("contaminated", pa.bool_()),
         pa.field("max_overlap", pa.float64()),
         pa.field("matched_hashes", pa.list_(pa.uint64())),
+        pa.field("matched_eval_ids", pa.list_(pa.string())),
     ]
 )
 
@@ -736,12 +875,31 @@ _FLAGGED_SCHEMA = pa.schema(
         pa.field("text", pa.string()),
         pa.field("max_overlap", pa.float64()),
         pa.field("matched_hashes", pa.list_(pa.uint64())),
+        pa.field("matched_eval_ids", pa.list_(pa.string())),
     ]
 )
 
 
+def _matched_items(
+    text: str, scan: _DocumentScan, bf: Container[int], ngram: NGramConfig, index: _ItemIndex
+) -> list[str]:
+    """Return eval items the record holds under the item rule.
+
+    Hits ignore the drop set: the rule counts an item's own n-grams, so a phrase
+    common in the corpus cannot dilute it. Records with backslash escapes are also
+    scored after undoing JSON escapes, which recovers eval text stored in JSON lines.
+    """
+    if not scan.bloom_hits:
+        return []
+    hits = scan.bloom_hits
+    if "\\" in text:
+        hits = hits | _scan_document(_json_unescaped(text), bf, ngram).bloom_hits
+    return index.matched_eval_ids(hits)
+
+
 def _make_marker(
     bloom_path: str,
+    index_path: str,
     output_dir: str,
     text_field: str,
     ngram: NGramConfig | None,
@@ -762,6 +920,8 @@ def _make_marker(
 
     def mark_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
         bf = _load_bloom(bloom_path)
+        item_match = ngram.item_match if ngram is not None else None
+        item_index = _load_item_index(index_path, item_match) if item_match is not None else None
         reservoir: list[dict[str, Any]] = []
         n_flagged = 0
         rng = random.Random(shard.shard_idx)
@@ -772,9 +932,17 @@ def _make_marker(
                 nonlocal n_flagged
                 for record in load_file(InputFileSpec(path=p, columns=["id", text_field])):
                     text = str(record.get(text_field, "") or "")
-                    max_score, matched = _document_overlap_and_matches(text, bf, ngram, drop_hashes)
-                    contaminated = bool(matched)
+                    scan = _scan_document(text, bf, ngram, drop_hashes)
+                    max_score, matched = scan.max_score, scan.matched_hashes
+                    matched_eval_ids = (
+                        _matched_items(text, scan, bf, ngram, item_index)
+                        if item_index is not None and ngram is not None
+                        else []
+                    )
+                    contaminated = bool(matched) or bool(matched_eval_ids)
                     counters.pipeline.update_counter("decon/contaminated" if contaminated else "decon/clean", 1)
+                    if matched_eval_ids:
+                        counters.pipeline.update_counter("decon/item_matched", 1)
                     if contaminated and flagged_sample_size:
                         n_flagged += 1
                         row = {
@@ -782,6 +950,7 @@ def _make_marker(
                             "text": text,
                             "max_overlap": max_score,
                             "matched_hashes": matched,
+                            "matched_eval_ids": matched_eval_ids,
                         }
                         if len(reservoir) < flagged_sample_size:
                             reservoir.append(row)
@@ -795,6 +964,7 @@ def _make_marker(
                         "contaminated": contaminated,
                         "max_overlap": max_score,
                         "matched_hashes": matched,
+                        "matched_eval_ids": matched_eval_ids,
                     }
 
             # Follow the normalize job's output layout: main attributes under
@@ -915,7 +1085,7 @@ def decon_to_parquet(
     if drop_hashes:
         logger.info("decon: filtering %d corpus-common ngrams from %s", len(drop_hashes), drop_set_dirs)
     pipeline = Dataset.from_list(files).map_shard(
-        _make_marker(bloom_path, output_path, text_field, ngram, drop_hashes, flagged_sample_size)
+        _make_marker(bloom_path, index_path, output_path, text_field, ngram, drop_hashes, flagged_sample_size)
     )
 
     resources = worker_resources or DEFAULT_WORKER_RESOURCES
@@ -1971,6 +2141,7 @@ def decon_step(
     overlap_threshold: float = 0.5,
     min_matched_features: int,
     paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER,
+    item_match: ItemMatchConfig | None = None,
     flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
@@ -2016,6 +2187,8 @@ def decon_step(
             complete document with one feature can still match. Ignored in
             exact-paragraph mode.
         paragraph_delimiter: Paragraph split string (see :class:`NGramConfig`).
+        item_match: Optional item rule (see :class:`ItemMatchConfig`). Needs an
+            n-gram config and enters the step hash.
             When reusing a ``prebuilt_bloom``, MUST match the delimiter the bloom
             was built with, or the two feature sets won't line up.
         estimated_doc_count, false_positive_rate: Bloom sizing parameters.
@@ -2034,6 +2207,7 @@ def decon_step(
             overlap_threshold=overlap_threshold,
             min_matched_features=min_matched_features,
             paragraph_delimiter=paragraph_delimiter,
+            item_match=item_match,
         )
         if ngram_length is not None
         else None
@@ -2049,6 +2223,7 @@ def decon_step(
         "overlap_threshold": overlap_threshold,
         "min_matched_features": min_matched_features,
         "paragraph_delimiter": paragraph_delimiter,
+        "item_match": dataclasses.asdict(item_match) if item_match is not None else None,
         "feature_filter_version": FEATURE_FILTER_VERSION,
         "attribute_schema_version": DECON_ATTRIBUTES_VERSION,
         "input_dir": input_dir,
