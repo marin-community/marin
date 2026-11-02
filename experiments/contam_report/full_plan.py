@@ -11,8 +11,10 @@ import sys
 
 
 def main() -> None:
-    sources = json.load(open(sys.argv[1]))
-    pilot = {p for paths in json.load(open(sys.argv[2])).values() for p in paths}
+    with open(sys.argv[1]) as f:
+        sources = json.load(f)
+    with open(sys.argv[2]) as f:
+        pilot = {p for paths in json.load(f).values() for p in paths}
     plan = {}
     for name, info in sorted(sources.items()):
         paths = [p for p, _ in info["files"] if p not in pilot]
@@ -21,7 +23,8 @@ def main() -> None:
     sizes = {p: s for info in sources.values() for p, s in info["files"]}
     chosen = [p for paths in plan.values() for p in paths]
     print(f"{len(chosen)} files from {len(plan)} sources, {sum(sizes[p] for p in chosen) / 1e12:.2f} TB")
-    json.dump(plan, open(sys.argv[3], "w"), indent=1)
+    with open(sys.argv[3], "w") as f:
+        json.dump(plan, f, indent=1)
 
 
 if __name__ == "__main__":

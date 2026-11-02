@@ -12,6 +12,7 @@ Usage: kept_requests.py AGG_DIR FILTERS_JSON OUT_JSON
 
 import json
 import sys
+from pathlib import Path
 
 import duckdb
 
@@ -20,7 +21,7 @@ MIN_COVERAGE = 0.5
 
 def main() -> None:
     agg_dir, filters_path, out_path = sys.argv[1:4]
-    filters = json.load(open(filters_path))
+    filters = json.loads(Path(filters_path).read_text())
     rows = duckdb.sql(
         f"""
         SELECT DISTINCT d.source, d.file, d.id
@@ -31,7 +32,7 @@ def main() -> None:
         """
     ).fetchall()
     requests = [{"source": s, "path": f"{filters[s]['dir']}/{f}", "id": i} for s, f, i in rows]
-    json.dump(requests, open(out_path, "w"))
+    Path(out_path).write_text(json.dumps(requests))
     print(f"{len(requests)} documents in {len({r['path'] for r in requests})} files")
 
 

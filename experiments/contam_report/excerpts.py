@@ -73,7 +73,7 @@ def make_fetcher(out_prefix: str):
                 if str(r["id"]) in wanted
             }
 
-            def rows():
+            def rows(path: str, wanted: dict, hero: dict):
                 for record in load_file(InputFileSpec(path=path, columns=["id", "text"])):
                     doc_id = str(record["id"])
                     if doc_id not in wanted:
@@ -92,7 +92,7 @@ def make_fetcher(out_prefix: str):
                             "hero_contaminated": hero.get(doc_id),
                         }
 
-            yield write_parquet_file(rows(), output_path=out_path, schema=SCHEMA)
+            yield write_parquet_file(rows(path, wanted, hero), output_path=out_path, schema=SCHEMA)
 
     return fetch
 

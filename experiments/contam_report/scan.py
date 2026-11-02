@@ -101,7 +101,7 @@ def make_scanner(bloom_path: str, out_prefix: str):
                 continue
             stats = {"source": source, "path": path, "docs": 0, "features": 0, "hit_docs": 0, "marked_docs": 0}
 
-            def rows():
+            def rows(path: str, stats: dict):
                 for record in load_file(InputFileSpec(path=path, columns=["id", "text"])):
                     hits, n_features, max_overlap, marked = document_hits(str(record.get("text") or ""), bloom)
                     stats["docs"] += 1
@@ -120,7 +120,7 @@ def make_scanner(bloom_path: str, out_prefix: str):
                         "marked": marked,
                     }
 
-            write_parquet_file(rows(), output_path=f"{out_prefix}/{source}/hits/{name}", schema=HITS_SCHEMA)
+            write_parquet_file(rows(path, stats), output_path=f"{out_prefix}/{source}/hits/{name}", schema=HITS_SCHEMA)
             # The stats file is written last: its presence marks the file done, so a rerun skips it.
             with StoragePath(stats_path).open("w") as f:
                 json.dump(stats, f)

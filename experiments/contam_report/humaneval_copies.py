@@ -103,13 +103,18 @@ def make_checker(out_prefix: str):
             if StoragePath(out_path).exists():
                 continue
 
-            def rows():
+            def rows(path: str, wanted: dict):
                 for record in load_file(InputFileSpec(path=path, columns=["id", "text"])):
                     doc_id = str(record["id"])
                     for eval_id, prompt, solution in wanted.get(doc_id, ()):
-                        yield {"eval_id": eval_id, "path": path, "id": doc_id, **check(str(record["text"]), prompt, solution)}
+                        yield {
+                            "eval_id": eval_id,
+                            "path": path,
+                            "id": doc_id,
+                            **check(str(record["text"]), prompt, solution),
+                        }
 
-            yield write_parquet_file(rows(), output_path=out_path, schema=SCHEMA)
+            yield write_parquet_file(rows(path, wanted), output_path=out_path, schema=SCHEMA)
 
     return run
 

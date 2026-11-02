@@ -63,7 +63,9 @@ def main() -> None:
                    round(100 * avg((best_coverage_kept >= 0.8)::INT), 1) AS kept_ge80
             FROM {status} GROUP BY eval ORDER BY eval
             """
-        ).fetchdf().to_string(index=False)
+        )
+        .fetchdf()
+        .to_string(index=False)
     )
     print(
         con.sql(
@@ -76,7 +78,9 @@ def main() -> None:
                    count(DISTINCT (file, id)) FILTER (WHERE kept) AS kept
             FROM cand_kept
             """
-        ).fetchdf().to_string(index=False)
+        )
+        .fetchdf()
+        .to_string(index=False)
     )
     print(
         con.sql(
@@ -87,7 +91,9 @@ def main() -> None:
             QUALIFY row_number() OVER (PARTITION BY eval ORDER BY count(*) DESC) <= 3
             ORDER BY eval, items DESC
             """
-        ).fetchdf().to_string(index=False)
+        )
+        .fetchdf()
+        .to_string(index=False)
     )
 
 

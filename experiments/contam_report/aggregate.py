@@ -58,7 +58,8 @@ def aggregate(
         """
     )
     con.execute(
-        "UPDATE idx SET eval = regexp_extract(eval_id, '^(uncheatable-[a-z0-9_]+)-\\d+$', 1) WHERE eval_id LIKE 'uncheatable-%'"
+        "UPDATE idx SET eval = regexp_extract(eval_id, '^(uncheatable-[a-z0-9_]+)-\\d+$', 1) "
+        "WHERE eval_id LIKE 'uncheatable-%'"
     )
     # Artificial Analysis ids are ``<eval>-<record>``, and eval names hold no dash.
     con.execute(

@@ -6,6 +6,7 @@
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from rigging.filesystem.buckets import filesystem_for
 
@@ -27,6 +28,6 @@ def files_of(item):
 
 with ThreadPoolExecutor(8) as ex:
     out = dict(ex.map(files_of, sorted(sources.items())))
-json.dump(out, open(sys.argv[1], "w"))
+Path(sys.argv[1]).write_text(json.dumps(out))
 tot = sum(s for v in out.values() for _, s in v["files"])
 print(len(out), "sources", sum(len(v["files"]) for v in out.values()), "files", tot / 1e12, "TB")

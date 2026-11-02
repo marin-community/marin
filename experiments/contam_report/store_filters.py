@@ -14,6 +14,7 @@ Usage: store_filters.py SOURCES_JSON OUT_JSON
 
 import json
 import sys
+from pathlib import Path
 
 from rigging.filesystem.buckets import filesystem_for
 
@@ -33,7 +34,7 @@ def artifact(path: str) -> dict:
 
 
 def main() -> None:
-    sources = json.load(open(sys.argv[1]))
+    sources = json.loads(Path(sys.argv[1]).read_text())
     store = artifact(STORE)
     exempt = set(store["config"]["fuzzy_dedup_exempt"])
     store_deps = set(store["deps"])
@@ -42,7 +43,7 @@ def main() -> None:
             raise ValueError(f"store does not depend on {dep}")
     exact = artifact(EXACT_DUPS)["result"]["sources"]
     fuzzy = artifact(VERIFIED_FUZZY_DUPS)["result"]["sources"]
-    decon = json.load(open(DECONTAM_PATHS))
+    decon = json.loads(Path(DECONTAM_PATHS).read_text())
     if set(sources) != set(store["result"]["source_names"]):
         raise ValueError("inventory sources differ from the store's sources")
     filters = {}
@@ -54,7 +55,7 @@ def main() -> None:
             "exact": f"{ROOT}/{exact[key]['attr_dir']}",
             "fuzzy": None if name in exempt else f"{ROOT}/{fuzzy[key]['attr_dir']}",
         }
-    json.dump(filters, open(sys.argv[2], "w"), indent=1)
+    Path(sys.argv[2]).write_text(json.dumps(filters, indent=1))
     print(f"{len(filters)} sources, {sum(f['fuzzy'] is None for f in filters.values())} fuzzy-exempt")
 
 
