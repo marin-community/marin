@@ -30,14 +30,8 @@ STAGE_GROUPS = ("author", "adversary")
 
 @dataclass(frozen=True)
 class Prompt:
-    """A template loaded from a prompt file.
+    """A template loaded from a prompt file: ``template`` is the file's text without its final newline."""
 
-    Attributes:
-        name: The file's path as its policy file names it.
-        template: The file's text without its final newline.
-    """
-
-    name: str
     template: str
 
     @property
@@ -164,20 +158,20 @@ def _prompts(policy: Policy) -> dict[str, Prompt]:
     return {key: getattr(getattr(policy, key.split(".")[0]), key.split(".")[1]) for key in policy_keys()}
 
 
-def _prompt_files(path: Path) -> dict[str, tuple[str, Path]]:
-    """The fields ``path`` names, each with its file name and the file's path."""
+def _prompt_files(path: Path) -> dict[str, Path]:
+    """The fields ``path`` names, each with its prompt file's path."""
     entries = json.loads(path.read_text())
     unknown = sorted(set(entries) - set(policy_keys()))
     if unknown:
         raise ValueError(f"{path} names no such policy field: {', '.join(unknown)}")
-    return {key: (name, path.parent / name) for key, name in entries.items()}
+    return {key: path.parent / name for key, name in entries.items()}
 
 
-def _load_prompt(name: str, path: Path) -> Prompt:
+def _load_prompt(path: Path) -> Prompt:
     text = path.read_text()
     if not text.endswith("\n"):
         raise ValueError(f"{path} does not end with a newline")
-    return Prompt(name, text[:-1])
+    return Prompt(text[:-1])
 
 
 def load_policy(defaults_dir: Path, *overlays: Path) -> Policy:
@@ -195,7 +189,7 @@ def load_policy(defaults_dir: Path, *overlays: Path) -> Policy:
         files |= _prompt_files(overlay)
     groups = {
         group: record(
-            **{field.name: _load_prompt(*files[f"{group}.{field.name}"]) for field in dataclasses.fields(record)}
+            **{field.name: _load_prompt(files[f"{group}.{field.name}"]) for field in dataclasses.fields(record)}
         )
         for group, record in _fields().items()
     }
