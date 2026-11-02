@@ -10,7 +10,7 @@ The serving library uses the repository's GPU release and TPU pins, with no
 patch in its private uv cache; it tests that patched runtime, not unmodified v4
 support in the pin. H100 uses TP1/DP8 with expert parallelism; v4 uses TP16.
 
-Land order: #10606 (pin), #10535 (multi-host launcher), then this PR.
+Land order: #10854 (pin), #10535 (multi-host launcher), then this PR.
 The v4 arm reuses #10535's Ray gang, allocated ports and `tpu-name`
 coscheduling across four hosts. Only rank zero runs the evaluator.
 
