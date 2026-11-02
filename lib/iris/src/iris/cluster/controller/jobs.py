@@ -29,7 +29,14 @@ from iris.cluster.constraints import (
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_owner_if_configured
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import BackendCapability, BackendObservation, JobFeasibilityRequest, TaskBackend
+from iris.cluster.controller.backend import (
+    BackendCapability,
+    BackendKind,
+    BackendObservation,
+    EgressAllowlistMode,
+    JobFeasibilityRequest,
+    TaskBackend,
+)
 from iris.cluster.controller.codec import reconstruct_launch_job_request, resource_spec_from_job_row
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.federation_budget import FederationBudgets
@@ -37,6 +44,7 @@ from iris.cluster.controller.projections.attempt_counts import AttemptCountsProj
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.schema import jobs_table, tasks_table
+from iris.cluster.egress import MAX_EGRESS_RULES, format_egress_rule, parse_egress_rules, validate_egress_rules
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
@@ -650,7 +658,7 @@ def _validate_launch_profile(
             "Container profile sandbox runs a self-contained image and accepts no workspace bundle; "
             "submit without a workspace.",
         )
-    _resolve_egress_policy(request)
+    _validate_egress(request)
     if request.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
         logger.warning(
             "Job %s uses deprecated CONTAINER_PROFILE_GVISOR; upgrade the submitter to SANDBOX",
@@ -658,12 +666,88 @@ def _validate_launch_profile(
         )
 
 
-def _resolve_egress_policy(request: controller_pb2.Controller.LaunchJobRequest) -> None:
-    """Resolve UNSPECIFIED egress in place and reject an unknown policy or a sandbox on the cluster network."""
+def _validate_egress(request: controller_pb2.Controller.LaunchJobRequest) -> None:
+    """Validate the requested egress.
+
+    Rejects an unknown policy, a SANDBOX job on a policy that reaches the
+    controller, a malformed or excessive rule list, and rules alongside an
+    explicit policy other than ALLOWLIST. An UNSPECIFIED policy is left
+    unresolved; its rules take effect only if it resolves to ALLOWLIST.
+    """
     try:
-        request.egress_policy = resolve_egress_policy(request.container_profile, request.egress_policy)
+        validate_egress_rules(request.egress_allow)
+        if request.egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
+            return
+        if request.egress_allow and request.egress_policy != job_pb2.EGRESS_POLICY_ALLOWLIST:
+            raise ValueError("Egress rules require egress policy allowlist")
+        resolve_egress_policy(request.container_profile, request.egress_policy)
     except ValueError as e:
         raise ConnectError(Code.INVALID_ARGUMENT, str(e)) from e
+
+
+def _resolve_egress(
+    dependencies: JobDependencies,
+    request: controller_pb2.Controller.LaunchJobRequest,
+    launch: LaunchIdentity,
+) -> None:
+    """Resolve the egress policy in place for a job that runs here.
+
+    A child job with an UNSPECIFIED policy inherits its parent's policy and
+    rules, so a job tree that opted out of the allowlist, or added rules,
+    keeps that choice. A root job, and a SANDBOX child, takes the cluster's
+    default: ALLOWLIST where the backend defaults to it and the job is not
+    SANDBOX, otherwise its profile's default. A job on ALLOWLIST that the
+    backend cannot enforce for it runs on CLUSTER instead, with a warning, so
+    the stored policy is the one the job runs under. A job queued for a
+    federation peer is not resolved here; the peer resolves it.
+    """
+    mode = dependencies.runtime.backend.egress_allowlist_mode(request)
+    if request.egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
+        _resolve_unspecified_egress(dependencies, request, launch, mode)
+    if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST and mode is EgressAllowlistMode.UNAVAILABLE:
+        logger.warning(
+            "Job %s uses egress policy allowlist, which this cluster cannot enforce for it; "
+            "it runs on the cluster network",
+            launch.job_id.to_wire(),
+        )
+        request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
+
+
+def _resolve_unspecified_egress(
+    dependencies: JobDependencies,
+    request: controller_pb2.Controller.LaunchJobRequest,
+    launch: LaunchIdentity,
+    mode: EgressAllowlistMode,
+) -> None:
+    parent_id = launch.job_id.parent
+    if parent_id is not None and request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+        with dependencies.db.read_snapshot() as snapshot:
+            parent = reads.get_job_detail(snapshot, parent_id)
+        if parent is not None and parent.egress_policy != job_pb2.EGRESS_POLICY_UNSPECIFIED:
+            request.egress_policy = parent.egress_policy
+            _inherit_egress_rules(request, parse_egress_rules(parent.egress_allow_json))
+            return
+    if request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX and mode is EgressAllowlistMode.DEFAULT:
+        request.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
+        return
+    request.egress_policy = resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
+
+
+def _inherit_egress_rules(
+    request: controller_pb2.Controller.LaunchJobRequest, parent_rules: list[job_pb2.EgressRule]
+) -> None:
+    """Add the parent's rules that the job does not already declare, within ``MAX_EGRESS_RULES``."""
+    declared = {format_egress_rule(rule) for rule in request.egress_allow}
+    inherited = {format_egress_rule(rule): rule for rule in parent_rules}
+    for key in declared:
+        inherited.pop(key, None)
+    if len(request.egress_allow) + len(inherited) > MAX_EGRESS_RULES:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            f"Job declares {len(request.egress_allow)} egress rules and inherits {len(inherited)} more from its "
+            f"parent; at most {MAX_EGRESS_RULES} are allowed",
+        )
+    request.egress_allow.extend(inherited.values())
 
 
 def _validate_launch_capacity(
@@ -730,6 +814,12 @@ def _prepare_job_slot(
             needs_drain = _replace_finished_job(cur, launch.job_id, record_tombstone=record_tombstone)
         elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
             if not is_job_finished(existing_state):
+                if dependencies.runtime.backend.descriptor.kind is BackendKind.KUBERNETES:
+                    raise ConnectError(
+                        Code.FAILED_PRECONDITION,
+                        f"Cannot recreate active Kubernetes job {launch.job_id}: cancel it, verify its pods have "
+                        "disappeared, then submit the replacement",
+                    )
                 ops.job.cancel(cur, job_id=launch.job_id, reason="Replaced by new submission")
                 needs_drain = True
             else:
@@ -905,6 +995,7 @@ def launch_job(
     request = _inject_resource_constraints(request)
     plan = _plan_launch(dependencies, request, launch)
     if plan.disposition == SubmitDisposition.LOCAL:
+        _resolve_egress(dependencies, request, launch)
         error = dependencies.runtime.backend.validate_job(request)
         if error:
             raise ConnectError(Code.INVALID_ARGUMENT, error)
@@ -954,7 +1045,7 @@ def get_job_status(
         dependencies,
         job,
         summary,
-        _get_autoscaler_pending_hints(dependencies) if job.state == job_pb2.JOB_STATE_PENDING else {},
+        _get_autoscaler_pending_hints(dependencies) if _job_awaits_placement(job, summary) else {},
         has_children=has_children,
         parent_job_id=job.parent_job_id.to_wire() if job.parent_job_id else "",
         resources=resource_spec_from_job_row(job),
@@ -1069,6 +1160,14 @@ def complete_job(
     return job_pb2.Empty()
 
 
+def _job_awaits_placement(job: JobStatusRow, summary: TaskJobSummary | None) -> bool:
+    return job.state == job_pb2.JOB_STATE_PENDING or (
+        job.state == job_pb2.JOB_STATE_RUNNING
+        and summary is not None
+        and summary.task_state_counts.get(job_pb2.TASK_STATE_PENDING, 0) > 0
+    )
+
+
 def _job_to_proto(
     dependencies: JobDependencies,
     job: JobStatusRow,
@@ -1087,13 +1186,17 @@ def _job_to_proto(
         pending_reason = _federated_pending_reason(
             job.cluster, handoff_state, current_peer_status, dependencies.runtime.federation.peer_reachable(job.cluster)
         )
-    elif job.state == job_pb2.JOB_STATE_PENDING:
+    elif _job_awaits_placement(job, task_summary):
         sched_reason = dependencies.runtime.get_job_scheduling_diagnostics(job.job_id.to_wire())
-        pending_reason = sched_reason or "Pending scheduler feedback"
+        pending_reason = sched_reason or ("Pending scheduler feedback" if job.state == job_pb2.JOB_STATE_PENDING else "")
         hint = autoscaler_pending_hints.get(job.job_id.to_wire())
         if hint is not None:
             scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
-            pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
+            autoscaler_reason = f"Autoscaler: {scaling_prefix}{hint.message}"
+            if pending_reason:
+                pending_reason = f"Scheduler: {pending_reason}\n\n{autoscaler_reason}"
+            else:
+                pending_reason = autoscaler_reason
 
     proto_job = job_pb2.JobStatus(
         job_id=job.job_id.to_wire(),
@@ -1177,7 +1280,7 @@ def list_jobs(
         federated_ids = [j.job_id for j in page if is_federated(j.cluster)]
         handoffs = reads.handoff_states(q, federated_ids)
 
-    has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in page)
+    has_pending = any(_job_awaits_placement(j, summaries.get(j.job_id)) for j in page)
     autoscaler_pending_hints = _get_autoscaler_pending_hints(dependencies) if has_pending else {}
     all_jobs = _jobs_to_protos(
         dependencies, page, summaries, autoscaler_pending_hints, has_children=children, handoff_states=handoffs

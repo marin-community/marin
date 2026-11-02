@@ -196,6 +196,11 @@ override-dependencies = [
     "opentelemetry-api ; sys_platform != 'linux'",
 ]
 constraint-dependencies = [
+    "dnspython>=2.9.0",
+    "gitpython>=3.2.0",
+    "msgpack>=1.2.3",
+    "nltk>=3.10.4",
+    "oauthlib>=4.0.0",
     "uv>=0.13.5",
     "gcsfs==2026.4.0",
     "botocore==1.42.97 ; sys_platform == 'linux'",

@@ -614,8 +614,14 @@ conversations, and the trainer selects what to train on. Final grading receives 
 has a model turn.
 
 `GenerationLimitReached` retains rendered prompt tokens when the model cannot start another response.
+A server that rejects the prompt without rendering it supplies no tokens, so the adapter passes an empty tuple.
+The engine records these tokens only when no turn of the conversation completed.
 The engine grades completed state with stop reason `length`.
 It does not add an oversized observation to retained response evidence.
+
+A model adapter reports `stop_reason="length"` for every response that ends on its output token budget.
+This includes a response that the server's tool parser reports as tool calls; vLLM's GLM tool parser reports such a response with finish reason `tool_calls`.
+The shell harness does not execute tool calls from a `length` response.
 
 ## Trace modes
 

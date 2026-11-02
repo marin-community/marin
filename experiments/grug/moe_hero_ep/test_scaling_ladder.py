@@ -9,6 +9,7 @@ import jax.tree_util as jtu
 import optax
 import pytest
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import launch_scaling_ladder
@@ -272,3 +273,64 @@ def test_hero_context_history_rebuilds_the_prior_phases_it_trained_with(monkeypa
         ),
     ]
     assert config.flops_baseline == FlopsBaseline(completed_steps=350_400, total_flops=2e24)
+
+
+def test_hero_without_context_parallelism_keeps_its_16k_layout(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 16384)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 1)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_BALANCE_ATTENTION_ROWS", False)
+    step = build_ladder_run(
+        run_id="test-d6144-cp1",
+        size="d6144",
+        version="dev",
+        context_phases=(HarrierContextPhase(end_step=257_553, seq_len=4096),),
+        flops_baseline_total=1.8e24,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.expert_axis_size == 64
+    assert config.trainer.trainer.mesh == MeshConfig()
+    assert config.eval.eval_batch_size == 704
+
+
+def test_hero_context_parallelism_splits_each_rack_into_expert_and_sequence_shards(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 65536)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_BALANCE_ATTENTION_ROWS", True)
+    step = build_ladder_run(
+        run_id="test-d6144-cp4",
+        size="d6144",
+        qk_mult=1.66,
+        version="dev",
+        context_phases=(
+            HarrierContextPhase(end_step=257_553, seq_len=4096),
+            HarrierContextPhase(end_step=376_900, seq_len=16384),
+        ),
+        flops_baseline_total=2e24,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.expert_axis_size == 16
+    mesh_axes, _ = config.trainer.trainer.mesh.axis_shapes(num_devices=704, num_slices=1)
+    assert (mesh_axes["data"], mesh_axes["context"]) == (176, 4)
+    # One 65,536-token sequence per batch shard: 16,384 tokens per device per eval batch, as at 16K.
+    assert config.eval.eval_batch_size == 16 * 11
+
+
+def test_hero_context_axis_must_divide_the_sequence(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 16386)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+    with pytest.raises(ValueError, match="context_axis_size=4 must divide max_seq_len=16386"):
+        build_ladder_run(run_id="test-d6144-seq", size="d6144", version="dev")
+
+
+def test_hero_context_axis_must_split_the_expert_bank(monkeypatch):
+    # EP16 x CP4 stores the bank over 64 shards; 32 experts pass a 16-way expert check but fail parameter init.
+    monkeypatch.setattr(
+        launch_scaling_ladder,
+        "HERO_MODEL_CONFIG",
+        dataclasses.replace(launch_scaling_ladder.HERO_MODEL_CONFIG, num_experts=32),
+    )
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+    with pytest.raises(ValueError, match=r"must be divisible by expert \(16\) \* context \(4\) = 64"):
+        build_ladder_run(run_id="test-d6144-bank", size="d6144", version="dev")

@@ -203,6 +203,11 @@ iris job cancel --prefix /user/job-prefix # all jobs with this ID prefix
 iris job describe /user/job-name          # per-task state, exit, duration, peak memory
 ```
 
+Kubernetes controllers reject `EXISTING_JOB_POLICY_RECREATE` while the existing
+job is active. Cancel it, verify that all pods for its job ID have disappeared
+in Kubernetes, then submit the replacement. A terminal Iris job state alone does
+not confirm pod deletion. See [the RECREATE incident](https://github.com/marin-community/marin/issues/10712).
+
 The workload command hierarchy is:
 
 | Resource | Inspection | Actions |
@@ -1061,6 +1066,35 @@ the node lifecycle state to `production`, and both the cordon and any
 `node.coreweave.cloud/reserved` taint are gone. Restore singleton controllers
 and original replica counts first, wait for them to become Ready, then remove
 temporary capacity or placement changes.
+
+### Rolling back the egress allowlist
+
+The allowlist is described in `docs/container-profiles.md`. Rolling it back
+changes controller config; pods already running keep their Cilium policies
+until they exit or an operator deletes the policies. `iris cluster stop` does
+not delete them.
+
+1. To stop new root jobs defaulting to `ALLOWLIST`, set
+   `defaults.egress_allowlist.default: false` and restart the controller.
+   Running `ALLOWLIST` jobs keep the policy, and so do their retries and the
+   child jobs they launch, which inherit it.
+2. To stop enforcing the allowlist for every pod started from now on, also
+   remove `kubernetes_provider.cilium` and restart the controller. New and
+   stored `ALLOWLIST` jobs then start their pods on the cluster network.
+3. To open the network of pods already running under the allowlist, delete the
+   per-pod policies first and the namespace policy second. In the other order,
+   a pod with its own rules reaches only those rules, losing the controller and
+   cluster DNS, until its policy is deleted. A pod that no policy selects is
+   unrestricted.
+
+```bash
+KUBECTL="kubectl --kubeconfig $HOME/.kube/coreweave-iris --context <context> -n <namespace>"
+$KUBECTL get ciliumnetworkpolicies -o name | grep -- '-egress$' | xargs -r $KUBECTL delete
+$KUBECTL delete ciliumnetworkpolicy iris-egress-allowlist
+```
+
+`iris cluster start` recreates `iris-egress-allowlist` while
+`kubernetes_provider.cilium` is set.
 
 ## CI Workflows
 

@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 import math
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ import levanter.grug.attention._fa4_cute as fa4_cute
 import levanter.grug.attention._fa4_cute_backend as fa4_cute_backend
 from levanter.grug.attention import (
     AttentionMask,
+    ContextAttentionLayout,
     GrugAttentionImplementation,
     attention,
     gpu_fa4_cute_attention,
@@ -370,8 +372,8 @@ def test_context_sharded_segment_ids_preserve_global_bounds():
 
 @pytest.mark.multidevice
 def test_context_sharded_query_blocks_keep_their_sequence_positions(monkeypatch):
-    # The sharded wrapper moves half of each shard's queries to balance causal work; every query and its
-    # bounds must still reach the kernel with its own position and come back to its own row.
+    # Zigzag moves half of each shard's queries to balance causal work and contiguous keeps them in place;
+    # under both, every query and its bounds must reach the kernel with its own position and come back to its row.
     with use_test_devices(4) as devices:
 
         def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
@@ -394,12 +396,15 @@ def test_context_sharded_query_blocks_keep_their_sequence_positions(monkeypatch)
             kv = jnp.zeros((1, seq_len, 1, 8), jnp.float32)
             lower_bounds = jnp.asarray(1000 + position, jnp.int32)[None, :]
             valid = jnp.asarray(position % 3 != 0)[None, :]
-            for mesh_shape, sequence_axes in (
-                ((4, 1), "context"),
-                ((2, 2), "context"),
-                ((1, 4), "context"),
-                ((2, 2), ("data", "context")),
-                ((2, 2), ("context", "data")),
+            for layout, (mesh_shape, sequence_axes) in itertools.product(
+                ("zigzag", "contiguous"),
+                (
+                    ((4, 1), "context"),
+                    ((2, 2), "context"),
+                    ((1, 4), "context"),
+                    ((2, 2), ("data", "context")),
+                    ((2, 2), ("context", "data")),
+                ),
             ):
                 shards = mesh_shape[1] if sequence_axes == "context" else 4
                 if seq_len % shards:
@@ -419,6 +424,7 @@ def test_context_sharded_query_blocks_keep_their_sequence_positions(monkeypatch)
                             valid,
                             sm_scale=1.0,
                             kernel_config=SimpleNamespace(sm90_backward=None),
+                            context_layout=layout,
                         )
                     )(
                         jax.device_put(q, NamedSharding(mesh, P(None, sequence_axes))),
@@ -427,7 +433,7 @@ def test_context_sharded_query_blocks_keep_their_sequence_positions(monkeypatch)
                         valid,
                     )
                 out = np.asarray(out)[0, :, 0]
-                case = f"seq_len={seq_len} on {mesh_shape} over {sequence_axes}"
+                case = f"{layout} seq_len={seq_len} on {mesh_shape} over {sequence_axes}"
                 np.testing.assert_array_equal(out[:, 0], position, err_msg=f"kernel positions, {case}")
                 np.testing.assert_array_equal(out[:, 1], position, err_msg=f"queries, {case}")
                 np.testing.assert_array_equal(out[:, 2], 1000 + position, err_msg=f"bounds, {case}")
@@ -464,9 +470,10 @@ def _assert_real_gpu_fa4_cute_matches_reference(
     *,
     valid_tokens=None,
     implementation: GrugAttentionImplementation = "gpu_fa4_cute",
+    context_layout: ContextAttentionLayout = "zigzag",
 ):
     def fa4(q_arg, k_arg, v_arg):
-        return attention(q_arg, k_arg, v_arg, mask, implementation=implementation)
+        return attention(q_arg, k_arg, v_arg, mask, implementation=implementation, context_layout=context_layout)
 
     actual = jax.jit(fa4)(q, k, v)
     expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
@@ -480,7 +487,7 @@ def _assert_real_gpu_fa4_cute_matches_reference(
         return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
 
     def fa4_loss(q_arg, k_arg, v_arg):
-        out = attention(q_arg, k_arg, v_arg, mask, implementation=implementation)
+        out = attention(q_arg, k_arg, v_arg, mask, implementation=implementation, context_layout=context_layout)
         return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
 
     actual_grads = jax.jit(jax.grad(fa4_loss, argnums=(0, 1, 2)))(q, k, v)
@@ -581,11 +588,14 @@ _SEQUENCE_SHARDED_CASES = [("gpu_fa4_cute", *layout) for layout in _SEQUENCE_SHA
     ],
 )
 @pytest.mark.parametrize("mask_kind", ["causal", "window", "packed"])
+@pytest.mark.parametrize("context_layout", ["zigzag", "contiguous"])
 def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_queries(
-    q_heads, kv_heads, head_dim, context_size, sequence_axes, implementation, mask_kind
+    q_heads, kv_heads, head_dim, context_size, sequence_axes, implementation, mask_kind, context_layout
 ):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    if context_size == 1 and context_layout == "contiguous":
+        pytest.skip("Without a context split both layouts run the same single kernel call.")
     if implementation == "gpu_fa4_cute_sm100" and fa4_cute.gpu_compute_capability() != 100:
         pytest.skip("Native SM100 requires SM100.")
     if jax.device_count() < context_size:
@@ -639,6 +649,7 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_que
             jax.device_put(cotangent, q_sharding),
             valid_tokens=valid,
             implementation=implementation,
+            context_layout=context_layout,
         )
 
 
