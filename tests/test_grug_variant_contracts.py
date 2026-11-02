@@ -117,7 +117,7 @@ def test_legacy_checkpoint_restore_with_unit_context_axis():
         devices = np.asarray(selected_devices, dtype=object)
         device_count = len(devices)
         legacy_mesh = Mesh(
-            np.asarray(devices, dtype=object).reshape(1, device_count // 2, 2, 1),
+            devices.reshape(1, device_count // 2, 2, 1),
             ("replica_dcn", "data", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )
@@ -157,7 +157,7 @@ def test_legacy_checkpoint_restore_with_context_sharding():
         devices = np.asarray(selected_devices, dtype=object)
         device_count = len(devices)
         legacy_mesh = Mesh(
-            np.asarray(devices, dtype=object).reshape(1, device_count // 2, 2, 1),
+            devices.reshape(1, device_count // 2, 2, 1),
             ("replica_dcn", "data", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )

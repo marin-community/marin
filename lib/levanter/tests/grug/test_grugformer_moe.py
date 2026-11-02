@@ -1691,7 +1691,7 @@ def test_ring_filtered_matches_ring_and_dense_with_drops(
         w_down = jax.random.normal(keys[4], (experts, inter, hidden)) / math.sqrt(inter)
         cotangent = jax.random.normal(keys[5], (tokens, hidden))
         if padding == "uneven":
-            # Shard s keeps about s / 7 of its tokens.
+            # Shard s keeps about s / 3 of its tokens.
             keep_fraction = np.repeat(np.arange(shards) / (shards - 1), tokens_per_shard)
             token_valid = np.asarray(jax.random.uniform(keys[6], (tokens,))) < keep_fraction
         else:

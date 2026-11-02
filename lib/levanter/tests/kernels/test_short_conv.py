@@ -396,8 +396,6 @@ def test_context_parallel_halo_matches_the_unsharded_reference():
     with use_test_devices(8) as devices:
         BATCH, SEQ, CHANNELS = 2, 32, 8
         DEVICES = np.asarray(devices)
-        device_count = len(DEVICES)
-        assert device_count == 8
 
         def bits(array):
             array = np.asarray(array)
@@ -417,9 +415,8 @@ def test_context_parallel_halo_matches_the_unsharded_reference():
         def check(context, packed, width):
             # `data` splits the batch; what is left goes on an axis nothing names, so every device is in
             # the mesh.
-            data_shards = min(BATCH, device_count // context)
             mesh = Mesh(
-                DEVICES.reshape(data_shards, context, device_count // (data_shards * context)),
+                DEVICES.reshape(BATCH, context, 8 // (BATCH * context)),
                 ("data", "context", "spare"),
                 axis_types=(AxisType.Explicit,) * 3,
             )
