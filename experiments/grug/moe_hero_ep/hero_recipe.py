@@ -32,6 +32,7 @@ DEFAULT_WANDB_PROJECT = "marin_moe"
 # The hero started at 4K context with 1024 sequences per rack. Every later context keeps those tokens
 # per rack per update.
 HERO_INITIAL_SEQ_LEN = 4096
+HERO_FIXED_EVAL_SEQ_LENS = (4096, 65_536, 262_144)
 HERO_TOKENS_PER_RACK = 1024 * HERO_INITIAL_SEQ_LEN
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
@@ -66,6 +67,11 @@ def hero_rack_batch_size(seq_len: int) -> int:
     if HERO_TOKENS_PER_RACK % seq_len:
         raise ValueError(f"seq_len={seq_len} must divide the hero's {HERO_TOKENS_PER_RACK} tokens per rack")
     return HERO_TOKENS_PER_RACK // seq_len
+
+
+def hero_eval_seq_lens(train_seq_len: int) -> tuple[int, ...]:
+    """Evaluate fixed contexts already reached by training and the current context."""
+    return tuple(length for length in sorted({train_seq_len, *HERO_FIXED_EVAL_SEQ_LENS}) if length <= train_seq_len)
 
 
 def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:

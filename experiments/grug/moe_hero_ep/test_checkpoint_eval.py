@@ -6,7 +6,7 @@ from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 @pytest.mark.timeout(240)
-def test_checkpoint_eval_scores_saved_weights_at_each_length_and_truncates_the_final_window():
+def test_checkpoint_eval_scores_saved_weights_at_each_length_and_pads_the_final_window():
     script = """
         import dataclasses
         import tempfile
@@ -36,7 +36,7 @@ def test_checkpoint_eval_scores_saved_weights_at_each_length_and_truncates_the_f
             sliding_window=4, global_every=2, initializer_std=0.1, qk_mult=1.0,
             attention_implementation="reference", moe_implementation="fixed_all_to_all",
         )
-        # 37 tokens: 4 windows of 8 and 2 windows of 16, each dropping the final 5 tokens.
+        # 37 tokens: 4 windows of 8 and 2 windows of 16, each followed by a padded window of the final 5 tokens.
         stream = (np.arange(37) % 61 + 1).astype(np.int32)
         with tempfile.TemporaryDirectory() as directory:
             tokenizer = Tokenizer(WordLevel({"<unk>": 0, **{str(i): i for i in range(1, 64)}}, unk_token="<unk>"))
@@ -48,7 +48,8 @@ def test_checkpoint_eval_scores_saved_weights_at_each_length_and_truncates_the_f
                 },
                 tokenizer=directory,
             )
-            with jax.set_mesh(compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)):
+            train_mesh = compact_grug_mesh(expert_axis_size=4, replica_axis_size=1)
+            with jax.set_mesh(train_mesh):
                 trained = model.Transformer.init(config, key=jax.random.key(3))
                 state = {
                     "step": jnp.array(17, dtype=jnp.int32),
@@ -78,14 +79,18 @@ def test_checkpoint_eval_scores_saved_weights_at_each_length_and_truncates_the_f
             reference = {}
             eval_mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
             with jax.set_mesh(eval_mesh):
-                weights = _reshard_tree_to_mesh(trained, eval_mesh)
+                weights = _reshard_tree_to_mesh(trained, train_mesh, eval_mesh)
                 for seq_len in (8, 16):
-                    windows = stream[: len(stream) // seq_len * seq_len].reshape(-1, seq_len)
-                    # Zero-weight rows fill the batch to the four data shards.
-                    rows = np.zeros((4, seq_len), dtype=np.int32)
-                    rows[: len(windows)] = windows
-                    loss_weight = np.zeros((4, seq_len), dtype=np.float32)
-                    loss_weight[: len(windows), : seq_len - 1] = 1
+                    # Right padding never reaches a real token under causal attention, so zero rows
+                    # and zero weights reproduce the padded final window. Zero-weight rows also fill
+                    # the batch to the four data shards.
+                    row_count = 8 if seq_len == 8 else 4
+                    rows = np.zeros((row_count * seq_len,), dtype=np.int32)
+                    rows[: len(stream)] = stream
+                    rows = rows.reshape(row_count, seq_len)
+                    flat_weight = np.arange(row_count * seq_len) < len(stream) - 1
+                    loss_weight = flat_weight.astype(np.float32).reshape(row_count, seq_len)
+                    loss_weight[:, -1] = 0
                     per_token = weights.next_token_loss(
                         jnp.asarray(rows), jnp.asarray(loss_weight), mask=model.AttentionMask.causal(),
                         reduction="none", logsumexp_weight=None,
@@ -95,7 +100,7 @@ def test_checkpoint_eval_scores_saved_weights_at_each_length_and_truncates_the_f
         assert step == 17
         for seq_len in (8, 16):
             prefix = f"eval_dropless/seq_len_{seq_len}"
-            assert metrics[prefix + "/paloma/tiny/tokens"] == (37 // seq_len) * (seq_len - 1)
+            assert metrics[prefix + "/paloma/tiny/tokens"] == 37 - -(-37 // seq_len)
             np.testing.assert_allclose(metrics[prefix + "/paloma/tiny/loss"], reference[seq_len], rtol=1e-4)
             assert abs(rescaled[prefix + "/loss"] - metrics[prefix + "/loss"]) > 1e-4
     """

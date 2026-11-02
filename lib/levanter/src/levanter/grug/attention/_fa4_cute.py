@@ -50,6 +50,10 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
 
 def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
     """Replicate a ``[B, S]`` metadata array over sequence, preserving batch sharding."""
+    # Slicing a unit batch can drop size-one named batch axes. Normalize those before
+    # concatenating metadata slices in the packed-segment scan.
+    if x.shape[0] == 1:
+        return _replicate_metadata(x)
     spec = partition_spec_of(x)
     if spec is None or len(spec) < 2 or spec[1] is None:
         return x
