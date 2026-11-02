@@ -19,13 +19,13 @@ GLOBAL_DF_COMMON_MIN_SOURCES = 3
 
 # Item rule (marin#6852): also mark a document holding at least this share of one
 # core or Uncheatable item's indexed 13-grams, not counting drop-set n-grams. GSM8K
-# and HumanEval copies often lack the worked answer or the tests, so their bar is
-# lower. Other evals are left to the paragraph rule; the rule has not been tuned
+# copies often lack the worked answer and HumanEval copies the tests, so their bars
+# are lower. Other evals are left to the paragraph rule; the rule has not been tuned
 # on them. ``mmlu_`` covers MMLU subjects and the MMLU-Pro categories.
 ITEM_MATCH = ItemMatchConfig(
     thresholds=(
         ("gsm8k", 0.3),
-        ("humaneval", 0.3),
+        ("humaneval", 0.4),
         ("mmlu_", 0.5),
         ("leaderboard_mmlu_pro-", 0.5),
         ("uncheatable-", 0.5),
