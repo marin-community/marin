@@ -374,11 +374,24 @@ def _item_threshold(eval_id: str, config: ItemMatchConfig) -> float:
     return max(matches)[1] if matches else math.inf
 
 
+_INDEX_READ_BATCH = 1 << 20
+
+
 @functools.cache
 def _load_item_index(index_path: str, config: ItemMatchConfig) -> _ItemIndex:
-    """Load the eval hash index once per process for the item rule."""
+    """Load the eval hash index rows the item rule scores, once per process.
+
+    The index covers every eval in the filter, which can be over a GB; only items
+    under a configured prefix are kept, read in batches.
+    """
+    prefixes = [prefix for prefix, _ in config.thresholds]
+    batches = []
     with StoragePath(index_path).open("rb") as source:
-        table = pq.read_table(source, columns=["hash", "eval_id"])
+        for batch in pq.ParquetFile(source).iter_batches(columns=["hash", "eval_id"], batch_size=_INDEX_READ_BATCH):
+            eval_id = batch.column("eval_id")
+            keep = functools.reduce(pc.or_, (pc.starts_with(eval_id, prefix) for prefix in prefixes))
+            batches.append(batch.filter(keep))
+    table = pa.Table.from_batches(batches, schema=_INDEX_SCHEMA)
     encoded = pc.dictionary_encode(table.column("eval_id")).combine_chunks()
     eval_ids = tuple(encoded.dictionary.to_pylist())
     items = encoded.indices.to_numpy().astype(np.int32)
