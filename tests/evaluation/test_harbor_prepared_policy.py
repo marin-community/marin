@@ -318,7 +318,7 @@ def test_prepared_tau2_models_resolve_openai_provider_and_hosted_judge_in_task_c
             f"""
             import json
             from pathlib import Path
-            from harbor.environments.prepared_compose import import_prepared_task
+            from harbor.environments.docker_translate import import_prepared_task
             from harbor.models.task.task import Task
             from harbor.utils.env import resolve_env_vars, task_environment
             from marin.evaluation.harbor.trial_driver import effective_job_config, _model_environment

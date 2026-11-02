@@ -2,7 +2,7 @@ import json
 import warnings
 from enum import Enum
 from pathlib import Path
-from typing import Any, ClassVar, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, ClassVar, Literal, NotRequired, TypedDict
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -10,6 +10,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PlainSerializer,
     SerializationInfo,
     field_serializer,
     field_validator,
@@ -27,6 +28,14 @@ from harbor_config.models.task.config import ArtifactConfig, MCPServerConfig, Tp
 from harbor_config.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
 
 DEFAULT_TRIAL_CLEANUP_GRACE_SEC = 30.0
+
+
+def _serialize_environment(env: dict[str, str], info: SerializationInfo) -> dict[str, str]:
+    serialized = templatize_sensitive_env(env)
+    return redact_capability_urls(serialized) if info.mode == "json" else serialized
+
+
+EnvironmentVariables = Annotated[dict[str, str], PlainSerializer(_serialize_environment)]
 
 
 class ArtifactAuthorityConfig(BaseModel):
@@ -110,7 +119,7 @@ class AgentConfig(BaseModel):
         ),
     )
     kwargs: dict[str, Any] = Field(default_factory=dict)
-    env: dict[str, str] = Field(default_factory=dict)
+    env: EnvironmentVariables = Field(default_factory=dict)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     # When True (default; preserves current behavior) the host-side agent logs are
     # re-uploaded BACK into a non-mounted agent environment after the agent phase.
@@ -122,12 +131,6 @@ class AgentConfig(BaseModel):
     # (Trial._upload_agent_logs); NOT forwarded to the agent constructor. Mounted
     # environments ignore this (they use a bind mount, no round-trip).
     upload_agent_logs: bool = True
-
-    @field_serializer("env")
-    @classmethod
-    def _serialize_env(cls, env: dict[str, str], info: SerializationInfo) -> dict[str, str]:
-        serialized = templatize_sensitive_env(env)
-        return redact_capability_urls(serialized) if info.mode == "json" else serialized
 
     @model_validator(mode="after")
     def require_model_name_for_alias(self):
@@ -202,7 +205,7 @@ class EnvironmentConfig(BaseModel):
     )
     mounts: list[ServiceVolumeConfig] | None = None
     extra_docker_compose: list[Path] = Field(default_factory=list)
-    env: dict[str, str] = Field(default_factory=dict)
+    env: EnvironmentVariables = Field(default_factory=dict)
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -257,12 +260,6 @@ class EnvironmentConfig(BaseModel):
             stacklevel=2,
         )
         self.mounts = value
-
-    @field_serializer("env")
-    @classmethod
-    def _serialize_env(cls, env: dict[str, str], info: SerializationInfo) -> dict[str, str]:
-        serialized = templatize_sensitive_env(env)
-        return redact_capability_urls(serialized) if info.mode == "json" else serialized
 
     @field_serializer("kwargs", when_used="json")
     @classmethod
@@ -321,16 +318,10 @@ class VerifierConfig(BaseModel):
             "effective timeout multiplier."
         ),
     )
-    env: dict[str, str] = Field(default_factory=dict)
+    env: EnvironmentVariables = Field(default_factory=dict)
     import_path: str | None = Field(default=None, exclude_if=lambda v: v is None)
     kwargs: dict[str, Any] = Field(default_factory=dict, exclude_if=lambda v: not v)
     disable: bool = False
-
-    @field_serializer("env")
-    @classmethod
-    def _serialize_env(cls, env: dict[str, str], info: SerializationInfo) -> dict[str, str]:
-        serialized = templatize_sensitive_env(env)
-        return redact_capability_urls(serialized) if info.mode == "json" else serialized
 
     def identity_fingerprint(self) -> dict[str, Any]:
         """Compare judge hosting service and settings without runtime URL routing."""
