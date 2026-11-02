@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from typing import Any, Protocol
 from uuid import uuid4
 
-from rolloutengine.models import LENGTH_STOP_REASON, ModelTurn, Prompt
+from rolloutengine.models import LENGTH_STOP_REASON, ContextWindowExceeded, ModelTurn, Prompt
 
 
 TRIAL_HEADER = "x-ot-trial-id"
@@ -68,6 +68,14 @@ class AgentInferenceBackend:
         options = {key: value for key, value in body.items() if key not in TRANSPORT_FIELDS}
         try:
             turn = await self.sessions[trial_id](Prompt(tuple(body["messages"]), options))
+        except ContextWindowExceeded as error:
+            return {
+                "error": {
+                    "message": str(error),
+                    "type": "context_length_exceeded",
+                    "code": 400,
+                }
+            }
         except AgentGenerationStopped as error:
             return {
                 "error": {
