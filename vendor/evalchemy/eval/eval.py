@@ -1,6 +1,7 @@
 import asyncio
 from eval.execution.driver import source_plans, run_evaluations
 from eval.execution.run_spec import RunSpec
+from eval.graders.answer_equivalence import JudgeProtocol
 import argparse
 import difflib
 import json
@@ -133,6 +134,7 @@ def setup_custom_parser():
         default=AUTO_ANNOTATOR_MODEL,
         help="Judge model used to evaluate generations. Example: gpt-4o-mini-2024-07-18",
     )
+    parser.add_argument("--judge-protocol", type=JudgeProtocol, choices=list(JudgeProtocol), default=JudgeProtocol.DEFAULT)
     parser.add_argument(
         "--max_tokens",
         type=int,
@@ -192,6 +194,8 @@ def evaluate(
     output_sink: FineStoreOutput | None = None,
 ) -> Dict[str, Dict]:
     """Normalize every source into EvalSpec items and execute one shared flow."""
+    if args is None:
+        args = argparse.Namespace()
     run = RunSpec.from_args(args)
     robust_api.configure_generation_overrides(lm, run.generation)
     if run.seeds[0] is not None:
@@ -218,6 +222,9 @@ def evaluate(
                                          predict_only=run.predict_only, seeds=run.seeds,
                                          supports_request_seed=False,
                                          batch_sizes=local_batches, batch_size_attribute="batch_size"))
+    descriptions = {item.task: item for item in getattr(args, "resolved_benchmark_metadata", ())}
+    descriptions.update({plan.name: plan.benchmark.describe(plan.name) for plan in plans if plan.benchmark is not None})
+    args.resolved_benchmark_metadata = tuple(descriptions.values())
     results["task_preparations"] = getattr(args, "task_preparations", {})
     _attach_benchmark_metadata(results, args)
     return results

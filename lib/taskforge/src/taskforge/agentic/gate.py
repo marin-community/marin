@@ -3,7 +3,8 @@
 
 """The evidence rules that a submitted task must satisfy. Code applies them, so the agent cannot accept its own task.
 
-``submit`` also refuses a task that the tools cannot run, and it asks an independent reviewer last.
+``submit`` also refuses a task that the tools cannot run or whose grader accepts wrong answers that it makes from
+the controls, and it asks an independent reviewer last.
 """
 
 from dataclasses import dataclass, field

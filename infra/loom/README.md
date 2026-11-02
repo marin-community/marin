@@ -99,6 +99,21 @@ authenticate with Loom, and profile permissions still apply.
 
 ## Automation identities
 
+Repository-owned task procedures live in `procedures/`:
+
+- [Lint reporting](procedures/lint-review.md), used by the `agentic-lint` profile.
+- [Canary triage](procedures/triage-canary.md), named by the canary failure action.
+- [Docs/code parity](procedures/scrub-docs-code-parity.md),
+  [experiment summaries](procedures/scrub-experiment-issue-tldrs.md), and
+  [self-improvement](procedures/scrub-reflection-self-improvement.md), for
+  explicitly assigned work. These scrubs are manual procedures; recurring
+  execution requires a Loom watch that names the procedure path. They retain
+  the harness result footer but register no schedule.
+
+The `pr-review` and `pr-holistic-review` profiles both use `review-pr`, selecting
+its correctness and holistic reporting contracts respectively. Profile
+permissions and automation behavior remain specific to each pass.
+
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
 activation. The deployment setting
@@ -189,13 +204,39 @@ HTTP MCP headers in place.
 
 A profile's `env` block declares the environment every session of that profile
 receives. Each entry sets either an inline `value` for non-secret configuration
-or a same-project `secretRef` that the host resolves from Secret Manager at launch. Declare
-`roles/secretmanager.secretAccessor` for each reference in
-`infra/pulumi/src/iac/gcp/loom.py` before applying the profile. Profile
+or a same-project `secretRef` that the host resolves from Secret Manager at launch.
+Create the secret and upload its value before referencing it. The stack imports
+each referenced secret without managing its versions, so preview fails while one
+is missing, and removing the last reference leaves the secret in place. The VM
+account's project-level `roles/secretmanager.secretAccessor` grant in
+`infra/pulumi/src/iac/gcp/loom.py` covers every reference. Profile
 environment is applied after `envClear`, so strict automation profiles receive
 it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
 a session land under `/loom/<job>` instead of inheriting the session container's
 `app` OS account.
+
+Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
+from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
+profiles, which accept a per-launch agent override, and the Claude automation
+profiles. Strict Codex profiles omit it. The value is a one-year token from
+`claude setup-token`, and the secret's `expires` annotation records its expiry.
+Claude Code prefers this variable to the login stored on the shared session home
+volume, so sessions do not depend on that login. An `ANTHROPIC_API_KEY` would
+take precedence over the token. Keep it out of `LOOM_DOTENV`, whose variables
+reach every session of a profile without `envClear`.
+
+Loom resolves `versions/latest` whenever it starts an agent, so rotation needs
+no deploy. New and resumed sessions use the new version; running agents keep the
+token they started with.
+
+```sh
+claude setup-token  # save the printed token to token.txt
+tr -d '[:space:]' < token.txt | gcloud secrets versions add \
+  LOOM_CLAUDE_CODE_OAUTH_TOKEN --project=hai-gcp-models --data-file=-
+gcloud secrets update LOOM_CLAUDE_CODE_OAUTH_TOKEN --project=hai-gcp-models \
+  --update-annotations=expires=YYYY-MM-DD
+rm token.txt
+```
 
 An interactive session always brokers the `loom-oa-dev` GitHub App for its own
 repository, and a stored personal token still takes precedence over it. The
@@ -267,6 +308,15 @@ Each Loom session supervisor runs in a separately labeled Docker container.
 Recreating the control-plane service preserves those containers, and the new
 control plane discovers and adopts them. Do not run `docker compose down` while
 sessions are live because it removes their shared network.
+
+The [startup script](startup-script.sh) disables MPTCP in the host network namespace and persists
+the setting in `/etc/sysctl.d/99-loom-mptcp.conf`. Compose disables MPTCP in
+Caddy's network namespace and sets `GODEBUG=multipathtcp=0`.
+Apply changes to Caddy's environment or sysctls by recreating only its service:
+
+```sh
+docker compose -f /opt/loom/docker-compose.yml up -d --no-deps --force-recreate caddy
+```
 
 To roll back an application release, check out the prior Loom tree, restore its
 numbered `dotenvSecretVersion` when necessary, and run the normal preview and

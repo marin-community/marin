@@ -13,7 +13,7 @@
     "@fontsource-variable/noto-sans-mono": "^5.2.10",
     "@observablehq/plot": "^0.6.17",
     "@tailwindcss/postcss": "^4.3.0",
-    "vue": "^3.5.35",
+    "vue": "^3.5.42",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {

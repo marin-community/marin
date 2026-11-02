@@ -26,6 +26,7 @@ from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
+from taskforge.llm.test_support import unique_run_name
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import Control
 from taskforge.stage50_validate.controls import ControlOutcome, ControlPlan, ControlVerdict, replay
@@ -39,7 +40,6 @@ from taskforge.stage50_validate.trials import (
     rollout_steps,
     run_trials,
 )
-from tests.conftest import unique_run_name
 from tests.sandbox.fixture_images import FixtureImageFactory
 
 pytestmark = pytest.mark.live_glm

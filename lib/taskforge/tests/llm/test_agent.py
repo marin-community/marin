@@ -28,7 +28,7 @@ from taskforge.llm.agent import (
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
 from taskforge.llm.recording import CallLedger
-from tests.conftest import fake_source
+from taskforge.llm.test_support import fake_source
 
 MESSAGES: list[Message] = [{"role": "system", "content": "be useful"}, {"role": "user", "content": "do it"}]
 ECHO_SCHEMA = {
@@ -56,7 +56,7 @@ def run(fake_glm, fast_provider: LLMProviderConfig, ledger):
     ) -> AgentRun:
         async def call() -> AgentRun:
             record = CallLedger(ledger=ledger, workpiece_id="workpiece-1", round=0, step="author")
-            async with GlmClient(fake_source(fake_glm), fast_provider) as client:
+            async with GlmClient(fake_source(fake_glm.base_url), fast_provider) as client:
                 return await run_agent(client, policy, messages, tools, max_turns, record, replay, stop)
 
         return asyncio.run(call())

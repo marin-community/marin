@@ -21,7 +21,7 @@ from taskcompendium.models import (
 
 from rolloutengine.chat import ChatModel
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
 from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.models import (
     Continuation,
@@ -187,7 +187,7 @@ async def test_a_response_without_usage_is_a_model_failure():
     )
 
 
-async def test_prefill_harness_reaches_chat_endpoint_as_text_without_pinned_tokens():
+async def test_assistant_prefix_harness_reaches_chat_endpoint_as_text_without_pinned_tokens():
     server = ChatServer([completion({"content": "2"})])
     task = arithmetic_task(
         context=ConversationInput(
@@ -200,8 +200,8 @@ async def test_prefill_harness_reaches_chat_endpoint_as_text_without_pinned_toke
     )
     model = server.model()
     try:
-        result = await RolloutEngine({}, {"prefill": PrefillHarness()}).run_task(
-            rollout_spec(task, harness="prefill", trace=TraceMode.MESSAGES), model
+        result = await RolloutEngine({}, {"assistant_prefix": AssistantPrefixHarness()}).run_task(
+            rollout_spec(task, harness="assistant_prefix", trace=TraceMode.MESSAGES), model
         )
     finally:
         await model.client.close()
@@ -213,7 +213,7 @@ async def test_prefill_harness_reaches_chat_endpoint_as_text_without_pinned_toke
 
 
 @pytest.mark.parametrize("channel", ["reasoning_content", "reasoning"])
-async def test_prefill_rejects_reasoning_parsed_by_a_chat_endpoint(channel):
+async def test_assistant_prefix_rejects_reasoning_parsed_by_a_chat_endpoint(channel):
     server = ChatServer([completion({"content": "", channel: "2"})])
     task = arithmetic_task(
         context=ConversationInput(
@@ -227,8 +227,8 @@ async def test_prefill_rejects_reasoning_parsed_by_a_chat_endpoint(channel):
     model = server.model()
     try:
         with pytest.raises(GradedRolloutInterrupted) as caught:
-            await RolloutEngine({}, {"prefill": PrefillHarness()}).run_task(
-                rollout_spec(task, harness="prefill", trace=TraceMode.MESSAGES), model
+            await RolloutEngine({}, {"assistant_prefix": AssistantPrefixHarness()}).run_task(
+                rollout_spec(task, harness="assistant_prefix", trace=TraceMode.MESSAGES), model
             )
     finally:
         await model.client.close()

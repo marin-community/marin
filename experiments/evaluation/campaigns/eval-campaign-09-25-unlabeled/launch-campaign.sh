@@ -161,6 +161,7 @@ PY
   stage_harbor_configs "$model"
 
   base_arguments=(
+    --policy-finalization-config "$CANONICAL_CONFIG_ROOT/finalization.yaml"
     --model-config "$STAGED_MODEL_CONFIG"
     --federated_cluster "$FEDERATED_CLUSTER"
     --priority "$PRIORITY"

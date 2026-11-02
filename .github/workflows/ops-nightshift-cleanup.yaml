@@ -38,7 +38,7 @@ jobs:
             demand or measured workflow cost, review its design and behavior
             holistically, and compare supported candidates
             before implementing the highest-value eligible improvement. Follow
-            AGENTS.md and the commit skill. Open a PR with agent-generated and
+            AGENTS.md and the manage-pr skill. Open a PR with agent-generated and
             nightshift labels only for a justified change. Publish a typed
             result with the review, candidate comparison, validation evidence,
             and PR URL or the reason no change was warranted.

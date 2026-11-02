@@ -62,7 +62,7 @@ configuration, and dependencies.
 
 A small internal web app (a browser UI over a database or an API, used by the
 team) does not need its own project at all: keep its source under
-`infra/marina/apps/` or `infra/marina/applets/` and release its package with
+`infra/marina/apps/` and release its package with
 `marina release`. The `marin-marina` stack deploys the shared base runtime; it
 does not publish application code (see `infra/marina/README.md`).
 

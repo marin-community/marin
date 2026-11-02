@@ -26,12 +26,10 @@ import tempfile
 import threading
 import time
 import urllib.request
-import uuid
 from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -40,8 +38,8 @@ import pytest
 from taskforge.ledger.records import LedgerEntry
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMProviderConfig
+from taskforge.llm.test_support import GLM_MODEL, fake_source
 
-GLM_MODEL = "glm-5.3"
 BASE_URL_ENV = "TASKFORGE_GLM_BASE_URL"
 TOKEN_ENV = "GLM_HIGH_TOKEN"
 PARALLEL_KEY_FILE_ENV = "TASKFORGE_PARALLEL_KEY_FILE"
@@ -59,13 +57,6 @@ def no_package_downloads(monkeypatch: pytest.MonkeyPatch, request: pytest.Fixtur
         raise AssertionError("Unit tests must not download ShellSim catalog or runtime assets")
 
     monkeypatch.setattr(urllib.request, "urlopen", refuse_download)
-
-
-def unique_run_name(prefix: str) -> str:
-    """``prefix`` plus the UTC second, the xdist worker and a random suffix, unique across workers and reruns."""
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
-    return f"{prefix}-{stamp}-{worker}-{uuid.uuid4().hex[:8]}"
 
 
 @dataclass(frozen=True)
@@ -313,11 +304,7 @@ def other_fake_glm() -> Iterator[FakeGlm]:
         yield fake
 
 
-def fake_source(fake: FakeGlm) -> FixedEndpoint:
-    return FixedEndpoint(GlmEndpoint(fake.base_url, "test-token", Pool.HIGH))
-
-
 @pytest.fixture
 async def glm_client(fake_glm: FakeGlm, fast_provider: LLMProviderConfig):
-    async with GlmClient(fake_source(fake_glm), fast_provider) as client:
+    async with GlmClient(fake_source(fake_glm.base_url), fast_provider) as client:
         yield client
