@@ -67,4 +67,3 @@ evidence, explicit rules or observable outcomes where they fit the requested
 capability. Keep every essential requirement: do not replace substantive evaluation
 with superficial checks, or call it a decision_model merely to avoid llm_as_judge.
 If substantive judgment is essential to the capability, retain llm_as_judge.
-
