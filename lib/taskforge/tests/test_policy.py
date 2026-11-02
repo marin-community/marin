@@ -21,8 +21,19 @@ def test_an_overlay_replaces_only_the_fields_it_names_and_changes_the_digest(tmp
     assert policy.author.nudge.render(program="program.py") == "Call a tool; submit `program.py` when it builds."
     assert policy.author.system == DEFAULT_POLICY.author.system
     assert policy.proposer == DEFAULT_POLICY.proposer
-    assert policy.digest != DEFAULT_POLICY.digest
-    assert load_policy(DEFAULTS_DIR).digest == DEFAULT_POLICY.digest
+    assert policy.stage_digest != DEFAULT_POLICY.stage_digest
+    assert load_policy(DEFAULTS_DIR).stage_digest == DEFAULT_POLICY.stage_digest
+
+
+def test_a_proposer_overlay_leaves_the_stage_digest_unchanged(tmp_path):
+    (tmp_path / "plan.md").write_text("Plan {n} slots.\n")
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text(json.dumps({"proposer.plan": "plan.md"}))
+
+    policy = load_policy(DEFAULTS_DIR, overlay)
+
+    assert policy.proposer.plan.render(n=2) == "Plan 2 slots."
+    assert policy.stage_digest == DEFAULT_POLICY.stage_digest
 
 
 def test_a_policy_file_naming_an_unknown_field_or_missing_one_is_refused(tmp_path):

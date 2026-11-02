@@ -137,7 +137,7 @@ class StageCoordinator:
             records it.
         model_digest: The model part of every step key, usually
             ``run.build_model_digest(model, sampling, services)``. ``OPENED`` records it.
-        policy_digest: The ``Policy.digest`` of the prompts the stages were made with. ``OPENED`` records it.
+        policy_digest: The ``Policy.stage_digest`` of the prompts the stages were made with. ``OPENED`` records it.
     """
 
     stages: StageFunctions

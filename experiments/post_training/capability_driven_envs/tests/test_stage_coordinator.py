@@ -169,7 +169,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         services=services,
         research=ResearchRequirement.OFF,
         model_digest=build_model_digest(model, sampling, services),
-        policy_digest=DEFAULT_POLICY.digest,
+        policy_digest=DEFAULT_POLICY.stage_digest,
     )
 
     assert await run_workpiece(coordinator, WORKPIECE, proposal, InMemoryEventLog()) is Terminal.ACCEPTED

@@ -24,6 +24,8 @@ from typing import get_type_hints
 from taskforge.content_hash import digest
 
 POLICY_FILE = "policy.json"
+STAGE_GROUPS = ("author", "adversary")
+"""The groups of ``Policy`` the stage coordinator's stages send, which ``Policy.stage_digest`` covers."""
 
 
 @dataclass(frozen=True)
@@ -128,16 +130,24 @@ class AdversaryPrompts:
 
 @dataclass(frozen=True)
 class Policy:
-    """Every prompt of a run, by stage."""
+    """Every prompt of a run, by stage.
+
+    ``stage_digest`` covers the groups the stage coordinator's stages send, ``author`` and ``adversary``, and is the
+    digest ``OPENED`` records. The proposer's prompts are outside that relaunch contract: they are used before a
+    workpiece exists and no coordinator stage reads them, so editing one never blocks a workpiece's relaunch.
+    """
 
     proposer: ProposerPolicy
     author: AuthorPolicy
     adversary: AdversaryPrompts
 
     @property
-    def digest(self) -> str:
-        """The sha256 of each field's template sha256, by dotted field name; file names do not count."""
-        return digest({key: prompt.sha256 for key, prompt in _prompts(self).items()})
+    def stage_digest(self) -> str:
+        """The sha256 of each ``author`` and ``adversary`` template's sha256, by dotted field name; file names do not
+        count."""
+        return digest(
+            {key: prompt.sha256 for key, prompt in _prompts(self).items() if key.split(".")[0] in STAGE_GROUPS}
+        )
 
 
 def _fields() -> dict[str, type]:

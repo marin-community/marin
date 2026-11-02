@@ -89,8 +89,9 @@ template per file, rendered with `str.format`. `policy.Policy` groups the templa
 parameter: `author_messages(proposal, policy.author)`, `CapabilitySource(model, sampling, policy.proposer,
 environments)`, `AdversaryPolicy(..., prompts=policy.adversary)`. `load_policy(defaults_dir, *overlays)`
 reads `policy.json`, which maps each dotted field (`author.system`) to its file; an overlay is a JSON file of
-the same shape naming only the fields it replaces, with paths relative to itself. `Policy.digest` hashes
-every template, and the coordinator records it in `OPENED`. `defaults.DEFAULT_POLICY` is the package's own
+the same shape naming only the fields it replaces, with paths relative to itself. `Policy.stage_digest` hashes
+the `author` and `adversary` templates, and the coordinator records it in `OPENED`; the proposer's prompts are
+used before a workpiece exists, so they are outside the relaunch check. `defaults.DEFAULT_POLICY` is the package's own
 files. The pre-commit check `taskforge_prompt_literals` (`infra/pre-commit.py`) refuses a new string literal
 of 200 or more characters under `src/`, docstrings aside; the ones still in code are listed, with the reason, in
 `prompt_literals_allowed.txt`.

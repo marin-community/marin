@@ -27,12 +27,13 @@ from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, Tas
 from verifyit.spec import NumericSpec
 
 from taskforge import content_hash
-from taskforge.defaults import DEFAULT_POLICY
+from taskforge.defaults import DEFAULT_POLICY, DEFAULTS_DIR
 from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.policy import load_policy
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import ControlKind
 from taskforge.spec.draft import assemble, requirements
@@ -388,7 +389,7 @@ def coordinator(
     budget: WorkpieceBudget = BUDGET,
     digest: str = UNUSED_MODEL_DIGEST,
     research: ResearchRequirement = ResearchRequirement.OFF,
-    policy_digest: str = DEFAULT_POLICY.digest,
+    policy_digest: str = DEFAULT_POLICY.stage_digest,
 ) -> StageCoordinator:
     return StageCoordinator(
         stages,
@@ -506,7 +507,7 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 
 
 OFF = ResearchRequirement.OFF
-POLICY = DEFAULT_POLICY.digest
+POLICY = DEFAULT_POLICY.stage_digest
 
 
 @pytest.mark.parametrize(
@@ -537,6 +538,21 @@ async def test_a_relaunch_with_another_proposal_budget_model_research_or_policy_
     with pytest.raises(ValueError, match=f"{WORKPIECE} was {refusal}"):
         await run_workpiece(relaunch, WORKPIECE, proposal, InMemoryEventLog())
     assert tree_bytes(tmp_path) == before
+
+
+async def test_a_relaunch_under_other_proposer_prompts_is_not_refused(tmp_path):
+    await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL, InMemoryEventLog())
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "plan.md").write_text("Plan {n} slots.\n")
+    (prompts / "overlay.json").write_text(json.dumps({"proposer.plan": "plan.md"}))
+    policy = load_policy(DEFAULTS_DIR, prompts / "overlay.json")
+
+    log = InMemoryEventLog()
+    await run_workpiece(coordinator(tmp_path, policy_digest=policy.stage_digest), WORKPIECE, PROPOSAL, log)
+
+    assert policy.proposer != DEFAULT_POLICY.proposer
+    assert log.events()[0].attrs["policy_digest"] == DEFAULT_POLICY.stage_digest
 
 
 async def test_a_program_other_than_the_authored_one_fails_the_workpiece_at_build(tmp_path):
