@@ -65,16 +65,16 @@ class PartialEvaluationRecorder:
 
     def __init__(
         self,
-        targets: tuple[str, str],
+        target_prefix: str,
         expected_rollouts: int,
         source: str | None,
         upload: Callable[[str, str], None],
     ) -> None:
-        self._targets = targets
         self._expected_rollouts = expected_rollouts
         self._source = source
         self._upload = upload
         self._attempt_id = uuid4().hex
+        self._targets = tuple(f"{target_prefix}-{self._attempt_id}-{slot}.jsonl" for slot in range(2))
         self._directory = tempfile.TemporaryDirectory(prefix="skyrl-eval-")
         self._rows_path = str(Path(self._directory.name) / "rows.jsonl")
         self._rows = open(self._rows_path, "wb")

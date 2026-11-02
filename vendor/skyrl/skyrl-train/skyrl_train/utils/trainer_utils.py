@@ -341,36 +341,37 @@ def evaluation_result_entries(
     entries = []
     for i, data_source in enumerate(data_sources):
         verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
-        entries.append(
-            {
-                "uid": uids[i],
-                "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
-                "response_token_ids": trajectory_batch["response_ids"][i],
-                "input_prompt": input_prompts[i],
-                "output_response": output_responses[i],
-                "score": trajectory_batch["rewards"][i],
-                "stop_reason": trajectory_batch.get("stop_reasons", [None] * len(input_prompts))[i],
-                "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
-                "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
-                "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
-                "env_class": env_classes[i],
-                "data_source": data_source if data_source is not None else "unknown",
-                "env_metrics": (trajectory_batch.get("env_metrics") or [{}] * len(input_prompts))[i],
-                "verification": None
-                if verification is None
-                else {
-                    "status": verification.status.value,
-                    "reason": verification.reason,
-                    "score": verification.score,
-                    "passed": verification.passed,
-                    "score_min": verification.score_min,
-                    "score_max": verification.score_max,
-                    "diagnostics": {
-                        key: value for key, value in verification.diagnostics.items() if key in EVAL_DIAGNOSTIC_FIELDS
-                    },
+        entry = {
+            "uid": uids[i],
+            "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
+            "response_token_ids": trajectory_batch["response_ids"][i],
+            "input_prompt": input_prompts[i],
+            "output_response": output_responses[i],
+            "score": trajectory_batch["rewards"][i],
+            "stop_reason": trajectory_batch.get("stop_reasons", [None] * len(input_prompts))[i],
+            "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
+            "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
+            "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
+            "env_class": env_classes[i],
+            "data_source": data_source if data_source is not None else "unknown",
+            "env_metrics": (trajectory_batch.get("env_metrics") or [{}] * len(input_prompts))[i],
+            "verification": None
+            if verification is None
+            else {
+                "status": verification.status.value,
+                "reason": verification.reason,
+                "score": verification.score,
+                "passed": verification.passed,
+                "score_min": verification.score_min,
+                "score_max": verification.score_max,
+                "diagnostics": {
+                    key: value for key, value in verification.diagnostics.items() if key in EVAL_DIAGNOSTIC_FIELDS
                 },
-            }
-        )
+            },
+        }
+        if "is_last_step" in trajectory_batch:
+            entry["is_last_step"] = trajectory_batch["is_last_step"][i]
+        entries.append(entry)
     return entries
 
 

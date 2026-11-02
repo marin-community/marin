@@ -130,10 +130,7 @@ async def _collect_evaluation_rollouts(
             dump_dir = evaluation_dump_dir(str(cfg.trainer.export_path), global_step)
             try:
                 recorder = PartialEvaluationRecorder(
-                    targets=(
-                        join_resource_path(dump_dir, "partial-0.jsonl"),
-                        join_resource_path(dump_dir, "partial-1.jsonl"),
-                    ),
+                    target_prefix=join_resource_path(dump_dir, "partial"),
                     expected_rollouts=len(rows) * cfg.generator.eval_n_samples_per_prompt,
                     source=val_set_name,
                     upload=io.upload_file,
@@ -177,9 +174,6 @@ async def _collect_evaluation_rollouts(
                         accumulator.env_classes[first:],
                         accumulator.uids[first:],
                     )
-                    if "is_last_step" in batch:
-                        for entry, is_last_step in zip(entries, batch["is_last_step"], strict=True):
-                            entry["is_last_step"] = is_last_step
                     recorder.append(entries, repetition)
                 except Exception:
                     logger.exception("Partial evaluation serialization failed; evaluation continues")
