@@ -90,6 +90,15 @@ def _change(current: float, previous: float) -> str:
     return f"{(current - previous) / previous * 100:+.2f}"
 
 
+def step_time_warning(current: CanaryScore, previous: CanaryScore | None) -> str | None:
+    """A warning when median step time moved more than STEP_TIME_WARN_FRACTION from the previous run."""
+    if previous is None:
+        return None
+    if abs(current.step_time - previous.step_time) / previous.step_time <= STEP_TIME_WARN_FRACTION:
+        return None
+    return f"{_change(current.step_time, previous.step_time)}% against {previous.run_id}"
+
+
 def report_markdown(current: CanaryScore, previous: CanaryScore | None) -> str:
     rows = [
         ("Median step time (s)", "step_time", "{:.3f}"),
@@ -165,11 +174,8 @@ def main(run_id: str, entity: str, project: str, start_step: int, steps: int, ch
         with open(summary_path, "a", encoding="utf-8") as fh:
             fh.write(markdown)
 
-    if previous and abs(current.step_time - previous.step_time) / previous.step_time > STEP_TIME_WARN_FRACTION:
-        print(
-            f"::warning title=Hero canary step time::{_change(current.step_time, previous.step_time)}% "
-            f"against {previous.run_id}"
-        )
+    if warning := step_time_warning(current, previous):
+        print(f"::warning title=Hero canary step time::{warning}")
     if reasons := incomplete_reasons(current, steps):
         print(f"Hero canary incomplete: {'; '.join(reasons)}", file=sys.stderr)
         sys.exit(1)

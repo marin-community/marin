@@ -55,7 +55,7 @@ def _is_coordinator(job: JobStatus, prefix: str) -> bool:
     return job_id.startswith(prefix) and job_id.endswith(COORDINATOR_SUFFIX) and job_id.count("/") == 2
 
 
-def _training(coordinator: JobStatus, jobs: list[JobStatus]) -> bool:
+def _is_training(coordinator: JobStatus, jobs: list[JobStatus]) -> bool:
     children = [job for job in jobs if str(job.job_id).startswith(str(coordinator.job_id) + "/")]
     return any(child.state is JobState.RUNNING for child in children)
 
@@ -79,7 +79,7 @@ def settle(jobs: list[JobStatus], prefix: str) -> Settlement:
         return Settlement(Outcome.NONE, job_id="", run_id="", to_cancel=())
 
     live = [job for job in coordinators if not is_job_finished(job.state)]
-    to_cancel = tuple(str(job.job_id) for job in live if not _training(job, jobs))
+    to_cancel = tuple(str(job.job_id) for job in live if not _is_training(job, jobs))
     latest = coordinators[0]
     job_id = str(latest.job_id)
     run_id = job_id.rsplit("/", 1)[1].removesuffix(COORDINATOR_SUFFIX)
@@ -108,7 +108,10 @@ def main(iris_config: Path, job_prefix: str, github_output: bool) -> None:
         click.echo(f"::notice title=Hero canary skipped::{settlement.run_id} got no rack before the next run.")
     if settlement.outcome is Outcome.RUNNING:
         click.echo(f"::notice title=Hero canary still training::{settlement.run_id}; today's run is skipped.")
-    if github_output and (path := os.environ.get("GITHUB_OUTPUT")):
+    if github_output:
+        path = os.environ.get("GITHUB_OUTPUT")
+        if not path:
+            raise click.UsageError("--github-output needs $GITHUB_OUTPUT to be set")
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(
                 f"outcome={settlement.outcome}\n"

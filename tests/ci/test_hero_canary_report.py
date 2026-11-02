@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from scripts.ci.hero_canary_report import WARMUP_STEPS, incomplete_reasons, report_markdown, score_run
+from scripts.ci.hero_canary_report import WARMUP_STEPS, incomplete_reasons, score_run, step_time_warning
 
 START_STEP = 372000
 
@@ -43,10 +43,11 @@ def test_incomplete_run_is_reported():
     ]
 
 
-def test_report_shows_step_time_change_against_previous_run():
+def test_step_time_change_beyond_threshold_warns():
     previous = score_run("hero-canary-1", "aaa", _rows([15.5] * 31), {"eval_dropless/macro_loss": 2.0}, START_STEP)
-    current = score_run("hero-canary-2", "bbb", _rows([15.81] * 31), {"eval_dropless/macro_loss": 2.0}, START_STEP)
+    slower = score_run("hero-canary-2", "bbb", _rows([15.81] * 31), {"eval_dropless/macro_loss": 2.0}, START_STEP)
+    within_noise = score_run("hero-canary-3", "ccc", _rows([15.58] * 31), {"eval_dropless/macro_loss": 2.0}, START_STEP)
 
-    markdown = report_markdown(current, previous)
-
-    assert "| Median step time (s) | 15.810 | 15.500 | +2.00 |" in markdown
+    assert step_time_warning(slower, previous) == "+2.00% against hero-canary-1"
+    assert step_time_warning(within_noise, previous) is None
+    assert step_time_warning(slower, None) is None
