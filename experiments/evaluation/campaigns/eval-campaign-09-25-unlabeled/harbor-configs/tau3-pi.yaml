@@ -16,6 +16,7 @@ retry:
   - AgentSetupTimeoutError
   - DaytonaSandboxStopError
   - DaytonaProcessError
+  - DaytonaDockerSetupError
   - TrialTimeoutError
   - AgentKilledBySignalError
   - VerifierTimeoutError

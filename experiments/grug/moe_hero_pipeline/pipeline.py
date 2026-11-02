@@ -679,6 +679,26 @@ def precompile_automatic_mpmd_step(step) -> int:
     return mpmd_primitives.precompile_pipeline_tasks(step.local_jaxpr, step.mpmd_mesh)
 
 
+def place_automatic_mpmd_batch(
+    compiled_step,
+    batches: GrugLmExample,
+    loss_denominator: jax.Array,
+    mpmd_mesh,
+    *,
+    memory_threshold: int | None = None,
+) -> tuple[GrugLmExample, jax.Array]:
+    """Place a batch and its loss denominator on the compiled pipeline meshes."""
+    pp, _ = _jaxpp_modules()
+    if memory_threshold is None and all(device.memory_stats() is None for device in jax.local_devices()):
+        memory_threshold = 0
+    return pp.spmd_to_mpmd_reshard(
+        mpmd_mesh,
+        (batches, loss_denominator),
+        compiled_step.in_shardings[0][1:3],
+        threshold=memory_threshold,
+    )
+
+
 def prepare_automatic_mpmd_step(
     step,
     state: GrugMoeAutomaticPipelineState,
@@ -731,13 +751,8 @@ def prepare_automatic_mpmd_step(
         )
 
     state = jax.tree.map(place_initial_scalar, state, args_shardings[0])
-    if memory_threshold is None and all(device.memory_stats() is None for device in jax.local_devices()):
-        memory_threshold = 0
-    batches, loss_denominator = pp.spmd_to_mpmd_reshard(
-        mpmd_mesh,
-        (batches, loss_denominator),
-        (args_shardings[1], args_shardings[2]),
-        threshold=memory_threshold,
+    batches, loss_denominator = place_automatic_mpmd_batch(
+        compiled, batches, loss_denominator, mpmd_mesh, memory_threshold=memory_threshold
     )
     return PreparedAutomaticMpmdStep(
         step=compiled,

@@ -406,6 +406,7 @@ class BasePPOExp:
             tokenizer=self.tokenizer,
             max_prompt_length=self.cfg.trainer.max_prompt_length,
             num_workers=8,
+            chat_template_kwargs=dict(self.cfg.generator.chat_template_kwargs),
             **terminal_options,
         )
 

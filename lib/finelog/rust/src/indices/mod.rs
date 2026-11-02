@@ -304,6 +304,35 @@ pub fn needs_rebuild(
         return true;
     };
     let source_rows = row_groups.iter().sum::<usize>() as u64;
+    needs_rebuild_for_binding(
+        &SourceBinding {
+            segment_uuid: Some(source_id.to_string()),
+            row_count: source_rows as i64,
+        },
+        expected_rows,
+        artifacts,
+        config,
+    )
+}
+
+/// Check advertised artifacts using immutable source metadata from table state.
+pub fn needs_rebuild_for_binding(
+    binding: &SourceBinding,
+    expected_rows: i64,
+    artifacts: &LocalArtifacts,
+    config: &SegmentIndexConfig,
+) -> bool {
+    if config.is_empty() {
+        return false;
+    }
+    let Some(source_id) = binding
+        .segment_uuid
+        .as_deref()
+        .and_then(|id| uuid::Uuid::parse_str(id).ok())
+    else {
+        return true;
+    };
+    let source_rows = binding.row_count as u64;
     let Some(path) = artifacts.bundle.clone() else {
         return true;
     };
@@ -402,6 +431,28 @@ pub(crate) fn write_segment_index(
     if config.is_empty() {
         return Ok(BuiltArtifacts::default());
     }
+    let (source_segment_id, _) = segment_id_and_row_group_rows(parquet_path).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "cannot read source segment footer for index build: {}",
+                parquet_path.display()
+            ),
+        )
+    })?;
+    write_index_artifacts(parquet_path, source_segment_id, batches, config)
+}
+
+/// Build artifacts from decoded rows and a footer identity without opening the source file.
+pub(crate) fn write_index_artifacts(
+    parquet_path: &Path,
+    source_segment_id: uuid::Uuid,
+    batches: &[RecordBatch],
+    config: &SegmentIndexConfig,
+) -> std::io::Result<BuiltArtifacts> {
+    if config.is_empty() {
+        return Ok(BuiltArtifacts::default());
+    }
     let started = Instant::now();
     let Some(first) = batches.first() else {
         return Ok(BuiltArtifacts::default());
@@ -415,16 +466,6 @@ pub(crate) fn write_segment_index(
             "segment row count overflow",
         ));
     };
-    let (source_segment_id, _) = segment_id_and_row_group_rows(parquet_path).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "cannot read source segment footer for index build: {}",
-                parquet_path.display()
-            ),
-        )
-    })?;
-
     let mut sections = build_trigram_sections(batches, config);
     append_group_extrema_sections(&mut sections, batches, config);
     let mut referenced_projection_paths = BTreeSet::new();

@@ -51,7 +51,11 @@ from harbor.llms.base import (
 )
 from harbor.llms.chat import Chat, assistant_message_from_response
 from harbor.llms.openai_llm import OpenAILLM
-from harbor.llms.vllm_tokenization import shared_async_tokenize_client, tokenize_url
+from harbor.llms.vllm_tokenization import (
+    is_retryable_tokenize_error,
+    shared_async_tokenize_client,
+    tokenize_url,
+)
 from harbor.models.agent.context import AgentContext
 from harbor.models.agent.name import AgentName
 from harbor.models.agent.rollout_detail import RolloutDetail
@@ -72,9 +76,11 @@ from harbor.utils.trajectory_utils import format_trajectory_json
 from harbor_config.stop_reason import AgentStopReason
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     retry_if_not_exception_type,
     stop_after_attempt,
+    wait_exponential,
 )
 from upath import UPath
 
@@ -105,6 +111,31 @@ def _get_shared_tokenize_client(timeout: float = 10.0) -> "httpx.Client":  # noq
 
 OPENAI_CHAT_REPLY_PRIMING_TOKENS = 3
 OPENAI_CHAT_TOKENS_PER_MESSAGE = 3
+
+
+@retry(
+    retry=retry_if_exception(is_retryable_tokenize_error),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, max=4),
+    reraise=True,
+)
+async def _server_token_count(url: str, payload: dict[str, Any]) -> int:
+    response = await shared_async_tokenize_client().post(url, json=payload)
+    response.raise_for_status()
+    return int(response.json()["count"])
+
+
+@retry(
+    retry=retry_if_exception(is_retryable_tokenize_error),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, max=4),
+    reraise=True,
+)
+def _sync_server_token_count(url: str, payload: dict[str, Any]) -> int:
+    response = _get_shared_tokenize_client().post(url, json=payload)
+    response.raise_for_status()
+    return int(response.json()["count"])
+
 
 RESERVED_SUMMARY_OUTPUT = 4096
 _MAX_RESERVED_SUMMARY_OUTPUT = 16384
@@ -859,15 +890,22 @@ class Terminus2(BaseAgent):
         if prep is not None:
             url, payload = prep
             try:
-                # Reuse the process-wide pooled client (see
-                # _get_shared_tokenize_client) so we don't rebuild an SSL
-                # context per turn on the coordinator loop.
-                client = _get_shared_tokenize_client()
-                resp = client.post(url, json=payload)
-                if resp.status_code == 200:
-                    return int(resp.json()["count"])
-            except Exception:
-                pass
+                return _sync_server_token_count(url, payload)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code == 404:
+                    try:
+                        return self._token_counter_fallback(chat, extra_messages)
+                    except Exception as fallback_error:
+                        raise ContextManagementInfrastructureError(
+                            f"Could not count prompt tokens through /tokenize; local fallback failed: {fallback_error}"
+                        ) from error
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
+            except Exception as error:
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
 
         return self._token_counter_fallback(chat, extra_messages)
 
@@ -969,12 +1007,24 @@ class Terminus2(BaseAgent):
         if prep is not None:
             url, payload = prep
             try:
-                client = shared_async_tokenize_client()
-                resp = await client.post(url, json=payload)
-                if resp.status_code == 200:
-                    return int(resp.json()["count"])
-            except Exception:
-                pass
+                return await _server_token_count(url, payload)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code == 404:
+                    try:
+                        return await asyncio.to_thread(
+                            self._token_counter_fallback, chat, extra_messages
+                        )
+                    except Exception as fallback_error:
+                        raise ContextManagementInfrastructureError(
+                            f"Could not count prompt tokens through /tokenize; local fallback failed: {fallback_error}"
+                        ) from error
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
+            except Exception as error:
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
 
         return await asyncio.to_thread(
             self._token_counter_fallback, chat, extra_messages

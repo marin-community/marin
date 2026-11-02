@@ -4,6 +4,7 @@
 """Tests for DockerRuntime mount resolution, staging, and container creation."""
 
 import subprocess
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -135,18 +136,17 @@ def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
 
 
 @pytest.mark.parametrize(
-    "network_mode, expect_sysctls, expect_egress_resolv_conf",
+    "network_mode, resolv_conf, expect_sysctls",
     [
-        (NETWORK_MODE_NONE, False, False),
-        (NETWORK_MODE_HOST, False, False),
-        ("bridge", True, False),
-        (EGRESS_NETWORK, False, True),
+        (NETWORK_MODE_NONE, None, False),
+        (NETWORK_MODE_HOST, None, False),
+        (NETWORK_MODE_HOST, "/cache/egress-dns/task_attempt_0/resolv.conf", False),
+        ("bridge", None, True),
+        (EGRESS_NETWORK, EGRESS_RESOLV_CONF, False),
     ],
 )
-def test_create_container_network_flags(
-    monkeypatch, tmp_path, runtime, network_mode, expect_sysctls, expect_egress_resolv_conf
-):
-    """The container joins the configured network; a plain bridge gets sysctl tuning, the egress network public DNS."""
+def test_create_container_network_flags(monkeypatch, tmp_path, runtime, network_mode, resolv_conf, expect_sysctls):
+    """The container joins the configured network and resolver; only a plain bridge gets sysctl tuning."""
     commands: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -164,6 +164,7 @@ def test_create_container_network_flags(
         env={},
         mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         network_mode=network_mode,
+        resolv_conf=Path(resolv_conf) if resolv_conf else None,
         workdir_host_path=workdir,
     )
 
@@ -172,7 +173,8 @@ def test_create_container_network_flags(
     create_command = next(command for command in commands if command[:2] == ["docker", "create"])
     assert create_command[create_command.index("--network") + 1] == network_mode
     assert ("--sysctl" in create_command) == expect_sysctls
-    assert (f"{EGRESS_RESOLV_CONF}:/etc/resolv.conf:ro" in create_command) == expect_egress_resolv_conf
+    resolv_mounts = [arg for arg in create_command if arg.endswith(":/etc/resolv.conf:ro")]
+    assert resolv_mounts == ([f"{resolv_conf}:/etc/resolv.conf:ro"] if resolv_conf else [])
 
 
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):

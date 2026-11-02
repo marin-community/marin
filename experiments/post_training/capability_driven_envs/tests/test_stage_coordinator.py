@@ -108,6 +108,7 @@ async def no_repair(proposal: TaskProposal, verdict: Verdict) -> TaskProposal:
     raise AssertionError("the preflight never asks for a repair")
 
 
+@pytest.mark.asyncio
 async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_workpiece_id(tmp_path):
     proposal = catalog_proposal(load_capability_ideas(example_catalog_path())[CAPABILITY])
     stages = StageFunctions(

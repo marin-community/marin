@@ -9,6 +9,8 @@ from typing import Any, Optional, Protocol, runtime_checkable
 import equinox as eqx
 import haliax
 import jax
+import jax.numpy as jnp
+from jax.sharding import AxisType
 
 from haliax import Axis
 
@@ -46,6 +48,7 @@ class ConvertLmConfig:
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
     export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES
     max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS
+    export_dtype: str | None = None
 
     model: LmConfig = LlamaConfig()
     save_tokenizer: bool = True  # if True, save the tokenizer to the output directory
@@ -65,7 +68,8 @@ def main(config: ConvertLmConfig):
     if tokenizer_spec is None:
         tokenizer = converter.tokenizer
     else:
-        tokenizer = load_tokenizer(tokenizer_spec)
+        tokenizer_ref = RepoRef.from_string(tokenizer_spec)
+        tokenizer = load_tokenizer(tokenizer_ref.model_name_or_path, revision=tokenizer_ref.revision)
 
     if tokenizer is None:
         vocab_size = config.override_vocab_size or getattr(config.model, "vocab_size", None)
@@ -79,7 +83,8 @@ def main(config: ConvertLmConfig):
 
     exit_stack = ExitStack()
     if config.use_cpu:
-        exit_stack.enter_context(local_cpu_mesh())
+        mesh_axis_type = AxisType.Explicit if config.model.requires_explicit_mesh_axes else AxisType.Auto
+        exit_stack.enter_context(local_cpu_mesh(mesh_axis_type))
     else:
         # exit_stack.enter_context(Mesh(jax.local_devices(), "dev"))
         exit_stack.enter_context(config.trainer.device_mesh)
@@ -116,6 +121,7 @@ def main(config: ConvertLmConfig):
             max_shard_size=config.max_shard_size,
             export_host_budget_bytes=config.export_host_budget_bytes,
             max_concurrent_shards=config.max_concurrent_shards,
+            dtype=jnp.dtype(config.export_dtype) if config.export_dtype is not None else None,
         )
 
 
