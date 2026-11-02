@@ -367,6 +367,7 @@ def test_snowball_load_path_multidevice_sharding():
             qk_mult=1.37,
             layer_norm_eps=1e-5,
             initializer_std=0.02,
+            attention_implementation="reference",
         )
         Vocab = Axis("vocab", cfg.vocab_size)
         mesh = Mesh(

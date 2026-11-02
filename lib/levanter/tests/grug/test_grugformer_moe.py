@@ -1449,7 +1449,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     implementation: MoeImplementation,
     token_valid: list[bool],
 ):
-    with use_test_devices(4) as devices:
+    with use_test_devices(4) as devices, jax.default_matmul_precision("highest"):
         mesh = Mesh(
             np.asarray(devices).reshape(2, 2, 1),
             axis_names=("data", "expert", "model"),
@@ -1673,7 +1673,7 @@ def test_ring_filtered_matches_ring_and_dense_with_drops(
     """On 4 expert shards, ring_filtered matches a dense reference that applies its sender capacity and then ring's
     receiver capacity, and matches ring whenever no sender drops. Gradients include the combine weights, which
     carry the router gradient. The uneven padding leaves shard 0 with no valid tokens."""
-    with use_test_devices(4) as devices:
+    with use_test_devices(4) as devices, jax.default_matmul_precision("highest"):
         shards, tokens_per_shard, hidden, inter, experts, topk = 4, 48, 8, 6, 32, 4
 
         tokens = shards * tokens_per_shard

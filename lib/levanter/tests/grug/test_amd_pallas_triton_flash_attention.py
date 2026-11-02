@@ -208,5 +208,4 @@ def test_flash_attention_batch_and_head_sharded_packed_matches_reference():
         assert actual.sharding.spec == sharding.spec
         assert all(g.sharding.spec == sharding.spec for g in grads)
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-4, rtol=1e-4)
-        for name, got, want in zip("qkv", grads, expected_grads, strict=True):
-            np.testing.assert_allclose(np.asarray(got), np.asarray(want), atol=1e-4, rtol=1e-4, err_msg=f"d{name}")
+        _assert_gradients_match(grads, expected_grads, tol=TOLERANCE[jnp.float32])

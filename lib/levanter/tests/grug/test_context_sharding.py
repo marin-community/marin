@@ -92,7 +92,7 @@ def test_drop_totals_count_each_assignment_once_when_tokens_skip_the_context_axi
 @pytest.mark.multidevice
 def test_fused_cross_entropy_reduces_over_the_sequence_instead_of_gathering_it():
     # Loss values alone miss a sequence all-gather; check compiled collectives too.
-    with use_test_devices(4) as devices:
+    with use_test_devices(4) as devices, jax.default_matmul_precision("highest"):
         k_hidden, k_head, k_labels, k_weight = jax.random.split(jax.random.key(5), 4)
         hidden = jax.random.normal(k_hidden, (4, 4, 16), dtype=jnp.float32)
         lm_head = jax.random.normal(k_head, (16, 64), dtype=jnp.float32) * 0.1
