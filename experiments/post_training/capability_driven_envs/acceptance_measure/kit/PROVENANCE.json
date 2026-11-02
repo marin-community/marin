@@ -1,0 +1,76 @@
+{
+  "ported": [
+    {
+      "file": "kit/reference/helpers/grade_kit.py",
+      "source_repo": "marin (branch mark/author-harness-20261026)",
+      "source_commit": "43666144ee1ba69db22ab43668b6d90a75b58b50",
+      "source_path": "experiments/post_training/capability_env_gen/phase11/inputs/synthesis/d3-v2/reference/helpers/grade_kit.py",
+      "source_sha256": "a593b15acb9727fbc7bc06fc9d9d5580a160eeb93af01566f8c7c82c97ff773e",
+      "ported_sha256": "a593b15acb9727fbc7bc06fc9d9d5580a160eeb93af01566f8c7c82c97ff773e",
+      "verbatim": true,
+      "edit": "verbatim"
+    },
+    {
+      "file": "kit/reference/patterns/strict-grading.md",
+      "source_repo": "marin (branch mark/author-harness-20261026)",
+      "source_commit": "43666144ee1ba69db22ab43668b6d90a75b58b50",
+      "source_path": "experiments/post_training/capability_env_gen/phase11/inputs/synthesis/d3-v2/reference/patterns/strict-grading.md",
+      "source_sha256": "16c4412f88083a87d0980175540c37f1e92b28b86f1dab125386f7942d80faa7",
+      "ported_sha256": "4e3aace386be25436760b3db40dcf65ebf13fa65a48b5fb77fffffbc5e28ba92",
+      "verbatim": false,
+      "edit": "last line: the pointer to program-patterns.md (not ported; the fork's bash helpers do not exist on the stack) now points at embed_file in probe-battery.md"
+    },
+    {
+      "file": "kit/addenda/contract-strictness.md",
+      "source_repo": "marin (branch mark/author-harness-20261026)",
+      "source_commit": "43666144ee1ba69db22ab43668b6d90a75b58b50",
+      "source_path": "experiments/post_training/capability_env_gen/phase11/inputs/synthesis/d3-v2/addenda/contract-strictness.md",
+      "source_sha256": "1cfa104914cbabdce88a44b91128193e49f050df6c2c510db421650e6b9d5907",
+      "ported_sha256": "9500396719e1d47238236a87e53667405d9a0c28a4a74944225e30be3039fdff",
+      "verbatim": false,
+      "edit": "last two sentences: grade_local.py/run_steps.py/embed.py (bash helpers of the fork's author) replaced by the stack session tools run_probe_battery and embed_file"
+    },
+    {
+      "file": "shadow/claim-judge.md",
+      "source_repo": "marin-taskforge worktree notes (af05f54944, untracked notes tree)",
+      "source_commit": null,
+      "source_path": "/Users/k3sc0re/openathena/branches/marin-taskforge/lib/taskforge/.notes/phase11-clef/author-harness-20261026/r4/src/audit.py",
+      "source_sha256": "85c8a627e0b7238c96aee34349f5c5336df461a09b87bb815b61563a119a5400",
+      "ported_sha256": "af623bf19cc042c846791efb60b70bbc9776a050524bb50c783d9e51c162de68",
+      "verbatim": false,
+      "edit": "AUDIT_SYSTEM string; the 'What the solver sees' paragraph drops the fork finder's Answer-format line, which the stack finders are not shown"
+    },
+    {
+      "file": "kit/taxonomy.json",
+      "source_path": "/Users/k3sc0re/openathena/branches/marin-taskforge/lib/taskforge/.notes/phase11-clef/author-harness-20261026/r4/src/audit.py DefectClass + d3-v2/synthesis.json items[0].provenance",
+      "verbatim": false,
+      "edit": "class names from R4 DefectClass; kit calls from strict-grading.md; keywords new (heuristic logging only)"
+    }
+  ],
+  "not_ported": [
+    {
+      "source_path": "experiments/post_training/capability_env_gen/phase11/inputs/synthesis/d3-v2/reference/helpers/grade_local.py",
+      "why": "needs a shell in the author's sandbox; the stack's agentic author has no shell tool. Replaced by run_probe_battery, which grades on the real grader machine after run_build"
+    },
+    {
+      "source_path": "experiments/post_training/capability_env_gen/phase11/inputs/synthesis/d3-v2/reference/helpers/run_steps.py",
+      "why": "needs a shell and the fork's installed SDK"
+    },
+    {
+      "source_path": "experiments/post_training/capability_env_gen/phase11/inputs/synthesis/d3-v2/reference/helpers/embed.py",
+      "why": "ported as the session tool embed_file (acceptance_measure/author.py), same marker grammar and literal check"
+    },
+    {
+      "source_path": "experiments/post_training/capability_env_gen/phase11/inputs/synthesis/d3-v2/reference/patterns/grader-probes.md",
+      "why": "bash procedure; superseded by text/probe-battery.md, which keeps its probe table as code-generated classes"
+    },
+    {
+      "source_path": "experiments/post_training/capability_env_gen/phase11/inputs/synthesis/d3-v2/reference/patterns/program-patterns.md",
+      "why": "describes the fork's SDK pages and bash helpers"
+    },
+    {
+      "source_path": "experiments/post_training/capability_env_gen/phase11/inputs/synthesis/d3-v2/reference/patterns/decision-rubrics.md",
+      "why": "decision-model stratum is out of scope for the powered code stratum"
+    }
+  ]
+}

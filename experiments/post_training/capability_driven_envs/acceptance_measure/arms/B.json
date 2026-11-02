@@ -1,0 +1,18 @@
+{
+  "name": "B",
+  "description": "A + L1 (d3-v2 grade kit and explicit contract defaults in the author's system prompt and workspace; the instruction states the contract, which the finders read) + L2 (code-generated probe battery as a non-charging session tool, enforced at submit, replaying earlier rounds' FA/FR witnesses; class-level repair feedback).",
+  "extends": "A.json",
+  "set": {
+    "author.guidance": ["../kit/addenda/contract-strictness.md", "../text/contract-defaults.md"],
+    "author.reference_files": {
+      "reference/patterns/strict-grading.md": "../kit/reference/patterns/strict-grading.md",
+      "reference/patterns/probe-battery.md": "../text/probe-battery.md",
+      "reference/helpers/grade_kit.py": "../kit/reference/helpers/grade_kit.py"
+    },
+    "author.tools": ["embed_file", "run_probe_battery"],
+    "author.probe_battery.enforce_at_submit": true,
+    "author.probe_battery.witness_replay": true,
+    "review.feedback": "class",
+    "review.class_feedback": "../text/class-feedback.md"
+  }
+}

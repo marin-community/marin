@@ -1,0 +1,28 @@
+{
+  "source": "DefectClass of the R4 claim audit (lib/taskforge/.notes/phase11-clef/author-harness-20261026/r4/src/audit.py on marin-taskforge af05f54944) and the d3-v2 cluster classes (synthesis.json items[0].provenance)",
+  "keyword_note": "keywords drive only the heuristic class logged as class_source=keyword; the shadow judge's defect_class is the validated enum",
+  "classes": {
+    "label_normalisation": {"strictness": true, "kit": "as_label / as_alias", "keywords": ["case", "lowercase", "uppercase", "casefold", "capitaliz", "punctuation", "whitespace around", "label"]},
+    "text_around_answer": {"strictness": true, "kit": "parse_json(EXACT|FENCED|LAST)", "keywords": ["prose", "fence", "surrounding text", "text around", "two answers", "multiple answers", "several", "hedg", "before the json", "after the json"]},
+    "type_coercion": {"strictness": true, "kit": "as_number / as_int / as_bool", "keywords": ["string instead of", "as a string", "quoted number", "coerc", "\"yes\"", "6.0", "integral float", "unit suffix"]},
+    "tolerance_too_loose": {"strictness": true, "kit": "close_to(sig=|places=)", "keywords": ["tolerance", "rounded", "significant", "precision", "within", "approximately"]},
+    "open_schema": {"strictness": true, "kit": "as_object / as_list(length=)", "keywords": ["extra key", "extra field", "additional key", "extra entry", "unexpected key", "ignored key"]},
+    "list_set_handling": {"strictness": true, "kit": "same_items / unique_by / within_universe", "keywords": ["duplicate entr", "subset", "superset", "order", "set(", "missing item", "first match"]},
+    "aggregates_only": {"strictness": true, "kit": "validate every row, then totals", "keywords": ["total only", "aggregate", "per-row", "rows not checked"]},
+    "derived_fields_not_recomputed": {"strictness": true, "kit": "recompute derived fields from primaries", "keywords": ["inconsistent", "derived", "recompute", "does not match its own"]},
+    "free_text_unvalidated": {"strictness": true, "kit": "drop the field or derive what it must say", "keywords": ["free text", "any text", "non-empty", "justification"]},
+    "duplicate_keys": {"strictness": true, "kit": "parse_json refuses repeated keys", "keywords": ["duplicate key", "repeated key", "same key twice"]},
+    "channel_fallback": {"strictness": true, "kit": "read_reply() or read_answer_file(path), no fallback", "keywords": ["fallback", "falls back", "reply instead of the file", "file instead of the reply"]},
+    "equivalent_notation_refused": {"strictness": true, "kit": "as_rational / alias map", "keywords": ["equivalent", "fraction", "notation", "leading +", "scientific notation"]},
+    "canonical_layout_hardcoded": {"strictness": true, "kit": "check the stated property", "keywords": ["layout", "canonical", "decomposition", "exact wording"]},
+    "wrong_channel_or_path": {"strictness": true, "kit": "the path the contract names", "keywords": ["path", "wrong file", "not read", "relative path", "absolute path"]},
+    "tolerance_too_tight": {"strictness": true, "kit": "close_to from the truth's precision", "keywords": ["full precision", "trailing zero", "more digits", "too tight"]},
+    "transport_noise_rejected": {"strictness": true, "kit": "strip BOM/CRLF/trailing whitespace, or state rejection", "keywords": ["bom", "crlf", "byte-order", "trailing newline", "trailing whitespace"]},
+    "rubric_not_enforcing_requirements": {"strictness": false, "kit": "one rubric item per requirement", "keywords": ["rubric"]},
+    "rubric_over_strict": {"strictness": false, "kit": "list each item's equivalences", "keywords": ["reference's wording"]},
+    "decision_grader_inconsistent": {"strictness": false, "kit": "-", "keywords": ["decision model", "inconsistent scor"]},
+    "reference_wrong": {"strictness": false, "kit": "self-checked ground truth", "keywords": ["reference is wrong", "reference answer is incorrect", "wrong reference"]},
+    "contract_silent_ambiguous": {"strictness": false, "kit": "state the choice in the contract", "keywords": ["ambiguous", "does not specify", "not stated"]},
+    "other": {"strictness": false, "kit": "-", "keywords": []}
+  }
+}

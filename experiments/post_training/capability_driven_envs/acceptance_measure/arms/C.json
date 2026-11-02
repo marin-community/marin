@@ -1,0 +1,8 @@
+{
+  "name": "C",
+  "description": "B + L3: a task whose solver trials all reach full credit (8/8) is accepted, labelled saturated, when every other check passes and the false-accept search passed on the same version; arms A and B log the same decision as a shadow.",
+  "extends": "B.json",
+  "set": {
+    "review.saturated_accept": true
+  }
+}
