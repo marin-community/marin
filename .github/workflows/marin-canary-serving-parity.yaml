@@ -57,6 +57,10 @@ jobs:
         run: |
           .venv/bin/python -m experiments.evaluation.serving_parity.nightly \
             --run-id "$RUN_ID" --scheduling-timeout "$QUEUE_SECONDS"
+      - name: Release unfinished jobs
+        if: always()
+        continue-on-error: true
+        run: .venv/bin/python -m experiments.evaluation.serving_parity.nightly --cleanup
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v7
@@ -72,10 +76,12 @@ jobs:
         run: echo '::warning::No capacity; no paired score this run.'
       - name: Check previous scheduled nights
         id: history
+        continue-on-error: true
         if: github.event_name == 'schedule' && steps.check.outputs.outcome == 'no_capacity'
         uses: actions/github-script@v8
         with:
           script: |
+            core.setOutput('alert', 'false');
             const { data } = await github.rest.actions.listWorkflowRuns({
               ...context.repo, workflow_id: 'marin-canary-serving-parity.yaml',
               event: 'schedule', per_page: 10
