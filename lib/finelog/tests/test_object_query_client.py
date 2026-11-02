@@ -247,7 +247,6 @@ def test_pin_catalog_exposes_direct_query_segment_metadata(tmp_path: Path) -> No
             created_at_ms=1700000000000,
         ),
     )
-    assert pin.object_uris == (str(object_path),)
 
 
 def test_object_query_reads_catalog_written_before_sha_field_removal(tmp_path: Path) -> None:

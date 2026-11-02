@@ -56,9 +56,8 @@ DEFAULT_IRIS_CONFIG = "lib/iris/config/marin.yaml"
 
 DEFAULT_LOOKBACK_HOURS = 12.0
 ROW_BATCH_SIZE = 10_000
-# DuckDB sizes its defaults from the host, not the container's limits, so a scan on
-# a large Iris worker would otherwise outgrow its resource request. The headroom
-# above this fraction covers the Python analysis and its result batches.
+# DuckDB uses host limits by default. Cap its memory below the Iris task request
+# to leave room for Python analysis and result batches.
 SCAN_MEMORY_FRACTION = 0.8
 GCS_HTTPS_ENDPOINT = "https://storage.googleapis.com/"
 GCS_READ_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only"
@@ -914,8 +913,6 @@ def run_analysis(
     with gcs_scan_connection(TaskResources.from_environment()) as con:
         summary = analyze(iter_log_rows(con, sources, window), db_path, window)
     logging.info(f"Scanned {len(sources)} segments in {time.monotonic() - started:.1f}s")
-    # Segments are read in place, so no log files are cached locally.
-    summary["local_log_files"] = []
     summary["local_db_path"] = str(db_path)
     summary["remote_logs_dir"] = f"{remote_log_dir}/{'/'.join(LOG_TABLE_PREFIX)}/{LOG_NAMESPACE}"
     return summary
@@ -1016,7 +1013,6 @@ def main(
                 "report_md": str(report_md_path),
                 "gist_command": f"gh gist create --desc {gist_desc!r} {report_md_path} {appendix_csv_path}",
                 "local_db_path": summary["local_db_path"],
-                "local_log_files": summary["local_log_files"],
                 "cross_region_log_lines": summary["cross_region_log_lines"],
                 "cross_region_path_mentions": summary["cross_region_path_mentions"],
                 "top_pairs": list(summary["cross_region_region_pairs"].items())[:10],

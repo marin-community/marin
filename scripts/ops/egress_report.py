@@ -53,8 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # us-central2; the job runs there and stages its outputs there so every large
 # read is same-region.
 LOG_REGION = "us-central2"
-# The job hands its report files back through this lifecycle-managed prefix, since
-# Iris discards a callable's return value.
+# Iris discards a callable's return value, so the job stages its reports for the runner.
 STAGING_DIR = "gs://marin-us-central2/tmp/egress-report"
 # Leaves the runner's 30-minute workflow timeout room to submit, fetch and publish.
 JOB_TIMEOUT = Duration.from_seconds(20 * 60)

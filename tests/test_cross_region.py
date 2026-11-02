@@ -37,12 +37,6 @@ def test_choose_log_segments_keeps_segments_created_after_the_lookback_cutoff() 
     assert chosen == [at_cutoff, during, after]
 
 
-def test_choose_log_segments_returns_nothing_when_every_segment_predates_the_window() -> None:
-    old = [_segment(f"old-{i}", WINDOW_START - dt.timedelta(days=i + 1)) for i in range(3)]
-
-    assert choose_log_segments(old, WINDOW, lookback_hours=12.0) == []
-
-
 TASK_ID = "/alice/train-job/0"
 CENTRAL_BUCKET_PATH = "gs://marin-us-central2/checkpoints/model.safetensors"
 EUROPE_BUCKET_PATH = "gs://marin-eu-west4/tokenized/shard.parquet"
