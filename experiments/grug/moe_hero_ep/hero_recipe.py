@@ -10,7 +10,7 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import compact_grug_mesh_shape
 from levanter.tracker import TrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
@@ -93,7 +93,7 @@ def validated_batch_axis_size(
 
     Context and model axes do not partition the batch.
     """
-    replica, data, _context, expert, _model = _compact_grug_mesh_shape(
+    replica, data, _context, expert, _model = compact_grug_mesh_shape(
         process_count=device_count,
         local_device_count=1,
         expert_axis_size=expert_axis_size,
