@@ -40,6 +40,8 @@ from experiments.datakit.testbed.decon_arm import (
 logger = logging.getLogger(__name__)
 
 _SPLIT_RE = re.compile(r"^(.*)-(validation|test|training|train|dev|eval)-\d+$")
+# Uncheatable Eval ids are ``uncheatable-<subset>-<record>``; the artifact sits in ``uncheatable/<subset>/``.
+_UNCHEATABLE_ID_RE = re.compile(r"^uncheatable-(?P<subset>[a-z0-9_]+)-\d+$")
 _SAMPLES_PER_SOURCE = 60
 _MAX_MATCHED_EVALS = 5
 _MAX_MATCHED_NGRAMS = 12
@@ -84,8 +86,17 @@ def _overlapping_ngrams(text: str, matched_hashes: set[int], ngram: NGramConfig)
 
 
 def eval_id_to_family(eval_id: str) -> str:
+    if uncheatable := _UNCHEATABLE_ID_RE.match(eval_id):
+        return f"uncheatable_{uncheatable['subset']}"
     m = _SPLIT_RE.match(eval_id)
     return m.group(1) if m else eval_id
+
+
+def _eval_artifact_dir(eval_id: str) -> str:
+    """Return the name of the corpus directory that holds *eval_id*'s artifact."""
+    if uncheatable := _UNCHEATABLE_ID_RE.match(eval_id):
+        return uncheatable["subset"]
+    return eval_id_to_family(eval_id)
 
 
 def _load_eval_texts(eval_ids: set[str]) -> dict[str, str]:
@@ -96,7 +107,7 @@ def _load_eval_texts(eval_ids: set[str]) -> dict[str, str]:
     """
     if not eval_ids:
         return {}
-    tasks = {eval_id_to_family(e) for e in eval_ids}
+    tasks = {_eval_artifact_dir(e) for e in eval_ids}
     fs, root = url_to_fs(f"{marin_prefix()}/datakit/decontam/evals")
     files = [f for f in fs.find(root) if f.endswith(".parquet") and f.split("/")[-2] in tasks]
     texts: dict[str, str] = {}
