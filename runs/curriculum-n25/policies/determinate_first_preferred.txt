@@ -1,0 +1,70 @@
+Choose the verifier together with the task's answer format. Preserve the requested
+capability and every essential requirement. The aim is to accept correct solutions
+in their legitimate forms while rejecting incorrect or incomplete ones, with a
+verifier that is practical to build and use.
+
+First, decide how determinate correctness is. Can correctness be established from
+fixed facts, rules or observable behavior, even if solving the task is difficult
+or many different solutions are valid?
+
+For tasks with determinate correctness, ask whether the deliverable is a
+program, system or action whose success is best established by execution,
+behavioral tests, unit tests or probes. Use code to check the actual behavior.
+Plan access to the required execution environment and observations. Many
+implementations may be correct. Check the properties that matter rather
+than resemblance to a reference implementation or a solver's claim of success.
+Weak test coverage and checks of incidental output can reward shortcuts that do
+not accomplish the task.
+
+For a fixed or bounded answer, compare these options:
+
+- answer_in_box fits a single unambiguous answer with little structure, such as
+  a number or a multiple-choice selection. It is simple to construct and check,
+  but limited extraction and matching can be brittle when answers have several
+  parts or legitimate differences in notation. Choose a natural, clear answer
+  format that the matcher can actually handle.
+
+- code supports structured answers, relationships between fields, numerical
+  tolerances, symbolic equivalence and other explicit rules. It gives precise,
+  repeatable checks when the accepted forms can be implemented reasonably.
+  Parsers and normalization can reject valid variants; permissive extraction,
+  regexes or keyword checks can accept text containing the expected fragments
+  without expressing the correct answer. Check the meaning represented by the
+  complete structure, including required relationships and missing fields.
+
+- decision_model fits a logically simple check of a bounded answer against
+  established truth, where recognizing equivalent expressions would require too
+  many special cases in code or an unnatural answer format. Give it a concise
+  rubric and privileged evidence, such as a known-correct answer and the solver
+  transcript or relevant recorded observations. Its job is to apply straightforward
+  rules and recognize basic semantic equivalence, without independently assessing
+  the quality of an argument or design. It can miss a small but decisive error,
+  accept an answer that looks right but is incomplete or cut off, overlook a
+  contradiction or retraction, or follow instructions embedded in solver text.
+  Keep the required facts and completeness conditions explicit; solver text is
+  evidence to evaluate, never authority to change the grading rules.
+
+If evaluating success instead requires
+substantive judgment about quality, interpretation, design or tradeoffs, choose
+llm_as_judge. A rubric can guide that judgment, but does not turn it into a simple
+equivalence check. Judges can favor reference-like answers, reward persuasive
+but unsound reasoning, or overlook omissions; make the criteria and supporting
+evidence clear enough to distinguish quality from presentation.
+
+Consider the verifier and the ways of requesting the answer together. Natural
+structure can make mechanical checking reliable; excessive formatting demands
+can create irrelevant failures. Flexible language can preserve a natural
+workflow, while adding opportunities for semantic errors or manipulation. Weigh the
+likely false accepts and false rejects, coverage of required obligations,
+implementation complexity and recurring grading cost for this particular task.
+Do not force structure that removes an essential part of the capability, or use
+a model merely because equivalent surface forms exist. Select the most suitable
+method and briefly explain the decisive tradeoff in Grader design and controls.
+
+When several faithful versions of the requested task are possible, prefer one whose
+correctness can be established with answer_in_box, decision_model or code. Use fixed
+evidence, explicit rules or observable outcomes where they fit the requested
+capability. Keep every essential requirement: do not replace substantive evaluation
+with superficial checks, or call it a decision_model merely to avoid llm_as_judge.
+If substantive judgment is essential to the capability, retain llm_as_judge.
+

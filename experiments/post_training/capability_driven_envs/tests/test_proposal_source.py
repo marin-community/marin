@@ -34,6 +34,7 @@ from experiments.post_training.capability_driven_envs.catalog import (
 )
 from experiments.post_training.capability_driven_envs.proposal_source import (
     RESEARCH_DECISION_CRITERION,
+    SYSTEM_PROMPT,
     CapabilitySource,
     SlotStatus,
     author_proposal,
@@ -237,7 +238,7 @@ def author(model: ScriptedModel, idea) -> SlotOutcome:
     two_slots = slot_plan_type(2, ALL_ENVIRONMENTS).model_validate(
         plan([slot(1, "shellsim", "code"), slot(2, "reasoning", "code")], [])
     )
-    return asyncio.run(author_proposal(model, LLMPolicy(), idea, two_slots, two_slots.slots[0]))
+    return asyncio.run(author_proposal(model, LLMPolicy(), SYSTEM_PROMPT, idea, two_slots, two_slots.slots[0]))
 
 
 def test_author_request_carries_the_document_schema_with_continuations_off(ideas):

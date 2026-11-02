@@ -98,10 +98,12 @@ async def propose_capability(source: CapabilitySource, idea: CapabilityIdea, slo
     try:
         batch = await propose_all(source, idea, slots)
     except StructuredOutputError as error:
-        planning = ProposalBatch(plan_request(idea, slots, source.environments), error.completions, ())
+        planning = ProposalBatch(
+            plan_request(source.system_prompt, idea, slots, source.environments), error.completions, ()
+        )
         return ProposedCapability(idea.capability_id, planning, {}, str(error))
     except (ModelRequestRejected, ModelUnavailable) as error:
-        planning = ProposalBatch(plan_request(idea, slots, source.environments), (), ())
+        planning = ProposalBatch(plan_request(source.system_prompt, idea, slots, source.environments), (), ())
         return ProposedCapability(idea.capability_id, planning, {}, str(error))
     verdicts = {s.slot: await preflight(s.proposal) for s in batch.slots if isinstance(s, SlotProposal)}
     return ProposedCapability(idea.capability_id, batch, verdicts, None)
