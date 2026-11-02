@@ -96,7 +96,11 @@ def budget_arguments(config: dict, task: dict, max_length: int | None) -> tuple[
     and sizes its own responses from the served context and its stored longest prompt, while an
     lm-eval-native generation task gets the served context minus a prompt reserve as ``max_gen_toks``.
     """
-    gen_budget = generation_budget(config["max_gen_toks"], max_length)
+    gen_budget = (
+        config["max_gen_toks"]
+        if config.get("prompt_budget_preflight", False)
+        else generation_budget(config["max_gen_toks"], max_length)
+    )
     if gen_budget != config["max_gen_toks"]:
         print(
             f"clamped max_gen_toks {config['max_gen_toks']} -> {gen_budget} to fit served context {max_length}",
@@ -229,6 +233,8 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
     # the evaluator task's own default; explicit 0 must still override defaults such as gsm8k's 5-shot.
     if task["num_fewshot"] is not None:
         cmd += ["--num_fewshot", str(task["num_fewshot"])]
+    if config.get("judge_protocol", "default") != "default":
+        cmd += ["--judge-protocol", config["judge_protocol"]]
     if config.get("batch_size") is not None:
         cmd += ["--batch_size", str(config["batch_size"])]
     if config.get("dataset_cache") is not None:
@@ -266,7 +272,9 @@ def main() -> None:
 
     out_path = config["out_path"].rstrip("/")
     served = served_max_length(config["base_url"])
-    available_context = served - _CONTEXT_MARGIN if served is not None else None
+    # Benchmarks with prompt preflight reserve their own output and safety margin.
+    context_margin = 0 if config.get("prompt_budget_preflight", False) else _CONTEXT_MARGIN
+    available_context = served - context_margin if served is not None else None
     configured_context = config.get("max_length")
     configured_lengths = [value for value in (available_context, configured_context) if value is not None]
     max_length = min(configured_lengths) if configured_lengths else None

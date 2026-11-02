@@ -5,7 +5,7 @@
 
 One ``TaskforgeTools`` serves one agent session, for one idea. The agent works in its workspace with the shell; the
 tools do only what the shell cannot. They read and write files in the workspace, and they run a candidate task's
-grader and rollouts on new ShellSim machines that the agent cannot see.
+grader and rollouts on new solver machines that the agent cannot see, of ``AgenticConfig.solver_factory``.
 They record the evidence of each version of a task under the digest of its ``TaskSpec``, and ``submit`` accepts a
 task only when ``missing_evidence`` finds nothing missing. The session keeps the accepted tasks and the spend of the
 tools for the caller.
@@ -15,12 +15,17 @@ error result. A failure of the host, for example an unavailable judge model, rai
 """
 
 import asyncio
+import csv
+import io
 import json
 import logging
+import re
+import shlex
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -43,12 +48,12 @@ from rolloutengine.models import (
     TokenUsage,
     TraceMode,
 )
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, Machine, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
+    EnvironmentRequirements,
     FunctionDefinition,
     InlineFile,
     ProviderRequirement,
@@ -58,10 +63,11 @@ from taskcompendium.models import (
     grades_with_judge,
 )
 from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import IfevalSpec, spec_from_table
 
 from taskforge.agentic.config import AgenticConfig
 from taskforge.agentic.gate import Evidence, Gate, missing_evidence
-from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, REVIEW_TASK_PROMPT
+from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, GUESS_PROMPT, REVIEW_TASK_PROMPT
 from taskforge.capability import FILE_SAFE_ID, CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.client import ContextExhausted
@@ -96,9 +102,12 @@ def machine_runtime(backend: str) -> MachineRuntimeSpec:
     )
 
 
-SHELLSIM_MACHINE = machine_runtime(Backend.SHELLSIM)
+COMMAND_SEMANTICS = {Backend.LOCAL: CommandSemantics.LINUX_PROCESS, Backend.SHELLSIM: CommandSemantics.SHELL_SIMULATOR}
+"""The command semantics of the machines of each backend that the agent and the solver can use."""
 ANSWER_TYPES = frozenset({AnswerType.TEXT, AnswerType.NUMBER, AnswerType.JSON})
 """The answer types of a final message: native actions need tools that the solver does not have."""
+PLAIN_DECIMAL = re.compile(r"[+-]?\d+(\.\d+)?")
+"""An answer whose last digit gives its precision, unlike a fraction or scientific notation."""
 OUTPUT_CHARS = 2000
 """The most characters of a program output, an answer, a page or a file that one tool result shows."""
 REVIEW_ANSWERS = 20
@@ -115,8 +124,31 @@ RAN_OUT_STOP_REASONS = frozenset(
     {MAX_TURNS_STOP_REASON, BUDGET_STOP_REASON, LENGTH_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON}
 )
 """Stop reasons of a solver that ran out of a limit before it answered: a failed run, not a format failure."""
+OPTION_PROBLEM = (
+    "The answer selects an option from a list, and reviews do not find the flaws of such tasks well. Make a task whose "
+    "answer the solver computes or writes."
+)
+"""On 313 labeled tasks, 27% of the option tasks that a review accepted had a blocking flaw, for example a correct
+option that a guess finds, against 8% of the other tasks."""
+GUESS_RUNS = 4
+"""Rollouts of ``submit`` in which the solver model guesses the answer of a task with files from its prompt alone."""
+MAX_GUESS_PASSES = 2
+"""The most guesses that can pass: more show an answer that the prompt gives away, for example by a cue."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
+PROGRAM_TIMEOUT = 120.0
+"""Seconds that one run of a build program can take."""
+VARIANT_SUFFIX = ".variant-"
+"""``submit`` runs the build program with the task id, this suffix and a number, to check the tasks of other ids."""
+VARIANTS = 8
+MAX_ANSWER_SHARE = 0.25
+"""The largest share of the variants that can have one reference answer. A policy that trains on a task whose
+answers repeat learns to guess the common answer instead of doing the work."""
+SUBMIT_DIR = ".submit"
+"""Where ``submit`` writes the tasks of the build program."""
+SNAPSHOT_EXCLUDES = frozenset({ROLLOUTS_DIR, SUBMIT_DIR})
+"""Workspace entries that the snapshot of an accepted task leaves out: the transcripts and the tasks of the build
+program are not inputs of the program."""
 
 
 class ToolError(Exception):
@@ -139,11 +171,30 @@ class BlindSolution(BaseModel):
     answer: str = Field(description="Your answer to the task, in the task's answer format.")
 
 
+class OptionList(BaseModel):
+    """A list of options in a task, from which the answer selects one."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    options: tuple[str, ...] = Field(
+        min_length=2,
+        description=(
+            "The options, quoted in full in their order. For an option that is a code, quote the text that defines it."
+        ),
+    )
+
+
 class TaskReview(BaseModel):
     """The review of one task. The decision comes last, so that the judge writes its analysis first."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    option_lists: tuple[OptionList, ...] = Field(
+        description=(
+            "Each list of options in the prompt or the files from which the answer selects one option. Empty when "
+            "the answer selects no option."
+        )
+    )
     failure_causes: tuple[str, ...] = Field(
         description=(
             "For each distinct failed answer: the answer, the reading or the mistake that gives it, and the "
@@ -158,11 +209,18 @@ class TaskReview(BaseModel):
 
 @dataclass(frozen=True)
 class AcceptedTask:
-    """A task that ``submit`` accepted, with the evidence that the gate accepted and the review."""
+    """A task that ``submit`` accepted, with the evidence that the gate accepted, the review, and its build program.
+
+    ``program`` writes the task again from its id, and other tasks of the same kind from other ids. ``workspace`` is
+    a gzipped tar of the workspace at the submit, without the transcripts, so that the program can run again later
+    with the files that it reads (see ``taskforge.agentic.instances``).
+    """
 
     task: TaskSpec
     evidence: Evidence
     review: TaskReview
+    program: str
+    workspace: bytes = field(repr=False)
 
 
 @dataclass
@@ -215,8 +273,18 @@ TOOL_DEFINITIONS = (
     ),
     _tool(
         "submit",
-        "Submit a task. The gate checks the task and its evidence, then an independent reviewer reads it.",
-        {"path": PATH},
+        "Submit a task with the build program that wrote it. The gate checks the program, the task and its "
+        "evidence, then an independent reviewer reads it.",
+        {
+            "path": PATH,
+            "program": {
+                "type": "string",
+                "description": (
+                    "The path of the build program in the workspace: `python3 <program> <task id> "
+                    "<output path>` (or `sh <program> ...` for a .sh file) must write this TaskSpec again."
+                ),
+            },
+        },
     ),
     _tool("finish", "Stop, with a report on the tasks and the problems.", {"report": {"type": "string"}}),
 )
@@ -234,11 +302,14 @@ class TaskforgeTools:
         self.n = n
         self.config = config
         self.solver_engine = RolloutEngine(
-            {Backend.SHELLSIM: ShellSimMachineFactory()},
+            {config.solver_factory.backend: config.solver_factory},
             {SOLVER_HARNESS: ShellHarness(command_timeout=config.command_timeout)},
         )
         self.evidence: defaultdict[str, Evidence] = defaultdict(Evidence)
         self.failed_answers: defaultdict[str, list[str]] = defaultdict(list)
+        # The answers of the controls that came out as the agent expected, from which submit makes wrong answers.
+        self.right_answers: defaultdict[str, list[str]] = defaultdict(list)
+        self.wrong_answers: defaultdict[str, list[str]] = defaultdict(list)
         self.adversary_runs: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         self.transcripts: Counter[str] = Counter()
         self.accepted: list[AcceptedTask] = []
@@ -327,14 +398,8 @@ class ToolSession:
 
     async def grade(self, path: str, answer: str, expect: Literal["pass", "fail"]) -> ToolCallResult:
         task = await self._load(path)
-        spec = _solver_spec(task, self.config)
-        try:
-            result = await self.tools.solver_engine.run_task(spec, _ReplayModel(answer))
-        except RolloutInterrupted as error:
-            raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
-        except (ValueError, NotImplementedError) as error:
-            raise ToolError(f"The grade failed; check the task: {error}") from error
-        status = result.grade.status
+        grade = await self._grade(task, answer)
+        status = grade.status
         if status == Outcome.SUBMISSION_FAILURE:
             # A wrong control must show that the grader rejects a wrong value, not that the format rejects the answer.
             return _result(
@@ -348,18 +413,33 @@ class ToolSession:
                 }
             )
         if status != Outcome.GRADED:
-            raise ToolError(f"The grade failed ({status}); check the task: {result.grade.error}")
-        passed = _passed(result.grade)
-        self.tools.evidence[_task_digest(task)].controls.append((expect == "pass", passed))
+            raise ToolError(f"The grade failed ({status}); check the task: {grade.error}")
+        passed = _passed(grade)
+        key = _task_digest(task)
+        self.tools.evidence[key].controls.append((expect == "pass", passed))
+        if passed and expect == "pass":
+            self.tools.right_answers[key].append(answer)
+        elif not passed and expect == "fail":
+            self.tools.wrong_answers[key].append(answer)
         return _result(
             {
-                "outcome": result.grade.status,
-                "reward": result.grade.reward,
+                "outcome": grade.status,
+                "reward": grade.reward,
                 "passed": passed,
                 "as_expected": passed == (expect == "pass"),
-                "error": result.grade.error,
+                "error": grade.error,
             }
         )
+
+    async def _grade(self, task: TaskSpec, answer: str) -> GradeResult:
+        """The grade of ``answer`` by the task's grader, from a rollout of a model that gives only that answer."""
+        try:
+            result = await self.tools.solver_engine.run_task(_solver_spec(task, self.config), _ReplayModel(answer))
+        except RolloutInterrupted as error:
+            raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
+        except (ValueError, NotImplementedError) as error:
+            raise ToolError(f"The grade failed; check the task: {error}") from error
+        return result.grade
 
     async def rollout(self, paths: list[str], n: int, role: Literal["solver", "adversary"]) -> ToolCallResult:
         if n < 1:
@@ -433,27 +513,148 @@ class ToolSession:
             **_next_step(evidence, self.config.gate),
         }
 
-    async def submit(self, path: str) -> ToolCallResult:
+    async def submit(self, path: str, program: str) -> ToolCallResult:
         task = await self._load(path)
         key = _task_digest(task)
         if any(_task_digest(accepted.task) == key for accepted in self.tools.accepted):
             raise ToolError("This task is already accepted")
         problems = _unsupported(task, self.tools.solver_engine, self.config)
+        problems += _malformed_files(task)
         if problems:
             return _result({"accepted": False, "problems": problems})
         evidence = self.tools.evidence[key]
         missing = missing_evidence(evidence, self.config.gate)
         if missing:
             return _result({"accepted": False, "missing": missing, "evidence": asdict(evidence)})
+        problems = await self._accepted_wrong_answers(task, key)
+        if problems:
+            return _result({"accepted": False, "problems": problems})
+        guessed = await self._guesses(task)
+        if guessed > MAX_GUESS_PASSES:
+            problem = (
+                f"A solver with the prompt alone and no files guessed the answer in {guessed} of {GUESS_RUNS} attempts: "
+                "the prompt gives the answer away, for example by a cue."
+            )
+            return _result({"accepted": False, "problems": [problem]})
+        # A fix of the program that writes the same task keeps the evidence, so the program check can come late.
+        problems = await self._program_problems(program, task)
+        if problems:
+            return _result({"accepted": False, "problems": problems})
+        snapshot = await self._snapshot()
         # The review comes last, so it sees all the evidence of this version of the task.
         review = await self._review(task, key, evidence)
         if not review.accept:
             return _result({"accepted": False, "review": review.model_dump(mode="json")})
-        accepted = AcceptedTask(task, replace(evidence, controls=list(evidence.controls)), review)
+        accepted = AcceptedTask(task, replace(evidence, controls=list(evidence.controls)), review, program, snapshot)
         self.tools.accepted.append(accepted)
         count = len(self.tools.accepted)
         reply = {"accepted": True, "accepted_tasks": count, "remaining": self.tools.n - count, "review": review.summary}
         return _result(reply, done=count >= self.tools.n)
+
+    async def _accepted_wrong_answers(self, task: TaskSpec, key: str) -> list[str]:
+        """The problems of a grader that accepts wrong answers made from the controls of this version: the right
+        answer with one unit more or less in its last digit, the right and the wrong answer as a list in the two
+        orders, and an empty answer. A grader that accepts the list in one order only reads one position of it."""
+        # An agent can also grade a more precise right answer, so the one with the fewest decimals gives the precision.
+        right = min(
+            (answer.strip() for answer in self.tools.right_answers[key]),
+            key=lambda answer: (PLAIN_DECIMAL.fullmatch(answer) is None, len(answer.partition(".")[2])),
+        )
+        wrong = self.tools.wrong_answers[key][-1].strip()
+        neighbors = _neighbors(right)
+        lists = [f"{wrong}, {right}", f"{right}, {wrong}"]
+        answers = [*neighbors, *lists, ""]
+        grades = await asyncio.gather(*(self._grade(task, answer) for answer in answers))
+        accepted = {
+            answer
+            for answer, grade in zip(answers, grades, strict=True)
+            if grade.status == Outcome.GRADED and _passed(grade)
+        }
+        problems = [
+            f"The grader accepts {answer}, one unit from your right control {right} in its last digit. Write the "
+            "reference with the precision that the prompt asks for, and a tolerance below one unit of it"
+            for answer in neighbors
+            if answer in accepted
+        ]
+        if set(lists) <= accepted:
+            problems.append(
+                f"The grader accepts {lists[0]!r} and {lists[1]!r}, so an answer that lists candidates passes. Grade "
+                "the whole answer, for example with an ExactSpec without substring matching"
+            )
+        if "" in accepted:
+            problems.append("The grader accepts an empty answer")
+        return problems
+
+    async def _guesses(self, task: TaskSpec) -> int:
+        """How many of ``GUESS_RUNS`` solvers with the prompt alone guess the answer of a task with files.
+
+        The guesses are a part of ``submit``, so they do not use the rollout budget of the agent.
+        """
+        if not task.resources.worker:
+            return 0
+        spec = _solver_spec(_guess_task(task), self.config)
+        outcomes = await asyncio.gather(*(self._solve(spec) for _ in range(GUESS_RUNS)))
+        return sum(isinstance(outcome, GradedRollout) and _passed(outcome.grade) for outcome in outcomes)
+
+    async def _program_problems(self, program: str, task: TaskSpec) -> list[str]:
+        """Why ``program`` is not the build program of ``task``: it must write ``task`` again from its id, and from
+        other ids, runnable tasks whose reference answers vary."""
+        try:
+            again = await self._build(program, task.id)
+            variants = [await self._build(program, f"{task.id}{VARIANT_SUFFIX}{k}") for k in range(VARIANTS)]
+        except ToolError as error:
+            return [str(error)]
+        if _task_digest(again) != _task_digest(task):
+            return [f"{program} with the task id {task.id!r} writes another TaskSpec than the submitted one"]
+        for k, variant in enumerate(variants):
+            # task_instances keeps only the tasks that have the id that the program gets.
+            if variant.id != (expected := f"{task.id}{VARIANT_SUFFIX}{k}"):
+                return [f"{program} with the task id {expected!r} writes a task with the id {variant.id!r}"]
+        if any(content_digest(variant) == content_digest(task) for variant in variants):
+            return [f"{program} writes the same task for another task id; derive the task's data from the id"]
+        answers = Counter(_reference(variant) for variant in variants)
+        answer, count = answers.most_common(1)[0]
+        if count > MAX_ANSWER_SHARE * VARIANTS:
+            return [
+                f"{count} of {VARIANTS} tasks that {program} writes for other ids have the same reference answer "
+                f"(grader {answer}), so a policy that guesses it passes too often. Draw the data so that the answers "
+                "vary."
+            ]
+        return [
+            f"With the task id {variant.id!r}, {program} writes a task with a problem: {problem}"
+            for variant in variants
+            for problem in _unsupported(variant, self.tools.solver_engine, self.config) + _malformed_files(variant)
+        ][:REVIEW_ANSWERS]
+
+    async def _build(self, program: str, task_id: str) -> TaskSpec:
+        output = f"{SUBMIT_DIR}/{task_id}.json"
+        command = (*program_command(program), task_id, output)
+        result = await self.machine.run(
+            Command(
+                ("sh", "-c", f"mkdir -p {SUBMIT_DIR} && {shlex.join(command)}"),
+                cwd=str(WORKDIR),
+                timeout=PROGRAM_TIMEOUT,
+            )
+        )
+        if result.exit_code != 0:
+            stderr = result.stderr.decode(errors="replace")
+            raise ToolError(f"`{shlex.join(command)}` failed with exit code {result.exit_code}: {_clip(stderr)}")
+        return await self._load(output)
+
+    async def _snapshot(self) -> bytes:
+        listing = await self.machine.run(Command(("ls", "-A1", str(WORKDIR))))
+        entries = [name for name in listing.stdout.decode().splitlines() if name not in SNAPSHOT_EXCLUDES]
+        result = await self.machine.run(
+            Command(("tar", "-czf", "-", *entries), cwd=str(WORKDIR), output_limit_bytes=MAX_FILE_BYTES)
+        )
+        if result.stdout_truncated:
+            raise ToolError(
+                f"The workspace is larger than {MAX_FILE_BYTES} bytes as a gzipped tar; delete the files that the "
+                "build program does not read"
+            )
+        if result.exit_code != 0:
+            raise ToolError(f"The workspace snapshot failed: {_clip(result.stderr.decode(errors='replace'))}")
+        return result.stdout
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
         # The budget must hold the whole review, so that a review never stops after its blind solve.
@@ -469,7 +670,10 @@ class ToolSession:
             [accepted.task for accepted in self.tools.accepted],
             blind,
         )
-        return await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
+        review = await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
+        if not review.option_lists:
+            return review
+        return review.model_copy(update={"accept": False, "problems": (*review.problems, OPTION_PROBLEM)})
 
     async def finish(self, report: str) -> ToolCallResult:
         budget = self.config.budget.solver_rollouts
@@ -658,11 +862,21 @@ def _task_digest(task: TaskSpec) -> str:
     return digest(task.model_dump(mode="json"))
 
 
+def content_digest(task: TaskSpec) -> str:
+    """The digest of everything that the solver and the grader see, without the task's identity."""
+    return digest(task.model_dump(mode="json", exclude={"id", "source", "tags"}))
+
+
+def program_command(program: str) -> tuple[str, ...]:
+    """The command that runs a build program: ``sh`` for a ``.sh`` file and ``python3`` for others."""
+    return ("sh", program) if program.endswith(".sh") else ("python3", program)
+
+
 def _absolute(path: str) -> str:
     return str(WORKDIR / path)
 
 
-def _needs_machine(task: TaskSpec) -> bool:
+def needs_machine(task: TaskSpec) -> bool:
     requirements = task.environment_requirements
     return bool(requirements.capabilities or requirements.setup_commands or task.resources.worker or task.output_paths)
 
@@ -671,7 +885,7 @@ def _solver_spec(task: TaskSpec, config: AgenticConfig) -> TaskRolloutSpec:
     return TaskRolloutSpec(
         task=task,
         harness=SOLVER_HARNESS,
-        task_machine=SHELLSIM_MACHINE if _needs_machine(task) else None,
+        task_machine=machine_runtime(config.solver_factory.backend) if needs_machine(task) else None,
         verifier_machine=None,
         limits=config.solver_limits,
         trace=TraceMode.MESSAGES,
@@ -690,11 +904,17 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
         try:
             if grades_with_judge(grader):
                 problems.append("Judge graders are not supported")
-        except ValueError as error:
+            elif _grades_keywords(grader):
+                problems.append(
+                    "Keyword graders are not supported: a correct paraphrase fails and an answer that only repeats "
+                    "the words passes. Ask for a value that a NumericSpec or an ExactSpec can grade"
+                )
+        except (TypeError, ValueError) as error:
             problems.append(f"The grader is invalid: {error}")
     requirements = task.environment_requirements
-    if _needs_machine(task) and requirements.command_semantics != CommandSemantics.SHELL_SIMULATOR:
-        problems.append("A task with a shell or files must use command_semantics shell_simulator")
+    semantics = COMMAND_SEMANTICS[config.solver_factory.backend]
+    if needs_machine(task) and requirements.command_semantics != semantics:
+        problems.append(f"A task with a shell or files must use command_semantics {semantics}")
     if task.resources.all:
         problems.append(
             "Put the solver's files in resources.worker and the grader's files in resources.verifier, not in "
@@ -708,6 +928,53 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
         except (ValueError, NotImplementedError) as error:
             problems.append(f"The rollout engine rejects the task: {error}")
     return problems
+
+
+def _grades_keywords(grader: VerifyitGrader) -> bool:
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    return isinstance(spec, IfevalSpec) and any(
+        constraint.name.startswith("keywords:") for constraint in spec.constraints
+    )
+
+
+def _neighbors(answer: str) -> list[str]:
+    """``answer`` with one unit more and one unit less in its last digit, when it is a plain decimal."""
+    if PLAIN_DECIMAL.fullmatch(answer) is None:
+        return []
+    value = Decimal(answer)
+    unit = Decimal(1).scaleb(-len(answer.partition(".")[2]))
+    return [str(value + unit), str(value - unit)]
+
+
+def _malformed_files(task: TaskSpec) -> list[str]:
+    """The solver's CSV and JSON files that do not parse, for example a CSV field with an unquoted comma."""
+    problems = []
+    for resource in task.resources.worker:
+        if not isinstance(resource.source, InlineFile):
+            continue
+        text = resource_bytes(resource).decode(errors="replace")
+        if resource.path.endswith(".csv"):
+            rows = [row for row in csv.reader(io.StringIO(text)) if row]
+            widths = {len(row) for row in rows}
+            if len(widths) > 1:
+                problems.append(
+                    f"{resource.path} is not a valid CSV: its rows have {sorted(widths)} fields. Quote the fields "
+                    "that contain commas"
+                )
+        elif resource.path.endswith(".json"):
+            try:
+                json.loads(text)
+            except json.JSONDecodeError as error:
+                problems.append(f"{resource.path} is not valid JSON: {error}")
+    return problems
+
+
+def _reference(task: TaskSpec) -> str:
+    """The reference answer of ``task``'s grader, as one string: its mode and parameters."""
+    grader = task.grader
+    if not isinstance(grader, VerifyitGrader):
+        return ""
+    return json.dumps({"mode": grader.mode, **grader.parameters}, sort_keys=True, default=str)
 
 
 def _public_task(task: TaskSpec, file_chars: int = OUTPUT_CHARS) -> dict[str, Any]:
@@ -728,6 +995,13 @@ def _public_task(task: TaskSpec, file_chars: int = OUTPUT_CHARS) -> dict[str, An
 
 def _adversary_task(task: TaskSpec) -> TaskSpec:
     return _with_system_prompt(task, ADVERSARY_PROMPT)
+
+
+def _guess_task(task: TaskSpec) -> TaskSpec:
+    """``task`` with no files and no shell, and the guess prompt as its system message."""
+    resources = task.resources.model_copy(update={"worker": ()})
+    task = task.model_copy(update={"environment_requirements": EnvironmentRequirements(), "resources": resources})
+    return _with_system_prompt(task, GUESS_PROMPT)
 
 
 def _with_system_prompt(task: TaskSpec, prompt: str) -> TaskSpec:

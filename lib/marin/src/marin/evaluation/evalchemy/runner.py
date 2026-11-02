@@ -119,6 +119,7 @@ class EvalchemyRunConfig:
     apply_chat_template: bool = False
     chat_tokenizer_backend: ChatTokenizerBackend = ChatTokenizerBackend.SERVER
     debug: bool = False
+    prompt_budget_preflight: bool = False
     # None passes no generation cap to Evalchemy, which then sizes each benchmark's responses from the
     # served context window minus its stored longest prompt (evalchemy#132).
     max_gen_toks: int | None = None
@@ -202,9 +203,11 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
                 for task in config.tasks
             ],
             "out_path": output_dir,
+            "judge_protocol": config.judge.protocol if config.judge is not None else "default",
             "apply_chat_template": config.apply_chat_template,
             "chat_tokenizer_backend": config.chat_tokenizer_backend,
             "debug": config.debug,
+            "prompt_budget_preflight": config.prompt_budget_preflight,
             "max_gen_toks": config.max_gen_toks,
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
             "chat_template_kwargs": dict(config.chat_template_kwargs),

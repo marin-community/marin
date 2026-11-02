@@ -309,7 +309,7 @@ sotopia = yaml.safe_load((harbor / "sotopia-hard.yaml").read_text())
 assert sotopia["datasets"] == [
     {
         "name": "hf://open-athena/sotopia-hard-harbor",
-        "ref": "539ee305186e0231be4e6c0b30a2a5629284dc28",
+        "ref": "b388b6634d82b25811afa431997b3dbfee9c17cf",
     }
 ]
 
@@ -473,7 +473,7 @@ snapshot_launch_configs() {
   CAMPAIGN_HARBOR_RUNTIME="$CAMPAIGN_HARBOR_RUNTIME" \
   CAMPAIGN_EVALCHEMY_SOURCE_HASH="$CAMPAIGN_EVALCHEMY_SOURCE_HASH" \
   SNAPSHOT_DIR="$CONFIG_SNAPSHOT_DIR" \
-  python3 - "$@" <<'PY'
+  uv run --project "$MARIN_DIR" python - "$@" <<'PY'
 import hashlib
 import json
 import os
@@ -481,12 +481,18 @@ import shutil
 import sys
 from pathlib import Path
 
-config_flags = {"--model-config", "--judge-model-config", "--harbor-config", "--evalchemy-config"}
+import yaml
+
+config_flags = {"--model-config", "--judge-model-config", "--harbor-config", "--evalchemy-config", "--policy-finalization-config"}
 arguments = sys.argv[1:]
 files = []
 for index, argument in enumerate(arguments[:-1]):
     if argument in config_flags:
         files.append((argument.removeprefix("--"), Path(arguments[index + 1]).resolve()))
+        if argument == "--policy-finalization-config":
+            path = Path(arguments[index + 1]).resolve()
+            config = yaml.safe_load(path.read_text())
+            files.extend((kind, path.parent / config[kind]) for kind in ("judge_model_config",))
 
 payload = {
     "argv": arguments,
