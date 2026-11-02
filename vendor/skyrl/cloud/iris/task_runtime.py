@@ -71,6 +71,7 @@ from marinskyrl.environment_contract import (
     ray_cluster_owner_environment,
 )
 from marinskyrl.hf_model import immutable_model_cache_key, validate_hf_model_weights
+from marinskyrl.gpu_discovery import constrain_cuda_device_discovery
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
@@ -2169,6 +2170,7 @@ def main() -> None:
     launch_config = load_launch_config(config_path)
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
+    constrain_cuda_device_discovery()
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.

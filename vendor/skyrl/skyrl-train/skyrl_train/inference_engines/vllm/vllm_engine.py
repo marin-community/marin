@@ -20,6 +20,7 @@ from vllm.distributed.parallel_state import get_dp_group, get_ep_group, get_pp_g
 from vllm.distributed.weight_transfer.base import WeightTransferUpdateRequest
 from vllm.renderers.online_renderer import OnlineRenderer
 
+from marinskyrl.gpu_discovery import constrain_cuda_device_discovery
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from skyrl_train.numa_policy import NUMA_AFFINITY_ENV
 from skyrl_train.config.behavior_logprobs import (
@@ -289,6 +290,7 @@ def setup_envvars_for_vllm(kwargs, bundle_indices):
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
         os.environ.pop("ROCR_VISIBLE_DEVICES", None)
         os.environ.pop("HIP_VISIBLE_DEVICES", None)
+        constrain_cuda_device_discovery()
     elif noset_visible_devices:
         # We need to set CUDA_VISIBLE_DEVICES to the ray assigned GPU
         # when the distributed_executor_backend is not rayargs and
