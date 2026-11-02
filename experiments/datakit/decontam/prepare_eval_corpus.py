@@ -13,8 +13,8 @@ in ``MARIN_PREFIX``:
   commit. These artifacts are mandatory.
 - ``lmh/<task>/<split>.parquet`` -- every unique task in
   ``experiments/evals/task_configs.py`` bundles, loaded via lm-eval-harness.
-  These best-effort artifacts keep their extraction-version sidecars in the
-  same immutable corpus-version root.
+  These artifacts keep their extraction-version sidecars in the same immutable
+  corpus-version root.
 
 Each record has the form ``{id: str, text: str}``. Mandatory extraction is
 pinned by benchmark. Preparation of a mandatory suite fails if a source cannot
