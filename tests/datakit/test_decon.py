@@ -984,6 +984,30 @@ def test_item_rule_requires_the_minimum_matched_features(tmp_path: Path):
     assert five["doc"]["contaminated"] is False
 
 
+def test_item_rule_ignores_matches_on_drop_set_ngrams(tmp_path: Path):
+    _write_eval_jsonl(tmp_path / "eval" / "eval.jsonl.gz", [{"id": "quiz-1", "text": _QUIZ_ITEM}])
+    _write_input_parquet(
+        tmp_path / "input" / "part-00000-of-00001.parquet",
+        [{"id": "doc", "partition_id": 0, "text": f"{_FILLER} {_QUIZ_ITEM} {_FILLER}"}],
+    )
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    common = [_bloom_hash(feature) for feature in _extract_ngrams(_QUIZ_ITEM, 4, 0)]
+    pq.write_table(pa.table({"hash": pa.array(common, type=pa.uint64())}), str(drop_dir / "drop.parquet"))
+
+    decon_to_parquet(
+        normalized_data=_as_source(tmp_path / "input"),
+        eval_data_sources=str(tmp_path / "eval"),
+        output_path=str(tmp_path / "output"),
+        ngram=_item_ngram(),
+        drop_set_dirs=[str(drop_dir)],
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+
+    assert _read_attributes(tmp_path / "output")["doc"]["contaminated"] is False
+
+
 def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
     """Building bloom separately + decon(prebuilt_bloom_dir=...) gives identical attrs to inline build."""
     # Path A: inline build.

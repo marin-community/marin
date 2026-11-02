@@ -881,20 +881,26 @@ _FLAGGED_SCHEMA = pa.schema(
 
 
 def _matched_items(
-    text: str, scan: _DocumentScan, bf: Container[int], ngram: NGramConfig, index: _ItemIndex
+    text: str,
+    scan: _DocumentScan,
+    bf: Container[int],
+    ngram: NGramConfig,
+    index: _ItemIndex,
+    drop_hashes: frozenset[int],
 ) -> list[str]:
     """Return eval items the record holds under the item rule.
 
-    Hits ignore the drop set: the rule counts an item's own n-grams, so a phrase
-    common in the corpus cannot dilute it. Records with backslash escapes are also
-    scored after undoing JSON escapes, which recovers eval text stored in JSON lines.
+    Drop-set n-grams do not count as matches but stay in each item's size, so an
+    item cannot be matched through corpus-common phrases alone. Records with
+    backslash escapes are also scored after undoing JSON escapes, which recovers
+    eval text stored in JSON lines.
     """
     if not scan.bloom_hits:
         return []
     hits = scan.bloom_hits
     if "\\" in text:
         hits = hits | _scan_document(_json_unescaped(text), bf, ngram).bloom_hits
-    return index.matched_eval_ids(hits)
+    return index.matched_eval_ids(hits - drop_hashes)
 
 
 def _make_marker(
@@ -935,7 +941,7 @@ def _make_marker(
                     scan = _scan_document(text, bf, ngram, drop_hashes)
                     max_score, matched = scan.max_score, scan.matched_hashes
                     matched_eval_ids = (
-                        _matched_items(text, scan, bf, ngram, item_index)
+                        _matched_items(text, scan, bf, ngram, item_index, drop_hashes)
                         if item_index is not None and ngram is not None
                         else []
                     )
