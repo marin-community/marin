@@ -4,7 +4,7 @@
 """Select a reproducible evaluation cohort without truncating canonical prompts."""
 
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Protocol
@@ -68,14 +68,14 @@ class SelectionDecision:
     case: EvaluationCase | None
 
 
-def wire_messages(task: TaskSpec, operation: ChatGeneration) -> list[dict[str, Any]]:
+def wire_messages(messages: Sequence[Mapping[str, Any]], operation: ChatGeneration) -> list[dict[str, Any]]:
     """Render source transport fields that do not change the canonical conversation."""
-    messages = conversation_messages(task.context.events)
     if operation.historical_assistant_reasoning == "empty":
-        messages = [
-            {**message, "reasoning_content": ""} if message["role"] == "assistant" else message for message in messages
+        return [
+            {**message, "reasoning_content": ""} if message["role"] == "assistant" else dict(message)
+            for message in messages
         ]
-    return messages
+    return [dict(message) for message in messages]
 
 
 def prompt_variant(
@@ -107,7 +107,7 @@ def prompt_tokens(
         return len(tokenizer.encode(operation.context, add_special_tokens=False))
     assert isinstance(operation, ChatGeneration)
     assert protocol.sampling is not None
-    messages = wire_messages(case.task, operation)
+    messages = wire_messages(conversation_messages(case.task.context.events), operation)
     if prefix_chars is not None:
         (message,) = messages
         messages = [{**message, "content": message["content"][:prefix_chars]}]

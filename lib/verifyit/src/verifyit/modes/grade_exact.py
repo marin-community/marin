@@ -88,7 +88,7 @@ def grade_normalized_aliases(
 
 
 def grade_literal_candidate(expected: str, candidate: str) -> Reward:
-    """Compare literal strings through the existing exact mode's strict options."""
+    """Compare strings without case or whitespace normalization, including empty strings."""
     spec = ExactSpec(
         expected=(expected,),
         ignore_case=False,

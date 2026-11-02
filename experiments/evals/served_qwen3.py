@@ -61,7 +61,6 @@ def qwen3_inference_config(
             proxy=InferenceProxyConfig(
                 request_timeout_seconds=_VLLM_TIMEOUT,
                 readiness_timeout_seconds=_VLLM_TIMEOUT,
-                ignored_request_fields=("seed",),
             )
         ),
         iris=IrisConfig(

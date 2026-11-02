@@ -32,7 +32,13 @@ from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_protocol
 from taskcompendium.evaluation.metrics import likelihood_metrics
 from taskcompendium.evaluation.response import completion_text
-from taskcompendium.evaluation.selection import SELECTIONS_TABLE, EvaluationTokenizer, Selection, select_cases
+from taskcompendium.evaluation.selection import (
+    SELECTIONS_TABLE,
+    EvaluationTokenizer,
+    Selection,
+    select_cases,
+    wire_messages,
+)
 from taskcompendium.evaluation.spec import (
     ChatGeneration,
     ChoiceLikelihood,
@@ -209,12 +215,8 @@ async def generation_turn(
     request: ModelRequest, *, model: Model, operation: ChatGeneration | TextGeneration
 ) -> ModelTurn:
     """Keep raw channels and wire messages while selecting the source's grading text."""
-    if isinstance(operation, ChatGeneration) and operation.historical_assistant_reasoning == "empty":
-        messages = tuple(
-            {**message, "reasoning_content": ""} if message["role"] == "assistant" else message
-            for message in request.messages
-        )
-        request = dataclasses.replace(request, messages=messages)
+    if isinstance(operation, ChatGeneration):
+        request = dataclasses.replace(request, messages=tuple(wire_messages(request.messages, operation)))
     turn = await model(request)
     raw_message = dict(turn.message)
     if reasoning := turn.metadata.get("reasoning"):

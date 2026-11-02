@@ -7,7 +7,12 @@ from functools import partial
 
 from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, OperationKind, Sampling, SummaryKind, TrialPolicy
 from taskcompendium.importers.evalchemy.grader import scorer_revision
-from taskcompendium.importers.evalchemy.reasoning import convert_gpqa, convert_mmlu, reasoning_item
+from taskcompendium.importers.evalchemy.reasoning import (
+    MMLU_VALIDATION_FILE,
+    convert_gpqa,
+    convert_mmlu,
+    reasoning_item,
+)
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import Converter, IntendedUse
 
@@ -19,7 +24,6 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 GPQA_REVISION = "83022cefff930aea54f654c0b282e74b9eeda5c6"
 MMLU_PRO_REVISION = "b189ec765aa7ed75c8acfea42df31fdae71f97be"
 MMLU_TEST_FILE = "data/test-00000-of-00001.parquet"
-MMLU_VALIDATION_FILE = "data/validation-00000-of-00001.parquet"
 
 
 def choice_dataset(

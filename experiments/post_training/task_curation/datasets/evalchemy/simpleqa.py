@@ -7,8 +7,7 @@ from functools import partial
 
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
-    Metric,
-    MetricKind,
+    Metrics,
     OperationKind,
     Sampling,
     SummaryKind,
@@ -23,7 +22,6 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, HfS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 SIMPLEQA_REVISION = "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94"
-CLASSIFICATION_METRICS = ("accuracy", "incorrect", "not_attempted", "judge_failed")
 
 
 def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvalDataset]:
@@ -65,10 +63,7 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvalDataset]:
                     chat_template_kwargs={"enable_thinking": True},
                 ),
                 trials=TrialPolicy(count=1, seed=None),
-                metrics=tuple(
-                    Metric(name=name, kind=MetricKind.BINARY, higher_is_better=name == "accuracy")
-                    for name in CLASSIFICATION_METRICS
-                ),
+                metrics=Metrics.CLASSIFICATION,
                 primary_metric="accuracy",
                 summary=SummaryKind.CLASSIFICATION,
                 expected_population=rows,

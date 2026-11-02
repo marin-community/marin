@@ -6,8 +6,7 @@
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
-    Metric,
-    MetricKind,
+    Metrics,
     OperationKind,
     Sampling,
     SummaryKind,
@@ -23,7 +22,6 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 SOURCE_REVISION = "623134de90723e7f189036da005067f36817b6e7"
 FINANCEBENCH_SHA256 = "0df2b2080400693d98eeccac6970432af72d7e092287b08bcc9bd013d2c3232e"
-CLASSIFICATION_METRICS = ("accuracy", "incorrect", "not_attempted", "judge_failed")
 
 
 def sources() -> list[RlDataSource[EvalDataset]]:
@@ -64,10 +62,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                         chat_template_kwargs={"enable_thinking": False},
                     ),
                     trials=TrialPolicy(count=1, seed=None),
-                    metrics=tuple(
-                        Metric(name=name, kind=MetricKind.BINARY, higher_is_better=name == "accuracy")
-                        for name in CLASSIFICATION_METRICS
-                    ),
+                    metrics=Metrics.CLASSIFICATION,
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
                     expected_population=50,

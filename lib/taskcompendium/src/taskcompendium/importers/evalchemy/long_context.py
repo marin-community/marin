@@ -48,9 +48,10 @@ def decode_mrcr(row: dict) -> dict:
 
 
 def read_mrcr(path: StoragePath, _context: ConversionContext):
-    """Stream one-row batches; native reading currently materializes whole row groups."""
+    """Yield source rows annotated with official token counts and benchmark bins."""
     with path.open("rb") as file:
         parquet = pq.ParquetFile(file)
+        # A full MRCR row group can exceed a curation worker's memory budget.
         for batch in parquet.iter_batches(batch_size=1):
             for row in batch.to_pylist():
                 yield decode_mrcr(row)

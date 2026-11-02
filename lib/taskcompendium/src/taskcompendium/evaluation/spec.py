@@ -159,6 +159,13 @@ class Metric(EvaluationModel):
 
 class Metrics:
     ACCURACY = Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True)
+    CLASSIFICATION = (
+        ACCURACY,
+        *(
+            Metric(name=name, kind=MetricKind.BINARY, higher_is_better=False)
+            for name in ("incorrect", "not_attempted", "judge_failed")
+        ),
+    )
 
 
 class SummaryKind(StrEnum):
