@@ -44,6 +44,7 @@ import functools
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -117,22 +118,23 @@ class ItemMatchConfig:
     dilute it (marin#6852).
 
     Attributes:
-        threshold: Minimum share of an item's indexed n-grams that the record must
-            contain.
+        thresholds: ``(eval_id_prefix, threshold)`` pairs. An item whose ``eval_id``
+            starts with a prefix is matched when the record contains at least that
+            share of its indexed n-grams; the longest matching prefix wins. Items
+            that match no prefix are left to the paragraph rule. Use a lower
+            threshold for evals whose copies often omit a long part of the item,
+            such as a worked answer.
         min_matched_features: Minimum number of distinct n-grams of that item that
             the record must contain.
-        threshold_overrides: ``(eval_id_prefix, threshold)`` pairs. An item whose
-            ``eval_id`` starts with a prefix uses that threshold; the longest
-            matching prefix wins. Use a lower threshold for evals whose items pair
-            a question with a long answer that copies often omit.
     """
 
-    threshold: float
+    thresholds: tuple[tuple[str, float], ...]
     min_matched_features: int
-    threshold_overrides: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
-        for value in (self.threshold, *(t for _, t in self.threshold_overrides)):
+        if not self.thresholds:
+            raise ValueError("thresholds must name at least one eval_id prefix")
+        for _, value in self.thresholds:
             if not 0 < value <= 1:
                 raise ValueError(f"item thresholds must be in (0, 1], got {value}")
         if self.min_matched_features < 1:
@@ -369,8 +371,9 @@ class _ItemIndex:
 
 
 def _item_threshold(eval_id: str, config: ItemMatchConfig) -> float:
-    matches = [(len(prefix), value) for prefix, value in config.threshold_overrides if eval_id.startswith(prefix)]
-    return max(matches)[1] if matches else config.threshold
+    """Return the item's threshold, or infinity (never matched) when no prefix covers it."""
+    matches = [(len(prefix), value) for prefix, value in config.thresholds if eval_id.startswith(prefix)]
+    return max(matches)[1] if matches else math.inf
 
 
 @functools.cache

@@ -908,14 +908,12 @@ _FILLER = (
 )
 
 
-def _item_ngram(*, threshold: float = 0.5, min_matched: int = 1, overrides=()) -> NGramConfig:
+def _item_ngram(*, thresholds=(("", 0.5),), min_matched: int = 1) -> NGramConfig:
     return NGramConfig(
         min_matched_features=2,
         ngram_length=4,
         overlap_threshold=0.5,
-        item_match=ItemMatchConfig(
-            threshold=threshold, min_matched_features=min_matched, threshold_overrides=tuple(overrides)
-        ),
+        item_match=ItemMatchConfig(thresholds=tuple(thresholds), min_matched_features=min_matched),
     )
 
 
@@ -949,13 +947,16 @@ def test_item_rule_matches_a_copy_stored_in_a_json_string(tmp_path: Path, monkey
     record = {"id": "doc", "partition_id": 0, "text": f"{_FILLER} {json.dumps({'prompt': item})} {_FILLER}"}
 
     rows = _run_decon_one_shot(
-        tmp_path, eval_records=[{"id": "code-1", "text": item}], input_records=[record], ngram=_item_ngram(threshold=0.8)
+        tmp_path,
+        eval_records=[{"id": "code-1", "text": item}],
+        input_records=[record],
+        ngram=_item_ngram(thresholds=[("", 0.8)]),
     )
 
     assert rows["doc"]["matched_eval_ids"] == ["code-1"]
 
 
-def test_item_rule_uses_the_longest_matching_threshold_override(tmp_path: Path):
+def test_item_rule_uses_the_longest_matching_threshold_prefix(tmp_path: Path):
     half = " ".join(_QUIZ_ITEM.split()[:8])
     records = dict(
         eval_records=[
@@ -967,11 +968,22 @@ def test_item_rule_uses_the_longest_matching_threshold_override(tmp_path: Path):
 
     default = _run_decon_one_shot(tmp_path / "default", **records, ngram=_item_ngram())
     lowered = _run_decon_one_shot(
-        tmp_path / "lowered", **records, ngram=_item_ngram(overrides=[("q", 0.9), ("quiz-", 0.3)])
+        tmp_path / "lowered", **records, ngram=_item_ngram(thresholds=[("", 0.5), ("q", 0.9), ("quiz-", 0.3)])
     )
 
     assert default["doc"]["contaminated"] is False
     assert lowered["doc"]["matched_eval_ids"] == ["quiz-1"]
+
+
+def test_item_rule_ignores_items_outside_its_prefixes(tmp_path: Path):
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "quiz-1", "text": _QUIZ_ITEM}],
+        input_records=[{"id": "doc", "partition_id": 0, "text": f"{_FILLER} {_QUIZ_ITEM} {_FILLER}"}],
+        ngram=_item_ngram(thresholds=[("word-", 0.5)]),
+    )
+
+    assert rows["doc"]["contaminated"] is False
 
 
 def test_item_rule_requires_the_minimum_matched_features(tmp_path: Path):
