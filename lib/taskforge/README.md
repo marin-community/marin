@@ -642,15 +642,15 @@ adversary_model)` runs one validation round from these parts as a graph of units
 directory, the proposal it built, the step store, the MODIFY rounds the workpiece has left and the pass of
 the round this validation is (`validation_pass`, from 1).
 `settings`, a `ValidationSettings`, is the validating host's: engine and its limits, the solver trials `k`,
-retries and backoff, the control writer's sampling, the adversary policy and the ledger. Lowering
+retries and backoff, the control writer's sampling, the adversary roster and the ledger. Lowering
 (`preflight`) and control writing start together; each of the `settings.k` solver trials starts once the
 lowering is done, without waiting for the controls; each control's replay and each of the
-`settings.adversary.k` adversary trials start once both the lowered spec and the controls exist, without
+adversary trials of `settings.adversary` start once both the lowered spec and the controls exist, without
 waiting for a solver trial. The round returns once every unit has ended, unless a violated control
 decides it early: while `context.modify_rounds_left` is above zero, the first control whose replay comes
 back violated, or whose attempt file already holds a violation, cancels every solver and adversary trial
 that has not ended, and the round returns once the other control replays end. Its result's `early`, an
-`EarlyDecision`, names that control and the cancelled trials (`solver/<i>`, `adversary/<i>`), which the
+`EarlyDecision`, names that control and the cancelled trials (`solver/<i>`, `adversary/<name>-<i>`), which the
 result's `solver` and `adversary` leave out. A cancelled attempt writes no attempt file, so a later round
 on the same files runs those trials again. With no MODIFY round left the round waits for every trial,
 since the workpiece's final record needs complete evidence. Every unit is idempotent on its own file, so
@@ -661,8 +661,8 @@ a relaunch resumes missing units and trials eligible for another attempt:
 <round_dir>/validation/<draft>/controls.json                 the written controls
 <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
 <round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
-<round_dir>/validation/<draft>/<task>/adversary/<i>/attempt-<n>.json
-<round_dir>/validation/<draft>/<task>/adversary/<i>/submissions/<n>/control/s<m>/attempt-<k>.json
+<round_dir>/validation/<draft>/<task>/adversary/<name>-<i>/attempt-<n>.json
+<round_dir>/validation/<draft>/<task>/adversary/<name>-<i>/submissions/<n>/control/s<m>/attempt-<k>.json
 ```
 
 `<draft>` is `content_hash.digest` of the draft's task, `<limits>` the engine limits,
@@ -688,7 +688,11 @@ coordinator, the file's one writer, writes the result its validate function retu
 An adversary trial (`stage50_validate.adversary.run_adversary_trial`) red-teams the grader as an agent
 loop with two tools: `shell` on a private task machine, started as the engine starts the solver's, and
 `submit`, which grades one candidate (a final reply and the files it names) as a control is graded, on a
-fresh machine. `AdversaryPolicy` sets the trials per round, the submissions per attempt (a `submit` past
+fresh machine. The roster, `ValidationSettings.adversary`, is a tuple of `AdversaryPolicy`, one per
+adversary. Each names an `AdversarySpec(name, brief)`: `name` is unique in the roster and names the
+trials (`<name>-<i>`), and `brief` is the goal the brief states (`adversary.SHORTCUT` is the shortcut search). Neither the round
+nor review branches on a name, so a new adversary is a new spec. A policy sets the trials per round, the
+submissions per attempt (a `submit` past
 them grades nothing), the turns, the sampling and the mode; the round's deadlines, retries and backoff
 apply. A `blackbox` adversary sees the task as the solver does; a `whitebox` one is also shown the
 grader's specification and verifier files, the round's controls with their expected rewards and the

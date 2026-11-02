@@ -19,7 +19,7 @@ Without a MODIFY round left, a violated control decides nothing early and the ro
 
 The round takes two inputs besides the draft and its models: the ``ValidationContext`` a stage coordinator owns
 (the workpiece, the round, its directory, the proposal it built, the step store, the MODIFY rounds left) and the
-host's ``ValidationSettings`` (engine, deadlines, trial counts, retries, adversary policy, ledger), which a caller's
+host's ``ValidationSettings`` (engine, deadlines, trial counts, retries, adversary roster, ledger), which a caller's
 validate function closes over.
 
 Each unit is idempotent on its own file, so a relaunch redoes only the units whose files are missing:
@@ -28,12 +28,12 @@ Each unit is idempotent on its own file, so a relaunch redoes only the units who
     <round_dir>/validation/<draft>/controls.json               the controls
     <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
     <round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
-    <round_dir>/validation/<draft>/<task>/adversary/<i>/attempt-<n>.json
-    <round_dir>/validation/<draft>/<task>/adversary/<i>/submissions/<n>/control/s<m>/attempt-<k>.json
+    <round_dir>/validation/<draft>/<task>/adversary/<name>-<i>/attempt-<n>.json
+    <round_dir>/validation/<draft>/<task>/adversary/<name>-<i>/submissions/<n>/control/s<m>/attempt-<k>.json
 
 ``<draft>`` is ``content_hash.digest`` of the draft's task, ``<limits>`` the engine limits,
 ``<task>`` the ``trials.task_digest`` of the lowered spec as its trials run, and ``<controls>``
-``content_hash.digest`` of the control set. A file covers
+``content_hash.digest`` of the control set, and ``<name>`` the ``AdversarySpec`` name. A file covers
 what its path names, so the lowering or controls of another task, the trials of another lowered spec and the
 replay of another control set are never read as done. The lowering also records the host and the
 factory backends it lowered for, and a lowering for another host is done again. An adversary attempt records its
@@ -155,7 +155,8 @@ class ValidationSettings:
         max_retries: The retries of a trial that fails for a retryable cause.
         retry_backoff: The wait between a trial's attempts.
         sampling: The sampling policy of the model writing the controls.
-        adversary: The adversary trials' policy.
+        adversary: The adversary roster: one policy per adversary, each with its own spec, trials and budgets;
+            names are unique. Empty runs no adversary.
         ledger: Where the trials and the control writing are recorded.
     """
 
@@ -165,8 +166,13 @@ class ValidationSettings:
     max_retries: int
     retry_backoff: RetryBackoff
     sampling: LLMPolicy
-    adversary: AdversaryPolicy
+    adversary: tuple[AdversaryPolicy, ...]
     ledger: Ledger
+
+    def __post_init__(self) -> None:
+        names = [policy.spec.name for policy in self.adversary]
+        if len(set(names)) != len(names):
+            raise ValueError(f"adversary names must be unique in the roster: {names}")
 
 
 class LoweringStatus(StrEnum):
@@ -244,10 +250,11 @@ class SubmissionResult:
 
 @dataclass(frozen=True)
 class AdversaryResult:
-    """An adversary trial's final attempt: ``cause`` is set when it is ungraded, and ``claim`` is the adversary's
-    own verdict. ``attempt_file`` is relative to the round directory."""
+    """An adversary trial's final attempt: ``name`` is its ``AdversarySpec``'s, ``cause`` is set when it is ungraded,
+    and ``claim`` is the adversary's own verdict. ``attempt_file`` is relative to the round directory."""
 
     trial: str
+    name: str
     mode: AdversaryMode
     status: TrialStatus
     cause: Cause | None
@@ -261,7 +268,7 @@ class EarlyDecision:
     """A round its first violated control decided before every trial ended.
 
     ``control`` is the id of that control, and ``cancelled`` names each solver and adversary trial the round
-    stopped, as ``solver/<i>`` or ``adversary/<i>``; none of them is in the round's result.
+    stopped, as ``solver/<i>`` or ``adversary/<name>-<i>``; none of them is in the round's result.
     """
 
     control: str
@@ -337,10 +344,10 @@ async def validate_round(
                 )
                 for index in range(settings.k)
             } | {
-                f"{TrialKind.ADVERSARY}/{index}": group.create_task(
-                    _adversary_unit(lowering, controls, context, settings, adversary_model, directory, str(index))
+                f"{TrialKind.ADVERSARY}/{trial}": group.create_task(
+                    _adversary_unit(lowering, controls, context, settings, adversary_model, policy, directory, trial)
                 )
-                for index in range(settings.adversary.k)
+                for policy, trial in _adversary_trials(settings)
             }
             closing = _EarlyClose(armed=context.modify_rounds_left > 0, trials=trials)
             group.create_task(_replay_units(lowering, controls, context, settings, directory, closing))
@@ -497,6 +504,7 @@ async def _adversary_unit(
     context: ValidationContext,
     settings: ValidationSettings,
     model: ModelClient,
+    policy: AdversaryPolicy,
     directory: Path,
     trial: str,
 ) -> None:
@@ -506,7 +514,6 @@ async def _adversary_unit(
     if lowered.spec is None:
         return
     spec, evidence_dir = lowered.spec, _trials_dir(directory, settings, lowered.spec)
-    policy = settings.adversary
     brief = adversary_brief(spec, control_set, policy)
 
     def under_brief(payload: bytes) -> bool:
@@ -517,6 +524,11 @@ async def _adversary_unit(
     plan = _resumed_plan(context, settings, TrialKind.ADVERSARY, evidence_dir, trial, under_brief, floor)
     if plan is not None:
         await run_adversary_trial(spec, brief, policy, plan, settings.engine, model, trial, settings.max_retries)
+
+
+def _adversary_trials(settings: ValidationSettings) -> list[tuple[AdversaryPolicy, str]]:
+    """Each adversary trial of the roster with its policy, named ``<name>-<i>``."""
+    return [(policy, f"{policy.spec.name}-{index}") for policy in settings.adversary for index in range(policy.k)]
 
 
 def _any_attempt(payload: bytes) -> bool:
@@ -609,9 +621,7 @@ def _result(
     trials_dir = _trials_dir(directory, settings, lowered.spec)
     cancelled = set() if early is None else set(early.cancelled)
     solver = [str(index) for index in range(settings.k) if f"{TrialKind.SOLVER}/{index}" not in cancelled]
-    adversary = [
-        str(index) for index in range(settings.adversary.k) if f"{TrialKind.ADVERSARY}/{index}" not in cancelled
-    ]
+    adversary = [trial for _, trial in _adversary_trials(settings) if f"{TrialKind.ADVERSARY}/{trial}" not in cancelled]
     return ValidationResult(
         context.workpiece_id,
         context.round,
@@ -672,7 +682,14 @@ def _adversary_result(context: ValidationContext, evidence_dir: Path, trial: str
             )
         )
     return AdversaryResult(
-        trial, record.mode, graded.status, graded.cause, record.claim, tuple(submissions), _relative(context, path)
+        trial,
+        record.name,
+        record.mode,
+        graded.status,
+        graded.cause,
+        record.claim,
+        tuple(submissions),
+        _relative(context, path),
     )
 
 

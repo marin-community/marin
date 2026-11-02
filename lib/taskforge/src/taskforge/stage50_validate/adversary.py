@@ -11,14 +11,17 @@ replays ``spec.controls.candidate_turns`` on a fresh machine, so the verifier's 
 machine. A task without a task machine offers ``submit`` alone. ``AdversaryPolicy.submissions`` bounds the
 submissions of an attempt; a ``submit`` past it returns an error and grades nothing.
 
-The two modes differ only in the brief (``adversary_brief``). ``BLACKBOX`` gives the task as the solver sees it
+An ``AdversarySpec`` names one adversary and states its goal, its ``brief``; a round runs a roster of them, each
+under its own ``AdversaryPolicy``, and nothing downstream reads the name except as the trial's id. The two modes
+differ only in the brief (``adversary_brief``). ``BLACKBOX`` gives the task as the solver sees it
 (the shell harness's ``task_prompt``), the tools, the budget and the verdict line. ``WHITEBOX`` adds the grader's
 specification and verifier files, every control of the round with its expected reward (the reference answer among
 them) and the task's example answers, and asks the adversary to name the grader line its submission defeats.
 
 Each attempt is one ``TRIAL`` ledger span, step ``adversary/<trial>/<attempt>``, and the agent's model calls and
 tool calls are recorded under the same step. Its attempt file, ``<evidence_dir>/adversary/<trial>/attempt-<n>.json``,
-holds ``trials.outcome_json``'s record and an ``adversary`` key, an ``AdversaryRecord``: the mode, the brief, the
+holds ``trials.outcome_json``'s record and an ``adversary`` key, an ``AdversaryRecord``: the spec's name, the mode,
+the brief, the
 system turn, the adversary's claim, the grader's digest and every submission with its grade. The rollout is one
 conversation whose steps are the agent's turns; it carries no token ids. Each submission is graded as the
 ``CONTROL`` trial ``s<ordinal>`` under ``<evidence_dir>/adversary/<trial>/submissions/<attempt>/``, whose attempt
@@ -35,6 +38,7 @@ judged here.
 import asyncio
 import json
 import posixpath
+import re
 import tempfile
 import time
 import traceback
@@ -101,6 +105,7 @@ from taskforge.stage50_validate.adversary_prompts import (
     NO_EXAMPLES,
     NO_SHORTCUT_LINE,
     NO_VERIFIER_FILES,
+    SHORTCUT_GOAL,
     SHORTCUT_PREFIX,
     SUBMIT_DESCRIPTION,
     TOOLS_SUBMIT_ONLY,
@@ -142,6 +147,8 @@ CONTROL_CHARS = 4_000
 """Characters of each workspace file of a control a white-box brief shows."""
 VERDICT_DECORATION = "*_`#> "
 """Markdown a model wraps a verdict line in (``**SHORTCUT:**``, a quote or heading marker), stripped before matching."""
+ADVERSARY_NAME = re.compile(r"[a-z0-9_]+")
+"""An adversary's name, which names its trials' directories (``adversary/<name>-<i>``)."""
 
 
 class AdversaryMode(StrEnum):
@@ -152,10 +159,30 @@ class AdversaryMode(StrEnum):
 
 
 @dataclass(frozen=True)
+class AdversarySpec:
+    """One adversary of a round's roster: ``name``, unique in the roster, and ``brief``, the goal its brief states.
+
+    The roster is data: a new adversary is a new spec, and neither the round nor review branches on a name.
+    """
+
+    name: str
+    brief: str
+
+    def __post_init__(self) -> None:
+        if not ADVERSARY_NAME.fullmatch(self.name) or not self.brief.strip():
+            raise ValueError(f"AdversarySpec needs a name matching {ADVERSARY_NAME.pattern} and a non-empty brief")
+
+
+SHORTCUT = AdversarySpec("shortcut", SHORTCUT_GOAL)
+"""Searches for an accepted candidate that does not do the task."""
+
+
+@dataclass(frozen=True)
 class AdversaryPolicy:
-    """How a validation round runs its adversary trials; the round's deadlines, retries and backoff apply to them.
+    """How a validation round runs one adversary's trials; the round's deadlines, retries and backoff apply to them.
 
     Attributes:
+        spec: The adversary these trials run.
         k: Adversary trials per round; 0 runs none.
         submissions: Verifier submissions per attempt.
         repair_submissions: The submissions within which a first accepted shortcut makes a grader repair finding.
@@ -166,6 +193,7 @@ class AdversaryPolicy:
         min_probes: Shortcut candidates the brief asks for before a verdict, capped below the budget.
     """
 
+    spec: AdversarySpec
     k: int
     submissions: int | None
     repair_submissions: int
@@ -233,6 +261,7 @@ class SubmissionRecord:
 class AdversaryRecord:
     """The ``adversary`` key of an adversary attempt file. ``system`` is empty for a trial that was not started."""
 
+    name: str
     mode: AdversaryMode
     brief: str
     system: str
@@ -356,6 +385,7 @@ def adversary_brief(spec: TaskRolloutSpec, controls: Sequence[Control], policy: 
     whitebox = policy.mode is AdversaryMode.WHITEBOX
     context = whitebox_context(spec.task, controls) if whitebox else ""
     return BRIEF_TEMPLATE.format(
+        goal=policy.spec.brief,
         tools=TOOLS_WITH_SHELL if spec.task_machine is not None else TOOLS_SUBMIT_ONLY,
         submissions="unlimited" if policy.submissions is None else policy.submissions,
         probes=(
@@ -748,7 +778,7 @@ async def run_adversary_trial(
     grader_digest = digest(grader_source(spec.task))
     refused = refusal(spec, settings.factories)
     if refused is not None:
-        record = AdversaryRecord(policy.mode, brief, "", NO_CLAIM, grader_digest, ())
+        record = AdversaryRecord(policy.spec.name, policy.mode, brief, "", NO_CLAIM, grader_digest, ())
         with attempt_span(trial_digest, plan, trial, plan.first_attempt) as fields:
             record_attempt(fields, refused, plan, trial, plan.first_attempt, _attempt_json(refused, record))
         return refused
@@ -771,11 +801,18 @@ async def run_adversary_trial(
             )
             claim = claim_of(outcome)
             record = AdversaryRecord(
-                policy.mode, brief, system, claim, grader_digest, tuple(submission.record for submission in submissions)
+                policy.spec.name,
+                policy.mode,
+                brief,
+                system,
+                claim,
+                grader_digest,
+                tuple(submission.record for submission in submissions),
             )
             record_attempt(fields, outcome, plan, trial, attempt, _attempt_json(outcome, record))
             fields.attrs.update(
                 {
+                    "adversary": policy.spec.name,
                     "mode": str(policy.mode),
                     "submissions": str(len(submissions)),
                     "passes": str(sum(submission.record.passed for submission in submissions)),

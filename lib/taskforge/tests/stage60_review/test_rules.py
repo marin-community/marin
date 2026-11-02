@@ -180,7 +180,8 @@ async def test_a_control_defect_does_not_turn_a_solver_outage_into_rejection():
 @pytest.mark.parametrize("cause", [Cause.MODEL_UNAVAILABLE, Cause.GENERATION_LIMIT, None])
 async def test_an_adversary_outage_cannot_be_erased_by_other_passing_evidence(cause):
     adversary = AdversaryResult(
-        "0",
+        "shortcut-0",
+        "shortcut",
         AdversaryMode.WHITEBOX,
         TrialStatus.UNGRADED if cause else TrialStatus.GRADED,
         cause,

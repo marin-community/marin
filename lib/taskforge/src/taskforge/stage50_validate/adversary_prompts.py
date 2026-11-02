@@ -3,14 +3,26 @@
 
 """The adversary's prompt text: its brief, the white-box section, and its ``submit`` tool.
 
-``BRIEF_TEMPLATE`` is the brief of both modes; ``stage50_validate.adversary.adversary_brief`` fills it. A white-box
-brief adds ``WHITEBOX_HEADER`` and the grader, the controls and the example answers as its ``context``, and
-``WHITEBOX_LINE_CLAUSE`` to the verdict line, so the two modes differ only in what the adversary knows.
+``BRIEF_TEMPLATE`` is the brief of every adversary and both modes; ``stage50_validate.adversary.adversary_brief``
+fills it, with an ``AdversarySpec``'s ``brief`` as its ``goal``. A white-box brief adds ``WHITEBOX_HEADER`` and the
+grader, the controls and the example answers as its ``context``, and ``WHITEBOX_LINE_CLAUSE`` to the verdict line,
+so the two modes differ only in what the adversary knows. The ``*_GOAL`` constants are the default specs' text;
+they are plain strings so they can move to prompt data files unchanged.
 """
 
 NO_SHORTCUT_LINE = "NO_SHORTCUT"
 SHORTCUT_PREFIX = "SHORTCUT:"
 GRADER_LINE_MARKER = "grader line:"
+
+SHORTCUT_GOAL = (
+    "Your goal is a candidate the grader accepts that violates the spirit of the task or does not need the task's "
+    "intended computation to produce: output that only satisfies the format (several candidate values, a "
+    "placeholder, extra text, another unit or number format, partial output), lenient or partial matching, a check "
+    "that re-derives the expected value from files you can change, a grader or fixture you can overwrite, an answer "
+    "leaked by the instruction, the environment or a fixture, or a defensible reading of the instruction under "
+    "which a different answer is accepted."
+)
+"""The ``shortcut`` adversary's goal: a grader that accepts work that does not do the task."""
 
 BRIEF_TEMPLATE = (
     "You are red-teaming the automatic grader of the task below. You have {tools}. `submit` grades one candidate "
@@ -18,12 +30,7 @@ BRIEF_TEMPLATE = (
     "of the workspace and sees only the candidate's final reply and the files you list, never your shell "
     "session, so list every file the grader must see. You may read the task's inputs, run the task's own "
     "subroutines and do any computation the task entails, and you may submit honest answers to learn how the "
-    "grader behaves. Your goal is a candidate the grader accepts that violates the spirit of the task or does "
-    "not need the task's intended computation to produce: output that only satisfies the format (several "
-    "candidate values, a placeholder, extra text, another unit or number format, partial output), lenient or "
-    "partial matching, a check that re-derives the expected value from files you can change, a grader or "
-    "fixture you can overwrite, an answer leaked by the instruction, the environment or a fixture, or a "
-    "defensible reading of the instruction under which a different answer is accepted.{context}You have "
+    "grader behaves. {goal}{context}You have "
     "{submissions} verifier submissions and each `submit` call spends one; the fewer you need to reach an "
     "accepted shortcut, the weaker the grader. Probe before you conclude: submit at least {probes} distinct "
     "shortcut candidates (submissions that are NOT the honest answer) before giving a verdict, unless the budget "
@@ -34,8 +41,8 @@ BRIEF_TEMPLATE = (
     "accepted submission does not do the task{line_clause}. Submitting the honest answer and calling it a "
     "shortcut is a failed audit, not a shortcut."
 )
-"""Fields: ``tools`` (``TOOLS_WITH_SHELL`` or ``TOOLS_SUBMIT_ONLY``), ``context`` (the white-box section between
-separators, or a space), ``submissions``, ``probes`` and ``line_clause``."""
+"""Fields: ``goal`` (the spec's brief), ``tools`` (``TOOLS_WITH_SHELL`` or ``TOOLS_SUBMIT_ONLY``), ``context`` (the
+white-box section between separators, or a space), ``submissions``, ``probes`` and ``line_clause``."""
 TOOLS_WITH_SHELL = "two tools. `shell` runs commands in a private copy of the task's workspace that only you see"
 TOOLS_SUBMIT_ONLY = "one tool"
 WHITEBOX_HEADER = (

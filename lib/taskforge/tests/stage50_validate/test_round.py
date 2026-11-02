@@ -43,7 +43,14 @@ from taskforge.stage40_build_with_program.step_store import (
     RLEnvBuildStepKey,
     RLEnvBuildStepStore,
 )
-from taskforge.stage50_validate.adversary import AdversaryMode, AdversaryPolicy, Claim, ClaimKind
+from taskforge.stage50_validate.adversary import (
+    SHORTCUT,
+    AdversaryMode,
+    AdversaryPolicy,
+    AdversarySpec,
+    Claim,
+    ClaimKind,
+)
 from taskforge.stage50_validate.control_drafts import CONTROLS_STEP
 from taskforge.stage50_validate.controls import ControlVerdict
 from taskforge.stage50_validate.outcome import Cause
@@ -131,6 +138,7 @@ def built_draft(store_root: Path) -> TaskDraft:
 
 def adversary_policy(k: int, submissions: int = 3, mode: AdversaryMode = AdversaryMode.BLACKBOX) -> AdversaryPolicy:
     return AdversaryPolicy(
+        spec=SHORTCUT,
         k=k,
         submissions=submissions,
         repair_submissions=1,
@@ -180,7 +188,7 @@ def round_settings(
         max_retries=1,
         retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=2.0, jitter=0.0),
         sampling=LLMPolicy(),
-        adversary=adversary or adversary_policy(k=0),
+        adversary=(adversary,) if adversary else (),
         ledger=ledger,
     )
 
@@ -541,7 +549,7 @@ async def test_adversary_trials_start_once_lowering_and_controls_exist_and_wait_
     controls_ended = max(entry.ended for entry in ledger.entries if entry.step == CONTROLS_STEP)
     adversary_trials = [e for e in ledger.entries if e.kind is EntryKind.TRIAL and e.step.startswith("adversary/")]
     solver_trials = [e for e in ledger.entries if e.kind is EntryKind.TRIAL and e.step.startswith("solver/")]
-    assert [e.step for e in adversary_trials] == ["adversary/0/0"]
+    assert [e.step for e in adversary_trials] == ["adversary/shortcut-0/0"]
     assert adversary_trials[0].started >= controls_ended
     assert adversary_trials[0].ended < solver_trials[0].ended
     # The white-box brief holds this round's controls.
@@ -617,12 +625,33 @@ async def test_a_relaunch_reruns_only_a_missing_adversary_attempt(glm_client, fa
     )
 
     steps = trial_steps(ledger, recorded)
-    assert {step for step in steps if not step.startswith("control/s")} == {"adversary/1/1"}
+    assert {step for step in steps if not step.startswith("control/s")} == {"adversary/shortcut-1/1"}
     assert again.adversary[0] == first.adversary[0]
     rerun, before = again.adversary[1], first.adversary[1]
-    assert rerun.attempt_file.endswith("adversary/1/attempt-1.json")
+    assert rerun.attempt_file.endswith("adversary/shortcut-1/attempt-1.json")
     assert [(s.ordinal, s.reward) for s in rerun.submissions] == [(s.ordinal, s.reward) for s in before.submissions]
     assert (again.solver, again.controls) == (first.solver, first.controls)
+
+
+async def test_the_roster_runs_each_spec_under_its_own_name_and_brief(glm_client, fake_glm, ledger, tmp_path):
+    fake_glm.stream(content=controls_reply("41"))
+    probe = AdversarySpec("probe", "Your goal is an accepted candidate of the probe kind.")
+    roster = (adversary_policy(k=1), replace(adversary_policy(k=2), spec=probe))
+    settings = replace(round_settings(ledger, k=1), adversary=roster)
+    adversary = AdversaryScript(PROBES)
+
+    result = await validate_round(
+        built_draft(tmp_path / "store"), round_context(tmp_path), settings, SolverModel(), glm_client, adversary
+    )
+
+    assert [(trial.trial, trial.name) for trial in result.adversary] == [
+        ("shortcut-0", "shortcut"),
+        ("probe-0", "probe"),
+        ("probe-1", "probe"),
+    ]
+    systems = {str(request[0]["content"]) for request in adversary.requests}
+    assert sorted(probe.brief in system for system in systems) == [False, True]
+    assert sorted(SHORTCUT.brief in system for system in systems) == [False, True]
 
 
 async def test_an_adversary_attempt_deadline_records_an_ungraded_retry(glm_client, fake_glm, ledger, tmp_path):
@@ -643,7 +672,7 @@ async def test_an_adversary_attempt_deadline_records_an_ungraded_retry(glm_clien
 
     (trial,) = result.adversary
     assert (trial.status, trial.cause) == (TrialStatus.UNGRADED, Cause.ATTEMPT_TIMEOUT)
-    assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
+    assert trial.attempt_file.endswith("adversary/shortcut-0/attempt-1.json")
     assert (context.round_dir / trial.attempt_file).exists()
 
 
@@ -660,15 +689,15 @@ async def test_an_adversary_attempt_cancelled_in_flight_leaves_no_attempt_file(g
     with pytest.raises(asyncio.CancelledError):
         await running
 
-    assert not list(context.round_dir.rglob("adversary/0/attempt-*"))
+    assert not list(context.round_dir.rglob("adversary/shortcut-0/attempt-*"))
     # The cancelled attempt's graded submission stays, so the rerun is numbered after it.
-    assert list(context.round_dir.rglob("adversary/0/submissions/0/control/s1/attempt-0.json"))
+    assert list(context.round_dir.rglob("adversary/shortcut-0/submissions/0/control/s1/attempt-0.json"))
     result = await validate_round(
         built_draft(tmp_path / "store"), context, settings, SolverModel(), UncalledClient(), AdversaryScript(PROBES)
     )
     (trial,) = result.adversary
     assert trial.status is TrialStatus.GRADED
-    assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
+    assert trial.attempt_file.endswith("adversary/shortcut-0/attempt-1.json")
 
 
 async def test_a_violated_control_with_a_modify_round_left_cancels_the_held_trials_and_names_them(
@@ -694,7 +723,7 @@ async def test_a_violated_control_with_a_modify_round_left_cancels_the_held_tria
 
     result = await asyncio.wait_for(running, timeout=30)
 
-    assert result.early == EarlyDecision(VIOLATED_CONTROL, ("solver/0", "solver/1", "adversary/0"))
+    assert result.early == EarlyDecision(VIOLATED_CONTROL, ("solver/0", "solver/1", "adversary/shortcut-0"))
     assert result.solver is not None and result.solver.trials == () and result.solver.ungraded == {}
     assert result.adversary == ()
     verdicts = {c.id: c.verdict for c in result.controls}
@@ -829,7 +858,7 @@ async def test_an_adversary_verifier_outage_remains_ungraded_and_retries(glm_cli
 
     (trial,) = result.adversary
     assert (trial.status, trial.cause) == (TrialStatus.UNGRADED, Cause.MACHINE_TERMINATED)
-    assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
+    assert trial.attempt_file.endswith("adversary/shortcut-0/attempt-1.json")
     assert all(s.status == GradeStatus.UNAVAILABLE for s in trial.submissions)
     first = json.loads((context.round_dir / Path(trial.attempt_file).with_name("attempt-0.json")).read_bytes())
     assert first["cause"] == Cause.MACHINE_TERMINATED
