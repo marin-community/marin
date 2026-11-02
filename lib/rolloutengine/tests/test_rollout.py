@@ -73,6 +73,7 @@ from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, Too
 from rolloutengine.harness.step import StepHarness
 from rolloutengine.machines import task_machine
 from rolloutengine.models import (
+    LENGTH_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
     ConversationStarted,
@@ -2116,10 +2117,16 @@ async def test_resource_cleanup_retains_failure_cause_after_cancellation(tmp_pat
 
 
 @pytest.mark.parametrize("phase", ["advance", "grade"])
-async def test_external_cancellation_at_attempt_deadline_remains_cancellation(phase):
+async def test_external_cancellation_at_attempt_deadline_remains_cancellation(phase, monkeypatch):
     closed = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    now = loop.time()
 
     async def wait_for_deadline():
+        nonlocal now
+        # Expire the attempt only once it reaches the selected phase. Startup
+        # includes executor-backed I/O and need not finish within 10ms.
+        now += 1
         try:
             await asyncio.Future()
         except asyncio.CancelledError:
@@ -2157,12 +2164,14 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
             return CaptureMachine()
 
     task = arithmetic_task(environment_requirements=GRADER_ENVIRONMENT, output_paths=("/workspace/out",))
-    with pytest.raises(asyncio.CancelledError):
-        await engine(
-            ReplayModel([{"role": "assistant", "content": "12"}]),
-            {"local": Factory()},
-            harnesses={"fixture": StepHarness(lambda _context: Episode())},
-        ).run_task(rollout_spec(task, machine=machine_runtime(), harness="fixture", attempt_timeout=0.01))
+    with monkeypatch.context() as clock:
+        clock.setattr(loop, "time", lambda: now)
+        with pytest.raises(asyncio.CancelledError):
+            await engine(
+                ReplayModel([{"role": "assistant", "content": "12"}]),
+                {"local": Factory()},
+                harnesses={"fixture": StepHarness(lambda _context: Episode())},
+            ).run_task(rollout_spec(task, machine=machine_runtime(), harness="fixture", attempt_timeout=0.01))
     assert closed.is_set()
 
 
@@ -3468,6 +3477,56 @@ async def test_a_task_machine_reports_its_close_failure_when_the_body_fails():
         async with task_machine(task, Factory(), machine_runtime(), cleanup_timeout=1):
             raise ValueError("body failed")
     assert caught.value.__notes__ == ["Machine cleanup failed: ['machine_close']"]
+
+
+async def test_a_task_machine_raises_its_close_failure_after_a_clean_body():
+    class FailingClose:
+        async def run(self, command):
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+        async def close(self):
+            raise OSError("close failed")
+
+    class Factory(DockerMachineFactory):
+        backend = Backend.DOCKER
+
+        async def create(self, spec):
+            return FailingClose()
+
+    task = arithmetic_task(environment_requirements=GRADER_ENVIRONMENT)
+    with pytest.raises(RuntimeError, match="machine_close"):
+        async with task_machine(task, Factory(), machine_runtime(), cleanup_timeout=1):
+            pass
+
+
+async def test_a_task_machine_closes_its_machine_when_setup_fails():
+    factory = RecordingShellSimFactory()
+    environment = GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("exit 3",)})
+    with pytest.raises(RuntimeError, match="setup command failed"):
+        async with task_machine(
+            arithmetic_task(environment_requirements=environment), factory, machine_runtime(), cleanup_timeout=5
+        ):
+            pass
+    with pytest.raises(RuntimeError):
+        await factory.machines[0].run(Command(("true",)))
+
+
+async def test_a_length_cut_tool_call_is_graded_without_execution():
+    class BudgetCutModel(ReplayModel):
+        async def complete(self, request):
+            return replace(await super().complete(request), stop_reason=LENGTH_STOP_REASON)
+
+    task = file_task()
+    task = task.model_copy(
+        update={"resources": task.resources.model_copy(update={"all": (inline_resource("workspace/answer", b"0"),)})}
+    )
+    model = BudgetCutModel([shell_call("echo 12 > /workspace/answer")])
+    record = await engine(model, {"local": FixtureImageFactory()}).run_task(
+        rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    assert len(model.requests) == 1
+    assert record.rollout.stop_reason == LENGTH_STOP_REASON
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 0.0)
 
 
 class StartsTwice:
