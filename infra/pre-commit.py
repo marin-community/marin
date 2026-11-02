@@ -857,27 +857,37 @@ def check_taskforge_prompt_literals(files: list[pathlib.Path], fix: bool) -> int
     """Refuse a long string literal in Taskforge code: prompt text belongs in ``taskforge/defaults/prompts``.
 
     ``TASKFORGE_PROMPT_ALLOWLIST`` lists the literals still in code, one ``<path> <sha256 prefix>`` per line, so a
-    new or edited literal fails until it moves to a prompt file or is listed.
+    new or edited literal fails until it moves to a prompt file or is listed. An entry of a checked file whose
+    literal is gone also fails, and ``fix`` removes it.
     """
-    allowed = set()
-    for line in TASKFORGE_PROMPT_ALLOWLIST.read_text().splitlines():
-        if line.strip() and not line.startswith("#"):
-            path, fingerprint = line.split()[:2]
-            allowed.add((path, fingerprint))
+    lines = TASKFORGE_PROMPT_ALLOWLIST.read_text().splitlines()
+    allowed = {tuple(line.split()[:2]) for line in lines if line.strip() and not line.startswith("#")}
     found = []
+    present = set()
     for file_path in files:
         relative = str(file_path.relative_to(ROOT_DIR))
         for line_no, fingerprint in _long_literals(file_path.read_text()):
+            present.add((relative, fingerprint))
             if (relative, fingerprint) not in allowed:
                 found.append(f"  - {relative}:{line_no} (allowlist entry: {relative} {fingerprint})\n")
+    checked = {str(file_path.relative_to(ROOT_DIR)) for file_path in files}
+    stale = {entry for entry in allowed if entry[0] in checked and entry not in present}
+    if stale and fix:
+        kept = [line for line in lines if tuple(line.split()[:2]) not in stale]
+        TASKFORGE_PROMPT_ALLOWLIST.write_text("\n".join(kept) + "\n")
+        stale = set()
+    output = ""
     if found:
-        output = (
+        output += (
             f"String literals of {PROMPT_LITERAL_CHARS}+ characters; move the text to "
             f"lib/taskforge/src/taskforge/defaults/prompts/ or list it in "
             f"{TASKFORGE_PROMPT_ALLOWLIST.relative_to(ROOT_DIR)}:\n" + "".join(found)
         )
-        return _record("Taskforge prompt literals", 1, output)
-    return _record("Taskforge prompt literals", 0)
+    if stale:
+        output += "Allowlist entries whose literal is gone (--fix removes them):\n" + "".join(
+            f"  - {path} {fingerprint}\n" for path, fingerprint in sorted(stale)
+        )
+    return _record("Taskforge prompt literals", 1 if output else 0, output)
 
 
 @dataclass
