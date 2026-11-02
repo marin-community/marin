@@ -56,7 +56,12 @@ case "${1:-}" in
       relay=$RELAY_EVEN; [ $((s % 2)) -eq 1 ] && relay=$RELAY_ODD
       submit "tfprop-$STAMP-s$(printf %02d $s)of$shards" "$s" "$shards" "$conc" "$ROOT/run" "$relay"
     done ;;
-  *) echo "usage: launch.sh smoke | pilot | full [SHARDS] [CONCURRENCY]" >&2; exit 2 ;;
+  one)
+    # Relaunch one shard of an existing run (after cancelling its old job): one SHARD [SHARDS] [CONCURRENCY]
+    s=${2:?shard index} total=${3:-8} conc=${4:-40} shards=1
+    relay=$RELAY_EVEN; [ $((s % 2)) -eq 1 ] && relay=$RELAY_ODD
+    submit "tfprop-$STAMP-s$(printf %02d $s)of$total" "$s" "$total" "$conc" "$ROOT/run" "$relay" ;;
+  *) echo "usage: launch.sh smoke | pilot | full [SHARDS] [CONCURRENCY] | one SHARD [SHARDS] [CONCURRENCY]" >&2; exit 2 ;;
 esac
 echo "submitted $submitted of $shards"
 [ "$submitted" -eq "$shards" ]

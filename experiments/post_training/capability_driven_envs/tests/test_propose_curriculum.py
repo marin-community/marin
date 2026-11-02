@@ -221,8 +221,8 @@ def test_the_capability_window_grows_with_the_controlled_limit(tmp_path):
         await apply_control(OutputRoot(str(tmp_path / "run")), limit, window, SLOTS, ControlState())
         return limit.limit, window.limit
 
-    assert capability_window(2, SLOTS) == 4
-    assert asyncio.run(scenario()) == (40, 2 * 20 + 2)
+    assert capability_window(2, SLOTS) == 6
+    assert asyncio.run(scenario()) == (40, 4 * 20 + 2)
 
 
 @pytest.mark.parametrize(

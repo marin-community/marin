@@ -187,9 +187,15 @@ class RequestLimit:
             self._changed.notify_all()
 
 
+WINDOW_FACTOR = 4
+"""Capabilities in flight per ``concurrency / slots``. A capability holds all its slots only at its start; over
+its life it averages about a quarter of them (measured 2026-11-02: 5-9 requests in flight per capability
+against 25 slots), so a factor of 2 left the request limit unreachable and the fleet under-loaded."""
+
+
 def capability_window(concurrency: int, slots: int) -> int:
-    """How many capabilities run at once: enough slot requests to fill ``concurrency`` twice over."""
-    return 2 * math.ceil(concurrency / slots) + 2
+    """How many capabilities run at once: enough that their in-flight slots can fill ``concurrency``."""
+    return WINDOW_FACTOR * math.ceil(concurrency / slots) + 2
 
 
 @dataclass
