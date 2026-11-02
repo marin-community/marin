@@ -15,8 +15,8 @@ def check_scores(h100: dict, tpu: dict, tolerance: float = 0.05) -> bool:
     """Print both scores; reject missing/different items instead of passing partial runs."""
     if not math.isfinite(tolerance) or not 0 <= tolerance <= 1:
         raise ValueError("Tolerance must be between 0 and 1")
-    if h100["hardware"] != "h100" or tpu["hardware"] not in ("v5p", "v4"):
-        raise ValueError("Expected an H100 result and a v5p/v4 result")
+    if h100["hardware"] != "h100" or tpu["hardware"] != "v4":
+        raise ValueError("Expected an H100 result and a v4 result")
     if (h100["model"], h100["revision"]) != (tpu["model"], tpu["revision"]):
         raise ValueError("Model checkpoints differ")
     scores, identities = [], []
@@ -40,15 +40,15 @@ def check_scores(h100: dict, tpu: dict, tolerance: float = 0.05) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--h100", required=True, help="H100 result.json path")
-    parser.add_argument("--tpu", required=True, action="append", help="TPU result.json path; repeat for v5p and v4")
+    parser.add_argument("--tpu", required=True, help="v4 result.json path")
     parser.add_argument(
         "--tolerance", type=float, default=0.05, help="Absolute accuracy difference; default five points"
     )
     args = parser.parse_args()
     configure_coreweave_s3()
     h100 = json.loads(StoragePath(args.h100).read_text())
-    passed = [check_scores(h100, json.loads(StoragePath(path).read_text()), args.tolerance) for path in args.tpu]
-    raise SystemExit(0 if all(passed) else 1)
+    tpu = json.loads(StoragePath(args.tpu).read_text())
+    raise SystemExit(0 if check_scores(h100, tpu, args.tolerance) else 1)
 
 
 if __name__ == "__main__":

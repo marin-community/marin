@@ -16,8 +16,6 @@ def test_score_check(capsys):
         items=[dict(id=str(i), sha256=f"document-{i}", correct=int(i < 89)) for i in range(100)],
     )
     tpu = copy.deepcopy(h100)
-    tpu["hardware"] = "v5p"
-    assert check_scores(h100, tpu)
     tpu["hardware"] = "v4"
     assert check_scores(h100, tpu)
     for i in range(84, 89):

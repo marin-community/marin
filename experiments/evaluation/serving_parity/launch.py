@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the first 100 GSM8K test items on an H100 node, v5p-8 slice, or v4-32 slice."""
+"""Run the first 100 GSM8K test items on an H100 node or a v4-32 slice."""
 
 import argparse
 import contextlib
@@ -107,8 +107,8 @@ def collect_items(archive: str) -> list[dict]:
 @contextlib.contextmanager
 def serving_model(hardware, model, engine):
     """Reuse the single-host backend or the multi-host TPU launcher."""
-    if hardware != "v4":
-        with local_inference(model, engine, num_chips=8 if hardware == "h100" else 4) as session:
+    if hardware == "h100":
+        with local_inference(model, engine, num_chips=8) as session:
             yield session.model
             session.check_alive()
         return
@@ -161,7 +161,7 @@ def run_arm(hardware: str, weights: str, output: str) -> None:
         tokenizer_revision=REVISION,
         revision=REVISION if weights == MODEL else None,
         max_model_len=8192,
-        tensor_parallel_size={"h100": 1, "v5p": 4, "v4": 16}[hardware],
+        tensor_parallel_size=1 if gpu else 16,
     )
     engine = VllmEngineConfig(
         launcher=VllmLauncherType.CUDA if gpu else VllmLauncherType.TPU,
@@ -202,7 +202,7 @@ def run_arm(hardware: str, weights: str, output: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--hardware", choices=("h100", "v5p", "v4"), required=True)
+    parser.add_argument("--hardware", choices=("h100", "v4"), required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--weights", required=True, help="Pinned regional Step12 checkpoint")
     parser.add_argument("--output", required=True, help="Fresh S3 (H100) or GCS (TPU) prefix")
@@ -213,13 +213,9 @@ def main() -> None:
         ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="512g", disk="200g", target_cluster="cw-rno2a")
         if gpu
         else ResourceConfig.with_tpu(
-            "v5p-8", cpu=32, ram="360g", disk="100g", regions=["us-east5"], zone="us-east5-a", preemptible=True
-        )
-    )
-    if args.hardware == "v4":
-        resources = ResourceConfig.with_tpu(
             "v4-32", cpu=32, ram="360g", disk="100g", regions=["us-central2"], zone="us-central2-b", preemptible=False
         )
+    )
     ports = [*RAY_PORTS] if args.hardware == "v4" else []
     coscheduling = resolve_coscheduling(resources, resources.replicas)
     print(
