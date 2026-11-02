@@ -1,0 +1,33 @@
+{
+  "attention_implementation": null,
+  "capacity_factor": 1,
+  "ce_implementation": null,
+  "disable_long_rope": true,
+  "disable_pko": true,
+  "head_dim": null,
+  "hidden_dim": 2560,
+  "initializer_std": 0.009882117688026186,
+  "intermediate_dim": 1280,
+  "layer_norm_eps": 1e-05,
+  "max_seq_len": 262144,
+  "moe_implementation": null,
+  "num_experts": 256,
+  "num_experts_per_token": 4,
+  "num_heads": 20,
+  "num_kv_heads": 5,
+  "num_layers": 26,
+  "qk_mult": 1.75,
+  "qk_mult_long_scale": 1,
+  "remat_mode": "recompute_all",
+  "replicate_attn_weights": false,
+  "rope": {
+    "scaling_factor": null,
+    "theta": 10000
+  },
+  "router_z_loss_coef": 0,
+  "shared_expert_intermediate_dim": 2560,
+  "sliding_window": 2048,
+  "split_w_gate_up": true,
+  "use_array_stacked_blocks": true,
+  "vocab_size": 128256
+}
