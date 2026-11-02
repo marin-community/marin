@@ -645,7 +645,7 @@ the round this validation is (`validation_pass`, from 1).
 retries and backoff, the control writer's sampling, the adversary roster and the ledger. Lowering
 (`preflight`) and control writing start together; each of the `settings.k` solver trials starts once the
 lowering is done, without waiting for the controls; each control's replay and each of the
-adversary trials of `settings.adversary` start once both the lowered spec and the controls exist, without
+adversary trials configured by `settings.adversary` start once both the lowered spec and the controls exist, without
 waiting for a solver trial. The round returns once every unit has ended, unless a violated control
 decides it early: while `context.modify_rounds_left` is above zero, the first control whose replay comes
 back violated, or whose attempt file already holds a violation, cancels every solver and adversary trial
@@ -680,29 +680,38 @@ holds every decision input without the rollouts: the lowering's status
 (`lowered`, `refused` by a factory, `rejected` by RolloutEngine, when no trial runs), refusals and
 backend fallback; each solver trial's status, reward, cause and attempt file, with the reward totals
 and ungraded causes of its `Evidence`; each control's verdict (`met`, `violated`, `ungraded`), reward
-and cause; each adversary trial's status, cause, claim and submissions with their grades and rewards; and
+and cause; each adversary trial's status, cause, report and submissions with their grades and rewards; and
 the early decision, if any. `write_validation(round_dir, result)` writes it to `<round_dir>/validation.json`, and
 `load_validation(round_dir)` reads it back. The round itself writes no `validation.json`: the stage
 coordinator, the file's one writer, writes the result its validate function returns.
 
-An adversary trial (`stage50_validate.adversary.run_adversary_trial`) red-teams the grader as an agent
-loop with two tools: `shell` on a private task machine, started as the engine starts the solver's, and
-`submit`, which grades one candidate (a final reply and the files it names) as a control is graded, on a
-fresh machine. The roster, `ValidationSettings.adversary`, is a tuple of `AdversaryPolicy`, one per
-adversary. Each names an `AdversarySpec(name, brief)`: `name` is unique in the roster and names the
-trials (`<name>-<i>`), and `brief` is the goal the brief states (`adversary.SHORTCUT` is the shortcut search). Neither the round
-nor review branches on a name, so a new adversary is a new spec. A policy sets the trials per round, the
-submissions per attempt (a `submit` past
-them grades nothing), the turns, the sampling and the mode; the round's deadlines, retries and backoff
-apply. A `blackbox` adversary sees the task as the solver does; a `whitebox` one is also shown the
-grader's specification and verifier files, the round's controls with their expected rewards and the
-task's example answers. The brief (`adversary_prompts`) asks for at least `min_probes` shortcut
-candidates and a final `NO_SHORTCUT` or `SHORTCUT:` line, recorded as the trial's claim. An attempt is
-reported with its last passing submission, else its last submission. A verifier failure stays
-ungraded with its original cause and retryability. Its attempt file holds the
-agent's whole rollout, the brief and every submission; an attempt under another brief, such as another
-mode or control set, does not count as done. The round records facts only: whether a passing submission
-is a shortcut is review's judgement.
+The roster, `ValidationSettings.adversary`, is a tuple of `AdversaryPolicy`, one per adversary, each with
+its own trial count, submission budget, turn budget, sampling and minimum number of distinct candidates.
+Each policy names an `AdversarySpec(name, brief)`. `name` is unique in the roster and names the trials
+(`<name>-<i>`); `brief` is the goal sentence of the brief. `stage50_validate.adversary` defines three specs:
+`FALSE_ACCEPT` searches for wrong or incomplete answers that earn full credit, `FALSE_REJECT` for correct,
+complete answers that lose credit, and `SHORTCUT` for accepted answers that skip the task's computation.
+Their text is in `adversary_prompts`. Neither the round nor review branches on a name, so a new adversary
+is a new spec. `blackbox` exposes the solver's task;
+`whitebox` also exposes the grader, reference and controls without clipping their text.
+
+The search uses `shell` on a private task machine and `submit` to replay a candidate's reply and named
+files on a fresh grading machine. It must call `finish_search` with a report containing defects and a summary.
+Each defect identifies tested candidate submissions, explains the issue, and states whether it needs addressing.
+An empty defect list reports no findings; execution and evidence completeness checks still apply.
+Prose alone is incomplete; grading a probe does not
+submit a defect. The spec selects the search objective; every adversary shares this reporting contract.
+
+After checking execution and evidence completeness, review requests repair for submitted defects marked
+as needing addressing. Informational defects do not force repair. Optional second review is a stub with
+access to the full task and submitted candidate evidence; it makes no model calls and does not gate normal
+defect handling. Candidate files are preserved exactly, including binary files.
+Saved searches are bound to the task, grader, brief, search policy (spec included) and search model.
+Interrupted searches retain their partial rollout and submissions. Retryable failures use the existing
+attempt budget; explicitly resuming validation can start a new numbered attempt with additional retry
+allowance. Each retry is a fresh search, not continuation of the previous conversation, and prior attempts
+remain archived. A changed task or search configuration starts distinct validation work.
+No additional independent correct-answer set is generated.
 
 ## Review
 
@@ -712,8 +721,10 @@ row of this table that matches:
 | finding | decision |
 |---------|----------|
 | lowering unavailable, or any solver/control/adversary execution unavailable | `Hold(reasons)` |
+| explicitly configured trial budget exhausted | `Reject(BUDGET)`, recorded by the coordinator as `ABANDONED` |
 | known authored defect or violated control | `Modify(findings)` |
 | missing, inconsistent or non-finite required evidence | `Hold(reasons)` |
+| complete evidence with a submitted defect needing attention | `Modify(findings)` |
 | complete solver evidence inside the configured band | `Accept(IN_BAND)` |
 | complete solver evidence outside the band | `Modify(findings)` |
 
@@ -725,8 +736,7 @@ The solve rate is the solved share of graded solver trials. The inclusive band r
 `BandRules.low` to `BandRules.high`; `accepted` can include only `IN_BAND`. A control violation
 that stopped a round early may request repair, but its partial solver evidence cannot support
 a final decision. The coordinator also checks completeness before accepting a custom review's
-`Accept` or task `Reject`. Shortcut adjudication and independent correct-answer acceptance policy
-remain separate from these execution-completeness checks.
+`Accept` or task `Reject`.
 
 ## Testing
 

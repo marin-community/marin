@@ -53,10 +53,10 @@ The result is read back from the unit files, each outcome through ``trials.attem
 round returns what an uninterrupted one would. The result holds every decision input and no rollout, which
 stays in the attempt files it names: the lowering's status, refusals and backend fallback; per solver
 trial its status, reward and cause, with the solver ``Evidence``'s reward totals and ungraded causes; per
-control its verdict, reward and cause; and per adversary trial its status, cause, claim and every submission with its
-grade status, reward and whether it passed. Which passing submissions are shortcuts is review's judgement, not
-the round's. ``write_validation`` writes it to ``<round_dir>/validation.json``, and ``load_validation`` reads it
-back without the evidence files.
+control its verdict, reward and cause; and per adversary trial its status, cause, report and every submission with its
+grade status, reward and whether it passed. Review requests repair for submitted defects needing addressing
+after checking evidence completeness. ``write_validation`` writes it to ``<round_dir>/validation.json``, and
+``load_validation`` reads it back without the evidence files.
 
 A spec RolloutEngine rejects is ``REJECTED`` and no trial runs. A spec a factory refuses is ``REFUSED`` and its
 trials run, each recording the one ``MACHINE_UNSUPPORTED`` attempt ``run_trial`` records for it.
@@ -89,7 +89,7 @@ from taskforge.stage50_validate.adversary import (
     SUBMISSIONS_DIR,
     AdversaryMode,
     AdversaryPolicy,
-    Claim,
+    SearchReport,
     adversary_brief,
     adversary_record,
     run_adversary_trial,
@@ -251,14 +251,15 @@ class SubmissionResult:
 @dataclass(frozen=True)
 class AdversaryResult:
     """An adversary trial's final attempt: ``name`` is its ``AdversarySpec``'s, ``cause`` is set when it is ungraded,
-    and ``claim`` is the adversary's own verdict. ``attempt_file`` is relative to the round directory."""
+    and ``report`` is the adversary's own ``finish_search`` report. ``attempt_file`` is relative to the round
+    directory."""
 
     trial: str
     name: str
     mode: AdversaryMode
     status: TrialStatus
     cause: Cause | None
-    claim: Claim
+    report: SearchReport | None
     submissions: tuple[SubmissionResult, ...]
     attempt_file: str
 
@@ -517,7 +518,8 @@ async def _adversary_unit(
     brief = adversary_brief(spec, control_set, policy)
 
     def under_brief(payload: bytes) -> bool:
-        return adversary_record(payload).brief == brief
+        record = adversary_record(payload)
+        return record.brief == brief and record.policy_digest == digest(policy) and record.model == model.model
 
     graded_submissions = _numbered_dirs(evidence_dir / str(TrialKind.ADVERSARY) / trial / SUBMISSIONS_DIR)
     floor = graded_submissions[-1] + 1 if graded_submissions else 0
@@ -687,7 +689,7 @@ def _adversary_result(context: ValidationContext, evidence_dir: Path, trial: str
         record.mode,
         graded.status,
         graded.cause,
-        record.claim,
+        record.report,
         tuple(submissions),
         _relative(context, path),
     )

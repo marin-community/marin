@@ -8,7 +8,7 @@ Unavailable execution takes precedence over known task defects and preserves the
 Known authored defects and violated controls produce ``Modify``. Complete solver evidence in an accepted
 band produces ``Accept``; another band requests repair. Exhausted retry/revision
 budgets abandon the workpiece.
-The adversary's shortcut claim still needs separate adjudication; availability is checked here.
+Submitted defects needing addressing request repair, whichever adversary submitted them; unfinished searches hold.
 """
 
 import math
@@ -96,6 +96,17 @@ def evidence_gaps(result: ValidationResult) -> tuple[str, ...]:
     for trial in result.adversary:
         if trial.status is not TrialStatus.GRADED or trial.cause is not None or not trial.submissions:
             gaps.append(f"adversary trial {trial.trial} is incomplete")
+        if trial.report is None:
+            gaps.append(f"adversary trial {trial.trial} has no completed search report")
+        else:
+            known = {submission.ordinal for submission in trial.submissions}
+            for defect in trial.report.defects:
+                if (
+                    not defect.explanation.strip()
+                    or not defect.submission_ids
+                    or not set(defect.submission_ids) <= known
+                ):
+                    gaps.append(f"adversary trial {trial.trial} has incomplete defect evidence")
         for submission in trial.submissions:
             if (
                 submission.status not in GRADED_STATUSES
@@ -127,11 +138,15 @@ async def default_review(result: ValidationResult, *, band: BandRules) -> Decisi
             ungraded.update(
                 Cause.GRADER_INFRA for submission in trial.submissions if submission.status not in GRADED_STATUSES
             )
-    if Cause.BUDGET_EXHAUSTED in ungraded:
-        return Reject(RejectKind.BUDGET, ("an explicitly configured trial budget was exhausted",))
-    unavailable = {cause: count for cause, count in ungraded.items() if cause not in TASK_DEFECTS}
+    unavailable = {
+        cause: count
+        for cause, count in ungraded.items()
+        if cause not in TASK_DEFECTS and cause is not Cause.BUDGET_EXHAUSTED
+    }
     if unavailable:
         return Hold(tuple(f"{count} ungraded trial(s): {cause}" for cause, count in sorted(unavailable.items())))
+    if Cause.BUDGET_EXHAUSTED in ungraded:
+        return Reject(RejectKind.BUDGET, ("an explicitly configured trial budget was exhausted",))
     findings = tuple(_finding(control) for control in result.controls if control.verdict is ControlVerdict.VIOLATED)
     if findings:
         return Modify(findings)
@@ -142,6 +157,15 @@ async def default_review(result: ValidationResult, *, band: BandRules) -> Decisi
     gaps = evidence_gaps(result)
     if gaps:
         return Hold(gaps)
+    findings = tuple(
+        f"Defect in {trial.trial}, submissions {defect.submission_ids}: {defect.explanation} ({trial.attempt_file})"
+        for trial in result.adversary
+        if trial.report is not None
+        for defect in trial.report.defects
+        if defect.needs_addressing
+    )
+    if findings:
+        return Modify(findings)
     stats = solver.stats
     place = band.place(stats.solved / stats.graded)
     if place in band.accepted:
