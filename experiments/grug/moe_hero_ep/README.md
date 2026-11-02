@@ -348,6 +348,26 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
 The default batch, 64 at 65K, keeps the production local batch of 1 sequence per GPU. The trace
 does not include the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
+### Daily hero canary
+
+[`marin-canary-hero-gb200.yaml`](../../../.github/workflows/marin-canary-hero-gb200.yaml) runs the
+hero config from `main` daily on one rack through `launch_diagnostics.py`. It restores the pinned
+permanent checkpoint `step-372000` and trains 35 updates on the production mixture, so every run
+sees the same weights and batches. One dropless eval runs after the last update; `--eval-every`
+equals `--num-steps` for that reason. A run holds the rack for about 20 minutes.
+
+The workflow submits at 11:00 UTC at `batch` priority, the band of the hero-completions sampler,
+so neither preempts the other, and does not wait for the run. The next day's workflow settles it
+with [`hero_canary_settle.py`](../../../scripts/ci/hero_canary_settle.py): a canary still waiting
+for a rack is cancelled and that day is skipped; a canary still training is left running and that
+day's submission is skipped; a finished canary is scored, and a failed one alerts.
+
+[`hero_canary_report.py`](../../../scripts/ci/hero_canary_report.py) drops 4 warmup steps and
+reports median step time, MFU and tokens/s, peak HBM, drop fraction, final train loss and dropless
+eval loss against the previous canary from the same checkpoint. The 30-step median is within about
+±0.5%, so the report warns on step-time changes beyond 1.5%. Re-pin `HERO_CANARY_CHECKPOINT` when the
+checkpoint layout or context length changes; the next run starts a new baseline.
+
 ### Profile-guided scheduling
 
 With collective overlap limited to 1, where XLA's latency-hiding scheduler places each collective
