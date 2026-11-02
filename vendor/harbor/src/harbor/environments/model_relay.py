@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only model capabilities shared by Shellbox environment adapters."""
+"""Relay task-local model requests to a fixed, host-authenticated endpoint."""
 
 import json
 from collections.abc import Iterator, Mapping
@@ -22,7 +22,7 @@ _HOST_MODEL_AUTH: ContextVar[Mapping[str, str]] = ContextVar(
 
 @contextmanager
 def host_model_authentication(values: Mapping[str, str]) -> Iterator[None]:
-    """Grant upstream authentication to host handlers without serializing it."""
+    """Bind endpoint-to-API-key credentials for relays constructed in this context."""
     token = _HOST_MODEL_AUTH.set(dict(values))
     try:
         yield
@@ -31,7 +31,10 @@ def host_model_authentication(values: Mapping[str, str]) -> Iterator[None]:
 
 
 class ModelRelay:
-    """A fixed OpenAI-compatible endpoint and model, authenticated only on the host."""
+    """Relay bounded chat, text Responses and tokenization requests using host credentials.
+
+    Streaming chat responses are buffered before SSE encoding.
+    """
 
     def __init__(self, endpoint: str, model: str):
         self.endpoint = endpoint

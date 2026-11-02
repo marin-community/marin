@@ -25,15 +25,15 @@ from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-im
     parse_registry_spec,
 )
 from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
+from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
+    COMPOSE_FILENAMES,
+    validate_prepared_task,
+)
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
     CANDIDATE_MODEL_RELAY_PORT,
     MODEL_RELAY_PORT,
     host_model_authentication,
-)
-from harbor.environments.prepared_compose import (  # pyrefly: ignore[missing-import]
-    COMPOSE_FILENAMES,
-    validate_prepared_task,
 )
 from harbor.environments.resource_policies import validate_local_resources  # pyrefly: ignore[missing-import]
 from harbor.environments.runtime import DAYTONA_API_URL, host_backend_credentials  # pyrefly: ignore[missing-import]

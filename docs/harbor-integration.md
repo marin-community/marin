@@ -264,7 +264,8 @@ images or install a nested container runtime.
 Shellbox adapters reclaim environments at completion. `--no-delete` and
 `environment.delete=false` are rejected before backend allocation.
 
-The agent makes model calls in the trusted Harbor process. Shellbox runs task commands and
+Host-side agents such as Terminus make model calls in the trusted Harbor process.
+Installed agents use the loopback relay described below. Shellbox runs task commands and
 verification in persistent bubblewrap containers. Members share private loopback and retain
 separate filesystems and PID namespaces. External traffic is denied, including DNS.
 Provider credentials stay in the trusted harness.
@@ -281,9 +282,8 @@ Unknown Compose fields, published host ports, host networking, extra Compose fil
 between sidecars fail explicitly.
 
 Containers share only the group's loopback network. External egress remains denied. Tau3's user model
-and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. A trusted host relay forwards only
-chat completions and tokenization to the selected model, fixes its model name, and rejects redirects;
-the upstream endpoint capability and provider authentication stay in the host process.
+and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. The relay fixes the upstream
+model name and keeps provider authentication in the host process. Its supported routes are listed below.
 Tau3 requires an explicit `--judge-model` in the shared launch command. That hosted model serves
 both the simulated user and verifier assertions; the candidate agent keeps its own model endpoint.
 Without a hosted model, the adapter rejects the task before allocating its container group. A direct
@@ -409,19 +409,6 @@ a real runtime trajectory and returned NL assertion results. A model reward of
 zero is a scored outcome; an infrastructure error or skipped evaluator fails
 the smoke run. Task images contain the same MCP client and terminal dependencies
 used by the candidate. No oracle solution is uploaded.
-
-To inventory a local task snapshot without executing it:
-
-```bash
-uv run python -m experiments.evaluation.audit_harbor_tasks path/to/tasks \
-  --source organization/dataset --revision SNAPSHOT_COMMIT > inventory.json
-```
-
-The report counts task manifests and Compose services, lists fields requiring review, and records
-locations of Docker command references. Source and revision are supplied by the caller. A Compose
-file can be a single-container wrapper; a command reference can be an unused helper. Neither
-establishes a requirement for nested Docker. The inventory does not certify image contents,
-external-access requirements or compatibility with offline execution.
 
 ## Sandbox environment isolation
 

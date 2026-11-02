@@ -12,7 +12,7 @@ from typing import Any
 
 RECIPE = Path(__file__).parent
 DEFAULT_REPOSITORY = "ghcr.io/marin-community/rollout-images"
-LOCKS = ("package-lock.json", "mcp.lock", "acp.lock")
+LOCKS = ("package-lock.json", "requirements.lock")
 
 
 def dependency_identity(base_image: str | None = None) -> tuple[dict[str, Any], str]:

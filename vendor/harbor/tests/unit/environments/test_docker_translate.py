@@ -8,7 +8,7 @@ import json
 import pytest
 import yaml
 
-from harbor.environments.prepared_compose import import_prepared_task
+from harbor.environments.docker_translate import import_prepared_task
 from harbor.models.task.config import EnvironmentConfig, MCPServerConfig
 from harbor.utils.env import task_environment
 from shellbox.machine import NetworkPolicy

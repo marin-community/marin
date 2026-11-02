@@ -16,12 +16,12 @@ RUN cd /opt/harbor-pi && npm ci --omit=dev --no-audit --no-fund \
     && npm cache clean --force
 RUN python3 -c 'import json; from pathlib import Path; path = Path("/root/.pi/agent/settings.json"); settings = json.loads(path.read_text()) if path.exists() else {}; settings.setdefault("extensions", []).append("/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"); path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(settings))'
 
-COPY mcp.lock acp.lock /opt/harbor-deps/
-RUN python3 -m pip install --no-cache-dir --require-hashes -r /opt/harbor-deps/mcp.lock \
+COPY requirements.lock /opt/harbor-deps/
+RUN python3 -m pip install --no-cache-dir --require-hashes -r /opt/harbor-deps/requirements.lock \
     && python3 -m venv /opt/harbor-acp-venv \
-    && /opt/harbor-acp-venv/bin/pip install --no-cache-dir --require-hashes -r /opt/harbor-deps/acp.lock \
-    && python3 -c 'import mcp' \
-    && /opt/harbor-acp-venv/bin/python -c 'import acp' \
+    && /opt/harbor-acp-venv/bin/pip install --no-cache-dir --require-hashes -r /opt/harbor-deps/requirements.lock \
+    && python3 -c 'import acp, mcp' \
+    && /opt/harbor-acp-venv/bin/python -c 'import acp, mcp' \
     && node --version && pi --version && acpx --version
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"

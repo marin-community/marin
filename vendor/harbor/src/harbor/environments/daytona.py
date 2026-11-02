@@ -20,7 +20,7 @@ from harbor.environments.capabilities import (
     EnvironmentCapabilities,
     EnvironmentResourceCapabilities,
 )
-from harbor.environments.prepared_compose import COMPOSE_FILENAMES
+from harbor.environments.docker_translate import COMPOSE_FILENAMES
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.runtime import daytona_connection

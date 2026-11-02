@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Translate prepared Harbor Compose tasks into named Shellbox containers."""
+"""Translate Docker image and Compose configuration into Shellbox containers."""
 
 import json
 import re
@@ -39,7 +39,7 @@ _DURATION = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)")
 _LOG_VOLUME = "${HOST_AGENT_LOGS_PATH}:${ENV_AGENT_LOGS_PATH}"
 
 
-class PreparedImage(BaseModel):
+class PreparedImageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     image: str
     workdir: str
@@ -116,20 +116,20 @@ def _environment(value: dict[str, str | int | float] | list[str]) -> dict[str, s
     return resolve_env_vars(values)
 
 
-def _prepared_images(environment_dir: Path) -> dict[str, PreparedImage]:
+def _prepared_images(environment_dir: Path) -> dict[str, PreparedImageConfig]:
     path = environment_dir / PREPARED_IMAGES_FILE
     if not path.exists():
         return {}
     document = json.loads(path.read_text())
     if not isinstance(document, dict):
         raise ValueError("shellbox-images.json must map service names to prepared image references and workdirs")
-    return {name: PreparedImage.model_validate(value) for name, value in document.items()}
+    return {name: PreparedImageConfig.model_validate(value) for name, value in document.items()}
 
 
 def _machine(
     name: str,
     service: ComposeService,
-    prepared: Mapping[str, PreparedImage],
+    prepared: Mapping[str, PreparedImageConfig],
     task: EnvironmentConfig,
 ) -> MachineSpec:
     image = prepared.get(name)

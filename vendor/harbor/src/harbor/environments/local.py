@@ -15,7 +15,7 @@ from harbor.environments.base import BASE_ENVIRONMENT_ARGUMENTS, BaseEnvironment
 from harbor.environments.capabilities import EnvironmentCapabilities, EnvironmentResourceCapabilities
 from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.model_relay import CANDIDATE_MODEL_RELAY_PORT, MODEL_RELAY_PORT, ModelRelay
-from harbor.environments.prepared_compose import import_prepared_task, validate_prepared_task
+from harbor.environments.docker_translate import import_prepared_task, validate_prepared_task
 from harbor.environments.resource_policies import validate_local_resources
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.config import ResourceMode

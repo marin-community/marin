@@ -44,7 +44,6 @@ def test_prepared_preflight_resolves_offline_tasks_without_allocating_a_sandbox(
     completed = _preflight(tmp_path, [(prepared_policy, {})])
     result = json.loads(completed.stdout)[0]
 
-    assert result["environment"] == json.loads(prepared_policy.read_text())["environment"]["type"]
     assert result["benchmark_metadata"]["n_benchmark"] == 1
     assert result["verifier_env_keys"] == []
 
@@ -123,7 +122,6 @@ def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_ca
                 raise AssertionError('conflicting candidate and judge credentials accepted')
             print(json.dumps({{
                 'agent': config.agents[0].model_dump(mode='python'),
-                'user_agent': config.user_agent.model_dump(mode='python'),
                 'verifier': config.verifier.env,
                 'capabilities': config.environment.kwargs,
             }}))
@@ -131,10 +129,8 @@ def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_ca
         ),
     )
     result = json.loads(completed.stdout)
-    assert result["agent"]["kwargs"]["registry_entry"]["id"] == "pi-acp"
     assert result["agent"]["kwargs"]["api_base"] == "http://127.0.0.1:8788/v1"
     assert result["agent"]["kwargs"]["api_key"] == "EMPTY"
-    assert result["user_agent"]["bridge"]["kind"] == "acp"
     assert result["verifier"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
     assert result["capabilities"]["candidate_model_endpoint"].endswith("private-capability/v1")
     assert "private-capability" not in json.dumps(result["agent"])

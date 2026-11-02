@@ -1,3 +1,7 @@
+agent-client-protocol==0.12.1 \
+    --hash=sha256:9963ccb590ed96d7dc542c9c023e90676fc76b1c6562e21a9ee112f4fbcb0095 \
+    --hash=sha256:aaf3cc301ed87d9e2c4ccb91adfe1cd58784355f6ce7e513f50e7ca2391862ef
+    # via -r requirements.in
 annotated-types==0.8.0 \
     --hash=sha256:13b2beaad985e05e2d6407ee4c4f35590b11f8d693a258a561055cac8f64cab7 \
     --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
@@ -226,7 +230,7 @@ jsonschema-specifications==2025.9.1 \
 mcp==1.25.0 \
     --hash=sha256:56310361ebf0364e2d438e5b45f7668cbb124e158bb358333cd06e49e83a6802 \
     --hash=sha256:b37c38144a666add0862614cc79ec276e97d72aa8ca26d622818d4e278b9721a
-    # via -r experiments/evaluation/images/tau3/mcp.in
+    # via -r requirements.in
 pycparser==3.12 \
     --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e \
     --hash=sha256:f03387877eab82ce01bbdfd0ba7252ee55a90b1c708d5129e2ce915475cf1db6
@@ -235,6 +239,7 @@ pydantic==2.14.2 \
     --hash=sha256:7efbf7507b937931cd32a5755acb00ea1cf5ccb1d4e8067a5850d5069e382118 \
     --hash=sha256:fb7b2db6cefe8414dd612edeede49c4c433acb0432b0f92b95024e45f66c505d
     # via
+    #   agent-client-protocol
     #   mcp
     #   pydantic-settings
 pydantic-core==2.50.2 \

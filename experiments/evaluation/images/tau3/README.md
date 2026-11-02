@@ -10,10 +10,10 @@ existing server and task configuration.
 [`dependencies.json`](dependencies.json) pins the parent digest, Node archive
 and checksum, platform, runtime digests and recipe revision.
 [`package-lock.json`](package-lock.json) locks Pi, pi-acp, acpx, the Pi MCP extension and their npm
-dependencies. [`mcp.lock`](mcp.lock) and [`acp.lock`](acp.lock) lock the Python
-dependencies with hashes. The image exposes `node`, `pi`, `pi-acp` and `acpx` on
-`PATH`, MCP to `python3`, and the ACP SDK through
-`/opt/harbor-acp-venv/bin/python`.
+dependencies. [`requirements.lock`](requirements.lock) locks the Python dependencies
+with hashes. Both `python3` and `/opt/harbor-acp-venv/bin/python` install that same
+lock and provide MCP and the ACP SDK. The image exposes `node`, `pi`, `pi-acp` and
+`acpx` on `PATH`.
 Pi loads the installed MCP extension from an absolute path in
 `/root/.pi/agent/settings.json`; Harbor stages the task's MCP servers separately.
 The extension is pinned to `pi-mcp-extension@1.10.0`; its SDK peers use
@@ -54,16 +54,14 @@ runtime references stay as declared in the manifest.
 
 ## Update dependencies
 
-Edit `package.json`, `mcp.in`, `acp.in` or `dependencies.json`, then regenerate the
+Edit `package.json`, `requirements.in` or `dependencies.json`, then regenerate the
 affected locks:
 
 ```bash
 cd experiments/evaluation/images/tau3
 npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 uv pip compile --generate-hashes --no-header --python-version 3.12 \
-  --python-platform x86_64-unknown-linux-gnu mcp.in --output-file mcp.lock
-uv pip compile --generate-hashes --no-header --python-version 3.12 \
-  --python-platform x86_64-unknown-linux-gnu acp.in --output-file acp.lock
+  --python-platform x86_64-unknown-linux-gnu requirements.in --output-file requirements.lock
 ```
 
 Bump `recipe_revision` when changing Dockerfile behavior. The builder hashes
