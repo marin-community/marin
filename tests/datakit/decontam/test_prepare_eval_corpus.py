@@ -16,7 +16,9 @@ import types
 import zipfile
 from dataclasses import replace
 
+import pyarrow.parquet as pq
 import pytest
+from rigging.timing import ExponentialBackoff
 
 from experiments.datakit.decontam import prepare_eval_corpus
 from experiments.datakit.decontam.prepare_eval_corpus import (
@@ -315,6 +317,9 @@ def _use_fake_lm_eval(monkeypatch, tmp_path, get_task_dict, task_names: list[str
     monkeypatch.setattr(prepare_eval_corpus, "patch_hf_dataset_loading", lambda: None)
     monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: task_names)
     monkeypatch.setattr(prepare_eval_corpus, "REQUIRED_LMH_TASKS", required)
+    monkeypatch.setattr(
+        prepare_eval_corpus, "LOAD_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0)
+    )
 
 
 def test_lmh_artifacts_are_stored_below_the_versioned_corpus_root(tmp_path, monkeypatch):
@@ -363,6 +368,97 @@ def test_lmh_required_task_failure_does_not_seal_manifest(tmp_path, monkeypatch,
         prepare_eval_corpus._prepare_lmh()
 
     assert not (tmp_path / prepare_eval_corpus.EVALS_RELATIVE / prepare_eval_corpus.LMH_MANIFEST_RELATIVE).exists()
+
+
+def test_lmh_required_task_load_is_retried(tmp_path, monkeypatch):
+    attempts = []
+
+    def flaky_get_task_dict(names: list[str]) -> dict:
+        attempts.append(names)
+        if len(attempts) == 1:
+            raise ConnectionError("Server disconnected without sending a response.")
+        return {"required-task": _fake_task([{"question": "What is two plus two?", "answer": "4"}])}
+
+    _use_fake_lm_eval(monkeypatch, tmp_path, flaky_get_task_dict, ["required-task"], required=("required-task",))
+
+    manifest = prepare_eval_corpus._prepare_lmh()
+
+    assert len(attempts) == 2
+    assert manifest["required_tasks"] == {"required-task": ["required-task"]}
+
+
+def test_lmh_optional_task_load_is_not_retried(tmp_path, monkeypatch):
+    attempts = []
+
+    def failing_get_task_dict(names: list[str]) -> dict:
+        attempts.append(names)
+        raise ConnectionError("Server disconnected without sending a response.")
+
+    _use_fake_lm_eval(monkeypatch, tmp_path, failing_get_task_dict, ["optional-task"], required=())
+
+    manifest = prepare_eval_corpus._prepare_lmh()
+
+    assert len(attempts) == 1
+    assert manifest["failed"][0]["task"] == "optional-task"
+
+
+def _use_fake_uncheatable(monkeypatch, tmp_path, dumps: dict[str, list[str]], expected: dict[str, int]) -> None:
+    monkeypatch.setattr(prepare_eval_corpus, "_output_root", lambda: str(tmp_path))
+    monkeypatch.setattr(prepare_eval_corpus, "UNCHEATABLE_RECORDS", expected)
+    urls = {prepare_eval_corpus._uncheatable_url(subset): texts for subset, texts in dumps.items()}
+    monkeypatch.setattr(prepare_eval_corpus, "_download", lambda url: json.dumps(urls[url]).encode())
+
+
+def test_uncheatable_suite_writes_each_subset_and_seals_its_manifest(tmp_path, monkeypatch):
+    _use_fake_uncheatable(
+        monkeypatch, tmp_path, {"bbc_news": ["First article.", "Second article."]}, expected={"bbc_news": 2}
+    )
+
+    manifest = prepare_eval_corpus._prepare_uncheatable()
+
+    artifact = tmp_path / "uncheatable" / "bbc_news" / "test.parquet"
+    assert pq.read_table(artifact).to_pylist() == [
+        {"id": "uncheatable-bbc_news-0", "text": "First article."},
+        {"id": "uncheatable-bbc_news-1", "text": "Second article."},
+    ]
+    assert manifest["status"] == "complete"
+    assert manifest["required"] is True
+    assert [entry["name"] for entry in manifest["benchmarks"]] == ["Uncheatable Eval bbc_news"]
+
+
+def test_uncheatable_record_count_mismatch_does_not_seal_manifest(tmp_path, monkeypatch):
+    _use_fake_uncheatable(monkeypatch, tmp_path, {"bbc_news": ["Only article."]}, expected={"bbc_news": 2})
+
+    with pytest.raises(ValueError, match="Uncheatable Eval bbc_news: wrote 1 records, expected 2"):
+        prepare_eval_corpus._prepare_uncheatable()
+
+    manifest = json.loads((tmp_path / prepare_eval_corpus.UNCHEATABLE_MANIFEST_RELATIVE).read_text())
+    assert manifest["status"] == "building"
+
+
+def test_uncheatable_dump_must_be_a_list_of_strings(tmp_path, monkeypatch):
+    _use_fake_uncheatable(monkeypatch, tmp_path, {"bbc_news": [{"text": "An article."}]}, expected={"bbc_news": 1})
+
+    with pytest.raises(ValueError, match="expected a JSON list of strings"):
+        prepare_eval_corpus._prepare_uncheatable()
+
+
+def test_download_retries_transient_network_errors(monkeypatch):
+    calls = []
+
+    def flaky_urlopen(url):
+        calls.append(url)
+        if len(calls) == 1:
+            raise ConnectionResetError("connection reset")
+        return io.BytesIO(b"payload")
+
+    monkeypatch.setattr(prepare_eval_corpus.urllib.request, "urlopen", flaky_urlopen)
+    monkeypatch.setattr(
+        prepare_eval_corpus, "LOAD_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0)
+    )
+
+    assert prepare_eval_corpus._download("https://example.com/data.json") == b"payload"
+    assert len(calls) == 2
 
 
 def test_lmh_import_failure_does_not_seal_manifest(tmp_path, monkeypatch):
