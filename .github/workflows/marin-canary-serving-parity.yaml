@@ -14,13 +14,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  arms:
+  score-check:
     runs-on: ubuntu-latest
     timeout-minutes: 350
-    strategy:
-      fail-fast: false
-      matrix:
-        hardware: [h100, v4]
+    outputs:
+      capacity_alert: ${{ steps.history.outputs.alert }}
     env:
       RUN_ID: serving-score-${{ github.run_id }}-${{ github.run_attempt }}
       QUEUE_SECONDS: ${{ github.event_name == 'schedule' && '16200' || '3600' }}
@@ -53,55 +51,22 @@ jobs:
           printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
-      - name: Submit and collect
+      - name: Run score check
+        id: check
         shell: bash -l {0}
-        env:
-          HARDWARE: ${{ matrix.hardware }}
         run: |
-          set -euo pipefail
-          if [[ "$HARDWARE" == h100 ]]; then
-            WEIGHTS=open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02
-            OUTPUT="s3://marin-us-east-02a/ci/serving-score/$RUN_ID/h100"
-          else
-            WEIGHTS=gs://marin-us-central2/scratch/karan/rsi-merge/parents/S--open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02@50fe2f488aee/
-            OUTPUT="gs://marin-us-central2/ci/serving-score/$RUN_ID/v4"
-          fi
-          .venv/bin/python -m experiments.evaluation.serving_parity.launch \
-            --hardware "$HARDWARE" --name "$RUN_ID-$HARDWARE" \
-            --weights "$WEIGHTS" --output "$OUTPUT" --submit \
-            --scheduling-timeout "$QUEUE_SECONDS" --job-id-file job-id.txt
-          .venv/bin/python -m experiments.evaluation.serving_parity.nightly wait \
-            --job-id-file job-id.txt --hardware "$HARDWARE" --output "$OUTPUT" \
-            --timeout "$((QUEUE_SECONDS + 3720))" --report "$HARDWARE.json"
-      - name: Upload outcome
+          .venv/bin/python -m experiments.evaluation.serving_parity.nightly \
+            --run-id "$RUN_ID" --scheduling-timeout "$QUEUE_SECONDS"
+      - name: Upload results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: serving-score-${{ matrix.hardware }}
-          path: ${{ matrix.hardware }}.json
+          name: serving-score
+          path: |
+            h100.json
+            v4.json
+            *.job
           if-no-files-found: warn
-
-  score-check:
-    needs: arms
-    if: always()
-    runs-on: ubuntu-latest
-    outputs:
-      capacity_alert: ${{ steps.history.outputs.alert }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@v7
-      - run: uv sync --all-packages --extra=cpu --no-default-groups
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: serving-score-*
-          merge-multiple: true
-          path: reports
-      - name: Check scores and coverage
-        id: check
-        run: .venv/bin/python -m experiments.evaluation.serving_parity.nightly check reports
       - name: No capacity
         if: steps.check.outputs.outcome == 'no_capacity'
         run: echo '::warning::No capacity; no paired score this run.'
@@ -129,10 +94,9 @@ jobs:
             if (streak) await core.summary.addRaw('No capacity for three consecutive scheduled runs.').write();
 
   notify-slack:
-    needs: [arms, score-check]
+    needs: score-check
     if: |
       always() && github.event_name == 'schedule' && (
-        needs.arms.result == 'failure' || needs.arms.result == 'cancelled' ||
         needs.score-check.result == 'failure' || needs.score-check.result == 'cancelled' ||
         needs.score-check.outputs.capacity_alert == 'true'
       )
