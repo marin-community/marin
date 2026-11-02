@@ -27,10 +27,12 @@ export XDG_CACHE_HOME=$JAX_AITER_HOME/cache
 export JAX_AITER_HOME
 
 # --cleanenv keeps the host's ROCm module environment out of the container; forward only the variables we use.
-forward=()
+# APPTAINERENV_* passes values verbatim; --env splits a value with more than one '=' on commas, which breaks
+# XLA_FLAGS such as --xla_gpu_enable_command_buffer=FUSION,CUBLAS.
 while IFS='=' read -r name _; do
-    forward+=(--env "$name=${!name}")
+    export "APPTAINERENV_$name=${!name}"
 done < <(env | grep -E '^(PYTHONPATH|SLURM_|HSA_|XLA_|JAX_|JA_|RAGGED_DOT_|PYTHONUNBUFFERED|XDG_CACHE_HOME|UV_CACHE_DIR|HIP_|RCCL_|NCCL_)')
+export APPTAINERENV_PATH=$JAX_AITER_HOME/venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 binds=(--bind "$JAX_AITER_HOME")
 if [ -n "$UV_CACHE_DIR" ]; then
@@ -65,7 +67,5 @@ if [ -n "$host_verbs" ]; then
     cmd=(bash -c "export LD_LIBRARY_PATH=$rdma_lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}; exec \"\$@\"" _ "$@")
 fi
 
-apptainer exec --cleanenv --rocm "${binds[@]}" "${forward[@]}" \
-    --env "PATH=$JAX_AITER_HOME/venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-    "$SIF" "${cmd[@]}" 2>&1 | grep --line-buffered -v -E "rocm_pcie_bandwidth|rocm_executor"
+apptainer exec --cleanenv --rocm "${binds[@]}" "$SIF" "${cmd[@]}" 2>&1 | grep --line-buffered -v -E "rocm_pcie_bandwidth|rocm_executor"
 exit "${PIPESTATUS[0]}"
