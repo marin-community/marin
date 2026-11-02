@@ -85,11 +85,18 @@ def training_recipe(steps: int) -> dict:
         dump_eval_results=True,
     )
     trainer["algorithm"].update(
+        batch_invariant=True,
         advantage_estimator="rloo_n",
         group_advantage_min_size=2,
         advantage_batch_normalize=False,
         rloo_n_filter_zero_reward_groups=True,
         use_entropy_loss=False,
+    )
+    # Arm D's reproducible evaluation profile: batch-invariant Triton attention without prefix reuse.
+    config["generator"].update(
+        eval_sampling_params={"seed": SEED},
+        vllm_attention_backend="TRITON_ATTN",
+        enable_prefix_caching=False,
     )
     trainer["policy"]["optimizer_config"].update(
         lr=1e-6,
