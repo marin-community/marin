@@ -32,6 +32,15 @@ records use `rigging.provenance` to record the checkout and launch context
 alongside the resolved configuration. Use a fresh RL artifact version after
 runtime changes unless checkpoint compatibility has been established.
 
+With `trainer.dump_eval_results`, completed eval rollouts are appended locally.
+SkyRL periodically backs up that scored prefix to `dumped_evals/<session>/partial-0.jsonl`
+and `partial-1.jsonl`. Each JSONL starts with a `partial_evaluation` record containing
+an attempt ID and completed/expected rollout counts. Use the valid snapshot with
+the latest `snapshot_at` for an attempt; do not combine rows from different
+attempts. Backup failures are logged and do not stop evaluation. The per-dataset
+JSONL and aggregate metrics are written after the full evaluation finishes.
+Partial snapshots are not full benchmark scores.
+
 The runtime supports Megatron training. Marin's curriculum arms use Megatron
 for both Qwen and Snowball.
 
