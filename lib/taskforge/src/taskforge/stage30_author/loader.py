@@ -12,29 +12,17 @@ the GLM author also sends it back within its structured call.
    the steps), ``@rl_env_build_step`` steps, the ``@rl_env_build_sink`` sink and, last,
    ``PROGRAM = rl_env_build_program(..., sink=...)``.
    A step reads whatever else it needs from its inputs, its own body or the build SDK
-   (``taskforge.stage40_build_with_program.sdk`` and its sibling modules), which ``SDK_VERSION`` covers. The
-   pass also refuses a name the program reads without binding it anywhere, by an import, a
-   definition, an assignment or a parameter, unless ``SAFE_BUILTINS`` holds it. A missing import
-   or a misspelt name would otherwise fail in the middle of a build, after the steps before it
-   spent their model calls. The refusal names the closest name, if one is close, out of the
-   program's bound names and the caller's ``SdkExports``, the names the allowed modules define; for
-   an SDK name it also gives the modules to import it from. The check ignores scope, so it misses
-   a name bound in one function and read in another. An attribute the program reads from a module
-   it imports, such as ``draft.GRADER_TIMEOUT``, is checked against that module the same way,
-   with the suggestion naming the module that defines the attribute.
+   (``taskforge.stage40_build_with_program.sdk`` and its sibling modules), which ``SDK_VERSION`` covers.
+   ``diagnostics`` then refuses a name or module attribute the program reads without binding it,
+   with the closest name the caller's ``SdkExports`` holds.
 2. It runs the module with imports limited to ``ALLOWED_IMPORTS`` and builtins to
    ``SAFE_BUILTINS``, which keeps a program to the SDK's functions; programs are trusted model
    output in the builder's process, so this is no security boundary. The build SDK belongs to a
    later stage than this module, so the program imports it by name at run time rather than this
-   module importing it, and the build lists the SDK's names for the loader
-   (``stage40_build_with_program.program_sdk.sdk_exports``). Before running the module, the pass
-   registers the source in ``linecache`` under the module's file name, so the step decorator's
-   ``inspect.getsource`` reads each step's text. An import of a name the module lacks gets a
-   suggestion from the ``SdkExports`` as well. The
-   loader looks first among the names the imported module defines, then in the other modules, so
-   a misspelt name comes back with its spelling in that module, and a name imported from the
-   wrong module comes back with the module defining it. The DAG checks
-   of ``rl_env_build_program`` run here and refuse, among others, an input named after no step.
+   module importing it. Before running the module, the pass registers the source in ``linecache``
+   under the module's file name, so the step decorator's ``inspect.getsource`` reads each step's
+   text. The DAG checks of ``rl_env_build_program`` run here and refuse, among others, an input
+   named after no step.
 3. It reads ``PROGRAM`` and requires a step named ``GRADER_STEP`` returning ``GRADER_OUTPUT``, a
    sink made by ``@rl_env_build_sink`` returning ``TaskSpec``, and every step and sink the module
    defines to be part of ``PROGRAM``.
@@ -47,19 +35,25 @@ program, whether refused or interrupted, is unregistered, so the next load of it
 
 import ast
 import builtins
-import difflib
 import functools
 import importlib
 import linecache
 import sys
 import types
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from types import ModuleType
 
-from pydantic import BaseModel
 from taskcompendium.models import TaskSpec
 
 from taskforge.content_hash import sha256_hex
+from taskforge.stage30_author.diagnostics import (
+    SdkExports,
+    check_module_attributes,
+    check_names,
+    import_suggestion,
+    sentence,
+    suggestion,
+)
 from taskforge.stage30_author.program import RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
 
 PROGRAM_NAME = "PROGRAM"
@@ -122,8 +116,6 @@ ALLOWED_IMPORTS = frozenset(
 UNSAFE_BUILTINS = frozenset(
     {"open", "exec", "eval", "compile", "input", "breakpoint", "globals", "locals", "vars", "help", "exit", "quit"}
 )
-RENAMED_SDK_NAMES = {"try_grader": "grade_candidate"}
-"""Former SDK names and the names replacing them. A program using a former name is told its replacement."""
 MODULE_RULE = (
     "An authored program defines only imports, output models (classes), steps (`@rl_env_build_step async def`), "
     "the sink (`@rl_env_build_sink async def ... -> TaskSpec`) and, last, "
@@ -131,18 +123,6 @@ MODULE_RULE = (
     "source and its output model alone, so whatever else a step reads belongs in its body or its inputs, or comes "
     "from an SDK function."
 )
-
-
-class SdkExports(BaseModel, frozen=True):
-    """Each public name the ``ALLOWED_IMPORTS`` modules define, with the modules defining it.
-
-    The loader suggests from these names when a program reads a name it never binds or imports a
-    name its module lacks. The build SDK belongs to a later stage, so this module never imports it:
-    the build lists its names (``stage40_build_with_program.program_sdk.sdk_exports``) and passes
-    them to ``load_program_source``.
-    """
-
-    defining_modules: dict[str, tuple[str, ...]]
 
 
 def _restricted_import(
@@ -156,7 +136,7 @@ def _restricted_import(
     submodules = [f"{name}.{item}" for item in fromlist or ()]
     allowed = name in ALLOWED_IMPORTS or (bool(submodules) and all(module in ALLOWED_IMPORTS for module in submodules))
     if level != 0 or not allowed:
-        refusal = _sentence(f"build programs may not import {name!r}{_suggestion(name, ALLOWED_IMPORTS)}")
+        refusal = sentence(f"build programs may not import {name!r}{suggestion(name, ALLOWED_IMPORTS)}")
         raise ImportError(f"{refusal} Allowed: {sorted(ALLOWED_IMPORTS)}")
     if "." in name and not fromlist:
         raise ImportError(f"use 'from {name} import ...' rather than 'import {name}'")
@@ -166,60 +146,8 @@ def _restricted_import(
     module = importlib.import_module(name)
     for item in fromlist or ():
         if item != "*" and not hasattr(module, item):
-            raise ImportError(f"{name!r} has no name {item!r}{_import_suggestion(item, name, sdk)}")
+            raise ImportError(f"{name!r} has no name {item!r}{import_suggestion(item, name, sdk)}")
     return module
-
-
-def _sentence(text: str) -> str:
-    """``text`` closed as a sentence: unchanged when a suggestion's question mark ends it, else with a period."""
-    return text if text.endswith("?") else f"{text}."
-
-
-def _suggestion(name: str, candidates: Iterable[str]) -> str:
-    """``"; did you mean 'x'?"`` for the closest of ``candidates`` to ``name``, or ``""`` when none is close."""
-    matches = difflib.get_close_matches(name, list(candidates), n=1)
-    return f"; did you mean {matches[0]!r}?" if matches else ""
-
-
-def _name_suggestion(name: str, bound: Iterable[str], sdk: SdkExports) -> str:
-    """``"; did you mean 'x'?"`` for the closest of ``bound`` and the SDK exports to ``name``.
-
-    A former SDK name in ``RENAMED_SDK_NAMES`` gets the name replacing it. An SDK export the
-    program has not bound comes with its modules, as in ``"; did you mean 'research' from
-    taskforge.stage40_build_with_program.sdk?"``. The result is ``""`` when no name is close.
-    """
-    exports = sdk.defining_modules
-    renamed = RENAMED_SDK_NAMES.get(name)
-    if renamed is not None:
-        return f"; did you mean {renamed!r} from {' or '.join(exports[renamed])}?"
-    local = set(bound)
-    matches = difflib.get_close_matches(name, [*local, *exports], n=1)
-    if not matches:
-        return ""
-    match = matches[0]
-    if match in local:
-        return f"; did you mean {match!r}?"
-    return f"; did you mean {match!r} from {' or '.join(exports[match])}?"
-
-
-def _import_suggestion(name: str, module: str, sdk: SdkExports) -> str:
-    """The suggestion for ``from module import name``, looking first among the names ``module`` defines.
-
-    A close name from ``module`` comes first, and an exact name another module defines follows it:
-    ``machine`` imported from ``taskforge.stage40_build_with_program.sandbox_effects`` gets ``build_machine``
-    there, or ``machine`` from ``taskforge.spec.draft``. Without a close name in ``module``, or for
-    a former SDK name, the suggestion is ``_name_suggestion``'s.
-    """
-    if name not in RENAMED_SDK_NAMES:
-        exports = sdk.defining_modules
-        own = sorted(export for export, defining in exports.items() if module in defining)
-        matches = difflib.get_close_matches(name, own, n=1)
-        elsewhere = [defining for defining in exports.get(name, ()) if defining != module]
-        if matches and elsewhere:
-            return f"; did you mean {matches[0]!r} from {module}, or {name!r} from {' or '.join(elsewhere)}?"
-        if matches:
-            return f"; did you mean {matches[0]!r} from {module}?"
-    return _name_suggestion(name, (), sdk)
 
 
 SAFE_BUILTINS = frozenset(name for name in vars(builtins) if name not in UNSAFE_BUILTINS)
@@ -257,8 +185,8 @@ def load_program_source(source: str, sdk: SdkExports) -> RLEnvBuildProgram:
     except SyntaxError as error:
         raise ValueError(f"the program does not parse: {error}") from error
     _check_module_level(tree)
-    _check_names(tree, sdk)
-    _check_module_attributes(tree, sdk)
+    check_names(tree, sdk, safe_builtins=SAFE_BUILTINS, unsafe_builtins=UNSAFE_BUILTINS, module_globals=MODULE_GLOBALS)
+    check_module_attributes(tree, sdk, ALLOWED_IMPORTS)
     filename = f"<{name}>"
     linecache.cache[filename] = (len(source), None, source.splitlines(keepends=True), filename)
     module = types.ModuleType(name)
@@ -338,93 +266,6 @@ def _check_module_level(tree: ast.Module) -> None:
 
 MODULE_GLOBALS = frozenset({"__file__"})
 """Names ``load_program_source`` binds in the module before it runs the program."""
-
-
-def _bound_names(tree: ast.Module) -> set[str]:
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
-            bound.add(node.id)
-        elif isinstance(node, ast.arg):
-            bound.add(node.arg)
-        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            bound.add(node.name)
-        elif isinstance(node, ast.alias):
-            bound.add((node.asname or node.name).split(".")[0])
-        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name is not None:
-            bound.add(node.name)
-        elif isinstance(node, ast.MatchMapping) and node.rest is not None:
-            bound.add(node.rest)
-        elif isinstance(node, ast.Global | ast.Nonlocal):
-            bound.update(node.names)
-        elif isinstance(node, ast.TypeVar | ast.ParamSpec | ast.TypeVarTuple):
-            bound.add(node.name)
-    return bound
-
-
-def _check_names(tree: ast.Module, sdk: SdkExports) -> None:
-    bound = _bound_names(tree)
-    unsafe: set[str] = set()
-    unbound: dict[str, int] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load) or node.id in bound:
-            continue
-        if node.id in UNSAFE_BUILTINS:
-            unsafe.add(node.id)
-        elif node.id not in SAFE_BUILTINS and node.id not in MODULE_GLOBALS:
-            unbound[node.id] = min(node.lineno, unbound.get(node.id, node.lineno))
-    if unsafe:
-        raise ValueError(f"the program uses builtins that do not exist for build programs: {sorted(unsafe)}")
-    if unbound:
-        problems = [
-            f"`{name}` (line {line}){_name_suggestion(name, bound | SAFE_BUILTINS, sdk)}"
-            for name, line in sorted(unbound.items(), key=lambda item: item[1])
-        ]
-        listed = "\n".join(f"- {problem}" for problem in problems)
-        raise ValueError(
-            f"the program reads names that no import, definition, assignment or builtin binds:\n{listed}\n"
-            "Import each SDK name the program uses from its module."
-        )
-
-
-def _imported_modules(tree: ast.Module) -> dict[str, str]:
-    """The allowed modules the program binds as names, by the name: ``{"draft": "taskforge.spec.draft"}``."""
-    modules: dict[str, str] = {}
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            modules.update({alias.asname or alias.name: alias.name for alias in node.names})
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            for alias in node.names:
-                if f"{node.module}.{alias.name}" in ALLOWED_IMPORTS:
-                    modules[alias.asname or alias.name] = f"{node.module}.{alias.name}"
-    return {name: path for name, path in modules.items() if path in ALLOWED_IMPORTS}
-
-
-def _check_module_attributes(tree: ast.Module, sdk: SdkExports) -> None:
-    """Refuse an attribute the program reads from an imported module that does not define it."""
-    modules = _imported_modules(tree)
-    missing: dict[tuple[str, str], int] = {}
-    for node in ast.walk(tree):
-        if (
-            not isinstance(node, ast.Attribute)
-            or not isinstance(node.value, ast.Name)
-            or not isinstance(node.ctx, ast.Load)
-        ):
-            continue
-        path = modules.get(node.value.id)
-        if path is None or hasattr(importlib.import_module(path), node.attr):
-            continue
-        read = (node.value.id, node.attr)
-        missing[read] = min(node.lineno, missing.get(read, node.lineno))
-    if not missing:
-        return
-    problems = [
-        f"`{name}.{attr}` (line {line}): {modules[name]!r} has no name {attr!r}"
-        f"{_import_suggestion(attr, modules[name], sdk)}"
-        for (name, attr), line in sorted(missing.items(), key=lambda item: item[1])
-    ]
-    listed = "\n".join(f"- {_sentence(problem)}" for problem in problems)
-    raise ValueError(f"the program reads attributes that the modules it imports do not define:\n{listed}")
 
 
 def _checked_program(module: ModuleType) -> RLEnvBuildProgram:
