@@ -1,8 +1,10 @@
 # One-update Pi turn-mixture DAgger gate: 1 H100 policy + separate 1 H100 teacher.
 # DO NOT RELAUNCH this managed-teacher topology on cw-us-east-02a as-is: two
-# one-GPU host-networked Ray tasks can pack onto one eight-GPU node and advertise
-# the same node IP. Both 2026-11-01 attempts failed at Ray bootstrap. Require
-# enforced host anti-affinity or use one Ray task plus an external teacher.
+# one-GPU host-networked Ray tasks can share an eight-GPU node. Kubernetes Ray
+# port placeholders are resolved independently per task, not reserved across
+# tasks: the 2026-11-01 retry collided on port 39535. Fix the allocator or
+# guarantee separate hosts; one Ray task plus an external teacher also avoids
+# this cross-task collision. The first attempt's failure remains unisolated.
 # Supply four independently staged task rows and fresh in-region output paths.
 entrypoint: standard
 config_groups:
