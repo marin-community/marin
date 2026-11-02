@@ -178,6 +178,19 @@ def bloom_paths(bloom_dir: str) -> tuple[str, str]:
     )
 
 
+@dataclass(frozen=True)
+class RequiredEvalSuite:
+    """A sealed eval manifest whose benchmarks must all enter the Bloom.
+
+    Args:
+        manifest_path: Manifest that lists the suite's benchmark artifacts.
+        names: Exact benchmark names the manifest must contain.
+    """
+
+    manifest_path: str
+    names: tuple[str, ...]
+
+
 class EvalBloom(BaseModel):
     """Artifact describing a pre-built eval bloom filter + hash index sidecar.
 
@@ -933,9 +946,8 @@ def build_eval_bloom(
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
-    required_eval_manifest_path: str | None = None,
+    required_eval_suites: tuple[RequiredEvalSuite, ...] = (),
     required_eval_corpus_version: str | None = None,
-    required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
     best_effort_required_tasks: tuple[str, ...] = (),
@@ -969,13 +981,12 @@ def build_eval_bloom(
         exclude_eval_dirs: Eval task directory names to skip while walking
             ``eval_data_sources`` (see :func:`_discover_eval_files`). Excludes
             those tasks from the bloom without regenerating the eval corpus.
-        required_eval_manifest_path: Optional manifest that must report a
-            complete required eval suite before Bloom creation starts. When
-            set, only the exact artifacts in this manifest enter the Bloom.
-        required_eval_corpus_version: Version that the required manifest must
-            report. Set this with ``required_eval_manifest_path``.
-        required_eval_names: Exact benchmark names that the required manifest
-            must contain.
+        required_eval_suites: Manifests that must each report a complete
+            required eval suite before Bloom creation starts. When set, only
+            the exact artifacts in these manifests (and the best-effort
+            manifest) enter the Bloom.
+        required_eval_corpus_version: Version that every required manifest
+            must report. Set this with ``required_eval_suites``.
         best_effort_eval_manifest_path: Optional manifest with the exact
             best-effort artifacts to include. Artifacts must be below the
             manifest directory.
@@ -994,17 +1005,21 @@ def build_eval_bloom(
     eval_paths = [eval_data_sources] if isinstance(eval_data_sources, str) else list(eval_data_sources)
     if not eval_paths:
         raise ValueError("eval_data_sources must be non-empty")
-    if (required_eval_manifest_path is None) != (required_eval_corpus_version is None):
-        raise ValueError("required eval manifest path and corpus version must be set together")
-    if required_eval_manifest_path is not None:
+    if bool(required_eval_suites) != (required_eval_corpus_version is not None):
+        raise ValueError("required eval suites and corpus version must be set together")
+    if required_eval_suites:
         assert required_eval_corpus_version is not None
-        eval_paths = _validate_required_eval_manifest(
-            required_eval_manifest_path,
-            required_eval_corpus_version,
-            required_eval_names,
-            text_field=text_field,
-            ngram=ngram,
-        )
+        eval_paths = [
+            path
+            for suite in required_eval_suites
+            for path in _validate_required_eval_manifest(
+                suite.manifest_path,
+                required_eval_corpus_version,
+                suite.names,
+                text_field=text_field,
+                ngram=ngram,
+            )
+        ]
     best_effort_parameters = (
         best_effort_eval_manifest_path,
         best_effort_eval_corpus_version,
@@ -1321,9 +1336,8 @@ def build_eval_bloom_step(
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
-    required_eval_manifest_path: str | None = None,
+    required_eval_suites: tuple[RequiredEvalSuite, ...] = (),
     required_eval_corpus_version: str | None = None,
-    required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
     best_effort_required_tasks: tuple[str, ...] = (),
@@ -1348,10 +1362,10 @@ def build_eval_bloom_step(
         exclude_eval_dirs: Eval task directory names to drop from the bloom
             (see :func:`build_eval_bloom`). Folded into ``hash_attrs`` so
             changing the exclusion set rebuilds the bloom at a fresh path.
-        required_eval_manifest_path, required_eval_corpus_version,
-            required_eval_names: Required-suite gate passed to
-            :func:`build_eval_bloom`. The path is an external input. The
-            expected version and names enter the step hash.
+        required_eval_suites, required_eval_corpus_version: Required-suite
+            gate passed to :func:`build_eval_bloom`. Manifest paths are
+            external inputs. The expected version and each suite's names enter
+            the step hash.
         best_effort_eval_manifest_path, best_effort_eval_corpus_version,
             best_effort_required_tasks: Optional best-effort suite. Only the
             exact artifacts below its immutable, versioned manifest directory
@@ -1396,7 +1410,7 @@ def build_eval_bloom_step(
         "eval_data_sources": tuple(sorted(s for s in raw_paths if s not in (d.output_path for d in step_deps))),
         "exclude_eval_dirs": tuple(sorted(exclude_eval_dirs)),
         "required_eval_corpus_version": required_eval_corpus_version,
-        "required_eval_names": tuple(sorted(required_eval_names)),
+        "required_eval_suites": tuple(sorted(tuple(sorted(suite.names)) for suite in required_eval_suites)),
         "best_effort_eval_corpus_version": best_effort_eval_corpus_version,
         "best_effort_required_tasks": tuple(sorted(best_effort_required_tasks)),
     }
@@ -1411,9 +1425,8 @@ def build_eval_bloom_step(
             estimated_doc_count=estimated_doc_count,
             false_positive_rate=false_positive_rate,
             exclude_eval_dirs=exclude_eval_dirs,
-            required_eval_manifest_path=required_eval_manifest_path,
+            required_eval_suites=required_eval_suites,
             required_eval_corpus_version=required_eval_corpus_version,
-            required_eval_names=required_eval_names,
             best_effort_eval_manifest_path=best_effort_eval_manifest_path,
             best_effort_eval_corpus_version=best_effort_eval_corpus_version,
             best_effort_required_tasks=best_effort_required_tasks,
