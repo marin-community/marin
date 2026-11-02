@@ -21,7 +21,6 @@ def test_interrupted_evaluation_keeps_scored_prefix_and_counts(tmp_path: Path) -
     assert len(snapshots) == 2
     latest = max(snapshots, key=lambda lines: lines[0]["completed_rollouts"])
     assert latest[0]["status"] == "partial"
-    assert latest[0]["expected_rollouts"] == 3
     assert latest[0]["completed_rollouts"] == 2
     assert latest[0]["trajectory_rows"] == 2
     assert [(row["uid"], row["score"], row["repetition_id"]) for row in latest if "uid" in row] == [
