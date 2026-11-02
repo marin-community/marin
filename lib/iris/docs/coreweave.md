@@ -101,7 +101,13 @@ GPU Pods request `nvidia.com/gpu`. On clusters with `host_network: true`, they
 also request `rdma/ib` and use `ClusterFirstWithHostNet`. Coscheduled jobs add
 Kueue topology annotations derived from
 `kubernetes_provider.kueue.topologies`, or from the CoreWeave defaults when the
-map is empty.
+map is empty. Named ports requested by host-networked tasks are assigned a
+stable per-task block below the default ephemeral range and declared as
+Kubernetes `hostPort`s. This makes the scheduler reserve them across Pods on
+the same node; if two tasks hash to the same block, Kubernetes places them on
+separate nodes rather than letting both processes bind the same port. Each
+task can request at most 16 named ports. Pods without host networking keep
+kernel-selected ports inside their separate network namespaces.
 
 Task logs are shipped from the node's container log file to Finelog by a
 sidecar. Process inspection and profiling run against the task container with
