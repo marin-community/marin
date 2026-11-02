@@ -297,6 +297,7 @@ export default function (pi) {
         compaction_reserve_tokens: int | None = None,
         model_info: dict[str, Any] | None = None,
         thinking_format: str | None = None,
+        mcp_adapter_version: str | None = None,
         **kwargs,
     ) -> None:
         if api_base is not None and (not isinstance(api_base, str) or not api_base):
@@ -320,6 +321,7 @@ export default function (pi) {
                 "model request with a trial correlation ID"
             )
 
+        self._mcp_adapter_version = mcp_adapter_version
         self._api_base = api_base
         self._api_key = api_key or "not-needed"
         self._collect_rollout_details = collect_rollout_details
@@ -353,6 +355,13 @@ export default function (pi) {
             )
 
         super().__init__(*args, **kwargs)
+        if self.mcp_servers:
+            if self._mcp_adapter_version is None:
+                raise ValueError("mcp_adapter_version must be pinned when Pi uses MCP servers")
+            try:
+                Version(self._mcp_adapter_version)
+            except InvalidVersion as exc:
+                raise ValueError("mcp_adapter_version must be an exact package version") from exc
 
     @classmethod
     def _resolve_model_limit(
@@ -475,6 +484,29 @@ export default function (pi) {
                 "pi --version"
             ),
         )
+        if self.mcp_servers:
+            payload = shlex.quote(json.dumps(self._mcp_configuration()))
+            assert self._mcp_adapter_version is not None
+            package = shlex.quote("npm:pi-mcp-adapter@" + self._mcp_adapter_version)
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    f"set -euo pipefail; {self.nvm_shell_command()}; "
+                    'mkdir -p "$HOME/.config/mcp"; '
+                    f'printf %s {payload} > "$HOME/.config/mcp/mcp.json"; '
+                    f"pi install {package}"
+                ),
+            )
+
+    def _mcp_configuration(self) -> dict[str, Any]:
+        servers = {}
+        for server in self.mcp_servers:
+            if server.transport == "stdio":
+                endpoint = {"command": server.command, "args": server.args}
+            else:
+                endpoint = {"url": server.url}
+            servers[server.name] = {**endpoint, "directTools": True, "lifecycle": "keep-alive"}
+        return {"mcpServers": servers}
 
     def _build_register_skills_command(self) -> str | None:
         """Return a shell command that copies skills to Pi's skills directory."""

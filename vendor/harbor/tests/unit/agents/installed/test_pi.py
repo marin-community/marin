@@ -22,6 +22,7 @@ from harbor.agents.installed.pi import Pi
 from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
+from harbor.models.task.config import MCPServerConfig
 
 
 @pytest.fixture
@@ -138,6 +139,51 @@ class TestPiAgent:
 
         with pytest.raises(ValueError, match="not a valid package version"):
             await agent.install(mock_env)
+
+    @pytest.mark.asyncio
+    async def test_install_registers_mcp_servers_with_pinned_adapter(self, temp_dir, monkeypatch):
+        shell = _local_pi_shell(
+            temp_dir,
+            monkeypatch,
+            '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$HOME/pi-adapter-args"\n',
+        )
+
+        class InstallEnvironment:
+            async def exec(self, command, **kwargs):
+                if "pi install" in command:
+                    return await shell.environment.exec(command, **kwargs)
+                return SimpleNamespace(return_code=0, stdout="", stderr="")
+
+        agent = Pi(
+            logs_dir=temp_dir,
+            mcp_servers=[
+                MCPServerConfig(name="local-tools", transport="stdio", command="npx", args=["tool-server"]),
+                MCPServerConfig(name="remote-tools", transport="streamable-http", url="https://tools.test/mcp"),
+            ],
+            mcp_adapter_version="7.0.0",
+        )
+
+        await agent.install(InstallEnvironment())
+
+        assert (temp_dir / "pi-adapter-args").read_text().splitlines() == [
+            "install",
+            "npm:pi-mcp-adapter@7.0.0",
+        ]
+        assert json.loads((temp_dir / ".config/mcp/mcp.json").read_text()) == {
+            "mcpServers": {
+                "local-tools": {
+                    "command": "npx",
+                    "args": ["tool-server"],
+                    "directTools": True,
+                    "lifecycle": "keep-alive",
+                },
+                "remote-tools": {
+                    "url": "https://tools.test/mcp",
+                    "directTools": True,
+                    "lifecycle": "keep-alive",
+                },
+            }
+        }
 
     @pytest.mark.asyncio
     async def test_run_command_structure(self, temp_dir):
