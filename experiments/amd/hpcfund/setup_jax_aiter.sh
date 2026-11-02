@@ -18,7 +18,11 @@ uv pip install --python "$VENV" \
     "jax==0.11.0" "jaxlib==0.11.0" "jax-rocm7-plugin==0.11.0.post1" "jax-rocm7-pjrt==0.11.0.post1" \
     cmake ninja pyyaml psutil pandas
 # The CUDA plugin from uv sync would compete with the ROCm one for the GPU backend.
-uv pip uninstall --python "$VENV" jax-cuda13-plugin jax-cuda13-pjrt || true
+for pkg in jax-cuda13-plugin jax-cuda13-pjrt; do
+    if uv pip show --python "$VENV" "$pkg" >/dev/null 2>&1; then
+        uv pip uninstall --python "$VENV" "$pkg"
+    fi
+done
 
 if [ ! -d "$SRC" ]; then
     git clone https://github.com/ROCm/jax-aiter "$SRC"
