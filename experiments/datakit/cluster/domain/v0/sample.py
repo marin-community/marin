@@ -62,14 +62,10 @@ def _sample_shard(
     per_shard: int,
     seed: int,
 ) -> Iterator[pa.RecordBatch]:
-    """Per-shard map: uniform-sample ``per_shard`` embeddings and label them with the source.
-
-    The whole shard's embedding column is held at once, because parquet row
-    groups can't be sampled randomly without first knowing row counts. It stays
-    in Arrow: short-document sources reach millions of rows per shard, and as
-    Python lists each row would cost kilobytes instead of 192 bytes.
-    """
+    """Per-shard map: uniform-sample ``per_shard`` embeddings and label them with the source."""
     rng = np.random.default_rng(seed + shard.shard_idx)
+    # Hold the shard's embedding column in Arrow, not as per-row Python lists: short-document
+    # sources reach millions of rows per shard, and a Python row costs kilobytes, not 192 bytes.
     embeddings = pa.chunked_array(
         [batch.column("embedding") for batch in batches], type=_SAMPLE_SCHEMA.field("embedding").type
     )
@@ -77,8 +73,6 @@ def _sample_shard(
         idx = rng.choice(len(embeddings), size=per_shard, replace=False)
         embeddings = embeddings.take(idx)
     for chunk in embeddings.chunks:
-        if len(chunk) == 0:
-            continue
         yield pa.RecordBatch.from_arrays([pa.repeat(source_name, len(chunk)), chunk], schema=_SAMPLE_SCHEMA)
 
 
