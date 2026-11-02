@@ -599,6 +599,14 @@ def test_extra_gen_kwargs_ride_on_gen_kwargs():
     assert gen_kwargs == "max_gen_toks=2048,skip_special_tokens=false,repetition_penalty=1.1"
 
 
+@pytest.mark.parametrize("prompt_budget_preflight,expected_cap", [(False, 130048), (True, 131072)])
+def test_prompt_preflight_owns_output_budget_selection(prompt_budget_preflight, expected_cap):
+    config = _payload(_config(max_gen_toks=131072, prompt_budget_preflight=prompt_budget_preflight))
+    command = build_command(config, config["tasks"][1], "/opt/py", 131072)
+
+    assert int(command[command.index("--max_tokens") + 1]) == expected_cap
+
+
 def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
     cmd = build_command(_payload(), _payload()["tasks"][1], "/opt/py", None)
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"

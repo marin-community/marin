@@ -1,40 +1,49 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adversary trials: an agent that red-teams a task's grader with the verifier as a tool.
+"""Adversary trials: an agent that searches a task's grader for defects with the verifier as a tool.
 
-Each attempt is one ``llm.agent.run_agent`` loop with two tools. ``shell`` runs commands on a private task
+An ``AdversarySpec`` names one adversary and states its goal; a round runs a roster of them, each under its own
+``AdversaryPolicy`` and evidence path, and nothing downstream reads the name except as the trial's id. The default
+specs are ``FALSE_ACCEPT`` (wrong answers that earn full credit), ``FALSE_REJECT`` (correct answers that lose credit)
+and ``SHORTCUT`` (accepted answers that skip the task's computation).
+
+Each attempt is one ``llm.agent.run_agent`` loop with three tools. ``shell`` runs commands on a private task
 machine, started as the engine starts the solver's (``rolloutengine.machines.task_machine``: the task's resources,
 worker files and setup commands). ``submit`` grades one candidate, a final reply and the files it names on that
 machine, exactly as validation replays a control: ``trials.run_trial`` with a ``controls.ScriptedModel`` that
 replays ``spec.controls.candidate_turns`` on a fresh machine, so the verifier's files exist only on the grading
-machine. A task without a task machine offers ``submit`` alone. ``AdversaryPolicy.submissions`` bounds the
+machine. ``finish_search`` hands in a ``SearchReport``: the defects found, each naming the graded submissions that
+show it and whether it needs addressing, and a summary. It refuses a report before ``min_probes`` distinct
+candidates were graded, or whose defects cite no graded submission; an accepted report ends the loop. A task
+without a task machine offers ``submit`` and ``finish_search`` alone. ``AdversaryPolicy.submissions`` bounds the
 submissions of an attempt; a ``submit`` past it returns an error and grades nothing.
 
 The two modes differ only in the brief (``adversary_brief``). ``BLACKBOX`` gives the task as the solver sees it
-(the shell harness's ``task_prompt``), the tools, the budget and the verdict line. ``WHITEBOX`` adds the grader's
-specification and verifier files, every control of the round with its expected reward (the reference answer among
-them) and the task's example answers, and asks the adversary to name the grader line its submission defeats.
+(the shell harness's ``task_prompt``), the tools and the budget. ``WHITEBOX`` adds the grader's specification and
+verifier files, every control of the round with its expected reward (the reference answer among them) and the
+task's example answers, unclipped.
 
 Each attempt is one ``TRIAL`` ledger span, step ``adversary/<trial>/<attempt>``, and the agent's model calls and
 tool calls are recorded under the same step. Its attempt file, ``<evidence_dir>/adversary/<trial>/attempt-<n>.json``,
-holds ``trials.outcome_json``'s record and an ``adversary`` key, an ``AdversaryRecord``: the mode, the brief, the
-system turn, the adversary's claim, the grader's digest and every submission with its grade. The rollout is one
-conversation whose steps are the agent's turns; it carries no token ids. Each submission is graded as the
-``CONTROL`` trial ``s<ordinal>`` under ``<evidence_dir>/adversary/<trial>/submissions/<attempt>/``, whose attempt
-file keeps the grader's full result.
+holds ``trials.outcome_json``'s record and an ``adversary`` key, an ``AdversaryRecord``: the spec's name, the model,
+the policy's digest, the mode, the brief, the system turn, the report, the grader's digest and every submission with
+its grade and exact files (base64 when not UTF-8). The rollout is one conversation whose steps are the agent's
+turns; it carries no token ids. Each submission is graded as the ``CONTROL`` trial ``s<ordinal>`` under
+``<evidence_dir>/adversary/<trial>/submissions/<attempt>/``, whose attempt file keeps the grader's full result.
 
-An attempt retains the outcome of its last passing submission, else its last submission, and reports
-``SUBMISSION_FAILURE`` without one. A verifier failure retains its ungraded cause. An attempt whose machine
-did not start or whose deadline expired is ``Ungraded`` with the cause ``classify`` gives it, and is retried
-like a solver attempt. The final
-reply's verdict line is recorded as the adversary's ``Claim``; whether a passing submission is a shortcut is not
-judged here.
+An attempt is ``Ungraded`` when any submission's grading or the agent loop itself failed: unavailable execution
+takes precedence over an exhausted turn budget, which takes precedence over an authored task defect. An
+interrupted attempt keeps its partial rollout and submissions. An attempt that ended without an accepted report is
+``SEARCH_INCOMPLETE``. Otherwise it reports its last submission's grade, or ``SUBMISSION_FAILURE`` without one.
+Whether a defect is real is review's judgement (``second_review`` is a stub), not the round's.
 """
 
 import asyncio
+import base64
 import json
 import posixpath
+import re
 import tempfile
 import time
 import traceback
@@ -72,9 +81,11 @@ from taskcompendium.submission import conversation_messages
 
 from taskforge.content_hash import canonical_json, digest
 from taskforge.llm.agent import (
+    AgentInterrupted,
     AgentRun,
     AgentStop,
     AgentTool,
+    AgentTurn,
     ReasoningReplay,
     ToolOutcome,
     assistant_message,
@@ -96,22 +107,21 @@ from taskforge.spec.controls import (
 from taskforge.spec.draft import GRADER_RESOURCE_ROOT
 from taskforge.stage50_validate.adversary_prompts import (
     BRIEF_TEMPLATE,
-    GRADER_LINE_MARKER,
+    FALSE_ACCEPT_GOAL,
+    FALSE_REJECT_GOAL,
     NO_CONTROLS,
     NO_EXAMPLES,
-    NO_SHORTCUT_LINE,
     NO_VERIFIER_FILES,
-    SHORTCUT_PREFIX,
+    SHORTCUT_GOAL,
     SUBMIT_DESCRIPTION,
     TOOLS_SUBMIT_ONLY,
     TOOLS_WITH_SHELL,
     VERIFIER_FAILED,
     WHITEBOX_HEADER,
-    WHITEBOX_LINE_CLAUSE,
 )
 from taskforge.stage50_validate.classify import classify
 from taskforge.stage50_validate.evidence import passed
-from taskforge.stage50_validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, TrialKind, Ungraded
+from taskforge.stage50_validate.outcome import GRADED_STATUSES, TASK_DEFECTS, Cause, Graded, Outcome, TrialKind, Ungraded
 from taskforge.stage50_validate.trials import (
     CLEANUP_ERROR_COUNT,
     EngineSettings,
@@ -120,7 +130,6 @@ from taskforge.stage50_validate.trials import (
     outcome_json,
     record_attempt,
     refusal,
-    rollout_steps,
     run_attempts,
     run_trial,
     task_digest,
@@ -136,12 +145,8 @@ CAPTURED_FILE_MODE = "644"
 FILE_PROBE_TIMEOUT = 60.0
 CONTEXT_STOP_REASON = "context"
 MACHINE_LOST_STOP_REASON = "machine_lost"
-GRADER_FILE_CHARS = 60_000
-"""Characters of each verifier file a white-box brief shows; a longer file is cut with a marker."""
-CONTROL_CHARS = 4_000
-"""Characters of each workspace file of a control a white-box brief shows."""
-VERDICT_DECORATION = "*_`#> "
-"""Markdown a model wraps a verdict line in (``**SHORTCUT:**``, a quote or heading marker), stripped before matching."""
+ADVERSARY_NAME = re.compile(r"[a-z0-9_]+")
+"""An adversary's name, which names its trials' directories (``adversary/<name>-<i>``)."""
 
 
 class AdversaryMode(StrEnum):
@@ -152,23 +157,42 @@ class AdversaryMode(StrEnum):
 
 
 @dataclass(frozen=True)
+class AdversarySpec:
+    """One adversary of a round's roster: ``name``, unique in the roster, and ``brief``, the goal its brief states.
+
+    The roster is data: a new adversary is a new spec, and neither the round nor review branches on a name.
+    """
+
+    name: str
+    brief: str
+
+    def __post_init__(self) -> None:
+        if not ADVERSARY_NAME.fullmatch(self.name) or not self.brief.strip():
+            raise ValueError(f"AdversarySpec needs a name matching {ADVERSARY_NAME.pattern} and a non-empty brief")
+
+
+FALSE_ACCEPT = AdversarySpec("false_accept", FALSE_ACCEPT_GOAL)
+FALSE_REJECT = AdversarySpec("false_reject", FALSE_REJECT_GOAL)
+SHORTCUT = AdversarySpec("shortcut", SHORTCUT_GOAL)
+
+
+@dataclass(frozen=True)
 class AdversaryPolicy:
-    """How a validation round runs its adversary trials; the round's deadlines, retries and backoff apply to them.
+    """How a validation round runs one adversary's trials; the round's deadlines, retries and backoff apply to them.
 
     Attributes:
+        spec: The adversary these trials run.
         k: Adversary trials per round; 0 runs none.
-        submissions: Verifier submissions per attempt.
-        repair_submissions: The submissions within which a first accepted shortcut makes a grader repair finding.
-            Recorded for an arbiter policy; the default review does not yet decide on adversary findings.
+        submissions: Verifier submissions per attempt; ``None`` is unbounded.
         max_turns: Agent turns per attempt.
         sampling: The adversary's sampling policy; an agent loop has no continuation.
         mode: What the adversary knows of the grader.
-        min_probes: Shortcut candidates the brief asks for before a verdict, capped below the budget.
+        min_probes: Distinct candidates an attempt grades before ``finish_search`` accepts its report.
     """
 
+    spec: AdversarySpec
     k: int
     submissions: int | None
-    repair_submissions: int
     max_turns: int | None
     sampling: LLMPolicy
     mode: AdversaryMode
@@ -179,39 +203,37 @@ class AdversaryPolicy:
             self.k < 0
             or (self.submissions is not None and self.submissions < 1)
             or (self.max_turns is not None and self.max_turns < 1)
-            or self.min_probes < 0
+            or self.min_probes < 1
         ):
-            raise ValueError("AdversaryPolicy needs k >= 0, submissions >= 1, max_turns >= 1 and min_probes >= 0")
-        if self.repair_submissions < 0 or (self.submissions is not None and self.repair_submissions > self.submissions):
-            raise ValueError("AdversaryPolicy needs 0 <= repair_submissions <= submissions")
-
-
-class ClaimKind(StrEnum):
-    SHORTCUT = "shortcut"
-    NO_SHORTCUT = "no_shortcut"
-    NONE = "none"
-    """The final reply has no verdict line, was cut off, or the attempt ended without a reply."""
+            raise ValueError("Search counts must be positive, except k may disable the adversary with zero")
+        if self.submissions is not None and self.min_probes > self.submissions:
+            raise ValueError("min_probes cannot exceed the submission budget")
 
 
 @dataclass(frozen=True)
-class Claim:
-    """The adversary's verdict: for a shortcut, why the accepted submission does not do the task and, in a
-    white-box reply, the grader line it defeats."""
+class Defect:
+    """A submitted defect, backed by tested candidates, with the finder's requested disposition."""
 
-    kind: ClaimKind
-    why: str
-    grader_line: str
+    submission_ids: tuple[int, ...]
+    explanation: str
+    needs_addressing: bool
 
 
-NO_CLAIM = Claim(ClaimKind.NONE, "", "")
+@dataclass(frozen=True)
+class SearchReport:
+    """An explicit completed search; probe candidates alone are not defect submissions."""
+
+    defects: tuple[Defect, ...]
+    summary: str
 
 
 @dataclass(frozen=True)
 class SubmittedFile:
-    """A file of a submission; ``content`` is its text, or a note of its size when it is not UTF-8."""
+    """An exact candidate file, preserved as text or base64."""
 
     path: str
     content: str
+    encoding: str = "utf-8"
 
 
 @dataclass(frozen=True)
@@ -233,10 +255,13 @@ class SubmissionRecord:
 class AdversaryRecord:
     """The ``adversary`` key of an adversary attempt file. ``system`` is empty for a trial that was not started."""
 
+    name: str
+    model: str
+    policy_digest: str
     mode: AdversaryMode
     brief: str
     system: str
-    claim: Claim
+    report: SearchReport | None
     grader_digest: str
     submissions: tuple[SubmissionRecord, ...]
 
@@ -246,41 +271,20 @@ def adversary_record(payload: bytes) -> AdversaryRecord:
     return _RECORD.validate_python(json.loads(payload)[ADVERSARY_KEY])
 
 
-def _verdict_line(line: str) -> str:
-    stripped = line.strip().lstrip(VERDICT_DECORATION)
-    if stripped.startswith(SHORTCUT_PREFIX):
-        return f"{SHORTCUT_PREFIX} {stripped.removeprefix(SHORTCUT_PREFIX).lstrip(VERDICT_DECORATION).lstrip()}".strip()
-    if stripped.startswith(NO_SHORTCUT_LINE):
-        return NO_SHORTCUT_LINE + stripped.removeprefix(NO_SHORTCUT_LINE).strip().rstrip(VERDICT_DECORATION)
-    return stripped
-
-
-def parse_claim(reply: str) -> Claim:
-    """The verdict of a final reply: its last line opening with ``NO_SHORTCUT`` or ``SHORTCUT:``, markdown emphasis
-    stripped. A shortcut's text runs from there to the end of the reply, and a ``grader line:`` in it starts the
-    grader line, on the same line or a later one."""
-    lines = [line.strip() for line in reply.splitlines() if line.strip()]
-    for index in range(len(lines) - 1, -1, -1):
-        line = _verdict_line(lines[index])
-        if line == NO_SHORTCUT_LINE:
-            return Claim(ClaimKind.NO_SHORTCUT, "", "")
-        if line.startswith(SHORTCUT_PREFIX):
-            text = " ".join([line.removeprefix(SHORTCUT_PREFIX).strip(), *lines[index + 1 :]])
-            why, _, grader_line = text.partition(GRADER_LINE_MARKER)
-            return Claim(ClaimKind.SHORTCUT, why.strip(), grader_line.strip())
-    return NO_CLAIM
-
-
-def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else f"{text[:limit]} [... {len(text) - limit} chars cut]"
-
-
 def _text(resource: TaskResource) -> str:
     data = resource_bytes(resource)
     try:
         return data.decode()
     except UnicodeDecodeError:
-        return f"<{len(data)} bytes, not text>"
+        return "base64:" + base64.b64encode(data).decode("ascii")
+
+
+def submitted_file(resource: TaskResource) -> SubmittedFile:
+    data = resource_bytes(resource)
+    try:
+        return SubmittedFile(f"/{resource.path}", data.decode())
+    except UnicodeDecodeError:
+        return SubmittedFile(f"/{resource.path}", base64.b64encode(data).decode("ascii"), "base64")
 
 
 def grader_source(task: TaskSpec) -> dict[str, Any]:
@@ -301,11 +305,7 @@ def control_view(control: Control) -> dict[str, Any]:
         body: dict[str, Any] = {"transcript": [turn.model_dump(mode="json") for turn in payload.turns]}
     else:
         assert isinstance(payload, Workspace)
-        body = {
-            "workspace_files": [
-                {"path": f"/{file.path}", "content": _clip(_text(file), CONTROL_CHARS)} for file in payload.files
-            ]
-        }
+        body = {"workspace_files": [{"path": f"/{file.path}", "content": _text(file)} for file in payload.files]}
     expect = control.expect
     return {
         "id": control.id,
@@ -322,10 +322,7 @@ def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
     source = grader_source(task)
     spec = json.dumps(source["grader_spec"], indent=1, ensure_ascii=False)
     files = (
-        "\n\n".join(
-            f"### {file['path']}\n```\n{_clip(file['content'], GRADER_FILE_CHARS)}\n```"
-            for file in source["grader_source"]
-        )
+        "\n\n".join(f"### {file['path']}\n```\n{file['content']}\n```" for file in source["grader_source"])
         or NO_VERIFIER_FILES
     )
     views = [control_view(control) for control in controls]
@@ -356,13 +353,11 @@ def adversary_brief(spec: TaskRolloutSpec, controls: Sequence[Control], policy: 
     whitebox = policy.mode is AdversaryMode.WHITEBOX
     context = whitebox_context(spec.task, controls) if whitebox else ""
     return BRIEF_TEMPLATE.format(
+        goal=policy.spec.brief,
         tools=TOOLS_WITH_SHELL if spec.task_machine is not None else TOOLS_SUBMIT_ONLY,
         submissions="unlimited" if policy.submissions is None else policy.submissions,
-        probes=(
-            policy.min_probes if policy.submissions is None else min(policy.min_probes, max(policy.submissions - 1, 1))
-        ),
+        probes=policy.min_probes,
         context=f"{PREAMBLE_SEPARATOR}{context}{PREAMBLE_SEPARATOR}" if context else " ",
-        line_clause=WHITEBOX_LINE_CLAUSE if whitebox else "",
     )
 
 
@@ -473,12 +468,32 @@ class Verifier:
     plan: TrialPlan
     machine: Machine | None
     budget: int | None
+    min_probes: int
     submissions: list[Submission] = field(default_factory=list)
+    report: SearchReport | None = None
+
+    async def finish(self, arguments: Mapping[str, object]) -> str:
+        report = TypeAdapter(SearchReport).validate_python(arguments)
+        known = {submission.record.ordinal: submission for submission in self.submissions}
+        distinct = {digest((item.record.reply, item.record.files)) for item in self.submissions}
+        if len(distinct) < self.min_probes:
+            return json.dumps({"error": f"submit at least {self.min_probes} candidates before finishing"})
+        for defect in report.defects:
+            if not defect.explanation.strip() or not defect.submission_ids:
+                return json.dumps({"error": "each defect needs an explanation and candidate evidence"})
+            if len(set(defect.submission_ids)) != len(defect.submission_ids):
+                return json.dumps({"error": "submission_ids must be unique within each defect"})
+            for ordinal in defect.submission_ids:
+                submission = known.get(ordinal)
+                if submission is None or not isinstance(submission.outcome, Graded):
+                    return json.dumps({"error": f"submission {ordinal} has no completed grade"})
+        self.report = report
+        return json.dumps({"completed": True})
 
     async def submit(self, arguments: Mapping[str, object]) -> str:
         if self.budget is not None and len(self.submissions) >= self.budget:
             return json.dumps(
-                {"error": f"submission budget spent: {self.budget} of {self.budget}; give your verdict now"}
+                {"error": f"submission budget spent: {self.budget} of {self.budget}; call finish_search now"}
             )
         reply = arguments["reply"]
         paths = arguments.get("files", [])
@@ -500,7 +515,7 @@ class Verifier:
             turn=None,
             trial=name,
             reply=reply,
-            files=tuple(SubmittedFile(f"/{file.path}", _text(file)) for file in files),
+            files=tuple(submitted_file(file) for file in files),
             grade=grade,
             passed=passed(grade),
             wall_time=time.monotonic() - started,
@@ -509,21 +524,27 @@ class Verifier:
         return json.dumps(_observation(submission, self.budget))
 
 
+def _failure(rollout: Rollout, failures: Sequence[Ungraded]) -> Ungraded:
+    # Unavailable execution takes precedence over exhausted budgets, then authored defects.
+    chosen = min(failures, key=lambda failure: (failure.cause in TASK_DEFECTS, failure.cause is Cause.BUDGET_EXHAUSTED))
+    return replace(chosen, rollout=rollout)
+
+
 def trial_outcome(rollout: Rollout, submissions: Sequence[Submission]) -> Outcome:
-    """Use the last passing submission, or the last submission, preserving verifier failures."""
-    for submission in submissions:
-        if isinstance(submission.outcome, Ungraded):
-            return replace(submission.outcome, rollout=rollout)
-    if rollout.stop_reason == MACHINE_LOST_STOP_REASON:
-        return Ungraded(Cause.MACHINE_TERMINATED, "adversary machine was lost", rollout, None)
-    if rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON:
-        return Ungraded(Cause.AGENT_TIMEOUT, "adversary session timed out", rollout, None)
-    if rollout.stop_reason == MAX_TURNS_STOP_REASON:
-        return Ungraded(Cause.BUDGET_EXHAUSTED, "adversary turn budget exhausted", rollout, None)
-    if rollout.stop_reason in (LENGTH_STOP_REASON, CONTEXT_STOP_REASON):
-        return Ungraded(Cause.GENERATION_LIMIT, f"adversary stopped at {rollout.stop_reason}", rollout, None)
-    accepted = [submission for submission in submissions if submission.record.passed]
-    chosen = accepted[-1] if accepted else submissions[-1] if submissions else None
+    """Retain failures across every submission and the search's own completion status."""
+    failures = [submission.outcome for submission in submissions if isinstance(submission.outcome, Ungraded)]
+    stop_causes = {
+        MACHINE_LOST_STOP_REASON: Cause.MACHINE_TERMINATED,
+        TOTAL_TURN_TIMEOUT_STOP_REASON: Cause.AGENT_TIMEOUT,
+        MAX_TURNS_STOP_REASON: Cause.BUDGET_EXHAUSTED,
+        LENGTH_STOP_REASON: Cause.GENERATION_LIMIT,
+        CONTEXT_STOP_REASON: Cause.GENERATION_LIMIT,
+    }
+    if cause := stop_causes.get(rollout.stop_reason):
+        failures.append(Ungraded(cause, f"adversary stopped at {rollout.stop_reason}", rollout, None))
+    if failures:
+        return _failure(rollout, failures)
+    chosen = submissions[-1] if submissions else None
     if chosen is None:
         return Graded(rollout, GradeResult(GradeStatus.SUBMISSION_FAILURE, None, "no verifier submission"), False)
     return replace(chosen.outcome, rollout=rollout)
@@ -534,6 +555,8 @@ AGENT_STOPS: Mapping[AgentStop, str] = {
     AgentStop.MAX_TURNS: MAX_TURNS_STOP_REASON,
     AgentStop.LENGTH: LENGTH_STOP_REASON,
     AgentStop.CONTEXT: CONTEXT_STOP_REASON,
+    AgentStop.STOPPED: "stop",
+    AgentStop.INTERRUPTED: "interrupted",
 }
 
 
@@ -614,16 +637,6 @@ def submission_turns(run: AgentRun) -> dict[int, int]:
     return turns
 
 
-def claim_of(outcome: Outcome) -> Claim:
-    """The verdict of the attempt's final text reply; ``NONE`` without one, or when the reply was cut off."""
-    rollout = outcome.rollout
-    steps = () if rollout is None else rollout_steps(rollout)
-    if not steps or steps[-1].turn.stop_reason == LENGTH_STOP_REASON:
-        return NO_CLAIM
-    last = steps[-1].turn.message
-    return NO_CLAIM if last.get("tool_calls") else parse_claim(str(last.get("content") or ""))
-
-
 @asynccontextmanager
 async def attempt_machine(spec: TaskRolloutSpec, settings: EngineSettings, run_id: str) -> AsyncIterator[Machine | None]:
     """The attempt's private task machine, or ``None`` when the spec has none. A start failure is raised as the
@@ -654,7 +667,7 @@ async def _agent_attempt(
     opening: tuple[dict[str, Any], ...],
     submission_plan: TrialPlan,
     run_id: str,
-) -> tuple[Outcome, tuple[Submission, ...]]:
+) -> tuple[Outcome, tuple[Submission, ...], SearchReport | None]:
     """One agent loop on a private task machine under the attempt deadline, its turns under the total-turn deadline.
 
     A failure before the loop finished is ``Ungraded`` with ``classify``'s cause; a machine close that fails after
@@ -666,20 +679,41 @@ async def _agent_attempt(
     lost = False
     cleanup_errors = 0
     verifier: Verifier | None = None
+
+    def finished_turn(_: AgentTurn) -> bool:
+        return verifier is not None and verifier.report is not None
+
     try:
         async with deadline, attempt_machine(spec, settings, run_id) as machine:
-            verifier = Verifier(spec, settings, submission_plan, machine, policy.submissions)
+            verifier = Verifier(spec, settings, submission_plan, machine, policy.submissions, policy.min_probes)
             submit = AgentTool(
                 SUBMIT_TOOL_NAME, SUBMIT_DESCRIPTION, submit_parameters(machine is not None), verifier.submit
             )
-            tools: tuple[AgentTool, ...] = (submit,)
+            finish = AgentTool(
+                "finish_search",
+                "Report defects with candidate IDs, explanation and needs_addressing; use no defects if none found.",
+                TypeAdapter(SearchReport).json_schema(),
+                verifier.finish,
+            )
+            tools: tuple[AgentTool, ...] = (submit, finish)
             if machine is not None:
                 shell = shell_tool(machine, timeout=settings.command_timeout, output_limit_bytes=SHELL_OUTPUT_LIMIT)
-                tools = (shell, submit)
+                tools = (shell, submit, finish)
             agent_deadline = asyncio.timeout(spec.limits.total_turn_timeout)
             try:
                 async with agent_deadline:
-                    run = await run_agent(model, policy.sampling, opening, tools, policy.max_turns, record)
+                    run = await run_agent(
+                        model,
+                        policy.sampling,
+                        opening,
+                        tools,
+                        policy.max_turns,
+                        record,
+                        stop=finished_turn,
+                    )
+            except AgentInterrupted as error:
+                run = error.run
+                raise
             except TimeoutError:
                 if not agent_deadline.expired():
                     raise
@@ -695,8 +729,10 @@ async def _agent_attempt(
                 interrupted.__cause__ = error
                 error = interrupted
             submissions = () if verifier is None else tuple(verifier.submissions)
-            outcome = Ungraded(classify(error, spec.task), "".join(traceback.format_exception(error)), None, None)
-            return outcome, submissions
+            rollout = agent_rollout(run_id, opening, run, "interrupted", 0, tuple(s.record for s in submissions))
+            outcome = Ungraded(classify(error, spec.task), "".join(traceback.format_exception(error)), rollout, None)
+            failures = [s.outcome for s in submissions if isinstance(s.outcome, Ungraded)]
+            return _failure(rollout, [*failures, outcome]), submissions, None
         cleanup_errors = 1
     submissions = () if verifier is None else tuple(verifier.submissions)
     if run is not None:
@@ -712,7 +748,11 @@ async def _agent_attempt(
     rollout = agent_rollout(
         run_id, opening, run, stop, cleanup_errors, tuple(submission.record for submission in submissions)
     )
-    return trial_outcome(rollout, submissions), submissions
+    outcome = trial_outcome(rollout, submissions)
+    report = None if verifier is None else verifier.report
+    if isinstance(outcome, Graded) and report is None:
+        outcome = Ungraded(Cause.SEARCH_INCOMPLETE, "search did not finish with a valid report", rollout, outcome.grade)
+    return outcome, submissions, report
 
 
 def _attempt_json(outcome: Outcome, record: AdversaryRecord) -> bytes:
@@ -731,8 +771,9 @@ async def run_adversary_trial(
     trial: str,
     submission_retries: int,
 ) -> Outcome:
-    """Run one adversary trial of ``spec`` with ``brief`` (``adversary_brief``), attempting it again after a backoff
-    while it fails for a retryable cause, up to ``plan.max_retries`` times.
+    """Run a search, retrying retryable failures up to ``plan.max_retries`` times.
+
+    Each retry starts a new attempt; prior partial rollouts and submissions remain archived.
 
     Args:
         spec: The lowered spec; its limits already include the validation policy.
@@ -748,7 +789,9 @@ async def run_adversary_trial(
     grader_digest = digest(grader_source(spec.task))
     refused = refusal(spec, settings.factories)
     if refused is not None:
-        record = AdversaryRecord(policy.mode, brief, "", NO_CLAIM, grader_digest, ())
+        record = AdversaryRecord(
+            policy.spec.name, model.model, digest(policy), policy.mode, brief, "", None, grader_digest, ()
+        )
         with attempt_span(trial_digest, plan, trial, plan.first_attempt) as fields:
             record_attempt(fields, refused, plan, trial, plan.first_attempt, _attempt_json(refused, record))
         return refused
@@ -766,12 +809,19 @@ async def run_adversary_trial(
         )
         calls = CallLedger(plan.ledger, plan.workpiece_id, plan.round, step)
         with attempt_span(trial_digest, plan, trial, attempt) as fields:
-            outcome, submissions = await _agent_attempt(
+            outcome, submissions, report = await _agent_attempt(
                 spec, policy, settings, model, calls, opening, submission_plan, step
             )
-            claim = claim_of(outcome)
             record = AdversaryRecord(
-                policy.mode, brief, system, claim, grader_digest, tuple(submission.record for submission in submissions)
+                policy.spec.name,
+                model.model,
+                digest(policy),
+                policy.mode,
+                brief,
+                system,
+                report,
+                grader_digest,
+                tuple(submission.record for submission in submissions),
             )
             record_attempt(fields, outcome, plan, trial, attempt, _attempt_json(outcome, record))
             fields.attrs.update(
@@ -779,7 +829,8 @@ async def run_adversary_trial(
                     "mode": str(policy.mode),
                     "submissions": str(len(submissions)),
                     "passes": str(sum(submission.record.passed for submission in submissions)),
-                    "claim": str(claim.kind),
+                    "defects": json.dumps([asdict(defect) for defect in report.defects] if report else None),
+                    "adversary": policy.spec.name,
                 }
             )
         return outcome
@@ -788,3 +839,8 @@ async def run_adversary_trial(
 
 
 _RECORD: TypeAdapter[AdversaryRecord] = TypeAdapter(AdversaryRecord)
+
+
+def second_review(spec: TaskRolloutSpec, search: AdversaryRecord, defect: Defect) -> None:
+    """Optional future review with the full task and candidate evidence; not performed."""
+    return None

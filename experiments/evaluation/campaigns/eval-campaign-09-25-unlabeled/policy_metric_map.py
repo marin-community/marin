@@ -9,8 +9,7 @@ machine key behind the score reported for the current publication campaign; it c
 name a subgroup or a separate cohort statistic. Historical records retain their
 recorded benchmark metadata.
 CRUXEval's record metric combines directions while its published metric uses only
-output trials. SOTOPIA's published metric is computed across a model cohort after
-the Harbor reward record is written.
+output trials. Harbor reports SOTOPIA's cohort-corrected metric when the job completes.
 PIQA's pinned task reports both `acc` and `acc_norm`; evaluator metadata selects
 `acc`, while the publication policy uses the length-normalized `acc_norm`.
 """
@@ -39,8 +38,8 @@ def _evalchemy(task: str, evaluator: str, record: str, published: str | None = N
     return PolicyMetric(PolicyMechanism.EVALCHEMY, task, evaluator, record, published or evaluator)
 
 
-def _harbor(published: str = "reward") -> PolicyMetric:
-    return PolicyMetric(PolicyMechanism.HARBOR, None, "reward", "reward", published)
+def _harbor(metric: str = "reward") -> PolicyMetric:
+    return PolicyMetric(PolicyMechanism.HARBOR, None, metric, metric, metric)
 
 
 POLICY_METRICS_2026_10_16: Mapping[str, PolicyMetric] = MappingProxyType(

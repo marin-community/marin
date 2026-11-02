@@ -40,9 +40,10 @@ runs:
       uses: astral-sh/setup-uv@v7
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
-        node-version: "20"
+        node-version: "24"
+        check-latest: true
 
     - name: Set up Pulumi CLI
       uses: pulumi/setup-pulumi@v2

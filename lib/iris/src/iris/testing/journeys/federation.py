@@ -85,7 +85,12 @@ class FederationJourney:
     """Drive two real controllers while scripting only peer reachability."""
 
     def __init__(self, root: Path, monkeypatch) -> None:
-        self.peer = JourneyWorld(root / "peer", monkeypatch)
+        self.peer = JourneyWorld(
+            root / "peer",
+            monkeypatch,
+            cluster_id=PEER_ID,
+            budget_parent=PARENT_CLUSTER_ID,
+        )
         self.connection = InProcessPeerConnection(self.peer.controller)
         self._federation_peer = FederationPeer(
             PEER_ID,
@@ -99,8 +104,10 @@ class FederationJourney:
             cluster_id=PARENT_CLUSTER_ID,
             peer_configs={PEER_ID: PeerConfig(controller_address=_PEER_CONTROLLER_ADDRESS)},
             federation_peers=[self._federation_peer],
+            budget_peers=(PEER_ID,),
         )
         self.manager = self.parent.controller.federation
+        self.manager.sync_once()
 
     def close(self) -> None:
         self.parent.close()
@@ -109,9 +116,9 @@ class FederationJourney:
     def submit(self, name: str, *, tasks: int = 1) -> JobRef:
         return self.parent.submit(name, tasks=tasks, required_attributes={CLUSTER_CONSTRAINT_KEY: PEER_ID})
 
-    def submit_child_on_peer(self, parent: JobRef, name: str, *, tasks: int = 1) -> JobRef:
+    def submit_child_on_peer(self, parent: JobRef, name: str, *, tasks: int = 1, preemption_retries: int = 0) -> JobRef:
         """Submit one descendant from the execution cluster."""
-        return self.peer.submit_child(parent, name, tasks=tasks)
+        return self.peer.submit_child(parent, name, tasks=tasks, preemption_retries=preemption_retries)
 
     def promote(self) -> None:
         """Run the parent tick that assigns a queued Job to peer B."""

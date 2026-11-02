@@ -19,6 +19,7 @@ from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
+from taskforge.llm.test_support import fake_source
 from taskforge.sandbox.factories import MachineHost
 from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind, Ungraded
@@ -30,7 +31,6 @@ from taskforge.stage50_validate.trials import (
     run_trials,
     task_digest,
 )
-from tests.conftest import fake_source
 from tests.sandbox.fixture_images import FixtureImageFactory
 
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
@@ -170,7 +170,7 @@ async def test_each_trial_of_a_glm_model_records_and_routes_under_its_own_attemp
         fake_glm.stream(content="395", prompt_tokens=3, completion_tokens=2)
     trial_plan = plan(tmp_path, k=2, max_retries=0)
 
-    async with GlmClient(fake_source(fake_glm), replace(fast_provider, max_attempts=1)) as client:
+    async with GlmClient(fake_source(fake_glm.base_url), replace(fast_provider, max_attempts=1)) as client:
         record = CallLedger(trial_plan.ledger, trial_plan.workpiece_id, trial_plan.round, str(TrialKind.SOLVER))
         model = GlmRolloutModel(client, LLMPolicy(max_continuations=0), record)
         outcomes = await run_trials(math_task, trial_plan, settings(fakes.flaky_factory(0, RuntimeError)), model)
