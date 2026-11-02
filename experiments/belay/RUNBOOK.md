@@ -89,6 +89,9 @@ A human then decides what happens. Never work around a refusal.
         <its Status row>");
      5. one `launching belay-X####-<run>` per run;
      6. `next: stop (...)`.
+   - **If it refuses because of the priority grant** (a grant below the Track's band), or Iris refuses the band
+     (`priority X not allowed for user Y`): run the escalate command it prints and stop. Never relaunch at a lower
+     band yourself; a maintainer grants the band in Iris user budgets or re-queues without the grant.
    - **If it prints `held:`:** the launch would pass the node cap (set on the admin page) or the idea's node grant.
      Stop working on this idea; it stays approved, and a later session reruns this step. Running it
      again resumes where it stopped.
@@ -332,6 +335,7 @@ A scheduled session (one that ran `B claim`) then reports these lines with
 - Sequence-length or batch-size warmups, token-superposition training, or Inkling `rel_extent` above 2048.
 - Anything touching GB200 or the hero run, including a study run on `hero-mfu` or at production priority.
 - A study that needs new model code, or its approved budget raised.
+- Setting or raising an idea's priority: only an approver grants it, on the admin page.
 - Starting, stopping or changing an Iris cluster, or touching a job Belay did not submit.
 
 ## 8b. Untrusted input
@@ -369,7 +373,7 @@ metric and rule. Nothing else spells out a launch.
 | Weekly branch | `<week_branch_prefix><Monday as YYYY-MM-DD>`. Demo: `marin_belay_v1_loomdemo_w2026-10-26` |
 | Weekly base | Must contain `base_branch`. Production: `marin_belay_v1_recipe`. Demo: `marin_belay_v1_loomdemo` |
 | Registry branch | Demo: `marin_belay_v1_registry_demo`. The demo never touches `marin_belay_v1_registry` |
-| Runs | Seed 0; cluster, priority and nodes per Track (`B tracks`) |
+| Runs | Seed 0; cluster, priority and nodes per Track (`B tracks`). An approver may grant an idea a higher Iris priority (`batch` < `interactive` < `production`); its runs then launch at that band in every stage and study run, and the band used is on each trial (`priority`) and in the spec's `launched:` commands. Analysis CPU jobs stay at `batch` |
 | Budget | A soft cap on nodes across all Belay runs, set on the admin page (default 8); a maintainer may grant one idea more nodes at approval. Sessions read both from the page and never change them |
 | Posts | The idea's thread on the Belay page's agent log. A #9514 idea also gets one reply on its comment, posted at registration and edited at the verdict, only when an approver turns GitHub posting on. Internal proposals get no reply |
 

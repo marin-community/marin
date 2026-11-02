@@ -64,6 +64,16 @@ class Idea:
     """The session's one reply on the idea's #9514 comment."""
     budget_hours: float | None
     """A study's approved hours (with ``node_grant`` as its nodes): its runs may not pass that budget."""
+    priority_grant: str | None
+    """An Iris priority band an approver granted the idea's runs, above its Track's band (``priority_by`` granted it)."""
+    priority_by: str | None
+
+    @property
+    def priority_line(self) -> str | None:
+        """How a post shows the grant: "Priority: interactive (granted by @ClassicLarry)"."""
+        if self.priority_grant is None:
+            return None
+        return f"Priority: {self.priority_grant} (granted by @{self.priority_by})"
 
     @property
     def name(self) -> str:

@@ -128,6 +128,9 @@ class Rule(StrEnum):
     """Δ = (variant - control) / control."""
 
 
+# Iris priority bands, lowest first. An approver may grant an idea's runs a band above its Track's; ``system`` is
+# Iris's own and never used by Belay.
+PRIORITY_BANDS = ("batch", "interactive", "production")
 H100_CLUSTER = "cw-us-east-02a"
 # CoreWeave object storage; a cluster cw-<region> keeps its run data in bucket marin-<region>.
 COREWEAVE_S3_ENDPOINT = "https://cwobject.com"
