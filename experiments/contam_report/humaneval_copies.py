@@ -60,19 +60,30 @@ def ngrams(tokens: list[str]) -> set[tuple[str, ...]]:
     return {tuple(tokens[i : i + NGRAM_LENGTH]) for i in range(len(tokens) - NGRAM_LENGTH + 1)}
 
 
-def coverage(part: str, doc_ngrams: set[tuple[str, ...]]) -> tuple[float | None, int]:
+def found_ngrams(wanted: set[tuple[str, ...]], doc_tokens: list[str]) -> set[tuple[str, ...]]:
+    """Return the wanted n-grams that occur in ``doc_tokens``, without building the doc's n-gram set."""
+    firsts = {g[0] for g in wanted}
+    found = set()
+    for i in range(len(doc_tokens) - NGRAM_LENGTH + 1):
+        if doc_tokens[i] in firsts and (g := tuple(doc_tokens[i : i + NGRAM_LENGTH])) in wanted:
+            found.add(g)
+    return found
+
+
+def coverage(part: str, doc_token_lists: list[list[str]]) -> tuple[float | None, int]:
     part_ngrams = ngrams(part.split())
     if not part_ngrams:
         return None, 0
-    return len(part_ngrams & doc_ngrams) / len(part_ngrams), len(part_ngrams)
+    found = set().union(*(found_ngrams(part_ngrams, tokens) for tokens in doc_token_lists))
+    return len(found) / len(part_ngrams), len(part_ngrams)
 
 
 def check(doc: str, prompt: str, solution: str) -> dict:
     flat = collapse(doc)
     flat_unescaped = collapse(unescape(doc))
-    doc_ngrams = ngrams(flat.split()) | ngrams(flat_unescaped.split())
-    prompt_cov, _ = coverage(prompt, doc_ngrams)
-    solution_cov, solution_ngrams = coverage(solution, doc_ngrams)
+    doc_token_lists = [flat.split(), flat_unescaped.split()]
+    prompt_cov, _ = coverage(prompt, doc_token_lists)
+    solution_cov, solution_ngrams = coverage(solution, doc_token_lists)
     return {
         "prompt_exact": prompt.strip() in doc,
         "prompt_normalized": collapse(prompt) in flat or collapse(prompt) in flat_unescaped,
