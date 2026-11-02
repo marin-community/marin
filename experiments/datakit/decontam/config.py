@@ -17,7 +17,7 @@ GLOBAL_DF_SAMPLE_DOCS = 1_000_000
 GLOBAL_DF_COMMON_MIN_ABS = 50
 GLOBAL_DF_COMMON_MIN_SOURCES = 3
 
-# Item rule (marin#6852): also mark a document holding at least this share of one
+# Item rule: also mark a document holding at least this share of one
 # core or Uncheatable item's indexed 13-grams, not counting drop-set n-grams. GSM8K
 # copies often lack the worked answer and HumanEval copies the tests, so their bars
 # are lower. Other evals are left to the paragraph rule; the rule has not been tuned

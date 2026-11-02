@@ -300,8 +300,6 @@ def _load_bloom(bloom_path: str) -> dupekit.Bloom:
 _JSON_ESCAPES = (("\\n", "\n"), ("\\t", "\t"), ('\\"', '"'), ("\\'", "'"), ("\\\\", "\\"))
 
 
-# The item rule unescapes huge records in pieces of at most this many characters,
-# cut at whitespace, so it never copies a whole multi-GB record.
 _UNESCAPE_PIECE_CHARS = 16 * 1024 * 1024
 _WHITESPACE_PATTERN = re.compile(r"\s")
 
@@ -2227,10 +2225,10 @@ def decon_step(
             complete document with one feature can still match. Ignored in
             exact-paragraph mode.
         paragraph_delimiter: Paragraph split string (see :class:`NGramConfig`).
-        item_match: Optional item rule (see :class:`ItemMatchConfig`). Needs an
-            n-gram config and enters the step hash.
             When reusing a ``prebuilt_bloom``, MUST match the delimiter the bloom
             was built with, or the two feature sets won't line up.
+        item_match: Optional item rule (see :class:`ItemMatchConfig`). Needs an
+            n-gram config and enters the step hash.
         estimated_doc_count, false_positive_rate: Bloom sizing parameters.
             Ignored when ``prebuilt_bloom`` is set.
         worker_resources, max_workers: Zephyr execution knobs.
