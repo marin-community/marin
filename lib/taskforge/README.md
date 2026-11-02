@@ -23,6 +23,7 @@ src/taskforge/
                                RolloutEngine model
   sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
+  spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage20_triage/              verdict.py: TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
@@ -37,13 +38,67 @@ src/taskforge/
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
-modules (`capability`, `content_hash`, `ledger`, `llm`, `sandbox`), and the shared modules import no
-stage. The coordinator package, `stage_coordinator`, runs the stages in order and is unnumbered. It
-may import any stage and shared module, and `tests/test_imports.py` refuses an import of it from any
-other package, along with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time
-and tokens per kind and step over JSONL ledgers. `scripts/build_image_job.py` runs on Iris and
-documents its submit command in its docstring: it builds a directory's `DockerBuild` context with
-`taskforge.sandbox.image_builder` and prints the pinned registry digest.
+modules (`capability`, `child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and
+the shared modules import no stage. The coordinator package, `stage_coordinator`, runs the stages in order and
+is unnumbered. It may import any stage and shared module, and `tests/test_imports.py` refuses an
+import of it from any other package, along with the other wrong-way imports.
+`scripts/ledger_summary.py` totals wall time and tokens per kind and step over JSONL ledgers.
+`scripts/build_image_job.py` runs on Iris and documents its submit command in its docstring: it
+builds a directory's `DockerBuild` context with `taskforge.sandbox.image_builder` and prints the
+pinned registry digest.
+
+## Task specs
+
+A built task is a TaskCompendium `TaskSpec` and the RolloutEngine `TaskRolloutSpec` that says how it
+runs. `spec.draft.assemble` builds the semantic task and `spec.draft.lower` alone builds the rollout
+spec, so a move of either is a single-site change.
+
+- `spec.draft.assemble(task_id, instruction, answer_type, answer_format, grader, source, *,
+  environment, files, output_paths, system, final_tools, tags) -> TaskSpec`. `environment` is
+  `requirements(image=, packages=, setup=, workdir=, env=)`, whose commands run as Linux processes
+  in the image or with CPython 3.12 and the PyPI `packages`, or, with neither, in ShellSim's
+  simulated shell, or `None` for a task without a machine.
+  `files` are agent-visible `file("workspace/x", ...)` resources relative to the machine root.
+  `grader` is a `GraderPackage` from `answer_grader(spec)` (a verifyit mode graded in process, or
+  in a verifier machine given `environment=`), `python_grader(script, config, environment=,
+  answer_path=, timeout=)` (`python3 /tests/grade.py` in a verifier machine) or
+  `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`. RolloutEngine grades an
+  LLM judge (a verifyit `JudgeSpec`) on the host through the judge service of `TaskRolloutSpec.judge_connection`
+  or `VERIFYIT_JUDGE_BASE_URL`, with no verifier machine, so its `RolloutEngine.check` fails on a host
+  that has neither.
+  `grader_environment(task_image)` is the verifier machine's environment: the task image, or
+  `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
+- `spec.draft.lower(task, *, host, task_machine, verifier_machine, limits, factories)` runs
+  each machine on `host_requirements` for `factories`: with the local backend, the grader base image
+  runs there. A package machine always lowers onto the local backend, so on a host without one
+  `lower` refuses it: `RolloutEngine.check` finds no factory for it. It
+  picks the host's container backend for an image, the local backend for Linux processes without
+  one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment,
+  other than a judge, takes a verifier machine; no other grader does. `limits` is a `RolloutLimits`
+  from `rollout_limits(...)`, which sets no token budget. The spec names the harness `TOOL_HARNESS`,
+  and `lower` rejects what `RolloutEngine.check` rejects (`draft.check`).
+- `spec.draft.rollout_engine(factories, *, command_timeout)` is the `RolloutEngine` every Taskforge
+  rollout runs on: the factories and RolloutEngine's `ShellHarness(command_timeout=...)` registered as
+  `TOOL_HARNESS`. The shell command timeout belongs to the harness registration, not to the spec, and
+  each run passes its model: `engine.run_task(spec, model)` returns a `GradedRollout`.
+- `spec.controls.Control` is one labeled candidate submission (`kind`, `category`, `concern`,
+  `author`, a `Transcript` or `Workspace` payload, an `Expectation`). `concern` is `reference`,
+  `acceptance`, `extraction` or `shortcut`, and the concern a control may carry follows its
+  category (`spec.controls.CONCERNS`). A task's control set needs a `reference`, an `acceptance`
+  and a `shortcut` control, so its coverage never rests on extraction controls, which pin today's
+  answer parser. `validate_controls(task, controls)` checks a set against its task.
+- `sandbox.factories.machine_factories(backends, controller_url)` returns exactly the requested
+  factories, keyed by shellbox `Backend` value, and raises if one is unavailable. Before a trial
+  starts, `task_refusals(spec, factories)` asks each factory to check its machine requirements.
+  `warm_local_python(factories)` can warm the local backend's CPython cache in a background thread.
+
+Task-specific grading is the task's own code, private in `resources.verifier`, run by a
+`ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
+the task's image or, for a ShellSim task or a task without a machine, from the grader base
+(CPython 3.12, `sh`, `setsid`, root), and receives the captured `output_paths` at their own paths
+and the extracted answer at `/app/answer.txt`. A grader program writes its verdict, the reward and
+one result per check, as `spec.verdict.verdict_json`. Generic modes that verifyit grades in
+process are preferred whenever a task fits one.
 
 ## Machine backends
 
