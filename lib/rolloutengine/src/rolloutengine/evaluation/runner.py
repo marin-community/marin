@@ -22,12 +22,33 @@ from finestore.eval import (
     SampleKind,
     sample_to_archive_row,
 )
+from finestore.eval_rollouts import rollout_records_from_sample
 from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from openai import APIError, APIStatusError
 from pydantic import BaseModel, ConfigDict, Field
+from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
+from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_protocol
+from taskcompendium.evaluation.metrics import likelihood_metrics
+from taskcompendium.evaluation.response import completion_text
+from taskcompendium.evaluation.selection import SELECTIONS_TABLE, EvaluationTokenizer, Selection, select_cases
+from taskcompendium.evaluation.spec import (
+    ChatGeneration,
+    ChoiceLikelihood,
+    ContinuationLikelihood,
+    EvaluationProtocol,
+    MetricKind,
+    TextGeneration,
+)
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge, judge_spec
+from taskcompendium.submission import conversation_messages
+from verifyit.modes.grade_judge import JudgeConnection
+
 from rolloutengine.engine import RolloutEngine
+from rolloutengine.evaluation.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.models import (
     GradedRolloutInterrupted,
@@ -41,31 +62,10 @@ from rolloutengine.models import (
     TaskRolloutSpec,
     TraceMode,
 )
-from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
-from taskcompendium.evaluation import (
-    ChatGeneration,
-    ChoiceLikelihood,
-    ContinuationLikelihood,
-    EvaluationProtocol,
-    MetricKind,
-    TextGeneration,
-    likelihood_metrics,
-)
-from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge, judge_spec
-from taskcompendium.pipeline.evaluation import EvaluationCase, evaluation_protocol
-from taskcompendium.submission import conversation_messages
-from verifyit.modes.grade_judge import JudgeConnection
-
-from marin.evaluation.completion import completion_text
-from marin.evaluation.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
-from marin.evaluation.rollouts import rollout_records_from_sample
-from marin.evaluation.selection import SELECTIONS_TABLE, EvaluationTokenizer, Selection, select_cases
 
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
-DRIVER_REVISION = "2026.10.29.6"
+DRIVER_REVISION = "2026.11.02.1"
 
 
 class EvaluationInfrastructureError(RuntimeError):

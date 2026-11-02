@@ -5,14 +5,22 @@
 
 from functools import partial
 
-from taskcompendium.evaluation import EvaluationProtocol, Metric, MetricKind, Sampling, TrialPolicy
+from taskcompendium.evaluation.spec import (
+    EvaluationProtocol,
+    Metric,
+    MetricKind,
+    OperationKind,
+    Sampling,
+    SummaryKind,
+    TrialPolicy,
+)
 from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.importers.evaluation_nupa import convert_nupa, nupa_item, read_nupa_panel, read_nupa_sample
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import BASIC_GRADER
-from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
+from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
+from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -21,7 +29,7 @@ PANEL_SHA256 = "27f122972d76dc2a1170a3d105a9856b55beedabe037f697c1a1aa2baeb67036
 PANEL_SOURCE_COMMIT = "623134de90723e7f189036da005067f36817b6e7"
 
 
-def sources() -> list[RlDataSource[EvalDataSet]]:
+def sources() -> list[RlDataSource[EvalDataset]]:
     result = []
     for name, rows, reader in (("NUPA-Loose", 238926, read_nupa_sample), ("NUPA5K-Loose", 5000, read_nupa_panel)):
         inputs = (
@@ -47,7 +55,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                     tags=("eval", "source:evalchemy", "single-turn", "benchmark", "family:numeric-representation"),
                     count=rows,
                 ),
-                config=EvalDataSet(
+                config=EvalDataset(
                     recipe=CurationRecipe(
                         name="evalchemy-" + name.lower(),
                         source=HfSource(
@@ -61,8 +69,8 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                     ),
                     protocol=EvaluationProtocol(
                         benchmark=name,
-                        version="maintained-nupa-loose-v3",
-                        operation="chat_generation",
+                        version="2026.11.02",
+                        operation=OperationKind.CHAT_GENERATION,
                         sampling=Sampling(
                             temperature=0,
                             top_p=None,
@@ -91,9 +99,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                             )
                         ),
                         primary_metric="exact_match",
-                        reducer=(
-                            "nupa_fixed_panel_mean_v1" if name == "NUPA5K-Loose" else "nupa_stratified_sample_mean_v1"
-                        ),
+                        summary=SummaryKind.MEAN,
                         expected_population=rows,
                         context_window=73664 if name == "NUPA5K-Loose" else None,
                     ),

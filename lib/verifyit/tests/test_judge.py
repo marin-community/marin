@@ -9,16 +9,12 @@ from pathlib import Path
 
 import httpx
 import pytest
-from verifyit.grade import InvalidTask, Status, grade, run, write_reward
+from verifyit.grade import GradingInfraError, InvalidTask, Status, grade, run, write_reward
 from verifyit.modes import grade_judge
-from verifyit.modes.grade_math_judge import grade_math_judge_candidate
 from verifyit.spec import (
     Constraint,
     EmptyOutputPolicy,
     JudgeSpec,
-    MathJudgeSpec,
-    MathProfile,
-    MathSpec,
     parse_spec,
     render_spec,
 )
@@ -35,53 +31,6 @@ QUESTION = "Under the narrow interpretation of Article 51 of the UN Charter, whe
 ENV_VARS = ("VERIFYIT_JUDGE_BASE_URL", "VERIFYIT_JUDGE_API_KEY", "VERIFYIT_JUDGE_MODEL")
 
 
-def _math_judge_spec() -> MathJudgeSpec:
-    return MathJudgeSpec(
-        math=MathSpec(expected="2", profile=MathProfile.BOXED),
-        judge=JudgeSpec(
-            references=("2",),
-            rubric="labels",
-            exact_gate=False,
-            prompt_template="Reference: {reference}\nCandidate: {candidate}",
-            label_scores={"correct": 1.0, "incorrect": 0.0, "not_attempted": 0.0},
-            label_scan="whole",
-            label_case="upper",
-            max_completion_tokens=2048,
-        ),
-    )
-
-
-@pytest.mark.parametrize("response, expected", [(r"\boxed{2}", 1), ("", 0)])
-def test_math_judge_roundtrip_preserves_local_decisions_without_an_endpoint(unconfigured_judge, response, expected):
-    spec = parse_spec(render_spec(_math_judge_spec()))
-    assert isinstance(spec, MathJudgeSpec)
-    verdict = grade_math_judge_candidate(spec, response, runtime=None)
-    assert (verdict.status, verdict.reward) == (Status.SCORED, expected)
-
-
-@pytest.mark.parametrize("reply,expected", [("correct", 1), (" INCORRECT\n", 0), ("Not_Attempted", 0)])
-def test_math_judge_sends_extracted_answer_and_parses_whole_label(fake_judge, reply, expected):
-    fake_judge.replies = [reply]
-    spec = parse_spec(render_spec(_math_judge_spec()))
-    assert isinstance(spec, MathJudgeSpec)
-    verdict = grade_math_judge_candidate(spec, r"\boxed{2} then \boxed{4}")
-    assert (verdict.status, verdict.reward) == (Status.SCORED, expected)
-    assert verdict.detail["extracted"] == "4"
-    assert fake_judge.requests[0]["messages"] == [
-        {
-            "role": "user",
-            "content": "Reference: 2\nCandidate: 4",
-        }
-    ]
-    assert fake_judge.requests[0]["temperature"] == 0
-
-
-def test_math_judge_malformed_reply_is_an_error(fake_judge):
-    fake_judge.replies = ["Probably correct"]
-    with pytest.raises(RuntimeError, match="malformed"):
-        grade_math_judge_candidate(_math_judge_spec(), r"\boxed{4}")
-
-
 class FakeJudgeServer(ThreadingHTTPServer):
     """A one-endpoint stand-in for an OpenAI-compatible chat server."""
 
@@ -95,6 +44,8 @@ class FakeJudgeServer(ThreadingHTTPServer):
     response_fields: dict
     raw_body: str | None
     usage_tokens: list[int]
+    http_statuses: list[int]
+    retry_after: str | None
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -150,7 +101,16 @@ class _Handler(BaseHTTPRequestHandler):
             ).encode()
         if server.raw_body is not None:
             body = server.raw_body.encode()
-        self.send_response(server.http_status)
+        status = (
+            server.http_statuses[min(len(server.requests) - 1, len(server.http_statuses) - 1)]
+            if server.http_statuses
+            else server.http_status
+        )
+        if status != 200 and server.http_statuses:
+            body = json.dumps({"error": {"message": "fixture unavailable"}}).encode()
+        self.send_response(status)
+        if server.retry_after is not None:
+            self.send_header("Retry-After", server.retry_after)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -168,6 +128,8 @@ def fake_judge(monkeypatch):
     server.requests = []
     server.finish_reasons = []
     server.http_status = 200
+    server.http_statuses = []
+    server.retry_after = None
     server.message_fields = {}
     server.response_fields = {}
     server.raw_body = None
@@ -804,6 +766,48 @@ def test_direct_candidate_uses_explicit_connection_and_preserves_text(fake_judge
     assert fake_judge.prompts == ["Reference: answer\nCandidate:   candidate\n", "Reference: answer\nCandidate: "]
     assert all(request["model"] == "explicit-model" for request in fake_judge.requests)
     assert "private-test-key" not in repr(connection)
+
+
+@pytest.mark.parametrize(
+    "statuses,retry_after,budget,expected_status,expected_requests",
+    [
+        ([400], None, 10, Status.INFRA_ERROR, 1),
+        ([503, 200], "0.25", 10, Status.SCORED, 2),
+        ([503], None, 10, Status.INFRA_ERROR, 3),
+        ([429], "60", 0.1, Status.INFRA_ERROR, 1),
+    ],
+)
+def test_judge_transport_retries_only_recoverable_failures_and_retains_unscored_evidence(
+    fake_judge, monkeypatch, statuses, retry_after, budget, expected_status, expected_requests
+):
+    fake_judge.http_statuses = statuses
+    fake_judge.retry_after = retry_after
+    fake_judge.replies = ["[[A=B]]"]
+    delays = []
+    monkeypatch.setattr(grade_judge.random, "uniform", lambda *_: 0)
+    monkeypatch.setattr(grade_judge.time, "sleep", delays.append)
+    spec = _label_spec(
+        label_scan="whole", label_case="upper", request_timeout=budget, transport_budget=budget, transport_attempts=3
+    )
+    if expected_status is Status.SCORED:
+        verdict = grade_judge.grade_judge_candidate(spec, "candidate")
+        assert (verdict.status, verdict.reward) == (Status.SCORED, 1)
+        detail = verdict.detail
+    else:
+        with pytest.raises(GradingInfraError) as failure:
+            grade_judge.grade_judge_candidate(spec, "candidate")
+        detail = failure.value.detail
+    assert len(fake_judge.requests) == expected_requests
+    attempts = detail["transport_attempts"]
+    assert [attempt["status"] for attempt in attempts if attempt["outcome"] == "failed"] == [statuses[0]] * (
+        expected_requests - int(expected_status is Status.SCORED)
+    )
+    assert json.loads(attempts[0]["body"]) == {"error": {"message": "fixture unavailable"}}
+    assert "test-key" not in json.dumps(detail)
+    if expected_status is Status.SCORED:
+        assert verdict.reward == 1
+        assert delays == [0.25]
+        assert attempts[-1]["outcome"] == "succeeded"
 
 
 def test_direct_candidate_validates_trusted_constraints_before_empty_gate():

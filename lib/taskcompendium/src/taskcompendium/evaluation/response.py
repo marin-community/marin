@@ -12,7 +12,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from taskcompendium.evaluation import ResponseSelection
+from taskcompendium.evaluation.spec import ResponseSelection
 
 
 def completion_text(message: Mapping[str, Any], stop_reason: str, selection: ResponseSelection) -> str:

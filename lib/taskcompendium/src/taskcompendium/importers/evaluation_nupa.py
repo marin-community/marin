@@ -14,11 +14,11 @@ from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.convert.evaluation import source_evidence
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation import ChatGeneration, EvaluationItem
+from taskcompendium.evaluation.corpus import source_order
+from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem
 from taskcompendium.importers.evalchemy.grader import source_package
 from taskcompendium.importers.evalchemy.scorers.nupa_preparation import NupaAnswerFormat
 from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.evaluation import source_order
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 

@@ -6,7 +6,6 @@
 import copy
 import json
 import re
-from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -17,13 +16,30 @@ import pytest
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
-from marin.evaluation.selection import SELECTIONS_TABLE, select_cases
-from marin.evaluation.task_driver import EvaluationRunConfig, ModelIdentity, run_evaluation
-from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from shellbox.machine import PackageSpec
+from taskcompendium.evaluation.selection import SELECTIONS_TABLE, select_cases
+from taskcompendium.evaluation.spec import (
+    ContextPolicy,
+    EvaluationProtocol,
+    Metric,
+    MetricKind,
+    OperationKind,
+    Sampling,
+    SummaryKind,
+    TrialPolicy,
+)
 from taskcompendium.grader import verifyit_package
+from taskcompendium.importers.evalchemy.long_context import (
+    convert_graphwalks,
+    convert_mrcr,
+    graphwalks_item,
+    mrcr_item,
+    read_mrcr,
+)
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
+from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import WhitespaceSplit
@@ -31,8 +47,8 @@ from transformers import PreTrainedTokenizerFast
 from verifyit.spec import ExactSpec
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.task_curation.datasets.evalchemy.long_context import sources
-from experiments.post_training.task_curation.pipeline import source_recipe
+from rolloutengine.evaluation.runner import EvaluationRunConfig, ModelIdentity, run_evaluation
+from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 
 
 class WordTokenizer:
@@ -99,46 +115,71 @@ def selection_task(row, context, *, convert):
 
 
 def publish_fixture(tmp_path: Path, benchmark: str, rows: list[dict], *, context_window: int | None = None):
-    source = next(source for source in sources() if source.config.protocol.benchmark == benchmark)
-    dataset = source.config
-    assert dataset is not None
+    if benchmark == "MRCR":
+        converter, item_builder, reader = convert_mrcr, mrcr_item, read_mrcr
+        context_policy = ContextPolicy(kind="mrcr", max_context=73728)
+        metric_name, max_tokens, enable_thinking = "accuracy", 4096, False
+    elif benchmark == "GraphWalks":
+        converter, item_builder, reader = convert_graphwalks, graphwalks_item, None
+        context_policy = ContextPolicy(kind="graphwalks", max_context=None)
+        metric_name, max_tokens, enable_thinking = "f1", 131072, True
+    else:
+        raise ValueError(f"Unknown selection fixture benchmark: {benchmark}")
     tmp_path = tmp_path / benchmark
     root = tmp_path / "input"
-    table = pa.Table.from_pylist(rows)
-    for index, filename in enumerate(dataset.files):
-        file = root / filename
-        file.parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(table if index == 0 else table.slice(0, 0), file)
+    root.mkdir(parents=True)
+    filename = "rows.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), root / filename)
     output = str(tmp_path / "published")
-    protocol = dataset.protocol.model_copy(
-        update={
-            "expected_population": len(rows),
-            "context_window": context_window,
-            "metrics": tuple(
-                metric for metric in dataset.protocol.metrics if metric.name == dataset.protocol.primary_metric
-            ),
-        }
+    protocol = EvaluationProtocol(
+        benchmark=benchmark,
+        version="2026.11.02",
+        operation=OperationKind.CHAT_GENERATION,
+        sampling=Sampling(
+            temperature=0,
+            top_p=None,
+            top_k=None,
+            max_tokens=max_tokens,
+            stop=(),
+            chat_template_kwargs={"enable_thinking": enable_thinking},
+        ),
+        trials=TrialPolicy(count=1, seed=None),
+        metrics=(Metric(name=metric_name, kind=MetricKind.CONTINUOUS, higher_is_better=True),),
+        primary_metric=metric_name,
+        summary=SummaryKind.MEAN,
+        expected_population=len(rows),
+        context_window=context_window,
+        context_policy=context_policy,
     )
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
         package_spec=PackageSpec(pypi_packages=("tomli-w==1.2.0",)),
     )
-    recipe = source_recipe(dataset.recipe, {}, environment)
-    recipe = replace(recipe, convert=partial(selection_task, convert=recipe.convert))
+    recipe = SourceRecipe(
+        name="selection-" + benchmark.lower(),
+        version="2026.11.02",
+        source=SourceFiles(benchmark, "fixture", (filename,), SourceFormat.PARQUET, read=reader),
+        convert=partial(selection_task, convert=converter),
+        rubric=None,
+        controls=None,
+        intended_use=IntendedUse.EVAL,
+        grader_environment=environment,
+        resource_budget_bytes=64 * 1024 * 1024,
+    )
     client = LocalClient()
     try:
         with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
             publish_evaluation_corpus(
                 recipe,
                 protocol,
-                dataset.item_builder,
+                item_builder,
                 context,
                 str(root),
                 output,
             )
     finally:
         client.shutdown()
-    return output, protocol, dataset.files[0]
+    return output, protocol, filename
 
 
 @pytest.fixture

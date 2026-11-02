@@ -6,10 +6,11 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.local_backend import LocalClient
-from taskcompendium.pipeline.evaluation import evaluation_cases, publish_evaluation_corpus
+from taskcompendium.evaluation.corpus import evaluation_cases
+from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.task_curation.datasets.evalchemy.harness import sources
+from experiments.post_training.task_curation.datasets.evalchemy.mmlu import sources
 from experiments.post_training.task_curation.pipeline import source_recipe
 
 

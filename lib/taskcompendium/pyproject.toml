@@ -61,5 +61,5 @@ project-excludes = [
     "src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
     "src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
 ]
-search-path = ["src", "../verifyit/src", "../rigging/src"]
+search-path = ["src", "../verifyit/src", "../rigging/src", "src/taskcompendium/importers/evalchemy/assets"]
 python-interpreter = "../../.venv/bin/python"

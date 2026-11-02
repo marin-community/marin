@@ -16,7 +16,7 @@ from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.cluster.types import ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
-from marin.evaluation.task_driver import (
+from rolloutengine.evaluation.runner import (
     ATTEMPTS_TABLE,
     EvaluationInfrastructureError,
     EvaluationRunConfig,
@@ -24,8 +24,9 @@ from marin.evaluation.task_driver import (
 )
 from rolloutengine.models import RolloutLimits
 from taskcompendium.convert.answers import exact_answer_task
-from taskcompendium.evaluation import EvaluationProtocol, Metric, MetricKind, Sampling, TrialPolicy
-from taskcompendium.pipeline.evaluation import chat_item, publish_evaluation_corpus
+from taskcompendium.evaluation.corpus import chat_item
+from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, MetricKind, Sampling, SummaryKind, TrialPolicy
+from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
 from tokenizers import Tokenizer
@@ -99,7 +100,7 @@ def recovery_corpora(tmp_path):
                     trials=TrialPolicy(count=2, seed=7),
                     metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                     primary_metric="accuracy",
-                    reducer="mean_v1",
+                    summary=SummaryKind.MEAN,
                     expected_population=2,
                 )
                 output = tmp_path / (name + "-published")

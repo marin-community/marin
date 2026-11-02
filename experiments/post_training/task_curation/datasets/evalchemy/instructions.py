@@ -5,28 +5,26 @@
 
 from functools import partial
 
-from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation import (
-    EvaluationItem,
+from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     Metric,
     MetricKind,
+    OperationKind,
     Sampling,
-    TextGeneration,
+    SummaryKind,
     TrialPolicy,
 )
-from taskcompendium.importers.evalchemy.grader import scorer_revision, source_package
+from taskcompendium.importers.evalchemy.grader import scorer_revision
+from taskcompendium.importers.evalchemy.instructions import convert_instructions, instruction_item
 from taskcompendium.importers.evalchemy.scorers.instruction_spec import InstructionProfile
-from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.evaluation import chat_item
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
-from taskcompendium.pipeline.models import IntendedUse, RawRow
+from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.instruction_environments import (
+from experiments.post_training.task_curation.datasets.evalchemy.environments import (
     IFBENCH_GRADER,
     IFEVAL_GRADER,
 )
-from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
+from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -46,34 +44,6 @@ IFBENCH_METRICS = (
 )
 
 
-def convert_instructions(row: RawRow, context: ConversionContext, *, profile: InstructionProfile) -> TaskSpec:
-    # Parquet pads kwargs with nulls for other checkers; both source protocols discard them.
-    constraints = [
-        {"name": name, "params": {key: value for key, value in params.items() if value is not None}}
-        for name, params in zip(row.data["instruction_id_list"], row.data["kwargs"], strict=True)
-    ]
-    task = conversation_task(
-        row,
-        events=(TextMessage(role="user", content=row.data["prompt"]),),
-        package=source_package(
-            "ifeval" if profile is InstructionProfile.HARNESS else "ifbench",
-            {"constraints": constraints, "profile": profile, "prompt": row.data["prompt"]},
-            environment=required_grader_environment(context),
-        ),
-        evidence=dict(row.data),
-    )
-    benchmark = "ifeval" if profile is InstructionProfile.HARNESS else "IFBench"
-    return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:" + benchmark)})
-
-
-def instruction_item(task: TaskSpec, *, profile: InstructionProfile) -> EvaluationItem:
-    item = chat_item(task)
-    if profile is InstructionProfile.HARNESS:
-        (message,) = task.context.events
-        return item.model_copy(update={"operation": TextGeneration(context=message.content)})
-    return item
-
-
 def instruction_source(
     name: str,
     benchmark: str,
@@ -81,7 +51,7 @@ def instruction_source(
     population: int,
     profile: InstructionProfile,
     max_tokens: int,
-) -> RlDataSource[EvalDataSet]:
+) -> RlDataSource[EvalDataset]:
     names = IFEVAL_METRICS if profile is InstructionProfile.HARNESS else IFBENCH_METRICS
     return RlDataSource(
         info=SourceInfo(
@@ -92,7 +62,7 @@ def instruction_source(
             tags=("eval", "source:evalchemy", "benchmark", "single-turn", "instruction-following"),
             count=population,
         ),
-        config=EvalDataSet(
+        config=EvalDataset(
             CurationRecipe(
                 name="evalchemy-" + name,
                 source=source,
@@ -103,8 +73,12 @@ def instruction_source(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="maintained-instructions-v4",
-                operation="text_generation" if profile is InstructionProfile.HARNESS else "chat_generation",
+                version="2026.11.02",
+                operation=(
+                    OperationKind.TEXT_GENERATION
+                    if profile is InstructionProfile.HARNESS
+                    else OperationKind.CHAT_GENERATION
+                ),
                 sampling=Sampling(
                     temperature=0,
                     top_p=None,
@@ -123,7 +97,7 @@ def instruction_source(
                     for name in names
                 ),
                 primary_metric=names[0],
-                reducer="instruction_weighted_v1",
+                summary=SummaryKind.WEIGHTED_MEAN,
                 expected_population=population,
             ),
             partial(instruction_item, profile=profile),
@@ -132,7 +106,7 @@ def instruction_source(
     )
 
 
-def sources() -> list[RlDataSource[EvalDataSet]]:
+def sources() -> list[RlDataSource[EvalDataset]]:
     return [
         instruction_source(
             "ifeval",

@@ -10,9 +10,10 @@ from functools import partial
 
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.evaluation import EvaluationProtocol
+from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, ItemBuilder
+from taskcompendium.evaluation.spec import EvaluationProtocol
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.evaluation import MANIFEST_FILENAME, ItemBuilder, publish_evaluation_corpus
+from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.sources import source_files_identity
@@ -40,11 +41,11 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource
 
-EVALUATION_PIPELINE_VERSION = "2026.10.28"
+EVALUATION_PIPELINE_VERSION = "2026.11.02"
 
 
 @dataclass(frozen=True)
-class EvalDataSet:
+class EvalDataset:
     """One source conversion and the additional protocol that turns its tasks into an evaluation."""
 
     recipe: CurationRecipe
@@ -96,7 +97,7 @@ def _build_run(
     )
 
 
-def _publish(dataset: EvalDataSet, options: PipelineOptions, identity: dict, run: EvaluationRun) -> CampaignArtifact:
+def _publish(dataset: EvalDataset, options: PipelineOptions, identity: dict, run: EvaluationRun) -> CampaignArtifact:
     validate_input_identity(dataset.recipe, options.inputs, identity)
     grader_environment = None
     if dataset.recipe.grader is not None:
@@ -133,7 +134,7 @@ def _publish(dataset: EvalDataSet, options: PipelineOptions, identity: dict, run
     )
 
 
-def curate(source: RlDataSource[EvalDataSet], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
+def curate(source: RlDataSource[EvalDataset], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Publish the complete evaluation population without RL admission or model review."""
     dataset = source.config
     assert dataset is not None

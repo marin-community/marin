@@ -56,7 +56,7 @@ EXCLUDE_PATTERNS = [
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
     # Benchmark prompts retain source whitespace byte for byte.
-    "experiments/post_training/task_curation/datasets/evalchemy/assets/crux_*.txt",
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/assets/crux_*.txt",
     # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
     "experiments/post_training/task_curation/datasets/*/scorers/**",
     ".git/**",

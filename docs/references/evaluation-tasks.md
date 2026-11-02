@@ -1,79 +1,82 @@
 # Evaluation tasks
 
-Evaluation datasets use the task catalog and canonical `TaskSpec` format. Each
-published corpus also carries the protocol and per-task execution inputs needed
-to reproduce the benchmark. The standard evaluation driver writes individual
-attempts to FineStore. Consumers, including Evaldash's raw importer, own reductions.
+Evaluation corpora pair canonical `TaskSpec` rows with a benchmark protocol and
+per-row execution inputs. RolloutEngine executes the corpus and writes raw
+attempts to FineStore. Evaldash summary computation and raw-archive ingestion
+remain separate work; this path produces no headline score or legacy
+`record.json`.
 
-```mermaid
-flowchart LR
-    Source[Pinned source and few-shot inputs] --> Curation[Curation]
-    Curation --> Tasks[TaskSpec parquet]
-    Curation --> Metadata[Protocol and task sidecars]
-    Tasks --> Driver[Evaluation driver]
-    Metadata --> Driver
-    Driver --> Engine[RolloutEngine and Shellbox]
-    Driver --> Likelihood[Token likelihood transport]
-    Engine --> Raw[FineStore raw attempts]
-    Likelihood --> Raw
-    Raw --> Consumer[Import, reduction and comparison]
-```
+## Ownership and data contracts
 
-## Curate a corpus
+| Owner | Responsibility |
+| --- | --- |
+| `experiments/post_training/task_curation/` | Pinned acquisition, environment declarations, artifact graphs, and the `EvalDataset` binding |
+| `taskcompendium.importers.evalchemy` | Source parsing, prompts, conversion, item builders, rubrics, and source grading programs |
+| `taskcompendium.evaluation` | Typed metadata, corpus readers, response policy, and pure cohort selection |
+| `taskcompendium.pipeline.evaluation` | Population-preserving corpus publication |
+| `verifyit` | Shared comparisons, mathematical equivalence, judge transport, and structured verdicts |
+| `rolloutengine.evaluation` | Generation and likelihood execution, grading, attempt bookkeeping, and FineStore writes |
+| `experiments.evaluation.task_driver` | CLI, endpoint and credential binding, retry/backoff, Shellbox factories, and Iris submission |
+| Shellbox | Machine isolation, resource access, and outer execution deadlines |
 
-Evaluation declarations live under
-`experiments/post_training/task_curation/datasets/evalchemy/` and appear in
-`all_sources()` with type `eval` and source tags. Default training curation
-excludes them; name evaluation sources explicitly.
+`EvalDataset` in `experiments.post_training.task_curation.evaluation` binds a
+`CurationRecipe`, an `EvaluationProtocol`, and an item builder. Leaf declarations
+live in `datasets/evalchemy/`; the shared catalog is
+`experiments.post_training.task_curation.sources.all_sources()`.
+
+Import `EvaluationProtocol`, `EvaluationItem`, `OperationKind`, and `SummaryKind`
+from `taskcompendium.evaluation.spec`. The protocol's `schema_version` is `2`,
+independent of TaskSpec and corpus-manifest schema versions. It records sampling,
+trial seeds, metric meanings, summary semantics, context policy, and the expected
+full source population. `EvaluationItem` joins each task to its original source
+position and stores operation inputs, grouping, and selection metadata.
+
+Operations distinguish chat generation, raw-text generation, choice likelihood,
+and continuation likelihood. Chat preserves the source conversation without an
+added submission instruction. Likelihood preserves context/continuation token
+boundaries and source normalization. Row eligibility precedes the run's source
+limit and trial expansion. Context selection records exclusions and token
+budgets; it never silently truncates an oversized chat prompt.
+
+Use CalVer for authored recipe and protocol revisions. Keep upstream commit
+pins, content hashes, and schema versions in their own fields. A changed
+converter, grader asset, or protocol can change corpus identity. Publish a fresh
+corpus and use a new result root when identity changes.
+
+## Curate and run
+
+Select evaluation sources explicitly; default training curation excludes them.
+QUICK publishes the complete declared evaluation population, skips RL admission
+and review, and refuses missing, rejected, or rewritten rows.
 
 ```bash
 uv run --package marin-core --group test python \
   -m experiments.post_training.task_curation.driver \
-  --mode quick --source evalchemy-math500 --source evalchemy-piqa \
+  --mode quick --source evalchemy-math500 \
   --cache-dir ~/.cache/marin/eval-curation \
   --output-root scratch/eval-curation --max-workers 2 --run
 ```
 
-For evaluations, QUICK publishes the complete declared population. It omits RL
-admission and review, and refuses rejected or rewritten rows. Use a new output
-root for a new publication. The command reports each corpus root, also recorded
-in `campaign.json`. Local roots in this example are
-`scratch/eval-curation/evalchemy-math500` and `scratch/eval-curation/evalchemy-piqa`.
-The usual `--input-file` and `--input` options support exact local source and
-few-shot fixtures; their byte hashes enter the artifact identity.
+The command reports the corpus root and records it in `campaign.json`. Local
+source overrides use the curation CLI's `--input-file` and `--input` options;
+their byte hashes enter artifact identity.
 
-| File | Contract |
-| --- | --- |
-| `normalize/*.parquet` | Canonical tasks in the existing `task_json` conversion column |
-| `evaluation/*.parquet` | `EvaluationItem` keyed by task ID and original conversion position |
-| `protocol.json` | Sampling, trials, metrics, primary metric, reducer and context policy |
-| `manifest.json` | Source conversion provenance and row accounting |
-| `evaluation_manifest.json` | Final publication marker binding protocol, provenance, population and shard hashes |
-
-`evaluation_cases(root)` verifies these bindings and streams joined tasks.
-`evaluation_items(root)` scans sidecars without decoding large TaskSpecs.
-Duplicates at different source positions remain distinct. Selection and
-repetitions happen during execution, after publication.
-
-## Run evaluations
-
-Create a JSON `EvaluationRunConfig`. Record the actual served model, tokenizer,
-revisions, context window and serving configuration. For example:
+Create `run-config.json` using `EvaluationRunConfig` from
+`rolloutengine.evaluation.runner`. Replace model, tokenizer, and serving fields
+with the identities of the actual endpoint:
 
 ```json
 {
   "model": {
-    "name": "Qwen/Qwen3-8B",
-    "revision": "b968826d9c46dd6066d109eabc6255188de91218",
-    "tokenizer": "Qwen/Qwen3-8B",
-    "tokenizer_revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    "name": "YOUR_MODEL",
+    "revision": "YOUR_MODEL_REVISION",
+    "tokenizer": "YOUR_TOKENIZER",
+    "tokenizer_revision": "YOUR_TOKENIZER_REVISION",
     "context_window": 32768,
-    "serving": {"backend": "vllm", "version": "0.25.1", "hardware": "H100x1"}
+    "serving": {"backend": "vllm", "version": "YOUR_VERSION", "hardware": "YOUR_HARDWARE"}
   },
   "max_tokens": 4096,
-  "concurrency": 64,
   "source_limit": 8,
-  "seed": null,
   "limits": {
     "max_turns": 1, "max_total_tokens": null,
     "model_turn_timeout": 600, "tool_turn_timeout": 60,
@@ -83,233 +86,125 @@ revisions, context window and serving configuration. For example:
 }
 ```
 
-`concurrency` defaults to 64 concurrent attempts, covering generation and grading.
-`max_tokens` is an explicit run ceiling, further bounded by the source protocol.
-The effective context window is the smaller of the served model's window and
-any protocol cap. MMLU-Pro retains its maintained 65,536-token cap; the NUPA5K
-panel retains its 73,664-token cap.
-`seed: null` preserves source seeds; a supplied seed uses base-plus-trial.
-The source row limit precedes trial expansion. AIME's ten trials therefore remain
-ten trials for each selected source row.
-
-Sampling preserves omitted source options. In particular, `top_p: null` leaves
-the request field absent so the served model's generation configuration applies;
-it does not mean `top_p: 1`. Empty source stops add no stop strings. Record the
-served generation defaults alongside its revision. The old CLI could strip source
-temperature and seed when applying empty global overrides. This driver honors
-the dataset protocol; compare old runs with explicit matching controls.
-
 ```bash
-OPENAI_API_KEY=unused uv run --package marin-core --group test python \
-  -m experiments.evaluation.task_driver \
-  --local \
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.task_driver --local \
   --dataset scratch/eval-curation/evalchemy-math500 \
-  --dataset scratch/eval-curation/evalchemy-piqa \
   --config run-config.json --endpoint-file endpoint.txt \
   --output scratch/eval-run
 ```
 
-Without `--local`, the driver submits a disposable Iris CPU worker to
-`cw-us-east-02a` and waits for completion. Use shared object-storage roots for
-both corpora and results:
+`endpoint.txt` contains the OpenAI-compatible base URL. Supply its credential in
+`OPENAI_API_KEY`, or select another variable with `--api-key-env`. Repeat
+`--dataset` for mixed-corpus runs; `source_limit` applies separately to each
+corpus before trial expansion. Standalone library callers install
+`marin-rolloutengine[evaluation]` and supply clients and machine factories to
+`run_evaluation`.
 
-```bash
-OPENAI_API_KEY=unused uv run --package marin-core python \
-  -m experiments.evaluation.task_driver \
-  --cluster cw-us-east-02a \
-  --dataset s3://marin-us-east-02a/YOUR_CORPUS_ROOT \
-  --config run-config.json --endpoint-file endpoint.txt \
-  --output s3://marin-us-east-02a/YOUR_RUN_ROOT
-```
+Concurrency defaults to 64 attempts across generation and grading. The explicit
+run `max_tokens` is further bounded by the protocol and available context. A null
+run seed preserves source trial seeds; an explicit seed uses base-plus-trial.
+Omitted source sampling options stay omitted: for example, `top_p: null` lets the
+served generation configuration apply. Record those serving defaults with the
+model identity.
 
-The worker requests 4 CPUs, 32 GiB of memory, 64 GiB of disk and a 36-hour
-lifetime. `--cpu`, `--memory`, `--disk` and `--timeout` override these resources;
-`--job-name` names the job and `--no-wait` returns after submission. Choose a
-cluster in the same region as the corpora, output and inference endpoint. The
-endpoint must already serve the model recorded in the run configuration.
+Omit `--local` to submit a disposable privileged Iris CPU worker. Shellbox's
+bubblewrap backend needs permission to create namespaces; local execution needs
+a host with the same support. Grader machines deny network access unless a
+scripted judge declares that capability. Choose a cluster near the corpora,
+results, and inference endpoint, and use shared storage roots for remote jobs.
+Use `python -m experiments.evaluation.task_driver --help` for worker resources,
+cluster selection, and pass limits.
 
-Both local and Iris execution make up to three passes with Marin's standard
-exponential backoff; `--max-attempts` changes the total pass limit. Each pass
-processes every supplied corpus before reporting temporary infrastructure
-failures. Later passes resume only failed attempts at the same output root,
-with the same source selection and seeds; successful grades, including scores
-of zero, are retained. Every physical retry remains in `evaluation_attempts`.
-The solver SDK's automatic retries stay disabled. Solver authentication and
-permanent request errors, configuration errors and unexpected exceptions
-propagate without this retry. Graders retain their existing infrastructure
-outcome classifications and transport policies. An exhausted run preserves its
-evidence and fails with
-`EvaluationInfrastructureError`; rerun the same command to resume it.
-
-`endpoint.txt` contains the OpenAI-compatible base URL. Use the credential
-environment variable appropriate to that endpoint; `--api-key-env` changes its
-name. Judge tasks additionally accept `--judge-endpoint` and
-`--judge-api-key-env` and require a `judge` object in the run configuration:
+Judge tasks also require `--judge-endpoint`, a credential selected by
+`--judge-api-key-env`, and a `judge` object in the run configuration:
 
 ```json
 {
   "judge": {
-    "deployment": "evaluation-judge-prod",
-    "models": {"gpt-4o-mini": "provider-snapshot-revision"},
+    "deployment": "YOUR_JUDGE_DEPLOYMENT",
+    "models": {"gpt-4o-mini": "YOUR_IMMUTABLE_JUDGE_REVISION"},
     "default_model": null
   }
 }
 ```
 
-Use a stable deployment label and map each requested model alias to its immutable
-deployment revision. Source model aliases take precedence. For sources without a
-judge model, including OlympiadBench, set `default_model` and include that alias
-in `models`. The driver checks selected judged tasks before submitting them and
-does not read `VERIFYIT_JUDGE_MODEL` as a fallback. Changing the judge identity
-requires a new run; resume rejects it. The mapping records the operator's pin;
-it cannot verify a provider's deployment independently. Judge responses retain
-their reported model identity. Keep endpoint URLs and credentials in the
-connection arguments, outside this secret-free run descriptor.
+Read requested aliases from `taskcompendium.models.judge_spec(case.task.grader)`
+while iterating `evaluation_cases(root)`; tasks without a judge return `None`.
+`deployment` identifies the service; `models` maps every requested alias to an
+immutable revision. `default_model` supplies the alias for source graders that
+omit one. These fields record the operator's pin; they cannot verify the
+provider's deployment. Endpoint URLs and credentials stay outside the persisted
+run descriptor. Changing judge identity requires a new run.
 
-Code and canonical instruction graders use Shellbox's `LocalMachineFactory`
-(bubblewrap) by default, with network access denied. The driver selects the Iris
-`CONTAINER_PROFILE_PRIVILEGED` CPU worker required to create bubblewrap's
-namespaces. Each Shellbox guest gets a private filesystem, read-only runtime
-mounts and explicit environment variables. Solver and judge connections stay in
-the coordinator's mounted secret files and do not enter grader machines or the
-run descriptor. Iris supplies the coordinator's storage credentials separately.
+Source grading programs and private tests are packaged with their pinned grader
+environment. Source program builders prepare tests and apply the benchmark
+execution timer. A completion receipt distinguishes finished tests from an early
+process exit. Shellbox provides the sandbox and bounds the whole grader command. Verifyit remains the shared scoring and verdict layer.
 
-An explicit `verifier_machine` or `task_machine` in the run configuration can
-set machine deadlines, network policy and user. Local machines require
-`cpus`, `memory_mb` and `storage_mb` to be null and `gpus` to be zero. Use the
-CLI worker flags for resource allocations. The default verifier startup
-deadline is 600 seconds; cleanup uses `limits.cleanup_timeout`. The CLI supports
-the local Shellbox backend; other backends supply factories through the library
-`run_evaluation` API. `--local` requires a host that supports bubblewrap
-namespaces. There is no unsandboxed execution fallback.
+## Published corpus and raw results
 
-Package locks, private tests and pinned NLP assets come from the published
-task's grader environment. The environment builder includes Verifyit's base
-dependencies in each lock and its artifact identity.
-Local shared runtime caches use
-`~/.cache/marin/task-runtime`; mounted workers use `/cache/task-curation`.
+| Corpus file | Contract |
+| --- | --- |
+| `normalize/*.parquet` | Canonical tasks in the conversion `task_json` column |
+| `evaluation/*.parquet` | `EvaluationItem` rows keyed by task ID and original source position |
+| `protocol.json` | Versioned benchmark execution and interpretation policy |
+| `manifest.json` | Conversion provenance and row accounting |
+| `evaluation_manifest.json` | Completion marker binding protocol, population, provenance, and shard hashes |
 
-Python code grading prepares the private test program before executing the
-candidate. Shellbox isolates and bounds the entire grader command. Inside that
-machine, the benchmark runner preloads dependencies, forks a worker and applies
-the source's 3-second execution alarm (10 seconds for CruxEval), with a separate
-one-second child termination allowance. Python and dependency startup have a
-separate 60-second outer deadline. A receipt distinguishes normal test completion
-from an early process exit. Candidate exceptions and timeouts score zero;
-preparation, startup and machine failures remain infrastructure errors.
+`evaluation_cases(root)` in `taskcompendium.evaluation.corpus` verifies these
+bindings and streams joined tasks. `evaluation_items(root)` reads sidecars
+without decoding large TaskSpecs. Duplicate rows at different source positions
+remain distinct. Publication checks the full expected population independently
+of run-time sampling; MRCR's pinned source population is 2,400 rows.
 
-Sandbox Verifyit graders honor their declared empty-output policy. Instruction
-benchmarks grade empty responses to retain zero-valued metrics and instruction
-counts needed for weighted reductions. A missing submission remains distinct
-from an explicitly empty assistant answer.
+FineStore stores `samples`, `rollouts_v1`, `evaluation_attempts`, and
+`evaluation_selection`, with `evaluation/run.json` and per-attempt evidence
+blobs. The run descriptor binds model and driver identities to corpus/protocol
+snapshots and execution settings. Raw evidence retains named metrics, weights,
+extractions, token likelihoods, and eligibility decisions. Infrastructure
+failures remain unscored; they do not become synthetic zero scores.
 
-Iris worker limits replace the old executor's per-process memory limit and are
-shared across concurrent attempts. Execution times also depend on the Python
-build and worker load. These runtime changes are recorded in the acceptance
-evidence. The current code environments require CPython and NumPy; selecting
-Shellbox does not automatically select its Shellsim backend.
+Repeat the same command and output root to resume. Completed logical attempts,
+including zero grades, are skipped. Infrastructure failures retry with the same
+row, trial, and seed and a new physical retry index. The CLI uses standard
+backoff between passes; each pass processes all supplied corpora before
+reporting retryable failures. Solver SDK retries are disabled. Verifyit handles
+judge HTTP retries separately under the source's transport policy.
 
-Chat, raw-text completion and likelihood operations remain distinct. Chat keeps
-the source conversation without an added submission instruction. Raw completions
-use the completion endpoint. Likelihood requests preserve tokenizer boundaries,
-choice-specific contexts, truncation evidence, token log probabilities and
-normalization choices; they never become generated letter answers.
+Resume rejects changed model, driver, corpus, protocol, or run settings. Consumers
+must select the latest terminal physical attempt for each dataset snapshot,
+source row, and trial to avoid counting retries twice. Terminal rows have
+`phase="finished"`; choose the highest `retry` index. Rows left at
+`phase="started"` have no terminal result. Exhausted infrastructure
+failures preserve evidence and raise `EvaluationInfrastructureError`.
 
-MRCR uses official o200k bins and interleaved source ranks, then checks the served
-model's window. GraphWalks retains its gold-dependent output allowance. Exclusions
-and uninspected rows after the cap are recorded, and prompts are never silently
-truncated. MMLU-Pro chooses among declared few-shot variants with the pinned
-tokenizer.
+## Summary semantics
 
-Output budgeting differs from the legacy runner. The legacy path could derive
-one benchmark-wide output limit from a stored longest-prompt length. This driver
-uses the explicit run ceiling and protocol cap, then reserves space using each
-prompt's served token count. These recorded budgets permit reproducible runs,
-but do not establish equivalence with legacy runs that used derived limits.
+`EvaluationProtocol.summary` describes the consumer's reduction of raw
+observations. The runtime does not compute these summaries. Evaldash must also
+use the selection ledger and distinguish unscored failures from graded answers.
 
-## Raw results and resume
+| `SummaryKind` | Reduction |
+| --- | --- |
+| `MEAN` (`mean`) | Arithmetic mean of each metric over its scored population |
+| `WEIGHTED_MEAN` (`weighted_mean`) | Sum of weighted observations divided by the sum of explicit per-metric weights in grading detail |
+| `CLASSIFICATION` (`classification`) | Correct, incorrect, and abstention counts; accuracy and class rates divide by their total, attempted accuracy divides correct by correct + incorrect |
+| `PERPLEXITY` (`perplexity`) | `exp(-mean(log_likelihood))` over per-row continuation log-likelihood sums; accuracy remains an arithmetic mean |
 
-The archive contains `samples`, `rollouts_v1`, `evaluation_attempts` and
-`evaluation_selection` tables, plus the `evaluation/run.json` descriptor and
-per-attempt evidence blobs. The descriptor records the driver revision, model,
-run configuration and complete corpus/protocol snapshots.
+Classification excludes judge failures from the judged total. Its F1 is the
+harmonic mean of accuracy and attempted accuracy; attempted accuracy and F1 are
+zero when their denominators are zero. LAMBADA likelihoods sum token log
+probabilities for each continuation before the row mean; the perplexity summary
+does not divide by the total number of continuation tokens.
 
-Each physical attempt has a start and terminal row. Its sample, terminal state
-and raw evidence commit together. Grader details retain all metrics, extraction
-filters, instruction weights, flags and reduction inputs. Provider or verifier
-failures have no synthetic zero score. Malformed responses and partial likelihood
-results remain available for diagnosis.
+Groups use the declared reduction independently. MRCR's headline is a row mean;
+its cell means are separate summaries, with no equal weighting of cells in the
+headline. NUPA uses ordinary means; task/bucket stratification constructs the
+population and supplies group labels. FinanceBench uses means. SimpleQA and
+SimpleQAMini use classification summaries.
 
-Repeat the same command to resume. The driver rejects a changed driver revision,
-model, corpus, protocol or selection. It skips completed logical attempts and
-retries failed ones with the same seed and a new physical retry index. Consumers must select the
-latest terminal physical attempt per dataset snapshot, source row and trial;
-otherwise resumed attempts would be counted twice.
-Concurrency remains part of the run identity because server batching can affect
-generation, even with a fixed seed and temperature zero.
-
-This path emits no headline summary or legacy `record.json`. Evaldash's existing
-legacy-run discovery does not yet import these archives. Its raw importer must
-use the descriptor, selection ledger and latest-attempt rule, then apply the
-dataset reducer to raw observations.
-
-## Add a dataset
-
-`EvalDataSet` binds a `CurationRecipe`, `EvaluationProtocol` and item builder.
-Simple math datasets reuse `math_dataset`; harness tasks use native prompt
-templates and explicit scoring policies. Source algorithms belong with the
-dataset importers; artifact graphs stay in `experiments/`. Verifyit provides
-shared comparisons, mathematical equivalence, judge transport and verdicts.
-
-Evalchemy's source scorers live in
-`taskcompendium.importers.evalchemy.scorers`. `source_package` ships the selected
-scorer and private row configuration as a `ScriptGrader`. The declared pinned
-environment runs it in a fresh Shellbox machine. `scorer_revision` includes the
-scorer, dependencies and entry point in the corpus identity. Benchmark prompts,
-rubrics and extraction rules remain source-owned.
-
-Scripted judges declare their `JudgeSpec` on the grader. The runtime installs
-`/tests/judge.toml` and supplies credentials only to the verifier machine. The
-evaluation driver enables network access for scripted judges whose environment
-explicitly requires it; other graders retain the configured network policy.
-The verifier limit must cover the script's deterministic work and judge
-transport budget. Judged Olympiad reserves 240 seconds for both stages.
-
-Pin source revisions and assets, retain the original population and source order,
-and version changes to prompts or grading. Compare the actual old and new
-implementations on matching pinned inputs and the same recorded responses.
-Keep pipeline tests for publication integrity, input identity, population joins,
-selection, transport failures and resume. Input fixtures may exercise these
-boundaries; stored expected prompts and grades are not the equivalence gate.
-
-## Validate ingestion
-
-The [96-declaration acceptance record](https://github.com/marin-community/marin/pull/10757#issuecomment-6483684301)
-records the migration's manual old/new comparisons, reproduction commands,
-source pins, row identities, coverage and limits. The
-[Qwen3-8B smoke report](https://github.com/marin-community/marin/pull/10757#issuecomment-6498358414)
-adds live old/new coverage across all 92 runnable declarations and records the
-excluded datasets and remaining differences. Scripts and raw captures remain
-session artifacts.
-
-For each dataset and protocol variant, run a matching subset of real pinned
-source rows through the old evaluator and the new curation/driver pipeline.
-Read the new results from FineStore and compare actual requests, references,
-same-response grades, metrics and trial seeds. Use full inputs when the old
-reader cannot subsample, recording the selected original row identities.
-
-Keep this one-time acceptance run's commands, source pins and hashes, row
-identities, raw responses, results and intentional protocol differences in the
-task artifact. Expected-output snapshots are not required in CI. Routine tests
-protect publication integrity, identity, joins, transport failures and resume.
-Use small inline inputs for these pipeline contracts. Keep benchmark corpora
-and NLP data archives out of routine test fixtures. Changes to conversion or
-grading behavior require a new comparison against the source implementation
-on matching inputs and recorded responses.
-
-Compare independently generated answers separately, using the same served
-model/tokenizer revision, context, generation options and output cap. Record
-strict request differences as well as any interpretation of omitted defaults.
-Identical shared-response grades establish grading equivalence; they do not
-establish independently generated output identity. State live coverage limits
-for context windows and external judges in the acceptance record.
+See [task curation](task-curation.md) for acquisition and publication and
+[task rollouts](task-rollouts.md) for single-task execution. Legacy Harbor
+execution migration and Evaldash's raw-archive importer remain separate from
+this evaluation path.

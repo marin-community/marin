@@ -4,9 +4,13 @@
 `GradedRollout`: the `Rollout`, which records what happened, and the `grade`.
 The engine holds the machine factories and the harnesses; each run passes the model, the policy under rollout.
 The caller owns concurrency, retries, group grading, and training projections.
-The [evaluation driver](evaluation-tasks.md) supplies that caller for published
-evaluation corpora and writes raw FineStore attempts.
-TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. VerifyIT supplies grading modes and their implementations.
+The [evaluation driver](evaluation-tasks.md),
+`rolloutengine.evaluation.runner.run_evaluation`, supplies that caller for
+published evaluation corpora and writes raw FineStore attempts. Its CLI is
+`experiments.evaluation.task_driver`. TaskCompendium supplies corpus metadata and
+selection policy; consumers compute summaries from the raw observations.
+TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. Verifyit
+supplies grading modes and their implementations.
 Shellbox supplies machine backends. RolloutEngine supplies the harness contract, the model session that records each model turn, and the built-in harnesses.
 
 ```mermaid

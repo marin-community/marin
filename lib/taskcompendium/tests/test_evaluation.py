@@ -12,22 +12,18 @@ from zephyr.context import ZephyrContext
 from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import exact_answer_task, source_defect
-from taskcompendium.evaluation import (
+from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, chat_item, evaluation_cases, evaluation_items
+from taskcompendium.evaluation.spec import (
     ContextPolicy,
     EvaluationProtocol,
     Metric,
     MetricKind,
     Sampling,
+    SummaryKind,
     TextGeneration,
     TrialPolicy,
 )
-from taskcompendium.pipeline.evaluation import (
-    MANIFEST_FILENAME,
-    chat_item,
-    evaluation_cases,
-    evaluation_items,
-    publish_evaluation_corpus,
-)
+from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, NormalizationChange, NormalizedTask, RawRow, SourceRecipe
 
@@ -75,7 +71,7 @@ def corpus(tmp_path):
         trials=TrialPolicy(count=1, seed=None),
         metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
         primary_metric="accuracy",
-        reducer="mean_v1",
+        summary=SummaryKind.MEAN,
         expected_population=3,
     )
     return source, tmp_path / "output", recipe, protocol

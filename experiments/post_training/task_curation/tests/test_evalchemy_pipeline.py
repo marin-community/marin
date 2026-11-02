@@ -13,8 +13,8 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from taskcompendium.convert.answers import answer_task
-from taskcompendium.evaluation import EvaluationProtocol, Metric, MetricKind, Sampling, TrialPolicy
-from taskcompendium.pipeline.evaluation import MANIFEST_FILENAME, chat_item, evaluation_cases, evaluation_protocol
+from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, chat_item, evaluation_cases, evaluation_protocol
+from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, MetricKind, Sampling, SummaryKind, TrialPolicy
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, RawRow
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -23,8 +23,8 @@ from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
-from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.driver import _conversion_steps
+from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -52,12 +52,12 @@ def grouped_item(task):
     return chat_item(task).model_copy(update={"groups": {"panel": "changed"}})
 
 
-def fixture_source() -> RlDataSource[EvalDataSet]:
+def fixture_source() -> RlDataSource[EvalDataset]:
     return RlDataSource(
         info=SourceInfo(
             id="eval-identity", title="Identity fixture", origin="test", family="test", tags=("eval",), count=1
         ),
-        config=EvalDataSet(
+        config=EvalDataset(
             CurationRecipe(
                 name="eval-identity",
                 source=HfSource("test/identity", "0" * 40, ("rows.jsonl",), SourceFormat.JSONL),
@@ -73,7 +73,7 @@ def fixture_source() -> RlDataSource[EvalDataSet]:
                 trials=TrialPolicy(count=1, seed=None),
                 metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                 primary_metric="accuracy",
-                reducer="mean_v1",
+                summary=SummaryKind.MEAN,
                 expected_population=1,
             ),
             chat_item,

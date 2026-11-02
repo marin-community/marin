@@ -26,6 +26,27 @@ flowchart LR
     G --> R[Typed grade result]
 ```
 
+## Evaluation corpora
+
+`taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 2),
+`EvaluationItem`, operation kinds, and consumer summary semantics.
+`taskcompendium.evaluation.corpus` verifies and reads published corpora;
+`taskcompendium.evaluation.selection` selects eligible source rows.
+`taskcompendium.pipeline.evaluation` publishes the full pinned population with
+conversion provenance and shard hashes. These metadata schemas are independent
+of the TaskSpec schema below.
+
+Evaluation adapters live under `taskcompendium.importers` and
+`taskcompendium.convert`. Reusable Evalchemy benchmark modules and source graders
+live in `taskcompendium.importers.evalchemy`. Experiment-owned `EvalDataset` declarations
+bind them to acquisition and environment recipes. Verifyit supplies shared
+scoring and judge transport; Shellbox isolates executable graders.
+
+`rolloutengine.evaluation` executes generation and likelihood operations and
+writes raw FineStore attempts. Evaldash summary computation and raw-archive
+ingestion remain separate work. See [evaluation tasks](../../docs/references/evaluation-tasks.md)
+for publication, execution, and retry/resume contracts.
+
 ## What is a task spec?
 
 `TaskSpec` defines one source task, including its grader and expected values. An importer or author creates it before choosing an execution runtime.

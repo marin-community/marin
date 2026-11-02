@@ -1,36 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full pinned long-context populations; the run records eligibility before selecting attempts."""
+"""Full pinned long-context populations and run-time eligibility policy."""
 
-import json
-from functools import cache
-
-import pyarrow.parquet as pq
-from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.convert.evaluation import source_evidence
-from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation import (
-    ChatGeneration,
+from taskcompendium.evaluation.spec import (
     ContextPolicy,
-    EvaluationItem,
     EvaluationProtocol,
-    GraphWalksContextSelection,
     Metric,
     MetricKind,
-    MRCRContextSelection,
+    OperationKind,
     Sampling,
+    SummaryKind,
     TrialPolicy,
 )
-from taskcompendium.importers.evalchemy.grader import scorer_revision, source_package
-from taskcompendium.importers.evalchemy.scorers.long_context import FINAL_ANSWER_PREFIX, mrcr_bin
-from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
-from taskcompendium.pipeline.evaluation import chat_item
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
-from taskcompendium.pipeline.models import IntendedUse, RawRow
+from taskcompendium.importers.evalchemy.grader import scorer_revision
+from taskcompendium.importers.evalchemy.long_context import (
+    MRCR_SOURCE_POPULATION,
+    convert_graphwalks,
+    convert_mrcr,
+    graphwalks_item,
+    mrcr_item,
+    read_mrcr,
+)
+from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import BASIC_GRADER
-from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
+from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
+from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -48,94 +44,7 @@ GRAPHWALKS_REVISION = "be6cc6ecf9b4d495b07d1ff53d2a16598e90fed7"
 GRAPHWALKS_FILES = ("graphwalks_128k_and_shorter.parquet", "graphwalks_256k_to_1mil.parquet")
 
 
-@cache
-def official_tokenizer():
-    # o200k is a curation dependency; inference uses the saved official counts.
-    from tiktoken import get_encoding  # noqa: PLC0415
-
-    return get_encoding("o200k_base")
-
-
-def official_token_count(row: dict) -> int:
-    encode = official_tokenizer().encode
-    return sum(len(encode(message["content"])) for message in json.loads(row["prompt"])) + len(encode(row["answer"]))
-
-
-def read_mrcr(path: StoragePath, _context: ConversionContext):
-    with path.open("rb") as file:
-        parquet = pq.ParquetFile(file)
-        for batch in parquet.iter_batches(batch_size=1):
-            for row in batch.to_pylist():
-                tokens = official_token_count(row)
-                yield {**row, "official_tokens": tokens, "mrcr_bin_upper": mrcr_bin(tokens)}
-
-
-def convert_mrcr(row: RawRow, context: ConversionContext) -> TaskSpec:
-    data = row.data
-    messages = json.loads(data["prompt"])
-    task = conversation_task(
-        row,
-        events=(TextMessage(role="user", content=messages[-1]["content"]),),
-        package=source_package(
-            "mrcr",
-            {"expected": data["answer"], "nonce": data["random_string_to_prepend"]},
-            environment=required_grader_environment(context),
-        ),
-        evidence=dict(data),
-    )
-    return task.model_copy(
-        update={
-            "context": ConversationInput(
-                events=tuple(TextMessage(role=message["role"], content=message["content"]) for message in messages)
-            ),
-            "tags": ("eval", "source:evalchemy", "benchmark:MRCR", "long-context"),
-        }
-    )
-
-
-def mrcr_item(task: TaskSpec) -> EvaluationItem:
-    row = source_evidence(task)
-    return chat_item(task).model_copy(
-        update={
-            "operation": ChatGeneration(historical_assistant_reasoning="empty"),
-            "context_selection": MRCRContextSelection(
-                official_tokens=row["official_tokens"],
-                bin_upper=row["mrcr_bin_upper"],
-                needles=row["n_needles"],
-            ),
-            "groups": {"cell": f"{row['mrcr_bin_upper']}_{row['n_needles']}needle"},
-        }
-    )
-
-
-def convert_graphwalks(row: RawRow, context: ConversionContext) -> TaskSpec:
-    task = conversation_task(
-        row,
-        events=(TextMessage(role="user", content=row.data["prompt"]),),
-        package=source_package(
-            "graphwalks",
-            {"expected": row.data["answer_nodes"]},
-            environment=required_grader_environment(context),
-        ),
-        evidence=dict(row.data),
-    )
-    return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:GraphWalks", "long-context")})
-
-
-def graphwalks_item(task: TaskSpec) -> EvaluationItem:
-    row = source_evidence(task)
-    return chat_item(task).model_copy(
-        update={
-            "context_selection": GraphWalksContextSelection(
-                prompt_chars=row["prompt_chars"],
-                gold_output=FINAL_ANSWER_PREFIX + " [" + ", ".join(row["answer_nodes"]) + "]",
-            ),
-            "groups": {"problem_type": row["problem_type"]},
-        }
-    )
-
-
-def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataSet]:
+def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + name.lower(),
@@ -143,9 +52,9 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataSet]:
             origin="Evalchemy",
             family="long-context",
             tags=("eval", "source:evalchemy", "benchmark", "long-context", "retrieval"),
-            count=2400,
+            count=MRCR_SOURCE_POPULATION,
         ),
-        config=EvalDataSet(
+        config=EvalDataset(
             CurationRecipe(
                 name="evalchemy-" + name.lower(),
                 source=HfSource("openai/mrcr", MRCR_REVISION, MRCR_FILES, SourceFormat.PARQUET, read=read_mrcr),
@@ -157,8 +66,8 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataSet]:
             ),
             EvaluationProtocol(
                 benchmark=name,
-                version="2",
-                operation="chat_generation",
+                version="2026.11.02",
+                operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=0,
                     top_p=None,
@@ -173,8 +82,8 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataSet]:
                     Metric(name="prefix_hit_rate", kind=MetricKind.BINARY, higher_is_better=True),
                 ),
                 primary_metric="accuracy",
-                reducer="mrcr_cell_means_v1",
-                expected_population=2400,
+                summary=SummaryKind.MEAN,
+                expected_population=MRCR_SOURCE_POPULATION,
                 context_policy=ContextPolicy(kind="mrcr", max_context=max_context),
             ),
             mrcr_item,
@@ -183,7 +92,7 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataSet]:
     )
 
 
-def sources() -> list[RlDataSource[EvalDataSet]]:
+def sources() -> list[RlDataSource[EvalDataset]]:
     return [
         mrcr_source("MRCR", 73728),
         mrcr_source("MRCR-32k", 32704),
@@ -197,7 +106,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                 tags=("eval", "source:evalchemy", "benchmark", "long-context", "graph"),
                 count=1150,
             ),
-            config=EvalDataSet(
+            config=EvalDataset(
                 CurationRecipe(
                     name="evalchemy-graphwalks",
                     source=HfSource("openai/graphwalks", GRAPHWALKS_REVISION, GRAPHWALKS_FILES, SourceFormat.PARQUET),
@@ -209,8 +118,8 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                 ),
                 EvaluationProtocol(
                     benchmark="GraphWalks",
-                    version="2",
-                    operation="chat_generation",
+                    version="2026.11.02",
+                    operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
                         temperature=0,
                         top_p=None,
@@ -229,7 +138,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                         for name in ("f1", "precision", "recall", "exact_match")
                     ),
                     primary_metric="f1",
-                    reducer="mean_v1",
+                    summary=SummaryKind.MEAN,
                     expected_population=1150,
                     context_policy=ContextPolicy(kind="graphwalks", max_context=None),
                 ),

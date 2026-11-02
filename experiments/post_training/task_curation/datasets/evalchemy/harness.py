@@ -5,211 +5,46 @@
 
 from functools import partial
 
-from taskcompendium.evaluation import (
+from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     LikelihoodMetric,
     LikelihoodNormalization,
     Metric,
     MetricKind,
+    OperationKind,
     Sampling,
+    SummaryKind,
     TrialPolicy,
 )
 from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.importers.evalchemy.scorers.harness_generation import COMPLETION_REQUEST_STOPS, GSM8K_REQUEST_STOPS
 from taskcompendium.importers.evaluation_harness import (
     HarnessTemplate,
-    choice_item,
     continuation_item,
-    convert_choice_document,
     convert_continuation_document,
     convert_generation_document,
     generation_item,
-    original_task_name,
-    read_choice_file,
     read_continuation_file,
     read_generation_file,
 )
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import (
+from experiments.post_training.task_curation.datasets.evalchemy.environments import (
     ALIAS_GRADER,
     BASIC_GRADER,
     MATH_GRADER,
 )
-from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
+from experiments.post_training.task_curation.datasets.evalchemy.likelihood import choice_source
+from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-MMLU_REVISION = "c30699e8356da336a370243923dbaf21066bb9fe"
-# Populations from cais/mmlu's pinned dataset metadata; each leaf has its own dev pool.
-MMLU_POPULATIONS = {
-    "abstract_algebra": 100,
-    "anatomy": 135,
-    "astronomy": 152,
-    "business_ethics": 100,
-    "clinical_knowledge": 265,
-    "college_biology": 144,
-    "college_chemistry": 100,
-    "college_computer_science": 100,
-    "college_mathematics": 100,
-    "college_medicine": 173,
-    "college_physics": 102,
-    "computer_security": 100,
-    "conceptual_physics": 235,
-    "econometrics": 114,
-    "electrical_engineering": 145,
-    "elementary_mathematics": 378,
-    "formal_logic": 126,
-    "global_facts": 100,
-    "high_school_biology": 310,
-    "high_school_chemistry": 203,
-    "high_school_computer_science": 100,
-    "high_school_european_history": 165,
-    "high_school_geography": 198,
-    "high_school_government_and_politics": 193,
-    "high_school_macroeconomics": 390,
-    "high_school_mathematics": 270,
-    "high_school_microeconomics": 238,
-    "high_school_physics": 151,
-    "high_school_psychology": 545,
-    "high_school_statistics": 216,
-    "high_school_us_history": 204,
-    "high_school_world_history": 237,
-    "human_aging": 223,
-    "human_sexuality": 131,
-    "international_law": 121,
-    "jurisprudence": 108,
-    "logical_fallacies": 163,
-    "machine_learning": 112,
-    "management": 103,
-    "marketing": 234,
-    "medical_genetics": 100,
-    "miscellaneous": 783,
-    "moral_disputes": 346,
-    "moral_scenarios": 895,
-    "nutrition": 306,
-    "philosophy": 311,
-    "prehistory": 324,
-    "professional_accounting": 282,
-    "professional_law": 1534,
-    "professional_medicine": 272,
-    "professional_psychology": 612,
-    "public_relations": 110,
-    "security_studies": 245,
-    "sociology": 201,
-    "us_foreign_policy": 100,
-    "virology": 166,
-    "world_religions": 171,
-}
 
-
-def choice_source(
-    name: str,
-    repo: str,
-    revision: str,
-    file: str,
-    population: int,
-    template: HarnessTemplate,
-    normalizations: tuple[LikelihoodNormalization, ...],
-) -> RlDataSource[EvalDataSet]:
-    """Bind immutable evaluation rows and the separate immutable few-shot pool."""
-    names = {
-        LikelihoodNormalization.RAW: "acc,none",
-        LikelihoodNormalization.CHARACTERS: "acc_norm,none",
-        LikelihoodNormalization.BYTES: "acc_bytes,none",
-    }
-    inputs = (
-        {"fewshot": HfSource(repo, revision, (template.fewshot_file,), SourceFormat.PARQUET)}
-        if template.num_fewshot
-        else {}
-    )
-    recipe = CurationRecipe(
-        name="evalchemy-" + name,
-        source=HfSource(
-            repo, revision, (file,), SourceFormat.PARQUET, read=partial(read_choice_file, template=template)
-        ),
-        inputs=inputs,
-        convert=partial(convert_choice_document, benchmark=name),
-        version="1",
-        intended_use=IntendedUse.EVAL,
-    )
-    return RlDataSource(
-        info=SourceInfo(
-            id="Evalchemy:" + name,
-            title=name,
-            origin="Evalchemy",
-            family="likelihood-choice",
-            tags=(
-                "eval",
-                "source:evalchemy",
-                "single-turn",
-                "benchmark",
-                "family:likelihood",
-                "task:" + original_task_name(template),
-            ),
-            count=population,
-        ),
-        config=EvalDataSet(
-            recipe=recipe,
-            protocol=EvaluationProtocol(
-                benchmark=name,
-                version="lm-eval-0.4.12-native-v1",
-                operation="choice_likelihood",
-                sampling=None,
-                trials=TrialPolicy(count=1, seed=None),
-                metrics=tuple(
-                    Metric(
-                        name=names[value],
-                        kind=MetricKind.CONTINUOUS if template.name == "truthfulqa_mc2" else MetricKind.BINARY,
-                        higher_is_better=True,
-                    )
-                    for value in normalizations
-                ),
-                primary_metric=names[normalizations[0]],
-                reducer="mmlu_subject_weighted_mean_v1" if template.name == "mmlu" else "mean_v1",
-                expected_population=population,
-                likelihood_metrics=tuple(
-                    LikelihoodMetric(
-                        name=names[value],
-                        normalization=value,
-                        scoring="probability_mass" if template.name == "truthfulqa_mc2" else "most_likely",
-                    )
-                    for value in normalizations
-                ),
-            ),
-            item_builder=partial(choice_item, subject=template.subject),
-        ),
-        pipeline=curate,
-    )
-
-
-def sources() -> list[RlDataSource[EvalDataSet]]:
+def sources() -> list[RlDataSource[EvalDataset]]:
     raw = (LikelihoodNormalization.RAW,)
     normalized = (LikelihoodNormalization.RAW, LikelihoodNormalization.CHARACTERS)
-    result = [
-        choice_source(
-            "mmlu-" + subject,
-            "cais/mmlu",
-            MMLU_REVISION,
-            subject + "/test-00000-of-00001.parquet",
-            population,
-            HarnessTemplate("mmlu", 5, subject, subject + "/dev-00000-of-00001.parquet"),
-            raw,
-        )
-        for subject, population in MMLU_POPULATIONS.items()
-    ]
-    result.append(
-        choice_source(
-            "mmlu-smoke",
-            "cais/mmlu",
-            MMLU_REVISION,
-            "abstract_algebra/test-00000-of-00001.parquet",
-            100,
-            HarnessTemplate("mmlu", 0, "abstract_algebra"),
-            raw,
-        )
-    )
+    result = []
     for name, repo, revision, file, population, shots, pool, normalizations in (
         (
             "arc_challenge",
@@ -307,7 +142,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                 tags=("eval", "source:evalchemy", "benchmark"),
                 count=5153,
             ),
-            config=EvalDataSet(
+            config=EvalDataset(
                 recipe=CurationRecipe(
                     name="evalchemy-lambada_openai",
                     source=HfSource(
@@ -318,13 +153,13 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                         read=read_continuation_file,
                     ),
                     convert=convert_continuation_document,
-                    version="1",
+                    version="2026.11.02",
                     intended_use=IntendedUse.EVAL,
                 ),
                 protocol=EvaluationProtocol(
                     benchmark="lambada_openai",
-                    version="lm-eval-0.4.12-native-v1",
-                    operation="continuation_likelihood",
+                    version="2026.11.02",
+                    operation=OperationKind.CONTINUATION_LIKELIHOOD,
                     sampling=None,
                     trials=TrialPolicy(count=1, seed=None),
                     metrics=(
@@ -332,7 +167,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                         Metric(name="perplexity,none", kind=MetricKind.CONTINUOUS, higher_is_better=False),
                     ),
                     primary_metric="acc,none",
-                    reducer="lambada_perplexity_from_mean_log_likelihood_v1",
+                    summary=SummaryKind.PERPLEXITY,
                     expected_population=5153,
                     likelihood_metrics=(
                         LikelihoodMetric(
@@ -352,7 +187,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
     return result
 
 
-def generation_sources() -> list[RlDataSource[EvalDataSet]]:
+def generation_sources() -> list[RlDataSource[EvalDataset]]:
     result = []
     for name, profile, repo, revision, file, pool, shots, population in (
         (
@@ -423,7 +258,7 @@ def generation_sources() -> list[RlDataSource[EvalDataSet]]:
                     tags=("eval", "source:evalchemy", "benchmark", "family:short-answer", "task:" + profile),
                     count=population,
                 ),
-                config=EvalDataSet(
+                config=EvalDataset(
                     recipe=CurationRecipe(
                         name="evalchemy-" + name,
                         source=HfSource(
@@ -446,8 +281,8 @@ def generation_sources() -> list[RlDataSource[EvalDataSet]]:
                     ),
                     protocol=EvaluationProtocol(
                         benchmark=name,
-                        version="lm-eval-0.4.12-vendor-native-v2",
-                        operation="text_generation",
+                        version="2026.11.02",
+                        operation=OperationKind.TEXT_GENERATION,
                         sampling=Sampling(
                             temperature=0,
                             top_p=None,
@@ -466,7 +301,7 @@ def generation_sources() -> list[RlDataSource[EvalDataSet]]:
                             for metric in metrics
                         ),
                         primary_metric="f1,extract_answer" if profile == "drop" else metrics[0],
-                        reducer="mean_v1",
+                        summary=SummaryKind.MEAN,
                         expected_population=population,
                     ),
                     item_builder=generation_item,

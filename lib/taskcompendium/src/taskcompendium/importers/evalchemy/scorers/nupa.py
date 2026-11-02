@@ -4,7 +4,6 @@
 """NUPA representation-sensitive component and aligned-digit exact grading."""
 
 import json
-from collections.abc import Callable
 
 from verifyit.grade import Aggregation, Reward, Status, aggregate_rewards, invalid_task
 from verifyit.modes.grade_exact import grade_literal_candidate
@@ -23,15 +22,11 @@ def grade_nupa_answer(
     candidate: object,
     expected: object,
     answer_format: str,
-    *,
-    extract_answer: Callable[[str | None, str], str | None],
-    full_answer: Callable[[str, str], str | None],
-    digit_parts: Callable[[str, str], tuple[str, ...]],
 ) -> Reward:
     """Keep trusted source extraction; grade full components and each aligned digit.
 
-    The callbacks prepare representations, never compute correctness. All five
-    benchmark metrics are retained; reward is the source exact-match metric.
+    Source preparation preserves representations and all five benchmark metrics.
+    Reward is the source exact-match metric.
     Source digit preparation omits signs, including scientific exponent signs.
     These are digit-component metrics, not mathematical numeric equivalence.
     """
@@ -78,9 +73,6 @@ def grade_nupa_candidate(expected: str, answer_format: str, candidate: str) -> R
         candidate,
         expected,
         representation,
-        extract_answer=extract_answer,
-        full_answer=full_answer,
-        digit_parts=digit_parts,
     )
     if verdict.status is not Status.SCORED:
         return verdict

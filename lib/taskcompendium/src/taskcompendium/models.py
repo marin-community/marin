@@ -29,7 +29,6 @@ from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
 from verifyit.modes.extract import extract_boxed
 from verifyit.modes.grade_judge import validate_judge_spec
-from verifyit.modes.grade_math_judge import validate_math_judge
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
@@ -37,7 +36,6 @@ from verifyit.spec import (
     GotestSpec,
     JudgeSpec,
     JunitSpec,
-    MathJudgeSpec,
     PytestSpec,
     ScriptSpec,
     Spec,
@@ -577,15 +575,12 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
     """Build the verifyit specification; in-process modes also pass their mode's validation."""
     try:
         _require_finite_json(grader.parameters)
-        if grader.mode in {"judge", "math-judge"}:
+        if grader.mode == "judge":
             if "mode" in grader.parameters:
                 raise ValueError("Verifier parameters must not override the mode")
             spec = spec_from_table({"mode": grader.mode, **grader.parameters})
-            if isinstance(spec, MathJudgeSpec):
-                validate_math_judge(spec)
-            else:
-                assert isinstance(spec, JudgeSpec)
-                validate_judge_spec(spec)
+            assert isinstance(spec, JudgeSpec)
+            validate_judge_spec(spec)
             return spec
         if grader.environment is None:
             return candidate_spec(grader.mode, grader.parameters)
@@ -675,8 +670,6 @@ def judge_spec(grader: Grader) -> JudgeSpec | None:
         return grader.judge
     if isinstance(grader, VerifyitGrader):
         verifier = verifyit_spec(grader)
-        if isinstance(verifier, MathJudgeSpec):
-            return verifier.judge
         if isinstance(verifier, JudgeSpec):
             return verifier
     return None

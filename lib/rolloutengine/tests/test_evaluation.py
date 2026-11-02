@@ -13,26 +13,13 @@ import pytest
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
-from marin.evaluation.likelihood import LikelihoodTransportError, VllmLikelihood
-from marin.evaluation.selection import SELECTIONS_TABLE
-from marin.evaluation.task_driver import (
-    ATTEMPTS_TABLE,
-    RUN_OBJECT,
-    EvaluationInfrastructureError,
-    EvaluationRunConfig,
-    JudgeIdentity,
-    ModelIdentity,
-    run_evaluation,
-)
-from rolloutengine.chat import ChatModel
-from rolloutengine.completion import CompletionModel
-from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
-from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task
 from taskcompendium.convert.evaluation import source_evidence
-from taskcompendium.evaluation import (
+from taskcompendium.evaluation.corpus import chat_item, source_order
+from taskcompendium.evaluation.selection import SELECTIONS_TABLE
+from taskcompendium.evaluation.spec import (
     ChatGeneration,
     ChatPromptVariant,
     ChoiceLikelihood,
@@ -45,6 +32,7 @@ from taskcompendium.evaluation import (
     Metric,
     MetricKind,
     Sampling,
+    SummaryKind,
     TextGeneration,
     TrialPolicy,
 )
@@ -59,7 +47,7 @@ from taskcompendium.models import (
     ScriptGrader,
     TextMessage,
 )
-from taskcompendium.pipeline.evaluation import chat_item, publish_evaluation_corpus, source_order
+from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, RawRow, SourceRecipe
 from verifyit.modes.grade_judge import JudgeConnection
@@ -67,11 +55,23 @@ from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
     JudgeSpec,
-    MathJudgeSpec,
-    MathProfile,
-    MathSpec,
 )
 from zephyr.context import ZephyrContext
+
+from rolloutengine.chat import ChatModel
+from rolloutengine.completion import CompletionModel
+from rolloutengine.evaluation.likelihood import LikelihoodTransportError, VllmLikelihood
+from rolloutengine.evaluation.runner import (
+    ATTEMPTS_TABLE,
+    RUN_OBJECT,
+    EvaluationInfrastructureError,
+    EvaluationRunConfig,
+    JudgeIdentity,
+    ModelIdentity,
+    run_evaluation,
+)
+from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
+from rolloutengine.test_support import machine_runtime
 
 
 def convert(row: RawRow, _context: ConversionContext):
@@ -110,7 +110,7 @@ def published_corpora(tmp_path):
                     trials=TrialPolicy(count=2, seed=7),
                     metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                     primary_metric="accuracy",
-                    reducer="mean_v1",
+                    summary=SummaryKind.MEAN,
                     expected_population=3,
                 )
                 output = tmp_path / (benchmark + "-published")
@@ -361,7 +361,7 @@ def mixed_corpora(tmp_path):
                         for name in names
                     ),
                     primary_metric=names[0],
-                    reducer="raw_fixture_v1",
+                    summary=SummaryKind.MEAN,
                     expected_population=len(documents),
                     likelihood_metrics=likelihoods,
                 )
@@ -424,7 +424,7 @@ def publish_policy_corpus(tmp_path, rows, converter=convert_mixed_row):
         trials=TrialPolicy(count=1, seed=None),
         metrics=tuple(Metric(name=name, kind=MetricKind.BINARY, higher_is_better=True) for name in names),
         primary_metric=names[0],
-        reducer="fixture_v1",
+        summary=SummaryKind.MEAN,
         expected_population=len(rows),
     )
     output = str(tmp_path / "corpus")
@@ -539,12 +539,7 @@ def convert_judged_row(row, _context):
         label_scan="whole",
         label_case="upper",
     )
-    verifier = (
-        MathJudgeSpec(math=MathSpec(expected="2", profile=MathProfile.BOXED), judge=judge)
-        if row.data.get("math")
-        else judge
-    )
-    task = answer_task(row, prompt=row.data["prompt"], spec=verifier, evidence=row.data)
+    task = answer_task(row, prompt=row.data["prompt"], spec=judge, evidence=row.data)
     if row.data.get("scripted"):
         task = task.model_copy(
             update={
@@ -610,7 +605,6 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
         [
             {"prompt": "explicit judge", "model": "source-judge"},
             {"prompt": "default judge"},
-            {"prompt": "nested math judge", "math": True},
         ],
         converter=convert_judged_row,
     )
@@ -647,18 +641,17 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
     failed_raw = json.loads(reader.read_blob(failed[0]["result_blob"]))
     assert failed_raw["grade"]["reward"] is None
     assert "fixture unavailable" in json.dumps(failed_raw["grade"]["detail"])
-    assert [request["model"] for request in judge_requests] == ["source-judge", "run-default", "run-default"]
+    assert [request["model"] for request in judge_requests] == ["source-judge", "run-default"]
     await run_evaluation((corpus,), output, config, model, machine_factories={}, judge_connection=connection)
     assert [request["model"] for request in judge_requests] == [
         "source-judge",
         "run-default",
-        "run-default",
         "source-judge",
     ]
-    assert len(model_requests) == 4
+    assert len(model_requests) == 3
     final_reader = ReadView(output)
     graded = [row for row in final_reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]
-    assert len(graded) == 3
+    assert len(graded) == 2
     grade_details = [json.loads(final_reader.read_blob(row["result_blob"]))["grade"]["detail"] for row in graded]
     assert {detail["requested_model"] for detail in grade_details} == {"source-judge", "run-default"}
     assert {detail["response_model"] for detail in grade_details} == {"judge-served-revision"}
@@ -681,7 +674,7 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
     )
     with pytest.raises(ValueError, match="Resume requires"):
         await run_evaluation((corpus,), output, changed, model, machine_factories={}, judge_connection=connection)
-    assert len(model_requests) == 4
+    assert len(model_requests) == 3
 
 
 @pytest.mark.asyncio

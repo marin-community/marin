@@ -1,35 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Legacy Evalchemy math populations with their original extraction policies."""
+"""Pinned Evalchemy math populations and source sampling policies."""
 
-import json
 from dataclasses import replace
 from functools import partial
 
-from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation import EvaluationProtocol, Sampling, TrialPolicy
-from taskcompendium.importers.evalchemy.grader import scorer_revision, source_package
+from taskcompendium.evaluation.corpus import chat_item
+from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, OperationKind, Sampling, SummaryKind, TrialPolicy
+from taskcompendium.importers.evalchemy.grader import scorer_revision
+from taskcompendium.importers.evalchemy.math import boxed_math_task, convert_amc, convert_olympiad
 from taskcompendium.importers.evalchemy.scorers.math import CHAT_REQUEST_STOPS
-from taskcompendium.importers.evalchemy.scorers.olympiad import reference_answers
-from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.evaluation import chat_item
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
-from taskcompendium.pipeline.models import IntendedUse, RawRow
-from verifyit.spec import JudgeSpec
+from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.datasets import (
-    ACCURACY,
-    MARIN_SOURCE_REVISION,
-    MATH_PROMPT,
-    math_dataset,
-)
-from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import MATH_GRADER, MATH_JUDGE_GRADER
-from experiments.post_training.task_curation.datasets.evalchemy.judge_prompts import EQUIVALENCE_JUDGE_TEMPLATE
-from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
-from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource
+from experiments.post_training.task_curation.datasets.evalchemy.environments import MATH_GRADER, MATH_JUDGE_GRADER
+from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+MATH500_REVISION = "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
+MARIN_SOURCE_REVISION = "623134de90723e7f189036da005067f36817b6e7"
+AIME24_SHA256 = "2dfe4f134aee7989cd9978218ca914b3c3db4685ea06d841560ec1391ba0a409"
 OLYMPIAD_SHA256 = "bcafaabc0128adfeef69c830d1682254428887d4e1b96b5b1b03fb5d3818f958"
 AIME25_SHA256 = "9affac318c4dd399482a67226936e229f954628567c7d7b7ee8f1360c15d6f7c"
 AMC23_SHA256 = "02ae54425741562778916b5fa8f6ff07749689cfcd7a53e65e1d88a89e5065f9"
@@ -45,66 +37,59 @@ def bundled_source(directory: str, filename: str, sha256: str) -> UrlSource:
     )
 
 
-def convert_amc(row: RawRow, context: ConversionContext) -> TaskSpec:
-    task = conversation_task(
-        row,
-        events=(TextMessage(role="user", content=MATH_PROMPT.format(problem=row.data["question"])),),
-        package=source_package(
-            "amc", {"expected": str(row.data["answer"])}, environment=required_grader_environment(context)
-        ),
-        evidence=dict(row.data),
+def math_dataset(
+    name: str,
+    benchmark: str,
+    source: HfSource | UrlSource,
+    answer_field: str,
+    rows: int,
+    trials: int,
+    temperature: float,
+) -> RlDataSource[EvalDataset]:
+    recipe = CurationRecipe(
+        name="evalchemy-" + name,
+        source=source,
+        convert=partial(boxed_math_task, answer_field=answer_field, benchmark=benchmark),
+        version=scorer_revision("boxed_math"),
+        intended_use=IntendedUse.EVAL,
+        grader=MATH_GRADER,
     )
-    return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:AMC23")})
-
-
-def convert_olympiad(row: RawRow, context: ConversionContext, *, judged: bool) -> TaskSpec:
-    answers = reference_answers(row.data["answer"])
-    judge = (
-        JudgeSpec(
-            references=(json.dumps(list(answers), ensure_ascii=False),),
-            question=row.data["problem"],
-            rubric="labels",
-            exact_gate=False,
-            prompt_template=EQUIVALENCE_JUDGE_TEMPLATE.replace("{reference_answers}", "{reference}").replace(
-                "{candidate_answer}", "{candidate}"
+    return RlDataSource(
+        info=SourceInfo(
+            id="Evalchemy:" + name,
+            title=benchmark,
+            origin="Evalchemy",
+            family="math-answer",
+            tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math"),
+            count=rows,
+        ),
+        config=EvalDataset(
+            recipe,
+            EvaluationProtocol(
+                benchmark=benchmark,
+                version="2026.11.02",
+                operation=OperationKind.CHAT_GENERATION,
+                sampling=Sampling(
+                    temperature=temperature,
+                    top_p=None,
+                    top_k=None,
+                    max_tokens=None,
+                    stop=CHAT_REQUEST_STOPS,
+                    chat_template_kwargs={"enable_thinking": True},
+                ),
+                trials=TrialPolicy(count=trials, seed=0 if temperature else None),
+                metrics=(Metrics.ACCURACY,),
+                primary_metric="accuracy",
+                summary=SummaryKind.MEAN,
+                expected_population=rows,
             ),
-            label_scores={"correct": 1.0, "incorrect": 0.0, "not_attempted": 0.0},
-            label_metrics={
-                label: {
-                    "accuracy": float(label == "correct"),
-                    "incorrect": float(label == "incorrect"),
-                    "not_attempted": float(label == "not_attempted"),
-                    "judge_failed": 0.0,
-                }
-                for label in ("correct", "incorrect", "not_attempted")
-            },
-            label_scan="whole",
-            label_case="upper",
-            max_completion_tokens=2048,
-        )
-        if judged
-        else None
-    )
-    environment = required_grader_environment(context)
-    if judged:
-        environment = environment.model_copy(update={"capabilities": (*environment.capabilities, "network")})
-    task = conversation_task(
-        row,
-        events=(TextMessage(role="user", content=MATH_PROMPT.format(problem=row.data["problem"])),),
-        package=source_package(
-            "olympiad",
-            {"expected": answers, "judged": judged},
-            environment=environment,
-            judge=judge,
-            timeout=60 + judge.transport_budget if judge is not None else 60,
+            partial(chat_item, response_selection="final_or_complete_boxed_reasoning"),
         ),
-        evidence=dict(row.data),
+        pipeline=curate,
     )
-    benchmark = "OlympiadBench" if judged else "OlympiadBenchDeterministic"
-    return task.model_copy(update={"tags": ("eval", "source:evalchemy", f"benchmark:{benchmark}")})
 
 
-def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataSet]:
+def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataset]:
     benchmark = "OlympiadBench" if judged else "OlympiadBenchDeterministic"
     count = 10 if judged else 1
     return RlDataSource(
@@ -116,7 +101,7 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataSet]:
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math", "legacy-subset"),
             count=30,
         ),
-        config=EvalDataSet(
+        config=EvalDataset(
             CurationRecipe(
                 name="evalchemy-" + benchmark.lower(),
                 source=bundled_source("OlympiadBench", "olympiadbench.jsonl", OLYMPIAD_SHA256),
@@ -127,8 +112,8 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataSet]:
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="olympiad-observations-v2" if judged else "1",
-                operation="chat_generation",
+                version="2026.11.02",
+                operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=0.7 if judged else 0,
                     top_p=1,
@@ -138,9 +123,9 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataSet]:
                     chat_template_kwargs={"enable_thinking": True},
                 ),
                 trials=TrialPolicy(count=count, seed=0 if judged else None),
-                metrics=(ACCURACY,),
+                metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
-                reducer="mean_over_examples_and_trials_v1",
+                summary=SummaryKind.MEAN,
                 expected_population=30,
             ),
             chat_item,
@@ -149,7 +134,36 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataSet]:
     )
 
 
-def sources() -> list[RlDataSource[EvalDataSet]]:
+def base_sources() -> list[RlDataSource[EvalDataset]]:
+    return [
+        math_dataset(
+            "math500",
+            "MATH500",
+            HfSource("HuggingFaceH4/MATH-500", MATH500_REVISION, ("test.jsonl",), SourceFormat.JSONL),
+            "answer",
+            500,
+            1,
+            0,
+        ),
+        math_dataset(
+            "aime24",
+            "AIME24",
+            UrlSource(
+                f"https://raw.githubusercontent.com/marin-community/marin/{MARIN_SOURCE_REVISION}/"
+                "vendor/evalchemy/eval/chat_benchmarks/AIME24/data/aime24.json",
+                AIME24_SHA256,
+                "aime24.jsonl",
+                SourceFormat.JSONL,
+            ),
+            "expected_answer",
+            30,
+            10,
+            0.7,
+        ),
+    ]
+
+
+def sources() -> list[RlDataSource[EvalDataset]]:
     # AIME25 and AMC23 source generation sets do_sample=False despite temperature=.7.
     aime = math_dataset(
         "aime25",
@@ -195,4 +209,4 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
             ),
         ),
     )
-    return [aime, amc, olympiad_source(judged=False), olympiad_source(judged=True)]
+    return [*base_sources(), aime, amc, olympiad_source(judged=False), olympiad_source(judged=True)]

@@ -15,7 +15,7 @@ from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
-from experiments.post_training.task_curation.datasets.evalchemy.instruction_environments import INSTRUCTION_ENVIRONMENTS
+from experiments.post_training.task_curation.datasets.evalchemy.environments import INSTRUCTION_ENVIRONMENTS
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
     DEFAULT_REPOSITORY,

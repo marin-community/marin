@@ -22,7 +22,8 @@ from verifyit.spec import ExactSpec
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.convert.evaluation import source_evidence
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation import (
+from taskcompendium.evaluation.corpus import source_order
+from taskcompendium.evaluation.spec import (
     ChoiceLikelihood,
     ContinuationLikelihood,
     EvaluationItem,
@@ -32,7 +33,6 @@ from taskcompendium.evaluation import (
 from taskcompendium.importers.evalchemy.grader import source_package
 from taskcompendium.importers.evalchemy.scorers.harness_generation import drop_references
 from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.evaluation import source_order
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 

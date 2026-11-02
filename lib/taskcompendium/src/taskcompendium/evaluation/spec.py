@@ -7,14 +7,19 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from verifyit.adapters.harness_native import likelihood_choice
-from verifyit.modes.grade_mcq import LikelihoodScoring, grade_mcq_likelihoods
 
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationInput
 
-EVALUATION_SCHEMA_VERSION = 1
+EVALUATION_SCHEMA_VERSION = 2
 type ResponseSelection = Literal["combine", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning"]
+
+
+class OperationKind(StrEnum):
+    CHAT_GENERATION = "chat_generation"
+    TEXT_GENERATION = "text_generation"
+    CHOICE_LIKELIHOOD = "choice_likelihood"
+    CONTINUATION_LIKELIHOOD = "continuation_likelihood"
 
 
 class EvaluationModel(BaseModel):
@@ -29,7 +34,7 @@ class ChatPromptVariant(EvaluationModel):
 class ChatGeneration(EvaluationModel):
     """Send the task's conversation unchanged, without another submission instruction."""
 
-    kind: Literal["chat_generation"] = "chat_generation"
+    kind: Literal[OperationKind.CHAT_GENERATION] = OperationKind.CHAT_GENERATION
     variants: tuple[ChatPromptVariant, ...] = ()
     prompt_selection: Literal["fixed", "fit_context"] = "fixed"
     response_selection: ResponseSelection = "combine"
@@ -43,7 +48,7 @@ class ChatGeneration(EvaluationModel):
 
 
 class TextGeneration(EvaluationModel):
-    kind: Literal["text_generation"] = "text_generation"
+    kind: Literal[OperationKind.TEXT_GENERATION] = OperationKind.TEXT_GENERATION
     context: str
 
 
@@ -55,7 +60,7 @@ class LikelihoodRequest(EvaluationModel):
 class ChoiceLikelihood(EvaluationModel):
     """Score continuations; normalization uses the original choices, before adding the delimiter."""
 
-    kind: Literal["choice_likelihood"] = "choice_likelihood"
+    kind: Literal[OperationKind.CHOICE_LIKELIHOOD] = OperationKind.CHOICE_LIKELIHOOD
     choices: tuple[str, ...]
     requests: tuple[LikelihoodRequest, ...]
     gold: tuple[int, ...]
@@ -73,7 +78,7 @@ class ChoiceLikelihood(EvaluationModel):
 
 
 class ContinuationLikelihood(EvaluationModel):
-    kind: Literal["continuation_likelihood"] = "continuation_likelihood"
+    kind: Literal[OperationKind.CONTINUATION_LIKELIHOOD] = OperationKind.CONTINUATION_LIKELIHOOD
     request: LikelihoodRequest
 
 
@@ -152,6 +157,25 @@ class Metric(EvaluationModel):
     higher_is_better: bool
 
 
+class Metrics:
+    ACCURACY = Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True)
+
+
+class SummaryKind(StrEnum):
+    """Consumer-side reductions; the driver always writes individual observations.
+
+    Groups use the same reduction independently of the headline population.
+    Weighted means read each metric's explicit weights from grading detail.
+    Classification derives conditional rates from correct/incorrect/abstention counts.
+    Perplexity transforms mean log likelihood with exp(-mean), leaving accuracy as a mean.
+    """
+
+    MEAN = "mean"
+    WEIGHTED_MEAN = "weighted_mean"
+    CLASSIFICATION = "classification"
+    PERPLEXITY = "perplexity"
+
+
 class LikelihoodNormalization(StrEnum):
     RAW = "raw"
     CHARACTERS = "characters"
@@ -167,15 +191,15 @@ class LikelihoodMetric(EvaluationModel):
 class EvaluationProtocol(EvaluationModel):
     """The immutable benchmark settings needed to execute and interpret individual attempts."""
 
-    schema_version: Literal[1] = EVALUATION_SCHEMA_VERSION
+    schema_version: Literal[2] = EVALUATION_SCHEMA_VERSION
     benchmark: str
     version: str
-    operation: Literal["chat_generation", "text_generation", "choice_likelihood", "continuation_likelihood"]
+    operation: OperationKind
     sampling: Sampling | None
     trials: TrialPolicy
     metrics: tuple[Metric, ...]
     primary_metric: str
-    reducer: str
+    summary: SummaryKind
     expected_population: int = Field(gt=0)
     context_window: int | None = Field(default=None, gt=0)
     context_policy: ContextPolicy | None = None
@@ -198,38 +222,3 @@ class EvaluationProtocol(EvaluationModel):
     @property
     def fingerprint(self) -> str:
         return canonical_sha256(self.model_dump(mode="json"))
-
-
-def likelihood_metrics(
-    operation: ChoiceLikelihood | ContinuationLikelihood,
-    scores: tuple[float, ...],
-    protocol: EvaluationProtocol,
-    *,
-    is_greedy: tuple[bool, ...] = (),
-) -> dict[str, float]:
-    """Grade saved model likelihoods using the shared native harness comparison policy."""
-    metrics = {}
-    for metric in protocol.likelihood_metrics:
-        if metric.scoring == "log_likelihood":
-            if len(scores) != 1:
-                raise ValueError("Continuation likelihood requires exactly one score")
-            metrics[metric.name] = scores[0]
-        elif metric.scoring == "greedy_accuracy":
-            if len(is_greedy) != 1:
-                raise ValueError("Greedy continuation accuracy requires token agreement evidence")
-            metrics[metric.name] = float(is_greedy[0])
-        elif isinstance(operation, ChoiceLikelihood):
-            if metric.scoring == "probability_mass":
-                metrics[metric.name] = grade_mcq_likelihoods(
-                    scores,
-                    operation.gold,
-                    normalization_lengths=[1] * len(scores),
-                    policy=LikelihoodScoring.PROBABILITY_MASS,
-                ).reward
-            else:
-                metrics[metric.name] = likelihood_choice(
-                    operation.choices, scores, operation.gold, normalization=metric.normalization
-                ).reward
-        else:
-            raise ValueError("Choice selection requires a choice likelihood operation")
-    return metrics

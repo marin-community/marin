@@ -39,6 +39,11 @@ Evaluation sources also use QUICK, with stricter publication checks that preserv
 the complete benchmark population. They publish canonical TaskSpec rows and
 evaluation protocol sidecars. See [evaluation tasks](../../../docs/references/evaluation-tasks.md)
 for declarations, outputs and the standard evaluation driver.
+`evaluation.py` binds `EvalDataset` recipes to
+`taskcompendium.pipeline.evaluation.publish_evaluation_corpus`. Evaluation
+protocols use schema version 2 from `taskcompendium.evaluation.spec`; source
+adapters live under `taskcompendium.importers` and `taskcompendium.convert`,
+including reusable benchmark modules in `taskcompendium.importers.evalchemy`.
 
 Select `--mode quick`, `sample` or `full`, or resume with `--corpus` as described
 below. Omit `--run` to print a plan without downloading, converting or starting

@@ -425,7 +425,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
       - name: Test rollout execution and private grading
         run: >-
-          uv run --package marin-rolloutengine --frozen --group test pytest
+          uv run --package marin-rolloutengine --frozen --extra evaluation --group test pytest
           -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
           lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py -q
 

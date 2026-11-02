@@ -10,7 +10,9 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
-from taskcompendium.evaluation import (
+
+from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_cases, evaluation_items
+from taskcompendium.evaluation.spec import (
     ChatGeneration,
     EvaluationProtocol,
     GraphWalksContextSelection,
@@ -25,7 +27,6 @@ from taskcompendium.importers.evalchemy.scorers.long_context import (
     interleave_mrcr_indices,
 )
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.evaluation import EvaluationCase, evaluation_cases, evaluation_items
 from taskcompendium.submission import conversation_messages
 
 SELECTIONS_TABLE = "evaluation_selection"
@@ -233,7 +234,7 @@ def _mrcr_cases(
     tokenizer: EvaluationTokenizer | None,
 ) -> Iterator[SelectionDecision]:
     items = list(evaluation_items(root))
-    cells = defaultdict(list)
+    cells: dict[tuple[int, int], list[int]] = defaultdict(list)
     for index, item in enumerate(items):
         metadata = item.context_selection
         assert isinstance(metadata, MRCRContextSelection)

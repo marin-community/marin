@@ -14,12 +14,16 @@ dependencies = [
     "openai>=1.59.9",
 ]
 
+[project.optional-dependencies]
+evaluation = ["marin-finestore", "marin-taskcompendium[pipeline]"]
+
 [dependency-groups]
 test = [
     "pytest>=8.3",
     "pytest-asyncio",
     "pytest-timeout",
     "marin-shellbox[daytona,shellsim]",
+    "transformers>=4.48",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -47,6 +51,7 @@ known-first-party = ["rolloutengine"]
 
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
-project-includes = ["src"]
+use-ignore-files = false
+project-includes = ["src/**/*.py"]
 search-path = ["src"]
 python-interpreter = "../../.venv/bin/python"

@@ -40,8 +40,13 @@ their token IDs need not be the tokens that the model sampled.
 See the [task rollout reference](../../docs/references/task-rollouts.md) for the harness contract, the
 exact-token contract, trace modes, failure handling, and backend configuration.
 
+Install `marin-rolloutengine[evaluation]` to run published evaluation corpora with
+`rolloutengine.evaluation.runner.run_evaluation`. The driver records raw attempts
+in FineStore and resumes failed work. Dataset protocols and corpus readers live
+in TaskCompendium; see [evaluation tasks](../../docs/references/evaluation-tasks.md).
+
 From the Marin repository root:
 
 ```bash
-uv run --package marin-rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
+uv run --package marin-rolloutengine --frozen --extra evaluation --group test pytest lib/rolloutengine/tests -q
 ```

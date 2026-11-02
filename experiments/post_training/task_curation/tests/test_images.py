@@ -124,17 +124,36 @@ def test_changed_runtime_dependencies_rebuild_the_cached_lock(docker_log, monkey
 
 
 @pytest.mark.integration
-def test_resolved_base_lock_imports_verifyit_in_an_isolated_python(tmp_path):
+def test_resolved_base_lock_grades_answers_in_an_isolated_python(tmp_path):
     environment = Environment()
     built = build_environment(
         environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "environment"))
     )
     runtime = local_runtime(built.lock_url)
     runtime.ensure_built()
-    result = subprocess.run(
-        [str(runtime.environment.python), "-I", "-c", "from verifyit.grade import main"], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
+    spec = tmp_path / "verifier.toml"
+    spec.write_text('mode = "exact"\nexpected = ["red"]\noutput = "answer.txt"\n')
+    for answer, expected in (("red", 1), ("blue", 0)):
+        (tmp_path / "answer.txt").write_text(answer)
+        logs = tmp_path / answer
+        result = subprocess.run(
+            [
+                str(runtime.environment.python),
+                "-I",
+                "-m",
+                "verifyit.grade",
+                str(spec),
+                "--workspace",
+                str(tmp_path),
+                "--logs-dir",
+                str(logs),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        verdict = json.loads((logs / "verdict.json").read_text())
+        assert (verdict["status"], verdict["reward"]) == ("scored", expected)
 
 
 @pytest.mark.parametrize(

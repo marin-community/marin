@@ -15,8 +15,9 @@ from typing import Any, Protocol
 
 from openai import AsyncOpenAI
 from openai.types.completion import Completion
+from taskcompendium.evaluation.spec import LikelihoodRequest
+
 from rolloutengine.models import TokenUsage
-from taskcompendium.evaluation import LikelihoodRequest
 
 
 class Tokenizer(Protocol):

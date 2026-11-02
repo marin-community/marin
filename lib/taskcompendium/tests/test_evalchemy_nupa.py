@@ -1,43 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import re
+import hashlib
+import json
 
 import pytest
+from rigging.filesystem.storage_path import StoragePath
 from verifyit.grade import Status
 
-from taskcompendium.importers.evalchemy.scorers.nupa import grade_nupa_answer
-
-
-def full_answer(value, answer_format):
-    patterns = {
-        "Integer": r"\d+",
-        "Float": r"\d+\.\d+",
-        "Fraction": r"\d+/\d+",
-        "ScientificNotation": r"\d+\.\d+[eE][+-]?\d+",
-    }
-    return value if re.fullmatch(patterns[answer_format], value) else None
-
-
-def digit_parts(value, answer_format):
-    separators = {"Integer": (), "Float": (".",), "Fraction": ("/",), "ScientificNotation": (".", "e")}
-    parts = [value]
-    for separator in separators[answer_format]:
-        parts = [piece for part in parts for piece in part.lower().split(separator, 1)]
-    if len(parts) != len(separators[answer_format]) + 1:
-        return tuple("" for _ in range(len(separators[answer_format]) + 1))
-    return tuple("".join(char for char in part if char.isdigit()) for part in parts)
-
-
-def grade(candidate, expected, answer_format):
-    return grade_nupa_answer(
-        candidate,
-        expected,
-        answer_format,
-        extract_answer=lambda value, fmt: full_answer(value, fmt) if isinstance(value, str) else None,
-        full_answer=full_answer,
-        digit_parts=digit_parts,
-    )
+from taskcompendium.importers.evalchemy.scorers.nupa import grade_nupa_candidate
+from taskcompendium.importers.evaluation_nupa import read_nupa_panel
+from taskcompendium.pipeline.inputs import ConversionContext
 
 
 @pytest.mark.parametrize(
@@ -52,44 +25,94 @@ def grade(candidate, expected, answer_format):
 def test_component_alignment_preserves_partial_digit_credit(
     candidate, expected, answer_format, digit_match, length_difference
 ):
-    verdict = grade(candidate, expected, answer_format)
+    verdict = grade_nupa_candidate(expected, answer_format, candidate)
     assert verdict.status is Status.SCORED
     assert verdict.reward == 0
     assert verdict.detail["metrics"] == {
         "exact_match": 0.0,
         "digit_match": digit_match,
         "dlength": float(length_difference),
-        "format_valid": 1.0,
-        "no_answer": 0.0,
+        "format_valid_rate": 1.0,
+        "no_answer_rate": 0.0,
     }
 
 
 def test_representation_equality_does_not_coerce_numeric_equivalents():
-    assert grade("1.00", "1.0", "Float").reward == 0
-    assert grade("1.0", "1.0", "Float").reward == 1
+    assert grade_nupa_candidate("1.0", "Float", "1.00").reward == 0
+    assert grade_nupa_candidate("1.0", "Float", "1.0").reward == 1
 
 
 def test_source_component_metric_omits_scientific_exponent_sign():
-    verdict = grade("1.23e-5", "1.23e5", "ScientificNotation")
+    verdict = grade_nupa_candidate("1.23e5", "ScientificNotation", "1.23e-5")
     assert verdict.reward == 1
     assert verdict.detail["metrics"]["digit_match"] == 1
 
 
 @pytest.mark.parametrize("candidate", [None, "missing", {"answer": "123"}])
 def test_missing_answer_keeps_reference_length_and_zero_credit(candidate):
-    verdict = grade(candidate, "123", "Integer")
+    verdict = grade_nupa_candidate("123", "Integer", candidate)
     assert verdict.reward == 0
     assert verdict.detail["metrics"] == {
         "exact_match": 0.0,
         "digit_match": 0.0,
         "dlength": 3.0,
-        "format_valid": 0.0,
-        "no_answer": 1.0,
+        "format_valid_rate": 0.0,
+        "no_answer_rate": 1.0,
     }
 
 
 @pytest.mark.parametrize("expected", ["", "abc123", "nan", "inf", None])
 def test_malformed_reference_cannot_be_reduced_to_matching_digits(expected):
-    verdict = grade("123", expected, "Integer")
+    verdict = grade_nupa_candidate(expected, "Integer", "123")
     assert verdict.status is Status.INVALID_TASK
     assert verdict.reward == 0
+
+
+SOURCE = {
+    "add_Integer_Integer_Integer": {"1": ["Add: 1 + 2 = 3", "Add: 1 + 2 = 3"]},
+    "sub_Integer_Integer_Integer": {"1": ["Subtract: 3 - 1 = 2"]},
+}
+PANEL = [
+    {
+        "task_name": "sub_Integer_Integer_Integer",
+        "digit": 1,
+        "sha256": hashlib.sha256(b"Subtract: 3 - 1 = 2").hexdigest(),
+    },
+    {"task_name": "add_Integer_Integer_Integer", "digit": 1, "sha256": hashlib.sha256(b"Add: 1 + 2 = 3").hexdigest()},
+]
+
+
+@pytest.fixture
+def staged_source(tmp_path):
+    primary = tmp_path / "source"
+    primary.mkdir()
+    (primary / "test.json").write_text(json.dumps(SOURCE))
+    panel = tmp_path / "panel"
+    panel.mkdir()
+    (panel / "nupa5k_manifest.jsonl").write_text("".join(json.dumps(identity) + "\n" for identity in PANEL))
+    return primary, panel
+
+
+def test_nupa_panel_resolves_manifest_order_and_rejects_missing_source_identity(staged_source):
+    primary, panel = staged_source
+    path = primary / "test.json"
+    context = ConversionContext({"panel": StoragePath(str(panel))}, None)
+    records = list(read_nupa_panel(StoragePath(str(path)), context))
+    assert [
+        {"task_name": row["task_name"], "digit": row["digit"], "sha256": row["source_sha256"]} for row in records
+    ] == PANEL
+    data = json.loads(path.read_text())
+    data.clear()
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="missing"):
+        list(read_nupa_panel(StoragePath(str(path)), context))
+
+
+def test_nupa_panel_order_does_not_depend_on_source_task_order(staged_source):
+    primary, panel = staged_source
+    path = primary / "test.json"
+    context = ConversionContext({"panel": StoragePath(str(panel))}, None)
+    before = list(read_nupa_panel(StoragePath(str(path)), context))
+    path.write_text(json.dumps(dict(reversed(list(SOURCE.items())))))
+    after = list(read_nupa_panel(StoragePath(str(path)), context))
+    assert after == before

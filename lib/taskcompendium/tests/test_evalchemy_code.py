@@ -4,6 +4,7 @@
 """Publish code rows while keeping executable tests in verifier-only resources."""
 
 import json
+from functools import partial
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -11,13 +12,16 @@ import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from shellbox.machine import PackageSpec
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
-from taskcompendium.pipeline.evaluation import evaluation_cases, publish_evaluation_corpus
-from taskcompendium.runtime.resources import resource_bytes
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.task_curation.datasets.evalchemy.code import sources
-from experiments.post_training.task_curation.pipeline import source_recipe
+from taskcompendium.evaluation.corpus import evaluation_cases
+from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, OperationKind, Sampling, SummaryKind, TrialPolicy
+from taskcompendium.importers.evalchemy.code import convert_python, python_item, read_crux
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
+from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
+from taskcompendium.runtime.resources import resource_bytes
 
 INPUTS = [
     {
@@ -41,10 +45,10 @@ INPUTS = [
 
 @pytest.mark.parametrize("case", INPUTS, ids=lambda case: case["suite"])
 def test_python_publication_keeps_tests_private_and_expands_crux_directions(case, tmp_path):
-    source = next(source for source in sources() if source.info.id == "Evalchemy:" + case["suite"])
-    dataset = source.config
+    suite = case["suite"]
+    filename = "test.parquet" if suite == "humaneval" else "test.jsonl"
     root = tmp_path / "source"
-    path = root / dataset.files[0]
+    path = root / filename
     path.parent.mkdir(parents=True)
     if path.suffix == ".parquet":
         pq.write_table(pa.Table.from_pylist(case["rows"]), path)
@@ -54,8 +58,32 @@ def test_python_publication_keeps_tests_private_and_expands_crux_directions(case
         command_semantics=CommandSemantics.LINUX_PROCESS,
         package_spec=PackageSpec(pypi_packages=("numpy==2.3.5",)),
     )
-    protocol = dataset.protocol.model_copy(
-        update={"expected_population": len(case["rows"]) * (2 if case["suite"] == "cruxeval" else 1)}
+    recipe = SourceRecipe(
+        name="python-publication",
+        version="fixture",
+        source=SourceFiles(
+            dataset="python-fixture",
+            revision="fixture",
+            patterns=(filename,),
+            format=SourceFormat.PARQUET if suite == "humaneval" else SourceFormat.JSONL,
+            read=read_crux if suite == "cruxeval" else None,
+        ),
+        convert=partial(convert_python, suite=suite),
+        intended_use=IntendedUse.EVAL,
+        rubric=None,
+        controls=None,
+        grader_environment=environment,
+    )
+    protocol = EvaluationProtocol(
+        benchmark=suite,
+        version="fixture",
+        operation=OperationKind.TEXT_GENERATION if suite == "humaneval" else OperationKind.CHAT_GENERATION,
+        metrics=(Metrics.ACCURACY,),
+        primary_metric="accuracy",
+        sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=1024, stop=(), chat_template_kwargs={}),
+        trials=TrialPolicy(count=1, seed=None),
+        summary=SummaryKind.MEAN,
+        expected_population=len(case["rows"]) * (2 if suite == "cruxeval" else 1),
     )
     output = str(tmp_path / "published")
     client = LocalClient()
@@ -69,9 +97,9 @@ def test_python_publication_keeps_tests_private_and_expands_crux_directions(case
             ) as context,
         ):
             publish_evaluation_corpus(
-                source_recipe(dataset.recipe, {}, environment),
+                recipe,
                 protocol,
-                dataset.item_builder,
+                partial(python_item, completion=suite == "humaneval"),
                 context,
                 str(root),
                 output,

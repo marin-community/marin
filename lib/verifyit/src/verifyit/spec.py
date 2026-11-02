@@ -34,7 +34,6 @@ class Mode(StrEnum):
     PREDICTED_ACTION = "predicted_action"
     MCQ = "mcq"
     MATH = "math"
-    MATH_JUDGE = "math-judge"
     NUMERIC = "numeric"
     EXACT = "exact"
     STRUCTURE_CLOSURE = "structure_closure"
@@ -350,16 +349,6 @@ class JudgeRuntimeSource(StrEnum):
 
 
 @dataclass(frozen=True)
-class MathJudgeSpec:
-    """Try a deterministic math grader, then judge its nonempty extracted answer."""
-
-    math: MathSpec
-    judge: JudgeSpec
-    output: str = DEFAULT_OUTPUT
-    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
-
-
-@dataclass(frozen=True)
 class ScriptSpec:
     path: str
     args: tuple[str, ...] = ()
@@ -375,7 +364,6 @@ Spec = (
     | PredictedActionSpec
     | McqSpec
     | MathSpec
-    | MathJudgeSpec
     | NumericSpec
     | ExactSpec
     | StructureClosureSpec
@@ -426,7 +414,6 @@ MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
     Mode.MATH: ModeDescriptor(
         MathSpec, "grade_math", CandidateEntrypoints("validate_math", "grade_math_text_candidate")
     ),
-    Mode.MATH_JUDGE: ModeDescriptor(MathJudgeSpec, "grade_math_judge"),
     Mode.NUMERIC: ModeDescriptor(
         NumericSpec, "grade_math", CandidateEntrypoints("validate_numeric", "grade_numeric_text_candidate")
     ),
@@ -468,13 +455,6 @@ def mode_of(spec: Spec) -> Mode:
 
 
 def _coerce(name: str, annotation: Any, value: Any) -> Any:
-    if annotation in (MathSpec, JudgeSpec):
-        if not isinstance(value, dict):
-            raise ValueError(f"field {name!r} expects a nested verifier table")
-        spec = spec_from_table(value)
-        if not isinstance(spec, annotation):
-            raise ValueError(f"field {name!r} expects a {annotation.__name__}")
-        return spec
     if annotation == tuple[FunctionCall, ...]:
         if not isinstance(value, list):
             raise ValueError(f"field {name!r} expects a list of function calls")
@@ -556,9 +536,7 @@ def spec_to_table(spec: Spec) -> dict[str, Any]:
         value = getattr(spec, f.name)
         if value is None and f.default is None:
             continue
-        if isinstance(value, MathSpec | JudgeSpec):
-            value = spec_to_table(value)
-        elif isinstance(value, tuple):
+        if isinstance(value, tuple):
             value = [dataclasses.asdict(v) if dataclasses.is_dataclass(v) else v for v in value]
         elif isinstance(value, StrEnum):
             value = value.value

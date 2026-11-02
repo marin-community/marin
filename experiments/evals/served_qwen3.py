@@ -1,26 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate served Qwen3 with the lm-eval suite.
+"""Serve a pinned Qwen model and evaluate published TaskSpec corpora.
 
-\b
-Examples:
-  uv run iris --cluster=marin job run --job-name qwen3-evals --cpu 1 --memory 2G \
-    --extra cpu --priority interactive --no-wait \
-    -- python -m experiments.evals.served_qwen3
-
-  uv run iris --config lib/iris/config/marin.yaml job run --target-cluster cw-us-east-02a \
-    --job-name qwen3-gpu-evals --cpu 1 --memory 2G --extra cpu --priority interactive --no-wait \
-    -- python -m experiments.evals.served_qwen3 --accelerator gpu
+Run with --config RUN.json --dataset CORPUS --output RESULTS and --accelerator gpu
+on the same cluster as the corpus and result storage. The run config supplies the
+Hugging Face model/tokenizer names and immutable revisions.
 """
 
 import argparse
+import uuid
+from dataclasses import replace
 from enum import StrEnum
-from types import MappingProxyType
 
 from fray.types import ANY_REGION, ResourceConfig, create_environment
-from marin.execution.lazy import lower
-from marin.execution.step_runner import StepRunner
+from iris.cli.connect import open_iris_client
+from iris.cluster.types import ResourceSpec
 from marin.inference.config import (
     BrokerConfig,
     InferenceProxyConfig,
@@ -30,10 +25,13 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
 )
+from marin.inference.iris import remote_inference
+from rigging.config_discovery import find_project_root
+from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.evaluation.runner import EvaluationRunConfig
 
-from experiments.evals.lm_eval_suite import lm_eval_suite
+from experiments.evaluation.task_driver import SOLVER_API_KEY, SOLVER_ENDPOINT, WORKER_TIMEOUT, submit_evaluation
 
-QWEN3_EVAL_VERSION = "2026.07.17"
 _VLLM_TIMEOUT = 1800
 _TPU_VLLM_WORKER_ENV_VARS = (
     ("VLLM_ENABLE_V1_MULTIPROCESSING", "0"),
@@ -89,12 +87,6 @@ QWEN3_TPU_INFERENCE = qwen3_inference_config(
     worker_env_vars=_TPU_VLLM_WORKER_ENV_VARS,
 )
 
-QWEN3_TPU_EVAL_RESULTS = lm_eval_suite(
-    QWEN3_TPU_INFERENCE,
-    model_name="qwen3-0.6b",
-    version=QWEN3_EVAL_VERSION,
-)
-
 QWEN3_GPU_INFERENCE = qwen3_inference_config(
     engine=VllmEngineConfig(
         launcher=VllmLauncherType.CUDA,
@@ -112,30 +104,45 @@ QWEN3_GPU_INFERENCE = qwen3_inference_config(
     worker_env_vars=(),
 )
 
-QWEN3_GPU_EVAL_RESULTS = lm_eval_suite(
-    QWEN3_GPU_INFERENCE,
-    model_name="qwen3-0.6b-gpu",
-    version=QWEN3_EVAL_VERSION,
-)
 
-QWEN3_EVALS_BY_ACCELERATOR = MappingProxyType(
-    {
-        Accelerator.TPU: QWEN3_TPU_EVAL_RESULTS,
-        Accelerator.GPU: QWEN3_GPU_EVAL_RESULTS,
-    }
-)
-
-
-def _parse_accelerator() -> Accelerator:
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--accelerator",
-        type=Accelerator,
-        choices=tuple(Accelerator),
-        default=Accelerator.TPU,
+    parser.add_argument("--accelerator", type=Accelerator, choices=tuple(Accelerator), default=Accelerator.GPU)
+    parser.add_argument("--cluster", default="cw-us-east-02a")
+    parser.add_argument("--dataset", action="append", required=True)
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
+    config = EvaluationRunConfig.model_validate_json(StoragePath(args.config).read_text())
+    inference = QWEN3_GPU_INFERENCE if args.accelerator is Accelerator.GPU else QWEN3_TPU_INFERENCE
+    inference = replace(
+        inference,
+        model=ServedModelConfig(
+            weights=config.model.name,
+            revision=config.model.revision,
+            tokenizer=config.model.tokenizer,
+            tokenizer_revision=config.model.tokenizer_revision,
+            max_model_len=config.model.context_window,
+        ),
+        iris=replace(
+            inference.iris, worker_resources=replace(inference.iris.worker_resources, target_cluster=args.cluster)
+        ),
     )
-    return parser.parse_args().accelerator
+    with remote_inference(inference) as session:
+        endpoint = session.model.endpoint
+        with open_iris_client(cluster_name=args.cluster, workspace=find_project_root()) as client:
+            job = submit_evaluation(
+                client,
+                tuple(args.dataset),
+                args.output,
+                config,
+                name=f"qwen-task-eval-{uuid.uuid4().hex[:8]}",
+                resources=ResourceSpec(cpu=4, memory="32g", disk="64g"),
+                timeout=WORKER_TIMEOUT,
+                secrets={SOLVER_ENDPOINT: endpoint.base_url, SOLVER_API_KEY: endpoint.api_key or "unused"},
+            )
+            job.wait(timeout=WORKER_TIMEOUT, stream_logs=True)
 
 
 if __name__ == "__main__":
-    StepRunner().run([lower(QWEN3_EVALS_BY_ACCELERATOR[_parse_accelerator()])])
+    main()

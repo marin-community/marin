@@ -1,14 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned instruction-checker packages and shared NLTK resource archives.
-
-Package versions match the frozen Evalchemy oracle. NLTK data is mounted once
-per environment, outside individual tasks; graders run without network access.
-"""
+"""Pinned grader dependencies and source data archives."""
 
 from experiments.post_training.task_curation.datasets.environments import PUNKT_TAB
 from experiments.post_training.task_curation.environment import Archive, Environment
+
+BASIC_GRADER = Environment(requirements=("tomli-w==1.2.0",))
+# Harness Unicode normalization uses NumPy's fixed-width string operations.
+ALIAS_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "numpy==2.3.5"))
+MATH_GRADER = Environment(
+    requirements=("tomli-w==1.2.0", "math-verify==0.9.0", "sympy==1.13.3", "antlr4-python3-runtime==4.11.0")
+)
+MATH_JUDGE_GRADER = Environment(requirements=(*MATH_GRADER.requirements, "openai==2.24.0"))
 
 NLTK_DATA_REVISION = "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a"
 NLTK_DATA_ROOT = "/srv/nltk_data"

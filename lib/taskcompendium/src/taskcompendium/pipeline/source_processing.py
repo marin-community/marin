@@ -323,7 +323,7 @@ def _unprocessed_review(
 
 
 def _judge_grader(grader: Grader) -> bool:
-    return isinstance(grader, VerifyitGrader) and grader.mode in (Mode.JUDGE, Mode.MATH_JUDGE)
+    return isinstance(grader, VerifyitGrader) and grader.mode == Mode.JUDGE
 
 
 def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -> Admission:
