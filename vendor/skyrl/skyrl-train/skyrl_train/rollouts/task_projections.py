@@ -19,7 +19,6 @@ from rolloutengine.models import RolloutContractError
 from skyrl_train.rollouts.training_record import (
     REASONING_VIOLATION_TOKEN_METADATA_KEY,
     TrainingRollout,
-    reasoning_violations,
 )
 
 from skyrl_train.error_treatment import ErrorTreatment
@@ -262,6 +261,7 @@ class WholeTaskProjection:
             self.tokenizer,
             [row.metadata.metric_class for row in request.rows],
         )
+        _attach_reasoning_violations(batch, rollouts, ends_attempt=[True] * len(rollouts))
         _merge_task_metrics(batch, rollouts, request)
         return batch
 
@@ -308,6 +308,7 @@ class StepTaskProjection:
         batch = _training_batch(samples, decisions, required, self.runner_config, self.tokenizer, None)
         batch["trajectory_ids"] = projected_ids
         batch["is_last_step"] = final_steps
+        _attach_reasoning_violations(batch, samples, ends_attempt=final_steps)
         _merge_task_metrics(batch, rollouts, request)
         return batch
 
@@ -365,7 +366,6 @@ def _training_batch(
     _attach_routed_experts(batch, rollouts)
     _attach_policy_steps(batch, rollouts)
     _attach_span_tags(batch, rollouts)
-    _attach_reasoning_violations(batch, rollouts)
     metrics = None
     if env_metric_classes is not None:
         metrics = [
@@ -512,9 +512,23 @@ def _violation_tokens(rollout: TrainingRollout) -> list[int]:
     return positions
 
 
-def _attach_reasoning_violations(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
-    batch["reasoning_span_violations"] = [len(reasoning_violations(rollout)) for rollout in rollouts]
-    batch["reasoning_span_violation_tokens"] = [_violation_tokens(rollout) for rollout in rollouts]
+def _reasoning_violation_count(rollout: TrainingRollout, ends_attempt: bool) -> int:
+    """Violations in the row's optimized turns, plus, on the row that ends the attempt, those in earlier
+    conversations, which no row optimizes."""
+    count = sum(step.turn.reasoning_violation is not None for step in rollout.steps)
+    if not ends_attempt:
+        return count
+    earlier = rollout.conversations[:-1]
+    return count + sum(step.turn.reasoning_violation is not None for conversation in earlier for step in conversation.steps)
+
+
+def _attach_reasoning_violations(
+    batch: TrajectoryBatch, rows: Sequence[TrainingRollout], ends_attempt: Sequence[bool]
+) -> None:
+    batch["reasoning_span_violations"] = [
+        _reasoning_violation_count(row, last) for row, last in zip(rows, ends_attempt, strict=True)
+    ]
+    batch["reasoning_span_violation_tokens"] = [_violation_tokens(row) for row in rows]
 
 
 def _task_error_policies(

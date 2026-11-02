@@ -9,10 +9,12 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from verifyit.reasoning_markup import ReasoningViolation
 
 from skyrl_train.inference_engines.base import InferenceEngineInput
+from skyrl_train.rollouts.task_projections import _attach_reasoning_violations, _step_rollouts
 from skyrl_train.rollouts.training_record import (
     TrainingRollout,
     TrainingStep,
     TrainingTransition,
+    REASONING_VIOLATION_TOKEN_METADATA_KEY,
     reject_malformed_reasoning,
 )
 from skyrl_train.trajectory_runners.model_clients import (
@@ -162,7 +164,7 @@ def test_a_stepwise_trajectory_is_penalized_once_at_its_last_trainable_token():
             "loss_masks": [[1, 1], [1, 1, 0]],
             "rewards": [[0.0, 0.0], [0.0, 1.0, 0.0]],
             "is_last_step": [False, True],
-            "reasoning_span_violations": [1, 1],
+            "reasoning_span_violations": [1, 0],
             "reasoning_span_violation_tokens": [[], []],
         }
     )
@@ -195,6 +197,60 @@ def test_a_marker_penalty_charges_the_violation_token_when_it_has_one(tokens, lo
     assert metrics["generate/reward_shaping/reasoning_span_penalty_mean"] == pytest.approx(-0.2)
     assert metrics["generate/reward_shaping/reasoning_span_incidence"] == 1.0
     assert metrics["generate/reward_shaping/loop_charged_tokens_mean"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("earlier_violation", "violations", "rewards", "loop_advantages"),
+    [
+        (None, [0, 1], [0.0, 1.0], [[0.0, 0.0], [0.0, -0.2]]),  # charged once, at the marker token
+        # An earlier, unoptimized conversation has no token to charge, so the reward pays.
+        (ReasoningViolation.STRAY_END, [0, 2], [0.0, 0.8], [[0.0, 0.0], [0.0, 0.0]]),
+    ],
+)
+def test_step_rows_count_only_their_own_turns(earlier_violation, violations, rewards, loop_advantages):
+    def turn(violation, token=None):
+        return ModelTurn(
+            message={"role": "assistant", "content": "4"},
+            prompt_token_ids=(3,),
+            response_token_ids=(4, 4),
+            logprobs=None,
+            stop_reason="stop",
+            metadata={} if token is None else {REASONING_VIOLATION_TOKEN_METADATA_KEY: token},
+            reasoning_violation=violation,
+        )
+
+    def conversation(*turns):
+        steps = tuple(RolloutStep(t, Transition(done=False), 0, ()) for t in turns)
+        return ConversationRecord((), (3,), (4,) * 2 * len(turns), (1,) * 2 * len(turns), None, steps)
+
+    optimized = (turn(None), turn(ReasoningViolation.SECOND_SPAN, token=1))
+    rollout = TrainingRollout(
+        task_id="task",
+        messages=(),
+        prompt_token_ids=(3,),
+        response_token_ids=(4, 4, 4, 4),
+        loss_mask=(1, 1, 1, 1),
+        logprobs=None,
+        grade=GradeResult(Outcome.GRADED, 1.0, passed=True),
+        stop_reason="stop",
+        steps=tuple(
+            TrainingStep(t, TrainingTransition(done=index == 1), 2 * index + 1, ()) for index, t in enumerate(optimized)
+        ),
+        conversations=(conversation(turn(earlier_violation)), conversation(*optimized)),
+    )
+    output = {
+        "response_ids": [[4, 4], [4, 4]],
+        "loss_masks": [[1, 1], [1, 1]],
+        "rewards": [0.0, 1.0],
+        "is_last_step": [False, True],
+    }
+
+    _attach_reasoning_violations(output, _step_rollouts(rollout), ends_attempt=[False, True])
+    _shape(output, target="marker")
+
+    assert output["reasoning_span_violations"] == violations
+    assert output["rewards"] == pytest.approx(rewards)
+    assert output["loop_advantages"] == [pytest.approx(row) for row in loop_advantages]
 
 
 def _batch(**fields):
