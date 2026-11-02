@@ -171,6 +171,7 @@ from experiments.belay.submit import (
     check_variant,
     iris_jobs,
     latest_stage,
+    launch_band,
     launch_command,
     load_spec,
     new_spec_text,
@@ -189,6 +190,7 @@ from experiments.belay.submit import (
     spec_path,
     spec_with_runs,
     stage_runs,
+    submit_run,
     track_command,
     track_of_comment,
     variant_settings,
@@ -498,6 +500,12 @@ def print_idea_brief(idea: Idea, track: Track, defaulted: bool) -> None:
     )
 
 
+def granted_band(state: PageState, registry_id: str, track: Track) -> str:
+    """The Iris band ``registry_id``'s runs launch at: its approver's priority grant, else the Track's band."""
+    idea = state.idea_for(registry_id)
+    return launch_band(track, None if idea is None else idea.priority_grant, registry_id)
+
+
 def node_grant(state: PageState, registry_id: str) -> int | None:
     """The maintainer's node grant on the idea behind ``registry_id``, if any."""
     idea = state.idea_for(registry_id)
@@ -718,6 +726,7 @@ def new_idea(
         commit,
         settings_of(variant_settings(spec)),
         url,
+        granted_band(state, registry_id, spec.track),
         idea.node_grant,
     )
     commit_and_push([path], f"Belay registry: {registry_id} {trial_id} planned", dry_run=False)
@@ -730,7 +739,8 @@ def new_idea(
 def post_footer(idea: Idea, registry_id: str, track: Track, defaults: str, commit: str) -> list[str]:
     source = f"[#9514 comment]({idea.url}) by @{idea.author}" if idea.url else f"proposal by @{CONFIG.default_author}"
     approved = f" · approved by @{idea.decided_by}" if idea.decided_by else ""
-    return footer(defaults, track, f"{source}{approved}", commit, entry_url(entry_path(registry_id)))
+    lines = footer(defaults, track, f"{source}{approved}", commit, entry_url(entry_path(registry_id)))
+    return [*lines, idea.priority_line] if idea.priority_line else lines
 
 
 def run_steps(spec: ExperimentSpec, run: RunSpec) -> int:
@@ -782,15 +792,16 @@ def launch_stage(
     require_clean_pushed_head(repo, branch)
     stage = ExperimentSpec(spec.experiment, spec.track, {r.name: r for r in runs})
     check_launch(stage, iris_jobs(), state.node_cap, node_grant(state, spec.experiment))
+    band = granted_band(state, spec.experiment, spec.track)
     minutes = TRACKS[spec.track].expected_minutes
     commands = {}
     for run in sorted(own_runs(runs), key=lambda r: not r.control):
         run_id = run_name(spec.experiment, run.name)
-        commands[run.name] = launch_command(spec, run)
+        commands[run.name] = launch_command(spec, run, band)
         print(f"{'would launch' if dry_run else 'launching'} {run_id}:\n  {shlex.join(commands[run.name])}")
         if dry_run:
             continue
-        subprocess.run(commands[run.name], cwd=repo, check=True)
+        submit_run(commands[run.name], repo, spec.experiment)
         if minutes is not None:
             due = datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=minutes)
             expect_finish(run_id, due, dry_run=False)
@@ -814,7 +825,9 @@ def launch(registry_id: str, run: str, *, print_only: bool, dry_run: bool) -> No
         if run not in plan.runs:
             raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(plan.runs)}")
         if print_only:
-            print(shlex.join(study_command(plan, plan.runs[run])))
+            idea = page_state().idea_for(registry_id)
+            grant = None if idea is None else idea.priority_grant
+            print(shlex.join(study_command(plan, plan.runs[run], launch_band(plan.runs[run].track, grant, registry_id))))
             return
         require_week_branch(repo, datetime.date.today())
         require_clean_pushed_head(repo, current_branch(repo))
@@ -828,7 +841,8 @@ def launch(registry_id: str, run: str, *, print_only: bool, dry_run: bool) -> No
     if run not in spec.runs:
         raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(spec.runs)}")
     if print_only:
-        print(shlex.join(launch_command(spec, spec.runs[run])))
+        band = granted_band(page_state(), registry_id, spec.track)
+        print(shlex.join(launch_command(spec, spec.runs[run], band)))
         return
     branch = require_week_branch(repo, datetime.date.today())
     variant = spec.runs[run].variant
@@ -1041,12 +1055,12 @@ def launch_study_runs(repo: Path, study: Study, runs: list[str], idea: Idea, sta
     for key in runs:
         run = study.runs[key]
         refuse_run(study.experiment, run)
-        command = study_command(study, run)
+        command = study_command(study, run, launch_band(run.track, idea.priority_grant, study.experiment))
         name = run_name(study.experiment, key)
         print(f"{'would launch' if dry_run else 'launching'} {name}:\n  {shlex.join(command)}")
         if dry_run:
             continue
-        subprocess.run(command, cwd=repo, check=True)
+        submit_run(command, repo, study.experiment)
         expect_finish(name, datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=run.hours), dry_run=False)
 
 
@@ -1076,7 +1090,7 @@ def study(registry_id: str, spec_file: Path, *, dry_run: bool) -> None:
     run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
     commit = "dry-run" if dry_run else git(repo, "rev-parse", "HEAD")
     name = load_entry(registry_id)["name"] if not dry_run or idea.registry_id else registry_id
-    heading, body = study_post(plan, name, StudyStatus.PLAN, budget, commit)
+    heading, body = study_post(plan, name, StudyStatus.PLAN, budget, commit, priority_line=idea.priority_line)
     publish_thread(registry_id, heading, body, idea.id, "plan", dry_run=dry_run)
     url = thread_url(registry_id)
     reply = reply_to_intake(
@@ -1087,7 +1101,7 @@ def study(registry_id: str, spec_file: Path, *, dry_run: bool) -> None:
         idea.id, {"state": "planned", "plan": summary, **({"reply_url": reply} if reply else {})}, dry_run=dry_run
     )
     launch_study_runs(repo, plan, list(plan.runs), idea, state, dry_run=dry_run)
-    heading, body = study_post(plan, name, StudyStatus.RUNNING, budget, commit)
+    heading, body = study_post(plan, name, StudyStatus.RUNNING, budget, commit, priority_line=idea.priority_line)
     publish_thread(registry_id, heading, body, idea.id, "plan", dry_run=dry_run)
     say_next("stop (the watcher starts a new session when the runs finish)")
 
@@ -1108,7 +1122,9 @@ def study_finished(registry_id: str, repo: Path, plan: Study, state: PageState, 
         return
     idea, budget = study_idea(state, registry_id)
     commit = spec_commit(repo, registry_id)
-    heading, body = study_post(plan, load_entry(registry_id)["name"], StudyStatus.ANALYSIS, budget, commit)
+    heading, body = study_post(
+        plan, load_entry(registry_id)["name"], StudyStatus.ANALYSIS, budget, commit, priority_line=idea.priority_line
+    )
     publish_thread(registry_id, heading, body, idea.id, "result", dry_run=dry_run)
     for step in plan.analysis:
         root = checkpoint_root(plan, plan.runs[step.input])
@@ -1183,7 +1199,9 @@ def analyze(registry_id: str, script: str, checkpoint: str, *, dry_run: bool) ->
         written = [entry_file, *(target / Path(f).name for f in files)]
         commit_and_push(written, f"Belay registry: {registry_id} study report", dry_run=False)
     commit = spec_commit(repo, registry_id)
-    heading, body = study_post(plan, load_entry(registry_id)["name"], StudyStatus.REPORT, budget, commit, url)
+    heading, body = study_post(
+        plan, load_entry(registry_id)["name"], StudyStatus.REPORT, budget, commit, url, idea.priority_line
+    )
     publish_thread(registry_id, heading, body, idea.id, "result", dry_run=dry_run)
     result = {"kind": "study", "summary": "report", "report": url}
     report_idea(idea.id, {"state": "recorded", "result": result}, dry_run=dry_run)
@@ -1393,6 +1411,7 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
             commit,
             settings,
             nxt.url,
+            granted_band(nxt.state, registry_id, spec.track),
             node_grant(nxt.state, registry_id),
         )
         commit_and_push([path], f"Belay registry: {registry_id} {trial_id} planned ({stage})", dry_run=False)

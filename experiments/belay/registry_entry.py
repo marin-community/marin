@@ -125,10 +125,12 @@ def add_trial(
     commit: str,
     settings: dict[str, str],
     comment_url: str,
+    priority: str,
     node_grant: int | None = None,
 ) -> tuple[str, Path]:
     """A new trial of the entry (``protocol`` is ``equal_steps`` or ``fixed_time``); returns its id and the path.
-    ``node_grant`` records a maintainer's node grant the trial ran under."""
+    ``priority`` is the Iris band its runs launched at; ``node_grant`` records a maintainer's node grant the trial
+    ran under."""
     path = entry_path(registry_id)
     entry = yaml.safe_load(path.read_text())
     trials = entry.setdefault("trials", [])
@@ -144,6 +146,7 @@ def add_trial(
         "wandb": [],
         "settings": settings,
         "commit": commit[:10],
+        "priority": priority,
     }
     if node_grant is not None:
         trial["node_grant"] = node_grant
