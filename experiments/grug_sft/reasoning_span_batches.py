@@ -33,7 +33,7 @@ import json
 import logging
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 
 import numpy as np
@@ -41,11 +41,11 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.log_setup import configure_logging
 from transformers import PreTrainedTokenizerBase
 
+from experiments.grug_sft.reclose_eval import PAD_SEGMENT
 from experiments.grug_sft.replay_data import StepBatch, read_step, write_step
 
 logger = logging.getLogger(__name__)
 
-PAD_SEGMENT = -1
 THINK_MARKER = "Reasoning: /think"
 NOTHINK_MARKER = "Reasoning: /nothink"
 
@@ -248,6 +248,14 @@ class RowReport:
     loss_tokens_after: int
 
 
+@dataclass(frozen=True)
+class PatchedRow:
+    tokens: np.ndarray
+    loss_weight: np.ndarray
+    segment_ids: np.ndarray
+    report: RowReport
+
+
 def patch_row(
     tokens: np.ndarray,
     loss_weight: np.ndarray,
@@ -256,7 +264,7 @@ def patch_row(
     *,
     repair: bool,
     pad_token: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, RowReport]:
+) -> PatchedRow:
     """Patch each document of one packed row and restore the row length."""
     documents: Counter = Counter()
     think_turns: Counter = Counter()
@@ -305,7 +313,7 @@ def patch_row(
         int(np.count_nonzero(loss_weight)),
         int(np.count_nonzero(new_weight)),
     )
-    return new_tokens, new_weight, new_segments, report
+    return PatchedRow(new_tokens, new_weight, new_segments, report)
 
 
 def batch_pad_token(batch: StepBatch, spans: SpanTokens) -> int:
@@ -314,7 +322,56 @@ def batch_pad_token(batch: StepBatch, spans: SpanTokens) -> int:
     return int(padded[0]) if len(padded) else spans.pad
 
 
-def patch_batch(batch: StepBatch, spans: SpanTokens, *, repair: bool) -> tuple[StepBatch, dict]:
+@dataclass(frozen=True)
+class SpanSummary:
+    """Counts over one step's rows, or summed over steps."""
+
+    steps: int
+    documents: dict[str, int]
+    think_turns: dict[str, int]
+    other_turns: dict[str, int]
+    inserted_spans: int
+    merged_pairs: int
+    rows_trimmed: int
+    rows_padded: int
+    max_length_delta: int
+    loss_tokens_before: int
+    loss_tokens_after: int
+
+    @classmethod
+    def of_rows(cls, reports: list[RowReport]) -> "SpanSummary":
+        return cls(
+            steps=1,
+            documents=dict(sum((r.documents for r in reports), Counter())),
+            think_turns=dict(sum((r.think_turns for r in reports), Counter())),
+            other_turns=dict(sum((r.other_turns for r in reports), Counter())),
+            inserted_spans=sum(r.inserted_spans for r in reports),
+            merged_pairs=sum(r.merged_pairs for r in reports),
+            rows_trimmed=sum(r.length_delta > 0 for r in reports),
+            rows_padded=sum(r.length_delta < 0 for r in reports),
+            max_length_delta=max(abs(r.length_delta) for r in reports),
+            loss_tokens_before=sum(r.loss_tokens_before for r in reports),
+            loss_tokens_after=sum(r.loss_tokens_after for r in reports),
+        )
+
+    @classmethod
+    def of_steps(cls, summaries: list["SpanSummary"]) -> "SpanSummary":
+        return cls(
+            steps=sum(s.steps for s in summaries),
+            documents=dict(sum((Counter(s.documents) for s in summaries), Counter())),
+            think_turns=dict(sum((Counter(s.think_turns) for s in summaries), Counter())),
+            other_turns=dict(sum((Counter(s.other_turns) for s in summaries), Counter())),
+            inserted_spans=sum(s.inserted_spans for s in summaries),
+            merged_pairs=sum(s.merged_pairs for s in summaries),
+            rows_trimmed=sum(s.rows_trimmed for s in summaries),
+            rows_padded=sum(s.rows_padded for s in summaries),
+            max_length_delta=max(s.max_length_delta for s in summaries),
+            loss_tokens_before=sum(s.loss_tokens_before for s in summaries),
+            loss_tokens_after=sum(s.loss_tokens_after for s in summaries),
+        )
+
+
+def patch_batch(batch: StepBatch, spans: SpanTokens, *, repair: bool) -> tuple[StepBatch, SpanSummary]:
     pad_token = batch_pad_token(batch, spans)
     rows = [
         patch_row(
@@ -322,53 +379,22 @@ def patch_batch(batch: StepBatch, spans: SpanTokens, *, repair: bool) -> tuple[S
         )
         for row in range(batch.tokens.shape[0])
     ]
-    reports = [report for *_, report in rows]
     patched = StepBatch(
-        tokens=np.stack([tokens for tokens, *_ in rows]),
-        loss_weight=np.stack([weight for _, weight, *_ in rows]),
-        segment_ids=np.stack([segments for _, _, segments, _ in rows]),
+        tokens=np.stack([row.tokens for row in rows]),
+        loss_weight=np.stack([row.loss_weight for row in rows]),
+        segment_ids=np.stack([row.segment_ids for row in rows]),
         sliding_window=batch.sliding_window,
     )
-    summary = {
-        "documents": dict(sum((r.documents for r in reports), Counter())),
-        "think_turns": dict(sum((r.think_turns for r in reports), Counter())),
-        "other_turns": dict(sum((r.other_turns for r in reports), Counter())),
-        "inserted_spans": sum(r.inserted_spans for r in reports),
-        "merged_pairs": sum(r.merged_pairs for r in reports),
-        "rows_trimmed": sum(r.length_delta > 0 for r in reports),
-        "rows_padded": sum(r.length_delta < 0 for r in reports),
-        "max_length_delta": max(abs(r.length_delta) for r in reports),
-        "loss_tokens_before": sum(r.loss_tokens_before for r in reports),
-        "loss_tokens_after": sum(r.loss_tokens_after for r in reports),
-    }
-    return patched, summary
+    return patched, SpanSummary.of_rows([row.report for row in rows])
 
 
-def process_step(input_root: str, output_root: str | None, step: int) -> dict:
+def process_step(input_root: str, output_root: str | None, step: int) -> SpanSummary:
     batch = read_step(input_root, step)
     patched, summary = patch_batch(batch, MARIN_TOKENS, repair=output_root is not None)
     if output_root is not None:
         write_step(output_root, step, patched)
-    summary["step"] = step
-    logger.info("step %d: %s", step, json.dumps(summary, sort_keys=True))
+    logger.info("step %d: %s", step, json.dumps(asdict(summary), sort_keys=True))
     return summary
-
-
-def aggregate(summaries: list[dict]) -> dict:
-    total: dict = {"steps": len(summaries)}
-    for key in ("documents", "think_turns", "other_turns"):
-        total[key] = dict(sum((Counter(s[key]) for s in summaries), Counter()))
-    for key in (
-        "inserted_spans",
-        "merged_pairs",
-        "rows_trimmed",
-        "rows_padded",
-        "loss_tokens_before",
-        "loss_tokens_after",
-    ):
-        total[key] = sum(s[key] for s in summaries)
-    total["max_length_delta"] = max(s["max_length_delta"] for s in summaries)
-    return total
 
 
 def main() -> None:
@@ -389,10 +415,16 @@ def main() -> None:
     steps = range(args.first, args.first + args.steps)
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         summaries = list(pool.map(process_step, [args.input] * len(steps), [args.output] * len(steps), steps))
-    report = {"input": args.input, "output": args.output, "total": aggregate(summaries), "steps": summaries}
+    total = asdict(SpanSummary.of_steps(summaries))
+    report = {
+        "input": args.input,
+        "output": args.output,
+        "total": total,
+        "steps": [{"step": step, **asdict(summary)} for step, summary in zip(steps, summaries, strict=True)],
+    }
     fs, path = filesystem_for(args.report)
     fs.pipe(path, json.dumps(report, indent=1, sort_keys=True).encode())
-    logger.info("total: %s", json.dumps(report["total"], sort_keys=True))
+    logger.info("total: %s", json.dumps(total, sort_keys=True))
 
 
 if __name__ == "__main__":

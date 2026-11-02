@@ -164,7 +164,13 @@ def test_rows_keep_their_length_through_padding_and_trimming(tokenizer, spans):
     growth = 2 * 2 - 1  # two empty spans in, one end/start pair out, per document
 
     row, weight, segments = packed_row(tokens, copies=2, padding=10)
-    new_tokens, new_weight, new_segments, report = patch_row(row, weight, segments, spans, repair=True, pad_token=7)
+    patched_row = patch_row(row, weight, segments, spans, repair=True, pad_token=7)
+    new_tokens, new_weight, new_segments, report = (
+        patched_row.tokens,
+        patched_row.loss_weight,
+        patched_row.segment_ids,
+        patched_row.report,
+    )
     assert len(new_tokens) == len(row)
     assert report.length_delta == 2 * growth
     assert int(np.sum(new_segments == PAD_SEGMENT)) == 10 - 2 * growth
@@ -177,9 +183,9 @@ def test_rows_keep_their_length_through_padding_and_trimming(tokenizer, spans):
     batch = StepBatch(row[None], weight[None], segments[None], sliding_window=None)
     patched, summary = patch_batch(batch, spans, repair=True)
     assert patched.tokens.shape == batch.tokens.shape
-    assert summary["rows_trimmed"] == 1 and summary["rows_padded"] == 0
-    assert summary["max_length_delta"] == growth
-    assert summary["think_turns"] == {
+    assert summary.rows_trimmed == 1 and summary.rows_padded == 0
+    assert summary.max_length_delta == growth
+    assert summary.think_turns == {
         TurnShape.ADJACENT_SPANS: 1,
         TurnShape.ZERO_SPAN_TOOL_CALL: 1,
         TurnShape.ONE_SPAN: 1,
@@ -187,4 +193,4 @@ def test_rows_keep_their_length_through_padding_and_trimming(tokenizer, spans):
     }
     unpatched, scan = patch_batch(batch, spans, repair=False)
     assert unpatched.tokens.tolist() == batch.tokens.tolist()
-    assert scan["inserted_spans"] == 0 and scan["think_turns"] == summary["think_turns"]
+    assert scan.inserted_spans == 0 and scan.think_turns == summary.think_turns
