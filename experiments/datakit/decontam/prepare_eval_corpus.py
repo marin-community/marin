@@ -357,6 +357,10 @@ _PASSAGE_FIELDS: frozenset[str] = frozenset(
 
 # Suffix of the record id for an lm-eval doc's raw-field view (see `_lmh_doc_views`).
 LMH_FIELDS_ID_SUFFIX = "-fields"
+# Hidden grader fields, left out of the raw-field view: copies of a coding item
+# hold its prompt and solution, rarely its tests. Harness prompts or targets that
+# render the tests (HumanEval's target, MBPP's prompt) still index them.
+_GRADER_FIELDS: frozenset[str] = frozenset({"test", "test_list"})
 
 
 def _field_lines(record: dict[str, Any], exclude: frozenset[str]) -> str:
@@ -390,7 +394,8 @@ def _lmh_doc_views(doc: Any, prompt_fn: Callable, target_fn: Callable) -> list[t
         target = str(target_fn(doc) or "")
     except Exception:
         target = ""
-    fields = _field_lines(doc, _PASSAGE_FIELDS if has_passage else frozenset()) if isinstance(doc, dict) else ""
+    excluded = _GRADER_FIELDS | (_PASSAGE_FIELDS if has_passage else frozenset())
+    fields = _field_lines(doc, excluded) if isinstance(doc, dict) else ""
     if has_passage:
         text = "\n\n".join(p for p in (target, fields) if p.strip())
         return [("", text)] if text else []

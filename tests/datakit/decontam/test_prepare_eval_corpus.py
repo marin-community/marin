@@ -44,6 +44,16 @@ def _target(doc: dict) -> str:
     return str(doc.get("answer", ""))
 
 
+def test_lmh_raw_field_view_leaves_out_grader_tests():
+    doc = {"prompt": "def add(a, b):", "canonical_solution": "    return a + b", "test": "assert add(1, 2) == 3"}
+
+    views = dict(_lmh_doc_views(doc, lambda d: d["prompt"], lambda d: d["test"]))
+
+    assert "assert add" in views[""]
+    assert "assert add" not in views["-fields"]
+    assert "return a + b" in views["-fields"]
+
+
 def _lmh_doc_text(doc: dict, prompt_fn, target_fn) -> str:
     return "\n\n".join(text for _, text in _lmh_doc_views(doc, prompt_fn, target_fn))
 
