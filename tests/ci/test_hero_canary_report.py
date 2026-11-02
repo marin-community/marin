@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from scripts.ci.hero_canary_report import WARMUP_STEPS, score_run
+from scripts.ci.hero_canary_report import WARMUP_STEPS, baseline_score, score_run, step_time_regression
 
 START_STEP = 372000
 
@@ -32,3 +32,14 @@ def test_score_ignores_warmup_and_duplicate_rows():
     assert score.steps_logged == WARMUP_STEPS + 3
     assert score.step_time == 15.5
     assert score.eval_loss == 2.0
+
+
+def test_one_regressed_run_does_not_become_the_baseline():
+    def run(day: int, step_time: float):
+        return score_run(f"hero-canary-{day}-1", "sha", _rows([step_time] * 31), {}, START_STEP)
+
+    # Three healthy days, then a day that regressed by 2%.
+    baseline = baseline_score([run(1, 15.5), run(2, 15.5), run(3, 15.5), run(4, 15.81)])
+
+    assert step_time_regression(run(5, 15.81), baseline) is not None
+    assert step_time_regression(run(5, 15.55), baseline) is None

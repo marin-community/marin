@@ -1,28 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score a hero GB200 canary run from W&B and compare it with the previous run.
+"""Score a hero GB200 canary run from W&B and compare it with a baseline of earlier runs.
 
 The canary restores a pinned hero checkpoint and trains a fixed number of updates.
 This reads the run's per-step history, drops the warmup steps, and reports median
 step time, MFU and throughput, peak HBM, drop fraction, final train loss and the
-dropless eval loss. It compares them with the most recent earlier canary restored
-from the same checkpoint, so a re-pinned checkpoint starts a new baseline.
+dropless eval loss. The baseline is the per-metric median of the last BASELINE_RUNS
+scheduled canaries restored from the same checkpoint: a single regressed run does not
+move it, manual runs never enter it, and a re-pinned checkpoint starts a new one.
 
 Exits non-zero only when the run is incomplete (missing steps or eval). A step-time
-change beyond STEP_TIME_WARN_FRACTION is reported as a GitHub warning, not a failure,
-until repeated same-commit runs calibrate the noise.
+change beyond STEP_TIME_WARN_FRACTION is a regression: a GitHub warning plus
+``regression=true`` in $GITHUB_OUTPUT, which the workflow posts to Slack.
 """
 
 import dataclasses
 import os
+import re
 import statistics
 import sys
 
 import click
 import wandb
 
-RUN_ID_PREFIX = "hero-canary-"
+# Scheduled runs are hero-canary-<run>-<attempt>; manual dispatches use hero-canary-manual-.
+SCHEDULED_RUN_ID = re.compile(r"^hero-canary-\d+-\d+$")
+BASELINE_RUNS = 5
 WARMUP_STEPS = 4
 # One run's 30-step median is within about ±0.5%; a difference of two runs is noisier.
 STEP_TIME_WARN_FRACTION = 0.015
@@ -90,16 +94,35 @@ def _change(current: float, previous: float) -> str:
     return f"{(current - previous) / previous * 100:+.2f}"
 
 
-def step_time_warning(current: CanaryScore, previous: CanaryScore | None) -> str | None:
-    """A warning when median step time moved more than STEP_TIME_WARN_FRACTION from the previous run."""
-    if previous is None:
+def baseline_score(scores: list[CanaryScore]) -> CanaryScore | None:
+    """The per-metric median of earlier runs, or None when there are none."""
+    if not scores:
         return None
-    if abs(current.step_time - previous.step_time) / previous.step_time <= STEP_TIME_WARN_FRACTION:
-        return None
-    return f"{_change(current.step_time, previous.step_time)}% against {previous.run_id}"
+    eval_losses = [score.eval_loss for score in scores if score.eval_loss is not None]
+    return CanaryScore(
+        run_id=f"median of {len(scores)} runs",
+        git_commit=None,
+        steps_logged=min(score.steps_logged for score in scores),
+        step_time=statistics.median(score.step_time for score in scores),
+        mfu=statistics.median(score.mfu for score in scores),
+        tokens_per_second=statistics.median(score.tokens_per_second for score in scores),
+        peak_hbm_gib=statistics.median(score.peak_hbm_gib for score in scores),
+        drop_fraction=statistics.median(score.drop_fraction for score in scores),
+        train_loss=statistics.median(score.train_loss for score in scores),
+        eval_loss=statistics.median(eval_losses) if eval_losses else None,
+    )
 
 
-def report_markdown(current: CanaryScore, previous: CanaryScore | None) -> str:
+def step_time_regression(current: CanaryScore, baseline: CanaryScore | None) -> str | None:
+    """A description when median step time moved more than STEP_TIME_WARN_FRACTION from the baseline."""
+    if baseline is None:
+        return None
+    if abs(current.step_time - baseline.step_time) / baseline.step_time <= STEP_TIME_WARN_FRACTION:
+        return None
+    return f"{_change(current.step_time, baseline.step_time)}% against the {baseline.run_id}"
+
+
+def report_markdown(current: CanaryScore, baseline: CanaryScore | None) -> str:
     rows = [
         ("Median step time (s)", "step_time", "{:.3f}"),
         ("Median MFU (%)", "mfu", "{:.2f}"),
@@ -109,18 +132,18 @@ def report_markdown(current: CanaryScore, previous: CanaryScore | None) -> str:
         ("Final train loss", "train_loss", "{:.4f}"),
         ("Dropless eval macro loss", "eval_loss", "{:.4f}"),
     ]
-    prev_label = f"`{previous.run_id}` (`{previous.git_commit}`)" if previous else "none"
+    baseline_label = f"the {baseline.run_id} from this checkpoint" if baseline else "none yet"
     lines = [
         "### Hero GB200 canary",
         "",
-        f"This run: `{current.run_id}` (`{current.git_commit}`). Previous run: {prev_label}.",
+        f"This run: `{current.run_id}` (`{current.git_commit}`). Baseline: {baseline_label}.",
         "",
-        "| Metric | This run | Previous | Change (%) |",
+        "| Metric | This run | Baseline | Change (%) |",
         "| --- | ---: | ---: | ---: |",
     ]
     for label, field, fmt in rows:
         value = getattr(current, field)
-        prev_value = getattr(previous, field) if previous else None
+        prev_value = getattr(baseline, field) if baseline else None
         shown = fmt.format(value) if value is not None else "missing"
         prev_shown = fmt.format(prev_value) if prev_value is not None else "-"
         change = _change(value, prev_value) if value is not None and prev_value else "-"
@@ -142,17 +165,23 @@ def _load_score(run, start_step: int) -> CanaryScore:
     return score_run(run.id, run.config.get("git_commit"), rows, dict(run.summary), start_step)
 
 
-def _previous_run(api: wandb.Api, entity: str, project: str, run_id: str, checkpoint: str):
+def _baseline_runs(api: wandb.Api, entity: str, project: str, run_id: str, checkpoint: str) -> list:
     runs = api.runs(
         f"{entity}/{project}",
-        filters={"display_name": {"$regex": f"^{RUN_ID_PREFIX}"}, "state": "finished"},
+        filters={"display_name": {"$regex": SCHEDULED_RUN_ID.pattern}, "state": "finished"},
         order="-created_at",
-        per_page=20,
+        per_page=50,
     )
+    matching = []
     for run in runs:
-        if run.id != run_id and _config_value(run.config, CHECKPOINT_CONFIG_PATH) == checkpoint:
-            return run
-    return None
+        if run.id == run_id or not SCHEDULED_RUN_ID.match(run.id):
+            continue
+        if _config_value(run.config, CHECKPOINT_CONFIG_PATH) != checkpoint:
+            continue
+        matching.append(run)
+        if len(matching) == BASELINE_RUNS:
+            break
+    return matching
 
 
 @click.command()
@@ -162,20 +191,31 @@ def _previous_run(api: wandb.Api, entity: str, project: str, run_id: str, checkp
 @click.option("--start-step", type=int, required=True, help="Step of the restored checkpoint.")
 @click.option("--steps", type=int, required=True, help="Updates the canary trains after the restore.")
 @click.option("--checkpoint", required=True, help="Restored checkpoint path; only runs from it are compared.")
-def main(run_id: str, entity: str, project: str, start_step: int, steps: int, checkpoint: str) -> None:
+@click.option("--github-output", is_flag=True, help="Write regression and its description to $GITHUB_OUTPUT.")
+def main(
+    run_id: str, entity: str, project: str, start_step: int, steps: int, checkpoint: str, github_output: bool
+) -> None:
     api = wandb.Api(timeout=60)
     current = _load_score(api.run(f"{entity}/{project}/{run_id}"), start_step)
-    previous_run = _previous_run(api, entity, project, run_id, checkpoint)
-    previous = _load_score(previous_run, start_step) if previous_run else None
+    baseline = baseline_score(
+        [_load_score(run, start_step) for run in _baseline_runs(api, entity, project, run_id, checkpoint)]
+    )
 
-    markdown = report_markdown(current, previous)
+    markdown = report_markdown(current, baseline)
     print(markdown)
     if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary_path, "a", encoding="utf-8") as fh:
             fh.write(markdown)
 
-    if warning := step_time_warning(current, previous):
-        print(f"::warning title=Hero canary step time::{warning}")
+    regression = step_time_regression(current, baseline)
+    if regression:
+        print(f"::warning title=Hero canary step time::{regression}")
+    if github_output:
+        path = os.environ.get("GITHUB_OUTPUT")
+        if not path:
+            raise click.UsageError("--github-output needs $GITHUB_OUTPUT to be set")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"regression={'true' if regression else 'false'}\nregression_detail={regression or ''}\n")
     if reasons := incomplete_reasons(current, steps):
         print(f"Hero canary incomplete: {'; '.join(reasons)}", file=sys.stderr)
         sys.exit(1)

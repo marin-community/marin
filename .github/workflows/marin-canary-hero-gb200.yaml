@@ -1,9 +1,11 @@
 name: "Marin - Canary - Hero GB200"
 
 # A daily throughput check of the production hero on one GB200 NVL72 rack.
-# It runs the hero's own config from main through launch_diagnostics, restored
-# from a pinned permanent hero checkpoint so every run trains on the same
-# weights and batches. One dropless eval runs after the last update.
+# It runs the hero model and training step from main through launch_diagnostics,
+# restored from a pinned permanent hero checkpoint so every run trains on the
+# same weights and batches. One dropless eval runs after the last update.
+# Settings that only the production launcher (launch_scaling_ladder) applies,
+# such as gate_router_weight_decay and prior_context_phases, are left out.
 #
 # The canary queues at batch priority, the band of the hero-completions
 # sampler, so neither preempts the other. If no rack is free within five hours
@@ -27,11 +29,15 @@ jobs:
     timeout-minutes: 360
     outputs:
       resource_exhausted: ${{ steps.wait.outputs.resource_exhausted }}
+      regression: ${{ steps.report.outputs.regression }}
+      regression_detail: ${{ steps.report.outputs.regression_detail }}
     concurrency:
       group: canary-hero-gb200
       cancel-in-progress: false
     env:
-      RUN_ID: hero-canary-${{ github.run_id }}-${{ github.run_attempt }}
+      # Only scheduled runs (hero-canary-<run>-<attempt>) enter the report's baseline
+      # and the MFU tracker; manual dispatches are hero-canary-manual-.
+      RUN_ID: ${{ github.event_name == 'schedule' && 'hero-canary' || 'hero-canary-manual' }}-${{ github.run_id }}-${{ github.run_attempt }}
       # Re-pin only when the hero's checkpoint layout or context length changes;
       # the report compares runs from the same checkpoint only.
       HERO_CANARY_CHECKPOINT: s3://marin-us-east-02a/marin/grug/hero-gradclip-step356k/2026.08.19.2/checkpoints/step-372000
@@ -129,6 +135,7 @@ jobs:
             --github-output
 
       - name: Report hero canary metrics
+        id: report
         if: steps.wait.outputs.resource_exhausted != 'true'
         run: |
           .venv/bin/python scripts/ci/hero_canary_report.py \
@@ -137,7 +144,8 @@ jobs:
             --project "$WANDB_PROJECT" \
             --start-step "$HERO_CANARY_START_STEP" \
             --steps "$HERO_CANARY_STEPS" \
-            --checkpoint "$HERO_CANARY_CHECKPOINT"
+            --checkpoint "$HERO_CANARY_CHECKPOINT" \
+            --github-output
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
@@ -195,3 +203,17 @@ jobs:
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Hero GB200 canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # A step-time regression leaves the run green, so it gets its own message.
+  notify-regression:
+    needs: hero-canary
+    if: always() && needs.hero-canary.outputs.regression == 'true' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":large_orange_circle: *Hero GB200 canary step time changed* ${{ needs.hero-canary.outputs.regression_detail }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
