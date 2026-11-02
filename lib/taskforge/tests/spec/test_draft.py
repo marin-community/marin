@@ -196,13 +196,7 @@ def sum_grader() -> GraderPackage:
 
 
 def shell_backed(package: GraderPackage) -> GraderPackage:
-    """``package`` with ``sh`` in place of ``python3``, so its ``/tests/grade.py`` runs as a sh program.
-
-    A bare ShellSim machine has no python3 (shellsim 0.1.36), and Marin CI leaves interpreter coverage to
-    ShellSim. A test of a shell-backed package checks what ``python_grader`` packages and how its verdict is
-    read: the program and private config under ``/tests``, its further private files, the captured output and
-    the extracted answer it reads, and the ``GRADER_VERDICT_PATH`` reward. The program's language is not tested.
-    """
+    """Run the packaged grader as shell code without downloading a guest interpreter."""
     assert isinstance(package.grader, ScriptGrader) and package.grader.argv == PYTHON_GRADER_ARGV
     return replace(package, grader=package.grader.model_copy(update={"argv": ("sh", *PYTHON_GRADER_ARGV[1:])}))
 

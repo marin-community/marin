@@ -187,3 +187,18 @@ def test_generation_schema_pins_identity(proposal):
     raw["header"]["source"]["hash"] = "wrong hash"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(raw, schema)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("resources", ["../private/key"]),
+        ("resources", ["/absolute/path"]),
+        ("build", [{"name": "same", "description": "first"}, {"name": "same", "description": "second"}]),
+    ],
+)
+def test_build_manifest_cannot_escape_root_or_replace_named_artifact(proposal, field, value):
+    raw = json.loads(render(proposal))
+    raw["header"][field] = value
+    with pytest.raises(ProposalFormatError, match=field):
+        parse(json.dumps(raw))
