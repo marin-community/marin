@@ -69,14 +69,9 @@ def _command(tmp_path: Path) -> list[str]:
     ]
 
 
-def test_launch_preflights_prepared_task_with_hosted_judge(tmp_path, submitted_batches, monkeypatch):
-    monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
-    for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "TOGETHER_API_KEY", "CUSTOM_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
-
-    # A real prepared task must resolve its Tau3-style model declarations during
-    # launcher preflight, before a hosted judge or any sandbox has been allocated.
-    with tempfile.TemporaryDirectory(prefix=".harbor-judge-", dir=Path(__file__).parents[2]) as directory:
+@pytest.fixture
+def harbor_task_workspace():
+    with tempfile.TemporaryDirectory(prefix=".harbor-launch-", dir=Path(__file__).parents[2]) as directory:
         root = Path(directory)
         task = root / "dataset" / "task"
         (task / "environment").mkdir(parents=True)
@@ -84,55 +79,69 @@ def test_launch_preflights_prepared_task_with_hosted_judge(tmp_path, submitted_b
         (task / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
         (task / "instruction.md").write_text("Complete the task.\n")
         (task / "task.toml").write_text(
-            '[task]\nname = "test/tau3-judge"\n[environment]\n'
+            '[task]\nname = "test/launch"\n[environment]\n'
             f'docker_image = "example.test/task@sha256:{"a" * 64}"\n'
             'allow_internet = false\nworkdir = "/workspace"\n'
-            '[environment.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
-            'OPENAI_BASE_URL = "${OPENAI_BASE_URL}"\nTAU2_USER_MODEL = "${TAU2_USER_MODEL}"\n'
-            '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
-            'OPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n'
-            'TAU2_NL_ASSERTIONS_MODEL = "${TAU2_NL_ASSERTIONS_MODEL}"\n'
         )
-        policy = root / "policy.json"
-        policy.write_text(
-            json.dumps(
-                {
-                    "environment": {"type": "local"},
-                    "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
-                    "datasets": [{"path": "dataset"}],
-                }
-            )
+        yield root
+
+
+def test_launch_preflights_prepared_task_with_hosted_judge(
+    tmp_path, submitted_batches, monkeypatch, harbor_task_workspace
+):
+    monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
+    for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "TOGETHER_API_KEY", "CUSTOM_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+    root = harbor_task_workspace
+    task_config = root / "dataset" / "task" / "task.toml"
+    task_config.write_text(
+        task_config.read_text() + '[environment.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
+        'OPENAI_BASE_URL = "${OPENAI_BASE_URL}"\nTAU2_USER_MODEL = "${TAU2_USER_MODEL}"\n'
+        '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
+        'OPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n'
+        'TAU2_NL_ASSERTIONS_MODEL = "${TAU2_NL_ASSERTIONS_MODEL}"\n'
+    )
+    policy = root / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "local"},
+                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
+                "datasets": [{"path": "dataset"}],
+            }
         )
-        command = [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--harbor-config",
-            str(policy),
-            "--platform",
-            "gpu",
-            "--accelerator",
-            "H100x1",
-            "--federated_cluster",
-            "cw-rno2a",
-            "--records-prefix",
-            str(tmp_path),
-            "--no-wait",
-        ]
-        runner = CliRunner()
-        rejected = runner.invoke(cli, command)
-        assert rejected.exit_code != 0
-        assert submitted_batches == []
+    )
+    command = [
+        "launch",
+        "--model",
+        "qwen3-8b",
+        "--harbor-config",
+        str(policy),
+        "--platform",
+        "gpu",
+        "--accelerator",
+        "H100x1",
+        "--federated_cluster",
+        "cw-rno2a",
+        "--records-prefix",
+        str(tmp_path),
+        "--no-wait",
+    ]
+    runner = CliRunner()
+    rejected = runner.invoke(cli, command)
+    assert rejected.exit_code != 0
+    assert submitted_batches == []
 
-        accepted = runner.invoke(cli, [*command, "--judge-model", "qwen3-0.6b", "--judge-accelerator", "H100x1"])
+    accepted = runner.invoke(cli, [*command, "--judge-model", "qwen3-0.6b", "--judge-accelerator", "H100x1"])
 
-        assert accepted.exit_code == 0, accepted.output
-        batch = submitted_batches[0]
-        config = batch.evaluations[0].executor.config
-        assert config.benchmark.n_benchmark == 1
-        assert config.verifier_env_keys == ()
-        assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {}
-        assert batch.judge.api_model == "qwen3-0.6b"
+    assert accepted.exit_code == 0, accepted.output
+    batch = submitted_batches[0]
+    config = batch.evaluations[0].executor.config
+    assert config.benchmark.n_benchmark == 1
+    assert config.verifier_env_keys == ()
+    assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {}
+    assert batch.judge.api_model == "qwen3-0.6b"
 
 
 @pytest.mark.parametrize("explicit_run_id", [True, False])
@@ -415,10 +424,11 @@ def test_policy_judge_startup_failure_preserves_infrastructure_evidence(tmp_path
     assert caught.value.log_tails == {"policy-judge": ("endpoint registration failed",)}
 
 
-def test_campaign_cohort_change_invalidates_only_sotopia(tmp_path, submitted_batches):
+def test_campaign_cohort_change_invalidates_only_sotopia(tmp_path, submitted_batches, harbor_task_workspace):
     campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
-    config_path = tmp_path / "sotopia-hard.yaml"
+    config_path = harbor_task_workspace / "sotopia-hard.yaml"
     config = yaml.safe_load((campaign / "harbor-configs/sotopia-hard.yaml").read_text())
+    config["datasets"] = [{"path": "dataset"}]
     config_path.write_text(yaml.safe_dump(config))
     command = _command(tmp_path)
     command[command.index("--evals") + 1] = "financebench,olympiadbench"
