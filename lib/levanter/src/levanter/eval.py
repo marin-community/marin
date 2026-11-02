@@ -69,6 +69,7 @@ class EvalResult:
     macro_bpb: Optional[float] = None
     tag_macro_bpb: Optional[dict[str, float]] = None
     tag_micro_bpb: Optional[dict[str, float]] = None
+    tag_tokens: Optional[dict[str, float]] = None  # loss-weighted (scored) tokens per leaf tag
 
 
 @dataclasses.dataclass
@@ -467,6 +468,8 @@ def construct_log_dict(evaluator, eval_result, total_time, prefix):
             continue
         if tag in evaluator.dataset.tag_to_index:
             log_dict[_join_prefix(prefix, tag) + "/loss"] = loss
+            if eval_result.tag_tokens is not None:
+                log_dict[_join_prefix(prefix, tag) + "/tokens"] = eval_result.tag_tokens[tag]
             logger.info(f"{tag} loss: {loss:.3f}")
         else:
             log_dict[_join_prefix(prefix, tag) + "/micro_loss"] = loss
@@ -640,8 +643,10 @@ class TaggedEvaluator(Generic[Ex, M]):
                 tag_macro_bpb[parent] = np.mean(mean_bits_per_tag_cpu, where=mask)
                 tag_micro_bpb[parent] = np.average(mean_bits_per_tag_cpu, weights=total_bytes_per_tag_cpu * mask)
 
+        tag_tokens: dict[str, float] = {}
         for tag, index in self.dataset.tag_to_index.items():
             tag_micro_loss[tag] = float(mean_loss_per_tag_cpu[index])
+            tag_tokens[tag] = float(total_tokens_per_tag_cpu[index])
             if self.bytes_per_token is not None:
                 tag_micro_bpb[tag] = float(mean_bits_per_tag_cpu[index])
 
@@ -655,6 +660,7 @@ class TaggedEvaluator(Generic[Ex, M]):
             macro_avg_bpb,
             tag_macro_bpb,
             tag_micro_bpb,
+            tag_tokens,
         )
 
     def _construct_tag_hierarchy(self) -> dict[str, list[int]]:
