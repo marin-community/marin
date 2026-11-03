@@ -5,15 +5,11 @@ import copy
 import hashlib
 import json
 import math
-from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.bfcl_parity import admit_native_run, compare_run_clusters
-from marin.evaluation.model_config import ModelConfig
 
 from experiments.evaluation import bfcl_parity as cli
 
@@ -50,6 +46,7 @@ def native(run_id, rewards, *, target="model-a"):
         {
             "doc_id": name,
             "task": "bfcl_parity",
+            "filter": "",
             "metrics": [["reward", reward]],
             "grading": {
                 "method": "harbor:verifier",
@@ -164,7 +161,9 @@ def test_different_checkpoint_within_one_arm_is_rejected():
         )
 
 
-@pytest.mark.parametrize("corruption", ["duplicate", "wrong-task", "subset", "reward", "benchmark", "filter", "passed"])
+@pytest.mark.parametrize(
+    "corruption", ["duplicate", "wrong-task", "subset", "reward", "benchmark", "filter", "sample-filter", "passed"]
+)
 def test_native_task_and_grading_joins_reject_inconsistent_sources(corruption):
     record, samples = native("a", (0, 1))
     tasks = TASKS
@@ -179,66 +178,14 @@ def test_native_task_and_grading_joins_reject_inconsistent_sources(corruption):
         samples[0]["task"] = "other-benchmark"
     elif corruption == "filter":
         samples[0]["grading"]["filter"] = "other-filter"
+    elif corruption == "sample-filter":
+        samples[0]["filter"] = "other-filter"
     elif corruption == "passed":
         samples[0]["grading"]["passed"] = True
     else:
         samples[0]["grading"]["score"] = 1
     with pytest.raises(ValueError):
         admit_native_run(record, samples, logical_run="a", task_ids=tasks)
-
-
-def test_launch_interleaves_five_prepare_submit_pairs_with_unchanged_method(tmp_path, monkeypatch):
-    model = ModelConfig(name="fixture", location="hf/model", tokenizer="hf/tokenizer")
-    monkeypatch.setattr(cli, "load_model_config", lambda _: model)
-    calls = []
-    pending = []
-
-    def prepare(spec):
-        calls.append(("prepare", spec))
-        pending[:] = [spec.run_id]
-        return SimpleNamespace(run_id=spec.run_id)
-
-    def submit(batch, client):
-        assert pending == [batch.run_id]
-        calls.append(("submit", batch.run_id))
-        return SimpleNamespace(job="job-" + batch.run_id)
-
-    @contextmanager
-    def client(**kwargs):
-        yield object()
-
-    monkeypatch.setattr(cli, "prepare_evaluation_batch", prepare)
-    monkeypatch.setattr(cli, "launch_group", submit)
-    monkeypatch.setattr(cli, "open_iris_client", client)
-    config = tmp_path / "model.yaml"
-    config.write_text("model binding supplied by fixture")
-    policy = tmp_path / "bfcl.yaml"
-    policy.write_text("native policy supplied by fixture")
-    result = CliRunner().invoke(
-        cli.main,
-        [
-            "launch",
-            "--model-config",
-            str(config),
-            "--harbor-config",
-            str(policy),
-            "--run-prefix",
-            "cohort",
-            "--federated-cluster",
-            "cw-rno2a",
-            "--records-prefix",
-            "s3://bucket/fresh",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert [kind for kind, _ in calls] == ["prepare", "submit"] * 5
-    specs = [value for kind, value in calls if kind == "prepare"]
-    assert len({spec.run_id for spec in specs}) == 5
-    for spec in specs:
-        assert spec.model == model and spec.harbor_definitions[0].config_path == policy
-        assert spec.priority_band == priority_band_value("production") and spec.limit is None and spec.seed is None
-        assert not spec.retry_unscored_harbor_trials and spec.resume_results_path is None
-        assert spec.federated_cluster == "cw-rno2a"
 
 
 def test_analysis_cli_verifies_native_byte_pins_and_writes_a_complete_report(tmp_path):

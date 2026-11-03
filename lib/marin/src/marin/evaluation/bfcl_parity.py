@@ -111,8 +111,8 @@ def admit_native_run(
             or not math.isfinite(reward)
             or reward not in (0, 1)
             or grading.get("method") != "harbor:verifier"
-            or grading.get("filter") is not None
-            or sample.get("filter") is not None
+            or grading.get("filter") not in (None, "")
+            or sample.get("filter") not in (None, "")
             or grading.get("passed") is not bool(reward)
             or grading.get("metric") != "reward"
             or grading.get("score") != reward
