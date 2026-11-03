@@ -348,7 +348,7 @@ def score_vllm_against_goldens(
             extra_args=(
                 "--enable-expert-parallel",
                 "--model-loader-extra-config",
-                '{"distributed":true}',
+                '{"distributed":true,"concurrency":4}',
                 "--max-logprobs",
                 str(RETURNED_LOGPROBS),
                 "--attention-backend",

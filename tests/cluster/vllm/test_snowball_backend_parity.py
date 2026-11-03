@@ -74,8 +74,8 @@ def _vllm_job(
         ),
         priority=job_pb2.PRIORITY_BAND_PRODUCTION,
         replicas=pipeline_parallel_size,
-        max_retries_failure=2,
-        max_task_failures=2,
+        max_retries_failure=0,
+        max_task_failures=0,
     )
 
 
