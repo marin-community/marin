@@ -82,7 +82,10 @@ def smoke_config() -> tuple[dict, SkyRLRolePlan]:
         }
     }
     config["generator"]["gpu_memory_utilization"] = 0.4
-    config["trajectory_runner"] = {"max_concurrent_tasks": 8, "rollout_workers": {"num_workers": 2, "cpus_per_worker": 2}}
+    config["trajectory_runner"] = {
+        "max_concurrent_tasks": 8,
+        "rollout_workers": {"num_workers": 2, "cpus_per_worker": 2},
+    }
     trainer = config["trainer"]
     trainer["eval_batch_size"] = PROBE_ROWS
     trainer["callbacks"] = [callback for callback in trainer["callbacks"] if callback["type"] != "database_registration"]
