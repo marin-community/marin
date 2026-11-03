@@ -173,11 +173,7 @@ class DockerMachine:
                 output_limit_bytes=command.output_limit_bytes,
             )
         except (TimeoutError, asyncio.CancelledError) as interruption:
-            try:
-                await finish_cleanup(self._interrupt(scope, command.user))
-            except Exception as error:
-                await self.close()
-                raise RuntimeError("Cannot confirm Docker command teardown") from error
+            await self._stop_command(scope, command.user)
             if isinstance(interruption, asyncio.CancelledError):
                 raise
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
@@ -197,6 +193,9 @@ class DockerMachine:
             not_started = status.exit_code == 126 and completed.exit_code in (126, 127)
             if status.exit_code not in (0, 124) and not not_started:
                 raise RuntimeError("Docker command teardown could not be confirmed")
+        except asyncio.CancelledError:
+            await self._stop_command(scope, command.user)
+            raise
         except BaseException:
             await self.close()
             raise
@@ -210,6 +209,13 @@ class DockerMachine:
             len(completed.stderr) > limit,
             ExitReason.TIMED_OUT if timed_out else ExitReason.EXITED,
         )
+
+    async def _stop_command(self, scope: ProcessScope, user: str | None) -> None:
+        try:
+            await finish_cleanup(self._interrupt(scope, user))
+        except Exception as error:
+            await self.close()
+            raise RuntimeError("Cannot confirm Docker command teardown") from error
 
     async def _interrupt(self, scope: ProcessScope, user: str | None) -> None:
         async with asyncio.timeout(CLEANUP_TIMEOUT):

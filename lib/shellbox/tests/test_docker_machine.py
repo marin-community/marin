@@ -384,8 +384,10 @@ def test_docker_commands_run_in_a_working_directory_the_image_lacks():
     assert (result.exit_code, result.stdout) == (0, b"/work/nested\n")
 
 
-@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
-def test_interrupted_docker_submission_uses_cleanup_before_returning(monkeypatch, interruption):
+@pytest.mark.parametrize(
+    "interruption, phase", [("timeout", "submission"), ("cancel", "submission"), ("cancel", "status")]
+)
+def test_interrupted_docker_command_preserves_the_machine(monkeypatch, interruption, phase):
     containers = set()
 
     async def scenario():
@@ -394,7 +396,10 @@ def test_interrupted_docker_submission_uses_cleanup_before_returning(monkeypatch
         async def docker(*args, **_kwargs):
             if args[0] == "run":
                 containers.add(args[args.index("--name") + 1])
-            elif args[:2] == ("exec", "-i"):
+            elif not started.is_set() and (
+                (phase == "submission" and args[:2] == ("exec", "-i"))
+                or (phase == "status" and " status /tmp/.shellbox-process-" in args[-1])
+            ):
                 started.set()
                 if interruption == "timeout":
                     raise TimeoutError("Docker exec startup timed out")
@@ -414,7 +419,7 @@ def test_interrupted_docker_submission_uses_cleanup_before_returning(monkeypatch
                 await pending
         else:
             assert (await pending).reason is ExitReason.TIMED_OUT
-        assert containers
+        assert (await machine.run(Command(("true",)))).exit_code == 0
         await machine.close()
         assert not containers
 
