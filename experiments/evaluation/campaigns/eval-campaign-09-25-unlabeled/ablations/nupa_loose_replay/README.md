@@ -45,6 +45,9 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
 
 Before promotion, the output prefix must contain a replay result for every
 sealed NUPA cell in the tracker. Repeat the model-filtered command as needed.
+The updater rereads each Grug/Snowball source run's `record.json` and leaves its
+cell unchanged unless `model.config.generation.extra_gen_kwargs.skip_special_tokens`
+is explicitly `"false"`. Missing records or settings require fresh generations.
 Run [update_tracker](update_tracker.py) locally with `--tracker`, `--output-prefix`,
 `--summary`, and `--lock` set to the campaign's `artifacts/.auto-refill.lock`;
 the updater acquires the [refill tracker lock](../../analysis/harbor_verifier_audit/README.md).

@@ -26,7 +26,7 @@ _ANSWER_TAIL_RE = re.compile(
     r"(?i)(?:^|\n)\s*(?:(?:so|therefore|thus)[, ]+)?(?:the\s+)?(?:final\s+)?"
     r"(?:answer|result|output)\s*(?:is\s*)?[:=]?\s*([^\s]+)\s*\Z"
 )
-_NUMERIC_TOKEN_RE = re.compile(r"[\d.,/eE+-]+\Z")
+_NUMERIC_TOKEN_RE = re.compile(r"(?=[^\d]*\d)[\d.,/eE+-]+\Z")
 _NUMBER_CONTINUATION_RE = re.compile(r"(?:[\d+-]|\d[.,/eE])\Z")
 _ANSWER_PATTERNS = {
     INTEGER: re.compile(r"^\d+"),
@@ -73,7 +73,7 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
                 return answer
 
     for pattern in (_EQUATION_TAIL_RE, _ANSWER_TAIL_RE):
-        match = pattern.search(tail)
+        match = pattern.search(tail.rstrip("$"))
         if match is not None:
             answer = _full_answer(match.group(1), answer_format)
             if answer is not None:

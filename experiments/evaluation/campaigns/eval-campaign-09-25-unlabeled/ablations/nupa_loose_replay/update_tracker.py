@@ -7,6 +7,7 @@
 import argparse
 import fcntl
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
+LOGGER = logging.getLogger(__name__)
 BENCHMARK = "NUPA"
 SCORE_CELL = re.compile(r"^([01](?:\.\d+)?)\s+\((s3://[^)]+)\)$")
 
@@ -26,6 +28,18 @@ def read_json(uri: str) -> dict:
 
 def result_uri(output_prefix: str, model: str) -> str:
     return prefix_join(output_prefix, f"results/nupa/{model.replace('/', '--')}.json")
+
+
+def thinking_boundaries_preserved(model: str, raw_source: str) -> bool:
+    """Require recorded decoding settings before promoting Grug/Snowball replays."""
+    if not any(name in model.casefold() for name in ("grug", "snowball")):
+        return True
+    record_uri = prefix_join(raw_source.rstrip("/").rsplit("/", 1)[0], "record.json")
+    filesystem, key = filesystem_for(record_uri)
+    if not filesystem.exists(key):
+        return False
+    config = read_json(record_uri)["model"].get("config")
+    return config is not None and config["generation"]["extra_gen_kwargs"].get("skip_special_tokens") == "false"
 
 
 def update_tracker(tracker: Path, output_prefix: str) -> list[dict]:
@@ -48,6 +62,9 @@ def update_tracker(tracker: Path, output_prefix: str) -> list[dict]:
         prior_source = match.group(2)
         uri = result_uri(output_prefix, row[0])
         result = read_json(uri)
+        if not thinking_boundaries_preserved(row[0], result["raw_source"]):
+            LOGGER.warning("Leave %s unchanged: thinking boundaries are unverified; regenerate NUPA", row[0])
+            continue
         trials = result["trials"]
         corrected_score = sum(float(trial["corrected_correct"]) for trial in trials) / len(trials)
         if prior_source == uri:
