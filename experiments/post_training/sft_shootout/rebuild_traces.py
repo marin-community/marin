@@ -23,6 +23,7 @@ no Harbor result.
 import argparse
 import json
 from collections import defaultdict
+from dataclasses import dataclass, field
 
 from rigging.filesystem.storage_path import StoragePath
 
@@ -44,18 +45,25 @@ def assistant_turn(record: dict) -> dict:
     return turn
 
 
-def rebuild(records: list[dict]) -> tuple[list[dict], list | None, list[str], list[dict]]:
-    """Return one conversation, its tools, consistency problems and dropped replies, from its records in order.
+@dataclass
+class Conversation:
+    messages: list[dict]
+    tools: list | None
+    problems: list[str] = field(default_factory=list)
+    dropped_replies: list[dict] = field(default_factory=list)
+
+
+def rebuild(records: list[dict]) -> Conversation:
+    """Rebuild one conversation from its records in order.
 
     Each reply is kept until the next request echoes it as its first new message. A request that adds
     nothing (a retry of the same request) replaces the pending reply. A reply the harness discarded
     (mini-swe-agent drops a reply without a valid tool call and sends "Tool call error:" instead) is
-    left out of the conversation and returned in the dropped replies.
+    left out of the messages and kept in ``dropped_replies``.
     """
     conversation: list[dict] = []
     problems: list[str] = []
     dropped: list[dict] = []
-    tools = records[0].get("tools")
     seen = 0
     pending: dict | None = None
     for record in records:
@@ -79,7 +87,7 @@ def rebuild(records: list[dict]) -> tuple[list[dict], list | None, list[str], li
         pending = assistant_turn(record) if record.get("status") == 200 else None
     if pending is not None:
         conversation.append(pending)
-    return conversation, tools, problems, dropped
+    return Conversation(conversation, records[0].get("tools"), problems, dropped)
 
 
 def token_counts(conversation: list[dict]) -> dict[str, dict[str, int]]:
@@ -107,15 +115,14 @@ def harbor_results(root: StoragePath) -> dict[str, dict]:
     for directory, _, names in root.walk():
         if RESULT_FILE not in names:
             continue
-        result = json.loads(StoragePath(f"{directory}/{RESULT_FILE}").read_text())
+        result = json.loads((directory / RESULT_FILE).read_text())
         trial_id = ((result.get("agent_result") or {}).get("metadata") or {}).get("rollout_correlation_id")
         if trial_id is None:
             continue
-        parent, name = str(directory).rstrip("/").rsplit("/", 2)[-2:]
         results[trial_id] = {
             "task_name": result["task_name"],
             "trial_name": result["trial_name"],
-            "retry": int(name) if parent == ATTEMPTS_DIR else 0,
+            "retry": int(directory.name) if directory.parent.name == ATTEMPTS_DIR else 0,
             "reward": ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward"),
             "exception": (result.get("exception_info") or {}).get("exception_type"),
         }
@@ -131,21 +138,21 @@ def rebuilt_rows(records: list[dict], results: dict[str, dict]) -> list[dict]:
         n_conversations[trial_id] += 1
     rows = []
     for (trial_id, index), group in sorted(by_conversation.items()):
-        conversation, tools, problems, dropped = rebuild(sorted(group, key=lambda r: r["ts"]))
+        conversation = rebuild(sorted(group, key=lambda r: r["ts"]))
         if trial_id not in results:
-            problems.append("no Harbor trial carries this correlation id")
+            conversation.problems.append("no Harbor trial carries this correlation id")
         rows.append(
             {
                 "trial_id": trial_id,
                 "conversation": index,
                 "n_conversations": n_conversations[trial_id],
                 **results.get(trial_id, {}),
-                "triggers": [m["trigger"] for m in conversation if m.get("trigger")],
-                "tokens": token_counts(conversation),
-                "messages": conversation,
-                "tools": tools,
-                "problems": problems,
-                "dropped_replies": dropped,
+                "triggers": [m["trigger"] for m in conversation.messages if m.get("trigger")],
+                "tokens": token_counts(conversation.messages),
+                "messages": conversation.messages,
+                "tools": conversation.tools,
+                "problems": conversation.problems,
+                "dropped_replies": conversation.dropped_replies,
             }
         )
     return rows

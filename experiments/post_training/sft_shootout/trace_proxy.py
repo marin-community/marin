@@ -207,8 +207,20 @@ def build_proxy(
         tokens = await counts(await request.json())
         return JSONResponse({"count": max(tokens.values()), "max_model_len": max_model_len})
 
-    async def models(request: Request) -> Response:
+    async def models(_request: Request) -> Response:
         return JSONResponse({"object": "list", "data": [{"id": teacher.model, "object": "model"}]})
+
+    def track_conversation(trial: str, messages: list[dict]) -> tuple[int, int]:
+        """Record ``messages`` in the trial's conversations; return its index and the first new message."""
+        keys = [message_key(m) for m in messages]
+        known = conversations[trial]
+        index = continued_conversation(known, keys) if trial else None
+        if index is None:
+            known.append(keys)
+            return len(known) - 1, 0
+        first = len(known[index])
+        known[index] = keys
+        return index, first
 
     async def chat(request: Request) -> Response:
         body = await request.json()
@@ -216,15 +228,7 @@ def build_proxy(
             return JSONResponse({"error": "streaming is not supported by this proxy"}, status_code=400)
         trial = request.headers.get(TRIAL_HEADER) or ""
         messages = body.get("messages", [])
-        keys = [message_key(m) for m in messages]
-        known = conversations[trial]
-        index = continued_conversation(known, keys) if trial else None
-        first = len(known[index]) if index is not None else 0
-        if index is None:
-            known.append(keys)
-            index = len(known) - 1
-        else:
-            known[index] = keys
+        index, first = track_conversation(trial, messages)
         record: dict = {
             "ts": time.time(),
             "trial": trial or None,

@@ -171,8 +171,9 @@ def test_rebuild_restores_replies_authors_and_the_final_turn(relay_app):
     post(test_client, first)
     second = [*first, {"role": "assistant", "content": '{"commands": []}'}, {"role": "user", "content": "$"}]
     post(test_client, second)
-    conversation, _, problems, _ = rebuild(read_log(log_path))
-    assert problems == []
+    rebuilt = rebuild(read_log(log_path))
+    conversation = rebuilt.messages
+    assert rebuilt.problems == []
     assert [m["role"] for m in conversation] == ["system", "user", "assistant", "user", "assistant"]
     assert conversation[2]["reasoning_content"] == "think first" and conversation[2]["author"] == "student"
     assert conversation[4]["author"] == "teacher" and conversation[4]["trigger"] == "completion_claim"
@@ -192,9 +193,9 @@ def test_summarization_restart_and_retry_keep_conversations_apart(relay_app):
     post(test_client, [*first, {"role": "assistant", "content": "a1 again"}, {"role": "user", "content": "$"}])
     records = read_log(log_path)
     assert [(r["conversation"], r["first_message"]) for r in records] == [(0, 0), (0, 1), (1, 0), (2, 0), (0, 1)]
-    conversation, _, problems, _ = rebuild([r for r in records if r["conversation"] == 0])
-    assert problems == []
-    assert [m["content"] for m in conversation] == ["task", "a1 again", "$", '{"task_complete": true}']
+    rebuilt = rebuild([r for r in records if r["conversation"] == 0])
+    assert rebuilt.problems == []
+    assert [m["content"] for m in rebuilt.messages] == ["task", "a1 again", "$", '{"task_complete": true}']
 
 
 def test_backend_failure_is_logged_and_returns_502(relay_app):

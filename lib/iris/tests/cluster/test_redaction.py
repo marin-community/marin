@@ -166,7 +166,7 @@ def _jwt(claims: dict) -> str:
 
 
 _CAPABILITY = _jwt({"aud": "iris-proxy", "sub": "endpoint:/job/serve", "exp": 1})
-_FIXTURE = _jwt({"aud": "oauthlib-tests", "sub": "user"})
+_OTHER_JWT = _jwt({"aud": "oauthlib-tests", "sub": "user"})
 
 
 def _wrapped(token: str, separator: str, width: int = 40) -> str:
@@ -183,13 +183,13 @@ def test_scrub_capability_tokens_handles_every_break_shape_and_keeps_other_jwts(
         "e\\\\ny" + _CAPABILITY[2:],  # a break inside the eyJ prefix
     ]
     for shape in shapes:
-        text = f"model.api_base=https://iris.example/proxy/t/{shape}/serve/v1' and {_FIXTURE}"
+        text = f"model.api_base=https://iris.example/proxy/t/{shape}/serve/v1' and {_OTHER_JWT}"
         assert count_capability_tokens(text) == 1, shape
         scrubbed, replaced = scrub_capability_tokens(text)
         assert replaced == 1 and count_capability_tokens(scrubbed) == 0, shape
-        assert REDACTED_VALUE in scrubbed and _FIXTURE in scrubbed
+        assert REDACTED_VALUE in scrubbed and _OTHER_JWT in scrubbed
 
 
 def test_count_capability_tokens_accepts_a_list_audience():
     assert count_capability_tokens(_jwt({"aud": ["other", "iris-proxy"]})) == 1
-    assert count_capability_tokens(_FIXTURE) == 0
+    assert count_capability_tokens(_OTHER_JWT) == 0

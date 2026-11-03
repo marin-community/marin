@@ -27,7 +27,7 @@ def main() -> None:
     total = left = 0
     for directory, _, names in StoragePath(args.prefix).walk():
         for name in names:
-            path = StoragePath(f"{directory}/{name}")
+            path = directory / name
             try:
                 text = path.read_text()
             except UnicodeDecodeError:
