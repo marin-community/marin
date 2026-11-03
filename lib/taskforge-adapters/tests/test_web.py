@@ -13,7 +13,7 @@ import httpx
 import pytest
 from rigging.timing import ExponentialBackoff
 
-from taskforge.llm.web import MAX_ATTEMPTS, web_tools
+from taskforge_adapters.web import MAX_ATTEMPTS, web_tools
 
 SEARCH = {"objective": "find x", "search_queries": ["x"]}
 FETCH = {"urls": ["https://example.com"]}

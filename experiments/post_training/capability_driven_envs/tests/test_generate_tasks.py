@@ -4,7 +4,7 @@
 import pytest
 
 # These tests run in the marin-taskforge package environment; environments without it skip them.
-pytest.importorskip("taskforge")
+pytest.importorskip("taskforge_adapters")
 
 import asyncio
 import json
@@ -25,9 +25,9 @@ from taskforge.llm.client import (
     StructuredResult,
     Usage,
 )
-from taskforge.llm.glm_client import Pool
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge_adapters.glm_client import Pool
 
 from experiments.post_training.capability_driven_envs.catalog import example_catalog_path
 from experiments.post_training.capability_driven_envs.generate_tasks import (

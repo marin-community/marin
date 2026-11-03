@@ -6,7 +6,7 @@
 ``run_build`` runs a program's steps on its caller's event loop. A step that computes in pure
 Python never yields, so neither ``STEP_TIMEOUT`` nor any other deadline on that loop can fire, and
 every other workpiece on the loop waits with it. ``run_build_in_process`` runs one workpiece's round in a
-child process instead, ``python -m taskforge.stage40_build_with_program.build_process <request> <result>``, and
+child process instead, ``python -m taskforge_adapters.build_process <request> <result>``, and
 the driver's loop goes on serving other workpieces while it waits.
 
 Everything a step uses is a network or file service already: the GLM router over HTTP, the Iris
@@ -65,17 +65,13 @@ from pydantic import Field, TypeAdapter
 from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.log_setup import configure_logging
 from shellbox.machine import Backend
-
 from taskforge.child_process import stop_process_group
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import ModelClient, ModelUnavailable
-from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
-from taskforge.llm.web import web_tools
-from taskforge.sandbox.factories import MachineHost, machine_factories
-from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
+from taskforge.sandbox.factories import MachineHost
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import program_file
 from taskforge.stage40_build_with_program.context import (
@@ -94,7 +90,12 @@ from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, TaskDraft, load_draft, run_build
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
 
-MODULE = "taskforge.stage40_build_with_program.build_process"
+from taskforge_adapters.backends import machine_factories
+from taskforge_adapters.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
+from taskforge_adapters.image_builder import IrisImageBuilder, RegistryCredential
+from taskforge_adapters.web import web_tools
+
+MODULE = "taskforge_adapters.build_process"
 REQUEST_FILE = "build-request.json"
 RESULT_FILE = "build-result.json"
 LOG_FILE = "build-process.log"
@@ -393,7 +394,7 @@ def _crashed(raised: Raised, head: str, error: Exception) -> Crashed:
 
 
 def main() -> None:
-    """``python -m taskforge.stage40_build_with_program.build_process <request.json> <result.json>``."""
+    """``python -m taskforge_adapters.build_process <request.json> <result.json>``."""
     _, request_path, result_path = sys.argv
     configure_logging(logging.INFO)
     request = REQUEST.validate_json(Path(request_path).read_bytes())

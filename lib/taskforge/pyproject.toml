@@ -13,22 +13,15 @@ dependencies = [
     "marin-shellbox[shellsim]",
     "marin-verifyit",
     "marin-rigging",
-    "marin-finelog",
-    "marin-iris",
     "httpx>=0.27,<1",
-    "openai",
     "pydantic>=2.7",
-    # The capability experiment's driver, which runs in this package's environment on a pod, needs
-    # click for its CLI and marin-iris to resolve the GLM relay inside an Iris task.
-    "click",
-    "marin-iris",
     "jsonschema>=4.20",
-    # Its failed-run analysis is a Zephyr pipeline over the rollout records of rolloutengine.
-    "marin-zephyr",
 ]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+# The library's tests, and the capability experiment's that run beside them, drive model calls through the
+# GLM client on a fake router (taskforge_adapters.testing); the library itself imports no adapter.
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-taskforge-adapters"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskforge"]
@@ -61,6 +54,7 @@ search-path = [
     "src",
     ".",
     "../..",
+    "../taskforge-adapters/src",
     "../taskcompendium/src",
     "../rolloutengine/src",
     "../shellbox/src",

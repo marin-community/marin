@@ -77,17 +77,19 @@ from iris.resources.state import is_job_finished
 from iris.rpc import job_pb2
 from rigging.secrets import COREWEAVE_SECRET_NAMES, SecretBehavior, get_secret
 from rigging.timing import Duration
-
-from taskforge.sandbox import image_push
 from taskforge.sandbox.images import (
     BUILD_LIMITS,
     REPOSITORY,
+    BuildFailed,
     DockerBuild,
+    ImageJobFailed,
     build_context_archive,
     build_digest,
     check_build_limits,
     pinned_image,
 )
+
+from taskforge_adapters import image_push
 
 logger = logging.getLogger(__name__)
 
@@ -189,14 +191,6 @@ def registry_credential_json() -> str:
         check=True,
     )
     return secret.stdout
-
-
-class BuildFailed(RuntimeError):
-    """The build job ran and failed: kaniko refused the Dockerfile or its context, or the build outran the job."""
-
-
-class ImageJobFailed(RuntimeError):
-    """A publish failed for a host reason, so no change to the Dockerfile helps (see the module docstring)."""
 
 
 @dataclass(frozen=True)

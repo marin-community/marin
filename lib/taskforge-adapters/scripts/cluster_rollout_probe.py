@@ -10,7 +10,7 @@ endpoint on that cluster; it has no default::
     uv run iris --cluster=marin job run --no-wait --max-retries 1 \
       --job-name taskforge-cluster-rollout-probe-NN --target-cluster cw-rno2a --priority interactive \
       --cpu 2 --memory 3GB --timeout 5400 -e GLM_HIGH_TOKEN "$GLM_HIGH_TOKEN" -- \
-      uv run --package marin-taskforge --frozen lib/taskforge/scripts/cluster_rollout_probe.py \
+      uv run --package marin-taskforge-adapters --frozen lib/taskforge-adapters/scripts/cluster_rollout_probe.py \
         --relay-job <relay-job>
 
 ``GLM_HIGH_TOKEN``, the high pool's bearer token, travels in the job's environment (``-e``), so the
@@ -70,14 +70,11 @@ from taskcompendium.models import (
     StdoutReward,
     VerifierArtifact,
 )
-from verifyit.spec import NumericSpec
-
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
-from taskforge.llm.glm_client import GLM_MODEL, GlmClient, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.sandbox.factories import MachineHost, machine_factories
+from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import (
     answer_grader,
     assemble,
@@ -91,6 +88,10 @@ from taskforge.stage50_validate.evidence import Evidence
 from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.outcome import Graded, Outcome, TrialKind
 from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff, TrialPlan, rollout_steps, run_trials
+from verifyit.spec import NumericSpec
+
+from taskforge_adapters.backends import machine_factories
+from taskforge_adapters.glm_client import GLM_MODEL, GlmClient, Pool, RelayEndpoint
 
 GLM_TOKEN_ENV = "GLM_HIGH_TOKEN"
 IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"

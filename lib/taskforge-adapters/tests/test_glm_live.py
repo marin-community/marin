@@ -20,16 +20,16 @@ from typing import Annotated
 import pytest
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 from rolloutengine.models import ModelRequest
-
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import AttemptOutcome, Completion, ContextExhausted, FinishReason
-from taskforge.llm.glm_client import GlmClient, request_kwargs
 from taskforge.llm.policy import LLMPolicy, Message, ReasoningEffort
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import response_format
-from taskforge.llm.test_support import GLM_MODEL, unique_run_name
+
+from taskforge_adapters.glm_client import GLM_MODEL, GlmClient, request_kwargs
+from taskforge_adapters.testing import unique_run_name
 
 COMPLETIONS = TypeAdapter(tuple[Completion, ...])
 

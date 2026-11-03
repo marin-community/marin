@@ -11,6 +11,8 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineSpec, PackageSpec
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.shell import ShellToolConfig, resolve_shell_tool
+from taskforge_adapters.glm_client import GlmClient
+from taskforge_adapters.testing import fake_source
 
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import (
@@ -25,10 +27,8 @@ from taskforge.llm.agent import (
     run_agent,
     shell_tool,
 )
-from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
 from taskforge.llm.recording import CallLedger
-from taskforge.llm.test_support import fake_source
 
 MESSAGES: list[Message] = [{"role": "system", "content": "be useful"}, {"role": "user", "content": "do it"}]
 ECHO_SCHEMA = {

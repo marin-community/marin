@@ -43,7 +43,7 @@ with the rest of the task. A task whose format cannot carry its answer for its g
 (TaskCompendium ``submission_compatibility``) is not started: each of its trials is one
 ``SUBMISSION_UNSUPPORTED`` attempt naming the reasons.
 
-``EngineSettings.factories`` come from ``taskforge.sandbox.factories.machine_factories``. Before a
+``EngineSettings.factories`` come from ``taskforge_adapters.backends.machine_factories``. Before a
 trial starts, ``task_refusals`` passes each of the task's machines to its factory's
 ``check_environment``. When a factory is missing or rejects a machine, the task is not started: each
 of its trials is one ``MACHINE_UNSUPPORTED`` attempt carrying the refusals.

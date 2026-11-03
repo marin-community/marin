@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build a directory's Dockerfile with ``taskforge.sandbox.image_builder.IrisImageBuilder`` and print the pinned image.
+"""Build a directory's Dockerfile with ``taskforge_adapters.image_builder.IrisImageBuilder`` and print the pinned image.
 
     uv run scripts/build_image_job.py --context DIR --repository capability-infra/taskforge-smoke
 
@@ -17,13 +17,14 @@ import json
 import logging
 from pathlib import Path
 
-from taskforge.sandbox.image_builder import (
+from taskforge.sandbox.images import BUILD_LIMITS, docker_build_from_directory
+
+from taskforge_adapters.image_builder import (
     TARGET_CLUSTER,
     IrisImageBuilder,
     RegistryCredential,
     registry_credential_json,
 )
-from taskforge.sandbox.images import BUILD_LIMITS, docker_build_from_directory
 
 
 def main() -> None:

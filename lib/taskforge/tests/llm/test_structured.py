@@ -6,9 +6,9 @@ from dataclasses import replace
 
 import pytest
 from pydantic import BaseModel, Field, field_validator
+from taskforge_adapters.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 
 from taskforge.llm.client import StructuredResult
-from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import IncompleteOutput, StructuredOutputError, schema_instruction
 

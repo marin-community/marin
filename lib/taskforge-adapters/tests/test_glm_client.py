@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-
 from taskforge.llm.client import (
     AttemptOutcome,
     Completion,
@@ -20,18 +19,19 @@ from taskforge.llm.client import (
     ModelRequestRejected,
     ModelUnavailable,
 )
-from taskforge.llm.glm_client import (
-    EndpointSource,
-    FixedEndpoint,
-    GlmClient,
-    GlmEndpoint,
-    Pool,
-)
 from taskforge.llm.policy import (
     CONTINUE_PROMPT,
     LLMPolicy,
     LLMProviderConfig,
     Message,
+)
+
+from taskforge_adapters.glm_client import (
+    EndpointSource,
+    FixedEndpoint,
+    GlmClient,
+    GlmEndpoint,
+    Pool,
 )
 
 MESSAGES: list[Message] = [{"role": "user", "content": "hi"}]

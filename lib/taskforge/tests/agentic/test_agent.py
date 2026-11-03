@@ -21,13 +21,13 @@ from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavaila
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
 from taskcompendium.models import CommandSemantics, TextMessage, VerifyitGrader
+from taskforge_adapters.parallel import ParallelWeb
 
 from taskforge.agentic import example_build
 from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.instances import task_instances
-from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, GUESS_PROMPT
 from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, OPTION_PROBLEM, BlindSolution, OptionList, TaskReview
 from taskforge.capability import CapabilityIdea

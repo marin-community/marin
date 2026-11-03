@@ -146,6 +146,21 @@ def pinned_image(registry: str, repository: str, manifest_digest: str) -> str:
     return reference
 
 
+class BuildFailed(RuntimeError):
+    """The build ran and failed: the builder refused the Dockerfile or its context, or the build outran its job.
+
+    An ``ImageBuilder`` raises it for a failure a Dockerfile change can fix; the build reports it as the program's.
+    """
+
+
+class ImageJobFailed(RuntimeError):
+    """A publish failed for a host reason, so no change to the Dockerfile helps.
+
+    An ``ImageBuilder`` raises it when its jobs did not schedule, were lost or killed, or the registry did not
+    serve back the pushed image; the build reports it as the host's (``IMAGE_JOB_FAILED``).
+    """
+
+
 class ImageBuilder(Protocol):
     """Build a context for linux/amd64, push it under ``repository``, and return it pinned by digest."""
 

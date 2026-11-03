@@ -30,7 +30,7 @@ driver still writes the run's outputs:
 ``--base-url``, ``--relay-job`` and ``--pool`` work as in ``generate_tasks``. On a laptop, with the
 GLM router port-forwarded and ``GLM_BULK_TOKEN`` exported::
 
-    uv run --package marin-taskforge --frozen python -m \\
+    uv run --package marin-taskforge-adapters --frozen python -m \\
         experiments.post_training.capability_driven_envs.propose_tasks \\
         --output-dir /tmp/capability-proposals --base-url http://127.0.0.1:18000/v1 --pool bulk \\
         --environment reasoning --environment shellsim
@@ -48,7 +48,6 @@ from rigging.log_setup import configure_logging
 from taskforge.content_hash import pretty_json
 from taskforge.defaults import DEFAULT_POLICY
 from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavailable
-from taskforge.llm.glm_client import EndpointSource, GlmClient, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.policy import ProposerPolicy
@@ -56,6 +55,7 @@ from taskforge.stage10_proposal.model import Environment, render
 from taskforge.stage10_proposal.source import ProposalBatch, SlotProposal, propose_all
 from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage20_triage.verdict import Verdict
+from taskforge_adapters.glm_client import EndpointSource, GlmClient, Pool
 
 from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,

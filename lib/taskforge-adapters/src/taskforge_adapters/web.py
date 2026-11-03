@@ -19,7 +19,6 @@ from collections.abc import Mapping
 
 import httpx
 from rigging.timing import ExponentialBackoff
-
 from taskforge.llm.agent import AgentTool
 from taskforge.llm.client import RETRYABLE_STATUSES
 
