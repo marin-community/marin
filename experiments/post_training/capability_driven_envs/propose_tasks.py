@@ -69,7 +69,11 @@ from experiments.post_training.capability_driven_envs.generate_tasks import (
     endpoint_source,
     selected_ideas,
 )
-from experiments.post_training.capability_driven_envs.proposal_source import CapabilitySource, plan_request
+from experiments.post_training.capability_driven_envs.proposal_source import (
+    VERIFICATION_RULE,
+    CapabilitySource,
+    plan_request,
+)
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV
 
 logger = logging.getLogger(__name__)
@@ -100,10 +104,12 @@ async def propose_capability(source: CapabilitySource, idea: CapabilityIdea, slo
     try:
         batch = await propose_all(source, idea, slots)
     except StructuredOutputError as error:
-        planning = ProposalBatch(plan_request(source.proposer, idea, slots, source.environments), error.completions, ())
+        planning = ProposalBatch(
+            plan_request(source.proposer, source.rule, idea, slots, source.environments), error.completions, ()
+        )
         return ProposedCapability(idea.capability_id, planning, {}, str(error))
     except (ModelRequestRejected, ModelUnavailable) as error:
-        planning = ProposalBatch(plan_request(source.proposer, idea, slots, source.environments), (), ())
+        planning = ProposalBatch(plan_request(source.proposer, source.rule, idea, slots, source.environments), (), ())
         return ProposedCapability(idea.capability_id, planning, {}, str(error))
     verdicts = {s.slot: await preflight(s.proposal) for s in batch.slots if isinstance(s, SlotProposal)}
     return ProposedCapability(idea.capability_id, batch, verdicts, None)
@@ -118,7 +124,7 @@ async def propose_tasks(
     proposer: ProposerPolicy,
 ) -> list[ProposedCapability]:
     """Propose and triage every capability of ``ideas`` concurrently, with ``proposer``'s text."""
-    source = CapabilitySource(model, policy, proposer, environments)
+    source = CapabilitySource(model, policy, proposer, DEFAULT_POLICY.prompt(VERIFICATION_RULE), environments)
 
     async def logged(idea: CapabilityIdea) -> ProposedCapability:
         proposed = await propose_capability(source, idea, slots)

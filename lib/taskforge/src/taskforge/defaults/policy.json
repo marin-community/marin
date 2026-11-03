@@ -5,6 +5,7 @@
   "proposer.repair": "prompts/proposer/repair.md",
   "proposer.research_criterion": "prompts/proposer/research_criterion.md",
   "proposer.solver_machine_rule": "prompts/proposer/solver_machine_rule.md",
+  "proposer.determinate_first_preferred": "prompts/proposer/determinate_first_preferred.md",
   "author.system": "prompts/author/system.md",
   "author.user": "prompts/author/user.md",
   "author.revision": "prompts/author/revision.md",

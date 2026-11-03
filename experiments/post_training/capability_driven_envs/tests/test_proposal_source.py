@@ -32,6 +32,7 @@ from experiments.post_training.capability_driven_envs.catalog import (
     load_capability_ideas,
 )
 from experiments.post_training.capability_driven_envs.proposal_source import (
+    VERIFICATION_RULE,
     CapabilitySource,
     SlotStatus,
     author_proposal,
@@ -62,6 +63,7 @@ CATALOG_VERSION = "v3"
 ALL_ENVIRONMENTS = frozenset(Environment)
 NO_CONTAINER = frozenset({Environment.REASONING, Environment.SHELLSIM})
 PROPOSER = DEFAULT_POLICY.proposer
+RULE = DEFAULT_POLICY.prompt(VERIFICATION_RULE)
 
 
 @pytest.fixture
@@ -124,14 +126,14 @@ def plan(slots: list[dict], excluded: list[dict]) -> dict:
 
 def test_slot_plan_requires_n_slots_and_rejects_using_an_excluded_pairing():
     plan_type = slot_plan_type(2, ALL_ENVIRONMENTS)
-    ok = plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "judge", "null")], []))
+    ok = plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "llm_as_judge", "null")], []))
     assert [s.status for s in ok.slots] == [SlotStatus.PROPOSE, SlotStatus.NULL]
 
     with pytest.raises(ValidationError):
         plan_type.model_validate(plan([slot(1, "reasoning", "code")], []))
-    excluded = [{"environment": "container", "verification": "judge", "reason": "x"}]
+    excluded = [{"environment": "container", "verification": "llm_as_judge", "reason": "x"}]
     with pytest.raises(ValidationError, match="excluded_combinations"):
-        plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "judge")], excluded))
+        plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "llm_as_judge")], excluded))
 
 
 @pytest.mark.parametrize(
@@ -146,13 +148,15 @@ def test_slot_plan_declares_a_solver_machine_exactly_for_an_imageless_slot(envir
         slot_plan_type(1, ALL_ENVIRONMENTS).model_validate(plan(slots, []))
 
 
-def test_slot_plan_caps_how_many_proposed_slots_share_a_pairing():
+def test_slot_plan_caps_how_many_proposed_slots_share_a_pairing_except_code():
     plan_type = slot_plan_type(4, ALL_ENVIRONMENTS)
-    crowded = [slot(n, "reasoning", "code") for n in (1, 2, 3)] + [slot(4, "container", "judge")]
-    with pytest.raises(ValidationError, match="reasoning x code"):
+    crowded = [slot(n, "reasoning", "decision_model") for n in (1, 2, 3)] + [slot(4, "container", "llm_as_judge")]
+    with pytest.raises(ValidationError, match="reasoning x decision_model"):
         plan_type.model_validate(plan(crowded, []))
-    crowded[2] = slot(3, "reasoning", "code", "null")
+    crowded[2] = slot(3, "reasoning", "decision_model", "null")
     assert plan_type.model_validate(plan(crowded, [])).slots[2].status is SlotStatus.NULL
+    coded = [slot(n, "reasoning", "code") for n in (1, 2, 3)] + [slot(4, "container", "llm_as_judge")]
+    assert len(plan_type.model_validate(plan(coded, [])).slots) == 4
 
 
 def test_plan_with_a_slot_in_an_unavailable_environment_fails_validation():
@@ -183,7 +187,7 @@ def filled_document(idea, number: int, research_need: ResearchNeed = ResearchNee
     """Fill every placeholder of the prompt's template; a needed document cites its research item."""
     raw = json.loads(document_template(f"{CAPABILITY_ID}/{number}", idea))
     raw["header"].update(
-        environment="shellsim", solver_machine="cpython", verification="judge", research_need=str(research_need)
+        environment="shellsim", solver_machine="cpython", verification="llm_as_judge", research_need=str(research_need)
     )
     raw["header"]["research"][0]["kind"] = "github"
     if research_need is ResearchNeed.NOT_NEEDED:
@@ -214,7 +218,7 @@ def author(model: ScriptedModel, idea) -> SlotOutcome:
     two_slots = slot_plan_type(2, ALL_ENVIRONMENTS).model_validate(
         plan([slot(1, "shellsim", "code"), slot(2, "reasoning", "code")], [])
     )
-    return asyncio.run(author_proposal(model, LLMPolicy(), PROPOSER, idea, two_slots, two_slots.slots[0]))
+    return asyncio.run(author_proposal(model, LLMPolicy(), PROPOSER, RULE, idea, two_slots, two_slots.slots[0]))
 
 
 def test_author_request_carries_the_document_schema_with_continuations_off(ideas):
@@ -300,7 +304,7 @@ def test_a_plan_slot_the_host_cannot_run_is_repaired_before_any_document_is_writ
     model.reply(filled_document(idea, 1))
 
     batch: ProposalBatch = asyncio.run(
-        propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, NO_CONTAINER), idea, 1)
+        propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, RULE, NO_CONTAINER), idea, 1)
     )
 
     repair_prompt = model.requests[1].messages[-2]["content"]
@@ -316,18 +320,20 @@ def test_a_plan_still_invalid_after_its_repair_raises_before_any_document_is_wri
     model.reply(unrunnable)
 
     with pytest.raises(StructuredOutputError, match="slot 1 is proposed in container"):
-        asyncio.run(propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, NO_CONTAINER), ideas[CAPABILITY_ID], 1))
+        asyncio.run(
+            propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, RULE, NO_CONTAINER), ideas[CAPABILITY_ID], 1)
+        )
     assert len(model.requests) == 2
 
 
 def test_propose_returns_one_outcome_per_slot_in_order_without_calling_the_model_for_null_slots(ideas):
     idea = ideas[CAPABILITY_ID]
     model = ScriptedModel()
-    model.reply(json.dumps(plan([slot(1, "reasoning", "judge", "null"), slot(2, "shellsim", "code")], [])))
+    model.reply(json.dumps(plan([slot(1, "reasoning", "llm_as_judge", "null"), slot(2, "shellsim", "code")], [])))
     model.reply(filled_document(idea, 2))
 
     batch: ProposalBatch = asyncio.run(
-        propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, ALL_ENVIRONMENTS), idea, 2)
+        propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, RULE, ALL_ENVIRONMENTS), idea, 2)
     )
 
     assert len(model.requests) == 2

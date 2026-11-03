@@ -47,3 +47,19 @@ def test_a_policy_file_naming_an_unknown_field_or_missing_one_is_refused(tmp_pat
     (tmp_path / POLICY_FILE).write_text(json.dumps(defaults))
     with pytest.raises(ValueError, match=r"has no file for author\.nudge"):
         load_policy(tmp_path)
+
+
+def test_a_prompt_outside_the_fields_is_read_by_key_only_from_the_file_its_key_names(tmp_path):
+    (tmp_path / "prompts" / "proposer").mkdir(parents=True)
+    (tmp_path / "prompts" / "proposer" / "strict.md").write_text("Grade with code.\n")
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text(json.dumps({"proposer.strict": "prompts/proposer/strict.md"}))
+
+    policy = load_policy(DEFAULTS_DIR, overlay)
+
+    assert policy.prompt("proposer.strict").render() == "Grade with code."
+    assert policy.prompt("proposer.plan") == DEFAULT_POLICY.proposer.plan
+    assert policy.stage_digest == DEFAULT_POLICY.stage_digest
+    overlay.write_text(json.dumps({"proposer.strict": "prompts/proposer/other.md"}))
+    with pytest.raises(ValueError, match=r"names no such policy field: proposer\.strict"):
+        load_policy(DEFAULTS_DIR, overlay)
