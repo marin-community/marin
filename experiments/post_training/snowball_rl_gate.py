@@ -1,7 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare Snowball runs with pinned control replicates."""
+"""Compare a saved Snowball run, or one control replicate, with the preset's pinned controls.
+
+Reads saved metrics and panel scores only, so it needs no GPU. Writes gate_report.json and
+gate_report.md under the caller's namespace and prints the report as JSON. snowball_rl runs this
+comparison itself after a gated run; use this command to re-score a finished run, for example
+with a new --require, or to check calibration by scoring a control against the other controls.
+
+\b
+Examples, each after `uv run python -m experiments.post_training.snowball_rl_gate`:
+  --preset learning-medium --candidate RUN_NAME --require 'panel-910/aaii_category/coding/mean>=control'
+  --preset speed-medium --leave-out r0
+"""
 
 from __future__ import annotations
 
@@ -744,10 +755,34 @@ def recorded_inputs(path: str) -> GateInputs:
 
 
 @click.command(help=__doc__)
-@click.option("--preset", "preset_name", type=click.Choice(sorted(CONTROLS)), required=True)
-@click.option("--candidate", "candidate_name")
-@click.option("--leave-out", "leave_out")
-@click.option("--require", "requirements", multiple=True)
+@click.option(
+    "--preset",
+    "preset_name",
+    type=click.Choice(sorted(CONTROLS)),
+    required=True,
+    help="Gated preset whose pinned controls to compare with.",
+)
+@click.option(
+    "--candidate",
+    "candidate_name",
+    metavar="NAME[@VERSION]",
+    help="Saved run to re-score, by the name and version the status block prints for it; VERSION defaults "
+    "to PRESET_REVISION. Give this or --leave-out.",
+)
+@click.option(
+    "--leave-out",
+    "leave_out",
+    metavar="rN",
+    help="Score control replicate N against the remaining controls. Each replicate should PASS; use it "
+    "after pinning new controls. Give this or --candidate.",
+)
+@click.option(
+    "--require",
+    "requirements",
+    multiple=True,
+    metavar="KEY<=|>=BOUND",
+    help="Add a condition, as in snowball_rl --require, to those the run recorded at launch. Repeatable.",
+)
 def main(preset_name: str, candidate_name: str | None, leave_out: str | None, requirements: tuple[str, ...]) -> None:
     if (candidate_name is None) == (leave_out is None):
         raise click.UsageError("choose --candidate NAME[@VERSION] or --leave-out r<index>")
