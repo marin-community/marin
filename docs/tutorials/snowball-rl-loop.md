@@ -16,7 +16,7 @@ occurs after Iris allocation. It never patches installed source. A passing
 source check alone does not attest the complete wheel or a successful GPU run.
 The checked file is `vllm/v1/attention/ops/triton_attention_helpers.py` in the
 installed `vllm` distribution. Follow the [GPU wheel release and adoption
-procedure](../../.agents/skills/refresh-fork/docs/vllm.md) to satisfy this prerequisite.
+procedure](https://github.com/marin-community/marin/blob/main/.agents/skills/refresh-fork/docs/vllm.md) to satisfy this prerequisite.
 
 The historical four-arm screen qualified its frozen runtime with a temporary
 source overlay. Those jobs are complete; they are not a qualification of a
@@ -25,8 +25,8 @@ newly assembled runtime, and must not be resumed to test this integration.
 ## Plan an experiment
 
 Use a durable checkout and a `codex/` branch. Follow the repository's
-[launch](../../.agents/skills/launch-rl/SKILL.md) and
-[pull-request](../../.agents/skills/manage-pr/SKILL.md) skills.
+[launch](https://github.com/marin-community/marin/blob/main/.agents/skills/launch-rl/SKILL.md) and
+[pull-request](https://github.com/marin-community/marin/blob/main/.agents/skills/manage-pr/SKILL.md) skills.
 The run requires existing HF, W&B, CoreWeave storage, Daytona evaluation and
 Together judge credentials. Follow [secret delivery](../references/rl-launching.md#experiment-entry-point).
 Keep credentials in the supported secret delivery path;
@@ -73,7 +73,7 @@ An authorized launch uses the same command with `--run`. Check startup and
 optimizer progress through Iris, then use heartbeat monitoring. Do not cancel,
 restart, or resubmit a failed run without authorization. The loop does not
 retry training or regenerate answers to repair evaluation.
-Submission prints the coordinator ID; use the [Iris guide](../../lib/iris/OPS.md)
+Submission prints the coordinator ID; use the [Iris guide](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
 to bind its child training job. Result files live under the training artifact's
 output directory, whose suffix is the printed artifact name/version under the
 configured `MARIN_PREFIX`. Retain that directory and both job IDs. Failures

@@ -11,10 +11,11 @@ from urllib.parse import urlparse
 
 import click
 from marin.rl.evaluation_identity import validate_evaluation_identity
-from marina.client import DEFAULT_MARINA_URL, LOCAL_HOSTS, marina_request
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
 
 APPLET_ID = "6c971887-1e22-45b1-9dcb-dd775829df57"
+DEFAULT_MARINA_URL = "https://marina.oa.dev"
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
 INSERT = """INSERT INTO rl_runs (run_id, attempt_id, record)
 VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
 ON CONFLICT (run_id, attempt_id) DO NOTHING"""
@@ -105,6 +106,19 @@ class RunSummary(BaseModel):
         ):
             raise ValueError("Successful attempts require complete baseline and final scoring")
         return self
+
+
+def marina_request(service_url: str, method: str, path: str, *, json_body: object | None = None) -> object | None:
+    """Load the deployment client only when publishing, outside ML graph construction."""
+    try:
+        from marina.client import marina_request as request  # noqa: PLC0415  # optional deployment dependency
+    except ModuleNotFoundError as error:
+        if error.name not in {"marina", "marina.client"}:
+            raise
+        raise RuntimeError(
+            "Publishing loop results requires the Marina client; run publication from the repository workspace."
+        ) from error
+    return request(service_url, method, path, json_body=json_body)
 
 
 def publish_result(record: dict[str, Any], service_url: str = DEFAULT_MARINA_URL) -> dict[str, Any]:

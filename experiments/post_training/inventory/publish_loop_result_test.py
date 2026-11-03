@@ -3,6 +3,7 @@
 
 import copy
 import json
+import sys
 
 import pytest
 from pydantic import ValidationError
@@ -144,3 +145,10 @@ def test_pre_evaluation_failure_publishes_no_fabricated_measurements(monkeypatch
     stored = next(iter(transport.rows.values()))
     assert stored["baseline"] is None and stored["final"] is None
     assert stored["date_basis"] == "launch_started"
+
+
+def test_publication_without_deployment_client_reports_missing_dependency(monkeypatch, result):
+    monkeypatch.setitem(sys.modules, "marina", None)
+    monkeypatch.setitem(sys.modules, "marina.client", None)
+    with pytest.raises(RuntimeError, match="requires the Marina client"):
+        publication.publish_result(result)
