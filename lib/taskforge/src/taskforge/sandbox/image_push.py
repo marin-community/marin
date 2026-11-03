@@ -119,7 +119,7 @@ def extract_member(archive: Path, name: str, target: Path, mode: Literal["r|gz",
 
 
 def archive_request() -> urllib.request.Request:
-    """Read an Iris output archive using the submitter's CoreWeave credentials."""
+    """A signed GET request for the Iris output archive at ``$ARCHIVE_URI``, with the submitter's CoreWeave keys."""
     return s3_get_request(
         os.environ[ARCHIVE_URI_ENV],
         "https://cwobject.com",
