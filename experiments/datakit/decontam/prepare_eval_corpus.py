@@ -98,7 +98,7 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v9"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v10"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
 LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
@@ -126,7 +126,7 @@ def _lmh_output_root() -> str:
 # step rewrites (does not skip) any shard whose sidecar doesn't match. Without this,
 # a policy change like the cluster-B passage drop (marin#6852) never reaches an
 # already-staged corpus — the bloom keeps reading the old passage-bearing text.
-_LMH_EXTRACTION_VERSION = "6-long-question-view"
+_LMH_EXTRACTION_VERSION = "7-question-view-all"
 _LMH_VERSION_SIDECAR = ".extraction_version"
 
 
@@ -390,13 +390,10 @@ _QUESTION_VIEW_MIN_WORDS = 20
 
 
 def _question_line(record: dict[str, Any]) -> str:
-    """The question of a multiple-choice record (one with a string-list field), else ``""``.
+    """The question (or coding prompt) of a record: its first multi-word string field.
 
-    The question is the first multi-word string field; it is returned only when it has
-    at least :data:`_QUESTION_VIEW_MIN_WORDS` words.
+    Returned only when it has at least :data:`_QUESTION_VIEW_MIN_WORDS` words, else ``""``.
     """
-    if not any(isinstance(v, list) and v and all(isinstance(x, str) for x in v) for v in record.values()):
-        return ""
     strings = (v for k, v in record.items() if k.lower() not in _GRADER_FIELDS and isinstance(v, str))
     question = next((v for v in strings if len(v.split()) > 1), "")
     return question if len(question.split()) >= _QUESTION_VIEW_MIN_WORDS else ""
@@ -411,9 +408,10 @@ def _lmh_doc_views(doc: Any, prompt_fn: Callable, target_fn: Callable) -> list[t
     rule can match a copy of either one; joined, a copy of one rendering holds only
     part of the record. Passage-bearing docs (a field in :data:`_PASSAGE_FIELDS`)
     give one record, the answer and the raw fields without the passage, since
-    ``doc_to_text`` renders the passage. A multiple-choice doc without a passage
-    also gets its question alone: copies in quiz pages and SFT prompts often drop
-    the choices, and short choices are too few n-grams to carry the item.
+    ``doc_to_text`` renders the passage. A doc without a passage also gets its
+    question alone: copies in quiz pages and SFT prompts often drop the choices
+    or the worked answer, and coding copies keep the prompt but rewrite the
+    solution, so the rest of the item outweighs the copied question.
     """
     has_passage = isinstance(doc, dict) and any(k.lower() in _PASSAGE_FIELDS for k in doc)
     try:

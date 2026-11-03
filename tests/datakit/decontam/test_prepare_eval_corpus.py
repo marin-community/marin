@@ -86,7 +86,7 @@ def test_lmh_non_passage_doc_indexes_the_prompt_and_the_raw_fields_as_separate_r
     ]
 
 
-def test_lmh_multiple_choice_doc_indexes_a_long_question_alone():
+def test_lmh_doc_indexes_a_long_question_alone():
     question = (
         "A box contains 4 white balls and 4 black balls. I draw them out of the box, one at a time. "
         "What is the probability that all of my draws alternate colors?"
@@ -96,6 +96,19 @@ def test_lmh_multiple_choice_doc_indexes_a_long_question_alone():
     views = dict(_lmh_doc_views(doc, lambda d: d["question"], _target))
 
     # Copies in quiz pages and SFT prompts often drop the choices.
+    assert views["-question"] == question
+
+
+def test_lmh_question_view_covers_docs_without_choices():
+    question = (
+        "A plane travels 1200 miles in 3 hours. At the same rate, how many additional hours "
+        "would it take to travel an additional 2000 miles?"
+    )
+    doc = {"question": question, "answer": "The rate is 1200/3=<<1200/3=400>>400 mph.\n#### 5"}
+
+    views = dict(_lmh_doc_views(doc, lambda d: f"Question: {d['question']}\nAnswer:", lambda d: d["answer"]))
+
+    # Copies of a math problem often drop the worked answer.
     assert views["-question"] == question
 
 
@@ -110,7 +123,7 @@ def test_lmh_raw_field_view_keeps_dataset_order_and_drops_labels():
     views = dict(_lmh_doc_views(doc, lambda d: d["prompt"], lambda d: d["canonical_solution"]))
 
     assert views["-fields"] == "def add(a, b):\n    '''Add two numbers.'''\n    return a + b"
-    assert "-question" not in views  # not multiple choice
+    assert "-question" not in views  # the prompt is under the 20-word floor
 
 
 @pytest.mark.parametrize("field", sorted(_PASSAGE_FIELDS))
