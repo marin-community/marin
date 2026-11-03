@@ -5,7 +5,7 @@ from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Deadline
+from rigging.timing import Deadline, Duration
 
 
 def test_external_endpoint_resolution_uses_controller_proxy_path():
@@ -67,3 +67,32 @@ def test_sandbox_submission_carries_no_bundle_or_submitter_env(tmp_path, monkeyp
     assert stub.request.bundle_blob == b""
     assert dict(stub.request.environment.env_vars) == {}
     assert list(stub.request.entrypoint.setup_commands) == []
+
+
+def test_submission_serializes_termination_grace_as_duration():
+    class ControllerStub:
+        request: controller_pb2.Controller.LaunchJobRequest | None = None
+
+        def launch_job(self, request, *, timeout_ms=None):
+            self.request = request
+            return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
+
+        def close(self):
+            pass
+
+    stub = ControllerStub()
+    client = RemoteClusterClient("http://controller.example:8080/", bundle_id="test-bundle")
+    client._client = stub
+    try:
+        client.submit_job(
+            job_id=JobName.root("alice", "training"),
+            entrypoint=Entrypoint.from_command("python", "train.py"),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000),
+            termination_grace=Duration.from_seconds(60),
+        )
+    finally:
+        client.shutdown()
+
+    assert stub.request is not None
+    assert stub.request.termination_grace.milliseconds == 60_000
+    assert "IRIS_PREEMPTION_GRACE_SECONDS" not in stub.request.environment.env_vars

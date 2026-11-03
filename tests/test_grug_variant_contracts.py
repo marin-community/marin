@@ -12,6 +12,8 @@ import dataclasses
 import importlib
 import json
 import logging
+import os
+import signal
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -37,6 +39,8 @@ from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.grug.preemption import GracefulPreemption
+
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
     grug_dir = Path(__file__).resolve().parents[1] / "experiments" / "grug"
@@ -53,6 +57,19 @@ def _discover_grug_variants_with_file(filename: str) -> list[str]:
     if not variants and not found_any:
         raise AssertionError(f"No grug variants with {filename} found under {grug_dir}")
     return variants
+
+
+def test_grug_preemption_records_sigterm_until_completed_step():
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    preemption = GracefulPreemption()
+    preemption.install()
+    try:
+        assert not preemption.should_stop(1)
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert preemption.should_stop(2)
+    finally:
+        preemption.restore()
+    assert signal.getsignal(signal.SIGTERM) == previous_handler
 
 
 def _variant_module_name(variant: str, module: str) -> str:
@@ -455,7 +472,8 @@ def test_grug_variant_initial_state_only_stores_ema_when_enabled(variant: str):
     assert with_ema_state_shape.ema_params is not None
 
 
-def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
+@pytest.mark.parametrize("preempt", [False, True])
+def test_grug_base_run_metrics_and_preemption_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preempt: bool):
     train_module = importlib.import_module("experiments.grug.base.train")
     model_module = importlib.import_module("experiments.grug.base.model")
 
@@ -517,9 +535,25 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
                 compute_bpb=False,
             ),
         )
-        train_module.run_grug(run_cfg)
+        if preempt:
+            original_should_stop = GracefulPreemption.should_stop
+
+            def request_preemption(self: GracefulPreemption, completed_step: int) -> bool:
+                self._request_stop(signal.SIGTERM, None)
+                return original_should_stop(self, completed_step)
+
+            monkeypatch.setattr(GracefulPreemption, "should_stop", request_preemption)
+            with pytest.raises(SystemExit) as exited:
+                train_module.run_grug(run_cfg)
+            assert exited.value.code == 128 + signal.SIGTERM
+        else:
+            train_module.run_grug(run_cfg)
     finally:
         logger.removeHandler(handler)
+
+    if preempt:
+        assert list((variant_tmp / "checkpoints").rglob("metadata.json"))
+        return
 
     records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
     finish_records = [record for record in records if record.get("event") == "finish"]

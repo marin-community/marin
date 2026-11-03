@@ -57,6 +57,7 @@ from experiments.grug.fast_track.model import (
     GrugModelConfig,
     Transformer,
 )
+from experiments.grug.preemption import GracefulPreemption
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -911,6 +912,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_step_duration = 0.0
 
         # Main optimization loop.
+        preemption = GracefulPreemption()
+        preemption.install()
+        preempted = False
         try:
             while int(state.step) < stop_step:
                 with jax.profiler.TraceAnnotation("load_batch"):
@@ -980,26 +984,30 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     ):
                         checkpointer.on_step(tree=state, step=int(state.step))
 
+                preempted = preemption.should_stop(int(state.step))
+                if preempted:
+                    break
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
             )
             raise
         else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if not preempted:
+                state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
                 with callbacks.progress_event_scope(
                     state_callbacks.emit_event,
                     callbacks.ProgressEvent.CHECKPOINT_STARTED,
                     callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                 ):
-                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
-                    checkpointer.wait_until_finished()
+                    checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
         finally:
+            preemption.restore()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+    preemption.exit_if_preempted()
 
 
 def run_grug(config: GrugRunConfig) -> None:
