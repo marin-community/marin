@@ -23,7 +23,7 @@ from rigging.filesystem.atomic import write_bytes_atomic
 
 from taskforge.content_hash import canonical_json, digest, pretty_json
 from taskforge.ledger.records import check_workpiece_id
-from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavailable
+from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.stage10_proposal.model import ProposalFormatError, TaskProposal, parse, render
@@ -39,7 +39,7 @@ from taskforge.stage30_author.author import (
     program_manifest,
 )
 from taskforge.stage30_author.program import RLEnvBuildProgram
-from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure
+from taskforge.stage40_build_with_program.context import BuildFailure
 from taskforge.stage40_build_with_program.failure_text import BuildCrash, error_line, failure_head, failure_text
 from taskforge.stage40_build_with_program.infrastructure import (
     InfrastructureCause,
@@ -386,18 +386,12 @@ async def _authored_program(workpiece: _Workpiece, state: WorkpieceState) -> RLE
 async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
     """Build the authored program, spending a revision only on a failure the author can fix.
 
-    A ``BuildFailure`` or any other exception from the program's own code becomes ``BUILD_FAILED``,
-    and the next author call receives its traceback, led by its ``failure_text.failure_head``.
-    These errors pass through unchanged, so ``run_workpiece`` fails the workpiece in place and spends no
-    revision:
-
-    * ``BuildInfrastructureFailure``, raised when the build host fails;
-    * ``BuildExpired``, raised when the build, a step or the grader ran past its clock, which is
-      neither the program's fault nor the host's until someone reads the record;
-    * ``ModelUnavailable``, raised when the model stays unreachable;
-    * ``OSError`` and its subclasses raised outside the program's frames (``infrastructure.storage_fault``): a
-      storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``). An ``OSError``
-      raised by the program's own code is a program bug and spends a revision.
+    A ``BuildFailure``, a ``BuildCrash`` or a programming error raised in the program's own frames
+    (``infrastructure.authored_failure``) becomes ``BUILD_FAILED``, and the next author call receives its traceback,
+    led by its ``failure_text.failure_head``. Everything else passes through, so ``run_workpiece`` holds the
+    workpiece at the build and spends no revision: a host fault (``BuildInfrastructureFailure``), an expired clock
+    (``BuildExpired``), an unavailable model, a storage fault (an ``OSError`` outside the program's frames, a
+    ``StoreCorruption`` among them) and any error ``run_program`` could not attribute to the program.
     """
     coordinator = workpiece.coordinator
     program = await _authored_program(workpiece, state)
@@ -415,16 +409,11 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
             research=coordinator.research,
             model_digest=coordinator.model_digest,
         )
-    except (BuildInfrastructureFailure, BuildExpired, ModelUnavailable, ModelRequestRejected):
-        raise
     except Exception as error:
-        infrastructure = infrastructure_failure(error)
-        if infrastructure is not None:
-            raise infrastructure from error
-        if storage_fault(error, _program_files(program)):
+        files = _program_files(program)
+        program_fault = isinstance(error, BuildCrash) or authored_failure(error, files)
+        if infrastructure_failure(error) is not None or storage_fault(error, files) or not program_fault:
             raise
-        if not isinstance(error, BuildCrash) and not authored_failure(error, _program_files(program)):
-            raise BuildInfrastructureFailure("unclassified_build_failure", str(error)) from error
         attrs = {
             **_failure_attrs(workpiece, state, error, _build_failure_head(error, program)),
             "step": (error.step or "") if isinstance(error, BuildFailure) else "",

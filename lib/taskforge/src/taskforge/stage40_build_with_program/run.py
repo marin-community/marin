@@ -264,6 +264,7 @@ async def run_program(
                     f"ran for more than {STEP_TIMEOUT:.0f} seconds without returning", ExpiredClock.STEP, name
                 ) from error
             except Exception as error:
+                # A step records a host fault as the host's and names itself; the group below classifies the rest.
                 raised[error] = error.__traceback__
                 infrastructure = infrastructure_failure(error)
                 if infrastructure is not None:
@@ -273,14 +274,8 @@ async def run_program(
                     raise infrastructure from error
                 if isinstance(error, BuildFailure) and error.step is None:
                     raise BuildFailure(error.message, name) from error
-                if isinstance(error, BuildExpired):
-                    if error.step is None:
-                        raise BuildExpired(error.message, error.clock, name) from error
-                    raise
-                if storage_fault(error, program_files):
-                    raise
-                if not authored_failure(error, program_files):
-                    raise BuildInfrastructureFailure("unclassified_build_failure", str(error)) from error
+                if isinstance(error, BuildExpired) and error.step is None:
+                    raise BuildExpired(error.message, error.clock, name) from error
                 raise
             fields.attrs["cache"] = status
             fields.output_hash = memo.output_digest
