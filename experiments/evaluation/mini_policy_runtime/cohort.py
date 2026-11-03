@@ -26,9 +26,20 @@ Serving bindings follow each checkpoint's own training configuration:
   training template drops the API ``tools`` array (Snowball, Nemotron). The
   vendored files are the checkpoints' exact training templates plus that
   section; the Qwen families' own templates already render tools.
+- Provenance arms added 2026-11-01: ``snowball-67b-a2b-sft8225`` is the #8225
+  final Nemotron-Terminal export (step 1,888 on the 5.7T cooldown), pinned at
+  the pipeline's own HF upload (config-identical to the S3 export at
+  ``marin-us-east-02a``) so the standard manifest-writing mirror path applies;
+  its embedded template renders ``tools``, so no vendored file and no
+  reasoning kwarg (its training template has no reasoning modes;
+  ``max_position_embeddings`` is 32,768, so the policy adopts that as the
+  context). The raw ``Qwen3-30B-A3B-Base`` and ``Qwen3.5-35B-A3B-Base`` bases
+  run with no additional training; their parsers match their families'
+  validated paths even though a raw base rarely emits parseable calls.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -50,6 +61,10 @@ class CohortModel:
     max_num_batched_tokens: int = 8192
     chat_template_file: str | None = None
     chat_template_kwargs: dict | None = None
+    # "hub" stages tokenizer metadata from the pinned Hub revision; "model-artifact"
+    # reads it from the object-store mirror, which is what a gated checkpoint needs
+    # because the evaluation containers carry no Hub credentials.
+    tokenizer_source: Literal["hub", "model-artifact"] = "hub"
 
 
 COHORT_MODELS: dict[str, CohortModel] = {
@@ -98,6 +113,51 @@ COHORT_MODELS: dict[str, CohortModel] = {
         max_num_batched_tokens=4096,
         chat_template_file="snowball-67b-a2b.jinja",
     ),
+    "snowball-67b-a2b-sft8225": CohortModel(
+        key="snowball-67b-a2b-sft8225",
+        repo="laion/snowball-67b-a2b-sft-s3-nemotron-terminal-step1888",
+        revision="680bec3ade494b61ead6861fa24fc4071f8dc294",
+        tool_parser="hermes",
+        context_length=32768,
+        gpus_per_node=4,
+        tensor_parallel_size=1,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=4,
+        expert_parallel_size=4,
+        gpu_memory_utilization=0.92,
+        max_num_seqs=4,
+        max_num_batched_tokens=4096,
+    ),
+    "qwen3-30b-a3b-base": CohortModel(
+        key="qwen3-30b-a3b-base",
+        repo="Qwen/Qwen3-30B-A3B-Base",
+        revision="1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9",
+        tool_parser="hermes",
+        context_length=32768,
+        chat_template_kwargs={"enable_thinking": True},
+    ),
+    "qwen35-35b-a3b-base": CohortModel(
+        key="qwen35-35b-a3b-base",
+        repo="Qwen/Qwen3.5-35B-A3B-Base",
+        revision="0f0813072d2358973511097385626f21fcb6d422",
+        tool_parser="qwen3_coder",
+        chat_template_kwargs={"enable_thinking": True},
+    ),
+    "grug-67b-a2b-datakit-sft": CohortModel(
+        key="grug-67b-a2b-datakit-sft",
+        repo="open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step471-2026.10.25",
+        revision="51669ee19b8972fc2e74c10b39eaef2eb244c44a",
+        tool_parser="hermes",
+        tokenizer_source="model-artifact",
+        gpus_per_node=4,
+        tensor_parallel_size=1,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=4,
+        expert_parallel_size=4,
+        gpu_memory_utilization=0.92,
+        max_num_seqs=4,
+        max_num_batched_tokens=4096,
+    ),
 }
 
 CHAT_ALIGNED_BASE_MODELS = (
@@ -113,9 +173,7 @@ def cohort_model(key: str) -> CohortModel:
     try:
         return COHORT_MODELS[key]
     except KeyError:
-        raise ValueError(
-            f"Unknown cohort model {key!r}; expected one of {sorted(COHORT_MODELS)}"
-        ) from None
+        raise ValueError(f"Unknown cohort model {key!r}; expected one of {sorted(COHORT_MODELS)}") from None
 
 
 def engine_init_kwargs(model: CohortModel) -> dict:

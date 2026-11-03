@@ -43,11 +43,17 @@ from experiments.evaluation.mini_policy_runtime.profile import (
     MAX_OUTPUT_TOKENS,
     SEED,
     SETUP_TIMEOUT,
-    TOTAL_CONTEXT_LENGTH,
     VERIFIER_TIMEOUT,
     counterpart_environment,
     pi_agent_config,
 )
+
+
+def tokenizer_binding(entry: CohortModel, model_uri: str) -> tuple[str, str]:
+    """Return the source the runtime stages tokenizer metadata from."""
+    if entry.tokenizer_source == "model-artifact":
+        return model_uri, entry.revision
+    return entry.repo, entry.revision
 
 
 def recipe(
@@ -212,19 +218,18 @@ def main(
         f"checkpoints/mini840-{entry.key}", "2026.10.31", model_uri, config={"revision": entry.revision}
     )
     spec_name = f"checkpoints/mini840-e2e-{entry.key}"
+    tokenizer_uri, tokenizer_revision = tokenizer_binding(entry, model_uri)
     step = skyrl_step(
         SkyRLSpec(
             name=spec_name,
             version=resolve_version(spec_name, None),
             config_yaml=yaml.safe_dump(config),
             model=ArtifactHfModel(
-                model_artifact, relative_path="", tokenizer_uri=entry.repo, tokenizer_revision=entry.revision
+                model_artifact, relative_path="", tokenizer_uri=tokenizer_uri, tokenizer_revision=tokenizer_revision
             ),
             train_data=(),
             validation_data=(ArtifactDataSource(data, relative_path="rollouts.parquet"),),
-            topology=SkyRLTopology(
-            num_nodes=1, gpus_per_node=entry.gpus_per_node, gpu_variant="H100", role_plan=plan
-        ),
+            topology=SkyRLTopology(num_nodes=1, gpus_per_node=entry.gpus_per_node, gpu_variant="H100", role_plan=plan),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=SEED,
         ),

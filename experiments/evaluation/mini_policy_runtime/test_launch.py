@@ -105,6 +105,10 @@ def test_launch_binds_the_model_topology_from_the_registry(tmp_path, monkeypatch
         ("qwen3-30b-a3b", "hermes"),
         ("nemotron3-nano-30b-a3b", "hermes"),
         ("snowball-67b-a2b", "hermes"),
+        ("snowball-67b-a2b-sft8225", "hermes"),
+        ("qwen3-30b-a3b-base", "hermes"),
+        ("qwen35-35b-a3b-base", "qwen3_coder"),
+        ("grug-67b-a2b-datakit-sft", "hermes"),
     ],
 )
 def test_cohort_bindings_reach_the_generator(key, tool_parser):
@@ -133,6 +137,40 @@ def test_qwen3_serves_at_its_native_context():
     assert entry.context_length == 32768
     agent = launch.pi_agent_config(entry.context_length)
     assert agent["kwargs"]["model_info"] == {"max_input_tokens": 32768, "max_output_tokens": 16384}
+
+
+def test_sft8225_snowball_serves_from_the_run_prefix_at_native_context():
+    entry = cohort_model("snowball-67b-a2b-sft8225")
+    assert entry.repo == "laion/snowball-67b-a2b-sft-s3-nemotron-terminal-step1888"
+    assert entry.context_length == 32768
+    assert entry.chat_template_file is None  # its embedded template renders tools
+    assert entry.chat_template_kwargs is None  # its training template has no reasoning modes
+
+
+def test_raw_bases_serve_with_family_parsers():
+    assert cohort_model("qwen3-30b-a3b-base").context_length == 32768
+    assert cohort_model("qwen35-35b-a3b-base").context_length == 65536
+    for key in ("qwen3-30b-a3b-base", "qwen35-35b-a3b-base"):
+        assert cohort_model(key).chat_template_kwargs == {"enable_thinking": True}
+
+
+def test_datakit_sft_serves_on_the_grug_topology_at_profile_context():
+    entry = cohort_model("grug-67b-a2b-datakit-sft")
+    assert entry.context_length == 65536  # 262k native; the profile caps at 65,536
+    assert entry.chat_template_file is None  # embedded template renders tools
+    assert entry.chat_template_kwargs is None  # its template has no reasoning contract in training
+    # The repo is manual-gated and the eval containers carry no Hub token, so the
+    # tokenizer must come from the same mirror as the weights.
+    assert launch.tokenizer_binding(entry, "s3://mirror/grug") == ("s3://mirror/grug", entry.revision)
+    assert launch.tokenizer_binding(cohort_model("qwen3-30b-a3b-base"), "s3://mirror/q3") == (
+        "Qwen/Qwen3-30B-A3B-Base",
+        "1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9",
+    )
+    _config, plan = launch.recipe(entry, {}, {}, {}, "http://judge.invalid/v1", "DAYTONA_EVAL_API_KEY")
+    assert plan.inference_engine_tensor_parallel_size == 1
+    assert plan.inference_engine_data_parallel_size == 4
+    assert plan.inference_engine_expert_parallel_size == 4
+    assert plan.policy_num_gpus_per_node == 4
 
 
 def test_snowball_serves_one_tp1_engine_with_dp4_expert_parallel():
