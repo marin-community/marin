@@ -50,4 +50,4 @@ lib/taskforge/src/taskforge/stage40_build_with_program/agentic_author.py 4ad4cc7
 
 # Not prompt text: a build script and refusal messages raised to the program or the loader.
 lib/taskforge/src/taskforge/spec/draft.py 8be336222b0fef56
-lib/taskforge/src/taskforge/stage30_author/loader.py c12c5596602b2c94
+lib/taskforge/src/taskforge/stage30_author/loader.py 38609282b7e8e0ff
