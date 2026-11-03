@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The workpiece state as a fold over its events, and the fold's refusal of a broken log."""
+"""The workpiece state as a fold over its events, and the fold's refusal of a broken log.
+
+Invariants: none (pins the event-log fold: stage transitions, budgets, closings and log refusals).
+"""
 
 from dataclasses import replace
 
@@ -109,41 +112,33 @@ def test_a_retry_past_the_budget_abandons_and_a_relaunch_re_enters_validation_wi
     assert (resumed.terminal, resumed.stage) == (None, Stage.REVIEW)
 
 
+BUILD_FAILED = WorkpieceEvent(
+    EventKind.BUILD_FAILED, 0, "prog1", {"step": "grader", "failure": "boom", "failure_file": "f"}
+)
+AUTHOR_FAILED = WorkpieceEvent(EventKind.AUTHOR_FAILED, 0, "p1", {"failure": "cut", "failure_file": "f"})
+
+
+@pytest.mark.parametrize(
+    ("failed", "before", "revision"),
+    [(BUILD_FAILED, (AUTHORED,), RevisionKind.BUILD_FAILURE), (AUTHOR_FAILED, (), RevisionKind.AUTHOR_FAILURE)],
+    ids=["build", "author"],
+)
 @pytest.mark.parametrize(
     ("way", "stage", "closing"),
     [("revise", Stage.AUTHOR, None), ("reject", Stage.DONE, (Terminal.REJECTED, RejectKind.BUDGET))],
 )
-def test_a_build_failure_revises_or_rejects_as_its_event_says(way, stage, closing):
-    failed = WorkpieceEvent(
-        EventKind.BUILD_FAILED, 0, "prog1", {EXIT: way, "step": "grader", "failure": "boom", "failure_file": "f"}
-    )
+def test_a_build_or_author_failure_revises_or_rejects_as_its_event_says(failed, before, revision, way, stage, closing):
+    event = replace(failed, attrs={**failed.attrs, EXIT: way})
 
-    state = derive_state(numbered(OPENED, TRIAGED, AUTHORED, failed))
+    state = derive_state(numbered(OPENED, TRIAGED, *before, event))
 
-    assert (state.stage, state.build_revisions, state.revision) == (stage, 1, RevisionKind.BUILD_FAILURE)
-    assert (None if state.closing is None else (state.closing.terminal, state.closing.kind)) == closing
-
-
-@pytest.mark.parametrize(
-    ("way", "stage", "closing"),
-    [("revise", Stage.AUTHOR, None), ("reject", Stage.DONE, (Terminal.REJECTED, RejectKind.BUDGET))],
-)
-def test_an_author_failure_revises_or_rejects_as_its_event_says(way, stage, closing):
-    failed = WorkpieceEvent(EventKind.AUTHOR_FAILED, 0, "p1", {EXIT: way, "failure": "cut", "failure_file": "f"})
-
-    state = derive_state(numbered(OPENED, TRIAGED, failed))
-
-    assert (state.stage, state.build_revisions, state.revision) == (stage, 1, RevisionKind.AUTHOR_FAILURE)
+    assert (state.stage, state.build_revisions, state.revision) == (stage, 1, revision)
     assert (None if state.closing is None else (state.closing.terminal, state.closing.kind)) == closing
 
 
 def test_an_author_failure_after_a_build_failure_spends_the_same_budget():
-    build_failed = WorkpieceEvent(
-        EventKind.BUILD_FAILED, 0, "prog1", {EXIT: "revise", "step": "", "failure": "boom", "failure_file": "f1"}
-    )
-    author_failed = WorkpieceEvent(
-        EventKind.AUTHOR_FAILED, 0, "p1", {EXIT: "revise", "failure": "cut", "failure_file": "f2"}
-    )
+    build_failed = replace(BUILD_FAILED, attrs={**BUILD_FAILED.attrs, EXIT: "revise", "step": ""})
+    author_failed = replace(AUTHOR_FAILED, attrs={**AUTHOR_FAILED.attrs, EXIT: "revise", "failure_file": "f2"})
 
     state = derive_state(numbered(OPENED, TRIAGED, AUTHORED, build_failed, author_failed, AUTHORED))
 

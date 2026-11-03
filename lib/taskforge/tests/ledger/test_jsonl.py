@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Invariants: none (pins the JSONL ledger's round trip, torn-line recovery and atomic appends)."""
+
 import subprocess
 import sys
 
@@ -43,22 +45,14 @@ def test_round_trip_keeps_every_field_one_file_per_workpiece(tmp_path):
     assert list(read_entries(ledger.path_for("b"))) == [make_entry("b", "other")]
 
 
-def test_reader_skips_torn_trailing_line(tmp_path):
+def test_a_torn_trailing_line_is_skipped_and_the_next_append_drops_it(tmp_path):
     ledger = JsonlLedger(tmp_path)
     ledger.record(make_entry("a", "done"))
     with ledger.path_for("a").open("ab") as f:
         f.write(b'{"workpiece_id": "a", "rou')
 
     assert [e.step for e in read_entries(ledger.path_for("a"))] == ["done"]
-
-
-def test_append_after_a_torn_line_drops_the_fragment(tmp_path):
-    ledger = JsonlLedger(tmp_path)
-    ledger.record(make_entry("a", "done"))
-    with ledger.path_for("a").open("ab") as f:
-        f.write(b'{"workpiece_id": "a", "rou')
     ledger.record(make_entry("a", "resumed"))
-
     assert [e.step for e in read_entries(ledger.path_for("a"))] == ["done", "resumed"]
 
 

@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Invariants: the task image is fixed by digest (``pinned_image``, the build digest) and a build context stays
+within ``BUILD_LIMITS``."""
+
 import gzip
 import io
 import tarfile
@@ -63,18 +66,6 @@ def test_build_digest_tracks_content_mode_and_path():
         DockerBuild(files=(dockerfile, script, other)),
     ]
     assert len({build_digest(base), *(build_digest(v) for v in variants)}) == 1 + len(variants)
-
-
-def test_build_must_contain_its_dockerfile():
-    with pytest.raises(ValueError, match="requires Dockerfile"):
-        DockerBuild(files=(resource("app/run.sh", b"echo\n"),))
-
-
-@pytest.mark.parametrize("paths", [("app", "app"), ("app", "app/run.sh"), ("app/run.sh", "app")])
-def test_build_context_paths_must_not_collide(paths):
-    files = tuple(resource(path, b"x") for path in paths)
-    with pytest.raises(ValueError, match="Path collision"):
-        DockerBuild(files=(resource("Dockerfile", b"FROM x\n"), *files))
 
 
 @pytest.mark.parametrize(

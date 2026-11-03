@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Invariants: the grader returns a well-formed verdict (``grader_checks`` refuses malformed checks)."""
+
 import json
 
 import pytest

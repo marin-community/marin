@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""``web_tools`` against a fake Parallel server: request shape, rejected arguments and retries.
+
+Invariants: none (pins the Parallel search and extract client).
+"""
+
 import asyncio
 import json
 import threading

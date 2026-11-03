@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""The failed-run analysis: ideas from failed rollouts, merged across shards and rounds into catalog ideas.
+
+Invariants: none (pins the analysis pipeline's evidence, merging and counters).
+"""
+
 import pytest
 
 pytest.importorskip("taskforge")
@@ -43,7 +48,7 @@ from experiments.post_training.capability_driven_envs.analyze_failed_runs.pipeli
 )
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollouts import FAILURE_OPERATION
 from experiments.post_training.capability_driven_envs.generate_tasks import task_workpieces
-from experiments.post_training.capability_driven_envs.tests.test_generate_tasks import COMPLETION
+from experiments.post_training.capability_driven_envs.tests.scripted_model import completion
 
 LOOKUP_CALL = {"id": "call", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "six"}'}}
 STOP_LOOPS = Capability(
@@ -59,6 +64,7 @@ CHECK_WORK = Capability(
     includes=("Recompute",),
 )
 RARE = Capability(id="failed-runs.rare.rare-skill", name="A rare skill", outcome="A rare outcome.", includes=("Rare",))
+COMPLETION = completion("")
 CUT_OFF = StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION,))
 
 
@@ -283,18 +289,15 @@ def test_more_ideas_than_one_merge_call_holds_merge_in_rounds_and_keep_their_evi
     assert max(len(request.splitlines()) for request in analyst.requests) == 4
 
 
-def test_a_merge_reply_names_only_its_lines_and_gives_each_capability_its_own_id():
+def test_a_merge_reply_names_only_its_lines_and_gives_each_capability_its_own_id_and_behaviors():
     reply_type = groups_of(frozenset({"k0", "k1", "k2"}))
 
-    def group(capability_id: str, *members: str) -> Group:
-        return Group(id=capability_id, name="A", outcome="B.", includes=("C",), members=members)
+    def group(capability_id: str, *members: str, includes: tuple[str, ...] = ("C",)) -> Group:
+        return Group(id=capability_id, name="A", outcome="B.", includes=includes, members=members)
 
     assert len(reply_type(capabilities=(group("a", "k0", "k1"), group("b", "k1"))).capabilities) == 2
     for invalid in [(group("a", "k0", "k3"),), (group("a", "k0"), group("a", "k1"))]:
         with pytest.raises(ValueError):
             reply_type(capabilities=invalid)
-
-
-def test_a_merged_capability_cannot_give_its_member_ids_as_behaviors():
     with pytest.raises(ValueError, match="not the IDs of its members"):
-        Group(id="failed-runs.a", name="A", outcome="B.", includes=("k0", "k4"), members=("k0", "k4"))
+        group("failed-runs.a", "k0", "k4", includes=("k0", "k4"))

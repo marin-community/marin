@@ -1,12 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A toy program carried through ``run_build``: ``numbers`` and ``grader`` feed the sink ``task``."""
+"""A toy program carried through ``run_build``: ``numbers`` and ``grader`` feed the sink ``task``.
+
+Invariants: the task runs on the solver machine it declares (``check_solver_machine``); none otherwise (pins step
+memoization, concurrency, research enforcement and the step clock).
+"""
 
 import asyncio
 import base64
 import json
-import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -52,7 +55,6 @@ from taskforge.stage40_build_with_program.run import (
     ResearchRequirement,
     build_model_digest,
     load_draft,
-    run_build,
     run_program,
     step_output,
 )
@@ -64,6 +66,7 @@ from tests.stage40_build_with_program.conftest import (
     SAMPLING,
     WORKPIECE,
     RecordingImageBuilder,
+    build_draft,
     declaring,
     web_tool,
 )
@@ -139,20 +142,7 @@ PROGRAM = rl_env_build_program(numbers, grader, sink=task)
 
 
 async def build(tmp_path, proposal, services, program=PROGRAM, **options):
-    model = options.pop("model", FakeModel())
-    return await run_build(
-        program,
-        proposal,
-        WORKPIECE,
-        tmp_path / "round",
-        str(tmp_path / "store"),
-        model,
-        SAMPLING,
-        services,
-        0,
-        research=options.pop("research", ResearchRequirement.OFF),
-        **options,
-    )
+    return await build_draft(tmp_path, program, proposal, services, options.pop("model", FakeModel()), **options)
 
 
 async def test_steps_without_a_dependency_between_them_run_together_and_outcomes_keep_the_program_order(
@@ -244,29 +234,22 @@ async def test_a_rebuild_hits_every_step_and_records_the_same_task_and_input_dig
     assert step_output(again, str(tmp_path / "store"), "numbers", TaskResource) == NUMBERS
 
 
-async def test_a_rewritten_step_reruns_itself_and_its_consumers_only(tmp_path, proposal, services):
+@pytest.mark.parametrize(
+    ("content", "consumer"), [(b"7 6\n", CacheStatus.MISS), (b"6 7\n", CacheStatus.HIT)], ids=["new", "same-output"]
+)
+async def test_a_rewritten_step_reruns_and_reruns_its_consumers_only_when_its_output_changes(
+    tmp_path, proposal, services, content, consumer
+):
     first = await build(tmp_path, proposal, services)
 
     @rl_env_build_step
     async def numbers(context: RLEnvBuildContext) -> TaskResource:
-        return inline_file("workspace/numbers.txt", b"7 6\n")
+        return inline_file("workspace/numbers.txt", content)
 
     rebuilt = await build(tmp_path, proposal, services, rl_env_build_program(numbers, grader, sink=task))
 
-    assert statuses(rebuilt) == {"numbers": CacheStatus.MISS, "grader": CacheStatus.HIT, "task": CacheStatus.MISS}
-    assert rebuilt.task.resources.worker != first.task.resources.worker
-
-
-async def test_a_rewritten_step_with_identical_output_leaves_its_consumers_hit(tmp_path, proposal, services):
-    await build(tmp_path, proposal, services)
-
-    @rl_env_build_step
-    async def numbers(context: RLEnvBuildContext) -> TaskResource:
-        return inline_file("workspace/numbers.txt", b"6 " + b"7\n")
-
-    rebuilt = await build(tmp_path, proposal, services, rl_env_build_program(numbers, grader, sink=task))
-
-    assert statuses(rebuilt) == {"numbers": CacheStatus.MISS, "grader": CacheStatus.HIT, "task": CacheStatus.HIT}
+    assert statuses(rebuilt) == {"numbers": CacheStatus.MISS, "grader": CacheStatus.HIT, "task": consumer}
+    assert (rebuilt.task.resources.worker != first.task.resources.worker) == (consumer is CacheStatus.MISS)
 
 
 async def test_a_changed_proposal_reruns_only_the_steps_declaring_it(tmp_path, proposal, services):
@@ -306,47 +289,39 @@ async def test_a_failing_sink_raises_a_build_failure_carrying_its_step_name(tmp_
     assert not (tmp_path / "round" / DRAFT_DIR).exists()
 
 
-@pytest.mark.parametrize(
-    ("machine", "declared"),
-    [
-        (SolverMachine.CPYTHON, "solver_machine cpython"),
-        (SolverMachine.PACKAGES, "solver_machine packages"),
-        (None, "the task's own image"),
-    ],
-)
-async def test_a_task_off_the_declared_solver_machine_fails_the_build_as_the_programs(
-    tmp_path, proposal, services, machine, declared
-):
-    """The toy program builds a ShellSim task whatever the proposal declares, on a host that provides every machine."""
-    able = replace(
-        services, images=RecordingImageBuilder(), factories={**FACTORIES, Backend.LOCAL.value: ShellSimMachineFactory()}
-    )
-
-    with pytest.raises(BuildFailure) as failure:
-        await build(tmp_path, declaring(proposal, machine), able)
-
-    assert failure.value.step == "task"
-    assert failure.value.message == (
-        f"the task runs on solver_machine shellsim, but the proposal declares {declared}; build the machine the "
-        "proposal declares"
-    )
-    assert not (tmp_path / "round" / DRAFT_DIR).exists()
-
-
 @rl_env_build_sink
 async def machineless_task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage) -> TaskSpec:
     shell = toy_task(context.workpiece_id, numbers, grader, "Multiply 6 by 7.")
     return shell.model_copy(update={"environment_requirements": EnvironmentRequirements()})
 
 
-async def test_a_task_without_a_machine_fails_the_build_when_the_proposal_declares_one(tmp_path, proposal, services):
-    expected = (
-        "the task runs on no machine (solver_machine none), but the proposal declares solver_machine shellsim; build "
-        "the machine the proposal declares"
+@pytest.mark.parametrize(
+    ("sink", "machine", "built", "declared"),
+    [
+        (task, SolverMachine.CPYTHON, "solver_machine shellsim", "solver_machine cpython"),
+        (task, SolverMachine.PACKAGES, "solver_machine shellsim", "solver_machine packages"),
+        (task, None, "solver_machine shellsim", "the task's own image"),
+        (machineless_task, SolverMachine.SHELLSIM, "no machine (solver_machine none)", "solver_machine shellsim"),
+    ],
+    ids=["cpython", "packages", "container", "machineless"],
+)
+async def test_a_task_off_the_declared_solver_machine_fails_the_build_as_the_programs(
+    tmp_path, proposal, services, sink, machine, built, declared
+):
+    """The program builds its task whatever the proposal declares, on a host that provides every machine."""
+    able = replace(
+        services, images=RecordingImageBuilder(), factories={**FACTORIES, Backend.LOCAL.value: ShellSimMachineFactory()}
     )
+    program = rl_env_build_program(numbers, grader, sink=sink)
 
-    with pytest.raises(BuildFailure, match=re.escape(expected)):
-        await build(tmp_path, proposal, services, rl_env_build_program(numbers, grader, sink=machineless_task))
+    with pytest.raises(BuildFailure) as failure:
+        await build(tmp_path, declaring(proposal, machine), able, program)
+
+    assert failure.value.step == program.order[-1]
+    assert failure.value.message == (
+        f"the task runs on {built}, but the proposal declares {declared}; build the machine the proposal declares"
+    )
+    assert not (tmp_path / "round" / DRAFT_DIR).exists()
 
 
 async def test_a_task_without_a_machine_builds_when_the_proposal_declares_none(tmp_path, proposal, services):
@@ -509,34 +484,20 @@ def two_items(proposal) -> TaskProposal:
     return replace(proposal, header=replace(header, research=(*header.research, item)), body=body)
 
 
-async def test_a_program_that_skips_a_research_item_fails_under_the_requirement(
-    tmp_path, two_items, services, glm_client, fake_glm
+async def test_a_program_that_skips_an_item_or_catches_a_failed_lookup_fails_under_the_requirement(
+    tmp_path, proposal, two_items, services, glm_client, fake_glm
 ):
+    researched = replace(services, web_tools=(web_tool([]),))
+    enforced = {"model": glm_client, "research": ResearchRequirement.ENFORCED}
+
     serve_research(fake_glm)
-    researched = replace(services, web_tools=(web_tool([]),))
-
-    with pytest.raises(BuildFailure, match=r"research items \[1\] have no finding") as failure:
-        await build(
-            tmp_path, two_items, researched, researching((0,)), model=glm_client, research=ResearchRequirement.ENFORCED
-        )
-    assert failure.value.step == "sources"
-
-
-async def test_a_program_that_catches_a_failed_lookup_still_fails_under_the_requirement(
-    tmp_path, proposal, services, glm_client, fake_glm
-):
+    with pytest.raises(BuildFailure, match=r"research items \[1\] have no finding") as skipped:
+        await build(tmp_path / "skipped", two_items, researched, researching((0,)), **enforced)
     serve_research(fake_glm, searched=False)
-    researched = replace(services, web_tools=(web_tool([]),))
+    with pytest.raises(BuildFailure, match=r"research items \[0\] have no finding") as caught:
+        await build(tmp_path / "caught", proposal, researched, researching((0,), caught=True), **enforced)
 
-    with pytest.raises(BuildFailure, match=r"research items \[0\] have no finding"):
-        await build(
-            tmp_path,
-            proposal,
-            researched,
-            researching((0,), caught=True),
-            model=glm_client,
-            research=ResearchRequirement.ENFORCED,
-        )
+    assert skipped.value.step == caught.value.step == "sources"
 
 
 async def test_research_off_builds_without_every_finding(tmp_path, two_items, services, glm_client, fake_glm):
@@ -549,15 +510,14 @@ async def test_research_off_builds_without_every_finding(tmp_path, two_items, se
     assert [finding.index for finding in sources.findings] == [0]
 
 
-async def test_a_program_without_a_sources_step_is_refused_under_the_requirement(tmp_path, proposal, services):
+async def test_the_requirement_refuses_a_program_without_a_sources_step_only_when_research_is_needed(
+    tmp_path, proposal, services
+):
     with pytest.raises(BuildFailure, match="needs a 'sources' step"):
         await build(tmp_path, proposal, services, research=ResearchRequirement.ENFORCED)
 
-
-async def test_a_proposal_without_research_needs_no_sources_step_under_the_requirement(tmp_path, proposal, services):
     header = replace(proposal.header, research_need=ResearchNeed.NOT_NEEDED, research=())
     unresearched = replace(proposal, header=header, body=proposal.body.replace("Sources: research[0].", ""))
-
     draft = await build(tmp_path, unresearched, services, research=ResearchRequirement.ENFORCED)
 
-    assert draft.task.id
+    assert draft.task.id == WORKPIECE

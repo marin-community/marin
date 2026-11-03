@@ -12,6 +12,8 @@ them from the environment) and the root as ``TASKFORGE_STEP_STORE_LIVE_ROOT``::
 
 The test leaves nothing under the root. Last run 2026-10-13 against CoreWeave S3: store 0.37 s,
 hit load 0.04 s, no temporary objects left behind.
+
+Invariants: none (pins the store's atomic writes on an object-store root, which no offline test reaches).
 """
 
 import os

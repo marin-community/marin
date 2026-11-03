@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""default_review: one test per row of the rule table, and the order between the rows."""
+"""default_review: one test per row of the rule table, and the order between the rows.
+
+Invariants: the accepted task's solve rate lies inside the review band; the solve rate rests on complete graded
+evidence (``evidence_gaps``); a violated control asks for ``Modify``.
+"""
 
 from collections import Counter
 from collections.abc import Sequence
@@ -101,17 +105,6 @@ async def test_a_violated_control_asks_for_a_modify_round():
     assert len(decision.findings) == 1 and VIOLATED.id in decision.findings[0]
 
 
-async def test_infrastructure_holds_even_with_a_known_control_defect():
-    incomplete = result(
-        evidence=solver(1, 0, [Cause.MODEL_TIMEOUT]),
-        controls=(VIOLATED, control("N3", ControlVerdict.UNGRADED, Cause.GRADER_TIMEOUT)),
-    )
-
-    decision = await default_review(incomplete, band=BAND)
-
-    assert isinstance(decision, Hold)
-
-
 async def test_a_round_decided_early_is_decided_by_its_violated_control_never_as_incomplete_evidence():
     """The round cancelled three of four solver trials, so the solver evidence alone is no measurement."""
     early = result(
@@ -167,14 +160,28 @@ async def test_ungraded_causes_separate_authored_defects_from_missing_evidence(c
     assert isinstance(decision, Hold if retryable else expected)
 
 
-async def test_a_control_defect_does_not_turn_a_solver_outage_into_rejection():
-    incomplete = result(
-        evidence=solver(2, 0, [Cause.MODEL_TIMEOUT]),
-        controls=(control("N3", ControlVerdict.UNGRADED, Cause.GRADER_INVALID_REWARD),),
-    )
-    decision = await default_review(incomplete, band=BAND)
+@pytest.mark.parametrize(
+    ("evidence", "controls", "reasons"),
+    [
+        (
+            solver(1, 0, [Cause.MODEL_TIMEOUT]),
+            (VIOLATED, control("N3", ControlVerdict.UNGRADED, Cause.GRADER_TIMEOUT)),
+            None,
+        ),
+        (
+            solver(2, 0, [Cause.MODEL_TIMEOUT]),
+            (control("N3", ControlVerdict.UNGRADED, Cause.GRADER_INVALID_REWARD),),
+            ("1 ungraded trial(s): model_timeout",),
+        ),
+        (solver(1, 0, [Cause.BUDGET_EXHAUSTED, Cause.MODEL_UNAVAILABLE]), (MET,), None),
+    ],
+    ids=["known-control-defect", "control-defect-with-solver-outage", "another-trials-exhausted-budget"],
+)
+async def test_an_infrastructure_hold_precedes_every_task_decision(evidence, controls, reasons):
+    decision = await default_review(result(evidence=evidence, controls=controls), band=BAND)
 
-    assert decision == Hold(("1 ungraded trial(s): model_timeout",))
+    assert isinstance(decision, Hold)
+    assert reasons is None or decision.reasons == reasons
 
 
 @pytest.mark.parametrize("cause", [Cause.MODEL_UNAVAILABLE, Cause.GENERATION_LIMIT, None])
@@ -194,8 +201,3 @@ async def test_an_adversary_outage_cannot_be_erased_by_other_passing_evidence(ca
     )
     decision = await default_review(result(adversary=(adversary,)), band=BAND)
     assert isinstance(decision, Hold)
-
-
-async def test_infrastructure_hold_precedes_another_trials_exhausted_budget():
-    checked = result(evidence=solver(1, 0, [Cause.BUDGET_EXHAUSTED, Cause.MODEL_UNAVAILABLE]))
-    assert isinstance(await default_review(checked, band=BAND), Hold)

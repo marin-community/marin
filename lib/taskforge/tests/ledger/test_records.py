@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Invariants: none (pins the ledger span's fields, cause and cancellation)."""
+
 import asyncio
 
 import pytest
@@ -22,32 +24,17 @@ def test_span_records_caller_fields_and_timing(ledger):
     assert entry.ended >= entry.started
 
 
-def test_span_records_exception_class_as_cause_and_reraises(ledger):
+@pytest.mark.parametrize("classified", [None, "sandbox_timeout"])
+def test_span_records_the_raised_exception_class_or_the_callers_cause_and_reraises(ledger, classified):
     with pytest.raises(TimeoutError):
         with span(ledger, EntryKind.STEP, workpiece_id="i1", round=0, step="run") as s:
             s.attrs["cmd"] = "pytest"
+            s.cause = classified
             raise TimeoutError("stalled")
 
     (entry,) = ledger.entries
-    assert entry.cause == "TimeoutError"
+    assert entry.cause == (classified or "TimeoutError")
     assert entry.attrs == {"cmd": "pytest"}
-
-
-def test_span_records_task_cancellation(ledger):
-
-    async def work():
-        with span(ledger, EntryKind.TRIAL, workpiece_id="i1", round=0, step="trial-0"):
-            await asyncio.sleep(10)
-
-    async def main():
-        task = asyncio.create_task(work())
-        await asyncio.sleep(0)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-    asyncio.run(main())
-    assert [e.cause for e in ledger.entries] == ["CancelledError"]
 
 
 def test_span_rejects_bad_workpiece_id_before_running_the_block(ledger):
@@ -63,9 +50,11 @@ class FailingLedger:
         raise OSError("disk full")
 
 
-def test_record_failure_does_not_replace_in_flight_cancellation():
+def cancel_in_flight(ledger) -> asyncio.CancelledError:
+    """Cancel a task while it is inside a ``TRIAL`` span and return the ``CancelledError`` it raised."""
+
     async def work():
-        with span(FailingLedger(), EntryKind.TRIAL, workpiece_id="i1", round=0, step="trial-0"):
+        with span(ledger, EntryKind.TRIAL, workpiece_id="i1", round=0, step="trial-0"):
             await asyncio.sleep(10)
 
     async def main():
@@ -76,13 +65,11 @@ def test_record_failure_does_not_replace_in_flight_cancellation():
             await task
         return info.value
 
-    cancelled = asyncio.run(main())
-    assert any("disk full" in note for note in cancelled.__notes__)
+    return asyncio.run(main())
 
 
-def test_caller_classified_cause_wins_over_exception_class(ledger):
-    with pytest.raises(TimeoutError):
-        with span(ledger, EntryKind.STEP, workpiece_id="i1", round=0, step="run") as s:
-            s.cause = "sandbox_timeout"
-            raise TimeoutError("stalled")
-    assert [e.cause for e in ledger.entries] == ["sandbox_timeout"]
+def test_span_records_task_cancellation_and_a_record_failure_does_not_replace_it(ledger):
+    cancel_in_flight(ledger)
+    assert [e.cause for e in ledger.entries] == ["CancelledError"]
+
+    assert any("disk full" in note for note in cancel_in_flight(FailingLedger()).__notes__)

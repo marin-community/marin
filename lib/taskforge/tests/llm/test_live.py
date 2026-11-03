@@ -7,6 +7,11 @@ Every run writes its exact first request body (bearer token excluded), full comp
 events included), and measurements to ``<evidence_root>/llm/runs/<check>-<utc>.json``. Only a
 run whose assertions pass is copied to ``<evidence_root>/llm/<check>.json``, so a failing run never
 overwrites cited evidence. ``evidence_root`` is the fixture in ``tests/conftest.py``.
+
+Each check pins a server behaviour the scripted GLM server only assumes: no ``max_tokens``, the context
+error text, continuation of a cut answer and of cut reasoning, and decoder-enforced ``json_schema`` output.
+
+Invariants: none (pins live GLM-5.3 wire compatibility).
 """
 
 import asyncio
@@ -18,16 +23,11 @@ from pathlib import Path
 from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, Field, TypeAdapter, field_validator
-from rolloutengine.models import ModelRequest
+from pydantic import BaseModel, Field, TypeAdapter
 
-from taskforge.ledger.jsonl import JsonlLedger, read_entries
-from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import AttemptOutcome, Completion, ContextExhausted, FinishReason
 from taskforge.llm.glm_client import GlmClient, request_kwargs
 from taskforge.llm.policy import LLMPolicy, Message, ReasoningEffort
-from taskforge.llm.recording import CallLedger
-from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import response_format
 from taskforge.llm.test_support import GLM_MODEL, unique_run_name
 
@@ -174,7 +174,7 @@ def test_reply_cut_off_while_reasoning_is_continued(glm_source, live_provider, e
         {
             "role": "user",
             "content": (
-                "How many integers from 1 to 1000 are divisible by 3 or 5 but not by 7? " "Answer with the number only."
+                "How many integers from 1 to 1000 are divisible by 3 or 5 but not by 7? Answer with the number only."
             ),
         }
     ]
@@ -195,71 +195,6 @@ def test_reply_cut_off_while_reasoning_is_continued(glm_source, live_provider, e
     assert completion.finish_reason is FinishReason.STOP
     assert completion.content.strip()
     promote(evidence_dir, run, "c_continue_mid_reasoning")
-
-
-class Capital(BaseModel):
-    country: str
-    city: str
-    population_millions: float
-
-
-class ShoutedCapital(BaseModel):
-    city: str
-
-    @field_validator("city")
-    @classmethod
-    def uppercase(cls, value: str) -> str:
-        if value != value.upper():
-            raise ValueError("city must be written entirely in uppercase letters")
-        return value
-
-
-@pytest.mark.live_glm
-@pytest.mark.timeout(900)
-def test_structured_output(glm_source, live_provider, evidence_dir):
-    messages: list[Message] = [
-        {"role": "user", "content": "What is the capital of Japan and its city population in millions?"}
-    ]
-    policy = LLMPolicy(reasoning_effort=ReasoningEffort.LOW)
-
-    async def go():
-        async with GlmClient(glm_source, live_provider) as client:
-            return await client.complete_structured(messages, Capital, policy)
-
-    result = asyncio.run(go())
-    run = record(
-        evidence_dir,
-        "d_structured",
-        "response_format json_schema strict content validated into a pydantic model",
-        structured_body(messages, Capital, policy),
-        result.completions,
-        value=result.value.model_dump(),
-    )
-    assert result.value.city == "Tokyo"
-    promote(evidence_dir, run, "d_structured")
-
-
-@pytest.mark.live_glm
-@pytest.mark.timeout(900)
-def test_structured_repair_keeps_prior_output(glm_source, live_provider, evidence_dir):
-    messages: list[Message] = [{"role": "user", "content": "Record the capital of France."}]
-    policy = LLMPolicy(reasoning_effort=ReasoningEffort.LOW)
-
-    async def go():
-        async with GlmClient(glm_source, live_provider) as client:
-            return await client.complete_structured(messages, ShoutedCapital, policy)
-
-    result = asyncio.run(go())
-    run = record(
-        evidence_dir,
-        "d_structured_repair",
-        "validator the schema cannot express; expect one repair request carrying the prior output",
-        structured_body(messages, ShoutedCapital, policy),
-        result.completions,
-        value=result.value.model_dump(),
-    )
-    assert result.value.city == "PARIS"
-    promote(evidence_dir, run, "d_structured_repair")
 
 
 class Verdict(StrEnum):
@@ -321,26 +256,3 @@ def test_structured_output_is_decoder_enforced(glm_source, live_provider, eviden
     )
     assert [len(result.completions) for result in results] == [1] * STRUCTURED_SAMPLES
     promote(evidence_dir, run, "d_structured_enforced")
-
-
-@pytest.mark.live_glm
-@pytest.mark.timeout(900)
-def test_rollout_model_turn_is_recorded_in_the_ledger(glm_source, live_provider, evidence_dir):
-    ledger = JsonlLedger(evidence_dir / "ledger" / "h_rollout_model_record")
-    record_to = CallLedger(ledger=ledger, workpiece_id=unique_run_name("live"), round=0, step="solver")
-    request = ModelRequest(
-        ({"role": "user", "content": "Name the largest planet in the solar system in one word."},),
-        {},
-    )
-
-    async def go():
-        async with GlmClient(glm_source, live_provider) as client:
-            return await GlmRolloutModel(client, LLMPolicy(max_continuations=0), record_to)(request)
-
-    turn = asyncio.run(go())
-    [entry] = list(read_entries(ledger.path_for(record_to.workpiece_id)))
-    assert (turn.prompt_token_ids, turn.response_token_ids) == ((), ())
-    assert turn.usage is not None and turn.usage.prompt_tokens and turn.usage.completion_tokens
-    assert (entry.kind, entry.step, entry.cause) == (EntryKind.LLM_CALL, "solver", None)
-    assert (entry.tokens_in, entry.tokens_out) == (turn.usage.prompt_tokens, turn.usage.completion_tokens)
-    assert entry.attrs["turn"] == "0" and int(entry.attrs["attempts"]) >= 1

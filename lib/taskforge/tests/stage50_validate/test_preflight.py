@@ -1,12 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The preflight probes a local task machine before any trial and falls back to a container when it cannot start."""
+"""The preflight probes a local task machine before any trial and falls back to a container when it cannot start.
+
+Invariants: task runs on the solver machine it declares (the fallback moves only a grader-base CPython task machine
+from the local to the container backend).
+"""
 
 from dataclasses import dataclass, field
 
 import pytest
-from rolloutengine.models import RolloutLimits
 from shellbox.backends.shellsim.machine import ShellSimMachine
 from shellbox.machine import (
     Backend,
@@ -31,30 +34,20 @@ from taskforge.stage40_build_with_program.infrastructure import InfrastructureCa
 from taskforge.stage50_validate.outcome import Cause
 from taskforge.stage50_validate.preflight import preflight
 from taskforge.stage50_validate.trials import EngineSettings
-from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
+from tests.sandbox.fixture_images import FixtureImageFactory, ForwardingMachine, PortlessShellSimFactory
+from tests.stage50_validate.conftest import LIMITS
 
 READ_ONLY = b"mkdir: cannot create directory '/opt/gen': Read-only file system\n"
 
 
-class ReadOnlyOptMachine:
+@dataclass
+class ReadOnlyOptMachine(ForwardingMachine):
     """A ShellSim machine whose shell refuses to write under /opt, as bubblewrap's read-only mounts do."""
-
-    def __init__(self, inner: ShellSimMachine):
-        self.inner = inner
 
     async def run(self, command: Command) -> Result:
         if command.argv[:2] == ("sh", "-c") and "/opt" in command.argv[2]:
             return Result(1, b"", READ_ONLY, False, False, ExitReason.EXITED)
-        return await self.inner.run(command)
-
-    async def upload(self, source, target) -> None:
-        await self.inner.upload(source, target)
-
-    async def download(self, source, target) -> None:
-        await self.inner.download(source, target)
-
-    async def close(self) -> None:
-        await self.inner.close()
+        return await self.machine.run(command)
 
 
 @dataclass(frozen=True)
@@ -141,45 +134,25 @@ def settings(local: MachineFactory | None, container: MachineFactory | None = No
     return EngineSettings(
         factories=factories,
         command_timeout=10,
-        limits=RolloutLimits(
-            max_turns=2,
-            tool_turn_timeout=20,
-            model_turn_timeout=30,
-            cleanup_timeout=10,
-            total_turn_timeout=20,
-            attempt_timeout=60,
-            verifier_timeout=None,
-            max_total_tokens=None,
-        ),
+        limits=LIMITS.model_copy(update={"max_turns": 2, "total_turn_timeout": 20, "verifier_timeout": None}),
     )
 
 
-async def test_a_setup_command_writing_under_a_read_only_root_moves_the_task_machine_to_a_container():
-    engine = settings(ReadOnlyLocalFactory())
-
-    result = await preflight(cpython_task(("mkdir -p /workspace /opt/gen",)), MachineHost.LAPTOP, engine)
-
-    assert result.spec.task_machine is not None
-    assert result.spec.task_machine.backend == Backend.DOCKER.value
-    assert result.spec.task.environment_requirements.docker_image == GRADER_BASE_IMAGE
-    assert result.fallback is not None
-    assert (result.fallback.from_backend, result.fallback.to_backend) == (Backend.LOCAL.value, Backend.DOCKER.value)
-    assert result.fallback.cause is Cause.TASK_SETUP
-    assert "Environment setup command failed" in result.fallback.detail
-
-
-async def test_the_fallback_moves_the_task_machine_alone_and_keeps_the_verifier_local():
+async def test_a_setup_command_writing_under_a_read_only_root_moves_the_task_machine_alone_to_a_container():
     engine = settings(ReadOnlyLocalFactory())
     task = cpython_task(("mkdir -p /workspace /opt/gen",), grader=file_grader())
 
     result = await preflight(task, MachineHost.LAPTOP, engine)
 
-    assert result.fallback is not None and result.fallback.to_backend == Backend.DOCKER.value
+    assert result.fallback is not None
+    assert (result.fallback.from_backend, result.fallback.to_backend) == (Backend.LOCAL.value, Backend.DOCKER.value)
+    assert result.fallback.cause is Cause.TASK_SETUP
+    assert "Environment setup command failed" in result.fallback.detail
     spec = result.spec
     assert spec.task_machine is not None and spec.task_machine.backend == Backend.DOCKER.value
     assert spec.verifier_machine is not None and spec.verifier_machine.backend == Backend.LOCAL.value
-    assert result.spec.task.environment_requirements.docker_image == GRADER_BASE_IMAGE
-    grading = grading_environment(result.spec.task)
+    assert spec.task.environment_requirements.docker_image == GRADER_BASE_IMAGE
+    grading = grading_environment(spec.task)
     assert grading is not None and grading.docker_image is None and grading.package_spec == LOCAL_CPYTHON
 
 
@@ -202,16 +175,6 @@ async def test_a_local_machine_the_host_failed_once_keeps_the_local_backend():
     result = await preflight(cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine)
 
     assert result.fallback is None and local.creates == 2
-    assert result.spec.task_machine is not None
-    assert result.spec.task_machine.backend == Backend.LOCAL.value
-
-
-async def test_a_task_whose_setup_runs_locally_keeps_the_local_backend():
-    engine = settings(ReadOnlyLocalFactory())
-
-    result = await preflight(cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine)
-
-    assert result.fallback is None
     assert result.spec.task_machine is not None
     assert result.spec.task_machine.backend == Backend.LOCAL.value
 

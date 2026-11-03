@@ -10,6 +10,8 @@ but no stage. A package in ``TOP``
 runs the whole pipeline: ``stage_coordinator`` runs the stages, and ``agentic`` replaces them with
 one agent. It may import every stage and shared module, and no package may import it.
 
+Invariants: none (pins the package import order; the last test shows the check can fail).
+
 """
 
 import ast

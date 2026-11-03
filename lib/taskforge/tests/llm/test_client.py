@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""GlmClient against a scripted GLM server: streaming, retries, holds, continuations and pool lifetime.
+
+Invariants: none (pins the GLM wire contract and the client's retry, hold and continuation behaviour).
+"""
+
 import asyncio
 import json
 import pickle
@@ -91,9 +96,13 @@ def outcomes(completion_or_error) -> list[AttemptOutcome]:
     return [a.outcome for a in completion_or_error.attempts]
 
 
-def test_stream_assembles_content_reasoning_usage_and_chunks(fake_glm, run):
+def test_stream_assembles_content_reasoning_usage_and_chunks_and_sends_request_fields(fake_glm, fast_provider):
+    tools = [{"type": "function", "function": {"name": "answer", "parameters": {"type": "object"}}}]
+    tool_choice = {"type": "function", "function": {"name": "answer"}}
+    constraint = {"regex": "[0-9]+"}
+    fields = {"tools": tools, "tool_choice": tool_choice, "structured_outputs": constraint}
     fake_glm.stream(content="Hello there", reasoning="thinking", prompt_tokens=12, completion_tokens=7)
-    completion = run()
+    completion = complete(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider, request_fields=fields)
     assert (completion.content, completion.reasoning) == ("Hello there", "thinking")
     assert completion.finish_reason is FinishReason.STOP
     assert (completion.usage.prompt_tokens, completion.usage.completion_tokens) == (12, 7)
@@ -106,24 +115,7 @@ def test_stream_assembles_content_reasoning_usage_and_chunks(fake_glm, run):
     assert "max_tokens" not in request and "max_completion_tokens" not in request
     assert (request["stream"], request["stream_options"]) == (True, {"include_usage": True})
     assert request["chat_template_kwargs"] == {"reasoning_effort": "high"}
-
-
-def test_request_fields_reach_the_wire(fake_glm, fast_provider):
-    tools = [{"type": "function", "function": {"name": "answer", "parameters": {"type": "object"}}}]
-    tool_choice = {"type": "function", "function": {"name": "answer"}}
-    constraint = {"regex": "[0-9]+"}
-    fake_glm.stream(content="42")
-    fields = {"tools": tools, "tool_choice": tool_choice, "structured_outputs": constraint}
-    complete(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider, request_fields=fields)
-    request = fake_glm.requests[0]
     assert (request["tools"], request["tool_choice"], request["structured_outputs"]) == (tools, tool_choice, constraint)
-    assert request["chat_template_kwargs"] == {"reasoning_effort": "high"}
-
-
-def test_tool_call_deltas_are_joined(fake_glm, run):
-    fake_glm.stream(tool_calls=(("answer", '{"city": "Paris"}'),))
-    completion = run()
-    assert [(c.name, c.arguments) for c in completion.tool_calls] == [("answer", '{"city": "Paris"}')]
 
 
 @pytest.mark.parametrize(
@@ -137,23 +129,19 @@ def test_tool_call_reply_that_used_its_whole_budget_is_reported_as_length(fake_g
     completion = run(LLMPolicy(max_tokens=64))
 
     assert (completion.finish_reason, completion.continuations, len(fake_glm.requests)) == (finish, 0, 1)
+    assert [(c.name, c.arguments) for c in completion.tool_calls] == [("shell", '{"command": "cat <<EOF')]
     assert json.loads(completion.attempts[0].events[-2])["choices"][0]["finish_reason"] == "tool_calls"
 
 
-def test_retryable_statuses_are_retried_then_succeed(fake_glm, run):
-    fake_glm.status(429, "slow down", {"Retry-After": "0"})
+def test_retryable_statuses_are_retried_after_their_retry_after_then_succeed(fake_glm, run):
+    fake_glm.status(429, "slow down", {"Retry-After": "0.3"})
     fake_glm.status(503, "unavailable")
     fake_glm.stream(content="ok")
     completion = run()
     assert completion.content == "ok"
     assert outcomes(completion) == [AttemptOutcome.RETRYABLE_STATUS] * 2 + [AttemptOutcome.COMPLETED]
     assert [a.http_status for a in completion.attempts] == [429, 503, 200]
-
-
-def test_retry_after_sets_the_minimum_delay(fake_glm, run):
-    fake_glm.status(429, "slow down", {"Retry-After": "0.3"})
-    fake_glm.stream(content="ok")
-    first, second = run().attempts
+    first, second, _ = completion.attempts
     assert second.started - (first.started + first.duration) >= 0.3
 
 
@@ -265,16 +253,6 @@ def test_failure_counts_an_attempt_unless_health_reports_the_pool_empty(fake_glm
         run(max_attempts=1, hold_timeout=60.0)
 
 
-def test_stall_abandons_attempt_and_retries(fake_glm, run):
-    fake_glm.stream(content="never finishes", stall_after_first=True)
-    fake_glm.stream(content="second try")
-    completion = run(stall_timeout=0.3)
-    assert completion.content == "second try"
-    stalled = completion.attempts[0]
-    assert stalled.outcome is AttemptOutcome.STALLED
-    assert len(stalled.events) == 2
-
-
 def test_stream_cut_before_finish_reason_is_retried(fake_glm, run):
     fake_glm.stream(content="cut", finish=None, send_done=False)
     fake_glm.stream(content="whole")
@@ -372,6 +350,7 @@ def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_p
     completion, replaced_and_closed = asyncio.run(call())
     assert completion.content == "second try"
     assert outcomes(completion) == [AttemptOutcome.STALLED, AttemptOutcome.COMPLETED]
+    assert len(completion.attempts[0].events) == 2
     assert replaced_and_closed
 
 

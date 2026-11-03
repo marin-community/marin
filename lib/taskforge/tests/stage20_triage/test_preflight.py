@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The default triage: the deterministic preflight accepts or rejects with the failing check as the reason."""
+"""The default triage: the deterministic preflight accepts or rejects with the failing check as the reason.
+
+Invariants: none (pins the preflight's verdicts and their JSON round trip).
+"""
 
 import asyncio
 from dataclasses import replace
@@ -21,6 +24,8 @@ def test_a_well_formed_proposal_is_accepted_with_every_check_recorded(proposal):
     assert (verdict.decision, verdict.reasons, verdict.author_state) == (TriageDecision.ACCEPT, (), {})
     assert (verdict.proposal_id, verdict.proposal_digest) == (proposal.header.id, proposal.digest)
     assert {r.status for r in verdict.structural} == {CheckStatus.PASS}
+    carrying = replace(verdict, author_state={"obligations": ["derive 42 in the grader"], "strict": True})
+    assert Verdict.from_json(carrying.to_json()) == carrying
 
 
 def test_a_proposal_with_a_thin_section_is_rejected_with_the_failing_check(proposal, section_replaced):
@@ -28,6 +33,7 @@ def test_a_proposal_with_a_thin_section_is_rejected_with_the_failing_check(propo
     assert verdict.decision is TriageDecision.REJECT
     assert len(verdict.reasons) == 1
     assert "required_sections" in verdict.reasons[0] and "Risks and null conditions" in verdict.reasons[0]
+    assert Verdict.from_json(verdict.to_json()) == verdict
 
 
 def test_a_null_proposal_is_rejected_with_its_reason(proposal):
@@ -49,13 +55,3 @@ def test_an_advisory_failure_does_not_reject(proposal, section_replaced):
     verdict = run(p)
     assert verdict.decision is TriageDecision.ACCEPT
     assert [r.name for r in verdict.structural if r.status is CheckStatus.FAIL] == ["resources_in_build_plan"]
-
-
-def test_verdict_round_trips_through_json(proposal, section_replaced):
-    verdict = run(section_replaced(proposal, "Risks and null conditions", "None."))
-    assert Verdict.from_json(verdict.to_json()) == verdict
-
-
-def test_a_verdict_carrying_author_state_round_trips_through_json(proposal):
-    verdict = replace(run(proposal), author_state={"obligations": ["derive 42 in the grader"], "strict": True})
-    assert Verdict.from_json(verdict.to_json()) == verdict

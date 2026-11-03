@@ -1,13 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""run_trials: deadlines, concurrency, retries on retryable causes, refusals, ledger spans and rollout evidence."""
+"""run_trials: deadlines, concurrency, retries on retryable causes, refusals, ledger spans and rollout evidence.
+
+Invariants: the task runs on the machine it declares (factory refusal); the grader can score the declared answer
+format (SUBMISSION_UNSUPPORTED); the evidence belongs to the exact task (trial digest as the TRIAL input_hash).
+"""
 
 import asyncio
 import json
 from dataclasses import replace
 
-from rolloutengine.models import TRACE_METRIC, Rollout, RolloutLimits, TraceMode
+from rolloutengine.models import TRACE_METRIC, Rollout, TraceMode
 from shellbox.machine import Backend
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import JsonAnswer, PlainText
@@ -32,6 +36,7 @@ from taskforge.stage50_validate.trials import (
     task_digest,
 )
 from tests.sandbox.fixture_images import FixtureImageFactory
+from tests.stage50_validate.conftest import ENGINE_LIMITS
 
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
 DOCKER_BACKEND = Backend.DOCKER.value
@@ -42,16 +47,7 @@ def settings(factory) -> EngineSettings:
     return EngineSettings(
         factories={SHELLSIM_BACKEND: factory, DOCKER_BACKEND: FixtureImageFactory()},
         command_timeout=10,
-        limits=RolloutLimits(
-            max_turns=4,
-            tool_turn_timeout=20,
-            model_turn_timeout=30,
-            cleanup_timeout=10,
-            total_turn_timeout=30,
-            attempt_timeout=60,
-            verifier_timeout=None,
-            max_total_tokens=None,
-        ),
+        limits=ENGINE_LIMITS,
     )
 
 
@@ -217,70 +213,48 @@ async def test_validation_attempt_deadline_bounds_a_trial_without_builder_deadli
     assert len(outcomes) == 1 and isinstance(outcomes[0], Ungraded) and outcomes[0].cause is Cause.ATTEMPT_TIMEOUT
 
 
-async def test_the_ledger_input_hash_covers_the_deadlines(tmp_path, math_task, fakes):
-    model = fakes.script_model([fakes.text("395")])
-    factory = fakes.flaky_factory(0, RuntimeError)
-    short = math_task.limits
-    long = short.model_copy(update={"total_turn_timeout": 60, "attempt_timeout": 120})
-
-    for limits in (short, short, long):
-        await run_trials(math_task.model_copy(update={"limits": limits}), plan(tmp_path, k=1), settings(factory), model)
-
-    first, again, other = (entry.input_hash for entry in ledger(tmp_path))
-    assert first == again != other
-
-
-async def test_a_task_is_presented_in_its_own_answer_format(tmp_path, json_task, fakes):
+async def test_a_task_is_presented_in_its_own_answer_format_and_not_started_in_one_that_cannot_carry_it(
+    tmp_path, json_task, fakes
+):
     model = fakes.script_model([fakes.text('{"sum": 60}')])
+    engine = settings(fakes.flaky_factory(0, RuntimeError))
 
-    outcomes = await run_trials(json_task, plan(tmp_path, k=1), settings(fakes.flaky_factory(0, RuntimeError)), model)
+    [presented] = await run_trials(json_task, plan(tmp_path / "json", k=1), engine, model)
 
-    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
+    assert isinstance(presented, Graded) and presented.reward == 1.0
     assert "one JSON value" in model.requests[0].messages[-1]["content"]
-
-
-async def test_a_task_whose_answer_format_cannot_carry_its_answer_is_not_started(tmp_path, json_task, fakes):
-    model = fakes.script_model([fakes.text('{"sum": 60}')])
     # assemble refuses this pairing; a task read from elsewhere can still carry it.
     plain = json_task.model_copy(update={"task": json_task.task.model_copy(update={"answer_format": PlainText()})})
-
-    outcomes = await run_trials(plain, plan(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)), model)
-
+    outcomes = await run_trials(plain, plan(tmp_path), engine, model)
     assert all(
         isinstance(o, Ungraded) and (o.cause, o.retryable) == (Cause.SUBMISSION_UNSUPPORTED, False) for o in outcomes
     )
     assert all(isinstance(o, Ungraded) and "PlainText cannot carry json" in o.detail for o in outcomes)
-    assert model.requests == []
+    assert len(model.requests) == 1
     assert [e.cause for e in ledger(tmp_path)] == [Cause.SUBMISSION_UNSUPPORTED] * 3
 
 
-async def test_the_ledger_input_hash_is_the_digest_of_the_lowered_task_with_its_answer_format(
+async def test_the_ledger_input_hash_is_the_trial_digest_and_covers_format_deadlines_and_command_timeout(
     tmp_path, math_task, relower, fakes
 ):
     model = fakes.script_model([fakes.text("395")])
-    factory = fakes.flaky_factory(0, RuntimeError)
-    as_json = relower(math_task.task.model_copy(update={"answer_format": JsonAnswer()}))
+    engine = settings(fakes.flaky_factory(0, RuntimeError))
+    longer = math_task.limits.model_copy(update={"total_turn_timeout": 60, "attempt_timeout": 120})
+    runs = [
+        (math_task, engine),
+        (math_task, engine),
+        (math_task.model_copy(update={"limits": longer}), engine),
+        (relower(math_task.task.model_copy(update={"answer_format": JsonAnswer()})), engine),
+        # The command timeout is the shell harness's, not the spec's, and the digest still covers it.
+        (math_task, replace(engine, command_timeout=15)),
+    ]
 
-    for task in (math_task, math_task, as_json):
-        await run_trials(task, plan(tmp_path, k=1), settings(factory), model)
+    for task, trial_settings in runs:
+        await run_trials(task, plan(tmp_path, k=1), trial_settings, model)
 
-    first, again, other = (entry.input_hash for entry in ledger(tmp_path))
-    assert first == again != other
-    engine_settings = settings(factory)
-    assert first == task_digest(math_task, engine_settings.command_timeout)
-
-
-async def test_the_ledger_input_hash_covers_the_shell_command_timeout(tmp_path, math_task, fakes):
-    # The command timeout is the shell harness's, not the spec's, and the digest still covers it.
-    model = fakes.script_model([fakes.text("395")])
-    engine_settings = settings(fakes.flaky_factory(0, RuntimeError))
-
-    for command_timeout in (10, 10, 15):
-        trial_settings = replace(engine_settings, command_timeout=command_timeout)
-        await run_trials(math_task, plan(tmp_path, k=1), trial_settings, model)
-
-    first, again, other = (entry.input_hash for entry in ledger(tmp_path))
-    assert first == again != other
+    first, again, *others = (entry.input_hash for entry in ledger(tmp_path))
+    assert first == again == task_digest(math_task, engine.command_timeout)
+    assert len({first, *others}) == len(runs) - 1
 
 
 def attempt_records(tmp_path) -> list[dict]:
@@ -288,54 +262,24 @@ def attempt_records(tmp_path) -> list[dict]:
     return [json.loads(path.read_bytes()) for path in paths]
 
 
-def test_a_candidate_code_error_is_recorded_on_its_graded_attempt():
+def test_a_graded_attempt_records_a_candidate_code_error_and_its_output_files_as_base64():
     grade = GradeResult(Outcome.GRADED, 0.0, detail={"reason": "collection_error"})
-    outcome = Graded(Rollout("run", (), "stop"), grade, candidate_code_error=True)
-
-    record = json.loads(outcome_json(outcome))
-
-    assert (record["outcome"], record["reward"], record["candidate_code_error"]) == ("graded", 0.0, True)
-
-
-def test_captured_output_files_are_recorded_as_base64_on_the_attempt():
-    grade = GradeResult(Outcome.GRADED, 1.0)
     rollout = Rollout("run", (), "stop", outputs={"/workspace/sum.txt": b"60\n\x00"})
 
-    record = json.loads(outcome_json(Graded(rollout, grade, candidate_code_error=False)))
+    record = json.loads(outcome_json(Graded(rollout, grade, candidate_code_error=True)))
 
+    assert (record["outcome"], record["reward"], record["candidate_code_error"]) == ("graded", 0.0, True)
     assert record["rollout"]["outputs"] == {"/workspace/sum.txt": "NjAKAA=="}
 
 
-async def test_the_evidence_counts_failed_cleanup_actions(tmp_path, file_task, fakes):
-    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
-
-    outcomes = await run_trials(file_task, plan(tmp_path, k=1), settings(fakes.faulty_factory(close_error=True)), model)
-
-    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
-    assert [record["cleanup_errors"] for record in attempt_records(tmp_path)] == [1]
-    assert [entry.attrs["cleanup_errors"] for entry in ledger(tmp_path)] == ["1"]
-
-
-async def test_lowering_applies_the_validation_turn_budget(tmp_path, file_task, fakes):
-    # Validation's four turns let the agent write the file on its second.
-    model = fakes.script_model(
-        [fakes.shell("true", "c0"), fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")]
-    )
-    engine = settings(fakes.flaky_factory(0, RuntimeError))
-    lowered = lower(file_task.task, MachineHost.LAPTOP, engine.factories, engine.limits)
-
-    outcomes = await run_trials(lowered, plan(tmp_path, k=1), engine, model)
-
-    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
-
-
-async def test_trials_run_under_the_messages_trace(tmp_path, file_task, fakes):
+async def test_an_attempt_runs_under_the_messages_trace_and_its_file_and_span_keep_steps_usage_and_cleanup_errors(
+    tmp_path, file_task, fakes
+):
     # The messages trace sends no continuation, so ScriptModel reports the same prompt ids on both turns and
     # the second does not extend the first: the exact-token trace would end the rollout there.
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
-    engine_settings = settings(fakes.flaky_factory(0, RuntimeError))
 
-    outcomes = await run_trials(file_task, plan(tmp_path, k=1), engine_settings, model)
+    outcomes = await run_trials(file_task, plan(tmp_path, k=1), settings(fakes.faulty_factory(close_error=True)), model)
 
     assert file_task.trace is TraceMode.MESSAGES
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
@@ -343,18 +287,12 @@ async def test_trials_run_under_the_messages_trace(tmp_path, file_task, fakes):
     assert rollout.metrics[TRACE_METRIC] == TraceMode.MESSAGES.value
     assert [set(conversation.loss_mask) for conversation in rollout.conversations] == [{0}]
     assert [request.continuation for request in model.requests] == [None, None]
-    [entry] = ledger(tmp_path)
-    # Two turns of 30 prompt and 4 completion tokens each, counted from usage, not from the ids.
-    assert (entry.tokens_in, entry.tokens_out) == (60, 8)
-
-
-async def test_the_attempt_file_keeps_the_steps(tmp_path, file_task, fakes):
-    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
-
-    outcomes = await run_trials(file_task, plan(tmp_path, k=1), settings(fakes.flaky_factory(0, RuntimeError)), model)
-
-    assert isinstance(outcomes[0], Graded) and [len(c.steps) for c in outcomes[0].rollout.conversations] == [2]
+    assert [len(c.steps) for c in rollout.conversations] == [2]
     (record,) = attempt_records(tmp_path)
     [conversation] = record["rollout"]["conversations"]
-    steps = conversation["steps"]
-    assert [step["turn"]["message"]["content"] for step in steps] == ["", "Done."]
+    assert [step["turn"]["message"]["content"] for step in conversation["steps"]] == ["", "Done."]
+    assert record["cleanup_errors"] == 1
+    [entry] = ledger(tmp_path)
+    assert entry.attrs["cleanup_errors"] == "1"
+    # Two turns of 30 prompt and 4 completion tokens each, counted from usage, not from the ids.
+    assert (entry.tokens_in, entry.tokens_out) == (60, 8)

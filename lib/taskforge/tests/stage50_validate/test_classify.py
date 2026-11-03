@@ -1,8 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Failures produced by a real RolloutEngine run map to the right Cause."""
+"""Failures produced by a real RolloutEngine run, or raised in the chains it builds, map to the right Cause.
 
+The host-failure chain rows come from a 2,049-workpiece run's infrastructure revisions and must stay retryable;
+the output-capture rows are task defects and must not.
+
+Invariants: grader returns a well-formed verdict in range (GRADER_REWARD_RANGE); solve rate rests on complete
+graded evidence (interrupted or ungraded trials are ``Ungraded``).
+"""
 
 import asyncio
 from dataclasses import dataclass
@@ -28,7 +34,7 @@ from rolloutengine.models import (
 )
 from shellbox.machine import Backend, UnsupportedMachineSpec
 from taskcompendium.grader import GraderPackage
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import NoGrader, TaskSpec
 from verifyit.spec import ExactSpec, PytestSpec
@@ -37,7 +43,7 @@ from taskforge.llm.client import ModelRequestRejected, ModelUnavailable
 from taskforge.spec.draft import answer_grader, grader_environment, rollout_engine
 from taskforge.stage50_validate.classify import candidate_code_error, classify, trial_outcome
 from taskforge.stage50_validate.outcome import RETRYABLE, Cause, Graded, Ungraded
-from tests.sandbox.fixture_images import SHELL_GRADER_ARGV, FixtureImageFactory
+from tests.sandbox.fixture_images import SHELL_GRADER_ARGV, FixtureImageFactory, ForwardingMachine
 
 INVALID_REWARD_GRADER = """printf '%s' '{"reward": "nan?"}' > /logs/verifier/reward.json\n"""
 FAILING_GRADER = "exit 3\n"
@@ -58,24 +64,15 @@ class HangingGraderFactory:
         FixtureImageFactory().check_environment(requirements, spec)
 
     async def create(self, spec):
-        machine = await FixtureImageFactory().create(spec)
+        return HangingGraderMachine(await FixtureImageFactory().create(spec))
 
-        class Hanging:
-            async def run(self, command):
-                if command.argv == SHELL_GRADER_ARGV:
-                    await asyncio.Future()
-                return await machine.run(command)
 
-            async def upload(self, source, target):
-                await machine.upload(source, target)
-
-            async def download(self, source, target):
-                await machine.download(source, target)
-
-            async def close(self):
-                await machine.close()
-
-        return Hanging()
+@dataclass
+class HangingGraderMachine(ForwardingMachine):
+    async def run(self, command):
+        if command.argv == SHELL_GRADER_ARGV:
+            await asyncio.Future()
+        return await self.machine.run(command)
 
 
 @dataclass(frozen=True)
@@ -188,23 +185,18 @@ async def test_turn_deadline_after_work_keeps_grade_as_incomplete_evidence(file_
     assert outcome.rollout is not None and outcome.rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON
 
 
-async def test_attempt_timeout(math_task, fakes):
+@pytest.mark.parametrize("harness", [None, DEADLINE_SWALLOWING])
+async def test_an_attempt_past_its_deadline_is_an_ungraded_retryable_attempt_timeout(math_task, fakes, harness):
+    # DEADLINE_SWALLOWING catches the deadline's cancellation and returns; RolloutEngine still fails the attempt
+    # as ``attempt`` with a TimeoutError and does not grade it.
     task = with_limits(math_task, attempt_timeout=0.01)
+    if harness is not None:
+        task = task.model_copy(update={"harness": harness})
 
     outcome = await outcome_of(task, fakes.script_model([fakes.text("395")], hang_from=0))
 
     assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.ATTEMPT_TIMEOUT, True)
-
-
-async def test_a_harness_that_ends_after_the_attempt_deadline_is_an_ungraded_attempt_timeout(math_task, fakes):
-    # The harness catches the deadline's cancellation and returns; RolloutEngine fails the attempt as
-    # ``attempt`` with a TimeoutError and does not grade it.
-    task = with_limits(math_task, attempt_timeout=0.01).model_copy(update={"harness": DEADLINE_SWALLOWING})
-
-    outcome = await outcome_of(task, fakes.script_model([fakes.text("395")], hang_from=0))
-
-    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.ATTEMPT_TIMEOUT, True)
-    assert "Attempt deadline expired" in outcome.detail
+    assert harness is None or "Attempt deadline expired" in outcome.detail
     assert outcome.grade is not None and outcome.grade.status is Outcome.UNAVAILABLE
 
 
@@ -300,32 +292,6 @@ def test_a_reward_outside_the_graders_score_range_is_an_ungraded_grader_defect(m
     assert isinstance(trial_outcome(solved, task), Graded)
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        RuntimeError("Output capture exceeds its file or byte budget"),
-        ValueError("Downloaded files fall outside the declared output paths"),
-        RuntimeError("Download contains an invalid or oversized file: /workspace/out/big.bin"),
-    ],
-    ids=["budget", "outside-declared-paths", "oversized-file"],
-)
-def test_declared_outputs_the_engine_cannot_capture_count_against_the_task(math_task, error):
-    """The agent wrote the files, so the capture failure is the task's, not a retryable grader fault."""
-    task = math_task.task
-    rollout, grade = Rollout("run", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None)
-    interrupted = GradedRolloutInterrupted(rollout, RolloutOperation.GRADE, grade)
-    interrupted.__cause__ = error
-
-    outcome = trial_outcome(interrupted, task)
-
-    assert isinstance(outcome, Ungraded) and outcome.cause is Cause.OUTPUT_CAPTURE
-    assert not outcome.retryable and outcome.rollout is rollout and outcome.grade is grade
-    raised = GradedRolloutInterrupted(rollout, RolloutOperation.GRADE, grade)
-    raised.__cause__ = RuntimeError("verifier exploded")
-    fallback = trial_outcome(raised, task)
-    assert isinstance(fallback, Ungraded) and fallback.cause is Cause.GRADER_RAISED
-
-
 @pytest.mark.parametrize("answer,status,reward", [("395", Outcome.GRADED, 1.0), ("", Outcome.SUBMISSION_FAILURE, 0.0)])
 async def test_judged_submissions_are_graded(math_task, fakes, answer, status, reward):
     outcome = await outcome_of(math_task, fakes.script_model([fakes.text(answer)]))
@@ -381,27 +347,84 @@ def test_a_machine_lost_under_a_trial_is_a_retryable_termination(math_task, erro
     assert (direct_cause in RETRYABLE) == (direct_cause is Cause.MACHINE_TERMINATED)
 
 
-@pytest.mark.parametrize(
-    "operation,cause",
-    [
-        (RolloutOperation.START, Cause.MACHINE_START_TIMEOUT),
-        (RolloutOperation.PREPARE, Cause.SESSION_PREPARE),
-    ],
-)
-@pytest.mark.parametrize("wrapped", [False, True])
-def test_setup_deadlines_are_unavailable_infrastructure_not_authored_defects(math_task, operation, cause, wrapped):
-    rollout = Rollout("setup-timeout", (), "error")
-    interrupted = GradedRolloutInterrupted(rollout, operation, GradeResult(Outcome.UNAVAILABLE, None))
-    timeout = TimeoutError("Environment setup command exceeded its deadline")
-    if wrapped:
-        outer = RuntimeError("Environment setup command failed")
-        outer.__cause__ = timeout
-        interrupted.__cause__ = outer
-    else:
-        interrupted.__cause__ = timeout
+PARENT_TERMINATED = "Iris sandbox task failed before running: Parent job terminated"
+CANNOT_SUBMIT = "Cannot submit job: parent job /muchanem/gen1000-s1p has terminated (state=JOB_STATE_KILLED)"
+SETUP_TIMEOUT = "Environment setup command exceeded its deadline"
+
+
+def raised_from(outer: BaseException, inner: BaseException) -> BaseException:
+    outer.__cause__ = inner
+    return outer
+
+
+INTERRUPTIONS = {
+    "start-setup-deadline": (RolloutOperation.START, lambda: TimeoutError(SETUP_TIMEOUT), Cause.MACHINE_START_TIMEOUT),
+    "start-setup-deadline-wrapped": (
+        RolloutOperation.START,
+        lambda: raised_from(RuntimeError("Environment setup command failed"), TimeoutError(SETUP_TIMEOUT)),
+        Cause.MACHINE_START_TIMEOUT,
+    ),
+    "prepare-setup-deadline": (RolloutOperation.PREPARE, lambda: TimeoutError(SETUP_TIMEOUT), Cause.SESSION_PREPARE),
+    "prepare-setup-deadline-wrapped": (
+        RolloutOperation.PREPARE,
+        lambda: raised_from(RuntimeError("Environment setup command failed"), TimeoutError(SETUP_TIMEOUT)),
+        Cause.SESSION_PREPARE,
+    ),
+    "parent-terminated-at-start": (RolloutOperation.START, lambda: RuntimeError(PARENT_TERMINATED), Cause.MACHINE_START),
+    "parent-terminated-verifier": (RolloutOperation.GRADE, lambda: RuntimeError(PARENT_TERMINATED), Cause.GRADER_RAISED),
+    "cannot-submit-at-start": (
+        RolloutOperation.START,
+        lambda: ConnectError(Code.FAILED_PRECONDITION, CANNOT_SUBMIT),
+        Cause.MACHINE_START,
+    ),
+    "cannot-submit-verifier": (
+        RolloutOperation.GRADE,
+        lambda: ConnectError(Code.FAILED_PRECONDITION, CANNOT_SUBMIT),
+        Cause.GRADER_RAISED,
+    ),
+    "package-install-network": (
+        RolloutOperation.START,
+        lambda: OSError("uv: failed to fetch https://pypi.org/simple/numpy/"),
+        Cause.MACHINE_START,
+    ),
+    # The agent wrote the declared outputs, so a capture failure is the task's, not a retryable grader fault.
+    "capture-budget": (
+        RolloutOperation.GRADE,
+        lambda: RuntimeError("Output capture exceeds its file or byte budget"),
+        Cause.OUTPUT_CAPTURE,
+    ),
+    "capture-outside-declared-paths": (
+        RolloutOperation.GRADE,
+        lambda: ValueError("Downloaded files fall outside the declared output paths"),
+        Cause.OUTPUT_CAPTURE,
+    ),
+    "capture-oversized-file": (
+        RolloutOperation.GRADE,
+        lambda: RuntimeError("Download contains an invalid or oversized file: /workspace/out/big.bin"),
+        Cause.OUTPUT_CAPTURE,
+    ),
+}
+
+
+@pytest.mark.parametrize(("operation", "error", "cause"), INTERRUPTIONS.values(), ids=INTERRUPTIONS.keys())
+def test_an_interrupted_operation_maps_to_its_cause_and_keeps_the_rollout(math_task, operation, error, cause):
+    rollout, grade = Rollout("run", (), "error"), GradeResult(Outcome.UNAVAILABLE, None)
+    interrupted = GradedRolloutInterrupted(rollout, operation, grade)
+    interrupted.__cause__ = error()
+
     outcome = trial_outcome(interrupted, math_task.task)
+
     assert isinstance(outcome, Ungraded) and outcome.cause is cause
-    assert outcome.rollout is rollout
+    assert outcome.retryable is (cause is not Cause.OUTPUT_CAPTURE)
+    assert outcome.rollout is rollout and outcome.grade is grade
+
+
+def test_a_grader_command_past_its_own_timeout_is_a_retryable_grader_timeout(math_task):
+    grade = GradeResult(GradeStatus.INFRA_ERROR, None, "Grader command timed out", failure=GradingFailure.TIMEOUT)
+
+    outcome = trial_outcome(GradedRollout(Rollout("run", (), "error"), grade), math_task.task)
+
+    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.GRADER_TIMEOUT, True)
 
 
 @pytest.mark.parametrize(

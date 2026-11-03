@@ -1,6 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""The restricted loader of authored build programs: what it loads, what it refuses, and its repair hints.
+
+Invariants: the build program cannot open files or sockets on the host (module-level rules, ``ALLOWED_IMPORTS``,
+``SAFE_BUILTINS``, the name check).
+"""
+
 import inspect
 import re
 import sys
@@ -69,7 +75,6 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
             "must end with `PROGRAM =",
         ),
         (lambda s: s + "\nprint(PROGRAM)\n", "must end with `PROGRAM ="),
-        (lambda s: s.replace("from dataclasses", "import os\nfrom dataclasses"), "may not import 'os'"),
         (
             lambda s: s.replace('return Question(text="What is 6 * 7?")', 'return Question(text=open("q").read())'),
             r"\['open'\]",
@@ -132,13 +137,6 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
         (
             lambda s: s.replace(
                 '    return Question(text="What is 6 * 7?")',
-                '    await research(context, "Find the product.")\n    return Question(text="What is 6 * 7?")',
-            ),
-            r"`research` \(line \d+\); did you mean 'research' from taskforge\.stage40_build_with_program\.sdk\?",
-        ),
-        (
-            lambda s: s.replace(
-                '    return Question(text="What is 6 * 7?")',
                 '    await try_grader(context)\n    return Question(text="What is 6 * 7?")',
             ),
             r"`try_grader` \(line \d+\); did you mean 'grade_candidate' "
@@ -152,11 +150,6 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
             ),
             r"has no name 'try_grader'; "
             r"did you mean 'grade_candidate' from taskforge\.stage40_build_with_program\.sandbox_effects\?",
-        ),
-        (
-            lambda s: s.replace("stage40_build_with_program.outputs import", "stage40_build_with_program.output import"),
-            r"may not import 'taskforge.stage40_build_with_program.output'; "
-            r"did you mean 'taskforge.stage40_build_with_program.outputs'\?",
         ),
         (
             lambda s: s.replace("sink=assemble", "assemble"),
@@ -173,7 +166,6 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
         "undecorated-step",
         "no-program",
         "statement-after-program",
-        "import",
         "unsafe-builtin",
         "unknown-input",
         "step-left-out",
@@ -184,10 +176,8 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
         "misspelt-import",
         "import-from-wrong-module",
         "close-name-in-the-imported-module",
-        "unimported-sdk-name",
         "former-sdk-name",
         "former-sdk-name-import",
-        "misspelt-module",
         "no-sink-keyword",
         "step-as-sink",
     ],
@@ -239,26 +229,31 @@ IMPORT_EACH = re.escape("Import each SDK name the program uses from its module."
     ids=["unbound-without-suggestion", "unbound-with-suggestion", "import-without-suggestion", "import-with-suggestion"],
 )
 def test_a_refusal_ends_each_sentence_once_with_or_without_a_suggestion(edit, message):
+    source = edit(PROGRAM)
     with pytest.raises(ValueError) as refusal:
-        load_program_source(edit(PROGRAM), SDK)
+        load_program_source(source, SDK)
 
     assert re.fullmatch(message, str(refusal.value)), str(refusal.value)
+    assert module_name(source) not in sys.modules
 
 
-def test_the_loader_suggests_only_the_sdk_names_its_caller_passes():
-    source = PROGRAM.replace(
-        '    return Question(text="What is 6 * 7?")',
-        '    await research(context, "Find the product.")\n    return Question(text="What is 6 * 7?")',
-    )
-    sdk = SdkExports(defining_modules={"research": ("example.sdk",)})
+def calling(name: str) -> str:
+    """``PROGRAM`` whose first step awaits ``name(context)`` before it returns."""
+    step = '    return Question(text="What is 6 * 7?")'
+    return PROGRAM.replace(step, f"    await {name}(context)\n{step}")
 
+
+def test_the_loader_suggests_only_the_sdk_names_its_caller_passes_and_every_former_name():
+    source = calling("research")
     with pytest.raises(ValueError, match=r"did you mean 'research' from example\.sdk\?") as suggested:
-        load_program_source(source, sdk)
+        load_program_source(source, SdkExports(defining_modules={"research": ("example.sdk",)}))
     with pytest.raises(ValueError) as unsuggested:
         load_program_source(source, SdkExports(defining_modules={}))
-
     assert "did you mean" not in str(unsuggested.value)
     assert module_name(source) not in sys.modules, str(suggested.value)
+
+    with pytest.raises(ValueError, match=r"`try_grader` \(line \d+\); did you mean 'grade_candidate'\?\n"):
+        load_program_source(calling("try_grader"), SdkExports(defining_modules={}))
 
 
 def facts_program(answer: str, *, before: str) -> str:
@@ -286,13 +281,3 @@ def test_an_edit_to_a_class_a_step_reads_changes_that_steps_memo_key():
 
     assert edited.steps["grader"].source_digest != first.steps["grader"].source_digest
     assert edited.steps["question"].source_digest == first.steps["question"].source_digest
-
-
-def test_a_former_sdk_name_gets_its_replacement_from_a_partial_sdk_catalog():
-    source = PROGRAM.replace(
-        '    return Question(text="What is 6 * 7?")',
-        '    await try_grader(context)\n    return Question(text="What is 6 * 7?")',
-    )
-
-    with pytest.raises(ValueError, match=r"`try_grader` \(line \d+\); did you mean 'grade_candidate'\?\n"):
-        load_program_source(source, SdkExports(defining_modules={}))

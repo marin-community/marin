@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
+"""Invariants: validation evidence belongs to the exact task (digests do not depend on the hash seed)."""
+
 import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
-
-from pydantic_core import to_jsonable_python
 
 from taskforge.content_hash import canonical_json
 
@@ -61,7 +60,6 @@ class Outer:
     weights: dict[str, float]
 
 
-def test_a_value_without_sets_encodes_as_pydantic_encodes_it():
+def test_a_value_without_sets_encodes_with_sorted_keys_base64_bytes_and_enum_values():
     value = Outer("x", (Inner(b"\x00\x01", Shade.DARK),), {"b": 0.5, "a": 1.0})
-    pydantic_only = to_jsonable_python(value, bytes_mode="base64")
-    assert canonical_json(value) == json.dumps(pydantic_only, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    assert canonical_json(value) == '{"name":"x","parts":[{"blob":"AAE=","shade":"dark"}],"weights":{"a":1.0,"b":0.5}}'
