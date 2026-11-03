@@ -297,8 +297,8 @@ def test_fa4_accepts_unit_context_axis(monkeypatch, context_entry):
     monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_unsharded_forward)
     mesh = AbstractMesh(
-        axis_sizes=(1, 2, 1, 8, 1),
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_sizes=(1, 2, 8, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     batch_axes = ("replica_dcn", "data", "expert")
@@ -387,8 +387,8 @@ def test_packed_bounds_with_singleton_batch_mesh_axes():
 
         expected = bounds(segment_ids)
         mesh = Mesh(
-            np.asarray(devices).reshape(1, 1, 2, 1, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            np.asarray(devices).reshape(1, 1, 1, 2, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         with jax.set_mesh(mesh):
@@ -772,8 +772,8 @@ def test_real_gpu_fa4_cute_cp2_matches_cp1_sm90(mask_kind):
     results = []
     for context_size in (1, 2):
         mesh = Mesh(
-            np.asarray(jax.devices()[:context_size]).reshape(1, 1, context_size, 1, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            np.asarray(jax.devices()[:context_size]).reshape(1, 1, 1, context_size, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         with jax.set_mesh(mesh):
