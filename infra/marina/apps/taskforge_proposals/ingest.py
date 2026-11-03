@@ -10,43 +10,30 @@ paths and the usage summary. Each row records ``source_key``, a digest of the ET
 files it was built from, so a rerun reads and uploads only rows whose sources changed. Rerunning is
 always safe: rows are upserted by capability and slot.
 
-    uv run infra/marina/apps/taskforge_proposals/ingest.py --app-id UUID [--url ORIGIN]
+    uv run python -m infra.marina.apps.taskforge_proposals.ingest --app-id UUID [--url ORIGIN]
 """
 
 import hashlib
-import importlib.util
 import json
 import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import click
 import fsspec
 import requests
-from marina.client import DEFAULT_MARINA_URL, applet_query, marina_token_provider
+from marina.client import DEFAULT_MARINA_URL, MarinaRequestError, applet_query, marina_token_provider
+from rigging.filesystem.factory import filesystem
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 
-
-def _sibling(name: str, relative: str):
-    """Load a module of this app by path: this script runs outside Marina's package layout."""
-    spec = importlib.util.spec_from_file_location(f"taskforge_proposals_{name}", Path(__file__).parent / relative)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_sections, _schema, _usage = (
-    _sibling("sections", "server/proposal.py"),
-    _sibling("schema", "server/schema.py"),
-    _sibling("usage", "slot_usage.py"),
-)
-body_sections, first_sentence = _sections.body_sections, _sections.first_sentence
-CAPABILITY_COLUMNS, PROPOSAL_COLUMNS = _schema.CAPABILITY_COLUMNS, _schema.PROPOSAL_COLUMNS
-USAGE_FIELDS, DEFAULT_RUN_ROOT, DEFAULT_USAGE = _usage.USAGE_FIELDS, _usage.DEFAULT_RUN_ROOT, _usage.DEFAULT_OUTPUT
+from .server.proposal import body_sections, first_sentence
+from .server.schema import CAPABILITY_COLUMNS, PROPOSAL_COLUMNS
+from .slot_usage import DEFAULT_OUTPUT as DEFAULT_USAGE
+from .slot_usage import DEFAULT_RUN_ROOT, USAGE_FIELDS, file_key, list_tree
 
 INGEST_VERSION = "1"
 DEFAULT_CATALOG = (
@@ -113,11 +100,6 @@ def digest(*parts: Any) -> str:
     return hashlib.sha256(json.dumps([INGEST_VERSION, *parts], sort_keys=True, default=str).encode()).hexdigest()[:32]
 
 
-def file_key(info: dict[str, Any] | None) -> str | None:
-    """``slot_usage.file_key``, the key usage summaries are recorded under; ``None`` for a missing file."""
-    return None if info is None else _usage.file_key(info)
-
-
 def catalog_capabilities(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Every capability section with its subject and the names of the groups above it."""
     out = {}
@@ -147,7 +129,7 @@ def catalog_capabilities(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def read_usage(fs: fsspec.AbstractFileSystem, usage_root: str) -> dict[str, dict[str, Any]]:
     """Usage summaries by file key; a later part replaces an earlier one for the same key."""
     out = {}
-    for path in sorted(fs.glob(f"{usage_root}/*.jsonl")):
+    for path in sorted(fs.glob(prefix_join(usage_root, "*.jsonl"))):
         for line in fs.cat(path).decode().splitlines():
             if line.strip():
                 record = json.loads(line)
@@ -173,8 +155,9 @@ class Uploader:
             try:
                 self.requests += 1
                 return self.local.query(sql, params)
-            except Exception as error:  # transport errors and 5xx are retried; the upsert is idempotent
-                if attempt == 4 or "(4" in str(error)[:30]:
+            except (requests.RequestException, MarinaRequestError) as error:
+                # Transport errors and 5xx are retried (the upsert is idempotent); a 4xx is the request's fault.
+                if attempt == 4 or (isinstance(error, MarinaRequestError) and error.status_code < 500):
                     raise
                 print(f"retrying after {type(error).__name__}: {str(error)[:200]}", flush=True)
                 time.sleep(2**attempt)
@@ -229,21 +212,20 @@ def main(
     started_at = datetime.now(UTC).isoformat()
     started = time.monotonic()
     configure_coreweave_s3()
-    fs = fsspec.filesystem("s3")
-    root = run_root.removeprefix("s3://").rstrip("/")
+    fs = filesystem("s3")
     uploader = Uploader(url, app_id, upload_threads)
 
     catalog_doc = json.loads(fs.cat(catalog_url))
     catalog = catalog_capabilities(catalog_doc)
-    listing = fs.find(root, detail=True)
+    listing = list_tree(fs, run_root)
     files: dict[str, dict[str, dict[str, Any]]] = {}
     for path, info in listing.items():
-        rel = path[len(root) + 1 :].split("/")
+        rel = path.split("/")
         if len(rel) == 2 and rel[0] in catalog:
             files.setdefault(rel[0], {})[rel[1]] = info
     if not files:
         raise SystemExit(f"no capability folders under {run_root}; check the CoreWeave keys and the root")
-    usage = read_usage(fs, usage_root.removeprefix("s3://").rstrip("/"))
+    usage = read_usage(fs, usage_root)
     if not usage:
         raise SystemExit(f"no usage summaries under {usage_root}; run slot_usage.py first")
     print(
@@ -272,6 +254,10 @@ def main(
         if record is None:
             problems["completions file without a current usage summary"] += 1
         return record
+
+    def stored_path(cap: str, name: str) -> str | None:
+        """The URL of a run file the viewer links to but does not load, when the file exists."""
+        return prefix_join(run_root, f"{cap}/{name}") if name in files.get(cap, {}) else None
 
     def cat_json(info: dict[str, Any] | None) -> Any:
         return None if info is None else json.loads(fs.cat(info["name"]))
@@ -377,10 +363,8 @@ def main(
                     "finish_reasons": (slot_usage or {}).get("finish_reasons"),
                     "wall_time": (slot_usage or {}).get("wall_time"),
                     "body_chars": len(body) if current else None,
-                    "request_path": (
-                        f"s3://{root}/{cap}/{prefix}request.json" if folder.get(prefix + "request.json") else None
-                    ),
-                    "completions_path": f"s3://{root}/{cap}/{prefix}completions.json" if completions_info else None,
+                    "request_path": stored_path(cap, prefix + "request.json"),
+                    "completions_path": stored_path(cap, prefix + "completions.json"),
                     "completions_bytes": completions_info["size"] if completions_info else None,
                     "proposal": proposal,
                     "verdict_record": verdict,
@@ -422,8 +406,8 @@ def main(
             "result": result,
             "failure": failure,
             "catalog_entry": meta["entry"],
-            "plan_request_path": f"s3://{root}/{cap}/plan.request.json" if folder.get("plan.request.json") else None,
-            "plan_completions_path": f"s3://{root}/{cap}/plan.completions.json" if plan_usage_info else None,
+            "plan_request_path": stored_path(cap, "plan.request.json"),
+            "plan_completions_path": stored_path(cap, "plan.completions.json"),
             "source_key": cap_key,
         }
         return cap_row, proposal_rows

@@ -278,7 +278,8 @@ def create_api(services: AppletServices) -> FastAPI:
                 connection,
                 where.statement(
                     "SELECT subject_id AS domain, verification AS kind, COUNT(*) AS n, "
-                    "COUNT(*) FILTER (WHERE verdict = 'accept') AS accepted "
+                    "COUNT(*) FILTER (WHERE verdict = 'accept') AS accepted, "
+                    "COUNT(*) FILTER (WHERE verdict IS NOT NULL) AS decided "
                     f"FROM proposals WHERE {clause} GROUP BY 1, 2 ORDER BY 1, 2"
                 ),
                 params,

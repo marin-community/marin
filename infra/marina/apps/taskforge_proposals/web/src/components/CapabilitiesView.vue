@@ -18,11 +18,14 @@ const sort = computed(() => props.query.sort || "id");
 const dir = computed(() => props.query.dir || "asc");
 const state = (extra) => ({ q: props.query.q, domain: props.query.domain, status: props.query.status, sort: props.query.sort, dir: props.query.dir, page_size: props.query.page_size, ...extra });
 
+// Only the latest request may update the table; an earlier one can resolve after it.
+let serial = 0;
 watch(() => props.query, async (query) => {
+  const mine = ++serial;
   try {
-    data.value = await api("capabilities", { q: query.q, domain: query.domain, status: query.status, sort: sort.value, dir: dir.value, page: query.page || 1, page_size: query.page_size || 50 });
-    error.value = "";
-  } catch (e) { error.value = e.message; }
+    const result = await api("capabilities", { q: query.q, domain: query.domain, status: query.status, sort: sort.value, dir: dir.value, page: query.page || 1, page_size: query.page_size || 50 });
+    if (mine === serial) { data.value = result; error.value = ""; }
+  } catch (e) { if (mine === serial) error.value = e.message; }
 }, { immediate: true, deep: true });
 
 function sortBy(key) {

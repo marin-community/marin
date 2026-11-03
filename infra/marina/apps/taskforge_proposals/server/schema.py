@@ -51,7 +51,8 @@ SCHEMA_STATEMENTS = (
         PRIMARY KEY (capability_id, slot)
     )
     """,
-    # Revision 1 created proposals without this column.
+    # CREATE TABLE IF NOT EXISTS leaves an existing table as it is, so a column added after a table
+    # was first created needs its own idempotent ALTER.
     "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS superseded BOOLEAN",
     "CREATE INDEX IF NOT EXISTS proposals_search ON proposals USING GIN (search)",
     "CREATE INDEX IF NOT EXISTS proposals_domain ON proposals (domain)",

@@ -3,21 +3,17 @@
 
 """The viewer's schema, ingest upsert and API against a real Postgres."""
 
-import importlib.util
 import json
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 from marina.db import UrlDatabase, engine_for
 from marina.testing import SourceServices
 from sqlalchemy import text
+from taskforge_proposals import ingest
 from taskforge_proposals.server import app as viewer
 from taskforge_proposals.server.proposal import body_sections
 
 APP = "taskforge_proposals"
-_spec = importlib.util.spec_from_file_location("tf_ingest", Path(__file__).parents[1] / "ingest.py")
-ingest = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(ingest)
 
 BODY = (
     "## Task\n\nSolve the cooling recurrence. More text.\n\n```\n## not a heading\n```\n\n"

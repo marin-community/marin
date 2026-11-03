@@ -28,15 +28,17 @@ counts come from per-file usage summaries.
 
 Those summaries come from the completions files (160 GB with stream events), so they are computed
 in the storage region by an Iris job. Each job lists the run, skips files a previous part already
-covers (same path, size and ETag) and writes `derived/slot-usage/part-<stamp>-<shard>.jsonl` next to
-the run. From the repository root, with `CW_KEY_ID`/`CW_KEY_SECRET` set:
+covers (same path, size and ETag) and writes `derived/slot-usage/part-<stamp>-<shard>-<attempt>.jsonl`
+next to the run. Each shard owns a fixed stride of the sorted listing, so a retried shard reads only the
+files its earlier attempt missed. From the repository root, with your own `CW_KEY_ID`/`CW_KEY_SECRET`
+exported (the Iris client forwards them as job secrets, so they stay out of the job spec):
 
 ```bash
 N=32; STAMP=$(date -u +%Y%m%d%H%M)
 for i in $(seq 0 $((N-1))); do
   uv run iris --cluster=marin job run --target-cluster cw-us-east-02a --no-wait \
     --job-name tfviewer-usage-$STAMP-s$(printf %02d $i)of$N --cpu 4 --memory 3GB --disk 8GB --max-retries 2 \
-    --sync-package marin-rigging -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
+    --sync-package marin-rigging \
     -- python infra/marina/apps/taskforge_proposals/slot_usage.py --shard $i --shards $N --stamp $STAMP
 done
 ```
@@ -44,7 +46,7 @@ done
 Then load the tables (a rerun uploads only rows whose source files or usage changed):
 
 ```bash
-uv run infra/marina/apps/taskforge_proposals/ingest.py --app-id 05b2dac2-284c-4029-a4c0-629f5b2c9b23
+uv run python -m infra.marina.apps.taskforge_proposals.ingest --app-id 05b2dac2-284c-4029-a4c0-629f5b2c9b23
 ```
 
 The ingest prints the stored counts and any problems: completions files without a usage summary,
@@ -60,5 +62,5 @@ uv run marina release infra/marina/apps/taskforge_proposals --base-version CURRE
 ```
 
 For a preview, load a few capabilities into it with
-`ingest.py --app-id PRINTED_ID --url PRINTED_ORIGIN --limit 50`. Tests:
+`uv run python -m infra.marina.apps.taskforge_proposals.ingest --app-id PRINTED_ID --url PRINTED_ORIGIN --limit 50`. Tests:
 `uv run pytest infra/marina/apps/taskforge_proposals`.

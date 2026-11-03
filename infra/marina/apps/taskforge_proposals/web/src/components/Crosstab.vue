@@ -22,14 +22,17 @@ const STEPS = 6;
 function shade(row, kind) {
   const c = row.cells[kind];
   if (!c || !c.n) return { cls: "zero", style: {} };
-  const value = props.metric === "accept" ? c.accepted / c.n : c.n / row.total;
+  // Accept rate counts decided slots only, as elsewhere on the page; a cell with none decided is blank.
+  if (props.metric === "accept" && !c.decided) return { cls: "zero", style: {} };
+  const value = props.metric === "accept" ? c.accepted / c.decided : c.n / row.total;
   const step = Math.min(STEPS, Math.max(1, Math.ceil(value * STEPS)));
   return { cls: step >= 4 ? "dark" : "", style: { background: `var(--seq-${step})` } };
 }
 function text(row, kind) {
   const c = row.cells[kind];
   if (!c) return "·";
-  return props.metric === "accept" ? pct(c.accepted, c.n, 0) : num(c.n);
+  if (props.metric === "accept") return c.decided ? pct(c.accepted, c.decided, 0) : "–";
+  return num(c.n);
 }
 </script>
 
@@ -41,7 +44,7 @@ function text(row, kind) {
         <tr v-for="row in table" :key="row.domain">
           <th :title="domains[row.domain]">{{ row.domain }} <span class="muted">{{ (domains[row.domain] || "").slice(0, 34) }}</span></th>
           <td v-for="k in kinds" :key="k" :class="shade(row, k).cls" :style="shade(row, k).style"
-            @mousemove="showTip($event, `${row.domain} · ${label(k)}`, row.cells[k] ? [`${num(row.cells[k].n)} slots (${pct(row.cells[k].n, row.total)} of the domain)`, `${pct(row.cells[k].accepted, row.cells[k].n)} accepted`] : ['no slots'])" @mouseleave="hideTip">{{ text(row, k) }}</td>
+            @mousemove="showTip($event, `${row.domain} · ${label(k)}`, row.cells[k] ? [`${num(row.cells[k].n)} slots (${pct(row.cells[k].n, row.total)} of the domain)`, row.cells[k].decided ? `${pct(row.cells[k].accepted, row.cells[k].decided)} of decided slots accepted` : 'no decided slots'] : ['no slots'])" @mouseleave="hideTip">{{ text(row, k) }}</td>
           <td class="zero">{{ num(row.total) }}</td>
         </tr>
       </tbody>
