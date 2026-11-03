@@ -27,7 +27,6 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.test_support import unique_run_name
-from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import Control
 from taskforge.stage50_validate.controls import ControlOutcome, ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.evidence import Evidence
@@ -206,7 +205,7 @@ async def solver_trials(
     model = GlmRolloutModel(client, POLICY, CallLedger(trial_plan.ledger, workpiece_id, 0, str(TrialKind.SOLVER)))
     started = time.monotonic()
     engine = settings(factories)
-    lowered = lower(lowered.task, MachineHost.LAPTOP, engine.factories, engine.limits)
+    lowered = lower(lowered.task, engine.factories, engine.limits)
     outcomes = await run_trials(lowered, trial_plan, engine, model)
     evidence = Evidence({TrialKind.SOLVER: tuple(outcomes)})
     write_summary(
@@ -260,7 +259,7 @@ async def replay_controls(
     workpiece_id = lowered.task.id
     started = time.monotonic()
     engine = settings(factories)
-    lowered = lower(lowered.task, MachineHost.LAPTOP, engine.factories, engine.limits)
+    lowered = lower(lowered.task, engine.factories, engine.limits)
     outcomes = await replay(lowered, controls, control_plan(directory, workpiece_id), engine)
     write_summary(
         directory,

@@ -787,7 +787,7 @@ async def run_adversary_trial(
     """
     trial_digest = task_digest(spec, settings.command_timeout)
     grader_digest = digest(grader_source(spec.task))
-    refused = refusal(spec, settings.factories)
+    refused = refusal(spec)
     if refused is not None:
         record = AdversaryRecord(
             policy.spec.name, model.model, digest(policy), policy.mode, brief, "", None, grader_digest, ()
