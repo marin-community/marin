@@ -168,7 +168,7 @@ process are preferred whenever a task fits one.
 
 Call `sandbox.factories.machine_factories(backends, controller_url)` with the exact shellbox
 `Backend` values the run uses. A requested backend that cannot start on the host raises during
-factory construction; the selection never silently shrinks. Supply a controller URL exactly when
+factory construction; the selection never silently shrinks. Supply a controller URL when
 selecting `Backend.GVISOR`. A ShellSim-only run does not probe Docker or the local sandbox.
 
 Custom-image builds remain available through `sandbox.image_builder`; selecting a backend and
