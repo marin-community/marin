@@ -895,17 +895,32 @@ class Controller(_message.Message):
         cursor: str
         budget_policy: Controller.FederationBudgetPolicy
         def __init__(self, requester_id: _Optional[str] = ..., cursor: _Optional[str] = ..., budget_policy: _Optional[_Union[Controller.FederationBudgetPolicy, _Mapping]] = ...) -> None: ...
+    class FederationJobLimits(_message.Message):
+        __slots__ = ("timeout", "scheduling_timeout", "max_retries_failure", "max_retries_preemption", "max_task_failures")
+        TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+        SCHEDULING_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+        MAX_RETRIES_FAILURE_FIELD_NUMBER: _ClassVar[int]
+        MAX_RETRIES_PREEMPTION_FIELD_NUMBER: _ClassVar[int]
+        MAX_TASK_FAILURES_FIELD_NUMBER: _ClassVar[int]
+        timeout: _time_pb2.Duration
+        scheduling_timeout: _time_pb2.Duration
+        max_retries_failure: int
+        max_retries_preemption: int
+        max_task_failures: int
+        def __init__(self, timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., max_task_failures: _Optional[int] = ...) -> None: ...
     class FederationJobDelta(_message.Message):
-        __slots__ = ("job_id", "summary", "changed_tasks", "tombstone")
+        __slots__ = ("job_id", "summary", "changed_tasks", "tombstone", "limits")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
         SUMMARY_FIELD_NUMBER: _ClassVar[int]
         CHANGED_TASKS_FIELD_NUMBER: _ClassVar[int]
         TOMBSTONE_FIELD_NUMBER: _ClassVar[int]
+        LIMITS_FIELD_NUMBER: _ClassVar[int]
         job_id: str
         summary: _job_pb2.JobStatus
         changed_tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         tombstone: bool
-        def __init__(self, job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ...) -> None: ...
+        limits: Controller.FederationJobLimits
+        def __init__(self, job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ..., limits: _Optional[_Union[Controller.FederationJobLimits, _Mapping]] = ...) -> None: ...
     class FederationEndpoint(_message.Message):
         __slots__ = ("endpoint_id", "name", "address", "task_id", "access", "metadata", "lease_remaining")
         class MetadataEntry(_message.Message):

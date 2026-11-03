@@ -54,7 +54,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
 from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, AttemptUid, JobName, WorkerId
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import timestamp_from_proto
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []
@@ -916,8 +916,8 @@ def insert_mirrored_job_config(
     """Insert the ``job_config`` companion for a job mirrored from a peer.
 
     Sets the name and the resources the peer reports. The columns describing how to
-    run the job (entrypoint, bundle, retries, timeouts) keep their defaults, since the
-    peer runs it and the parent only renders it.
+    run the job (entrypoint, bundle) keep their defaults, since the peer runs it
+    and the parent only renders it. Requested limits are applied by each sync.
 
     ``priority_band`` is the parent's band, which is what the peer's own inheritance
     resolves for this child unless the child overrode it — the sync summary carries no
@@ -933,6 +933,22 @@ def insert_mirrored_job_config(
             res_disk_bytes=int(resources.disk_bytes),
             res_device_json=proto_to_json(resources.device),
             priority_band=priority_band,
+        )
+    )
+
+
+@writes_to(job_config_table)
+def mirror_federated_job_limits(tx: Tx, job_id: JobName, limits: controller_pb2.Controller.FederationJobLimits) -> None:
+    """Keep the hub's displayed limits equal to the execution peer's request."""
+    tx.execute(
+        update(job_config_table)
+        .where(job_config_table.c.job_id == job_id)
+        .values(
+            timeout_ms=limits.timeout.milliseconds or None,
+            scheduling_timeout_ms=limits.scheduling_timeout.milliseconds or None,
+            max_retries_failure=limits.max_retries_failure,
+            max_retries_preemption=limits.max_retries_preemption,
+            max_task_failures=limits.max_task_failures,
         )
     )
 
