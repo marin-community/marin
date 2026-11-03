@@ -461,7 +461,7 @@ class RemoteClusterClient:
 
         Raises:
             ConnectError: With NOT_FOUND when no instance is registered. Other
-                RPC failures retain their original code. External proxy URLs
+                RPC failures retain their original code. Controller proxy URLs
                 are returned without checking readiness.
         """
         if self._use_controller_proxy:

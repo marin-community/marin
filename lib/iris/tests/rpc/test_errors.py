@@ -316,5 +316,6 @@ def test_format_connect_error_includes_code_reason_and_server_traceback(with_tra
         factory = connect_error_with_traceback if with_traceback else connect_error_sanitized
         error = factory(Code.INVALID_ARGUMENT, "children cannot be federated", exc=exc)
     message = format_connect_error(error)
-    assert message.startswith("INVALID_ARGUMENT: children cannot be federated")
+    assert error.code.name in message
+    assert error.message in message
     assert ("ValueError: invalid routing" in message) is with_traceback

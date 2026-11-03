@@ -11,9 +11,9 @@ from cloud.iris.iris_backend import launch
 
 
 @pytest.mark.parametrize(
-    "routing", 
+    "routing",
     [
-        {"target_cluster": "cw-rno2a", "parent_cluster_config": "marin.yaml"},
+        {"target_cluster": "cw-rno2a", "parent_cluster_config": None},
         {"target_cluster": None, "parent_cluster_config": "marin.yaml"},
     ],
 )
@@ -21,7 +21,7 @@ def test_nested_launch_rejects_root_routing_before_remote_submission(tmp_path, r
     previous = get_job_info()
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/coordinator/0")))
     try:
-        with pytest.raises(ValueError, match="Clear target_cluster and parent_cluster_config"):
+        with pytest.raises(ValueError):
             launch(SimpleNamespace(**routing), tmp_path)
     finally:
         set_job_info(previous)

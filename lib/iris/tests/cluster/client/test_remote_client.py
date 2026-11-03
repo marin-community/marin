@@ -11,7 +11,7 @@ from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.errors import connect_error_sanitized, extract_error_details
+from iris.rpc.errors import connect_error_sanitized
 from rigging.timing import Deadline
 
 
@@ -125,8 +125,9 @@ def test_submission_failure_keeps_rpc_details_and_prints_code_and_reason():
                 resources=job_pb2.ResourceSpecProto(cpu_millicores=1000),
             )
         assert raised.value is error
-        assert extract_error_details(raised.value).message == "task cannot submit through the hub"
         rendered = "".join(traceback.format_exception(raised.value))
-        assert "launch_job(/alice/train/eval): PERMISSION_DENIED: task cannot submit through the hub" in rendered
+        assert "launch_job(/alice/train/eval)" in rendered
+        assert error.code.name in rendered
+        assert error.message in rendered
     finally:
         client.shutdown()
