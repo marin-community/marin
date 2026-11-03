@@ -98,7 +98,7 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v6"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v7"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
 LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
@@ -126,7 +126,7 @@ def _lmh_output_root() -> str:
 # step rewrites (does not skip) any shard whose sidecar doesn't match. Without this,
 # a policy change like the cluster-B passage drop (marin#6852) never reaches an
 # already-staged corpus — the bloom keeps reading the old passage-bearing text.
-_LMH_EXTRACTION_VERSION = "3-split-views"
+_LMH_EXTRACTION_VERSION = "4-fields-without-labels"
 _LMH_VERSION_SIDECAR = ".extraction_version"
 
 
@@ -364,13 +364,17 @@ _GRADER_FIELDS: frozenset[str] = frozenset({"test", "test_list"})
 
 
 def _field_lines(record: dict[str, Any], exclude: frozenset[str]) -> str:
-    """String fields in key order, then the items of string-list fields, one per line.
+    """Multi-word string fields in dataset order, then the items of string-list fields, one per line.
 
-    Lists usually hold answer choices, so they follow the question, as they do in
-    copies of the dataset. Keys whose lowercase name is in *exclude* are skipped.
+    Dataset order puts a coding prompt before its solution, and lists usually hold
+    answer choices, so they follow the question, as they do in copies of the
+    dataset. One-token strings are labels (``subject``, ``task_id``, an answer
+    letter) that copies rarely keep next to the question; indexing them adds
+    n-grams no copy holds, which lowers the item's matched share. Keys whose
+    lowercase name is in *exclude* are skipped.
     """
-    keys = [k for k in sorted(record) if k.lower() not in exclude]
-    lines = [record[k] for k in keys if isinstance(record[k], str) and record[k].strip()]
+    keys = [k for k in record if k.lower() not in exclude]
+    lines = [record[k] for k in keys if isinstance(record[k], str) and len(record[k].split()) > 1]
     for k in keys:
         value = record[k]
         if isinstance(value, list) and all(isinstance(x, str) for x in value):
