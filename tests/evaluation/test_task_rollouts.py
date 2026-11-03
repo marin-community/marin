@@ -655,10 +655,13 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
         "run-default",
         "source-judge",
     ]
-    assert len(model_requests) == 3
+    assert len(model_requests) == 2
     final_reader = ReadView(output)
     graded = [row for row in final_reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]
     assert len(graded) == 2
+    retry = next(row for row in graded if row["retry"] == 1)
+    assert retry["prompt_tokens"] == retry["completion_tokens"] == 0
+    assert json.loads(final_reader.read_blob(retry["result_blob"]))["reused_response_from_retry"] == 0
     grade_details = [json.loads(final_reader.read_blob(row["result_blob"]))["grade"]["detail"] for row in graded]
     assert {detail["requested_model"] for detail in grade_details} == {"source-judge", "run-default"}
     assert {detail["response_model"] for detail in grade_details} == {"judge-served-revision"}
@@ -681,7 +684,7 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
     )
     with pytest.raises(ValueError, match="Resume requires"):
         await run_evaluation((corpus,), output, changed, model, machine_factories={}, judge_connection=connection)
-    assert len(model_requests) == 3
+    assert len(model_requests) == 2
 
 
 @pytest.mark.asyncio
@@ -809,7 +812,12 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
     endpoint = MixedEndpoint()
     tokenizer = CharacterTokenizer()
     config = run_config.model_copy(
-        update={"source_limit": None, "concurrency": 3, "verifier_machine": machine_runtime(backend="shellsim")}
+        update={
+            "source_limit": None,
+            "concurrency": 3,
+            "verifier_machine": machine_runtime(backend="shellsim"),
+            "generation_extra_body": {"skip_special_tokens": False},
+        }
     )
     output = str(tmp_path / "mixed-results")
     async with openai.AsyncOpenAI(
@@ -824,7 +832,7 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
             completion_model=CompletionModel(client, "fixture"),
             likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
         )
-        model = ChatModel(client, "fixture", 16)
+        model = ChatModel(client, "fixture", 16, extra_body={"skip_special_tokens": True})
         with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
             await run_evaluation(mixed_corpora, output, config, model, **arguments)
         first = ReadView(output)
@@ -860,7 +868,13 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
         final_count = len(endpoint.requests)
         await run_evaluation(mixed_corpora, output, config, model, **arguments)
         assert len(endpoint.requests) == final_count
+        assert all(
+            body["skip_special_tokens"] is False
+            for _, body in endpoint.requests
+            if "messages" in body or isinstance(body.get("prompt"), str)
+        )
     reader = ReadView(output)
+    assert json.loads(reader.read_blob(RUN_OBJECT))["config"]["generation_extra_body"] == {"skip_special_tokens": False}
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
     assert len([row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]) == 13
     invalid = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "invalid_task"]
@@ -904,6 +918,7 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
         "stop": ["STOP"],
         "seed": 7,
         "chat_template_kwargs": {"enable_thinking": False},
+        "skip_special_tokens": False,
         "stream": False,
     }
     raw_wire = next(body for _, body in endpoint.requests if body.get("prompt") == "raw/bare")
@@ -914,6 +929,7 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
         "top_p": 1,
         "max_tokens": 6,
         "stop": ["\nQuestion:"],
+        "skip_special_tokens": False,
         "stream": False,
     }
     likelihood_wire = next(body for _, body in endpoint.requests if isinstance(body.get("prompt"), list))

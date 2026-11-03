@@ -15,7 +15,13 @@ from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
-from experiments.post_training.task_curation.datasets.evalchemy.environments import INSTRUCTION_ENVIRONMENTS
+from experiments.post_training.task_curation.datasets.evalchemy.environments import (
+    ALIAS_GRADER,
+    BASIC_GRADER,
+    INSTRUCTION_ENVIRONMENTS,
+    MATH_GRADER,
+    MATH_JUDGE_GRADER,
+)
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
     DEFAULT_REPOSITORY,
@@ -27,7 +33,15 @@ from experiments.post_training.task_curation.images.build import (
 def declared_environments() -> dict[str, Environment]:
     """Explicitly registered buildable environments, keyed by identity."""
     return {
-        identity_digest(environment): environment for environment in (*BUILDABLE_ENVIRONMENTS, *INSTRUCTION_ENVIRONMENTS)
+        identity_digest(environment): environment
+        for environment in (
+            *BUILDABLE_ENVIRONMENTS,
+            BASIC_GRADER,
+            ALIAS_GRADER,
+            MATH_GRADER,
+            MATH_JUDGE_GRADER,
+            *INSTRUCTION_ENVIRONMENTS,
+        )
     }
 
 

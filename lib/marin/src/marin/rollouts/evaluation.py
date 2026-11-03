@@ -40,7 +40,9 @@ from rolloutengine.models import (
     ModelTurn,
     Rollout,
     RolloutLimits,
+    RolloutOperation,
     TaskRolloutSpec,
+    TokenUsage,
     TraceMode,
 )
 from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
@@ -71,7 +73,7 @@ from verifyit.modes.grade_judge import JudgeConnection
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.02.3"
+EVALUATION_EXECUTION_REVISION = "2026.11.03"
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -104,6 +106,7 @@ class JudgeIdentity(RunModel):
 class EvaluationRunConfig(RunModel):
     model: ModelIdentity
     max_tokens: int = Field(gt=0)
+    generation_extra_body: dict[str, Any] = Field(default_factory=dict)
     concurrency: int = Field(default=64, gt=0)
     limits: RolloutLimits
     source_limit: int | None = Field(default=None, gt=0)
@@ -142,6 +145,7 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
         extra["chat_template_kwargs"] = sampling.chat_template_kwargs
     if sampling.top_k is not None:
         extra["top_k"] = sampling.top_k
+    extra.update(config.generation_extra_body)
     options: dict[str, Any] = {
         "temperature": sampling.temperature,
         "max_tokens": min(config.max_tokens, sampling.max_tokens or config.max_tokens),
@@ -209,6 +213,40 @@ def _sample(
 
 def _attempt_key(dataset: str, source_row: str, trial: int) -> tuple[str, str, int]:
     return dataset, source_row, trial
+
+
+def _grading_retry_turn(reader: ReadView, old: Attempt | None) -> ModelTurn | None:
+    """Reuse one completed generation when its verifier, rather than the model, failed."""
+    if old is None or old.phase is not AttemptPhase.FINISHED or old.outcome is not Outcome.INFRA_ERROR:
+        return None
+    assert old.result_blob is not None
+    saved = reader.read_blob(old.result_blob)
+    assert saved is not None
+    raw = json.loads(saved)
+    failure = raw["failure"]
+    if failure is not None and failure["diagnostics"]["operation"] != RolloutOperation.GRADE:
+        return None
+    if failure is None and raw["grade"]["status"] not in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
+        return None
+    conversations = raw["conversations"]
+    if len(conversations) != 1 or len(conversations[0]["steps"]) != 1:
+        return None
+    turn = conversations[0]["steps"][0]["turn"]
+    usage = turn["usage"]
+    return ModelTurn(
+        message=turn["message"],
+        prompt_token_ids=tuple(turn["prompt_token_ids"]),
+        response_token_ids=tuple(turn["response_token_ids"]),
+        logprobs=tuple(turn["logprobs"]) if turn["logprobs"] is not None else None,
+        stop_reason=turn["stop_reason"],
+        text=turn["text"],
+        metadata=turn["metadata"],
+        usage=TokenUsage(**usage) if usage is not None else None,
+    )
+
+
+async def _saved_model_turn(_request: ModelRequest, turn: ModelTurn) -> ModelTurn:
+    return turn
 
 
 async def generation_turn(
@@ -379,6 +417,7 @@ async def _score_generation(
     *,
     machine_factories: Mapping[str, MachineFactory],
     judge_connection: JudgeConnection | None,
+    retry_turn: ModelTurn | None,
 ) -> Outcome:
     task = case.task
     options = generation_options(protocol, config, attempt.trial)
@@ -410,7 +449,11 @@ async def _score_generation(
     operation = case.item.operation
     assert isinstance(operation, ChatGeneration | TextGeneration)
 
-    policy_model = partial(generation_turn, model=model, operation=operation)
+    policy_model = (
+        partial(_saved_model_turn, turn=retry_turn)
+        if retry_turn is not None
+        else partial(generation_turn, model=model, operation=operation)
+    )
 
     failure_evidence = None
     permanent_error = None
@@ -444,7 +487,18 @@ async def _score_generation(
         "failure": dataclasses.asdict(rollout.failure) if rollout.failure else None,
         "failure_evidence": failure_evidence,
         "options": options,
+        "reused_response_from_retry": attempt.retry - 1 if retry_turn is not None else None,
     }
+    prompt_tokens = (
+        sum(turn.usage.prompt_tokens if turn.usage else len(turn.prompt_token_ids) for turn in turns) if turns else None
+    )
+    completion_tokens = (
+        sum(turn.usage.completion_tokens if turn.usage else len(turn.response_token_ids) for turn in turns)
+        if turns
+        else None
+    )
+    if retry_turn is not None:
+        prompt_tokens = completion_tokens = 0
     _save_attempt(
         store,
         attempt,
@@ -452,16 +506,8 @@ async def _score_generation(
         raw,
         outcome,
         grade.error,
-        (
-            sum(turn.usage.prompt_tokens if turn.usage else len(turn.prompt_token_ids) for turn in turns)
-            if turns
-            else None
-        ),
-        (
-            sum(turn.usage.completion_tokens if turn.usage else len(turn.response_token_ids) for turn in turns)
-            if turns
-            else None
-        ),
+        prompt_tokens,
+        completion_tokens,
     )
     if permanent_error is not None:
         raise permanent_error
@@ -557,12 +603,13 @@ async def run_evaluation(
             primary_key=("dataset", "source_row"),
             schema_version=1,
         )
-        latest = _latest_attempts(store.read_view())
+        reader = store.read_view()
+        latest = _latest_attempts(reader)
         with store.transaction() as transaction:
             transaction.write_object(RUN_OBJECT, json.dumps(run, allow_nan=False).encode())
 
-        queue: asyncio.Queue[tuple[EvaluationCase, EvaluationProtocol, Selection, int, int] | None] = asyncio.Queue(
-            maxsize=config.concurrency * 2
+        queue: asyncio.Queue[tuple[EvaluationCase, EvaluationProtocol, Selection, int, int, ModelTurn | None] | None] = (
+            asyncio.Queue(maxsize=config.concurrency * 2)
         )
         failures = 0
 
@@ -599,7 +646,20 @@ async def run_evaluation(
                             and old.outcome in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE, Outcome.INVALID_TASK)
                         ):
                             continue
-                        await queue.put((case, protocol, decision.record, trial, 0 if old is None else old.retry + 1))
+                        await queue.put(
+                            (
+                                case,
+                                protocol,
+                                decision.record,
+                                trial,
+                                0 if old is None else old.retry + 1,
+                                (
+                                    _grading_retry_turn(reader, old)
+                                    if isinstance(case.item.operation, ChatGeneration | TextGeneration)
+                                    else None
+                                ),
+                            )
+                        )
                 if records:
                     with store.transaction() as transaction:
                         transaction.table(SELECTIONS_TABLE).extend(records)
@@ -611,7 +671,7 @@ async def run_evaluation(
         async def consume() -> None:
             nonlocal failures
             while (work := await queue.get()) is not None:
-                case, protocol, selection, trial, retry = work
+                case, protocol, selection, trial, retry, retry_turn = work
                 task = case.task
                 seed = protocol.trials.seed_for(trial) if config.seed is None else config.seed + trial
                 attempt = Attempt(
@@ -649,6 +709,7 @@ async def run_evaluation(
                     selection.max_tokens,
                     machine_factories=machine_factories,
                     judge_connection=judge_connection,
+                    retry_turn=retry_turn,
                 )
                 failures += outcome is Outcome.INFRA_ERROR
 

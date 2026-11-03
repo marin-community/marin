@@ -8,20 +8,32 @@ import string
 from collections.abc import Mapping
 from typing import Any
 
-from verifyit.adapters.completion import END_OF_TURN
+from verifyit.adapters.completion import END_OF_TURN, final_text
 from verifyit.grade import InvalidTask, Reward, scored
 from verifyit.modes.grade_exact import grade_collection_f1, grade_normalized_aliases
+
+from .amc import last_boxed_answer
 
 INVALID_ANSWER = "[invalid]"
 GSM8K_STOPS = tuple("Question:" if stop == "\nQuestion:" else stop for stop in END_OF_TURN)
 COMPLETION_REQUEST_STOPS = ("\nYou are an AI assistant", "\nQuestion:", "\nQ:", "\n[Question]")
 GSM8K_REQUEST_STOPS = ("\nYou are an AI assistant", "Question:", "\nQ:", "\n[Question]")
 _NUMBER = r"-?\$?\d[\d,]*(?:\.\d+)?"
-_GSM_FLEXIBLE_PATTERNS = (
-    re.compile(rf"\\boxed\{{\s*({_NUMBER})\s*\}}"),
-    re.compile(rf"(?i)\b(?:final\s+answer|answer)\s*(?:is|:|=)?\s*({_NUMBER})"),
-    re.compile(_NUMBER),
+_BARE_NUMBER = r"-?\d[\d,]*(?:\.\d+)?"
+_GSM_FINAL_ANSWER = re.compile(rf"(?i)\b(?:final\s+answer|answer)\s*(?:is|:|=)?\s*({_NUMBER})")
+_GSM_NUMERIC_CANDIDATE = re.compile(_NUMBER)
+_ANNOTATED_SCALAR = re.compile(
+    rf"^\s*(?:\\?\$|€|£)?\s*(?P<number>{_BARE_NUMBER})"
+    r"(?P<unit>\s+[A-Za-z]+(?:\s+[A-Za-z]+)*|\s*%|/(?:day|week|month|year|hour|minute|second)s?)?"
+    r"(?:\s*\(\s*=\s*(?:\d+(?:\.\d+)?\s+[A-Za-z]+\s*)+\))?\s*\.?\s*$"
 )
+_PROSE_SCALAR = re.compile(rf"^[A-Za-z][A-Za-z\s]*\s+(?P<number>{_BARE_NUMBER})\s+[A-Za-z][A-Za-z\s]*\.?$")
+_CLOCK_ANSWER = re.compile(
+    r"^\s*(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?:a\.?m\.?|p\.?m\.?))?\s*$",
+    re.IGNORECASE,
+)
+_TEXT_ANNOTATION = re.compile(r"\\(?:text|textbf|mathrm|operatorname)\s*\{([^{}]*)\}")
+_TEXT_BLOCK = re.compile(r"\\(?:text|textbf|mathrm|operatorname)\s*\{[^{}]*\}")
 _ANSWER_MARKER = re.compile(r"(?im)^[ \t]*(?:(?:final)[ \t]+)?(?:answer|a)[ \t]*:[ \t]*(?P<answer>\S[^\r\n]*)")
 _EXPLICIT_ANSWER = re.compile(r"(?im)\b(?:the[ \t]+)?(?:final[ \t]+)?answer[ \t]+is[ \t]+(?P<answer>\S[^\r\n]*)")
 _LEADING_ANSWER_MARKER = re.compile(r"(?i)^(?:(?:final)[ \t]+)?(?:answer|a)[ \t]*:[ \t]*")
@@ -179,7 +191,48 @@ def validate_harness_generation(profile: str, references: tuple[tuple[str, ...],
         raise InvalidTask("Only DROP accepts multi-span references")
 
 
-def grade_harness_generation_candidate(profile: str, references: tuple[tuple[str, ...], ...], response: str) -> Reward:
+def _gsm8k_flexible_answer(response: str) -> str:
+    response = final_text(truncate_response(response, GSM8K_STOPS))
+    boxed = last_boxed_answer(response.replace(r"\fbox", r"\boxed"))
+    if boxed:
+        return boxed.strip()
+    for pattern in (_GSM_FINAL_ANSWER, _GSM_NUMERIC_CANDIDATE):
+        if matches := pattern.findall(response):
+            return matches[-1].strip()
+    return INVALID_ANSWER
+
+
+def _gsm8k_equivalence_candidates(prediction: str, question: str) -> list[str]:
+    """Retain complete final expressions while accepting the source's annotated scalars."""
+    candidates = [prediction]
+    scalar_text = prediction.replace("{,}", ",").replace(",\\!", ",").replace("\\,", "")
+    scalar_text = _TEXT_ANNOTATION.sub(r" \1 ", scalar_text)
+    scalar_text = scalar_text.replace(r"^\circ", " degrees ").replace(r"\%", "%")
+    scalar_text = re.sub(r"\\[ ,;!]", " ", scalar_text).strip()
+    scalar = _ANNOTATED_SCALAR.fullmatch(scalar_text)
+    if scalar is not None:
+        candidates.append(scalar.group("number"))
+    prose = _PROSE_SCALAR.fullmatch(scalar_text)
+    if prose is not None:
+        candidates.append(prose.group("number"))
+    if "=" in scalar_text:
+        right_hand = _ANNOTATED_SCALAR.fullmatch(scalar_text.rsplit("=", 1)[-1].strip())
+        if right_hand is not None:
+            candidates.append(right_hand.group("number"))
+    arithmetic = _TEXT_BLOCK.sub("", prediction).replace(r"\over", "/")
+    if not re.search(r"[A-Za-z]", arithmetic) and re.search(r"[+*/]", arithmetic):
+        candidates.append(arithmetic)
+    if "time" in question.lower():
+        clock_text = _TEXT_ANNOTATION.sub(r"\1", prediction).replace("\\,", " ").replace("\\ ", " ")
+        clock = _CLOCK_ANSWER.fullmatch(clock_text)
+        if clock is not None and clock.group("minute") == "00":
+            candidates.append(str(int(clock.group("hour"))))
+    return list(dict.fromkeys(candidates))
+
+
+def grade_harness_generation_candidate(
+    profile: str, references: tuple[tuple[str, ...], ...], response: str, question: str
+) -> Reward:
     """Grade all source extraction variants and retain each named metric and extracted answer."""
     validate_harness_generation(profile, references)
     if profile == "drop":
@@ -190,20 +243,26 @@ def grade_harness_generation_candidate(profile: str, references: tuple[tuple[str
         from .minerva import is_equiv, normalize_final_answer  # noqa: PLC0415
 
         strict = re.findall(r"#### (\-?[0-9\.\,]+)", response)
-        flexible = truncate_response(response, GSM8K_STOPS)
-        answer = INVALID_ANSWER
-        for pattern in _GSM_FLEXIBLE_PATTERNS:
-            if matches := pattern.findall(flexible):
-                answer = matches[-1].strip()
-                break
+        answer = _gsm8k_flexible_answer(response)
         extracted = {"strict-match": strict[0] if strict else INVALID_ANSWER, "flexible-extract": answer}
         reference = normalize_final_answer(references[0][0])
-        metrics = {
-            f"exact_match,{name}": float(
-                candidate != INVALID_ANSWER and is_equiv(normalize_final_answer(candidate), reference)
+        metrics = {}
+        for name, candidate in extracted.items():
+            if candidate == INVALID_ANSWER:
+                metrics[f"exact_match,{name}"] = 0.0
+                continue
+            candidates = (
+                _gsm8k_equivalence_candidates(candidate, question) if name == "flexible-extract" else [candidate]
             )
-            for name, candidate in extracted.items()
-        }
+            equivalent = any(is_equiv(normalize_final_answer(value), reference) for value in candidates)
+            if (
+                not equivalent
+                and name == "flexible-extract"
+                and ("percent" in question.lower() or "pass rate" in question.lower())
+            ):
+                percent_reference = rf"\frac{{{reference}}}{{100}}"
+                equivalent = any(is_equiv(normalize_final_answer(value), percent_reference) for value in candidates)
+            metrics[f"exact_match,{name}"] = float(equivalent)
         primary = "exact_match,strict-match"
     else:
         extracted = {

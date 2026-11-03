@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -34,6 +35,7 @@ from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
 from packaging.requirements import Requirement
+from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.runtime.local import (
     ENVIRONMENT_MANIFEST,
@@ -392,7 +394,7 @@ def built_environment(environment: Environment) -> EnvironmentArtifact:
             identity = step.name.removeprefix("images/env-")
             raise MissingEnvironmentArtifact(
                 f"The environment {step.name} is not built ({path} has no artifact); "
-                f"run: {BUILD_COMMAND.format(identity=identity)}"
+                f"run: MARIN_PREFIX={shlex.quote(marin_prefix())} {BUILD_COMMAND.format(identity=identity)}"
             )
         _built_environments[path] = EnvironmentArtifact.raw_load(path)
     return _built_environments[path]

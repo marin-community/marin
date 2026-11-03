@@ -354,6 +354,7 @@ def convert_generation_document(row: RawRow, context: ConversionContext, *, benc
             {
                 "profile": row.data["profile"],
                 "references": tuple(tuple(spans) for spans in row.data["references"]),
+                "question": row.data["document"]["question"],
             },
             environment=required_grader_environment(context),
         ),

@@ -63,7 +63,7 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
     if scorer == "harness_generation":
         from .harness_generation import grade_harness_generation_candidate
 
-        return grade_harness_generation_candidate(config["profile"], config["references"], response)
+        return grade_harness_generation_candidate(config["profile"], config["references"], response, config["question"])
     if scorer in {"ifeval", "ifbench"}:
         from .instruction_spec import InstructionProfile, InstructionSpec
         from .instructions import grade_source_instructions

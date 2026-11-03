@@ -9,13 +9,14 @@ import pytest
 from verifyit.grade import GradingInfraError
 
 from taskcompendium.importers.evalchemy.scorers.harness_generation import grade_harness_generation_candidate
+from taskcompendium.importers.evalchemy.scorers.main import score
 from taskcompendium.importers.evalchemy.scorers.minerva import is_equiv
 
 
 def test_harness_math_symbolic_fallback_grades_correctly_in_a_worker_thread():
     answer = "1.2345678901234567"
     with ThreadPoolExecutor(max_workers=1) as workers:
-        result = workers.submit(grade_harness_generation_candidate, "gsm8k", ((answer,),), "#### " + answer).result(
+        result = workers.submit(grade_harness_generation_candidate, "gsm8k", ((answer,),), "#### " + answer, "").result(
             timeout=15
         )
     assert result.reward == 1
@@ -23,6 +24,28 @@ def test_harness_math_symbolic_fallback_grades_correctly_in_a_worker_thread():
         "exact_match,strict-match": 1.0,
         "exact_match,flexible-extract": 1.0,
     }
+
+
+@pytest.mark.parametrize(
+    ("response", "reference", "question", "extracted", "expected"),
+    [
+        (r"Reasoning considered 25. Final answer: \boxed{\$600}", "25", "How many TVs?", r"\$600", 0),
+        (r"The answer is \boxed{11:30}", "11", "What is the time?", "11:30", 0),
+        (r"The answer is \boxed{2:00}", "2", "What is the time?", "2:00", 1),
+        (r"The answer is \boxed{\frac{1}{4}}", "25", "What percent?", r"\frac{1}{4}", 1),
+        (r"The answer is \boxed{3 + 1}", "3", "How many?", "3 + 1", 0),
+        (r"The answer is \boxed{3 + 1}", "4", "How many?", "3 + 1", 1),
+        (r"The answer is \boxed{448 mL}", "448", "What volume?", "448 mL", 1),
+    ],
+)
+def test_gsm8k_flexible_grader_preserves_complete_final_box(response, reference, question, extracted, expected):
+    verdict = score(
+        "harness_generation",
+        {"profile": "gsm8k", "references": ((reference,),), "question": question},
+        response,
+    )
+    assert verdict.detail["extracted"]["flexible-extract"] == extracted
+    assert verdict.detail["metrics"]["exact_match,flexible-extract"] == expected
 
 
 @pytest.mark.parametrize("threaded", [False, True])

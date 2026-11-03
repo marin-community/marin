@@ -8,6 +8,7 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.grade import Status
 
+from taskcompendium.importers.evalchemy.scorers.main import score
 from taskcompendium.importers.evalchemy.scorers.nupa import grade_nupa_candidate
 from taskcompendium.importers.evaluation_nupa import read_nupa_panel
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -65,6 +66,41 @@ def test_missing_answer_keeps_reference_length_and_zero_credit(candidate):
 def test_malformed_reference_cannot_be_reduced_to_matching_digits(expected):
     verdict = grade_nupa_candidate(expected, "Integer", "123")
     assert verdict.status is Status.INVALID_TASK
+    assert verdict.reward == 0
+
+
+@pytest.mark.parametrize(
+    ("response", "answer_format", "expected"),
+    [
+        ("The result is 1046.1046", "Integer", "1046"),
+        ("The result is 486.612.486.612", "Float", "486.612"),
+        ("The result is 43/20.43/20", "Fraction", "43/20"),
+        ("The result is 5.09786549e52.5.09786549e52", "ScientificNotation", "5.09786549e52"),
+        ("The answer is $1046$.", "Integer", "1046"),
+        ("Answer: **486.612**", "Float", "486.612"),
+        ("42\nThis is because 6 times 7 is 42", "Integer", "42"),
+        ("<|start_think|>Maybe 9<|end_think|>**1046**", "Integer", "1046"),
+    ],
+)
+def test_packaged_nupa_scorer_accepts_final_representation(response, answer_format, expected):
+    verdict = score("nupa", {"expected": expected, "answer_format": answer_format}, response)
+    assert verdict.reward == 1
+    assert verdict.detail["extracted"] == expected
+
+
+@pytest.mark.parametrize(
+    ("response", "expected", "answer_format"),
+    [
+        ("The answer is 18\n1818", "18", "Integer"),
+        ("486.612486.612", "486.612", "Float"),
+        ("The final answer is 123.42", "42", "Integer"),
+        ("The final answer is 11046.1046", "1046", "Integer"),
+        ("$1046$ but the answer is 9", "1046", "Integer"),
+        ("<|start_think|>The answer is **1046**", "1046", "Integer"),
+    ],
+)
+def test_packaged_nupa_scorer_rejects_repeats_fragments_and_unfinished_thinking(response, expected, answer_format):
+    verdict = score("nupa", {"expected": expected, "answer_format": answer_format}, response)
     assert verdict.reward == 0
 
 

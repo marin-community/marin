@@ -648,11 +648,14 @@ def main(
         if local and sources:
             selected = {name: selected[name] for name in dict.fromkeys(sources)}
         options = PipelineOptions(processing_mode, runtime, inputs=inputs)
-        steps = (
-            {name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()}
-            if local
-            else _conversion_steps(selected, options)
-        )
+        if local:
+            assert cache_dir is not None
+            with artifact_prefix(str(cache_dir)):
+                steps = {
+                    name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()
+                }
+        else:
+            steps = _conversion_steps(selected, options)
         roots = _quick_conversion(
             steps,
             selected,

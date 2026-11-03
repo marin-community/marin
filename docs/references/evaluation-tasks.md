@@ -127,6 +127,13 @@ Omitted source sampling options stay omitted: for example, `top_p: null` lets th
 served generation configuration apply. Record those serving defaults with the
 model identity.
 
+Set `generation_extra_body` in the run config for endpoint-specific request
+options. For Grug or Snowball served without a reasoning parser, use
+`"generation_extra_body": {"skip_special_tokens": false}` to keep
+`<|end_think|>` in the response. The NUPA scorer needs that boundary to exclude
+reasoning. The option is recorded in the run descriptor; changing it requires a
+new result root.
+
 Omit `--local` to submit a disposable privileged Iris CPU worker. Shellbox's
 bubblewrap backend needs permission to create namespaces; local execution needs
 a host with the same support. Grader machines deny network access unless a
@@ -188,8 +195,9 @@ failures remain unscored; they do not become synthetic zero scores.
 
 Repeat the same command and output root to resume. Completed logical attempts,
 including zero grades, are skipped. Infrastructure failures retry with the same
-row, trial, and seed and a new physical retry index. The CLI uses standard
-backoff between passes; each pass processes all supplied corpora before
+row, trial, and seed and a new physical retry index. A completed model response
+is reused if only grading failed. Model failures make a fresh request. The CLI
+uses standard backoff between passes; each pass processes all supplied corpora before
 reporting retryable failures. Solver SDK retries are disabled. Verifyit handles
 judge HTTP retries separately under the source's transport policy.
 
