@@ -1,31 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a workpiece through the caller's stages, checkpointing after every stage event.
+"""Run a workpiece through the caller's stages, resuming from its event log.
 
-Only completed evaluation supports ACCEPTED or REJECTED. Exhausted triage,
-author/build, validation or modify budgets produce resumable ABANDONED. Other
-execution failures and unavailable evidence produce resumable HELD.
-
-An explicit relaunch of ABANDONED starts a fresh budget window and records its
-budget digest. Cumulative repair, revision and round numbers keep earlier files
-intact. A review hold resumes validation; a stage exception resumes that stage.
-Accepted and rejected workpieces remain final. Legacy FAILED records resume as HELD.
-
-Triage repairs are stored in repaired/<k>.json. Author calls write program.json
-and optional program.py to rounds/<n>/authored/<k>/, where k counts author/build
-failures. Failure text in build-failures/<k>.txt supplies the next revision.
-Programs without source must be deterministic when the build asks the author
-again. Completed build steps are reused from the step store.
-
-Triage author_state is preserved for every author call. The run layout is
-documented in lib/taskforge/README.md.
+The event log is the one record of what happened. ``run_workpiece`` loads it from the event store, folds it into
+the workpiece's state, runs the stage that state names and saves the log after every event it appends. A relaunch
+therefore continues from the last recorded event: a review hold or a stage exception resumes that stage, an
+ABANDONED workpiece resumes in a fresh budget window, and an accepted or rejected one stays final. Every file a
+stage writes is keyed by the counters the log folds (rounds, revisions, repairs), so a relaunch never overwrites
+earlier evidence, and the build reuses completed steps from the step store. The run layout is in the README.
 """
 
 import asyncio
 import inspect
+import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from pydantic import TypeAdapter
@@ -63,7 +53,7 @@ from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage50_validate.round import ValidationContext, load_validation, write_validation
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Hold, Modify, Reject, RejectKind, Retry
 from taskforge.stage60_review.rules import evidence_gaps
-from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
+from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import (
     AUTHOR_STATE_ATTR,
@@ -79,6 +69,7 @@ from taskforge.stage_coordinator.workpiece_machine import (
     WorkpieceEvent,
     WorkpieceState,
     derive_state,
+    opened,
     transition,
 )
 
@@ -152,12 +143,22 @@ class StageCoordinator:
     policy_digest: str
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Workpiece:
     coordinator: StageCoordinator
     workpiece_id: str
     proposal: TaskProposal
-    log: WorkpieceEventLog
+    events: list[WorkpieceEvent] = field(default_factory=list)
+
+    def append(self, event: WorkpieceEvent) -> WorkpieceEvent:
+        """Number and stamp ``event`` as the log's next, then save the whole log."""
+        numbered = replace(event, seq=len(self.events) + 1, at=time.time())
+        self.events.append(numbered)
+        self.save()
+        return numbered
+
+    def save(self) -> None:
+        self.coordinator.event_store.save(self.workpiece_id, tuple(self.events))
 
     @property
     def directory(self) -> Path:
@@ -194,70 +195,50 @@ def _repaired_file(repairs: int) -> Path:
     return Path(REPAIRED_DIR) / f"{repairs}.json"
 
 
-async def run_workpiece(
-    coordinator: StageCoordinator, workpiece_id: str, proposal: TaskProposal, log: WorkpieceEventLog
-) -> Terminal:
-    """Run or resume a workpiece, restoring its event log when the caller's log is empty.
+async def run_workpiece(coordinator: StageCoordinator, workpiece_id: str, proposal: TaskProposal) -> Terminal:
+    """Run or resume a workpiece from the events its coordinator's store holds.
 
-    Final decisions return without running stages. ABANDONED starts a fresh budget
-    window; HELD resumes the interrupted stage with the existing budget. Other run
-    settings must still match the original proposal, model, research and policy digests.
-
-    Stage exceptions and cancellation are checkpointed as HELD and re-raised.
-    Persistence errors are propagated; an unavailable store may prevent a checkpoint.
-    Invalid ids, mismatched settings and corrupt logs are rejected before execution.
+    Final decisions return without running stages. ABANDONED starts a fresh budget window; HELD resumes the
+    interrupted stage with the existing budget. The proposal, model digest, research requirement and policy digest
+    must match the ones ``OPENED`` recorded. Stage exceptions and cancellation are recorded as HELD and re-raised;
+    persistence errors propagate. Invalid ids, mismatched settings and corrupt logs raise before any stage runs.
     """
     check_workpiece_id(workpiece_id)
-    stored = coordinator.event_store.load(workpiece_id)
-    if not log.events() and stored is not None:
-        log.restore(stored)
-    workpiece = _Workpiece(coordinator, workpiece_id, proposal, log)
-    _open(workpiece)
-    state = derive_state(log.events())
-    if state.terminal is not None and state.terminal in FINAL:
-        if stored != log.events():
-            coordinator.event_store.save(workpiece_id, log.events())
+    workpiece = _Workpiece(coordinator, workpiece_id, proposal, list(coordinator.event_store.load(workpiece_id) or ()))
+    _check_opened(workpiece)
+    state = derive_state(workpiece.events) if workpiece.events else None
+    if state is not None and state.terminal is not None and state.terminal in FINAL:
         return state.terminal
     try:
-        if state.terminal is Terminal.ABANDONED:
+        if state is None:
+            state = opened(workpiece.append(_opened_event(workpiece)))
+        elif state.terminal is Terminal.ABANDONED:
             resumed = WorkpieceEvent(EventKind.RESUMED, state.round, None, {BUDGET_DIGEST: digest(coordinator.budget)})
-            state = transition(state, log.append(resumed))
-        coordinator.event_store.save(workpiece_id, log.events())
-        state = await _advance(workpiece, state)
+            state = transition(state, workpiece.append(resumed))
+        while True:
+            state = transition(state, workpiece.append(await ADAPTERS[state.stage](workpiece, state)))
+            if state.terminal is not None:
+                return state.terminal
     except (Exception, asyncio.CancelledError) as error:
-        exhausted = False
-        # A failed save after a conclusive decision must not append an illegal event
-        # after its final terminal. Retain that decision for the next save attempt.
-        if derive_state(log.events()).terminal not in FINAL:
-            infrastructure = infrastructure_failure(error)
-            exhausted = infrastructure is not None and infrastructure.cause == InfrastructureCause.BUDGET_EXHAUSTED
-            attrs = {
-                TERMINAL_ATTR: Terminal.ABANDONED.value if exhausted else Terminal.HELD.value,
-                REASON_ATTR: f"{type(error).__name__}: {error}",
-            }
-            if exhausted:
-                attrs["kind"] = RejectKind.BUDGET
-            log.append(WorkpieceEvent(EventKind.TERMINAL, log.events()[-1].round, None, attrs))
-        coordinator.event_store.save(workpiece_id, log.events())
+        # A failed save after a final decision keeps that decision for the next save; nothing may follow it.
+        if derive_state(workpiece.events).terminal in FINAL:
+            workpiece.save()
+            raise
+        infrastructure = infrastructure_failure(error)
+        exhausted = infrastructure is not None and infrastructure.cause == InfrastructureCause.BUDGET_EXHAUSTED
+        attrs = {
+            TERMINAL_ATTR: Terminal.ABANDONED.value if exhausted else Terminal.HELD.value,
+            REASON_ATTR: f"{type(error).__name__}: {error}",
+        }
+        if exhausted:
+            attrs["kind"] = RejectKind.BUDGET
+        workpiece.append(WorkpieceEvent(EventKind.TERMINAL, workpiece.events[-1].round, None, attrs))
         if exhausted:
             return Terminal.ABANDONED
         raise
-    coordinator.event_store.save(workpiece_id, log.events())
-    assert state.terminal is not None
-    return state.terminal
 
 
-async def _advance(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceState:
-    while True:
-        event = await ADAPTERS[state.stage](workpiece, state)
-        state = transition(state, workpiece.log.append(event))
-        workpiece.coordinator.event_store.save(workpiece.workpiece_id, workpiece.log.events())
-        if state.terminal is not None:
-            return state
-
-
-def _open(workpiece: _Workpiece) -> None:
-    proposal_digest = digest(workpiece.proposal)
+def _opened_event(workpiece: _Workpiece) -> WorkpieceEvent:
     coordinator = workpiece.coordinator
     attrs = {
         BUDGET_DIGEST: digest(coordinator.budget),
@@ -265,36 +246,27 @@ def _open(workpiece: _Workpiece) -> None:
         RESEARCH: str(coordinator.research),
         POLICY_DIGEST: coordinator.policy_digest,
     }
-    events = workpiece.log.events()
-    if not events:
-        workpiece.log.append(WorkpieceEvent(EventKind.OPENED, 0, proposal_digest, attrs))
+    return WorkpieceEvent(EventKind.OPENED, 0, digest(workpiece.proposal), attrs)
+
+
+def _check_opened(workpiece: _Workpiece) -> None:
+    """Refuse a relaunch whose proposal or settings differ from the ones ``OPENED`` recorded.
+
+    The budget may change only at the relaunch of an abandoned workpiece, which records it in ``RESUMED``.
+    """
+    if not workpiece.events:
         return
-    first = events[0]
-    if first.digest != proposal_digest:
-        raise ValueError(f"{workpiece.workpiece_id} was opened for proposal {first.digest}, not {proposal_digest}")
-    budget_event = next((event for event in reversed(events) if event.kind is EventKind.RESUMED), first)
-    if (
-        budget_event.attrs[BUDGET_DIGEST] != attrs[BUDGET_DIGEST]
-        and derive_state(events).terminal is not Terminal.ABANDONED
-    ):
-        raise ValueError(
-            f"{workpiece.workpiece_id} was opened under budget {budget_event.attrs[BUDGET_DIGEST]}, "
-            f"not {attrs[BUDGET_DIGEST]}"
-        )
-    if first.attrs[MODEL_DIGEST] != attrs[MODEL_DIGEST]:
-        raise ValueError(
-            f"{workpiece.workpiece_id} was opened with model digest {first.attrs[MODEL_DIGEST]}, "
-            f"not {attrs[MODEL_DIGEST]}"
-        )
-    if first.attrs[RESEARCH] != attrs[RESEARCH]:
-        raise ValueError(
-            f"{workpiece.workpiece_id} was opened with research {first.attrs[RESEARCH]}, not {attrs[RESEARCH]}"
-        )
-    if first.attrs[POLICY_DIGEST] != attrs[POLICY_DIGEST]:
-        raise ValueError(
-            f"{workpiece.workpiece_id} was opened with policy digest {first.attrs[POLICY_DIGEST]}, "
-            f"not {attrs[POLICY_DIGEST]}"
-        )
+    expected = _opened_event(workpiece)
+    first = workpiece.events[0]
+    if first.digest != expected.digest:
+        raise ValueError(f"{workpiece.workpiece_id} was opened for proposal {first.digest}, not {expected.digest}")
+    budget_event = next((event for event in reversed(workpiece.events) if event.kind is EventKind.RESUMED), first)
+    recorded = {**first.attrs, BUDGET_DIGEST: budget_event.attrs[BUDGET_DIGEST]}
+    if derive_state(workpiece.events).terminal is Terminal.ABANDONED:
+        recorded[BUDGET_DIGEST] = expected.attrs[BUDGET_DIGEST]
+    for name, value in expected.attrs.items():
+        if recorded[name] != value:
+            raise ValueError(f"{workpiece.workpiece_id} was opened with {name} {recorded[name]}, not {value}")
 
 
 async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
@@ -497,13 +469,7 @@ def _program_files(program: RLEnvBuildProgram) -> set[str]:
 
 
 async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
-    """Validate the round's draft in the round's ``ValidationContext`` and write the result to ``validation.json``.
-
-    The context carries the MODIFY rounds the workpiece has left (``_modify_rounds_left``) and the pass of
-    the round this validation is, one more than ``WorkpieceState.validation_passes``. That count survives the
-    retry reset of an abandoned workpiece's re-entry, so a review ``Retry`` and a relaunch both rerun the
-    round's ungraded retryable trials with a fresh budget.
-    """
+    """Validate the round's draft in the round's ``ValidationContext`` and write the result to ``validation.json``."""
     coordinator = workpiece.coordinator
     round_dir = workpiece.round_dir(state.round)
     draft = load_draft(round_dir / DRAFT_DIR)
@@ -518,7 +484,6 @@ async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEv
         proposal=workpiece.proposal_at(state),
         store_root=str(coordinator.root / STORE_DIR),
         modify_rounds_left=_modify_rounds_left(workpiece, state),
-        validation_pass=state.validation_passes + 1,
     )
     result = await coordinator.stages.validate(draft, context)
     write_validation(round_dir, result)
@@ -570,7 +535,8 @@ def _decision_attrs(workpiece: _Workpiece, state: WorkpieceState, decision: Deci
             spent = state.retries >= workpiece.coordinator.budget.max_validation_retries
             way = Exit.ABANDON if spent else Exit.RETRY
             if spent:
-                return {EXIT: way, "reasons": f"{count} ungraded trial(s): {cause}", **used}
+                reasons = f"{count} ungraded trial(s): {cause}"
+                return {EXIT: way, "reasons": reasons, "resume_stage": Stage.VALIDATE, **used}
             return {EXIT: way, "cause": cause, "count": str(count), "retries_used": str(state.retries + 1)}
         case Modify(findings=findings):
             budget = workpiece.coordinator.budget.max_modify_rounds

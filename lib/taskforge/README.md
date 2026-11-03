@@ -8,11 +8,10 @@ Taskforge turns task ideas into TaskCompendium `TaskSpec`s with a model's help. 
 ```
 src/taskforge/
   stage_coordinator/           workpiece_machine.py: Stage, Exit, TRANSITIONS, `transition`, `derive_state`;
-                               event_log.py: WorkpieceEventLog, InMemoryEventLog, WorkpieceEventStore,
-                               JsonEventStore;
+                               event_log.py: WorkpieceEventStore, JsonEventStore;
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
-                               run.py: InfrastructureRetry, `run_workpieces`
+                               run.py: `run_workpieces`
   agentic/                     agent.py: `generate_tasks`, one managed agent that makes tasks for an idea;
                                tools.py: the agent's Taskforge tools; gate.py: the acceptance rule;
                                config.py, prompts.py, parallel.py (web search), example_build.py
@@ -499,9 +498,8 @@ handoff-count cap. A relaunch starts from the saved workspace instead of resumin
 
 `ACCEPTED` and `REJECTED` are final decisions requiring complete evaluation evidence.
 Acceptance requires a solver solve rate within the configured band. Exhausting a workpiece's triage repairs, author/build
-revisions, validation retries, modify rounds or outer infrastructure retries produces `ABANDONED`.
+revisions, validation retries or modify rounds produces `ABANDONED`.
 Other execution failures and missing evidence produce `HELD`. Both retain the event log, completed artifacts and next stage for resume.
-Historical reject edges remain readable, and historical `FAILED` records are read as `HELD`.
 
 Triage's preflight verdict is distinct from a task evaluation verdict. A failed preflight holds
 at triage. A REPAIR verdict within budget rewrites the proposal to `repaired/<k>.json` and triages
@@ -538,12 +536,8 @@ passes them to every build with its model, sampling policy and model digest.
 
 The validate stage calls `StageFunctions.validate(draft, context)` with the round's
 `ValidationContext`: the workpiece id, the round, the round directory, the proposal the round built,
-the step store, the MODIFY rounds left, `max_modify_rounds` less the `Modify` decisions already
-followed, and `validation_pass`, this validation's pass of the round counting from 1. The pass is one more
-than `WorkpieceState.validation_passes`, the round's `VALIDATED` events, which a new round alone resets.
-`WorkpieceState.retries`, the count `max_validation_retries` bounds, returns to zero when an abandoned
-workpiece is relaunched, but the pass count does not, so the relaunch gives the round's ungraded retryable
-trials fresh attempts. It returns a `ValidationResult`, which the coordinator writes to
+the step store, and the MODIFY rounds left, `max_modify_rounds` less the `Modify` decisions already
+followed. It returns a `ValidationResult`, which the coordinator writes to
 `validation.json`. The caller's function closes over what the coordinator does not own, the host's `ValidationSettings` and
 the trial models, as `validate_round(draft, context, settings, solver, controls, adversary)` takes them.
 The review stage reads the result back from `validation.json` (`load_validation`) and calls
@@ -571,10 +565,13 @@ workpieces/<workpiece_id>/rounds/<n>/
 store/                             the step store: blobs/, workpieces/<workpiece_id>/steps/
 ```
 
-The coordinator checkpoints `events.json` after each stage event. A relaunch with an empty log
-loads and folds these events. Accepted and rejected workpieces return their final decision.
-A review hold resumes validation; a stage exception or cancellation holds at that stage.
-Completed build steps remain reusable from the step store.
+The event log is the one record a relaunch resumes from. `run_workpiece(coordinator, workpiece_id, proposal)`
+loads `events.json` from the coordinator's `WorkpieceEventStore`, folds it with `derive_state`, runs the stage the
+state names and saves the whole log after every event it appends, so the store always holds the last checkpoint.
+Accepted and rejected workpieces return their final decision. A review hold resumes validation; a stage exception
+or cancellation holds at that stage. Every file a stage writes is keyed by the counters the log folds, or by the
+digest of what it covers, so a relaunch finds finished work and overwrites nothing; completed build steps remain
+reusable from the step store, and validation's unit files are described under Validation.
 
 Explicitly relaunching `ABANDONED` records `RESUMED` and resets the budget spent since the last resume to zero. The caller
 may change `WorkpieceBudget` at this point. Artifact counters remain cumulative, and earlier
@@ -593,12 +590,8 @@ failures hold with those revisions unspent, including:
 - storage fails, or a blob or memo is missing or corrupt (`OSError`, with `StoreCorruption` for a
   corrupt one).
 
-The relaunch then resumes at the stage that raised.
-
-A process killed mid-workpiece leaves `events.json` as the workpiece's last terminal wrote it, or
-leaves none, so the next run starts again from that terminal or from triage, and the step store
-serves the build steps already run. A file-backed `WorkpieceEventLog` saving each event on append is
-planned with the ledger.
+The relaunch then resumes at the stage that raised. A process killed mid-workpiece leaves the log as its last
+appended event saved it, and the next run resumes from that event.
 
 ## Running many workpieces
 
@@ -606,15 +599,10 @@ planned with the ledger.
 `(workpiece_id, proposal)` pairs through `run_workpiece`, starting each as the iterable yields it,
 so a proposal still being written holds back no workpiece. It sets no width: the stages' resource
 pools bound how much runs at once. Each workpiece runs in a wrapper that records its terminal and
-never raises, so a failed workpiece cancels none of its siblings.
-
-A workpiece stopped by a transient infrastructure failure runs again in-process after a backoff,
-resuming at the stage that raised, up to `InfrastructureRetry.max_attempts` attempts; each failed attempt
-leaves a `TERMINAL` failed event in its log. Only two failures qualify
-(`transient_infrastructure_failure`): `ModelUnavailable`, and a `BuildInfrastructureFailure` whose
-cause is not one of `HOST_REJECTIONS` (no factory or no image builder on this host). A
-`BuildExpired`, a storage fault, and every task or program failure leave the workpiece failed in
-place after one attempt, as `run_workpiece` leaves it.
+never raises, so a failed workpiece cancels none of its siblings. A workpiece whose run raised is `HELD` at the
+stage that raised, and the next `run_workpieces` over the same root resumes it there by replaying its log; the
+wrapper keeps no retry budget of its own, since the model client, the build host and the trials already retry
+their own transient failures.
 
 `run_workpieces` returns each started workpiece's terminal once the iterable is exhausted and every
 workpiece has one. A workpiece id yielded a second time raises `ValueError`, and an error reading the
@@ -669,8 +657,7 @@ one `CONTROL` trial named by its id.
 `stage50_validate.round.validate_round(draft, context, settings, solver_model, controls_model,
 adversary_model)` runs one validation round from these parts as a graph of units. `context`, a
 `ValidationContext`, is what the stage coordinator knows of the round: the workpiece id, the round, its
-directory, the proposal it built, the step store, the MODIFY rounds the workpiece has left and the pass of
-the round this validation is (`validation_pass`, from 1).
+directory, the proposal it built, the step store and the MODIFY rounds the workpiece has left.
 `settings`, a `ValidationSettings`, is the validating host's: engine and its limits, the solver trials `k`,
 retries and backoff, the control writer's sampling, the adversary roster and the ledger. Lowering
 (`preflight`) and control writing start together; each of the `settings.k` solver trials starts once the
@@ -687,24 +674,22 @@ since the workpiece's final record needs complete evidence. Every unit is idempo
 a relaunch resumes missing units and trials eligible for another attempt:
 
 ```
-<round_dir>/validation/<draft>/<limits>-lowered.json                  the lowering, for one host and set of backends
+<round_dir>/validation/<draft>/<lowering>-lowered.json      the lowering
 <round_dir>/validation/<draft>/controls.json                 the written controls
 <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
 <round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
-<round_dir>/validation/<draft>/<task>/adversary/<name>-<i>/attempt-<n>.json
-<round_dir>/validation/<draft>/<task>/adversary/<name>-<i>/submissions/<n>/control/s<m>/attempt-<k>.json
+<round_dir>/validation/<draft>/<task>/search-<search>/adversary/<name>-<i>/attempt-<n>.json
+<round_dir>/validation/<draft>/<task>/search-<search>/adversary/<name>-<i>/submissions/<n>/control/s<m>/attempt-<k>.json
 ```
 
-`<draft>` is `content_hash.digest` of the draft's task, `<limits>` the engine limits,
-`<task>` the `trials.task_digest` of the
-lowered spec as the round's trials run it, and `<controls>` `content_hash.digest` of the control set,
-so no file of another task, lowered spec or control set counts as done. A trial is done when its
-last attempt is graded, failed for a cause that is not retryable, or used its retries: it holds
-`(max_retries + 1) * validation_pass` attempts, one full budget for each validation pass of the round.
-Otherwise it resumes at the next attempt with the retries left in the current budget. A review `Retry`,
-or a relaunch of an abandoned workpiece, therefore reruns exactly the trials and control replays that
-ended ungraded for a retryable cause, each with a full budget, numbering its attempts after the files on
-disk. Attempt files are written whole or not at all, and an attempt cancelled in flight writes none, so a cancelled trial runs again instead of
+`<draft>` is `content_hash.digest` of the draft's task, `<lowering>` the digest of the engine limits, the host
+and the factory backends, `<task>` the `trials.task_digest` of the lowered spec as the round's trials run it,
+`<controls>` `content_hash.digest` of the control set, and `<search>` the digest of an adversary's brief, policy
+and model, so no file of another task, lowering, lowered spec, control set or search counts as done. A trial is
+done when its last attempt is graded or failed for a task defect. Otherwise each validation of the round
+continues it with one `max_retries` budget, numbering its attempts after every file on disk, so a review `Retry`
+or any relaunch reruns exactly the trials and control replays that ended ungraded for another cause; the review's
+`max_validation_retries`, which the event log counts, bounds how often. Attempt files are written whole or not at all, and an attempt cancelled in flight writes none, so a cancelled trial runs again instead of
 counting as ungraded. The result is read back from the unit files (`trials.attempt_outcome`) and
 holds every decision input without the rollouts: the lowering's status
 (`lowered`, `refused` by a factory, `rejected` by RolloutEngine, when no trial runs), refusals and
@@ -738,10 +723,9 @@ After checking execution and evidence completeness, review requests repair for s
 as needing addressing. Informational defects do not force repair. Optional second review is a stub with
 access to the full task and submitted candidate evidence; it makes no model calls and does not gate normal
 defect handling. Candidate files are preserved exactly, including binary files.
-Saved searches are bound to the task, grader, brief, search policy (spec included) and search model.
-Interrupted searches retain their partial rollout and submissions. Retryable failures use the existing
-attempt budget; explicitly resuming validation can start a new numbered attempt with additional retry
-allowance. Each retry is a fresh search, not continuation of the previous conversation, and prior attempts
+Saved searches are bound to the task, grader, brief, search policy (spec included) and search model by
+their directory. Interrupted searches retain their partial rollout and submissions. Retryable failures use the
+trial's attempt budget; a later validation of the round starts a new numbered attempt with a fresh budget. Each retry is a fresh search, not continuation of the previous conversation, and prior attempts
 remain archived. A changed task or search configuration starts distinct validation work.
 No additional independent correct-answer set is generated.
 
