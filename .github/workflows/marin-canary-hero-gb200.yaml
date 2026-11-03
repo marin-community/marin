@@ -1,18 +1,5 @@
 name: "Marin - Canary - Hero GB200"
 
-# A daily throughput check of the production hero on one GB200 NVL72 rack.
-# It runs the hero model and training step from main through launch_diagnostics,
-# restored from a pinned permanent hero checkpoint so every run trains on the
-# same weights and batches. One dropless eval runs after the last update.
-# Settings that only the production launcher (launch_scaling_ladder) applies,
-# such as gate_router_weight_decay and prior_context_phases, are left out.
-#
-# The canary queues at batch priority, the band of the hero-completions
-# sampler, so neither preempts the other. If no rack is free within five hours
-# the job is cancelled and the day is skipped: a warning, no Slack or Loom.
-# A healthy run then holds the rack for about 20 minutes.
-#
-# One rack does not exercise cross-rack collectives or checkpoint recovery.
 on:
   schedule:
     - cron: '0 11 * * *'  # 3 AM PST / 6 AM EST (4 AM PDT / 7 AM EDT in summer)

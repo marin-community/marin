@@ -1,18 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score a hero GB200 canary run from W&B and compare it with a baseline of earlier runs.
+"""Score a hero GB200 canary against recent scheduled runs from its checkpoint.
 
-The canary restores a pinned hero checkpoint and trains a fixed number of updates.
-This reads the run's per-step history, drops the warmup steps, and reports median
-step time, MFU and throughput, peak HBM, drop fraction, final train loss and the
-dropless eval loss. The baseline is the per-metric median of the last BASELINE_RUNS
-scheduled canaries restored from the same checkpoint: a single regressed run does not
-move it, manual runs never enter it, and a re-pinned checkpoint starts a new one.
-
-Exits non-zero only when the run is incomplete (missing steps or eval). A step-time
-change beyond STEP_TIME_WARN_FRACTION is a regression: a GitHub warning plus
-``regression=true`` in $GITHUB_OUTPUT, which the workflow posts to Slack.
+Missing steps or eval fail the report. A step-time change beyond
+STEP_TIME_WARN_FRACTION emits a GitHub warning and a regression output for Slack.
 """
 
 import dataclasses

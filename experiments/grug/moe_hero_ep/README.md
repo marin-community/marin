@@ -352,11 +352,11 @@ does not include the 11-rack `replica_dcn` collectives or their global histogram
 
 [`marin-canary-hero-gb200.yaml`](../../../.github/workflows/marin-canary-hero-gb200.yaml) runs the
 hero model and training step from `main` daily on one rack through `launch_diagnostics.py`.
-Settings that only `launch_scaling_ladder.py` applies, such as `gate_router_weight_decay` and
-`prior_context_phases`, are left out; they do not change step time. It restores the pinned
-permanent checkpoint `step-372000` and trains 35 updates on the production mixture, so every run
-sees the same weights and batches. One dropless eval runs after the last update; `--eval-every`
-equals `--num-steps` for that reason. A run holds the rack for about 20 minutes.
+It leaves out `gate_router_weight_decay` and `prior_context_phases`, which the production
+`launch_scaling_ladder.py` applies. The canary restores the pinned permanent checkpoint
+`step-372000` and trains 35 updates on the production mixture with a fixed seed. One dropless eval
+runs after the last update. A healthy run holds the rack for about 20 minutes. The diagnostic does
+not exercise cross-rack collectives or checkpoint recovery.
 
 The workflow submits at 11:00 UTC at `batch` priority, the band of the hero-completions sampler,
 so neither preempts the other. If the training job has not started within five hours,
@@ -366,10 +366,10 @@ a warning; a failed run alerts through Slack and Loom.
 [`hero_canary_report.py`](../../../scripts/ci/hero_canary_report.py) drops 4 warmup steps and
 reports median step time, MFU and tokens/s, peak HBM, drop fraction, final train loss and dropless
 eval loss against a baseline: the per-metric median of the last 5 scheduled canaries from the same
-checkpoint, so one regressed run does not move it and manual dispatches (`hero-canary-manual-*`)
-never enter it. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to
-Slack. Re-pin `HERO_CANARY_CHECKPOINT` when the
-checkpoint layout or context length changes; the next run starts a new baseline.
+checkpoint, limiting the effect of one outlier. Manual dispatches (`hero-canary-manual-*`) never
+enter it. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to Slack.
+Re-pin `HERO_CANARY_CHECKPOINT` when the checkpoint layout or context length changes; the next run
+starts a new baseline.
 
 ### Profile-guided scheduling
 
