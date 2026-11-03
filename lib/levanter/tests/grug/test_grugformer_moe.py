@@ -60,7 +60,6 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
-from levanter.testing.devices import use_test_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -1658,7 +1657,6 @@ def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
 @pytest.mark.multidevice
 def test_combine_in_fp32_matches_an_fp32_combine_reference_on_eight_devices():
     with use_test_devices(8) as devices:
-
 
         mesh = Mesh(
             np.asarray(devices).reshape(2, 4, 1),
