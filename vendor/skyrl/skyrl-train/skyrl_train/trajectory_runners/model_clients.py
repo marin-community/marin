@@ -53,6 +53,7 @@ _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 REASONING_VIOLATIONS_KEY = "reasoning_violations"
 REASONING_VIOLATION_TOKENS_KEY = "reasoning_violation_tokens"
+RAW_RESPONSES_KEY = "raw_responses"
 
 
 class ModelClientOutput(InferenceEngineOutput):
@@ -62,6 +63,7 @@ class ModelClientOutput(InferenceEngineOutput):
     generation_token_budgets: NotRequired[list[int | None]]
     reasoning_violations: NotRequired[list[ReasoningViolation | None]]
     reasoning_violation_tokens: NotRequired[list[int | None]]
+    raw_responses: NotRequired[list[str]]
 
 
 class ModelClient(Protocol):
@@ -129,6 +131,8 @@ class _ChatResult:
     policy_steps: list[int] | None = None
     reasoning_violation: ReasoningViolation | None = None
     reasoning_violation_token: int | None = None
+    raw_response: str | None = None
+    """The response decoded with its special tokens."""
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -157,6 +161,9 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
     if any(result.reasoning_violation is not None for result in results):
         output[REASONING_VIOLATIONS_KEY] = [result.reasoning_violation for result in results]
         output[REASONING_VIOLATION_TOKENS_KEY] = [result.reasoning_violation_token for result in results]
+    raw_responses = [result.raw_response for result in results]
+    if all(raw is not None for raw in raw_responses):
+        output[RAW_RESPONSES_KEY] = raw_responses
     if all(rows is not None for rows in selected_indices):
         output["student_topk_indices"] = selected_indices
         output["behavior_topk_logprobs"] = selected_scores
@@ -458,6 +465,7 @@ class DirectModelClient:
                 choice.get(CHOICE_POLICY_STEPS_KEY),
                 reasoning_violation,
                 reasoning_violation_token,
+                decoded,
             )
 
         results = await asyncio.gather(

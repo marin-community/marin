@@ -17,6 +17,7 @@ from taskcompendium.models import (
     grades_with_judge,
     require_resolved_environment,
 )
+from taskcompendium.protocol import with_protocol_assessment
 from taskcompendium.runtime.environment import validate_machine_spec
 from taskcompendium.runtime.grading import grade_in_sandbox
 
@@ -31,8 +32,20 @@ def grade_task(
 ) -> GradeResult:
     """Grade with an explicit judge connection, in process, or in a fresh grading machine.
 
-    A ``NoGrader`` task is unavailable. Judge and machine failures become infrastructure errors.
+    A ``NoGrader`` task is unavailable. Judge and machine failures become infrastructure errors. A task
+    with a protocol check also gets its protocol assessment in the grade diagnostics.
     """
+    grade = _answer_grade(task, attempt, machine_factory, machine_spec, judge_connection)
+    return with_protocol_assessment(task, attempt, grade)
+
+
+def _answer_grade(
+    task: TaskSpec,
+    attempt: GradingAttempt,
+    machine_factory: MachineFactory | None,
+    machine_spec: MachineSpec | None,
+    judge_connection: JudgeConnection | None,
+) -> GradeResult:
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)

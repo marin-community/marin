@@ -62,6 +62,7 @@ from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
     REASONING_VIOLATION_TOKENS_KEY,
+    RAW_RESPONSES_KEY,
     REASONING_VIOLATIONS_KEY,
     DirectModelClient,
     GenerationBudgetExceededError,
@@ -215,6 +216,7 @@ async def _model_turn(
             REASONING_VIOLATION_TOKEN_METADATA_KEY: (output.get(REASONING_VIOLATION_TOKENS_KEY) or [None])[0],
         },
         reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
+        raw_response=(output.get(RAW_RESPONSES_KEY) or [None])[0],
     )
 
 

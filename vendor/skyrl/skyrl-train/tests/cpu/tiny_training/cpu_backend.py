@@ -6,6 +6,7 @@ trajectory runners, and weight-sync protocol can run end to end on a tiny Huggin
 
 import asyncio
 import hashlib
+import json
 import itertools
 import os
 import time
@@ -30,6 +31,9 @@ from skyrl_train.utils.torch_utils import chunked_entropy_from_logits, logprobs_
 from skyrl_train.workers.worker import PolicyWorkerBase
 from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from verifyit.tool_call_markup import ToolCallStatus, tool_call_regions
+
+from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
 
 CHECKPOINT_FILE_TEMPLATE = "rank_{rank}.pt"
 # Sampling controls the CPU engine implements; any other non-neutral control fails fast.
@@ -216,6 +220,21 @@ class CPURefWorker(CPUPolicyWorker):
 
     def save_checkpoint(self, ckpt_dir, tokenizer=None):
         raise RuntimeError("the reference model checkpoints with the trainer state")
+
+
+def _assistant_message(text: str, stop_reason: str) -> tuple[dict[str, Any], str]:
+    """Parse ``<tool_call>`` markup into tool calls, as a serving tool parser does, keeping the text before it."""
+    answer = final_answer_text(text)
+    regions = [region for region in tool_call_regions(answer, initial_thinking=False) if region.status == ToolCallStatus.VALID]
+    if not regions:
+        return {"role": "assistant", "content": text}, stop_reason
+    calls = []
+    for index, region in enumerate(regions):
+        payload = json.loads(answer[region.payload_start : region.end].removesuffix("</tool_call>"))
+        function = {"name": payload["name"], "arguments": json.dumps(payload["arguments"])}
+        calls.append({"id": f"call-{index}", "type": "function", "function": function})
+    content = answer[: regions[0].start].strip() or None
+    return {"role": "assistant", "content": content, "tool_calls": calls}, "tool_calls"
 
 
 class CPUInferenceEngine(InferenceEngineInterface):
@@ -411,6 +430,7 @@ class CPUInferenceEngine(InferenceEngineInterface):
         )
         tokens = result["response_ids"][0]
         logprobs = result["response_logprobs"]
+        message, finish_reason = _assistant_message(result["responses"][0], result["stop_reasons"][0])
         return {
             "id": request_payload.get("headers", {}).get("x-request-id", "cpu-completion"),
             "object": "chat.completion",
@@ -418,10 +438,10 @@ class CPUInferenceEngine(InferenceEngineInterface):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": result["responses"][0]},
+                    "message": message,
                     "token_ids": tokens,
                     CHOICE_POLICY_STEPS_KEY: result["response_policy_steps"][0],
-                    "finish_reason": result["stop_reasons"][0],
+                    "finish_reason": finish_reason,
                     "logprobs": None
                     if logprobs is None
                     else {
@@ -443,9 +463,11 @@ class CPUInferenceEngine(InferenceEngineInterface):
         body = request_payload["json"]
         encoded = self.tokenizer.apply_chat_template(
             body["messages"],
+            tools=body.get("tools"),
             tokenize=True,
             return_dict=False,
             add_generation_prompt=body.get("add_generation_prompt", False),
+            **(body.get("chat_template_kwargs") or {}),
         )
         return {"tokens": encoded}
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
 from shellbox.machine import Machine
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import CHAT_TEMPLATE_KWARGS, ENABLE_THINKING, TaskSpec, ThinkingDisabledCheck
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.harness.core import Harness, HarnessContext
@@ -61,6 +61,14 @@ def _failure_record(operation: RolloutOperation, cause: BaseException) -> Rollou
     if notes:
         diagnostics["notes"] = list(notes)
     return RolloutFailure(type(cause).__name__, diagnostics)
+
+
+def _without_thinking(prompt: Prompt) -> Prompt:
+    """Disable thinking in every request of the conversation, for a thinking-disabled check."""
+    kwargs = prompt.options.get(CHAT_TEMPLATE_KWARGS, {})
+    if kwargs.get(ENABLE_THINKING, False):
+        raise RolloutContractError("The harness enables thinking for a task with a thinking-disabled check")
+    return replace(prompt, options={**prompt.options, CHAT_TEMPLATE_KWARGS: {**kwargs, ENABLE_THINKING: False}})
 
 
 class _NoEvents:
@@ -123,7 +131,13 @@ class _Conversation:
             steps = (*steps, replace(self.pending, transition=incomplete))
         prompt = self.trace.prompt if self.unserved_prompt is None else self.unserved_prompt
         return ConversationRecord(
-            tuple(self.messages), prompt, self.trace.response, self.trace.loss_mask, self.trace.logprobs, steps
+            tuple(self.messages),
+            prompt,
+            self.trace.response,
+            self.trace.loss_mask,
+            self.trace.logprobs,
+            steps,
+            self.options,
         )
 
 
@@ -172,9 +186,10 @@ class _Recorder:
     and records a sent request that has no answer. Final observations replace such a request.
     """
 
-    def __init__(self, model: Model, limits: RolloutLimits, mode: TraceMode, events: EventSink):
+    def __init__(self, model: Model, task: TaskSpec, limits: RolloutLimits, mode: TraceMode, events: EventSink):
         self.model = model
         self.limits = limits
+        self.disable_thinking = isinstance(task.protocol_check, ThinkingDisabledCheck)
         self.mode = mode
         self.events = events
         self.earlier: list[ConversationRecord] = []
@@ -200,12 +215,12 @@ class _Recorder:
         conversation = self.conversation
         return (conversation is not None and conversation.has_turn) or any(record.steps for record in self.earlier)
 
-    def graded_messages(self) -> tuple[dict[str, Any], ...] | None:
-        """The chat of the last conversation that has a model turn, or ``None``."""
+    def graded_conversation(self) -> ConversationRecord | None:
+        """The last conversation that has a model turn, or ``None``."""
         conversation = self.conversation
         if conversation is not None and conversation.has_turn:
-            return tuple(conversation.messages)
-        return next((record.messages for record in reversed(self.earlier) if record.steps), None)
+            return conversation.record(self._incomplete())
+        return next((record for record in reversed(self.earlier) if record.steps), None)
 
     async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()
@@ -217,7 +232,7 @@ class _Recorder:
         assert deadlines is not None
         if current is None and deadlines.total.when() is None and self.limits.total_turn_timeout is not None:
             deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
-        conversation = _Conversation(prompt, self.mode)
+        conversation = _Conversation(_without_thinking(prompt) if self.disable_thinking else prompt, self.mode)
         request = _Request(self.step_observations, None, conversation, self._waited())
         return await self._send(request, conversation.request((), prompt.token_ids))
 
@@ -539,7 +554,7 @@ async def harness_rollout(
     """
     harness.check(task, limits)
     run_id = uuid.uuid4().hex if run_id is None else run_id
-    recorder = _Recorder(model, limits, trace, events)
+    recorder = _Recorder(model, task, limits, trace, events)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as resources:
         context = HarnessContext(task, limits, machine, events, _CleanupScope(resources, cleanup), run_id)

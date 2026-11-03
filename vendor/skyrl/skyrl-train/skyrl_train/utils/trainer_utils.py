@@ -28,6 +28,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 BasicType = Union[int, float, str, bool, type(None)]
 EVAL_DIAGNOSTIC_FIELDS = frozenset(
     {
+        "protocol",
         "exception_type",
         "cause_error_type",
         "operation",
