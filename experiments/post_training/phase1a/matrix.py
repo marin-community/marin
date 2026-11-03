@@ -90,6 +90,33 @@ EXPORT_CHECKPOINT_STEPS = tuple(
 # Phase 1a decision 2026-10-31: resolve OPD's early reverse-progress crossings.
 M4_EXPORT_CHECKPOINT_STEPS = (2, 4, 6, 8, *EXPORT_CHECKPOINT_STEPS)
 M4_CHECKPOINT_STEPS = tuple(sorted({2, 4, 6, 8, *CHECKPOINT_STEPS}))
+# Stage C (decision 2026-11-03): every Phase 1a run trains to 125 steps, the
+# registered schedule plus the new final step. The optimizer keeps (10, 50, 100)
+# because scored exports come from the export schedule, not the optimizer saves.
+STAGE_C_STEPS = 125
+STAGE_C_CHECKPOINT_STEPS = (10, 20, 30, 40, 50, 75, 100, 125)
+STAGE_C_M4_CHECKPOINT_STEPS = tuple(sorted({2, 4, 6, 8, *STAGE_C_CHECKPOINT_STEPS}))
+STAGE_C_EXPORT_CHECKPOINT_STEPS = (10, 30, 50, 100, 125)
+STAGE_C_M4_EXPORT_CHECKPOINT_STEPS = (2, 4, 6, 8, *STAGE_C_EXPORT_CHECKPOINT_STEPS)
+
+
+def stage_c_schedule(method: Method, steps: int) -> dict:
+    """The trainer schedule for a fresh Stage C run trained straight to ``steps``."""
+    if steps != STAGE_C_STEPS:
+        raise ValueError(f"Stage C runs train {STAGE_C_STEPS} steps, not {steps}")
+    if method is Method.M4:
+        return {
+            "checkpoint_steps": list(STAGE_C_M4_CHECKPOINT_STEPS),
+            "optimizer_checkpoint_steps": list(OPTIMIZER_CHECKPOINT_STEPS),
+            "hf_export_steps": list(STAGE_C_M4_EXPORT_CHECKPOINT_STEPS),
+        }
+    return {
+        "checkpoint_steps": list(STAGE_C_CHECKPOINT_STEPS),
+        "optimizer_checkpoint_steps": list(OPTIMIZER_CHECKPOINT_STEPS),
+        "hf_export_steps": list(STAGE_C_EXPORT_CHECKPOINT_STEPS),
+    }
+
+
 SEEDS = (0, 1, 2)
 PHASE1A_CONDITIONS = (Condition.X, Condition.R, Condition.XR, Condition.X_PRIME, Condition.R_PRIME)
 # The user cut the batch-noise controls to one seed (DESIGN decision log, 2026-10-30):

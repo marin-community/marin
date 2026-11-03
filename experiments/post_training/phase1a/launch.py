@@ -55,6 +55,7 @@ from experiments.post_training.phase1a.matrix import (
     phase0c_lr_sweep,
     phase1a_runs,
     skyrl_recipe,
+    stage_c_schedule,
     topology,
 )
 
@@ -125,6 +126,11 @@ def run_spec(
         trainer["max_steps"] = max_steps
         for field in ("checkpoint_steps", "optimizer_checkpoint_steps", "hf_export_steps"):
             trainer[field] = [step for step in trainer[field] if step <= max_steps]
+    elif max_steps > STEPS and resume_from is None:
+        # Stage C decision 2026-11-03: a fresh run trains straight to the 125-step
+        # length on the registered schedule plus the new final step (exports and
+        # checkpoints grow; optimizer saves stay at (10, 50, 100)).
+        trainer.update(max_steps=max_steps, **stage_c_schedule(run.method, max_steps))
     elif max_steps > STEPS:
         # An extension resumes a finished run's last full checkpoint and saves, keeps the
         # optimizer for, and exports only its new final step.
@@ -139,7 +145,11 @@ def run_spec(
         )
     if resume_from is not None:
         trainer.update(resume_mode="from_path", resume_path=resume_from)
-    suffix = "" if max_steps == STEPS else f"-smoke{max_steps}" if max_steps < STEPS else f"-ext{max_steps}"
+    suffix = (
+        ""
+        if max_steps == STEPS
+        else f"-smoke{max_steps}" if max_steps < STEPS else "" if resume_from is None else f"-ext{max_steps}"
+    )
     name = user_owned_name(f"checkpoints/phase1a/{run.name}{suffix}")
     return SkyRLSpec(
         name=name,
@@ -227,7 +237,8 @@ def selected_runs(
     "--max-steps",
     type=click.Choice([10, STEPS, EXTENDED_STEPS]),
     default=STEPS,
-    help=f"10 for setup smokes; {STEPS} for full runs; {EXTENDED_STEPS} extends a finished run (needs --resume-from).",
+    help=f"10 for setup smokes; {STEPS} for the registered 100-step runs; {EXTENDED_STEPS} is Stage C's "
+    f"length: a fresh run trains straight to {EXTENDED_STEPS} steps, and with --resume-from it extends a finished one.",
 )
 @rl_build_options
 def main(

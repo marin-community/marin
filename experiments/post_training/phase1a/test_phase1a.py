@@ -185,6 +185,7 @@ def test_a_short_prompt_pool_raises():
     [
         (None, 10),
         (None, 100),
+        (None, 125),
         ("s3://bucket/previous-run/checkpoints/global_step_10", 10),
         ("s3://bucket/previous-run/checkpoints/global_step_10", 100),
         ("s3://bucket/previous-run/checkpoints/global_step_100", 125),
@@ -216,7 +217,21 @@ def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path, resu
     for index, (condition, _) in enumerate(cells):
         m1, m4 = composed[2 * index], composed[2 * index + 1]
         assert m1.pop("env_class") == "fixed_completion" and m4.pop("env_class") == "prompt_only"
-        if max_steps > 100:
+        if max_steps > 100 and resume_from is None:
+            # Stage C (decision 2026-11-03): a fresh run trains on the registered
+            # schedule plus the new final step; optimizer saves stay (10, 50, 100).
+            assert m4.pop("checkpoints") == [
+                [2, 4, 6, 8, 10, 20, 30, 40, 50, 75, 100, 125],
+                [10, 50, 100],
+            ]
+            assert m1.pop("checkpoints") == [
+                [10, 20, 30, 40, 50, 75, 100, 125],
+                [10, 50, 100],
+            ]
+            assert m1.pop("exports") == [10, 30, 50, 100, 125]
+            assert m4.pop("exports") == [2, 4, 6, 8, 10, 30, 50, 100, 125]
+            assert m1.pop("retention") == 8 and m4.pop("retention") == 12
+        elif max_steps > 100:
             # An extension saves, keeps the optimizer for, and exports only its final step.
             for config in (m1, m4):
                 assert config.pop("checkpoints") == [[max_steps], [max_steps]]
