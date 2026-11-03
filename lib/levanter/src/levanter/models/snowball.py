@@ -227,7 +227,6 @@ class SnowballConfig(HFCompatConfig):
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
     # Dispatch capacity trades memory for overflow; it does not change HF weights.
-    moe_capacity_factor: float = 1.0
     router_dot_fp32: bool = False
     """Upcast compute-view router operands before the dot; does not change storage or HF metadata."""
     moe_capacity_factor: float = 1.0
