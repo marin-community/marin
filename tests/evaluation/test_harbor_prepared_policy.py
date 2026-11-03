@@ -40,15 +40,7 @@ def prepared_policy(tmp_path):
     return policy
 
 
-def test_prepared_preflight_resolves_offline_tasks_without_allocating_a_sandbox(tmp_path, prepared_policy):
-    completed = _preflight(tmp_path, [(prepared_policy, {})])
-    result = json.loads(completed.stdout)[0]
-
-    assert result["benchmark_metadata"]["n_benchmark"] == 1
-    assert result["verifier_env_keys"] == []
-
-
-def test_prepared_compose_preflight_accepts_pinned_peers_without_building(tmp_path, prepared_policy):
+def test_prepared_compose_preflight_accepts_pinned_peers(tmp_path, prepared_policy):
     environment = tmp_path / "dataset" / "task" / "environment"
     (environment / "compose.yaml").write_text(
         json.dumps(

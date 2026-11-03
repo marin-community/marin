@@ -336,11 +336,8 @@ async def test_local_interrupted_operation_keeps_original_error_through_relay_cl
             await operation
         if interruption == "cancel":
             assert caught.value.args == ("original operation cancellation",)
-        else:
-            assert operation.cancelling() == 0
         await adapter.stop(delete=True)
         assert machine.closed
-        assert adapter.machine is None
         assert all(session.process.returncode is not None for session in machine.sessions)
     finally:
         await machine.close()

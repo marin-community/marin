@@ -44,8 +44,8 @@ path. Local bubblewrap supports private container groups imported from the valid
 subset. Daytona runs one Shellbox machine and rejects Compose; its image builds
 run in provider preparation, never in a privileged guest daemon. See
 [Harbor execution](../../docs/harbor-integration.md) for preparation requirements.
-Existing historical policies are inputs for reproduction, not a promise that a
-removed provider or old image recipe can run unchanged.
+Historical policies using a removed provider or old image recipe need changes
+before they can run.
 
 Edit Harbor and its local Marin dependencies in the same pull request. Update
 Harbor's lock when a dependency manifest changes, and run
