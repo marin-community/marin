@@ -29,7 +29,7 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, JsonValueAnswer, PlainText, Source, TaskSpec
 from verifyit.spec import NumericSpec, StructuredExactSpec
 
-from taskforge.sandbox.factories import MachineHost, grading_environment
+from taskforge.sandbox.factories import grading_environment
 from taskforge.spec.controls import (
     Control,
     ControlCategory,
@@ -91,7 +91,6 @@ def lowered(task: TaskSpec) -> TaskRolloutSpec:
     has_machine = SHELL_CAPABILITY in task.environment_requirements.capabilities
     return lower(
         task,
-        host=MachineHost.LAPTOP,
         task_machine=SHELLSIM if has_machine else None,
         verifier_machine=None if grading_environment(task) is None else SHELLSIM,
         limits=LIMITS,

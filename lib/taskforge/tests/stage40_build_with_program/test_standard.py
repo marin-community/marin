@@ -16,7 +16,6 @@ from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import ExactSpec
 
-from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import answer_grader, rollout_engine
@@ -172,7 +171,7 @@ async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_t
         ("", 0.0),
     ]
 
-    lowered = lower(task, MachineHost.LAPTOP, FACTORIES, VALIDATION_LIMITS)
+    lowered = lower(task, FACTORIES, VALIDATION_LIMITS)
     assert lowered.task_machine is not None and lowered.task_machine.backend == Backend.SHELLSIM
     assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == Backend.DOCKER
     result = await rollout_engine(FACTORIES, command_timeout=None).run_task(lowered, answer)

@@ -707,7 +707,7 @@ ended ungraded for a retryable cause, each with a full budget, numbering its att
 disk. Attempt files are written whole or not at all, and an attempt cancelled in flight writes none, so a cancelled trial runs again instead of
 counting as ungraded. The result is read back from the unit files (`trials.attempt_outcome`) and
 holds every decision input without the rollouts: the lowering's status
-(`lowered`, `refused` by a factory, `rejected` by RolloutEngine, when no trial runs), refusals and
+(`lowered`, or `rejected` by RolloutEngine or a factory it asks, when no trial runs) and
 backend fallback; each solver trial's status, reward, cause and attempt file, with the reward totals
 and ungraded causes of its `Evidence`; each control's verdict (`met`, `violated`, `ungraded`), reward
 and cause; each adversary trial's status, cause, report and submissions with their grades and rewards; and

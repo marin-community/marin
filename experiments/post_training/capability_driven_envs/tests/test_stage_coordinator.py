@@ -114,7 +114,7 @@ async def task(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec:
 
 async def validate(draft: TaskDraft, context: ValidationContext) -> ValidationResult:
     stats = RewardStats(graded=4, mean_reward=0.5, solved=2, timed_out=0, candidate_code_errors=0)
-    lowering = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
+    lowering = Lowering(LoweringStatus.LOWERED, "", None, "lowered-task")
     trials = tuple(
         TrialResult(str(i), TrialStatus.GRADED, reward, None, f"solver/{i}/attempt-0.json")
         for i, reward in enumerate((1.0, 0.0, 1.0, 0.0))

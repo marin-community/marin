@@ -9,7 +9,6 @@ from collections.abc import Sequence
 import pytest
 from taskcompendium.grading_result import Outcome as GradeStatus
 
-from taskforge.sandbox.factories import MachineRole, Refusal, RefusalReason
 from taskforge.spec.controls import ControlKind
 from taskforge.stage50_validate.adversary import AdversaryMode, Defect, SearchReport
 from taskforge.stage50_validate.controls import ControlVerdict
@@ -31,8 +30,7 @@ from taskforge.stage60_review.decision import Accept, BandOutcome, Hold, Modify
 from taskforge.stage60_review.rules import BandRules, default_review
 
 BAND = BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND}))
-LOWERED = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
-REFUSAL = Refusal(RefusalReason.NO_FACTORY, MachineRole.TASK, "this host has no docker factory")
+LOWERED = Lowering(LoweringStatus.LOWERED, "", None, "lowered-task")
 
 
 def solver(solved: int, failed: int, ungraded: Sequence[Cause] = ()) -> SolverEvidence:
@@ -76,19 +74,9 @@ def result(
     return ValidationResult("workpiece", 0, lowering, evidence, controls, adversary, early)
 
 
-@pytest.mark.parametrize(
-    "rejected",
-    [
-        result(
-            Lowering(LoweringStatus.REFUSED, "", (REFUSAL,), None, "lowered-task"),
-            solver(0, 0, [Cause.MACHINE_UNSUPPORTED] * 4),
-            (VIOLATED, control("N3", ControlVerdict.UNGRADED, Cause.MACHINE_UNSUPPORTED)),
-        ),
-        result(Lowering(LoweringStatus.REJECTED, "the verifier machine has no factory", (), None, None), None, ()),
-    ],
-    ids=["refused", "rejected"],
-)
-async def test_a_refused_or_rejected_lowering_holds_before_any_task_decision(rejected):
+async def test_a_rejected_lowering_holds_before_any_task_decision():
+    rejected = result(Lowering(LoweringStatus.REJECTED, "the verifier machine has no factory", None, None), None, ())
+
     decision = await default_review(rejected, band=BAND)
 
     assert isinstance(decision, Hold)

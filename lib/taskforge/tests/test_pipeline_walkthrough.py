@@ -266,7 +266,7 @@ def passing_result(context: ValidationContext) -> ValidationResult:
         for index, reward in enumerate((1.0, 0.0, 1.0, 0.0))
     )
     stats = RewardStats(graded=4, mean_reward=0.5, solved=2, timed_out=0, candidate_code_errors=0)
-    lowering = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
+    lowering = Lowering(LoweringStatus.LOWERED, "", None, "lowered-task")
     return ValidationResult(
         context.workpiece_id,
         context.round,
