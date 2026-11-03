@@ -262,7 +262,7 @@ run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
 `llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
 own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each assistant turn's
 `reasoning_content`. `shell_tool` offers RolloutEngine's default shell tool on a shellbox
-`Machine`, and `taskforge_adapters.web` adds Parallel search and extract. The policy defaults to no application output cap: `max_tokens=None` omits both
+`Machine`, and `llm.web.web_tools(web)` adds web search and extract over a `Web`, such as `taskforge_adapters.parallel.ParallelWeb`. The policy defaults to no application output cap: `max_tokens=None` omits both
 provider output-limit fields. Explicit caps remain available. A physical context or output
 boundary interrupts the attempt and preserves its partial trace for a hold. Agent turn,
 continuation and structured-repair limits are optional; `None` leaves them unbounded.

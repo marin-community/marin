@@ -12,8 +12,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import pytest
 from rigging.timing import ExponentialBackoff
+from taskforge.llm.web import web_tools
 
-from taskforge_adapters.web import MAX_ATTEMPTS, web_tools
+from taskforge_adapters.parallel import MAX_ATTEMPTS, ParallelWeb
 
 SEARCH = {"objective": "find x", "search_queries": ["x"]}
 FETCH = {"urls": ["https://example.com"]}
@@ -56,9 +57,9 @@ def call(fake: FakeParallel, *calls: tuple[int, dict]) -> list[str]:
     """Run ``(tool_index, arguments)`` calls in order through one shared client."""
 
     async def go() -> list[str]:
-        async with httpx.AsyncClient() as http:
-            backoff = ExponentialBackoff(initial=0.001, maximum=0.001)
-            tools = web_tools(http, "test-key", base_url=fake.base_url, backoff=backoff)
+        backoff = ExponentialBackoff(initial=0.001, maximum=0.001)
+        async with ParallelWeb("test-key", base_url=fake.base_url, backoff=backoff) as web:
+            tools = web_tools(web)
             return [await tools[index].handler(arguments) for index, arguments in calls]
 
     return asyncio.run(go())

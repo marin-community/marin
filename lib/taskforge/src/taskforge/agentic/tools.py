@@ -70,6 +70,7 @@ from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.agent import clip_tool_output
 from taskforge.llm.policy import Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.llm.web import WebRequestRejected
 from taskforge.spec.controls import ScriptedModel, context_assistant_turns
 from taskforge.stage40_build_with_program.context import BuildInfrastructureFailure
 
@@ -868,7 +869,7 @@ def rollout_tokens(rollout: Rollout) -> int:
 async def _web(request: Awaitable[dict[str, Any]]) -> dict[str, Any]:
     try:
         return await request
-    except httpx.HTTPError as error:
+    except (httpx.HTTPError, WebRequestRejected) as error:
         raise ToolError(f"The web request failed: {error}") from error
 
 
