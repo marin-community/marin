@@ -96,15 +96,44 @@ entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
 `--steps 25` for the normal iteration. Each run starts from the pinned SFT model.
 The selected data stays cached; training does not curate or resample it.
 
-The launcher binds `train.parquet` and `validation.parquet` from that artifact.
-Evaluation attempts the fixed panel before training and after the last update,
-and saves task-level verifier outcomes. Under the run artifact's `exports/`,
+The launcher binds `train.parquet` and `validation.parquet` from that artifact,
+and the `rl-data/protocol-probes` artifact as a second validation source. The
+probes are eight tasks per agent protocol check (required-file submission, tool
+execution, thinking disabled, URL loading), built by
+[`protocol_probes.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/inventory/protocol_probes.py).
+Their file and tool tasks run on a ShellSim machine with four turns, set through
+`task_sessions.task_spec.max_turns_by_dataset` and `task_machine_by_dataset`, and
+the answer file is graded in the worker from a verifyit-only environment lock
+that the graph builds. Evaluation attempts the fixed panel and the probes before
+training and after the last update, and saves task-level verifier outcomes. Under the run artifact's `exports/`,
 `dumped_evals/global_step_0_evals/` holds the baseline and
 `dumped_evals/global_step_<steps>_evals/` holds the final evaluation. Each contains
 per-dataset JSONL responses and `aggregated_results.jsonl`; compare its
-`avg_score` and `pass_at_1` metrics alongside verifier coverage. The final update saves a checkpoint;
-HF export is opt-in with `--export-hf` and adds a separate export job after training.
-Local graders require the privileged container profile; image graders and host judges use their configured backends.
+`avg_score` and `pass_at_1` metrics alongside verifier coverage. The probes report
+`eval/protocol-probes/protocol/<check>/<result>` rates for protocol compliance,
+submission completeness and answer correctness, each with an `_assessed`
+denominator; a check whose evidence cannot decide it is left out of the rate. Each
+row of `protocol-probes.jsonl` keeps its label under
+`verification.diagnostics.protocol`, such as `no_invocation` or `missing_file`.
+
+To see the probe labels for a small model before a launch, run them through the
+trainer's CPU harness. It evaluates the three probes that need no grading
+machine on a local Hugging Face snapshot and prints their label counts:
+
+```bash
+cd vendor/skyrl && uv sync --frozen --extra cpu --no-group dev
+PROTOCOL_PROBES_MODEL=~/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/<revision> \
+  PYTHONPATH=skyrl-train:skyrl-gym uv run --frozen --extra cpu --no-group dev \
+  pytest skyrl-train/tests/cpu/test_protocol_probes_cpu.py -s
+```
+
+Qwen3-0.6B with thinking off answers the thinking probe but narrates the
+command and URL probes without calling a tool, which the labels report as
+`no_invocation` and `not_attempted` with wrong answers.
+
+The final update saves a checkpoint; HF export is opt-in with `--export-hf` and
+adds a separate export job after training. Local graders require the privileged
+container profile; image graders and host judges use their configured backends.
 
 ## Compare the iteration
 

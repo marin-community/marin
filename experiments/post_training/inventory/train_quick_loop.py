@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Train Datakit SFT on the Snowball 100k selection and evaluate before and after RL."""
+"""Train Datakit SFT on the Snowball 100k selection and evaluate before and after RL.
+
+Evaluation also runs the agent protocol probes, which report protocol compliance separately from
+answer correctness.
+"""
 
 from dataclasses import replace
 
@@ -25,8 +29,10 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from taskcompendium.examples.protocol_probes import PROBE_DATASET, PROBE_TURNS, SHELLSIM_MACHINE
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
+from experiments.post_training.inventory.protocol_probes import PROBES_FILENAME, probe_tasks_step
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -65,6 +71,10 @@ def training_recipe(steps: int) -> dict:
             "local": {},
             "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
             "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
+            "task_spec": {
+                "max_turns_by_dataset": {PROBE_DATASET: PROBE_TURNS},
+                "task_machine_by_dataset": {PROBE_DATASET: SHELLSIM_MACHINE},
+            },
         }
     }
     config["extra_env"].update(
@@ -105,7 +115,7 @@ def build_run(
     steps: int = DEFAULT_STEPS,
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
-    """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
+    """Bind selected canonical tasks, the protocol probes, pinned SFT weights and terminal outputs."""
     model = ArtifactStep.adopt(
         f"models/snowball-datakit-sft-{MODEL_REVISION}",
         MODEL_VERSION,
@@ -125,7 +135,10 @@ def build_run(
                 relative_path="",
             ),
             train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
-            validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
+            validation_data=(
+                ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),
+                ArtifactDataSource(probe_tasks_step(), relative_path=PROBES_FILENAME),
+            ),
             topology=SkyRLTopology(
                 num_nodes=plan.num_nodes,
                 gpus_per_node=plan.policy_num_gpus_per_node,
