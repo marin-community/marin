@@ -4,7 +4,7 @@
 """Tests for RuntimeEntrypoint assembly from an Entrypoint + EnvironmentConfig."""
 
 import pytest
-from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
+from iris.cluster.entrypoint import build_runtime_entrypoint
 from iris.cluster.setup_scripts import iris_runtime_setup_script
 from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2

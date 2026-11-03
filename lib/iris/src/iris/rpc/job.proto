@@ -475,6 +475,20 @@ message ResourceSpecProto {
 // ENVIRONMENT CONFIGURATION
 // ============================================================================
 
+enum NetworkAttachment {
+  NETWORK_ATTACHMENT_DEFAULT = 0;
+  NETWORK_ATTACHMENT_POD = 1;
+}
+
+// A declared primary-container endpoint for a live driver task in this cluster.
+message DriverConnectionSpec {
+  string driver_task_id = 1;
+  string driver_attempt_uid = 2;
+  uint32 port = 3;
+  // Stamped by the controller, never accepted from a submitter.
+  string driver_instance_uid = 4;
+}
+
 // Job environment configuration.
 message EnvironmentConfig {
   map<string, string> env_vars = 2;  // Environment variables to set
@@ -485,10 +499,34 @@ message EnvironmentConfig {
   // client builds this list (default project sync, or caller-provided); empty
   // means no setup. Child jobs inherit it to reproduce the parent's environment.
   repeated string setup_scripts = 6;
+  // Canonical task description, including the primary container. Flat environment
+  // fields above are the derived primary projection used by worker runtimes.
+  repeated ContainerSpec containers = 10;
+  string primary_container = 11;
+  NetworkAttachment network_attachment = 12;
+  DriverConnectionSpec driver_connection = 13;
 
-  // pip_packages(1), extras(3), python_version(4) are resolved into setup_scripts
-  // client-side; dockerfile(5) is replaced by RunTaskRequest.task_image.
   reserved 1, 3, 4, 5;
+}
+
+// Image startup inherits ENTRYPOINT/CMD when an override is absent.
+message ImageCommand {
+  CommandEntrypoint entrypoint = 1;
+  CommandEntrypoint arguments = 2;
+}
+
+message ContainerSpec {
+  string name = 1;
+  string image = 2;
+  string workdir = 3;
+  map<string, string> env_vars = 4;
+  ResourceSpecProto resources = 5;
+  map<string, string> secrets = 6;
+  repeated string setup_scripts = 7;
+  oneof startup {
+    RuntimeEntrypoint runtime_entrypoint = 8;
+    ImageCommand image_command = 9;
+  }
 }
 
 // ============================================================================

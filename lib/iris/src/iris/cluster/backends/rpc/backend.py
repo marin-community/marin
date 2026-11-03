@@ -35,6 +35,7 @@ from iris.cluster.controller.backend import (
     EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderError,
+    ProviderUnsupportedError,
     ReconcileObservation,
     ReconcileRequest,
     RemoveCapacityRequest,
@@ -55,6 +56,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,
 )
+from iris.cluster.task_connection import TaskConnection
 from iris.cluster.types import WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -325,6 +327,14 @@ class RpcTaskBackend:
         )
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if request.environment.network_attachment != job_pb2.NETWORK_ATTACHMENT_DEFAULT or request.environment.HasField(
+            "driver_connection"
+        ):
+            return "Native Pod attachment and driver endpoints require Kubernetes"
+        if len(request.environment.containers) > 1:
+            return "Multi-container tasks require the Kubernetes backend"
+        if request.environment.containers and not request.environment.containers[0].HasField("runtime_entrypoint"):
+            return "The worker backend requires an Iris command as its primary container startup"
         return None
 
     def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
@@ -367,12 +377,25 @@ class RpcTaskBackend:
         stub = self.stub_factory.get_stub(target.address)
         return asyncio.run(stub.profile_task(request, timeout_ms=timeout_ms))
 
+    def resolve_driver_connection(self, driver: TaskTarget) -> TaskConnection:
+        raise ProviderUnsupportedError("This backend does not support direct task connections")
+
+    def prepare_driver_connection(self, driver: TaskTarget, port: int) -> TaskConnection:
+        raise ProviderUnsupportedError("This backend does not support direct task connections")
+
+    def resolve_task_connection(
+        self, driver: TaskTarget, target: TaskTarget, spec: job_pb2.DriverConnectionSpec
+    ) -> TaskConnection:
+        raise ProviderUnsupportedError("This backend does not support direct task connections")
+
     def exec_in_container(
         self,
         target: TaskTarget,
         request: worker_pb2.Worker.ExecInContainerRequest,
         timeout_seconds: int = 60,
     ) -> worker_pb2.Worker.ExecInContainerResponse:
+        if request.container_name:
+            return worker_pb2.Worker.ExecInContainerResponse(error="Sandbox containers require the Kubernetes backend")
         if not target.address:
             raise ProviderError(f"Worker {target.worker_id} has no address")
         stub = self.stub_factory.get_stub(target.address)

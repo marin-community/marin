@@ -1111,3 +1111,39 @@ gh workflow run "<workflow name>" -R marin-community/marin --ref main
 # View failed run
 gh run view <run-id> -R marin-community/marin --log-failed | tail -50
 ```
+
+## Direct sandbox connections
+
+Submit a trusted Iris driver with `network_attachment=NetworkAttachment.POD`.
+From that live task, submit a child `TaskSpec` with `NetworkAttachment.POD` and
+`DriverConnectionSpec(driver_task_id, driver_attempt_uid, port)`. The primary
+application must listen on that port. `GetTaskConnection` returns its current
+address and opaque instance/attempt identities only to the owning driver.
+The caller supplies the application protocol; Shellbox and Harbor adoption is
+pending. External callers, host-network drivers and controller port-forwards
+cannot use this path. See [task containers](docs/container-profiles.md#task-containers)
+for the API and isolation rules.
+
+Before enabling it in a namespace:
+
+- Deploy matching controller and client versions. Start a new Pod-network driver
+  after the rollout; existing jobs retain their networking.
+- Install the configured CPU-only gVisor RuntimeClass and enforcing sandbox
+  NetworkPolicies. No other policy may grant wider access to sandbox Pods.
+- Apply the controller's driver-connection RBAC from
+  `iris.cluster.platforms.k8s.rbac_manifests` through an operator rollout.
+
+The Kubernetes controller creates ingress policies for each owning driver
+attempt and port; deleting that driver Pod reclaims its policies. Driver
+credentials are not passed to the child. Docker-worker backends do not support
+this connection path.
+
+To diagnose a connection failure, inspect the driver, child and ingress policy:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> get pods -o wide
+kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> get networkpolicies -o yaml
+```
+
+Check Pod attachment and the owning driver/attempt labels. Do not enable sandbox
+egress or host networking to bypass a connection failure.

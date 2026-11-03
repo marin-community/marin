@@ -34,6 +34,45 @@ EGRESS_BLOCKED_CIDRS: tuple[str, ...] = (
     "169.254.0.0/16",
 )
 
+_CREDENTIAL_NAMES = frozenset(
+    {
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CREDENTIALS",
+        "GOOGLE_CLOUD_KEYFILE_JSON",
+        "GCP_CREDENTIALS",
+        "GCP_SERVICE_ACCOUNT_KEY",
+        "HF_TOKEN",
+        "HF_TOKEN_PATH",
+        "HUGGING_FACE_HUB_TOKEN",
+        "HUGGINGFACE_API_KEY",
+        "HUGGINGFACE_TOKEN",
+        "HUGGINGFACE_HUB_TOKEN",
+        "KUBECONFIG",
+        "SSH_AUTH_SOCK",
+        "FSSPEC_S3",
+        "WANDB_API_KEY",
+        "RIGGING_SECRETS_DIR",
+        "MARIN_CLUSTER_TOKEN",
+        "IRIS_TASK_TOKEN",
+        "IRIS_CONTROLLER_ADDRESS",
+        "IRIS_CONTROLLER_URL",
+    }
+)
+_CREDENTIAL_PREFIXES = ("AWS_", "S3_", "CW_KEY_", "AZURE_", "CLOUDSDK_AUTH_")
+
+
+def validate_sandbox_environment(environment: dict[str, str]) -> None:
+    """Reject cloud and control-plane credential delivery into untrusted machines."""
+    rejected = [
+        name
+        for name in environment
+        if name.upper() in _CREDENTIAL_NAMES or name.upper().startswith(_CREDENTIAL_PREFIXES)
+    ]
+    if rejected:
+        raise ValueError(f"Sandbox environments cannot receive cloud or controller credentials: {sorted(rejected)}")
+    if any("${" in value for value in environment.values()):
+        raise ValueError("Sandbox service environments require literal values")
+
 
 class TaskNetwork(StrEnum):
     """What a task's network can reach (``job_pb2.EgressPolicy``, resolved).

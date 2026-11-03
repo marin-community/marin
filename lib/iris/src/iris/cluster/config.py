@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PRIORITY = 100
 DOCKER_WORKER_RUNTIME = "docker"
 KUBERNETES_WORKER_RUNTIME = "kubernetes"
+DEFAULT_SANDBOX_RUNTIME_CLASS = "gvisor"
 
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "backend.coreweave.cloud/",
@@ -738,6 +739,8 @@ class KubernetesProviderConfig(_Config):
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     service_account: str = ""
     host_network: bool = False
+    # Operator-owned CPU gVisor RuntimeClass, used by both isolated profiles.
+    sandbox_runtime_class: str = Field(default=DEFAULT_SANDBOX_RUNTIME_CLASS, min_length=1)
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
     cache_max_age: DurationField | None = None  # enables cache reclamation
     node_health: NodeHealthConfig | None = None

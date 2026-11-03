@@ -57,6 +57,7 @@ message Worker {
     string task_id = 1;             // Task whose container to exec into
     repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
     int32 timeout_seconds = 3;      // Command timeout in seconds (0 = default 60s)
+    string container_name = 4;      // Empty selects task; otherwise a declared sandbox service name.
   }
 
   message ExecInContainerResponse {

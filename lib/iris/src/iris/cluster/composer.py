@@ -119,6 +119,7 @@ def make_task_backend(
                 logship_image=config.controller.image,
                 service_account=kp.service_account or "",
                 host_network=kp.host_network,
+                sandbox_runtime_class=kp.sandbox_runtime_class,
                 cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
                 controller_address=kp.controller_address or None,
                 managed_label=managed_label,
@@ -206,7 +207,7 @@ def make_backend(
     """
     which = config.provider_kind()
     capabilities = (
-        frozenset({BackendCapability.DIRECT_DISPATCH})
+        frozenset({BackendCapability.DIRECT_DISPATCH, BackendCapability.TASK_SERVICES, BackendCapability.POD_NETWORK})
         if which == "kubernetes_provider"
         else frozenset({BackendCapability.WORKER_FLEET} | ({BackendCapability.AUTOSCALER} if not dry_run else set()))
     )

@@ -8,7 +8,7 @@ in [`job.proto`](../src/iris/rpc/job.proto):
 |---|---|---|
 | `CONTAINER_PROFILE_RESTRICTED` | `--container-profile CONTAINER_PROFILE_RESTRICTED` | Hardened: drops all Linux capabilities, blocks privilege escalation, keeps the default seccomp profile. No profiling cap. For untrusted/sandboxed workloads. |
 | `CONTAINER_PROFILE_DEFAULT` | default (or `--container-profile CONTAINER_PROFILE_DEFAULT`) | `SYS_PTRACE` for profiling (plus `SYS_RESOURCE` on TPU). The everyday training/eval pod. |
-| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | For model-controlled workloads. Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / k8s `runtimeClassName: gvisor`). The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address or task token; no node-shared caches; no Kubernetes service account token. Its [egress policy](#egress-policy) defaults to `INTERNET` and cannot be `CLUSTER` or `ALLOWLIST`. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** CPU-only. See [Sandbox jobs](#sandbox-jobs). |
+| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | For model-controlled workloads. Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / the operator's configured Kubernetes RuntimeClass). The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address or task token; no node-shared caches; no Kubernetes service account token. Its [egress policy](#egress-policy) defaults to `INTERNET` and cannot be `CLUSTER` or `ALLOWLIST`. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** CPU-only. See [Sandbox jobs](#sandbox-jobs). |
 | `CONTAINER_PROFILE_DOCKER_ACCESS` | `--container-profile CONTAINER_PROFILE_DOCKER_ACCESS` | DEFAULT **plus** the host docker socket (`/var/run/docker.sock`) — lets the container drive the host Docker daemon to build images or run sibling containers. **Elevated.** |
 | `CONTAINER_PROFILE_PRIVILEGED` | `--container-profile CONTAINER_PROFILE_PRIVILEGED` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
 
@@ -83,25 +83,28 @@ container is created.
 |---|---|
 | `RESTRICTED` | `capabilities.drop:[ALL]`, `allowPrivilegeEscalation:false`, `seccompProfile.type:RuntimeDefault` (not full PSS Restricted — `runAsNonRoot` is not forced) |
 | `DEFAULT` | `capabilities.add:[SYS_PTRACE (+SYS_RESOURCE on TPU)]` |
-| `SANDBOX` | DEFAULT `securityContext` (no privilege) plus `spec.runtimeClassName: gvisor` on the pod — the node RuntimeClass provides isolation, not the container context — and `automountServiceAccountToken: false`, no `serviceAccountName`, no ambient task credential volume, no cluster `task_env`, and no node cache `hostPath` mounts (cache paths stay in the container layer) |
+| `SANDBOX` | DEFAULT `securityContext` (no privilege) plus `spec.runtimeClassName` from `kubernetes_provider.sandbox_runtime_class` and `automountServiceAccountToken: false`, no `serviceAccountName`, no ambient task credential volume, no cluster `task_env`, and no node cache `hostPath` mounts (cache paths stay in the container layer) |
 | `DOCKER_ACCESS` | **rejected** — k8s nodes run containerd, not dockerd, so there is no host docker socket. Use the docker worker backend, or `PRIVILEGED` with an in-pod runtime. |
 | `PRIVILEGED` | `privileged:true`, `allowPrivilegeEscalation:true`, plus the DEFAULT caps |
 
 ## Running under gVisor
 
 `SANDBOX` runs the **whole** container under gVisor's `runsc` runtime
-(docker `--runtime=runsc`; k8s `runtimeClassName: gvisor`). The worker/node's
+(docker `--runtime=runsc`; the operator's configured RuntimeClass on Kubernetes). The worker/node's
 container runtime — running as root — builds the sandbox, so the container itself
 needs no privilege: in-container root gets the docker default capability set
 (`setuid`, `apt`, etc. work) while the intercepted guest kernel isolates the
 host. This makes it safe to hand out **without** the admin role, unlike
-`PRIVILEGED`. It is CPU-only — `runsc` cannot pass a GPU/TPU through, so
-accelerator tasks are rejected at submit.
+`PRIVILEGED`. Iris supports CPU-only gVisor workloads; GPU and TPU requests
+are rejected at submit for both `SANDBOX` and legacy `GVISOR`.
 
 **Operator prerequisite:** `runsc` must be installed and registered on the
 workers — as a docker runtime named `runsc` in `/etc/docker/daemon.json` on
-docker-worker clusters (worker bootstrap does this), or as a `RuntimeClass`
-named `gvisor` on k8s. Without it, a `SANDBOX` job fails at container creation.
+docker-worker clusters (worker bootstrap does this), or as a CPU-only Kubernetes
+RuntimeClass. Set `kubernetes_provider.sandbox_runtime_class` to that class's
+name; it defaults to `gvisor`. The operator setting applies to singleton and
+container-group pods under both gVisor profiles. Jobs cannot select another
+class, and a missing class fails Pod creation.
 
 To instead run an *inner* gVisor sandbox around an untrusted child image while
 keeping the outer container normal, use `CONTAINER_PROFILE_PRIVILEGED` and run
@@ -122,12 +125,95 @@ itself (`IRIS_*` identity, the controller address, cache paths), and the job
 (`EnvironmentSpec.env_vars`, and in a child job the parent's
 variables). Under `SANDBOX` only the job's explicit `env_vars` and the Iris
 identity variables reach the task. Its explicit `secrets` map is mounted as
-read-only files; parent secrets are not inherited.
+read-only files; parent secrets are not inherited. Explicit cloud-storage and
+controller credential names are rejected in both environment variables and
+secret bundles, including for single-container tasks.
 
 The profile still supports `ExecInContainer`, which reaches the task through
 the worker or `kubectl exec`. The job cannot carry a workspace bundle, and
 the client rejects `extras`, `pip_packages` and `sync_packages`; setup scripts
 run verbatim and default to none.
+
+### Task containers
+
+`IrisClient.submit_task(TaskSpec(...))` submits a complete list of named
+`ContainerSpec` members through `TaskSpec.containers`, including the primary.
+Each container declares its own image, working directory, environment and
+resources. The scheduler reserves the sum of those resources. A container can
+run an Iris `Entrypoint`, preserving setup
+and workspace handling, or use its image ENTRYPOINT and CMD with optional
+overrides. The primary owns the task's completion and output handling.
+
+The existing `submit(entrypoint=..., resources=..., environment=...)` API
+normalizes to a one-container task through the same path. Kubernetes renders these
+containers in one Pod for both ordinary and sandbox jobs; container profile and
+egress policy determine their isolation separately. Docker workers lower
+one-container Iris-command tasks to their existing execution path and reject
+multi-container tasks and image-command startup.
+
+`TaskSpec.network_attachment` selects the network attachment separately from
+egress policy. `NetworkAttachment.DEFAULT` retains the cluster's existing host
+or Pod networking choice; `POD` explicitly requests Pod networking. Trusted
+drivers need `POD` when managing children through direct connections. A child's
+optional `DriverConnectionSpec` declares the live driver task, driver attempt
+and one ingress port. Iris stamps an opaque `driver_instance_uid` after resolving
+the live driver instance. The declaration grants no sandbox egress or driver
+credentials to the child. Docker workers
+reject explicit Pod attachment and driver connections.
+
+`TaskSpec.primary` names the primary container; omitting it uses `task`.
+`TaskSpec.primary_container` returns that container's `ContainerSpec`. Exec
+accepts that logical name, while the physical primary Kubernetes container
+remains `task`. Companions accept literal environment variables but cannot run
+Iris setup scripts or receive secret bundles. Ordinary primary containers retain
+their existing environment, setup and secret behavior.
+
+`EnvironmentConfig.containers` stores every member and `primary_container` selects
+the primary. A controller migration promotes persisted single-container jobs,
+retaining uploaded workdir files. Deploy matching client and controller versions
+together.
+
+### Private container groups
+
+A private group uses the native container model on one `SANDBOX` job with
+`EGRESS_POLICY_NONE`. The Kubernetes backend advertises `task-containers`;
+controllers and clients without that capability reject group creation.
+Docker-worker backends do not implement groups.
+
+Each container receives its digest-pinned image, absolute working directory,
+literal environment, CPU/memory/disk reservation and optional command overrides.
+The job reservation includes every member. Image ENTRYPOINT and CMD are preserved
+when their overrides are absent. Arbitrary pod fields, mounts, accelerators,
+setup scripts and secrets are rejected. Task and container environments reject
+cloud-storage and controller credential variables.
+
+The containers have separate filesystems and PID namespaces but share
+pod loopback. `/etc/hosts` maps the declared container names and `task` to
+`127.0.0.1`; there is no external DNS. The pod runs under gVisor, without service
+account tokens or credential-bearing infrastructure sidecars, with root users,
+all capabilities dropped and privilege escalation disabled. A dedicated policy
+selecting `iris.egress=loopback` denies both ingress and egress, including DNS.
+Operator controller startup installs this durable policy. Before creating a
+group pod, the controller reads the named policy and verifies its selector and
+deny-all rules; missing or changed isolation prevents dispatch. For direct
+connections, it also manages an ingress-only policy per driver attempt and port,
+allowing only the exact owning driver Pod. The policy belongs to the driver Pod
+and is garbage-collected with it. Existing clusters need the updated RBAC and an
+operator controller restart before this path can run. The namespace must have
+an enforcing NetworkPolicy implementation and no wider allow policy selecting
+these Pods; Kubernetes policy permissions are additive.
+
+The primary application must listen on the declared ingress port. Its owning
+driver calls `GetTaskConnection` with both exact attempt identities to obtain the
+current `address`, `port`, `instance_uid` and `attempt_uid`. Kubernetes validates
+the live Pods and their network attachment internally; the controller contract
+uses opaque instance identities. The caller owns the application protocol and
+connection lifetime. Iris supplies no process broker or HTTP relay.
+
+Cancelling the job tears down every member. A companion exiting fails the group
+so reconciliation reclaims its remaining containers. Container exec names are
+checked against the job definition before dispatch, so the API cannot address
+an infrastructure container. Shellbox and Harbor adoption is a separate follow-up.
 
 ## Egress policy
 

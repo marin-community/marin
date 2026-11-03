@@ -27,6 +27,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.network_policies import build_container_group_network_policy
 from iris.cluster.platforms.k8s.types import K8sResource, parse_k8s_quantity
 from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
@@ -78,6 +79,8 @@ def _dispatch(
 ) -> tuple[list[TaskUpdate], dict[K8sResource, list[dict]]]:
     """Dispatch one request through the provider and snapshot its K8s effects."""
     k8s = InMemoryK8sService(namespace=config.namespace)
+    if len(request.environment.containers) > 1 and request.egress_policy == job_pb2.EGRESS_POLICY_NONE:
+        k8s.apply_json(build_container_group_network_policy(config.namespace))
     provider = K8sTaskProvider(descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=config, cluster_scan_interval=0.0)
     try:
         updates = provider.sync(make_batch(tasks_to_run=[request]))
@@ -89,6 +92,7 @@ def _dispatch(
                 K8sResource.PDBS,
                 K8sResource.CILIUM_NETWORK_POLICIES,
                 K8sResource.SECRETS,
+                K8sResource.NETWORK_POLICIES,
             )
         }
     finally:
@@ -151,6 +155,10 @@ def _task_update_from_pod(
         observed = deepcopy(pod)
         observed["kind"] = "Pod"
         observed["metadata"] = {**applied["metadata"], **observed.get("metadata", {})}
+        observed["metadata"]["labels"] = {
+            **applied["metadata"].get("labels", {}),
+            **observed["metadata"].get("labels", {}),
+        }
         observed["metadata"]["name"] = applied["metadata"]["name"]
         k8s.seed_resource(K8sResource.PODS, applied["metadata"]["name"], observed)
         if workload is not None:
@@ -1219,6 +1227,96 @@ def test_allowlist_job_rules_reach_only_their_own_attempt():
     assert set(dns_names) == {"api.openai.com", "*.example.com"}
 
 
+@pytest.mark.parametrize("override_command", [False, True])
+def test_private_container_group_separates_filesystems_and_has_no_off_pod_network(override_command):
+    request = make_run_req("/alice/group/0", cpu_mc=3000)
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    request.task_image = "example.test/task@sha256:" + "a" * 64
+    request.resources.disk_bytes = 2 * 1024**3
+    request.environment.primary_container = "agent"
+    primary = request.environment.containers.add(
+        name="agent",
+        image=request.task_image,
+        workdir="/app",
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=3 * 1024**3, disk_bytes=1024**3),
+    )
+    primary.runtime_entrypoint.CopyFrom(request.entrypoint)
+    service = request.environment.containers.add(
+        name="runtime",
+        image="example.test/runtime@sha256:" + "b" * 64,
+        workdir="/app",
+        env_vars={"PUBLIC": "runtime-input"},
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, disk_bytes=1024**3),
+    )
+    service.image_command.SetInParent()
+    if override_command:
+        service.image_command.entrypoint.argv.extend(["python3"])
+        service.image_command.arguments.argv.extend(["server.py"])
+    request.ClearField("entrypoint")
+    request.ClearField("resources")
+    request.ClearField("task_image")
+    request.environment.ClearField("env_vars")
+    updates, resources = _dispatch(
+        request,
+        pod_config(
+            sandbox_runtime_class="cpu-sandbox",
+            host_network=True,
+            task_env={"AWS_SECRET_ACCESS_KEY": "host-private"},
+            service_account="privileged-account",
+            task_outputs=TaskOutputPolicy(),
+        ),
+    )
+    assert updates == []
+    pod = resources[K8sResource.PODS][0]
+    policy = resources[K8sResource.NETWORK_POLICIES][0]
+    assert policy["spec"]["podSelector"]["matchLabels"] == {EGRESS_LABEL: pod["metadata"]["labels"][EGRESS_LABEL]}
+    assert policy["spec"]["egress"] == policy["spec"]["ingress"] == []
+    assert pod["metadata"]["labels"][EGRESS_LABEL] == "loopback"
+    spec = pod["spec"]
+    task, runtime = spec["containers"]
+    assert [container["name"] for container in spec["containers"]] == ["task", "service-runtime"]
+    assert spec["runtimeClassName"] == "cpu-sandbox"
+    assert spec["hostAliases"] == [{"ip": "127.0.0.1", "hostnames": ["task", "agent", "runtime"]}]
+    assert spec["dnsPolicy"] == "None"
+    assert "hostNetwork" not in spec and "serviceAccountName" not in spec
+    assert spec["automountServiceAccountToken"] is False
+    assert spec["enableServiceLinks"] is False
+    assert spec["initContainers"] == []
+    assert "volumeMounts" not in runtime
+    assert not any("hostPath" in volume or "secret" in volume for volume in spec["volumes"])
+    assert runtime["env"] == [{"name": "PUBLIC", "value": "runtime-input"}]
+    task_env = {item["name"]: item.get("value") for item in task["env"]}
+    primary_budget = json.loads(task_env["IRIS_TASK_RESOURCES"])
+    assert primary_budget["cpu_millicores"] == 2000
+    assert int(primary_budget["memory_bytes"]) == 3 * 1024**3
+    for container in (task, runtime):
+        assert container["securityContext"]["runAsUser"] == 0
+        assert container["securityContext"]["allowPrivilegeEscalation"] is False
+        assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+        assert not any(item["name"].startswith("AWS_") for item in container["env"])
+    if override_command:
+        assert runtime["command"] == ["python3"]
+        assert runtime["args"] == ["server.py"]
+    else:
+        assert "command" not in runtime and "args" not in runtime
+
+
+@pytest.mark.parametrize("sandbox", [False, True])
+def test_service_exit_terminates_the_group_even_when_task_is_still_running(sandbox):
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/alice/group/0"), attempt_id=0)
+    pod = make_pod("ignored", "Running")
+    if sandbox:
+        pod["metadata"]["labels"] = {EGRESS_LABEL: "loopback"}
+    pod["status"]["containerStatuses"] = [
+        {"name": "task", "state": {"running": {}}},
+        {"name": "service-runtime", "state": {"terminated": {"exitCode": 1, "reason": "Error"}}},
+    ]
+    update = _task_update_from_pod(entry, pod)
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
+    assert "service-runtime" in update.error
+
+
 def test_default_profile_off_the_cluster_network_keeps_cluster_env_but_no_cluster_route():
     """The egress policy sets the network for any profile; the profile alone decides the cluster env."""
     req = make_run_req("/my-job/task-0")
@@ -1298,6 +1396,16 @@ def test_host_network_omitted_when_disabled():
     manifest = _build_pod_manifest(req, pod_config(host_network=False))
     assert "hostNetwork" not in manifest["spec"]
     assert "dnsPolicy" not in manifest["spec"]
+
+
+def test_explicit_pod_attachment_overrides_cluster_host_network():
+    req = make_run_req("/my-job/task-0")
+    req.environment.network_attachment = job_pb2.NETWORK_ATTACHMENT_POD
+    manifest = _build_pod_manifest(req, pod_config(host_network=True, controller_address="http://controller:8080"))
+    assert not manifest["spec"].get("hostNetwork", False)
+    task_env = {entry["name"]: entry for entry in manifest["spec"]["containers"][0]["env"]}
+    assert task_env["IRIS_CONTROLLER_ADDRESS"]["value"] == "http://controller:8080"
+    assert task_env["IRIS_POD_UID"]["valueFrom"]["fieldRef"]["fieldPath"] == "metadata.uid"
 
 
 # ---------------------------------------------------------------------------
