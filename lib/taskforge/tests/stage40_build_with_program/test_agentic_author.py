@@ -370,6 +370,7 @@ async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, pr
     assert read(target / "author.json")["tested"] is False, "the second submit hands in an untested program"
 
 
+FIRST_STEP = "\n\n\n@rl_env_build_step\n"
 SPINNING_CLASS = "class Spin:\n    while True:\n        pass\n\n\n"
 """An output model whose class body never returns; the template with it added is a program that spins on load."""
 
@@ -380,7 +381,7 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
     async def bounded(source: str) -> ProgramManifest:
         return await load_program_in_process(source, sdk_exports(), wall_timeout=2)
 
-    spinning = inspect.getsource(standard).replace("PROGRAM = ", f"{SPINNING_CLASS}PROGRAM = ")
+    spinning = inspect.getsource(standard).replace(FIRST_STEP, f"\n\n\n{SPINNING_CLASS}@rl_env_build_step\n", 1)
     workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": spinning})),

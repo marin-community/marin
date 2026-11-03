@@ -55,14 +55,16 @@ def suggestion(name: str, candidates: Iterable[str]) -> str:
 def _name_suggestion(name: str, bound: Iterable[str], sdk: SdkExports) -> str:
     """``"; did you mean 'x'?"`` for the closest of ``bound`` and the SDK exports to ``name``.
 
-    A former SDK name in ``RENAMED_SDK_NAMES`` gets the name replacing it. An SDK export the
-    program has not bound comes with its modules, as in ``"; did you mean 'research' from
-    taskforge.stage40_build_with_program.sdk?"``. The result is ``""`` when no name is close.
+    A former SDK name in ``RENAMED_SDK_NAMES`` gets the name replacing it, with its modules when
+    ``sdk`` lists them. An SDK export the program has not bound comes with its modules, as in
+    ``"; did you mean 'research' from taskforge.stage40_build_with_program.sdk?"``. The result is
+    ``""`` when no name is close.
     """
     exports = sdk.defining_modules
     renamed = RENAMED_SDK_NAMES.get(name)
     if renamed is not None:
-        return f"; did you mean {renamed!r} from {' or '.join(exports[renamed])}?"
+        modules = exports.get(renamed, ())
+        return f"; did you mean {renamed!r} from {' or '.join(modules)}?" if modules else f"; did you mean {renamed!r}?"
     local = set(bound)
     matches = difflib.get_close_matches(name, [*local, *exports], n=1)
     if not matches:

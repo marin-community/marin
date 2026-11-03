@@ -259,3 +259,40 @@ def test_the_loader_suggests_only_the_sdk_names_its_caller_passes():
 
     assert "did you mean" not in str(unsuggested.value)
     assert module_name(source) not in sys.modules, str(suggested.value)
+
+
+def facts_program(answer: str, *, before: str) -> str:
+    """``PROGRAM`` whose grader reads its answer from a class ``Facts`` declared just above ``before``."""
+    facts = f'class Facts:\n    ANSWER = "{answer}"\n\n\n'
+    return PROGRAM.replace('ExactSpec(expected=("42",))', "ExactSpec(expected=(Facts.ANSWER,))").replace(
+        before, f"{facts}{before}", 1
+    )
+
+
+def test_a_class_below_a_step_is_refused():
+    """A step's digest covers the classes bound when it is decorated, so it could not cover ``Facts`` here."""
+    source = facts_program("42", before="@rl_env_build_sink")
+
+    with pytest.raises(ValueError, match=r"`class Facts:`\) comes after the step `question` \(line \d+\)"):
+        load_program_source(source, SDK)
+
+    assert module_name(source) not in sys.modules
+
+
+def test_an_edit_to_a_class_a_step_reads_changes_that_steps_memo_key():
+    above = "@dataclass(frozen=True)\nclass Question"
+    first = load_program_source(facts_program("42", before=above), SDK)
+    edited = load_program_source(facts_program("41", before=above), SDK)
+
+    assert edited.steps["grader"].source_digest != first.steps["grader"].source_digest
+    assert edited.steps["question"].source_digest == first.steps["question"].source_digest
+
+
+def test_a_former_sdk_name_gets_its_replacement_from_a_partial_sdk_catalog():
+    source = PROGRAM.replace(
+        '    return Question(text="What is 6 * 7?")',
+        '    await try_grader(context)\n    return Question(text="What is 6 * 7?")',
+    )
+
+    with pytest.raises(ValueError, match=r"`try_grader` \(line \d+\); did you mean 'grade_candidate'\?\n"):
+        load_program_source(source, SdkExports(defining_modules={}))
