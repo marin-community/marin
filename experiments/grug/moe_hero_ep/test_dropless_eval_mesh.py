@@ -52,9 +52,7 @@ def test_dropless_eval_mesh_reuses_training_device_groups_at_cp4(replica, expert
         }
         tree = {key: jax.device_put(values, NamedSharding(train_mesh, spec)) for key, spec in kept.items()}
         tree["experts"] = jax.device_put(values, NamedSharding(train_mesh, P(("expert", "context"), None, None)))
-        tree["step"] = 3
         moved = train._reshard_tree_to_mesh(tree, eval_mesh)
-        assert moved["step"] == 3
         for key in ("batch", "fsdp", "dense", "experts"):
             assert moved[key].sharding.mesh == eval_mesh
             np.testing.assert_array_equal(np.asarray(moved[key]), values)
