@@ -47,6 +47,9 @@ from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
 GATE_REVISION = "2026.11.03.1"
 GATE_REPORT_FILENAME = "gate_report.json"
+GRADER_ERROR_LIMIT = 0.01
+OUTCOME_PREFIX = "generate/outcome/"
+REWARD_PREFIX = "reward/domain/"
 
 
 @dataclass(frozen=True)
@@ -135,8 +138,8 @@ def check_requirements(preset: presets.Preset, requirements: Sequence[str], *, c
         return  # gate_step names the missing control pin.
     rates_path = _pass_rates_path(preset)
     rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
-    control = _load_run(_control_path(preset, pins[0], 0), preset, rates)
-    missing = [key for key in keys if key not in control.values]
+    reference = _load_run(_control_path(preset, pins[0], 0), preset, rates)
+    missing = [key for key in keys if key not in reference.values]
     if missing:
         raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
 
@@ -396,7 +399,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         scores.append(table)
         initial_scores.append(initial)
         ids = frozenset(table["item"].to_pylist())
-        if evaluation.file != "train":
+        if evaluation.file != scoring.TRAIN_STEM:
             panel_ids[evaluation.name] = ids
         invariants.extend(_session_invariants(evaluation.name, table, evaluation, preset))
         if inputs.init is not None:
@@ -413,7 +416,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         invariants.append(Invariant(name="finite_losses_and_gradients", value=finite, limit=True, holds=finite))
 
     def count(*outcomes: str) -> float:
-        return math.fsum(row.get(f"generate/outcome/{outcome}", 0) for row in training for outcome in outcomes)
+        return math.fsum(row.get(OUTCOME_PREFIX + outcome, 0) for row in training for outcome in outcomes)
 
     total, bad, failures = (
         count(*Outcome),
@@ -421,11 +424,16 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         count("rollout_failure"),
     )
     lower, upper = (max(bad, failures) / total, min(total, bad + failures) / total) if total else (1.0, 1.0)
-    recorded = all(f"generate/outcome/{outcome}" in row for row in training for outcome in (*Outcome, "rollout_failure"))
-    holds = upper <= 0.01 and recorded
+    recorded = all(OUTCOME_PREFIX + outcome in row for row in training for outcome in (*Outcome, "rollout_failure"))
+    holds = upper <= GRADER_ERROR_LIMIT and recorded
     invariants.append(
         ErrorBoundInvariant(
-            name="grader_error_fraction", value=upper, lower_bound=lower, upper_bound=upper, limit=0.01, holds=holds
+            name="grader_error_fraction",
+            value=upper,
+            lower_bound=lower,
+            upper_bound=upper,
+            limit=GRADER_ERROR_LIMIT,
+            holds=holds,
         )
     )
     fixed = preset.recipe.fixed_reply_tokens
@@ -496,7 +504,7 @@ def _change(row: Comparison) -> Change:
 
 
 def _breakdown_group(key: str) -> str:
-    if key.startswith("reward/domain/"):
+    if key.startswith(REWARD_PREFIX):
         return "Training reward per source"
     if key.endswith(("/initial", "/gain")):
         return key.split("/", 1)[0] + ": initial weights"
@@ -540,8 +548,8 @@ def _compare(
         key
         for row in (*values, noise)
         for key in row
-        if (key.startswith(prefixes) or key.startswith("reward/domain/"))
-        and (not key.startswith("reward/domain/") or key in noise)
+        if (key.startswith(prefixes) or key.startswith(REWARD_PREFIX))
+        and (not key.startswith(REWARD_PREFIX) or key in noise)
         and key not in declared
         and key not in guard_keys
     )
@@ -562,7 +570,7 @@ def _compare(
             n_control,
             (
                 counts[_breakdown_group(metric.key)]
-                if metric.key not in declared and metric.key.startswith((*prefixes, "reward/domain/"))
+                if metric.key not in declared and metric.key.startswith((*prefixes, REWARD_PREFIX))
                 else 1
             ),
         )
@@ -596,7 +604,7 @@ def _render_markdown(report: GateReport) -> str:
     for title, value in (("Run", report.run), ("Control", report.control)):
         lines += ["", f"## {title}", ""]
         lines += [f"- {key}: {json.dumps(item, default=str)}" for key, item in value.model_dump().items()]
-    prefixes = (*(evaluation.name + "/" for evaluation in presets.PRESETS[report.preset].evaluations), "reward/domain/")
+    prefixes = (*(evaluation.name + "/" for evaluation in presets.PRESETS[report.preset].evaluations), REWARD_PREFIX)
     breakdown = [row for row in report.reported if row.metric.startswith(prefixes)]
     summary = [row for row in report.reported if not row.metric.startswith(prefixes)]
     for title, rows in (("Guards", report.guards), ("Reported", summary), ("Invariants", report.invariants)):
@@ -812,7 +820,7 @@ def main(preset_name: str, candidate_name: str | None, leave_out: str | None, re
     root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
     source = str(root / name / (version if separator else presets.PRESET_REVISION))
     namespace = user_owned_name(
-        f"checkpoints/snowball-rl/rescore/{preset_name}-{fingerprint_hash(canonical_json((source, pins, index)))}"
+        f"{presets.RUN_PREFIX}/rescore/{preset_name}-{fingerprint_hash(canonical_json((source, pins, index)))}"
     )
     recorded = recorded_inputs(source)
     inputs = GateInputs(recorded.settings, recorded.tasks, recorded.init, (*recorded.requirements, *requirements))
