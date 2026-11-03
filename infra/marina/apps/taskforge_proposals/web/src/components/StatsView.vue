@@ -87,7 +87,7 @@ const label2 = (g) => `${g.key} ${(domains.value[g.key] || "").slice(0, 32)}`;
       <div class="section-head"><h2>Token distributions</h2><span class="sub">per slot, summed over its completions (repairs included)</span></div>
       <div class="grid three">
         <div v-for="name in ['completion_tokens', 'reasoning_tokens', 'prompt_tokens']" :key="name" class="card">
-          <div class="card-head"><h3>{{ label(name) }}</h3><span class="muted small" v-if="data.histograms[name].lo != null">{{ num(data.histograms[name].lo) }}–{{ num(data.histograms[name].hi) }}</span></div>
+          <div class="card-head"><h3>{{ label(name) }}</h3><span class="muted small" v-if="data.histograms[name].lo != null">{{ num(data.histograms[name].lo) }}–{{ num(data.histograms[name].max) }}; last bin holds the top 1%</span></div>
           <Histogram :hist="data.histograms[name]" :name="label(name)" />
         </div>
       </div>

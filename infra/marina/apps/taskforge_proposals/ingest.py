@@ -64,7 +64,8 @@ PROPOSAL_COLUMNS = (
     "research_need TEXT, verdict TEXT, reason TEXT, cut_off BOOLEAN, failure TEXT, completions INTEGER, "
     "prompt_tokens INTEGER, completion_tokens INTEGER, reasoning_tokens INTEGER, cached_tokens INTEGER, "
     "finish_reasons JSONB, wall_time DOUBLE PRECISION, body_chars INTEGER, request_path TEXT, "
-    "completions_path TEXT, completions_bytes BIGINT, proposal JSONB, verdict_record JSONB, source_key TEXT"
+    "completions_path TEXT, completions_bytes BIGINT, proposal JSONB, verdict_record JSONB, superseded BOOLEAN, "
+    "source_key TEXT"
 )
 
 
@@ -98,6 +99,23 @@ def batches(rows: list[dict[str, Any]]) -> list[str]:
     if batch:
         out.append("[" + ",".join(batch) + "]")
     return out
+
+
+def without_nul(value: Any) -> tuple[Any, int]:
+    """``value`` with each NUL character replaced by U+FFFD, which Postgres text and JSONB cannot hold."""
+    if isinstance(value, str):
+        count = value.count("\x00")
+        return (value.replace("\x00", "\ufffd"), count) if count else (value, 0)
+    if isinstance(value, dict):
+        out, total = {}, 0
+        for key, item in value.items():
+            out[key], count = without_nul(item)
+            total += count
+        return out, total
+    if isinstance(value, list):
+        items = [without_nul(item) for item in value]
+        return [item for item, _ in items], sum(count for _, count in items)
+    return value, 0
 
 
 def digest(*parts: Any) -> str:
@@ -244,10 +262,14 @@ def main(
     ids = sorted(catalog)[:limit] if limit else sorted(catalog)
 
     existing_caps = uploader.keys("SELECT id AS k, source_key FROM capabilities ORDER BY id")
-    existing_slots = uploader.keys(
+    existing_slots: dict[str, dict[int, str]] = {}
+    for composite, key in uploader.keys(
         "SELECT capability_id || '/' || slot AS k, source_key FROM proposals ORDER BY capability_id, slot"
-    )
-    print(f"stored: {len(existing_caps)} capabilities, {len(existing_slots)} proposals", flush=True)
+    ).items():
+        capability_id, slot = composite.rsplit("/", 1)
+        existing_slots.setdefault(capability_id, {})[int(slot)] = key
+    stored_count = sum(len(v) for v in existing_slots.values())
+    print(f"stored: {len(existing_caps)} capabilities, {stored_count} proposals", flush=True)
     problems: Counter[str] = Counter()
 
     def usage_of(info: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -275,13 +297,31 @@ def main(
                 for kind in ("proposal.json", "verdict.json", "failure.txt", "completions.json")
             }
             slot_sources[n]["usage"] = slot_sources[n]["completions.json"] in usage
+            # A rerun of a slot rewrites its request first; a proposal older than the request is an earlier
+            # attempt's leftover, not this slot's outcome (the rerun ended in failure.txt instead).
+            proposal_info, request_info = folder.get(prefix + "proposal.json"), folder.get(prefix + "request.json")
+            if proposal_info and request_info and request_info["LastModified"] > proposal_info["LastModified"]:
+                slot_sources[n]["superseded"] = True
         cap_key = digest(
             [file_key(i) for i in (plan_info, result_info, failure_info, plan_usage_info)],
             (usage_of(plan_usage_info) or {}).get("key"),
             {str(n): s for n, s in slot_sources.items()},
             catalog_doc["catalog_version"],
         )
-        if existing_caps.get(cap) == cap_key:
+        plan_key = file_key(plan_info)
+
+        def slot_key(n: int) -> str:
+            sources = slot_sources.get(n)
+            used = usage.get(sources["completions.json"]) if sources else None
+            return digest(sources, plan_key, (used or {}).get("key"), meta["subject_id"])
+
+        stored_slots = existing_slots.get(cap, {})
+        if (
+            existing_caps.get(cap) == cap_key
+            and stored_slots
+            and set(slot_numbers) <= set(stored_slots)
+            and all(stored_slots[n] == slot_key(n) for n in stored_slots)
+        ):
             return None, []
         plan, result, failure = cat_json(plan_info), cat_json(result_info), cat_json(failure_info)
         planned = {s["slot"]: s for s in (plan or {}).get("slots", [])}
@@ -297,22 +337,24 @@ def main(
             slot_usage = usage_of(completions_info)
             for name in USAGE_FIELDS:
                 slot_usage_total[name] += (slot_usage or {}).get(name) or 0
-            key = digest(slot_sources.get(n), file_key(plan_info), (slot_usage or {}).get("key"), meta["subject_id"])
+            key = slot_key(n)
             proposal_info, verdict_info, failure_txt = (
                 folder.get(prefix + k) for k in ("proposal.json", "verdict.json", "failure.txt")
             )
             failure_text = fs.cat(failure_txt["name"]).decode().strip() if failure_txt else None
             slot_result = slot_results.get(str(n))
             cut_off = CUT_OFF_TEXT in (failure_text or "") or CUT_OFF_TEXT in str(slot_result or "")
-            status = "proposed" if proposal_info else "cut_off" if cut_off else "failed" if failure_text else "pending"
+            superseded = bool((slot_sources.get(n) or {}).get("superseded"))
+            current = proposal_info is not None and not superseded
+            status = "proposed" if current else "cut_off" if cut_off else "failed" if failure_text else "pending"
             counts[status] += 1
-            if existing_slots.get(f"{cap}/{n}") == key:
+            if stored_slots.get(n) == key:
                 continue
             proposal, verdict = cat_json(proposal_info), cat_json(verdict_info)
-            header = (proposal or {}).get("header") or {}
-            body = (proposal or {}).get("body") or ""
+            header = ((proposal or {}).get("header") or {}) if current else {}
+            body = ((proposal or {}).get("body") or "") if current else ""
             sections = {s["heading"]: s["text"] for s in body_sections(body)}
-            verdict_decision = (verdict or {}).get("decision")
+            verdict_decision = (verdict or {}).get("decision") if current else None
             proposal_rows.append(
                 {
                     "capability_id": cap,
@@ -334,14 +376,15 @@ def main(
                     "grounding": header.get("grounding"),
                     "research_need": header.get("research_need") or plan_slot.get("research_need"),
                     "verdict": verdict_decision,
-                    "reason": "; ".join((verdict or {}).get("reasons") or []) or None,
+                    "reason": ("; ".join((verdict or {}).get("reasons") or []) or None) if current else None,
+                    "superseded": superseded,
                     "cut_off": cut_off,
                     "failure": failure_text,
                     "completions": (slot_usage or {}).get("completions"),
                     **{name: (slot_usage or {}).get(name) for name in USAGE_FIELDS},
                     "finish_reasons": (slot_usage or {}).get("finish_reasons"),
                     "wall_time": (slot_usage or {}).get("wall_time"),
-                    "body_chars": len(body) if proposal else None,
+                    "body_chars": len(body) if current else None,
                     "request_path": (
                         f"s3://{root}/{cap}/{prefix}request.json" if folder.get(prefix + "request.json") else None
                     ),
@@ -396,16 +439,24 @@ def main(
     read_started = time.monotonic()
     with ThreadPoolExecutor(read_threads) as pool:
         built = list(pool.map(capability_rows, ids))
-    cap_rows = [row for row, _ in built if row is not None]
-    slot_rows = [row for _, rows in built for row in rows]
+    cap_rows, slot_rows = [], []
+    for row in [row for row, _ in built if row is not None] + [row for _, rows in built for row in rows]:
+        clean, replaced = without_nul(row)
+        if replaced:
+            problems["rows with NUL characters replaced by U+FFFD"] += 1
+            print(
+                f"warning: replaced {replaced} NUL characters in {row.get('id') or (row['capability_id'], row['slot'])}"
+            )
+        (cap_rows if "id" in clean else slot_rows).append(clean)
     print(
         f"read {len(cap_rows)} changed capabilities and {len(slot_rows)} changed proposals "
         f"in {time.monotonic() - read_started:.0f}s",
         flush=True,
     )
     upload_started = time.monotonic()
-    uploaded_caps = uploader.upsert("capabilities", CAPABILITY_COLUMNS, "id", cap_rows) if cap_rows else 0
+    # Slots first, so a stored capability key never vouches for slots that failed to land.
     uploaded_slots = uploader.upsert("proposals", PROPOSAL_COLUMNS, "capability_id, slot", slot_rows) if slot_rows else 0
+    uploaded_caps = uploader.upsert("capabilities", CAPABILITY_COLUMNS, "id", cap_rows) if cap_rows else 0
     print(
         f"upserted {uploaded_caps} capabilities, {uploaded_slots} proposals in {time.monotonic() - upload_started:.0f}s"
     )
@@ -447,10 +498,14 @@ def main(
         "INSERT INTO run_stats (key, value) SELECT 'provenance', jsonb_build_object("
         "'git_sha', (SELECT jsonb_object_agg(git_sha, n) FROM (SELECT git_sha, COUNT(*) AS n FROM capabilities "
         "WHERE git_sha IS NOT NULL GROUP BY 1) g), "
-        "'policy', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'policy') FROM capabilities), "
-        "'catalog', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'catalog') FROM capabilities), "
-        "'max_tokens', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'max_tokens') FROM capabilities), "
-        "'slots', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'slots') FROM capabilities)) "
+        "'policy', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'policy') FROM capabilities "
+        "WHERE result IS NOT NULL), "
+        "'catalog', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'catalog') FROM capabilities "
+        "WHERE result IS NOT NULL), "
+        "'max_tokens', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'max_tokens') FROM capabilities "
+        "WHERE result IS NOT NULL), "
+        "'slots', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'slots') FROM capabilities "
+        "WHERE result IS NOT NULL)) "
         "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
         {},
     )

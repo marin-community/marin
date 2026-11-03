@@ -65,6 +65,7 @@ const siblingClass = (s) => (s.verdict || (s.cut_off ? "cut_off" : ""));
           <span class="chip outline"><span class="swatch" :class="`kind-${p.verification}`"></span>{{ label(p.verification) }}</span>
           <span class="chip outline">{{ label(p.environment) }}</span>
           <span v-if="p.solver_machine" class="chip outline">machine: {{ p.solver_machine }}</span>
+          <span v-if="p.superseded" class="chip warn" title="proposal.json predates the slot's last request">superseded proposal</span>
           <span v-if="p.completions > 1" class="chip warn" title="The document was repaired after failing to parse">{{ p.completions - 1 }} repair{{ p.completions > 2 ? "s" : "" }}</span>
         </div>
       </div>
@@ -85,6 +86,10 @@ const siblingClass = (s) => (s.verdict || (s.cut_off ? "cut_off" : ""));
           <button :class="{ on: tab === 'document' }" @click="tab = 'document'">Proposal</button>
           <button :class="{ on: tab === 'proposal' }" :disabled="!p.proposal" @click="tab = 'proposal'">proposal.json</button>
           <button :class="{ on: tab === 'verdict' }" :disabled="!p.verdict_record" @click="tab = 'verdict'">verdict.json</button>
+        </div>
+        <div v-if="p.superseded" class="error" style="margin-bottom: 12px">
+          This slot was rerun and ended <strong>{{ verdictText(p) }}</strong>. The proposal and verdict below are an
+          earlier attempt's files, older than the slot's last request and its plan, kept for reference only.
         </div>
         <template v-if="tab === 'document'">
           <div v-if="!p.proposal" class="card">

@@ -88,6 +88,7 @@ SCHEMA_STATEMENTS = (
         PRIMARY KEY (capability_id, slot)
     )
     """,
+    "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS superseded BOOLEAN NOT NULL DEFAULT false",
     "CREATE INDEX IF NOT EXISTS proposals_search ON proposals USING GIN (search)",
     "CREATE INDEX IF NOT EXISTS proposals_domain ON proposals (domain)",
     "CREATE INDEX IF NOT EXISTS proposals_verification ON proposals (verification)",

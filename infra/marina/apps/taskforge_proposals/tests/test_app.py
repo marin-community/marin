@@ -38,6 +38,7 @@ def proposal_row(capability: str, slot: int, **overrides):
         environment="reasoning",
         verdict="accept",
         cut_off=False,
+        superseded=False,
         completion_tokens=1000 * slot,
         reasoning_tokens=500 * slot,
         prompt_tokens=100,

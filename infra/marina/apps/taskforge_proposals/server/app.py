@@ -8,6 +8,7 @@ and sort keys are looked up in a fixed map.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,6 +51,7 @@ CAPABILITY_SORTS = {
     "status": "status {dir}, id",
 }
 NONE = "none"
+CAPABILITY_LIKE = re.compile(r"[\w-]+(\.[\w-]+)+")
 
 
 def migrate(connection: Connection) -> None:
@@ -107,11 +109,16 @@ def proposal_filter(
 ) -> Where:
     where = Where()
     if q and q.strip():
-        where.add(
-            "(search @@ websearch_to_tsquery('english', :q) OR capability_id ILIKE :q_like ESCAPE '\\')",
-            q=q.strip(),
-            q_like="%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",
-        )
+        q = q.strip()
+        if CAPABILITY_LIKE.fullmatch(q):
+            # Something shaped like a capability id also matches ids containing it; plain text uses the index.
+            where.add(
+                "(search @@ websearch_to_tsquery('english', :q) OR capability_id ILIKE :q_like ESCAPE '\\')",
+                q=q,
+                q_like="%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",
+            )
+        else:
+            where.add("search @@ websearch_to_tsquery('english', :q)", q=q)
     if capability:
         where.add("capability_id = :capability", capability=capability)
     where.any_of("subject_id", "domain", domain)
@@ -343,7 +350,10 @@ def create_api(services: AppletServices) -> FastAPI:
             for name in TOKEN_FIELDS:
                 bounds = (
                     connection.execute(
-                        where.statement(f"SELECT MIN({name}) AS lo, MAX({name}) AS hi FROM proposals WHERE {clause}"),
+                        where.statement(
+                            f"SELECT MIN({name}) AS lo, MAX({name}) AS max, "
+                            f"percentile_disc(0.99) WITHIN GROUP (ORDER BY {name}) AS hi FROM proposals WHERE {clause}"
+                        ),
                         params,
                     )
                     .mappings()
@@ -362,9 +372,10 @@ def create_api(services: AppletServices) -> FastAPI:
                         {**params, "lo": lo, "width": width},
                     ):
                         bins[int(row["bin"])] = row["n"]
-                    histograms[name] = {"lo": lo, "hi": hi, "width": width, "bins": bins}
+                    # Bins span the minimum to the 99th percentile; the last bin also holds the tail above it.
+                    histograms[name] = {"lo": lo, "hi": hi, "max": bounds["max"], "width": width, "bins": bins}
                 else:
-                    histograms[name] = {"lo": None, "hi": None, "width": None, "bins": []}
+                    histograms[name] = {"lo": None, "hi": None, "max": None, "width": None, "bins": []}
             result = {
                 "totals": dict(totals),
                 "by_kind": grouped("verification"),

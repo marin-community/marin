@@ -18,9 +18,11 @@ const ticks = computed(() => {
 const bw = computed(() => (W - L) / Math.max(1, bins.value.length));
 const y = (v) => T + (H - T - B) * (1 - v / top.value);
 const edge = (i) => props.hist.lo + i * props.hist.width;
+const last = (i) => i === bins.value.length - 1;
+const binText = (i) => (last(i) ? `${num(edge(i))}–${num(props.hist.max)} ${props.name} (includes the top 1%)` : `${num(edge(i))}–${num(edge(i + 1) - 1)} ${props.name}`);
 const xLabels = computed(() => {
   const n = bins.value.length;
-  return n ? [0, Math.floor(n / 2), n].map((i) => ({ x: L + i * bw.value, text: compact(edge(i)) })) : [];
+  return n ? [0, Math.floor(n / 2), n].map((i) => ({ x: L + i * bw.value, text: i === n ? `${compact(edge(i))}+` : compact(edge(i)) })) : [];
 });
 </script>
 
@@ -38,7 +40,7 @@ const xLabels = computed(() => {
           <path v-if="n" class="col" :d="`M${L + i * bw + 1},${H - B} V${y(n) + 3} q0,-3 3,-3 H${L + (i + 1) * bw - 4} q3,0 3,3 V${H - B} Z`"
             :style="{ fill: 'var(--accent)' }" />
           <rect :x="L + i * bw" :y="T" :width="bw" :height="H - T - B" fill="transparent"
-            @mousemove="showTip($event, `${num(edge(i))}–${num(edge(i + 1) - 1)} ${name}`, [`${num(n)} slots`])" @mouseleave="hideTip" />
+            @mousemove="showTip($event, binText(i), [`${num(n)} slots`])" @mouseleave="hideTip" />
         </g>
         <text v-for="l in xLabels" :key="l.x" :x="l.x" :y="H - 8" text-anchor="middle">{{ l.text }}</text>
       </svg>
@@ -46,7 +48,7 @@ const xLabels = computed(() => {
         <summary>Table</summary>
         <div class="fold-body">
           <table class="items small"><thead><tr><th>From</th><th>To</th><th class="num">Slots</th></tr></thead>
-            <tbody><tr v-for="(n, i) in bins" :key="i" style="cursor: default"><td>{{ num(edge(i)) }}</td><td>{{ num(edge(i + 1) - 1) }}</td><td class="num">{{ num(n) }}</td></tr></tbody>
+            <tbody><tr v-for="(n, i) in bins" :key="i" style="cursor: default"><td>{{ num(edge(i)) }}</td><td>{{ last(i) ? num(hist.max) : num(edge(i + 1) - 1) }}</td><td class="num">{{ num(n) }}</td></tr></tbody>
           </table>
         </div>
       </details>
