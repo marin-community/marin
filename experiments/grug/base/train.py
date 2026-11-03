@@ -52,7 +52,6 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.base.model import GrugModelConfig, Transformer
 from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.preemption import GracefulPreemption
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
@@ -561,9 +560,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         backward_flow_graph: BackwardFlowGraph | None = None
 
         # Main optimization loop.
-        preemption = GracefulPreemption()
-        preemption.install()
-        preempted = False
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
@@ -632,25 +628,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree=state, step=int(state.step))
-                preempted = preemption.should_stop(int(state.step))
-                if preempted:
-                    break
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
             )
             raise
         else:
-            if not preempted:
-                state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            # Mirror classic trainer behavior: force callbacks on the last completed step.
+            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
-
-        finally:
-            preemption.restore()
+                checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
-    preemption.exit_if_preempted()
 
 
 def run_grug(config: GrugRunConfig) -> None:

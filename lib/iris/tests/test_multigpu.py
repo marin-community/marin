@@ -13,18 +13,11 @@ import sys
 import textwrap
 
 import pytest
-from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import ResourceSpec, gpu_device
 from iris.jax import multigpu_main as multigpu
 from iris.jax.multigpu import MultiGpuHook, build_multigpu_hook
 from iris.jax.multigpu_main import main, run
-
-
-@pytest.fixture(autouse=True)
-def _reset_job_context():
-    set_job_info(None)
-    yield
-    set_job_info(None)
+from rigging.timing import Duration
 
 
 def _py(code: str) -> list[str]:
@@ -54,8 +47,7 @@ def test_run_terminates_peers_when_one_fails() -> None:
 def test_run_sigkills_a_peer_that_ignores_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
     # Rank 0 fails; the peer traps SIGTERM and would sleep 30s. With escalation,
     # the supervisor SIGKILLs it after the grace period and still returns 3.
-    monkeypatch.setenv("IRIS_TASK_ID", "/test/supervisor/0")
-    monkeypatch.setenv("IRIS_TERMINATION_GRACE_MS", "1000")
+    monkeypatch.setattr(multigpu, "_TERMINATE_GRACE", Duration.from_seconds(0.5))
     code = (
         "import os,sys,signal,time\n"
         "if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0': sys.exit(3)\n"

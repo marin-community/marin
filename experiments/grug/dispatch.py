@@ -13,7 +13,6 @@ from fray.types import Entrypoint, JobRequest, create_environment
 from iris.rpc.proto_display import priority_band_value
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
-from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,6 @@ def dispatch_grug_training_run(
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
     extras: list[str] | None = None,
-    termination_grace: Duration = Duration.from_seconds(60),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -83,7 +81,6 @@ def dispatch_grug_training_run(
         max_task_failures=max_task_failures,
         processes_per_task=processes_per_task,
         priority=priority,
-        termination_grace=termination_grace,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
     job = current_client().submit(request)
