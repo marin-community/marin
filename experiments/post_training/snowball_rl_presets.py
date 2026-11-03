@@ -738,16 +738,87 @@ def control_name(preset: str, commit: str, replicate: int) -> str:
 def run_command(*, help_text: str | None = None):
     def decorate(function):
         options = (
-            click.option("--preset", "preset_name", required=True, type=click.Choice(sorted(PRESETS))),
-            click.option("--set", "settings", multiple=True),
-            click.option("--require", "requirements", multiple=True),
-            click.option("--tasks", "tasks_name"),
-            click.option("--init", "init_name"),
-            click.option("--resume-from", "resume_name"),
-            click.option("--layout", "layout_name", type=click.Choice(sorted(TRAIN_LONG_RECIPES))),
-            click.option("--eval", "evaluations", multiple=True, type=click.Choice(sorted(EVALUATIONS))),
-            click.option("--replicates", type=click.IntRange(1, 5), default=1),
-            click.option("--control", is_flag=True),
+            click.option(
+                "--preset",
+                "preset_name",
+                required=True,
+                type=click.Choice(sorted(PRESETS)),
+                help="Experiment to run; the table above says which preset fits a change.",
+            ),
+            click.option(
+                "--set",
+                "settings",
+                multiple=True,
+                metavar="KEY=VALUE",
+                help="Change one key of the composed SkyRL config: a dotted key and a YAML value, for example "
+                "trainer.algorithm.advantage_estimator=grpo. Use +KEY=VALUE for a key the base config lacks. "
+                "Repeatable. Keys the preset owns (placement, data, evaluation, measurement) are refused with the "
+                "reason; data presets accept none. Code changes need no flag: the run name includes the source "
+                "tree hash.",
+            ),
+            click.option(
+                "--require",
+                "requirements",
+                multiple=True,
+                metavar="KEY<=|>=BOUND",
+                help="Add a condition the gate checks on a metric key; the examples above show two. With a "
+                "number, every candidate replicate must meet the bound. With control, the candidate mean must not "
+                "be worse than the controls' beyond tolerance. Repeatable; gated presets only, not with --control. "
+                "A training metric the controls never recorded is refused before launch.",
+            ),
+            click.option(
+                "--tasks",
+                "tasks_name",
+                metavar="NAME@VERSION",
+                help="Curated task selection to train on, at an immutable version. Required by data-short and "
+                "data-medium, whose selection must hold out the same panel as the default; train-long defaults "
+                "to the pinned snowball-100k.",
+            ),
+            click.option(
+                "--init",
+                "init_name",
+                metavar="NAME@VERSION",
+                help="Initial weights: a published model artifact, or a finished train-long run (its HF export). "
+                "learning-medium and train-long only. The initial weights are evaluated too, so the report shows "
+                "the gain.",
+            ),
+            click.option(
+                "--resume-from",
+                "resume_name",
+                metavar="NAME[@VERSION]",
+                help="Continue an earlier train-long run's checkpoints and optimizer state under a new run name. "
+                "train-long only.",
+            ),
+            click.option(
+                "--layout",
+                "layout_name",
+                type=click.Choice(sorted(TRAIN_LONG_RECIPES)),
+                help="train-long GPU layout: l112 (default; 64 trainer + 48 engine H100 on cw-rno2a, the "
+                "production recipe) or p40 (32 + 8 H100 on cw-us-east-02a, learning-medium's batch shape).",
+            ),
+            click.option(
+                "--eval",
+                "evaluations",
+                multiple=True,
+                type=click.Choice(sorted(EVALUATIONS)),
+                help="Add an evaluation to train-long, beside its in-run panel and final 910-task evaluation. "
+                "Repeatable.",
+            ),
+            click.option(
+                "--replicates",
+                type=click.IntRange(1, 5),
+                default=1,
+                show_default=True,
+                help="Identical copies of a short or medium preset, sharing one seed. The gate compares their "
+                "mean with the controls; more copies narrow the tolerance. Not for train-long.",
+            ),
+            click.option(
+                "--control",
+                is_flag=True,
+                help="Run the preset's control replicates from a clean checkout with only its pinned default "
+                "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require and "
+                "data-medium, which uses learning-medium's controls.",
+            ),
         )
         command = rl_build_options(function)
         for option in reversed(options):

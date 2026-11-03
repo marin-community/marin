@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a Snowball RL experiment from a preset.
+"""Run a Snowball RL experiment from a preset; gated presets compare the run with pinned controls.
 
-Choose the preset by what the change can affect. Each entry gives what the preset runs, its
-cost, what it measures and the changes it is for:
+Every preset except train-long is gated: it reports PASS, FAIL or INVALID against control runs of
+the same preset, with a change label. Choose the preset by what the change can affect. Each entry
+gives what the preset runs, its cost, what it measures and the changes it is for:
 
 \b
   speed-short      vLLM engine only: one pass of 512 prompts x 4 replies of 4,096 tokens;
@@ -24,18 +25,21 @@ cost, what it measures and the changes it is for:
                    selection. For a new task selection that passed data-short.
   train-long       the async production loop with checkpoints, panel-100 every 10 updates and
                    an HF export; 112 H100, or 40 with --layout p40. For release training and
-                   for models that later runs load with --init.
+                   for models that later runs load with --init. No verdict.
 
 An engine change runs speed-short, then speed-medium. A trainer kernel, parallelism or numerics
 change runs speed-medium, then learning-medium. A new task selection runs data-short, then
-data-medium. Without --run the command prints the plan and the status block; --run submits
-it. --version dev satisfies the launcher; Snowball steps use PRESET_REVISION. Guide:
-docs/recipes/snowball-rl.md.
+data-medium. --require adds a condition of your own, such as a mismatch bound on a speed run or
+a per-category score on a learning run. Without --run the command prints the plan and the status
+block, including the verdict of a finished gated run; --run submits it. --version dev satisfies
+the launcher; Snowball steps use PRESET_REVISION. Guide: docs/recipes/snowball-rl.md.
 
 \b
 Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
   --preset speed-medium --version dev --run
   --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo --version dev --run
+  --preset speed-medium --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
+  --preset learning-medium --require 'panel-910/aaii_category/coding/mean>=control' --version dev --run
   --preset data-short --tasks my-selection@2026.11.02 --version dev --run
   --preset train-long --layout p40 --set trainer.max_steps=100 --version dev --run
 """
