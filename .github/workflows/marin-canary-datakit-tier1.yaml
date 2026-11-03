@@ -14,7 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     concurrency:
-      group: datakit-smoke
+      # A run on a branch must not cancel the scheduled run on main.
+      group: datakit-smoke-${{ github.ref }}
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}

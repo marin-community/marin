@@ -295,7 +295,9 @@ def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
-        lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
+        lambda model, *_args, **_kwargs: SimpleNamespace(
+            model=SimpleNamespace(model_id=model.name), iris=SimpleNamespace(max_retries_failure=1)
+        ),
     )
 
 
@@ -349,7 +351,9 @@ def _evaluate_with_session(
         patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
         patch(
             "marin.evaluation.runner.inference_config_for_model",
-            lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
+            lambda model, *_args, **_kwargs: SimpleNamespace(
+                model=SimpleNamespace(model_id=model.name), iris=SimpleNamespace(max_retries_failure=1)
+            ),
         ),
     ):
         return _run_test_batch(batch)
@@ -2762,7 +2766,7 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
 
     def inference_config(model, *_args, priority, **_kwargs):
         priorities.append(priority)
-        return SimpleNamespace(model=SimpleNamespace(model_id=model.name))
+        return SimpleNamespace(model=SimpleNamespace(model_id=model.name), iris=SimpleNamespace(max_retries_failure=1))
 
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
