@@ -73,7 +73,7 @@ def test_lmh_passage_doc_drops_passage_keeps_qa():
     assert "C" in text  # answer kept
 
 
-def test_lmh_non_passage_doc_indexes_the_prompt_and_the_raw_fields_as_separate_records():
+def test_lmh_multiple_choice_doc_indexes_prompt_raw_fields_and_question_as_separate_records():
     doc = {"question": "Which planet is largest", "choices": ["Mars", "Jupiter"], "answer": "1"}
 
     views = _lmh_doc_views(doc, lambda d: f"{d['question']}\nA. Mars\nB. Jupiter\nAnswer:", _target)
@@ -82,6 +82,8 @@ def test_lmh_non_passage_doc_indexes_the_prompt_and_the_raw_fields_as_separate_r
         ("", "Which planet is largest\nA. Mars\nB. Jupiter\nAnswer:\n\n1"),
         # Choices follow the question on single lines, as dataset copies print them.
         ("-fields", "Which planet is largest\nMars\nJupiter"),
+        # Copies often drop the choices; the question alone is its own record.
+        ("-question", "Which planet is largest"),
     ]
 
 
@@ -96,6 +98,7 @@ def test_lmh_raw_field_view_keeps_dataset_order_and_drops_labels():
     views = dict(_lmh_doc_views(doc, lambda d: d["prompt"], lambda d: d["canonical_solution"]))
 
     assert views["-fields"] == "def add(a, b):\n    '''Add two numbers.'''\n    return a + b"
+    assert "-question" not in views  # not multiple choice
 
 
 @pytest.mark.parametrize("field", sorted(_PASSAGE_FIELDS))
