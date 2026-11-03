@@ -152,6 +152,17 @@ def machine_available(services: RLEnvBuildServices, proposal: TaskProposal) -> N
         )
 
 
+def failure_chain_text(error: BaseException) -> str:
+    """``error`` and every cause behind it, outermost first, so a wrapper never hides the fault.
+
+    ``RolloutInterrupted`` says only ``interrupted during start``; the catalog fetch or machine
+    error that interrupted it is what the operator needs to read.
+    """
+    return " <- ".join(
+        f"{type(link).__name__}: {link}" if str(link) else type(link).__name__ for link in exception_chain(error)
+    )
+
+
 def exception_chain(error: BaseException) -> list[BaseException]:
     """Walk every grouped exception and cause, without losing concurrent infrastructure failures."""
     chain: list[BaseException] = []
@@ -206,9 +217,21 @@ def authored_failure(error: BaseException, program_files: Collection[str]) -> bo
             continue
         if any(frame.filename in contract_files for frame in frames):
             continue
+        if isinstance(link, (ValueError, TypeError, LookupError)) and _sdk_called_by_program(frames, program_files):
+            continue
         if not frames or frames[-1].filename not in program_files:
             return False
     return True
+
+
+def _sdk_called_by_program(frames: list[traceback.FrameSummary], program_files: Collection[str]) -> bool:
+    """Whether the error left an SDK function the program called with arguments the SDK refused.
+
+    A ``ValueError`` that ``draft.python_grader`` raises about the program's grader files is the
+    program's failure, not the host's, even though its last frame is in the library.
+    """
+    sdk_root = str(Path(__file__).parents[1])
+    return any(frame.filename in program_files for frame in frames) and frames[-1].filename.startswith(sdk_root)
 
 
 def raised_in_program(error: BaseException, program_files: Collection[str]) -> bool:

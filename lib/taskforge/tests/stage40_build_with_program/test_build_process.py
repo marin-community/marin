@@ -261,6 +261,8 @@ def test_the_child_builds_images_with_the_credential_its_environment_holds_and_n
         CREDENTIAL,
     )
     assert image_builder(make_request(PROGRAM).services) is None
+    unpinned = image_builder(replace(on_iris(make_request(PROGRAM), "cw-us-east-02a").services, image_cluster=None))
+    assert isinstance(unpinned, IrisImageBuilder) and unpinned.target_cluster is None
     with pytest.raises(ValueError, match="controller URL"):
         image_builder(
             replace(make_request(PROGRAM).services, image_cluster="cw-us-east-02a", registry_credential_env=REGISTRY_ENV)

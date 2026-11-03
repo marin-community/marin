@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import click
+from iris.cluster.client import get_job_info
 from rigging.log_setup import configure_logging
 from shellbox.machine import Backend
 from taskforge.llm.glm_client import RelayEndpoint
@@ -409,7 +410,8 @@ def run(
         relay_job=relay_job,
         base_url=base_url,
         parallel_key_env=PARALLEL_KEY_ENV if os.environ.get(PARALLEL_KEY_ENV) else None,
-        image_cluster=image_cluster if relay_job else None,
+        # Inside an Iris task the controller is the task's own cluster, which refuses a pin naming itself.
+        image_cluster=image_cluster if relay_job and get_job_info() is None else None,
         registry_credential_env=REGISTRY_CREDENTIAL_ENV if relay_job else None,
     )
     preflight(host, names)

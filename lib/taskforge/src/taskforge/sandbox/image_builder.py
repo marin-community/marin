@@ -245,12 +245,15 @@ def output_archive(job: Job) -> TaskOutputArchive:
 
 
 def submit_job(
-    client: IrisClient, *, name: str, entrypoint: Entrypoint, image: str, env: dict[str, str], target_cluster: str
+    client: IrisClient, *, name: str, entrypoint: Entrypoint, image: str, env: dict[str, str], target_cluster: str | None
 ) -> Job:
     """Submit an image job with explicit values and the storage credentials it needs.
 
     Inherited environment values are blanked and mounted-secret inheritance is disabled.
     Only the submitter's CoreWeave storage credentials and explicit ``env`` values are passed.
+    ``target_cluster`` pins the job to a federation peer of the controller; a job submitted
+    from inside a cluster to that cluster's own controller passes ``None``, since a peer
+    controller refuses a pin naming itself.
     """
     job_info = get_job_info()
     inherited = {} if job_info is None else dict.fromkeys(job_info.env, "")
@@ -266,7 +269,11 @@ def submit_job(
         resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
         task_image=image,
         container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
-        constraints=[Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster)],
+        constraints=(
+            []
+            if target_cluster is None
+            else [Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster)]
+        ),
         scheduling_timeout=Duration.from_seconds(SCHEDULING_TIMEOUT),
         timeout=Duration.from_seconds(JOB_TIMEOUT),
         max_retries_failure=0,
@@ -278,7 +285,8 @@ class IrisImageBuilder:
     """Publish DockerBuilds through a build job and a separate push job (see the module docstring).
 
     The jobs are submitted through the controller of the named Iris ``cluster`` or at
-    ``controller_url`` (exactly one), run on ``target_cluster``, and push to ``credential.registry``
+    ``controller_url`` (exactly one), run on ``target_cluster`` (``None``: wherever that controller
+    places them), and push to ``credential.registry``
     with ``credential``. Constructing a builder contacts nothing.
     """
 
@@ -287,7 +295,7 @@ class IrisImageBuilder:
         *,
         cluster: str | None = None,
         controller_url: str | None = None,
-        target_cluster: str,
+        target_cluster: str | None,
         credential: RegistryCredential,
     ):
         if (cluster is None) == (controller_url is None):
