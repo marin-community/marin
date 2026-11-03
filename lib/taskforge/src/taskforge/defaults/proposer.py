@@ -6,11 +6,11 @@
 ``CapabilitySource`` proposes in two phases:
 
 1. ``plan(idea, n)``: a structured call plans ``n`` slots. Each slot gets a workflow, an environment
-   the host can run, the solver's machine (``null`` for a container slot), a verification and a
-   research decision.
+   the host can run, the solver's machine (``null`` for a container slot), a verification (one of
+   ``OFFERED_VERIFICATIONS``, so never the reserved ``composite``) and a research decision.
    The validators of the plan's output type reject a portfolio with the wrong slot count, a solver
    machine that does not fit its environment, a slot in an environment the host lacks, or too many
-   slots on one environment x verification pairing, and the model gets one repair.
+   non-code slots on one environment x verification pairing, and the model gets one repair.
 2. ``write(idea, portfolio, slot)``: for one proposed slot, independent of every other, GLM writes a
    proposal document in the ``stage10_proposal`` JSON format, thinking first. The request decodes under
    schema derived from the proposal dataclasses, with fixed id and source fields. Continuations
@@ -24,7 +24,8 @@ repair request under the same schema. The repair request keeps the prior reply a
 and quotes the parse error. A slot the plan marks null becomes a proposal with ``null_reason`` set
 and costs no model call.
 
-Both prompts quote ``taskforge.capability.capability_idea_record(idea)``.
+Both prompts quote ``taskforge.capability.capability_idea_record(idea)``, and the system turn of both quotes the
+verification rule the source is given, a prompt of the policy (``VERIFICATION_RULE`` names the default).
 """
 
 from collections import Counter
@@ -34,16 +35,19 @@ from textwrap import indent
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import ERROR_TEXT_LIMIT, schema_instruction
-from taskforge.policy import ProposerPolicy
+from taskforge.policy import Prompt, ProposerPolicy
 from taskforge.stage10_proposal.model import (
+    OFFERED_VERIFICATIONS,
     REQUIRED_HEADINGS,
     Environment,
     Grounding,
+    OfferedVerification,
     ProposalFormatError,
     ProposalHeader,
     ResearchNeed,
@@ -64,6 +68,8 @@ from taskforge.stage10_proposal.source import Portfolio, SlotFailure, SlotOutcom
 CUT_OFF = "cut off by the output limit"
 SLOT_MODEL_ERRORS = (ModelUnavailable, ModelRequestRejected)
 """The model errors that fail one slot, rather than the batch."""
+VERIFICATION_RULE = "proposer.determinate_first_preferred"
+"""The policy key of the default verification rule."""
 
 
 class SlotStatus(StrEnum):
@@ -77,7 +83,7 @@ class ExcludedCombination(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     environment: Environment
-    verification: Verification
+    verification: OfferedVerification
     reason: str = Field(min_length=1, description="Why no slot of the portfolio can use this pairing.")
 
 
@@ -94,7 +100,9 @@ class PlannedSlot(BaseModel):
         description="The solver's machine for a reasoning or shellsim slot (none, no machine, for reasoning only); "
         "null for a container slot."
     )
-    verification: Verification = Field(description="How the private evaluator grades the task.")
+    verification: OfferedVerification = Field(
+        description="How the private evaluator grades the task, by the verification rule."
+    )
     distinctive_challenge: str = Field(description="What sets this task apart from the other slots.")
     research_need: ResearchNeed = Field(description="Whether building this task needs a lookup, by the criterion above.")
     research_reason: str = Field(min_length=1, description="A line naming what drives the research decision.")
@@ -102,6 +110,10 @@ class PlannedSlot(BaseModel):
         description="propose for a real, distinct workflow; null for a slot you cannot fill with one."
     )
     reason: str | None = Field(description="For a null slot, the substantive reason; null for a proposed slot.")
+
+
+UNCAPPED_VERIFICATIONS = frozenset({Verification.CODE})
+"""Verifications any number of proposed slots may share with one environment; their slots differ by workflow."""
 
 
 def max_slots_per_pairing(n: int) -> int:
@@ -146,7 +158,11 @@ class SlotPlan(BaseModel):
                     f"slot {s.slot} uses {s.environment} x {s.verification}, which excluded_combinations rules out"
                 )
         limit = max_slots_per_pairing(len(self.slots))
-        pairings = Counter((s.environment, s.verification) for s in self.slots if s.status is SlotStatus.PROPOSE)
+        pairings = Counter(
+            (s.environment, s.verification)
+            for s in self.slots
+            if s.status is SlotStatus.PROPOSE and s.verification not in UNCAPPED_VERIFICATIONS
+        )
         crowded = [f"{e} x {v} ({count} slots)" for (e, v), count in pairings.items() if count > limit]
         if crowded:
             raise ValueError(
@@ -183,9 +199,9 @@ def slot_plan_type(n: int, environments: frozenset[Environment]) -> type[SlotPla
     return HostSlotPlan
 
 
-def system_prompt(proposer: ProposerPolicy) -> str:
-    """The system turn of every proposer call."""
-    return proposer.system.render(solver_machine_rule=solver_machine_rule(proposer))
+def system_prompt(proposer: ProposerPolicy, rule: Prompt) -> str:
+    """The system turn of every proposer call, quoting the verification rule ``rule``."""
+    return proposer.system.render(solver_machine_rule=solver_machine_rule(proposer), verification_rule=rule.render())
 
 
 def solver_machine_rule(proposer: ProposerPolicy) -> str:
@@ -215,7 +231,8 @@ def document_template(proposal_id: str, idea: CapabilityIdea) -> str:
                 "null_reason": None,
                 "environment": "<reasoning | shellsim | container>",
                 "solver_machine": "<none (reasoning only) | shellsim | cpython | packages, or null for container>",
-                "verification": " | ".join(Verification),
+                "verification": " | ".join(OFFERED_VERIFICATIONS),
+                "composite": [],
                 "research_need": "<needed | not_needed>",
                 "research_reason": "<what does or does not require looking anything up>",
                 "research": [{"kind": "<web | github>", "purpose": "<what to find, desired properties and fallback>"}],
@@ -281,6 +298,7 @@ def null_slot_proposal(idea: CapabilityIdea, slot: PlannedSlot) -> SlotProposal:
         environment=slot.environment,
         solver_machine=slot.solver_machine,
         verification=slot.verification,
+        composite=(),
         grounding=Grounding.UNVERIFIED,
         research_need=ResearchNeed.NOT_NEEDED,
         research_reason=f"null slot: {slot.reason.strip()}",
@@ -293,25 +311,11 @@ def null_slot_proposal(idea: CapabilityIdea, slot: PlannedSlot) -> SlotProposal:
     return SlotProposal(slot.slot, parse(render(TaskProposal(header=header, body=body))), (), (), None)
 
 
-def plan_request(
-    proposer: ProposerPolicy, idea: CapabilityIdea, n: int, environments: frozenset[Environment]
-) -> tuple[Message, ...]:
-    """Build the first planning request for ``n`` slots on a host that runs ``environments``, as sent.
-
-    It is the system prompt, ``plan_prompt``, and the final user turn holding the plan type's field
-    instruction, which ``complete_structured`` appends to the messages it is given.
-    """
-    return (
-        {"role": "system", "content": system_prompt(proposer)},
-        {"role": "user", "content": plan_prompt(proposer, idea, n, environments)},
-        {"role": "user", "content": schema_instruction(slot_plan_type(n, environments))},
-    )
-
-
 async def plan_slots(
     model: ModelClient,
     policy: LLMPolicy,
     proposer: ProposerPolicy,
+    rule: Prompt,
     idea: CapabilityIdea,
     n: int,
     environments: frozenset[Environment],
@@ -324,12 +328,18 @@ async def plan_slots(
     Raises:
         StructuredOutputError: the output limit cut the plan off, or every reply failed validation.
     """
-    request = plan_request(proposer, idea, n, environments)
-    # complete_structured appends the field instruction itself, so the call gets the turns before it.
-    result = await model.complete_structured(list(request[:-1]), slot_plan_type(n, environments), policy)
+    plan_type = slot_plan_type(n, environments)
+    request: tuple[Message, ...] = (
+        {"role": "system", "content": system_prompt(proposer, rule)},
+        {"role": "user", "content": plan_prompt(proposer, idea, n, environments)},
+    )
+    result = await model.complete_structured(list(request), plan_type, policy)
     plan = result.value
     slots = tuple(_portfolio_slot(s) for s in plan.slots)
-    return Portfolio(request, result.completions, plan, slots)
+    # The request as sent: complete_structured appends the plan type's field instruction as the last user turn.
+    instruction: Message = {"role": "user", "content": schema_instruction(plan_type)}
+    sent = (*request, instruction)
+    return Portfolio(sent, result.completions, plan, slots)
 
 
 def _portfolio_slot(slot: PlannedSlot) -> PortfolioSlot:
@@ -344,6 +354,7 @@ async def author_proposal(
     model: ModelClient,
     policy: LLMPolicy,
     proposer: ProposerPolicy,
+    rule: Prompt,
     idea: CapabilityIdea,
     plan: SlotPlan,
     slot: PlannedSlot,
@@ -358,7 +369,7 @@ async def author_proposal(
     fields = document_request_fields(slot_id, source_ref(idea))
     single = replace(policy, max_continuations=0)
     messages: list[Message] = [
-        {"role": "system", "content": system_prompt(proposer)},
+        {"role": "system", "content": system_prompt(proposer, rule)},
         {"role": "user", "content": proposal_prompt(proposer, idea, plan, slot, slot_id)},
     ]
     request = tuple(messages)
@@ -391,15 +402,22 @@ class CapabilitySource:
         model: The model that plans the slots and writes the documents.
         policy: Its sampling policy for every call.
         proposer: The text of every call.
+        rule: The verification rule the system turn quotes, such as ``policy.prompt(VERIFICATION_RULE)``.
         environments: The task environments the build host runs. The plan proposes slots in these alone.
     """
 
     def __init__(
-        self, model: ModelClient, policy: LLMPolicy, proposer: ProposerPolicy, environments: frozenset[Environment]
+        self,
+        model: ModelClient,
+        policy: LLMPolicy,
+        proposer: ProposerPolicy,
+        rule: Prompt,
+        environments: frozenset[Environment],
     ):
         self.model = model
         self.policy = policy
         self.proposer = proposer
+        self.rule = rule
         self.environments = environments
 
     async def plan(self, idea: CapabilityIdea, n: int) -> Portfolio[SlotPlan]:
@@ -410,7 +428,7 @@ class CapabilitySource:
             ModelUnavailable: the planning call ran out of retries.
             ModelRequestRejected: the server rejected the planning call.
         """
-        return await plan_slots(self.model, self.policy, self.proposer, idea, n, self.environments)
+        return await plan_slots(self.model, self.policy, self.proposer, self.rule, idea, n, self.environments)
 
     async def write(self, idea: CapabilityIdea, portfolio: Portfolio[SlotPlan], slot: int) -> SlotOutcome:
         """The proposal of ``slot``, or a null proposal with no model call for a slot the plan marked null.
@@ -421,4 +439,4 @@ class CapabilitySource:
         planned = portfolio.plan.slots[slot - 1]
         if planned.status is not SlotStatus.PROPOSE:
             return null_slot_proposal(idea, planned)
-        return await author_proposal(self.model, self.policy, self.proposer, idea, portfolio.plan, planned)
+        return await author_proposal(self.model, self.policy, self.proposer, self.rule, idea, portfolio.plan, planned)

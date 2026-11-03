@@ -5,7 +5,13 @@ from dataclasses import replace
 
 import pytest
 
-from taskforge.stage10_proposal.model import ResearchItem, ResearchKind, parse
+from taskforge.stage10_proposal.model import (
+    CompositePart,
+    ResearchItem,
+    ResearchKind,
+    Verification,
+    parse,
+)
 from taskforge.stage20_triage.checks import (
     CHECKS,
     CheckStatus,
@@ -34,14 +40,28 @@ def test_valid_proposal_passes_every_check(proposal):
         ("code", "A judge scores the essay against anchored criteria. " * 10, CheckStatus.FAIL),
         ("composite", "The checker parses the output and recomputes every total. " * 10, CheckStatus.FAIL),
         ("composite", "The checker parses the output; a judge rubric scores the memo. " * 10, CheckStatus.PASS),
-        ("judge", "The checker parses the output and recomputes every total. " * 10, CheckStatus.FAIL),
-        ("simple", "The answer key is compared after whitespace normalization. " * 10, CheckStatus.PASS),
+        ("llm_as_judge", "The checker parses the output and recomputes every total. " * 10, CheckStatus.FAIL),
+        ("decision_model", "The checker parses the output and recomputes every total. " * 10, CheckStatus.FAIL),
+        ("decision_model", "Each rubric item compares the answer with the reference. " * 10, CheckStatus.PASS),
+        ("answer_in_box", "The answer key is compared after whitespace normalization. " * 10, CheckStatus.PASS),
     ],
 )
 def test_grader_section_must_match_verification(make_document, section_replaced, verification, grader_text, expected):
     p = parse(make_document(verification=verification, resources='["prompt.md"]'))
     p = section_replaced(p, "Grader design and controls", grader_text)
     assert grader_matches_verification(p)[0] is expected
+
+
+def test_a_composite_needs_the_evidence_of_each_of_its_parts(make_document, section_replaced):
+    p = parse(make_document(verification="composite", resources='["prompt.md"]'))
+    rubric_only = "Each rubric item compares the answer with the reference. " * 10
+    p = section_replaced(p, "Grader design and controls", rubric_only)
+    status_, reason = grader_matches_verification(p)
+    assert status_ is CheckStatus.FAIL and "an executable check" in reason
+
+    decisions = (CompositePart(Verification.DECISION_MODEL, 0.5), CompositePart(Verification.DECISION_MODEL, 0.5))
+    two_rubrics = replace(p, header=replace(p.header, composite=decisions))
+    assert grader_matches_verification(two_rubrics)[0] is CheckStatus.PASS
 
 
 def test_code_file_resource_counts_as_an_executable_check(make_document, section_replaced):

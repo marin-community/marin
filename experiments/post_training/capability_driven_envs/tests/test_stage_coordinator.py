@@ -101,7 +101,7 @@ def catalog_proposal(idea: CapabilityIdea) -> TaskProposal:
             proposal_id=f"{idea.capability_id}/0",
             source={"kind": "capability", "ref": idea.capability_id, "hash": idea.capability_hash},
             environment="shellsim",
-            verification="simple",
+            verification="answer_in_box",
             research_reason="the example program draws its own recipe",
             body=f"{body}\n",
         )

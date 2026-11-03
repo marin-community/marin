@@ -6,8 +6,10 @@
 ``load_policy(defaults_dir, *overlays)`` reads ``policy.json`` in ``defaults_dir``, a JSON object from each
 dotted field name (``author.system``) to a prompt file relative to that directory. An overlay is a JSON object of
 the same shape, naming any subset of the fields, with paths relative to the overlay's own directory; each overlay
-replaces the files of the fields it names, in order. A key that names no field is refused, and so is a default
-that leaves a field without a file. ``taskforge.defaults.DEFAULT_POLICY`` is the policy of the package's own files.
+replaces the files of the fields it names, in order. A key may also name a prompt outside the fields, read with
+``Policy.prompt``, when its file is ``prompts/<group>/<name>.md`` (``proposer.determinate_first_preferred``). Any
+other key that names no field is refused, and so is a default that leaves a field without a file.
+``taskforge.defaults.DEFAULT_POLICY`` is the policy of the package's own files.
 
 A prompt file holds its template and then one newline, which the loader drops, so a template that ends with a
 newline ends its file with a blank line. A template is rendered with ``str.format``: ``{name}`` is a field the
@@ -17,7 +19,8 @@ stage fills, ``{{`` and ``}}`` are literal braces.
 import dataclasses
 import hashlib
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import get_type_hints
 
@@ -47,7 +50,8 @@ class ProposerPolicy:
     """The capability proposer's text: the planning call, then one proposal document per slot.
 
     Attributes:
-        system: The system turn of every call. Field: ``solver_machine_rule``.
+        system: The system turn of every call. Fields: ``solver_machine_rule`` and ``verification_rule``, the
+            text of the rule prompt the source is given (``Policy.prompt``).
         plan: The planning request. Fields: ``n``, ``environments``, ``max_per_pairing``,
             ``research_criterion`` and ``capability_record``.
         write: The request for one slot's document. Fields: ``slot``, ``document_template``,
@@ -134,6 +138,16 @@ class Policy:
     proposer: ProposerPolicy
     author: AuthorPolicy
     adversary: AdversaryPrompts
+    prompts: Mapping[str, Prompt] = field(default_factory=dict)
+    """The prompts outside the fields, by dotted key."""
+
+    def prompt(self, key: str) -> Prompt:
+        """The prompt of dotted ``key``, a field or one of ``prompts``.
+
+        Raises:
+            KeyError: no field or prompt has that key.
+        """
+        return _prompts(self)[key]
 
     @property
     def stage_digest(self) -> str:
@@ -146,7 +160,7 @@ class Policy:
 
 def _fields() -> dict[str, type]:
     """Each group of ``Policy`` with its record type."""
-    return get_type_hints(Policy)
+    return {group: record for group, record in get_type_hints(Policy).items() if group != "prompts"}
 
 
 def policy_keys() -> tuple[str, ...]:
@@ -155,13 +169,20 @@ def policy_keys() -> tuple[str, ...]:
 
 
 def _prompts(policy: Policy) -> dict[str, Prompt]:
-    return {key: getattr(getattr(policy, key.split(".")[0]), key.split(".")[1]) for key in policy_keys()}
+    fields = {key: getattr(getattr(policy, key.split(".")[0]), key.split(".")[1]) for key in policy_keys()}
+    return fields | dict(policy.prompts)
+
+
+def _named_by_key(key: str, name: str) -> bool:
+    """Whether ``name`` is the file ``prompts/<group>/<name>.md`` of a dotted ``key`` in a group of ``Policy``."""
+    group, _, rest = key.partition(".")
+    return group in _fields() and rest.isidentifier() and name == f"prompts/{group}/{rest}.md"
 
 
 def _prompt_files(path: Path) -> dict[str, Path]:
     """The fields ``path`` names, each with its prompt file's path."""
     entries = json.loads(path.read_text())
-    unknown = sorted(set(entries) - set(policy_keys()))
+    unknown = sorted(key for key, name in entries.items() if key not in policy_keys() and not _named_by_key(key, name))
     if unknown:
         raise ValueError(f"{path} names no such policy field: {', '.join(unknown)}")
     return {key: path.parent / name for key, name in entries.items()}
@@ -193,4 +214,5 @@ def load_policy(defaults_dir: Path, *overlays: Path) -> Policy:
         )
         for group, record in _fields().items()
     }
-    return Policy(**groups)
+    prompts = {key: _load_prompt(path) for key, path in files.items() if key not in policy_keys()}
+    return Policy(**groups, prompts=prompts)

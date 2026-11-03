@@ -30,7 +30,7 @@ from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderIma
 PROPOSAL = proposal_document(
     proposal_id="d00.arithmetic.products/1",
     source={"kind": "capability", "ref": "d00.arithmetic.products", "hash": "abc123"},
-    verification="simple",
+    verification="answer_in_box",
     research_need="needed",
     research_reason="the task depends on an external fact the build must confirm",
     research=[{"kind": "web", "purpose": "confirm the multiplication table"}],
