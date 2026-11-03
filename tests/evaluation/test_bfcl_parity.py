@@ -49,11 +49,13 @@ def native(run_id, rewards, *, target="model-a"):
     samples = [
         {
             "doc_id": name,
+            "task": "bfcl_parity",
             "metrics": [["reward", reward]],
             "grading": {
                 "method": "harbor:verifier",
                 "metric": "reward",
                 "score": reward,
+                "passed": None if reward is None else bool(reward),
                 "detail": json.dumps(
                     {
                         "scored": reward is not None,
@@ -162,7 +164,7 @@ def test_different_checkpoint_within_one_arm_is_rejected():
         )
 
 
-@pytest.mark.parametrize("corruption", ["duplicate", "wrong-task", "subset", "reward"])
+@pytest.mark.parametrize("corruption", ["duplicate", "wrong-task", "subset", "reward", "benchmark", "filter", "passed"])
 def test_native_task_and_grading_joins_reject_inconsistent_sources(corruption):
     record, samples = native("a", (0, 1))
     tasks = TASKS
@@ -173,6 +175,12 @@ def test_native_task_and_grading_joins_reject_inconsistent_sources(corruption):
     elif corruption == "subset":
         tasks = TASKS[:1]
         samples = samples[:1]
+    elif corruption == "benchmark":
+        samples[0]["task"] = "other-benchmark"
+    elif corruption == "filter":
+        samples[0]["grading"]["filter"] = "other-filter"
+    elif corruption == "passed":
+        samples[0]["grading"]["passed"] = True
     else:
         samples[0]["grading"]["score"] = 1
     with pytest.raises(ValueError):

@@ -85,7 +85,10 @@ def admit_native_run(
     rewards: dict[str, float | None] = dict.fromkeys(task_ids)
     errors = {}
     seen = set()
+    expected_task = native_tasks[0].get("name", record["eval"]["harbor"]["dataset"])
     for sample in samples:
+        if sample["task"] != expected_task:
+            raise ValueError("Native sample belongs to a different benchmark")
         name = sample["doc_id"]
         if name not in rewards or name in seen:
             raise ValueError(f"Unexpected or duplicate native task: {name}")
@@ -108,6 +111,9 @@ def admit_native_run(
             or not math.isfinite(reward)
             or reward not in (0, 1)
             or grading.get("method") != "harbor:verifier"
+            or grading.get("filter") is not None
+            or sample.get("filter") is not None
+            or grading.get("passed") is not bool(reward)
             or grading.get("metric") != "reward"
             or grading.get("score") != reward
             or detail.get("rewards", {}).get("reward") != reward
