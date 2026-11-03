@@ -98,7 +98,7 @@ from taskforge.llm.agent import (
 from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavailable, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
-from taskforge.policy import AuthorPolicy
+from taskforge.policy import Policy
 from taskforge.spec import draft as draft_module
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author.author import (
@@ -949,7 +949,7 @@ async def drive(
     session: AuthorSession,
     plan: SessionPlan,
     config: AgenticAuthorConfig,
-    prompts: AuthorPolicy,
+    prompts: Policy,
     client: ModelClient,
     policy: LLMPolicy,
     ledger: Ledger,
@@ -1019,12 +1019,15 @@ async def drive(
             break
         if run.stop is AgentStop.LENGTH:
             length_nudges += 1
-            nudge: Message = {"role": "user", "content": prompts.length_nudge.render(limit=config.turn_max_tokens)}
+            nudge: Message = {
+                "role": "user",
+                "content": prompts.prompt("author.length_nudge").render(limit=config.turn_max_tokens),
+            }
             conversation.append(nudge)
             transcript.append(_user_entry(nudge))
             continue
         nudges += 1
-        nudge = {"role": "user", "content": prompts.nudge.render(program=PROGRAM_FILE)}
+        nudge = {"role": "user", "content": prompts.prompt("author.nudge").render(program=PROGRAM_FILE)}
         conversation.append(nudge)
         transcript.append(_user_entry(nudge))
     return SessionResult(
@@ -1122,10 +1125,10 @@ def session_record(session_id: str, plan: SessionPlan, session: AuthorSession, r
 # --- the author stage ------------------------------------------------------------------------------
 
 
-def opening_messages(proposal: TaskProposal, prompts: AuthorPolicy, turns: int | None) -> list[Message]:
+def opening_messages(proposal: TaskProposal, prompts: Policy, turns: int | None) -> list[Message]:
     """The one-shot author's rules, proposal, SDK reference and template, with the agentic section added."""
     system, user = author_messages(proposal, prompts)
-    section = prompts.session.render(
+    section = prompts.prompt("author.session").render(
         program=PROGRAM_FILE,
         proposal=PROPOSAL_PATH,
         sdk=SDK_PATH,
@@ -1137,9 +1140,9 @@ def opening_messages(proposal: TaskProposal, prompts: AuthorPolicy, turns: int |
     return [{**system, "content": f"{system['content']}{section}"}, user]
 
 
-def _revision_text(prompts: AuthorPolicy, revision: Revision) -> str:
-    revise = prompts.revision.render(kind=revision.kind, detail=revision.detail)
-    return f"{revise}\n{prompts.edit_and_submit.render(program=PROGRAM_FILE)}"
+def _revision_text(prompts: Policy, revision: Revision) -> str:
+    revise = prompts.prompt("author.revision").render(kind=revision.kind, detail=revision.detail)
+    return f"{revise}\n{prompts.prompt("author.edit_and_submit").render(program=PROGRAM_FILE)}"
 
 
 def _submitted(session_dir: Path) -> bool:
@@ -1148,10 +1151,10 @@ def _submitted(session_dir: Path) -> bool:
     return record.exists() and _read_json(record)["status"] == AuthorStatus.ACCEPTED
 
 
-def _seed_message(prompts: AuthorPolicy, previous: Path, lead: str) -> Message:
+def _seed_message(prompts: Policy, previous: Path, lead: str) -> Message:
     submitted = previous / SUBMIT_FILE
     notes = _read_json(submitted).get("notes", "") if submitted.exists() else ""
-    note = prompts.seed.render(
+    note = prompts.prompt("author.seed").render(
         program=PROGRAM_FILE,
         notes=NOTES_PATH,
         submitted=f"Its submission notes: {notes}\n" if notes else "",
@@ -1165,7 +1168,7 @@ def plan_session(
     proposal: TaskProposal,
     revision: Revision | None,
     config: AgenticAuthorConfig,
-    prompts: AuthorPolicy,
+    prompts: Policy,
 ) -> SessionPlan:
     """Which session round ``round_no`` runs next (see the module docstring)."""
     opening = opening_messages(proposal, prompts, config.turns)
@@ -1175,7 +1178,7 @@ def plan_session(
         if not _submitted(previous):
             record = previous / AUTHOR_RECORD
             reason = _read_json(record).get("stop_reason", "unsubmitted") if record.exists() else "interrupted"
-            lead = prompts.handoff.render(reason=reason)
+            lead = prompts.prompt("author.handoff").render(reason=reason)
             if revision is not None:
                 lead = f"{lead}\n\n{_revision_text(prompts, revision)}"
             seed = _seed_message(prompts, previous, lead)
@@ -1205,7 +1208,7 @@ def plan_session(
             prior["turns_total"],
             str(previous.relative_to(workpiece_dir)),
         )
-    lead = prompts.no_revision.render() if revision is None else _revision_text(prompts, revision)
+    lead = prompts.prompt("author.no_revision").render() if revision is None else _revision_text(prompts, revision)
     seed = _seed_message(prompts, previous, lead)
     return SessionPlan(SessionMode.REVISION, previous / WORKSPACE_DIR, (*opening, seed), 3, config.turns, 0, None)
 
@@ -1237,7 +1240,7 @@ class AgenticAuthor:
     policy: LLMPolicy
     ledger: Ledger
     builds: SessionBuilds
-    prompts: AuthorPolicy
+    prompts: Policy
 
     async def __call__(
         self,
@@ -1283,7 +1286,7 @@ class AgenticAuthor:
         session_dir = sessions / str(k)
         session_id = f"{context.round}.{k}"
         session = AuthorSession(session_dir, context.workpiece_id, context.round, proposal, build, session_id)
-        session.prepare(plan.seed, sdk_reference(self.prompts.grading_reference))
+        session.prepare(plan.seed, sdk_reference(self.prompts.prompt("author.grading_reference")))
         try:
             result = await drive(
                 session, plan, self.config, self.prompts, self.client, self.policy, self.ledger, session_id

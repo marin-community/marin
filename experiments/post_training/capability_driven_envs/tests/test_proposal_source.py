@@ -61,7 +61,7 @@ EDGE = {"dependent_id": CAPABILITY_ID, "prerequisite_id": "d01.algebra.exact-lin
 CATALOG_VERSION = "v3"
 ALL_ENVIRONMENTS = frozenset(Environment)
 NO_CONTAINER = frozenset({Environment.REASONING, Environment.SHELLSIM})
-PROPOSER = DEFAULT_POLICY.proposer
+PROPOSER = DEFAULT_POLICY
 
 
 @pytest.fixture
@@ -171,7 +171,7 @@ def test_plan_and_proposal_prompts_share_the_research_criterion_and_the_catalog_
     planning = plan_prompt(PROPOSER, idea, 1, NO_CONTAINER)
     authoring = proposal_prompt(PROPOSER, idea, portfolio, portfolio.slots[0], f"{CAPABILITY_ID}/1")
 
-    criterion = PROPOSER.research_criterion.render()
+    criterion = PROPOSER.prompt("proposer.research_criterion").render()
     assert criterion in planning
     assert " ".join(criterion.split()) in " ".join(authoring.split())
     for prompt in (planning, authoring):
@@ -260,7 +260,7 @@ def test_consistency_error_gets_one_schema_repair(ideas):
     assert repair.messages == [
         *outcome.request,
         {"role": "assistant", "content": uncited},
-        {"role": "user", "content": PROPOSER.repair.render(error=outcome.repair_error)},
+        {"role": "user", "content": PROPOSER.prompt("proposer.repair").render(error=outcome.repair_error)},
     ]
 
 

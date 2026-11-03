@@ -3,7 +3,6 @@
 
 """The stage coordinator runs the catalog entry ``d43.culinary.scaling`` to an accepted task."""
 
-from functools import partial
 
 import pytest
 
@@ -51,9 +50,8 @@ from taskforge.stage50_validate.round import (
     ValidationContext,
     ValidationResult,
 )
-from taskforge.stage60_review.decision import BandOutcome
-from taskforge.stage60_review.rules import BandRules, default_review
-from taskforge.stage_coordinator.coordinator import StageCoordinator, WorkpieceBudget, run_workpiece
+from taskforge.stage60_review.rules import default_review
+from taskforge.stage_coordinator.coordinator import StageCoordinator, run_workpiece
 from taskforge.stage_coordinator.event_log import JsonEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import Terminal
@@ -144,7 +142,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         load_program=load_program,
         build=run_build,
         validate=validate,
-        review=partial(default_review, band=BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND}))),
+        review=default_review,
     )
     model = UnusedModel()
     sampling = LLMPolicy()
@@ -159,9 +157,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
     )
     coordinator = StageCoordinator(
         stages=stages,
-        budget=WorkpieceBudget(
-            max_triage_repairs=0, max_build_revisions=0, max_validation_retries=0, max_modify_rounds=0
-        ),
+        policy=DEFAULT_POLICY,
         root=tmp_path,
         event_store=JsonEventStore(tmp_path),
         model=model,
@@ -169,7 +165,6 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         services=services,
         research=ResearchRequirement.OFF,
         model_digest=build_model_digest(model, sampling, services),
-        policy_digest=DEFAULT_POLICY.stage_digest,
     )
 
     assert await run_workpiece(coordinator, WORKPIECE, proposal) is Terminal.ACCEPTED

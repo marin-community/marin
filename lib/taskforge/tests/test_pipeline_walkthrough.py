@@ -13,8 +13,7 @@ import base64
 import inspect
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import replace
-from functools import partial
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -27,13 +26,13 @@ from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, Tas
 from verifyit.spec import NumericSpec
 
 from taskforge import content_hash
-from taskforge.defaults import DEFAULT_POLICY, DEFAULTS_DIR
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
-from taskforge.policy import load_policy
+from taskforge.policy import Policy
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import ControlKind
 from taskforge.spec.draft import assemble, requirements
@@ -167,7 +166,6 @@ BUDGET = WorkpieceBudget(max_triage_repairs=0, max_build_revisions=1, max_valida
 REPAIRING = replace(BUDGET, max_triage_repairs=1)
 """``BUDGET`` for a consumer using the REPAIR surface: one rewrite, then a REPAIR verdict rejects."""
 SAMPLING = LLMPolicy()
-BAND = BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND}))
 SERVICES = RLEnvBuildServices(
     host=MachineHost.LAPTOP,
     factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
@@ -307,7 +305,7 @@ STAGES = StageFunctions(
     load_program=load_toy_program,
     build=run_build,
     validate=validate,
-    review=partial(default_review, band=BAND),
+    review=default_review,
 )
 UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
@@ -383,17 +381,22 @@ class SaveFailsOnce(JsonEventStore):
         super().save(workpiece_id, events)
 
 
+def budgeted(budget: WorkpieceBudget, policy: Policy = DEFAULT_POLICY) -> Policy:
+    """``policy`` with ``budget`` as its ``budget.*`` settings."""
+    return policy.overlaid({f"budget.{name}": value for name, value in asdict(budget).items()})
+
+
 def coordinator(
     root: Path,
     stages: StageFunctions = STAGES,
     budget: WorkpieceBudget = BUDGET,
     digest: str = UNUSED_MODEL_DIGEST,
     research: ResearchRequirement = ResearchRequirement.OFF,
-    policy_digest: str = DEFAULT_POLICY.stage_digest,
+    policy: Policy = DEFAULT_POLICY,
 ) -> StageCoordinator:
     return StageCoordinator(
         stages,
-        budget,
+        budgeted(budget, policy),
         root,
         JsonEventStore(root),
         UnusedModel(),
@@ -401,7 +404,6 @@ def coordinator(
         SERVICES,
         research,
         digest,
-        policy_digest,
     )
 
 
@@ -516,11 +518,12 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 
 
 OFF = ResearchRequirement.OFF
-POLICY = DEFAULT_POLICY.stage_digest
+POLICY = DEFAULT_POLICY
+AUTHOR_OVERLAY = DEFAULT_POLICY.overlaid({"author.nudge": "Call a tool."})
 
 
 @pytest.mark.parametrize(
-    ("proposal", "budget", "digest", "research", "policy_digest", "refusal"),
+    ("proposal", "budget", "digest", "research", "policy", "refusal"),
     [
         (
             replace(PROPOSAL, body=PROPOSAL.body.replace("Multiply", "Add")),
@@ -540,35 +543,38 @@ POLICY = DEFAULT_POLICY.stage_digest
         ),
         (PROPOSAL, BUDGET, "another-model", OFF, POLICY, "opened with model_digest"),
         (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, ResearchRequirement.ENFORCED, POLICY, "opened with research off"),
-        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, OFF, "another-policy", "opened with policy_digest"),
+        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, OFF, AUTHOR_OVERLAY, "opened with policy_digest"),
+        (
+            PROPOSAL,
+            BUDGET,
+            UNUSED_MODEL_DIGEST,
+            OFF,
+            DEFAULT_POLICY.overlaid({"band.low": 0.5}),
+            "opened with policy_digest",
+        ),
     ],
-    ids=["proposal", "budget", "model digest", "research", "policy digest"],
+    ids=["proposal", "budget", "model digest", "research", "author prompt", "band"],
 )
 async def test_a_relaunch_with_another_proposal_budget_model_research_or_policy_is_refused(
-    tmp_path, proposal, budget, digest, research, policy_digest, refusal
+    tmp_path, proposal, budget, digest, research, policy, refusal
 ):
     await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL)
     before = tree_bytes(tmp_path)
 
-    relaunch = coordinator(tmp_path, budget=budget, digest=digest, research=research, policy_digest=policy_digest)
+    relaunch = coordinator(tmp_path, budget=budget, digest=digest, research=research, policy=policy)
     with pytest.raises(ValueError, match=f"{WORKPIECE} was {refusal}"):
         await run_workpiece(relaunch, WORKPIECE, proposal)
     assert tree_bytes(tmp_path) == before
 
 
-async def test_a_relaunch_under_other_proposer_prompts_is_not_refused(tmp_path):
+@pytest.mark.parametrize("overlay", [{"proposer.plan": "Plan {n} slots."}, {"solver.k": 8}], ids=["proposer", "solver"])
+async def test_a_relaunch_under_other_proposer_prompts_or_solver_settings_is_not_refused(tmp_path, overlay):
     await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL)
-    prompts = tmp_path / "prompts"
-    prompts.mkdir()
-    (prompts / "plan.md").write_text("Plan {n} slots.\n")
-    (prompts / "overlay.json").write_text(json.dumps({"proposer.plan": "plan.md"}))
-    policy = load_policy(DEFAULTS_DIR, prompts / "overlay.json")
+    policy = DEFAULT_POLICY.overlaid(overlay)
 
-    log = StoredLog(tmp_path)
-    await run_workpiece(coordinator(tmp_path, policy_digest=policy.stage_digest), WORKPIECE, PROPOSAL)
+    await run_workpiece(coordinator(tmp_path, policy=policy), WORKPIECE, PROPOSAL)
 
-    assert policy.proposer != DEFAULT_POLICY.proposer
-    assert log.events()[0].attrs["policy_digest"] == DEFAULT_POLICY.stage_digest
+    assert StoredLog(tmp_path).events()[0].attrs["policy_digest"] == coordinator(tmp_path).policy_digest
 
 
 async def test_a_program_other_than_the_authored_one_fails_the_workpiece_at_build(tmp_path):
@@ -898,7 +904,7 @@ async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     reviewed: list[ValidationResult] = []
 
-    async def review_in_turn(result: ValidationResult) -> Decision:
+    async def review_in_turn(result: ValidationResult, *, band: BandRules) -> Decision:
         reviewed.append(result)
         return decisions.pop(0)
 
@@ -962,7 +968,7 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
 
-    async def review_in_turn(result: ValidationResult) -> Decision:
+    async def review_in_turn(result: ValidationResult, *, band: BandRules) -> Decision:
         return decisions.pop(0)
 
     stages = replace(STAGES, author=author, review=review_in_turn)
@@ -977,7 +983,7 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
 
 
-async def always_modify(result: ValidationResult) -> Decision:
+async def always_modify(result: ValidationResult, *, band: BandRules) -> Decision:
     return Modify(findings=("the file states the product",))
 
 
@@ -1329,7 +1335,7 @@ def agentic_author(model: ScriptedModel, root: Path) -> AgenticAuthor:
 
         return SessionBuild(builder, store, SERVICES, root / "sessions.jsonl", in_process_loader)
 
-    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.ledger, builds, DEFAULT_POLICY.author)
+    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.ledger, builds, DEFAULT_POLICY)
 
 
 class RecordingValidate:
@@ -1394,7 +1400,7 @@ async def test_abandoned_author_budget_resumes_with_failure_and_preserves_old_fi
     before = tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds")
     assert derive_state(log.events()).stage is Stage.AUTHOR
 
-    resumed = replace(first, budget=replace(BUDGET, max_build_revisions=3))
+    resumed = replace(first, policy=budgeted(replace(BUDGET, max_build_revisions=3)))
     assert await run_workpiece(resumed, WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
     after = tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds")
     assert all(after[path] == data for path, data in before.items())
@@ -1409,10 +1415,12 @@ async def test_abandoned_modify_budget_resumes_review_before_starting_a_new_roun
     assert await run_workpiece(first, WORKPIECE, PROPOSAL) is Terminal.ABANDONED
     old_round = tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds" / "0")
 
-    async def review(result):
-        return await always_modify(result) if result.round == 0 else await default_review(result, band=BAND)
+    async def review(result, *, band):
+        return await always_modify(result, band=band) if result.round == 0 else await default_review(result, band=band)
 
-    resumed = replace(first, stages=replace(STAGES, review=review), budget=replace(BUDGET, max_modify_rounds=1))
+    resumed = replace(
+        first, stages=replace(STAGES, review=review), policy=budgeted(replace(BUDGET, max_modify_rounds=1))
+    )
     log = StoredLog(tmp_path)
     assert await run_workpiece(resumed, WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
     assert derive_state(log.events()).round == 1
@@ -1431,7 +1439,7 @@ async def test_abandoned_triage_budget_resumes_with_the_last_rewritten_proposal(
 
 
 async def test_exhausted_validation_retries_resume_without_rebuilding(tmp_path):
-    async def retry(result):
+    async def retry(result, *, band):
         return Retry(Cause.MODEL_UNAVAILABLE, 1)
 
     first = coordinator(tmp_path, replace(STAGES, review=retry), replace(BUDGET, max_validation_retries=0))
@@ -1447,7 +1455,7 @@ async def test_custom_review_cannot_close_a_task_with_missing_evidence(tmp_path,
     async def incomplete(draft, context):
         return replace(passing_result(context), controls=())
 
-    async def review(result):
+    async def review(result, *, band):
         return decision
 
     stages = replace(STAGES, validate=incomplete, review=review)

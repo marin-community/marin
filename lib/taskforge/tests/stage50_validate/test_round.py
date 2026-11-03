@@ -151,7 +151,7 @@ def adversary_policy(k: int, submissions: int = 3, mode: AdversaryMode = Adversa
         sampling=LLMPolicy(max_continuations=0),
         mode=mode,
         min_probes=1,
-        prompts=DEFAULT_POLICY.adversary,
+        prompts=DEFAULT_POLICY,
     )
 
 

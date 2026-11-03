@@ -35,8 +35,8 @@ own, such as the host's ``ValidationSettings`` and the trial models::
 The coordinator writes the ``ValidationResult`` returned by validate to ``validation.json``
 (``write_validation``), the file's one writer. The review stage hands review the result read back from
 that file (``load_validation``), so a resumed review receives the same value as a review in the first
-process. The caller binds review settings, for example ``partial(default_review, band=band)``;
-the coordinator enforces the MODIFY budget on every review decision.
+process, with the band of the coordinator's policy, so ``default_review`` is passed as it is; the coordinator
+enforces the MODIFY budget on every review decision.
 """
 
 from dataclasses import dataclass
@@ -53,6 +53,7 @@ from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDr
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage50_validate.round import ValidationContext, ValidationResult
 from taskforge.stage60_review.decision import Decision
+from taskforge.stage60_review.rules import BandRules
 
 
 class Triage(Protocol):
@@ -101,9 +102,9 @@ class Validate(Protocol):
 
 
 class Review(Protocol):
-    """Decide on a validation round's ``result`` using the caller's review settings."""
+    """Decide on a validation round's ``result``, placing its solve rate against the policy's ``band``."""
 
-    async def __call__(self, result: ValidationResult, /) -> Decision: ...
+    async def __call__(self, result: ValidationResult, /, *, band: BandRules) -> Decision: ...
 
 
 @dataclass(frozen=True)
