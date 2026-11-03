@@ -21,7 +21,7 @@ from levanter.models.snowball import (
     snowball_loss_with_dispatch_stats,
 )
 from levanter.store.cache import SerialCacheWriter
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.devices import use_test_devices
 
 
 def test_unpacked_chat_validity_keeps_prompt_and_real_eos(tmp_path):
@@ -98,10 +98,9 @@ def test_stats_forward_preserves_observer_and_loss():
         np.testing.assert_array_equal(metrics["moe_dropped"], stats.dropped)
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.multidevice
 def test_dropless_bos_routes_ignore_companions_and_padding():
-    run_on_cpu_devices(
-        """
+    with use_test_devices(8) as devices:
         from dataclasses import replace
         import equinox as eqx
         import haliax as hax
@@ -111,7 +110,7 @@ def test_dropless_bos_routes_ignore_companions_and_padding():
         from jax.sharding import AxisType, Mesh
         from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
-        mesh = Mesh(np.array(jax.devices()).reshape(1, 2, 4, 1, 1, 1),
+        mesh = Mesh(np.array(devices).reshape(1, 2, 4, 1, 1, 1),
             ('replica_dcn', 'data', 'expert', 'context', 'replica', 'model'),
             axis_types=(AxisType.Explicit,) * 6)
         config = SnowballConfig(vocab_size=32, hidden_dim=16, intermediate_dim=16,
@@ -153,6 +152,3 @@ def test_dropless_bos_routes_ignore_companions_and_padding():
             np.testing.assert_array_equal(counts.sender_dropped, np.zeros(3))
             np.testing.assert_array_equal(counts.receiver_dropped, np.full(3, 48))
             np.testing.assert_array_equal(counts.dropped, np.full(3, 48))
-        """,
-        device_count=8,
-    )
