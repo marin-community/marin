@@ -237,6 +237,27 @@ def _failed_rollout(
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         diagnostics["cause_error_type"] = type(error.__cause__).__name__
         diagnostics["machine_operation"] = error.operation.value
+        causes = []
+        cause = error.__cause__
+        seen_causes = {id(error)}
+        while cause is not None and id(cause) not in seen_causes:
+            seen_causes.add(id(cause))
+            origin = None
+            traceback = cause.__traceback__
+            while traceback is not None:
+                frame = traceback.tb_frame
+                module = frame.f_globals.get("__name__", "")
+                if module.startswith(("shellbox.", "daytona.", "daytona_sdk.", "daytona_api_client_async.")):
+                    origin = {
+                        "module": module,
+                        "function": frame.f_code.co_qualname,
+                        "line": traceback.tb_lineno,
+                    }
+                traceback = traceback.tb_next
+            # Exception arguments and notes may contain command text or credentials.
+            causes.append({"exception_type": type(cause).__name__, "origin": origin})
+            cause = cause.__cause__ or cause.__context__
+        diagnostics["machine_error_causes"] = causes
         provider_error = error.__cause__
         if isinstance(provider_error, DaytonaError):
             if type(provider_error.status_code) is int and 100 <= provider_error.status_code <= 599:

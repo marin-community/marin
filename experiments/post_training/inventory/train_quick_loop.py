@@ -4,6 +4,7 @@
 """Train Datakit SFT on the Snowball 100k selection and evaluate before and after RL."""
 
 from dataclasses import replace
+from enum import StrEnum
 
 import click
 import yaml
@@ -27,6 +28,8 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
+from experiments.post_training.inventory.loop_publication import publication_step, run_recorded_loop
+from experiments.post_training.inventory.loop_result import LoopRunConfig
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -34,7 +37,7 @@ MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 DEFAULT_STEPS = 25
-ARTIFACT_NAME = "checkpoints/snowball-inventory"
+ARTIFACT_NAME = "checkpoints/snowball-inventory-batch-fixed"
 SELECTION_PREFIX = "rl-data/task-selection"
 DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.10.23.2"
 CLUSTER = "cw-us-east-02a"
@@ -43,23 +46,31 @@ REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
+ATTENTION_HELPER_SHA256 = "fe39ea5a707a1979f9576595f580a2f70506a5868a389ee150202b45963b5f03"
 
 
-def training_recipe(steps: int) -> dict:
-    """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
+class Arm(StrEnum):
+    CONTROL = "a"
+    LEARNING_RATE = "b"
+    SEQUENCE_MEAN = "c"
+    ASYNC = "d"
+
+
+def training_recipe(steps: int, *, arm: Arm = Arm.CONTROL) -> dict:
+    """Render one treatment with fixed training and greedy evaluation budgets."""
     preset = replace(
         DEFAULT,
         label="snowball-100k",
         max_steps=steps,
         eval_interval=steps,
-        max_staleness_steps=0,
+        max_staleness_steps=2 if arm == Arm.ASYNC else 0,
         request_window_tokens=REQUEST_WINDOW_TOKENS,
         max_new_tokens=MAX_NEW_TOKENS,
         batch_policy="full_batch",
     )
     config = training_config(preset)
     config["entrypoint"] = "taskcompendium"
-    config["data"] = {"kind": "parquet", "shuffle": True}
+    config["data"] = {"kind": "parquet", "shuffle": True, "expected_eval_rows": 100}
     config["environment"] = {
         "task_sessions": {
             "local": {},
@@ -79,13 +90,32 @@ def training_recipe(steps: int) -> dict:
         project_name="marin-snowball-curriculum",
         eval_num_prompts=None,
         dump_eval_results=True,
+        resume_mode="none",
+        loop_evidence_enabled=True,
     )
     trainer["algorithm"].update(
+        batch_invariant=True,
         advantage_estimator="rloo_n",
         group_advantage_min_size=2,
         advantage_batch_normalize=False,
         rloo_n_filter_zero_reward_groups=True,
         use_entropy_loss=False,
+        use_kl_loss=False,
+        use_kl_in_reward=False,
+        loss_reduction="token_mean",
+        off_policy_correction="none",
+        off_policy_correction_rules=None,
+    )
+    trainer["rollout_buffer"]["max_in_flight"] = 192 if arm == Arm.ASYNC else SNOWBALL_RECIPE.role_plan.train_batch_size
+    config["generator"].update(
+        eval_sampling_params={"seed": SEED, "temperature": 0.0},
+        max_num_seqs=1024,
+        vllm_attention_backend="TRITON_ATTN",
+        required_vllm_attention_helper_sha256=ATTENTION_HELPER_SHA256,
+        enable_prefix_caching=False,
+        enable_chunked_prefill=True,
+        max_num_batched_tokens=8192,
+        enforce_eager=False,
     )
     trainer["policy"]["optimizer_config"].update(
         lr=1e-6,
@@ -95,6 +125,10 @@ def training_recipe(steps: int) -> dict:
         scheduler="constant_with_warmup",
         num_warmup_steps=0,
     )
+    if arm == Arm.LEARNING_RATE:
+        trainer["policy"]["optimizer_config"]["lr"] = 2e-6
+    if arm == Arm.SEQUENCE_MEAN:
+        trainer["algorithm"]["loss_reduction"] = "sequence_mean"
     return config
 
 
@@ -103,6 +137,7 @@ def build_run(
     *,
     selection: ArtifactStep[Artifact],
     steps: int = DEFAULT_STEPS,
+    arm: Arm = Arm.CONTROL,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
     model = ArtifactStep.adopt(
@@ -112,11 +147,11 @@ def build_run(
         kind=LevanterCheckpoint,
     )
     plan = SNOWBALL_RECIPE.role_plan
-    return skyrl_step(
+    training = skyrl_step(
         SkyRLSpec(
-            name=user_owned_name(ARTIFACT_NAME),
+            name=user_owned_name(f"{ARTIFACT_NAME}-{arm.value}"),
             version=version,
-            config_yaml=yaml.safe_dump(training_recipe(steps), sort_keys=False),
+            config_yaml=yaml.safe_dump(training_recipe(steps, arm=arm), sort_keys=False),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=MODEL_ID,
@@ -150,8 +185,17 @@ def build_run(
             wandb_entity="marin-community",
             required_env_vars=(EVALUATION_API_KEY_ENV, JUDGE_API_KEY_ENV),
         ),
-        export_hf=True,
+        export_hf=False,
     )
+
+    def build_config(ctx):
+        return LoopRunConfig(
+            skyrl=training.build_config(ctx),
+            label=f"Fixed runtime · {arm.value.upper()}{steps}",
+            expected_steps=steps,
+        )
+
+    return replace(training, build_config=build_config, run=run_recorded_loop)
 
 
 @click.command(help=__doc__)
@@ -159,9 +203,11 @@ def build_run(
     "--selection-uri", default=DEFAULT_SELECTION_URI, show_default=True, help="Published task-selection artifact root."
 )
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
+@click.option("--arm", type=click.Choice([arm.value for arm in Arm]), default=Arm.CONTROL.value, show_default=True)
 @rl_build_options
-def main(selection_uri: str, steps: int) -> ArtifactStep[SkyRLRun]:
-    name = user_owned_name(ARTIFACT_NAME)
+def main(selection_uri: str, steps: int, arm: str) -> ArtifactStep:
+    selected_arm = Arm(arm)
+    name = user_owned_name(f"{ARTIFACT_NAME}-{selected_arm.value}")
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
     parts = identity.split("/")
@@ -172,11 +218,13 @@ def main(selection_uri: str, steps: int) -> ArtifactStep[SkyRLRun]:
         )
     selection_name, selection_version = parts
     selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
-    return build_run(
+    training = build_run(
         resolve_version(name, None),
         selection=selection,
         steps=steps,
+        arm=selected_arm,
     )
+    return publication_step(training)
 
 
 if __name__ == "__main__":

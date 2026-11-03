@@ -20,6 +20,7 @@ from ray.util.placement_group import (
 )
 
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
+from skyrl_train.inference_engines.vllm_source import validate_vllm_source_config
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.config.query_bias import resolve_grug_query_bias_update
@@ -663,6 +664,7 @@ def validate_generator_cfg(cfg: DictConfig):
         ValueError: when cfg.generator.sampling_params.logprobs > 0
     """
 
+    validate_vllm_source_config(cfg.generator)
     parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     parse_trajectory_retention_config(cfg.generator.get("trajectory_retention"))
 

@@ -225,3 +225,8 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 
 For the current curation, training and evaluation recipe, see the
 [quick RL loop](../recipes/quick-rl-loop.md).
+
+## Snowball development loop
+
+For the fixed-input Snowball screen, terminal reporting, baseline changes and
+runtime admission limits, see [Run a Snowball RL development screen](../tutorials/snowball-rl-loop.md).

@@ -30,6 +30,7 @@ EVAL_DIAGNOSTIC_FIELDS = frozenset(
     {
         "exception_type",
         "cause_error_type",
+        "machine_error_causes",
         "operation",
         "timed_out",
         "machine_operation",

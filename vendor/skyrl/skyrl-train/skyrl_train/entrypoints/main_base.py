@@ -28,6 +28,7 @@ import asyncio
 import multiprocessing as mp
 
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
+from skyrl_train.inference_engines.vllm_source import verify_vllm_attention_source
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
     validate_rollout_launch,
@@ -295,6 +296,7 @@ class BasePPOExp:
 
         The `cfg` passed here will be the final config from Hydra, including CLI overrides.
         """
+        verify_vllm_attention_source(cfg.generator.required_vllm_attention_helper_sha256)
         self.cfg = cfg
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
