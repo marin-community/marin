@@ -6,6 +6,7 @@
 import argparse
 import contextlib
 import logging
+import math
 import threading
 import time
 import uuid
@@ -585,7 +586,11 @@ def _run_tpu_service(service: IrisServiceConfig) -> None:
     launcher = vllm_launcher(service.engine)
     assert isinstance(launcher, IsolatedTpuVllm)
     with tpu_ray_gang(
-        launcher, chips_per_host=device.chip_count(), timeout_seconds=service.engine.startup_timeout_seconds
+        launcher,
+        # Ray's --num-cpus is an integer: round the Iris request down, minimum 1.
+        cpus_per_host=max(1, math.floor(service.iris.worker_resources.cpu)),
+        chips_per_host=device.chip_count(),
+        timeout_seconds=service.engine.startup_timeout_seconds,
     ) as gang:
         if gang.leader:
             with iris_vllm_followers(gang.identity):

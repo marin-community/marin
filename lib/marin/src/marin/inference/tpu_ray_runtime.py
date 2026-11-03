@@ -27,7 +27,9 @@ def ray_environment(address: str) -> dict[str, str]:
     }
 
 
-def ray_start_command(*, host: str, address: str, leader: bool, chips: int, ports: dict[str, int]) -> list[str]:
+def ray_start_command(
+    *, host: str, address: str, leader: bool, cpus: int, chips: int, ports: dict[str, int]
+) -> list[str]:
     """Return a blocking head or worker command with the allocated Ray listeners."""
     command = [
         sys.executable,
@@ -38,7 +40,7 @@ def ray_start_command(*, host: str, address: str, leader: bool, chips: int, port
         "--node-ip-address",
         host,
         "--num-cpus",
-        "8",
+        str(cpus),
         "--resources",
         json.dumps({"TPU": chips}),
         "--disable-usage-stats",
@@ -82,6 +84,7 @@ def main() -> None:
         host=config["host"],
         address=config["address"],
         leader=config["leader"],
+        cpus=config["cpus"],
         chips=config["chips"],
         ports=config["ports"],
     )

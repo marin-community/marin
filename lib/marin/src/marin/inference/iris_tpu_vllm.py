@@ -59,7 +59,9 @@ def _stop_owned_process(process: subprocess.Popen) -> None:
 
 
 @contextlib.contextmanager
-def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seconds: float) -> Iterator[TpuRayGang]:
+def tpu_ray_gang(
+    launcher: IsolatedTpuVllm, *, cpus_per_host: int, chips_per_host: int, timeout_seconds: float
+) -> Iterator[TpuRayGang]:
     """Own Ray processes on every allocated host until the caller exits.
 
     Wait for all hosts to join before yielding. Serving coordination belongs to the
@@ -88,6 +90,7 @@ def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seco
                     "address": address,
                     "leader": leader,
                     "ports": ports,
+                    "cpus": cpus_per_host,
                     "chips": chips_per_host,
                     "hosts": info.num_tasks,
                     "ready_path": str(ready_path),

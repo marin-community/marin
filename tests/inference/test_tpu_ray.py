@@ -25,12 +25,13 @@ from marin.inference.config import (
 )
 
 
-def _config():
+def _config(cpu: float = 8):
     return RemoteInferenceConfig(
         model=ServedModelConfig(weights="gs://models/model", tensor_parallel_size=16),
         engine=VllmEngineConfig(launcher=VllmLauncherType.TPU),
         iris=IrisConfig(
-            worker_resources=ResourceConfig.with_tpu("v4-32"), worker_environment=create_environment(extras=["tpu"])
+            worker_resources=ResourceConfig.with_tpu("v4-32", cpu=cpu),
+            worker_environment=create_environment(extras=["tpu"]),
         ),
     )
 
@@ -47,7 +48,7 @@ def test_failed_ray_supervisor_reports_its_log(tmp_path):
 
 @pytest.mark.parametrize("transient", [False, True])
 def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch, transient):
-    config = _config()
+    config = _config(cpu=6.5)
     service = serving.IrisServiceConfig(
         model=config.model, engine=config.engine, iris=config.iris, endpoint_name="/serve/test"
     )
@@ -78,8 +79,8 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
         # The vLLM backend imports GitPython lazily, which probes the git executable.
         if Path(command[0]).name == "git":
             return real_popen(command, **kwargs)
-        commands.append(command)
         launch = json.loads(Path(command[-1]).read_text())
+        commands.append(launch)
         Path(launch["ready_path"]).write_text("{}")
         return process
 
@@ -93,6 +94,11 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
     serving.run_iris_service(service)
 
     assert len(commands) == 1
+    ray_start = tpu_ray_runtime.ray_start_command(
+        **{key: commands[0][key] for key in ("host", "address", "leader", "cpus", "chips", "ports")}
+    )
+    # Ray gets the CPUs Iris granted (6.5 rounded down), not a fixed count.
+    assert ray_start[ray_start.index("--num-cpus") + 1] == "6"
     registry.registered.assert_not_called()
     assert coordinator.follower_stopped.call_count == (2 if transient else 1)
     coordinator.follower_stopped.assert_called_with(1)
@@ -120,6 +126,7 @@ def test_ray_head_failure_interrupts_blocked_initialization(monkeypatch, tmp_pat
                 "host": "127.0.0.1",
                 "address": "127.0.0.1:12000",
                 "leader": True,
+                "cpus": 8,
                 "chips": 4,
                 "ports": {},
                 "hosts": 4,
