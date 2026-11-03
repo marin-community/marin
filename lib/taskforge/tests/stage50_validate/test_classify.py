@@ -42,7 +42,7 @@ from taskforge.llm.client import ModelRequestRejected, ModelUnavailable
 from taskforge.spec.draft import answer_grader, grader_environment, rollout_engine
 from taskforge.stage50_validate.classify import candidate_code_error, classify, trial_outcome
 from taskforge.stage50_validate.outcome import RETRYABLE, Cause, Graded, Ungraded
-from tests.sandbox.fixture_images import SHELL_GRADER_ARGV, FixtureImageFactory
+from tests.sandbox.fixture_images import SHELL_GRADER_ARGV, FixtureImageFactory, ForwardingMachine
 
 INVALID_REWARD_GRADER = """printf '%s' '{"reward": "nan?"}' > /logs/verifier/reward.json\n"""
 FAILING_GRADER = "exit 3\n"
@@ -63,24 +63,15 @@ class HangingGraderFactory:
         FixtureImageFactory().check_environment(requirements, spec)
 
     async def create(self, spec):
-        machine = await FixtureImageFactory().create(spec)
+        return HangingGraderMachine(await FixtureImageFactory().create(spec))
 
-        class Hanging:
-            async def run(self, command):
-                if command.argv == SHELL_GRADER_ARGV:
-                    await asyncio.Future()
-                return await machine.run(command)
 
-            async def upload(self, source, target):
-                await machine.upload(source, target)
-
-            async def download(self, source, target):
-                await machine.download(source, target)
-
-            async def close(self):
-                await machine.close()
-
-        return Hanging()
+@dataclass
+class HangingGraderMachine(ForwardingMachine):
+    async def run(self, command):
+        if command.argv == SHELL_GRADER_ARGV:
+            await asyncio.Future()
+        return await self.machine.run(command)
 
 
 @dataclass(frozen=True)

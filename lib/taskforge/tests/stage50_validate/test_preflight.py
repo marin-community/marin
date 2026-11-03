@@ -34,31 +34,20 @@ from taskforge.stage40_build_with_program.infrastructure import InfrastructureCa
 from taskforge.stage50_validate.outcome import Cause
 from taskforge.stage50_validate.preflight import preflight
 from taskforge.stage50_validate.trials import EngineSettings
-from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
+from tests.sandbox.fixture_images import FixtureImageFactory, ForwardingMachine, PortlessShellSimFactory
 from tests.stage50_validate.conftest import LIMITS
 
 READ_ONLY = b"mkdir: cannot create directory '/opt/gen': Read-only file system\n"
 
 
-class ReadOnlyOptMachine:
+@dataclass
+class ReadOnlyOptMachine(ForwardingMachine):
     """A ShellSim machine whose shell refuses to write under /opt, as bubblewrap's read-only mounts do."""
-
-    def __init__(self, inner: ShellSimMachine):
-        self.inner = inner
 
     async def run(self, command: Command) -> Result:
         if command.argv[:2] == ("sh", "-c") and "/opt" in command.argv[2]:
             return Result(1, b"", READ_ONLY, False, False, ExitReason.EXITED)
-        return await self.inner.run(command)
-
-    async def upload(self, source, target) -> None:
-        await self.inner.upload(source, target)
-
-    async def download(self, source, target) -> None:
-        await self.inner.download(source, target)
-
-    async def close(self) -> None:
-        await self.inner.close()
+        return await self.machine.run(command)
 
 
 @dataclass(frozen=True)
