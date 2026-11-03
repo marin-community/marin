@@ -40,8 +40,12 @@ from zephyr.writers import write_parquet_file
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
 
 SELECTION_PREFIX = "rl-data/task-selection"
+HELDOUT_BLEND = "rlvr1"
+STRUCTURAL_FAMILY = "structural"
+PARQUET_BATCH_ROWS = 256
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
+SUMMARY_FILENAME = "summary.json"
 FULL_VALIDATION_FILENAME = "full_validation.parquet"
 TASK_MANIFEST_FILENAME = "task_manifest.parquet"
 TASK_SPEC_COLUMN = "task_spec"
@@ -63,7 +67,7 @@ AAII_CATEGORIES = MappingProxyType(
         "competitive_coding": "coding",
         "reasoning_gym": "scientific_reasoning",
         "stem": "scientific_reasoning",
-        "structural": "format",
+        STRUCTURAL_FAMILY: "format",
     }
 )
 TASK_MANIFEST_SCHEMA = pa.schema(
@@ -175,7 +179,7 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
     if isinstance(task.grader, ScriptGrader) and task.grader.environment.docker_image is not None:
         dataset = _grader_contract(task)["dataset"]
         if dataset not in grader_environments:
-            raise ValueError(f"No admitted grader environment for {BLENDS['rlvr1'][dataset].id}")
+            raise ValueError(f"No admitted grader environment for {BLENDS[HELDOUT_BLEND][dataset].id}")
         task = task.model_copy(
             update={"grader": task.grader.model_copy(update={"environment": grader_environments[dataset]})}
         )
@@ -184,7 +188,7 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
 
 def validation_family(task: TaskSpec) -> str:
     if task.source.dataset == STRUCTURE_CLOSURE_DATASET:
-        return "structural"
+        return STRUCTURAL_FAMILY
     return HELDOUT_FAMILIES[_grader_contract(task)["dataset"]]
 
 
@@ -227,12 +231,12 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
         raise ValueError(f"Selection source is not a training population: {source.source_id}")
     for path in sorted((root / "final" / "*.parquet").glob(), key=str):
         with path.open("rb") as stream:
-            for batch in pq.ParquetFile(stream).iter_batches(batch_size=256, columns=[TASK_JSON_COLUMN]):
+            for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_JSON_COLUMN]):
                 yield from batch.to_pylist()
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
-    components = {BLENDS["rlvr1"][dataset].id: dataset for dataset in HELDOUT_FAMILIES}
+    components = {BLENDS[HELDOUT_BLEND][dataset].id: dataset for dataset in HELDOUT_FAMILIES}
     environments = {}
     for source in sources:
         if source.source_id not in components:
@@ -260,8 +264,8 @@ def _grader_kind(task: TaskSpec) -> GraderKind:
 
 def _manifest_records(tasks: tuple[TaskSpec, ...]) -> Iterator[dict[str, Any]]:
     for task in tasks:
-        contract = None if task.source.dataset == STRUCTURE_CLOSURE_DATASET else _grader_contract(task)
-        family = "structural" if contract is None else HELDOUT_FAMILIES[contract["dataset"]]
+        family = validation_family(task)
+        contract = None if family == STRUCTURAL_FAMILY else _grader_contract(task)
         yield {
             "task_id": task.id,
             "family": family,
@@ -274,7 +278,7 @@ def _manifest_records(tasks: tuple[TaskSpec, ...]) -> Iterator[dict[str, Any]]:
 
 def _grader_counts(path: Path) -> dict[str, int]:
     counts: Counter[GraderKind] = Counter()
-    for batch in pq.ParquetFile(path).iter_batches(batch_size=256, columns=[TASK_SPEC_COLUMN]):
+    for batch in pq.ParquetFile(path).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_SPEC_COLUMN]):
         counts.update(_grader_kind(TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])) for row in batch.to_pylist())
     return {kind.value: counts[kind] for kind in GraderKind}
 
@@ -383,7 +387,7 @@ def prepare(config: SelectionConfig) -> None:
         destination.mkdirs()
         for name in (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME):
             (destination / name).upload_from(str(directory / name))
-        (destination / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        (destination / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
 def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecipe) -> ArtifactStep[Artifact]:
