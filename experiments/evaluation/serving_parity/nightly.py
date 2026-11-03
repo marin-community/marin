@@ -18,6 +18,7 @@ from iris.resources.state import TERMINAL_JOB_STATES
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.evaluation.serving_parity.launch import H100_WEIGHTS, V4_WEIGHTS
 from experiments.evaluation.serving_parity.score_check import scored_items
 
 
@@ -46,10 +47,11 @@ def cleanup() -> None:
 def run(run_id: str, scheduling_timeout: int) -> None:
     configure_coreweave_s3()
     module = "experiments.evaluation.serving_parity"
-    h100 = "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
-    v4 = "gs://marin-us-central2/scratch/karan/rsi-merge/parents/S--open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02@50fe2f488aee/"
     outputs, states = {}, []
-    for hardware, weights, bucket in (("h100", h100, "s3://marin-us-east-02a"), ("v4", v4, "gs://marin-us-central2")):
+    for hardware, weights, bucket in (
+        ("h100", H100_WEIGHTS, "s3://marin-us-east-02a"),
+        ("v4", V4_WEIGHTS, "gs://marin-us-central2"),
+    ):
         outputs[hardware] = f"{bucket}/ci/serving-score/{run_id}/{hardware}"
         subprocess.run(
             [
@@ -97,9 +99,10 @@ def run(run_id: str, scheduling_timeout: int) -> None:
             text=True,
         )
         score_exit = score.returncode
-        print(score.stdout)
+        details = score.stdout + score.stderr
+        print(details)
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-            summary.write(score.stdout)
+            summary.write(details)
     outcome = classify(states, score_exit)
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write(f"outcome={outcome}\n")
