@@ -6,10 +6,11 @@ import numpy as np
 import pytest
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.grug.grug_moe import MoEExpertMlpPspecs
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.devices import use_test_devices
 
-from experiments.grug.moe_hero_ep import train
+from experiments.grug.moe_hero_ep import model, train
 
 
 def _device_groups(mesh, axes):
@@ -44,16 +45,21 @@ def test_dropless_eval_mesh_reuses_training_device_groups_at_cp4(replica, expert
         assert _device_groups(eval_mesh, ["context"]) == _device_groups(train_mesh, ["context"])
         assert _device_groups(eval_mesh, ["data"]) == _device_groups(train_mesh, ["data", "expert"])
 
-        values = np.arange(16 * 8 * 6, dtype=np.float32).reshape(16, 8, 6)
+        values = np.arange(16 * 8 * 8, dtype=np.float32).reshape(16, 8, 8)
         kept = {
             "batch": P(("replica_dcn", "data", "expert"), "context"),
             "fsdp": P(("data", "expert", "context")),
             "dense": P(None, "context", None),
         }
         tree = {key: jax.device_put(values, NamedSharding(train_mesh, spec)) for key, spec in kept.items()}
-        tree["experts"] = jax.device_put(values, NamedSharding(train_mesh, P(("expert", "context"), None, None)))
+        # The routed-expert weights, as the hero shards them: experts over (expert, context), and the
+        # hidden dimension over data, which the eval mesh widens to the training (data, expert) size.
+        expert_specs = MoEExpertMlpPspecs(expert=model._EXPERT_WEIGHT_AXES)
+        moved_keys = {"w_gate_up": expert_specs.w_gate_up, "w_down": expert_specs.w_down}
+        for key, spec in moved_keys.items():
+            tree[key] = jax.device_put(values, NamedSharding(train_mesh, spec))
         moved = train._reshard_tree_to_mesh(tree, eval_mesh)
-        for key in ("batch", "fsdp", "dense", "experts"):
+        for key in (*kept, *moved_keys):
             assert moved[key].sharding.mesh == eval_mesh
             np.testing.assert_array_equal(np.asarray(moved[key]), values)
         for key in kept:
