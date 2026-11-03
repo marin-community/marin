@@ -5,7 +5,7 @@
 
 ``machine_factories`` constructs the explicitly selected backends and keys them by
 shellbox ``Backend`` value as ``MachineRuntimeSpec.backend`` refers to them. ``container_backend`` gives
-the backend for image-backed machines on that host. ``RolloutEngine.check`` (``spec.draft.check``) asks
+the backend for image-backed machines among those selected. ``RolloutEngine.check`` (``spec.draft.check``) asks
 the factories about a spec's machines before any machine starts.
 """
 
@@ -14,8 +14,7 @@ import shutil
 import subprocess
 import threading
 import time
-from collections.abc import Mapping, Sequence
-from enum import StrEnum
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -46,13 +45,6 @@ as a host failure, and a shorter engine deadline cancels the wait first and repo
 """
 
 
-class MachineHost(StrEnum):
-    """Where the factories run: a developer laptop, or inside an Iris task."""
-
-    LAPTOP = "laptop"
-    IRIS = "iris"
-
-
 def docker_unavailable_reason() -> str | None:
     """Check the requested Docker backend for a reachable daemon; return why Docker machines are unavailable, or None."""
     docker = shutil.which("docker")
@@ -80,11 +72,25 @@ def local_factory() -> MachineFactory:
     return LocalMachineFactory(system_directories=SystemDirectories.COPY_ON_WRITE)
 
 
-def container_backend(where: MachineHost) -> Backend:
-    """The backend of an image-backed machine on ``where``."""
-    if where is MachineHost.IRIS:
-        return Backend.GVISOR
-    return Backend.DOCKER
+CONTAINER_BACKENDS = (Backend.GVISOR, Backend.DOCKER)
+
+
+def container_backend(backends: Iterable[str]) -> Backend:
+    """The backend of an image-backed machine: the one ``CONTAINER_BACKENDS`` entry among the selected ``backends``.
+
+    ``backends`` are shellbox ``Backend`` values, such as the keys of ``machine_factories``.
+
+    Raises:
+        ValueError: ``backends`` selects no container backend, or more than one.
+    """
+    selected = set(backends)
+    containers = [backend for backend in CONTAINER_BACKENDS if backend.value in selected]
+    if len(containers) != 1:
+        raise ValueError(
+            f"An image machine needs exactly one container backend ({', '.join(CONTAINER_BACKENDS)}) "
+            f"among the selected backends, not {sorted(selected)}"
+        )
+    return containers[0]
 
 
 def machine_factories(backends: Sequence[Backend], controller_url: str | None) -> Mapping[str, MachineFactory]:

@@ -132,12 +132,13 @@ spec, so a move of either is a single-site change.
   that has neither.
   `grader_environment(task_image)` is the verifier machine's environment: the task image, or
   `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
-- `spec.draft.lower(task, *, host, task_machine, verifier_machine, limits, factories)` runs
+- `spec.draft.lower(task, *, task_machine, verifier_machine, limits, factories)` runs
   each machine on `host_requirements` for `factories`: with the local backend, the grader base image
   runs there. A package machine always lowers onto the local backend, so on a host without one
   `lower` refuses it: `RolloutEngine.check` finds no factory for it. It
-  picks the host's container backend for an image, the local backend for Linux processes without
-  one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment,
+  picks the one container backend (`GVISOR` or `DOCKER`) among `factories` for an image, the local
+  backend for Linux processes without one, and ShellSim otherwise, so a lowered spec is bound to its
+  host's factories. A grader with an environment,
   other than a judge, takes a verifier machine; no other grader does. `limits` is a `RolloutLimits`
   from `rollout_limits(...)`, which sets no token budget. The spec names the harness `TOOL_HARNESS`,
   and `lower` rejects what `RolloutEngine.check` rejects (`draft.check`).

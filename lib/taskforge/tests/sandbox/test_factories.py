@@ -39,7 +39,6 @@ from verifyit.spec import JudgeSpec, NumericSpec
 
 from taskforge.sandbox import factories
 from taskforge.sandbox.factories import (
-    MachineHost,
     grading_environment,
     machine_factories,
     warm_local_python,
@@ -239,7 +238,7 @@ async def test_a_grader_base_machine_runs_cpython_312_on_the_local_backend():
     """Needs bubblewrap (Linux, as root or with user namespaces) and uv; installs CPython into the package cache."""
     built = machine_factories((Backend.LOCAL,), controller_url=None)
     requirements = draft.host_requirements(draft.grader_environment(None), built)
-    runtime = draft.machine_runtime(draft.machine(startup_timeout=600), requirements, MachineHost.IRIS)
+    runtime = draft.machine_runtime(draft.machine(startup_timeout=600), requirements, built)
     async with AsyncExitStack() as owned:
         machine = await _prepare_machine(requirements, runtime, (), built, _Cleanup(60), owned)
         assert machine is not None
