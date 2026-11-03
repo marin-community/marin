@@ -307,12 +307,15 @@ class IrisImageBuilder:
         self.credential = credential
 
     async def publish(self, build: DockerBuild, repository: str) -> str:
-        return (await self.publish_with_timings(build, repository)).image
+        """``ImageBuilder.publish``: ``publish_with_timings`` in a worker thread.
 
-    async def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
-        return await asyncio.to_thread(self._publish, build, repository)
+        A publish blocks for up to ``SCHEDULING_TIMEOUT + JOB_TIMEOUT`` seconds while it waits on
+        Iris, and its callers await it on an event loop that runs other builds concurrently.
+        """
+        return (await asyncio.to_thread(self.publish_with_timings, build, repository)).image
 
-    def _publish(self, build: DockerBuild, repository: str) -> Published:
+    def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
+        """Publish ``build`` under ``repository``, blocking until the image is pushed and read back."""
         check_build_limits(build, BUILD_LIMITS)
         if not REPOSITORY.fullmatch(repository):
             raise ValueError(f"not an OCI repository name: {repository!r}")

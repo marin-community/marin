@@ -11,7 +11,6 @@ laptop's ``gcloud`` and hands it to the builder in process; the builder's module
 describes the build and push jobs and where the credential travels.
 """
 
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -43,7 +42,7 @@ def main(context: Path, repository: str, cluster: str, target_cluster: str) -> N
     build = docker_build_from_directory(context, BUILD_LIMITS)
     credential = RegistryCredential.from_json(registry_credential_json())
     builder = IrisImageBuilder(cluster=cluster, target_cluster=target_cluster, credential=credential)
-    published = asyncio.run(builder.publish_with_timings(build, repository))
+    published = builder.publish_with_timings(build, repository)
     print(
         json.dumps(
             {
