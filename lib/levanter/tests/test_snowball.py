@@ -363,7 +363,9 @@ def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
         model = replace(model, router=router, router_bias=jnp.array([0, 0.001, -10, -10], jnp.float32))
         compute = cast_model_for_compute(model, jmp.get_policy("p=f32,c=bf16"), {"router_bias": "float32"})
         inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, :2].set(1)
-        routes = eqx.filter_jit(lambda value: value.with_routes(inputs)[1])
+        # Keep primitive boundaries explicit: XLA may fuse the BF16 dot's
+        # following FP32 conversion into a CPU dot with an FP32 accumulator.
+        routes = lambda value: value.with_routes(inputs)[1]
         high = routes(compute)
         low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
     np.testing.assert_array_equal(high, [[[0]]])
