@@ -1,5 +1,6 @@
 name: "Marin - Canary - Hero GB200"
 
+# See "Daily hero canary" in experiments/grug/moe_hero_ep/README.md.
 on:
   schedule:
     - cron: '0 11 * * *'  # 3 AM PST / 6 AM EST (4 AM PDT / 7 AM EDT in summer)
