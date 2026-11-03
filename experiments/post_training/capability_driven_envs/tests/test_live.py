@@ -68,7 +68,7 @@ def test_every_proposed_slot_parses_on_its_first_request(
     async def go():
         async with GlmClient(live_endpoint, GLM_PROVIDER) as client:
             return await propose_tasks(
-                client, {capability_id: idea}, SLOTS, frozenset(Environment), policy, DEFAULT_POLICY.proposer
+                client, {capability_id: idea}, SLOTS, frozenset(Environment), policy, DEFAULT_POLICY
             )
 
     started = time.monotonic()

@@ -11,7 +11,7 @@ endpoint on that cluster; it has no default::
       --job-name taskforge-cluster-rollout-probe-NN --target-cluster cw-rno2a --priority interactive \
       --cpu 2 --memory 3GB --timeout 5400 -e GLM_HIGH_TOKEN "$GLM_HIGH_TOKEN" -- \
       uv run --package marin-taskforge-adapters --frozen lib/taskforge-adapters/scripts/cluster_rollout_probe.py \
-        --relay-job <relay-job>
+        --relay-job <relay-job> --policy '{"solver.k": 8}'
 
 ``GLM_HIGH_TOKEN``, the high pool's bearer token, travels in the job's environment (``-e``), so the
 controller stores it with the job and the task's ``IRIS_JOB_ENV`` carries it. Iris copies
@@ -19,7 +19,9 @@ controller stores it with the job and the task's ``IRIS_JOB_ENV`` carries it. Ir
 so ``main`` removes the token (and the submitter keys Iris forwards) from this process's
 environment before anything submits a child.
 
-Phases, each ``k`` trials through ``taskforge.stage50_validate.trials.run_trials``:
+``--policy`` overlays the default policy (``taskforge.policy``), repeatably; the run prints every declared policy
+value next to the resolved one before it starts. Phases, each ``solver.k`` trials with ``solver.max_retries`` retries
+through ``taskforge.stage50_validate.trials.run_trials``:
 
 - ``math``: a null-environment numeric task (no machine).
 - ``docker``: a task on a digest-pinned public image on
@@ -70,10 +72,12 @@ from taskcompendium.models import (
     StdoutReward,
     VerifierArtifact,
 )
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
+from taskforge.policy import Policy, parse_overlay, resolution_lines
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import (
     answer_grader,
@@ -371,7 +375,9 @@ def secret_names(names: list[str]) -> list[str]:
     return [name for name in names if SECRET_WORDS & set(name.split("_")) or name.endswith(SECRET_SUFFIXES)]
 
 
-async def probe(args: argparse.Namespace, token: str, controller_url: str, results: Path) -> dict[str, Any]:
+async def probe(
+    args: argparse.Namespace, policy: Policy, token: str, controller_url: str, results: Path
+) -> dict[str, Any]:
     relay = RelayEndpoint(args.relay_job, token, Pool.HIGH)
     endpoint = relay.current()
     print(f"GLM_ENDPOINT relay={args.relay_job} base_url={endpoint.base_url}", flush=True)
@@ -387,12 +393,9 @@ async def probe(args: argparse.Namespace, token: str, controller_url: str, resul
     }
     async with GlmClient(relay, PROVIDER) as client:
         factories = dict(machine_factories((Backend.GVISOR,), controller_url))
-        summary["phases"].append(
-            await run_phase(Phase.MATH, math_task(factories), factories, client, results, args.k, 2)
-        )
-        summary["phases"].append(
-            await run_phase(Phase.DOCKER, docker_task(factories), factories, client, results, args.k, 2)
-        )
+        k, retries = (policy.setting(key, int) for key in ("solver.k", "solver.max_retries"))
+        for phase, task in ((Phase.MATH, math_task(factories)), (Phase.DOCKER, docker_task(factories))):
+            summary["phases"].append(await run_phase(phase, task, factories, client, results, k, retries))
         summary["sandbox_environment"] = await sandbox_environment(factories[Backend.GVISOR.value])
     return summary
 
@@ -400,8 +403,12 @@ async def probe(args: argparse.Namespace, token: str, controller_url: str, resul
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--relay-job", required=True, help=f"Iris job that registers the {GLM_MODEL} endpoint")
-    parser.add_argument("--k", type=int, default=3)
+    parser.add_argument(
+        "--policy", action="append", type=parse_overlay, default=[], help="A JSON policy overlay; repeatable."
+    )
     args = parser.parse_args()
+    policy = DEFAULT_POLICY.overlaid(*args.policy)
+    print("\n".join(resolution_lines(DEFAULT_POLICY, policy)), flush=True)
     controller_url = os.environ.get(IRIS_CONTROLLER_URL_ENV)
     output_dir = os.environ.get(IRIS_OUTPUT_DIR_ENV)
     if not controller_url or not output_dir:
@@ -413,7 +420,7 @@ def main() -> None:
     results = Path(output_dir) / RESULTS_DIR
     results.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    summary = asyncio.run(probe(args, token, controller_url, results))
+    summary = asyncio.run(probe(args, policy, token, controller_url, results))
     summary["wall_time"] = time.monotonic() - started
     summary["run"] = run
     (results / "summary.json").write_text(json.dumps(summary, indent=1, default=str))

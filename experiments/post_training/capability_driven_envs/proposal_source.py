@@ -39,7 +39,7 @@ from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import ERROR_TEXT_LIMIT, schema_instruction
-from taskforge.policy import ProposerPolicy
+from taskforge.policy import Policy
 from taskforge.stage10_proposal.model import (
     REQUIRED_HEADINGS,
     Environment,
@@ -183,23 +183,25 @@ def slot_plan_type(n: int, environments: frozenset[Environment]) -> type[SlotPla
     return HostSlotPlan
 
 
-def system_prompt(proposer: ProposerPolicy) -> str:
+def system_prompt(proposer: Policy) -> str:
     """The system turn of every proposer call."""
-    return proposer.system.render(solver_machine_rule=solver_machine_rule(proposer))
+    return proposer.prompt("proposer.system").render(solver_machine_rule=solver_machine_rule(proposer))
 
 
-def solver_machine_rule(proposer: ProposerPolicy) -> str:
+def solver_machine_rule(proposer: Policy) -> str:
     """The rule for the ``solver_machine`` header value."""
-    return proposer.solver_machine_rule.render(**{machine.value: machine.value for machine in SolverMachine})
+    return proposer.prompt("proposer.solver_machine_rule").render(
+        **{machine.value: machine.value for machine in SolverMachine}
+    )
 
 
-def plan_prompt(proposer: ProposerPolicy, idea: CapabilityIdea, n: int, environments: frozenset[Environment]) -> str:
+def plan_prompt(proposer: Policy, idea: CapabilityIdea, n: int, environments: frozenset[Environment]) -> str:
     """Build the planning request for ``n`` slots on a host that runs ``environments``."""
-    return proposer.plan.render(
+    return proposer.prompt("proposer.plan").render(
         n=n,
         environments=", ".join(sorted(environments)),
         max_per_pairing=max_slots_per_pairing(n),
-        research_criterion=proposer.research_criterion.render(),
+        research_criterion=proposer.prompt("proposer.research_criterion").render(),
         capability_record=pretty_json(capability_idea_record(idea)),
     )
 
@@ -229,15 +231,13 @@ def document_template(proposal_id: str, idea: CapabilityIdea) -> str:
     )
 
 
-def proposal_prompt(
-    proposer: ProposerPolicy, idea: CapabilityIdea, plan: SlotPlan, slot: PlannedSlot, proposal_id: str
-) -> str:
+def proposal_prompt(proposer: Policy, idea: CapabilityIdea, plan: SlotPlan, slot: PlannedSlot, proposal_id: str) -> str:
     """Build the request for the proposal document of ``slot``, quoting the whole portfolio."""
-    return proposer.write.render(
+    return proposer.prompt("proposer.write").render(
         slot=slot.slot,
         document_template=document_template(proposal_id, idea),
         solver_machine_rule=solver_machine_rule(proposer),
-        research_criterion=indent(proposer.research_criterion.render(), "  "),
+        research_criterion=indent(proposer.prompt("proposer.research_criterion").render(), "  "),
         headings=", ".join(f"`## {h}`" for h in REQUIRED_HEADINGS),
         capability_record=pretty_json(capability_idea_record(idea)),
         portfolio=pretty_json(plan.model_dump(mode="json")),
@@ -294,7 +294,7 @@ def null_slot_proposal(idea: CapabilityIdea, slot: PlannedSlot) -> SlotProposal:
 
 
 def plan_request(
-    proposer: ProposerPolicy, idea: CapabilityIdea, n: int, environments: frozenset[Environment]
+    proposer: Policy, idea: CapabilityIdea, n: int, environments: frozenset[Environment]
 ) -> tuple[Message, ...]:
     """Build the first planning request for ``n`` slots on a host that runs ``environments``, as sent.
 
@@ -311,7 +311,7 @@ def plan_request(
 async def plan_slots(
     model: ModelClient,
     policy: LLMPolicy,
-    proposer: ProposerPolicy,
+    proposer: Policy,
     idea: CapabilityIdea,
     n: int,
     environments: frozenset[Environment],
@@ -343,7 +343,7 @@ def _portfolio_slot(slot: PlannedSlot) -> PortfolioSlot:
 async def author_proposal(
     model: ModelClient,
     policy: LLMPolicy,
-    proposer: ProposerPolicy,
+    proposer: Policy,
     idea: CapabilityIdea,
     plan: SlotPlan,
     slot: PlannedSlot,
@@ -379,7 +379,12 @@ async def author_proposal(
             if first_error is None:
                 first_error = str(error)
             messages.append({"role": "assistant", "content": reply.content})
-            messages.append({"role": "user", "content": proposer.repair.render(error=str(error)[:ERROR_TEXT_LIMIT])})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": proposer.prompt("proposer.repair").render(error=str(error)[:ERROR_TEXT_LIMIT]),
+                }
+            )
             continue
         return SlotProposal(slot.slot, proposal, request, tuple(completions), first_error)
 
@@ -394,9 +399,7 @@ class CapabilitySource:
         environments: The task environments the build host runs. The plan proposes slots in these alone.
     """
 
-    def __init__(
-        self, model: ModelClient, policy: LLMPolicy, proposer: ProposerPolicy, environments: frozenset[Environment]
-    ):
+    def __init__(self, model: ModelClient, policy: LLMPolicy, proposer: Policy, environments: frozenset[Environment]):
         self.model = model
         self.policy = policy
         self.proposer = proposer

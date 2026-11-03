@@ -96,7 +96,7 @@ from taskforge.llm.agent import (
 from taskforge.llm.client import Completion, FinishReason, ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
-from taskforge.policy import AdversaryPrompts, Prompt
+from taskforge.policy import Policy, Prompt
 from taskforge.sandbox.host_failures import machine_lost
 from taskforge.spec.controls import (
     Control,
@@ -167,11 +167,11 @@ class AdversarySpec:
             raise ValueError(f"AdversarySpec needs a name matching {ADVERSARY_NAME.pattern} and a non-empty brief")
 
 
-FALSE_ACCEPT = AdversarySpec("false_accept", DEFAULT_POLICY.adversary.false_accept.template)
-FALSE_REJECT = AdversarySpec("false_reject", DEFAULT_POLICY.adversary.false_reject.template)
-SHORTCUT = AdversarySpec("shortcut", DEFAULT_POLICY.adversary.shortcut.template)
-"""The default specs, whose goals are the default policy's ``AdversaryPrompts.false_accept``, ``false_reject`` and
-``shortcut``."""
+FALSE_ACCEPT = AdversarySpec("false_accept", DEFAULT_POLICY.prompt("adversary.false_accept").template)
+FALSE_REJECT = AdversarySpec("false_reject", DEFAULT_POLICY.prompt("adversary.false_reject").template)
+SHORTCUT = AdversarySpec("shortcut", DEFAULT_POLICY.prompt("adversary.shortcut").template)
+"""The default specs, whose goals are the default policy's ``adversary.false_accept``, ``adversary.false_reject`` and
+``adversary.shortcut``."""
 
 
 @dataclass(frozen=True)
@@ -196,7 +196,7 @@ class AdversaryPolicy:
     sampling: LLMPolicy
     mode: AdversaryMode
     min_probes: int
-    prompts: AdversaryPrompts
+    prompts: Policy
 
     def __post_init__(self) -> None:
         if (
@@ -208,6 +208,28 @@ class AdversaryPolicy:
             raise ValueError("Search counts must be positive, except k may disable the adversary with zero")
         if self.submissions is not None and self.min_probes > self.submissions:
             raise ValueError("min_probes cannot exceed the submission budget")
+
+
+def adversary_roster(policy: Policy, sampling: LLMPolicy) -> tuple[AdversaryPolicy, ...]:
+    """One ``AdversaryPolicy`` per name in the policy's ``adversary.roster``, its goal the prompt ``adversary.<name>``,
+    each with the policy's ``adversary.*`` trial count, budgets and mode and the caller's ``sampling``."""
+
+    def setting[T](name: str, kind: type[T]) -> T:
+        return policy.setting(f"adversary.{name}", kind)
+
+    return tuple(
+        AdversaryPolicy(
+            spec=AdversarySpec(name, policy.prompt(f"adversary.{name}").template),
+            k=setting("k", int),
+            submissions=setting("submissions", int),
+            max_turns=setting("max_turns", int),
+            sampling=sampling,
+            mode=AdversaryMode(setting("mode", str)),
+            min_probes=setting("min_probes", int),
+            prompts=policy,
+        )
+        for name in setting("roster", tuple)
+    )
 
 
 @dataclass(frozen=True)
@@ -351,8 +373,8 @@ def whitebox_context(task: TaskSpec, controls: Sequence[Control], header: Prompt
 def adversary_brief(spec: TaskRolloutSpec, controls: Sequence[Control], policy: AdversaryPolicy) -> str:
     """The brief of an adversary on ``spec``: the white-box section of ``controls`` only in ``WHITEBOX`` mode."""
     whitebox = policy.mode is AdversaryMode.WHITEBOX
-    context = whitebox_context(spec.task, controls, policy.prompts.whitebox) if whitebox else ""
-    return policy.prompts.brief.render(
+    context = whitebox_context(spec.task, controls, policy.prompts.prompt("adversary.whitebox")) if whitebox else ""
+    return policy.prompts.prompt("adversary.brief").render(
         goal=policy.spec.brief,
         tools=TOOLS_WITH_SHELL if spec.task_machine is not None else TOOLS_SUBMIT_ONLY,
         submissions="unlimited" if policy.submissions is None else policy.submissions,
@@ -687,7 +709,10 @@ async def _agent_attempt(
         async with deadline, attempt_machine(spec, settings, run_id) as machine:
             verifier = Verifier(spec, settings, submission_plan, machine, policy.submissions, policy.min_probes)
             submit = AgentTool(
-                SUBMIT_TOOL_NAME, policy.prompts.submit.render(), submit_parameters(machine is not None), verifier.submit
+                SUBMIT_TOOL_NAME,
+                policy.prompts.prompt("adversary.submit").render(),
+                submit_parameters(machine is not None),
+                verifier.submit,
             )
             finish = AgentTool(
                 "finish_search",

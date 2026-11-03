@@ -25,8 +25,8 @@ src/taskforge/
                                config.py, prompts.py, parallel.py (web search), example_build.py
   capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
-  policy.py                    Policy: every prompt by stage, `load_policy` and the policy digest
-  defaults/                    policy.json and prompts/**.md, the package's DEFAULT_POLICY
+  policy.py                    Policy: every prompt and setting by dotted key, `load_policy`, overlays
+  defaults/                    policy.json (settings) and prompts/**.md, the package's DEFAULT_POLICY
   ledger/                      timed spans, and their per-workpiece JSONL backend
   llm/                         the ModelClient protocol, sampling policy, structured output, ledger
                                recording, agent loop, the RolloutEngine model
@@ -86,14 +86,19 @@ and step over JSONL ledgers. The cluster scripts are in `lib/taskforge-adapters/
 ## Prompts and policy
 
 The text Taskforge sends its models lives in `src/taskforge/defaults/prompts/<stage>/<name>.md`, one
-template per file, rendered with `str.format`. `policy.Policy` groups the templates by stage
-(`ProposerPolicy`, `AuthorPolicy`, `AdversaryPrompts`), and the stage functions take their group as a
-parameter: `author_messages(proposal, policy.author)`, `CapabilitySource(model, sampling, policy.proposer,
-environments)`, `AdversaryPolicy(..., prompts=policy.adversary)`. `load_policy(defaults_dir, *overlays)`
-reads `policy.json`, which maps each dotted field (`author.system`) to its file; an overlay is a JSON file of
-the same shape naming only the fields it replaces, with paths relative to itself. `Policy.stage_digest` hashes
-the `author` and `adversary` templates, and the coordinator records it in `OPENED`; the proposer's prompts are
-used before a workpiece exists, so they are outside the relaunch check. `defaults.DEFAULT_POLICY` is the package's own
+template per file, rendered with `str.format`. `policy.Policy` is one flat mapping from dotted key to entry:
+`load_policy(defaults_dir)` makes each file `prompts/<stage>/<name>.md` the prompt `<stage>.<name>`, so adding a
+prompt is adding a file, and reads the scalar settings from `policy.json`: the review band (`band.low`,
+`band.high`), the solver trials (`solver.k`, `solver.max_retries`), the adversary roster and its budgets
+(`adversary.roster`, `adversary.k`, `adversary.submissions`, `adversary.max_turns`, `adversary.min_probes`,
+`adversary.mode`) and the workpiece budget (`budget.*`, the fields of `WorkpieceBudget`). A stage reads
+`policy.prompt("author.system")` or `policy.setting("solver.k", int)`; the stage functions take the policy:
+`author_messages(proposal, policy)`, `CapabilitySource(model, sampling, policy, environments)`,
+`adversary_roster(policy, sampling)`. `Policy.overlaid(*overlays)` applies plain dicts from dotted key to value
+in order, a string replacing a prompt's template; an unknown key or a value of another type is refused.
+`Policy.stage_digest(prefix)` is the sha256 of the sorted entries under `prefix`. The drivers
+(the adapters' `cluster_rollout_probe.py`, `propose_tasks.py`) take repeatable `--policy '<json overlay>'` arguments and
+print every declared value next to the resolved one at startup. `defaults.DEFAULT_POLICY` is the package's own
 files. The pre-commit check `taskforge_prompt_literals` (`infra/pre-commit.py`) refuses a new string literal
 of 200 or more characters under `src/`, docstrings aside; the ones still in code are listed, with the reason, in
 `prompt_literals_allowed.txt`.
@@ -132,7 +137,7 @@ not a relative path inside the build root and a `build` name that repeats.
 `document_request_fields(proposal_id, source)` returns the `response_format` JSON-schema request
 field that constrains a completion to the typed object for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
-built from `ProposerPolicy.repair`.
+built from `proposer.repair`.
 
 `experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
 source for catalog capabilities, which takes its model, sampling policy and host environments at
@@ -534,8 +539,12 @@ new `authored/<k>/`, so a relaunch resuming at build finds the program its `AUTH
 even when a killed process re-authored the workpiece after the last save. A program defined in
 Python, as `static_author` returns, has no source, and the build stage asks the author for it again.
 
-`StageCoordinator` holds the build host's `RLEnvBuildServices` and the `ResearchRequirement`, and
-passes them to every build with its model, sampling policy and model digest.
+`StageCoordinator` holds the run's `Policy`, the build host's `RLEnvBuildServices` and the
+`ResearchRequirement`, and passes the services to every build with its model, sampling policy and model digest.
+Its `budget` is the policy's `budget.*` settings and its `band` the policy's `band.low` and `band.high`.
+`OPENED` records the budget's digest and `policy_digest`, the digest of the policy's `stage_digest` for `author`,
+`adversary`, `band` and `solver`: the proposer's entries are used before a workpiece exists, and the budget may
+change when an abandoned workpiece is relaunched.
 
 The validate stage calls `StageFunctions.validate(draft, context)` with the round's
 `ValidationContext`: the workpiece id, the round, the round directory, the proposal the round built,
@@ -544,8 +553,7 @@ followed. It returns a `ValidationResult`, which the coordinator writes to
 `validation.json`. The caller's function closes over what the coordinator does not own, the host's `ValidationSettings` and
 the trial models, as `validate_round(draft, context, settings, solver, controls, adversary)` takes them.
 The review stage reads the result back from `validation.json` (`load_validation`) and calls
-`StageFunctions.review(result)`. The caller binds its settings with
-`partial(default_review, band=band)`. The coordinator enforces the MODIFY budget for every review function;
+`StageFunctions.review(result, band=coordinator.band)`, so `default_review` is passed as it is. The coordinator enforces the MODIFY budget for every review function;
 the default rule table is under Review.
 
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
@@ -577,7 +585,7 @@ digest of what it covers, so a relaunch finds finished work and overwrites nothi
 reusable from the step store, and validation's unit files are described under Validation.
 
 Explicitly relaunching `ABANDONED` records `RESUMED` and resets the budget spent since the last resume to zero. The caller
-may change `WorkpieceBudget` at this point. Artifact counters remain cumulative, and earlier
+may change the policy's `budget.*` settings at this point. Artifact counters remain cumulative, and earlier
 artifacts are retained. Triage exhaustion resumes triage, author/build exhaustion resumes
 authoring with its last failure, modify exhaustion resumes review to reconsider its repair request under the new budget, and
 validation exhaustion resumes validation. A review hold reruns validation to obtain missing evidence. Ordinary holds keep their current budget window.
