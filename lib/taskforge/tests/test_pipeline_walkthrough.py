@@ -567,9 +567,10 @@ async def test_a_relaunch_with_another_proposal_budget_model_research_or_policy_
     assert tree_bytes(tmp_path) == before
 
 
-async def test_a_relaunch_under_other_proposer_prompts_is_not_refused(tmp_path):
+@pytest.mark.parametrize("overlay", [{"proposer.plan": "Plan {n} slots."}, {"solver.k": 8}], ids=["proposer", "solver"])
+async def test_a_relaunch_under_other_proposer_prompts_or_solver_settings_is_not_refused(tmp_path, overlay):
     await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL)
-    policy = DEFAULT_POLICY.overlaid({"proposer.plan": "Plan {n} slots."})
+    policy = DEFAULT_POLICY.overlaid(overlay)
 
     await run_workpiece(coordinator(tmp_path, policy=policy), WORKPIECE, PROPOSAL)
 

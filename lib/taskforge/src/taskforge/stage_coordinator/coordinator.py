@@ -85,10 +85,12 @@ POLICY_DIGEST = "policy_digest"
 RESEARCH = "research"
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build or author failure for the author's revision."""
-STAGE_PREFIXES = ("author", "adversary", "band", "solver")
-"""The policy entries a workpiece's stages depend on, which ``OPENED`` records. The ``budget`` entries are recorded
-apart, as ``budget_digest``, so an abandoned workpiece may resume under a new budget; the ``proposer`` entries are
-used before a workpiece exists."""
+STAGE_PREFIXES = ("author", "adversary", "band")
+"""The policy entries a workpiece's stages are built from, which ``OPENED`` records: the author's prompts, the roster
+a validate stage builds with ``adversary_roster(policy, sampling)``, and the band review is called with. The
+``budget`` entries are recorded apart, as ``budget_digest``, so an abandoned workpiece may resume under a new budget;
+the ``proposer`` entries are used before a workpiece exists; and ``solver.*`` is not a stage input, because a
+validate stage takes its trial count and retries from its ``ValidationSettings``."""
 ATTR_CHARS = 500
 """The length of the failure's head kept in a ``BUILD_FAILED`` or ``AUTHOR_FAILED`` event.
 
