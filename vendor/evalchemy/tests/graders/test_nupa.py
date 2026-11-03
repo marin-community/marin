@@ -14,6 +14,9 @@ scorer = import_module("eval.chat_benchmarks.NUPA-Loose.scorer")
         ("The answer is 9.9, because 9.9 is larger.", scorer.FLOAT, "9.9"),
         ("I think the answer is 9.9", scorer.FLOAT, None),
         ("So the answer is 123", scorer.INTEGER, "123"),
+        ("42\nThis is because 6 times 7 is 42", scorer.INTEGER, "42"),
+        ("The answer is 42\nI computed 6*7", scorer.INTEGER, "42"),
+        ("3.14\nRounded from pi", scorer.FLOAT, "3.14"),
         ("5.04E+04", scorer.SCIENTIFIC, "5.04e04"),
     ],
 )

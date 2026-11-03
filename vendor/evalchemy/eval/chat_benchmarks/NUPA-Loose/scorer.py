@@ -26,6 +26,7 @@ _ANSWER_TAIL_RE = re.compile(
     r"(?i)(?:^|\n)\s*(?:(?:so|therefore|thus)[, ]+)?(?:the\s+)?(?:final\s+)?"
     r"(?:answer|result|output)\s*(?:is\s*)?[:=]?\s*([^\s]+)\s*\Z"
 )
+_NUMERIC_TOKEN_RE = re.compile(r"[\d.,/eE+-]+\Z")
 _NUMBER_CONTINUATION_RE = re.compile(r"(?:[\d+-]|\d[.,/eE])\Z")
 _ANSWER_PATTERNS = {
     INTEGER: re.compile(r"^\d+"),
@@ -79,7 +80,7 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
                 return answer
 
     final_line = tail.splitlines()[-1].strip() if tail else ""
-    if len(stripped.splitlines()) > 1:
+    if len(stripped.splitlines()) > 1 and _NUMERIC_TOKEN_RE.fullmatch(final_line):
         return _full_answer(final_line, answer_format) or _answer_after_terminal_period(tail, answer_format)
 
     direct = _ANSWER_MARKER_RE.sub("", stripped, count=1)

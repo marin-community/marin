@@ -13,14 +13,23 @@ numbers in `$...$` and `**...**`. It does not repair concatenated repeats such a
 [grader contract](../../../../../../vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/README.md).
 
 The original completion archive remains the source of each trial, including
-when the tracker points to an earlier replay. Regrading cannot restore thinking
-markers removed during the original generation. New local generation requests
-retain special tokens by default so the scorer can separate reasoning from the
-final answer.
+when the tracker points to an earlier replay. Each result records
+`thinking_marker_trials`, the number of stored responses containing a Grug
+thinking marker. This count describes the stored text, not the server's
+original decoding settings.
 
-Upload a tracker snapshot, then run the replay on an Iris CPU task in `cw-rno2a`:
+Regrading cannot restore thinking markers removed during generation. Rerun
+Grug/Snowball NUPA cells whose archives lost those markers with the updated
+campaign model configs; do not replace those cells with replay scores. The
+configs explicitly set `generation.extra_gen_kwargs.skip_special_tokens` to
+`"false"`, which is retained in the evaluation run record. Publish the fresh
+results before comparing those cells with other runs that retain boundaries.
+
+For other cells, upload a tracker snapshot and select the model to replay.
+Run the replay on an Iris CPU task in `cw-rno2a`:
 
 ```bash
+REPLAY_MODEL=org/model
 REPLAY_OUTPUT=s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-20261103
 uv run fsutil cp /absolute/path/TRACKER.md "$REPLAY_OUTPUT/input/TRACKER.md"
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
@@ -29,7 +38,8 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --job-name nupa-loose-replay-20261103 \
   -- uv run --project vendor/evalchemy --frozen --extra nupa5k-loose \
   python -m experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.ablations.nupa_loose_replay.regrade \
-  --tracker-uri "$REPLAY_OUTPUT/input/TRACKER.md" --output-prefix "$REPLAY_OUTPUT" --workers 4
+  --tracker-uri "$REPLAY_OUTPUT/input/TRACKER.md" --output-prefix "$REPLAY_OUTPUT" --workers 4 \
+  --model "$REPLAY_MODEL"
 ```
 
 After the job succeeds, run `update_tracker` locally while the campaign refill

@@ -58,6 +58,13 @@ concurrency slot. A transport attempt may use that full window; retrying does no
 K2 is limited to four after its 16-request runs saturated serving and produced mostly timed-out
 generations. Effective concurrency is recorded in each run's Evalchemy provenance.
 
+Grug/Snowball Evalchemy requests explicitly retain special tokens through
+`generation.extra_gen_kwargs.skip_special_tokens: "false"` in their model configs.
+This setting is recorded with the run. It preserves `<|end_think|>` so graders
+can separate reasoning from the final answer. Old NUPA archives without those
+markers require fresh generations; regrading cannot restore the boundary.
+See the [NUPA replay guidance](ablations/nupa_loose_replay/README.md).
+
 Pass `--version LABEL` only when a submitter-controlled cohort label is useful. The launcher forwards
 the label to Marin unchanged. It remains provenance metadata and does not alter the conformance
 boundary above.

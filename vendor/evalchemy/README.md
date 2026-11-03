@@ -26,12 +26,6 @@ are removed.
 
 The evaluator's import packages, `eval` and `evalchemy_config`, belong to this
 environment. Marin calls the `evalchemy` CLI in a child process.
-Local generation requests default to `skip_special_tokens: false` so vLLM
-preserves thinking boundaries. Without the Grug reasoning parser or this request
-setting, vLLM drops `<|end_think|>` and can join the last reasoning number to the
-final answer. Explicit caller settings still take precedence. OpenAI provider
-requests and echo/logprob requests keep their existing settings.
-
 Configuration validation requires the installed lm-eval task catalog; missing
 catalog dependencies fail validation instead of using an incomplete task list.
 

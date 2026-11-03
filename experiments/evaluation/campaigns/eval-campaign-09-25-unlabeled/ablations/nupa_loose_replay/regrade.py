@@ -175,6 +175,9 @@ def regrade(cell: dict) -> dict:
         "corrected_metrics": aggregates,
         "changed_trials": changed_trials,
         "num_trials": BENCHMARK_SIZE,
+        "thinking_marker_trials": sum(
+            any(marker in (row["output"] or "") for marker in ("<|start_think|>", "<|end_think|>")) for row in rows
+        ),
         "scorer_sha256": SCORER_SHA256,
         "trials": trials,
     }
