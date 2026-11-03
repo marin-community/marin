@@ -10,7 +10,9 @@ the GLM author also sends it back within its structured call.
 1. Before running anything it checks the module's top level against the authored-program contract.
    The top level may hold only imports, classes (the output models of
    the steps), ``@rl_env_build_step`` steps, the ``@rl_env_build_sink`` sink and, last,
-   ``PROGRAM = rl_env_build_program(..., sink=...)``.
+   ``PROGRAM = rl_env_build_program(..., sink=...)``. The imports and classes come before the first
+   step: a step's source digest covers the classes it reads that are bound when it is decorated, so
+   a class declared below a step could change without changing that step's memo key.
    A step reads whatever else it needs from its inputs, its own body or the build SDK
    (``taskforge.stage40_build_with_program.sdk`` and its sibling modules), which ``SDK_VERSION`` covers.
    ``diagnostics`` then refuses a name or module attribute the program reads without binding it,
@@ -119,9 +121,9 @@ UNSAFE_BUILTINS = frozenset(
 MODULE_RULE = (
     "An authored program defines only imports, output models (classes), steps (`@rl_env_build_step async def`), "
     "the sink (`@rl_env_build_sink async def ... -> TaskSpec`) and, last, "
-    "`PROGRAM = rl_env_build_program(<steps>, sink=<sink>)` at module level. A step's memo key covers its own "
-    "source and its output model alone, so whatever else a step reads belongs in its body or its inputs, or comes "
-    "from an SDK function."
+    "`PROGRAM = rl_env_build_program(<steps>, sink=<sink>)` at module level, with the imports and output models "
+    "above the first step. A step's memo key covers its own source and the output models it reads, so whatever "
+    "else a step reads belongs in its body or its inputs, or comes from an SDK function."
 )
 
 
@@ -258,10 +260,20 @@ def _check_module_level(tree: ast.Module) -> None:
             f"line {call.lineno}: pass the final step to `{PROGRAM_CONSTRUCTOR}` as `{SINK_KEYWORD}=`, "
             f"decorated with `@{SINK_DECORATOR}`. {MODULE_RULE}"
         )
+    first_step: ast.AsyncFunctionDef | None = None
     for node in statements[:-1]:
-        if isinstance(node, ast.Import | ast.ImportFrom | ast.ClassDef) or _is_step(node):
+        if _is_step(node):
+            assert isinstance(node, ast.AsyncFunctionDef)
+            first_step = first_step or node
             continue
-        raise ValueError(f"line {node.lineno}: {_statement(node)} is not allowed at module level. {MODULE_RULE}")
+        if not isinstance(node, ast.Import | ast.ImportFrom | ast.ClassDef):
+            raise ValueError(f"line {node.lineno}: {_statement(node)} is not allowed at module level. {MODULE_RULE}")
+        if first_step is not None:
+            # A step's digest is computed when it is decorated, so it cannot cover a class bound later.
+            raise ValueError(
+                f"line {node.lineno}: {_statement(node)} comes after the step `{first_step.name}` "
+                f"(line {first_step.lineno}). {MODULE_RULE}"
+            )
 
 
 MODULE_GLOBALS = frozenset({"__file__"})
