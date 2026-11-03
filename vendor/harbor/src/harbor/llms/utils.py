@@ -2,13 +2,10 @@ import copy
 import re
 from typing import Any, Dict, List, Tuple
 
-import harbor.llms._litellm_setup  # noqa: F401 - configures litellm
-from litellm import Message
-
 
 def add_vllm_reasoning(
-    messages: List[Dict[str, Any] | Message],
-) -> List[Dict[str, Any] | Message]:
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     """Copy assistant ``reasoning_content`` into ``reasoning`` for vLLM.
 
     vLLM's chat endpoint reads replayed reasoning only from the ``reasoning``
@@ -16,18 +13,20 @@ def add_vllm_reasoning(
     this copy interleaved thinking never reaches the chat template.
     """
     return [
-        {**msg, "reasoning": msg["reasoning_content"]}
-        if isinstance(msg, dict)
-        and msg.get("role") == "assistant"
-        and msg.get("reasoning_content") is not None
-        else msg
+        (
+            {**msg, "reasoning": msg["reasoning_content"]}
+            if isinstance(msg, dict)
+            and msg.get("role") == "assistant"
+            and msg.get("reasoning_content") is not None
+            else msg
+        )
         for msg in messages
     ]
 
 
 def add_anthropic_caching(
-    messages: List[Dict[str, Any] | Message], model_name: str
-) -> List[Dict[str, Any] | Message]:
+    messages: List[Dict[str, Any]], model_name: str
+) -> List[Dict[str, Any]]:
     """
     Add ephemeral caching to the most recent messages for Anthropic models.
 
@@ -66,32 +65,10 @@ def add_anthropic_caching(
                     for content_item in msg["content"]:
                         if isinstance(content_item, dict) and "type" in content_item:
                             content_item["cache_control"] = {"type": "ephemeral"}
-            elif hasattr(msg, "content"):
-                if isinstance(msg.content, str):
-                    msg.content = [  # type: ignore
-                        {
-                            "type": "text",
-                            "text": msg.content,
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ]
-                elif isinstance(msg.content, list):
-                    for content_item in msg.content:
-                        if isinstance(content_item, dict) and "type" in content_item:
-                            content_item["cache_control"] = {"type": "ephemeral"}
-
     return cached_messages
 
 
 _HOSTED_VLLM_PREFIX = "hosted_vllm/"
-# Per-segment length bound is intentionally generous (128, not 64). For
-# self-hosted vLLM the `<org>/<model>` name is an ARBITRARY local identifier
-# litellm dispatches verbatim to our OpenAI-compatible endpoint — there is no
-# downstream HF/Docker-tag or hosted-API 64-char limit that bites here. Long RL
-# checkpoint names are run-descriptor concatenations (e.g.
-# `rl__24GPU_qwen3_coder_30b_a3b__exp_rpt_pymethods2test-large__Qwen3-Coder-30B-A3B-40-30B`,
-# 87 chars) and were spuriously rejected at 64. The pattern's real job is
-# character-class + structure validation; keep that, just raise the bound.
 _HOSTED_VLLM_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _HOSTED_VLLM_REQUIRED_INT_FIELDS = ("max_input_tokens", "max_output_tokens")
 _HOSTED_VLLM_REQUIRED_FLOAT_FIELDS = (
@@ -123,15 +100,6 @@ def validate_hosted_vllm_model_config(
             f"Got '{full_model_name}'."
         )
 
-    # Strip the provider prefix and validate the remainder. Both the bare
-    # `hosted_vllm/<model>` and the org-qualified `hosted_vllm/<org>/<model>`
-    # forms are valid: vLLM serves an HF model under its full repo id
-    # (`<org>/<model>`) by default, and litellm routes `hosted_vllm/<org>/<model>`
-    # correctly (it strips only the `hosted_vllm/` provider prefix before
-    # dispatching `<org>/<model>` to the OpenAI-compatible vLLM endpoint). We
-    # therefore allow 1 or 2 remaining path segments and validate each segment
-    # individually against the canonical-name pattern, preserving rejection of
-    # genuinely-malformed names (empty/odd segments, bad characters, deep paths).
     remainder = full_model_name[len(_HOSTED_VLLM_PREFIX) :]
     segments = remainder.split("/")
     if len(segments) not in (1, 2) or not all(
@@ -144,8 +112,6 @@ def validate_hosted_vllm_model_config(
             f"spaces. Got '{full_model_name}'."
         )
 
-    # canonical mirrors the served name litellm dispatches to vLLM (the full
-    # org-qualified id when present), used for register_model / param lookups.
     canonical = remainder
 
     if not model_info:

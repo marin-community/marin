@@ -4,7 +4,6 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-
 from harbor.agents.installed.cursor_cli import CursorCli
 from harbor.models.task.config import MCPServerConfig
 
@@ -345,7 +344,16 @@ class TestCursorCliCost:
         ]
 
     def test_estimates_cost_from_usage_when_cli_omits_cost(self, temp_dir):
-        agent = CursorCli(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
+        agent = CursorCli(
+            logs_dir=temp_dir,
+            model_name="anthropic/claude-sonnet-4-5",
+            model_info={
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 0.3e-6,
+                "cache_creation_input_token_cost": 3.75e-6,
+            },
+        )
         events = self._result_events(
             usage={
                 "inputTokens": 2,
@@ -361,9 +369,9 @@ class TestCursorCliCost:
         fm = trajectory.final_metrics
         assert fm.total_cost_usd == pytest.approx(0.0468816, rel=1e-4)
         assert fm.extra is not None
-        assert fm.extra.get("cost_source") == "litellm"
+        assert fm.extra.get("cost_source") == "model_info"
 
-    def test_prefers_cli_reported_cost_over_litellm_estimate(self, temp_dir):
+    def test_prefers_cli_reported_cost_over_model_info_estimate(self, temp_dir):
         agent = CursorCli(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
         events = self._result_events(
             usage={
@@ -403,7 +411,9 @@ class TestCursorCliCost:
         assert fm.extra is not None
         assert fm.extra.get("cost_source") == "cursor_pricing"
 
-    def test_builtin_pricing_preferred_over_litellm_for_cursor_models(self, temp_dir):
+    def test_builtin_pricing_preferred_over_model_info_for_cursor_models(
+        self, temp_dir
+    ):
         agent = CursorCli(logs_dir=temp_dir, model_name="cursor/composer-2-fast")
         events = self._result_events(
             usage={
@@ -441,7 +451,16 @@ class TestCursorCliCost:
         assert trajectory.final_metrics.total_cost_usd is None
 
     def test_populate_context_post_run_sets_cost_usd(self, temp_dir):
-        agent = CursorCli(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
+        agent = CursorCli(
+            logs_dir=temp_dir,
+            model_name="anthropic/claude-sonnet-4-5",
+            model_info={
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 0.3e-6,
+                "cache_creation_input_token_cost": 3.75e-6,
+            },
+        )
         output_path = temp_dir / "cursor-cli.txt"
         output_path.write_text(
             "\n".join(

@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import yaml
@@ -32,6 +33,7 @@ class EvalchemyJudgeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     base_url: str
+    protocol: Literal["default", "marin-10197"] = "default"
     model: str
     api_key: tuple[str, ...] = Field(min_length=1)
 
@@ -84,6 +86,8 @@ class EvalchemyConfig(BaseModel):
     apply_chat_template: bool | None = None
     chat_tokenizer_backend: ChatTokenizerBackend = ChatTokenizerBackend.SERVER
     debug: bool = False
+    # The task counts rendered prompts and owns per-example output/context selection.
+    prompt_budget_preflight: bool = False
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: str | None = None

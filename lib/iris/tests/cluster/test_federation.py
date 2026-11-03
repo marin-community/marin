@@ -9,6 +9,7 @@ live backends, the ListPeers view, and the submit router's decision matrix
 """
 
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pydantic
 import pytest
@@ -194,6 +195,26 @@ def _availability_backend(backend_id: str, version: int) -> controller_pb2.Contr
     return backend
 
 
+def test_list_peers_hides_stale_capacity_when_peer_is_unreachable():
+    connection = _StubConnection((_availability_backend("gpu", AVAILABILITY_METRIC_VERSION),))
+    peer = _peer("cw", connection)
+    manager = FederationManager([peer], threads=get_thread_container())
+    peer.probe()
+    assert manager.peer_summaries()[0].backends[0].availability.amounts["h100"] == 8
+
+    connection.fail = True
+    peer.probe()
+    (summary,) = manager.peer_summaries()
+    assert not summary.reachable
+    assert not summary.backends[0].HasField("availability")
+    assert summary.backends[0].advertised_attributes[WellKnownAttribute.DEVICE_VARIANT].values == ["h100"]
+    assert peer.heartbeat().backends[0].availability.amounts["h100"] == 8
+
+    connection.fail = False
+    peer.probe()
+    assert manager.peer_summaries()[0].backends[0].availability.amounts["h100"] == 8
+
+
 def test_availability_at_a_known_version_is_read_in_full():
     peer = _peer("cw", _StubConnection((_availability_backend("gpu", AVAILABILITY_METRIC_VERSION),)))
     manager = FederationManager([peer], threads=get_thread_container())
@@ -274,6 +295,53 @@ def test_heartbeat_rpc_has_a_finite_deadline(monkeypatch):
     connection.list_backends()
 
     assert stub.list_backends_timeout_ms is not None
+
+
+@pytest.mark.parametrize("method, stall", [("sync", "body"), ("cancel", "headers")])
+def test_peer_rpc_stall_times_out_and_next_sync_succeeds(monkeypatch, method, stall):
+    monkeypatch.setattr(peer_module, "_PEER_RPC_TIMEOUT_MS", 200)
+    release = threading.Event()
+    response = controller_pb2.Controller.FederationSyncResponse(next_cursor="recovered").SerializeToString()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, _format, *args):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if stall == "headers" and not release.is_set():
+                release.wait(timeout=3)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/proto")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            if not release.is_set():
+                release.wait(timeout=3)
+                return
+            self.wfile.write(response)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = peer_module._PeerRpcConnection(f"http://127.0.0.1:{server.server_port}", [])
+    request = controller_pb2.Controller.FederationSyncRequest(requester_id="parent")
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            if method == "sync":
+                connection.federation_sync(request)
+            else:
+                connection.terminate_job(JobName.from_string("/u/job"))
+        assert exc_info.value.code == Code.DEADLINE_EXCEEDED
+
+        release.set()
+        assert connection.federation_sync(request).next_cursor == "recovered"
+    finally:
+        release.set()
+        connection.shutdown()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 class _BlockingStub(_StubConnection):

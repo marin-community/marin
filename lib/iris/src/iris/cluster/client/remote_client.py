@@ -168,6 +168,7 @@ class RemoteClusterClient:
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+        egress_allow: Sequence[job_pb2.EgressRule] = (),
         submit_argv: list[str] | None = None,
     ) -> JobName:
         if replicas < 1:
@@ -199,6 +200,7 @@ class RemoteClusterClient:
             priority_band=priority_band,
             container_profile=container_profile,
             egress_policy=egress_policy,
+            egress_allow=egress_allow,
             submit_argv=submit_argv or [],
             client_revision_date=client_revision_date(),
         )
@@ -224,7 +226,11 @@ class RemoteClusterClient:
         def _call():
             return self._client.launch_job(request, timeout_ms=launch_timeout_ms)
 
-        response = call_with_retry(f"launch_job({job_id})", _call)
+        try:
+            response = call_with_retry(f"launch_job({job_id})", _call)
+        except ConnectError as exc:
+            exc.add_note(f"launch_job({job_id}): {exc.code.name}: {exc.message}")
+            raise
         return JobName.from_wire(response.job_id)
 
     def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus:
@@ -452,12 +458,17 @@ class RemoteClusterClient:
         endpoint's path under the controller's generic proxy; otherwise looks
         the name up in the controller's endpoint registry and returns the
         backing service's direct address.
+
+        Raises:
+            ConnectError: With NOT_FOUND when no instance is registered. Other
+                RPC failures retain their original code. Controller proxy URLs
+                are returned without checking readiness.
         """
         if self._use_controller_proxy:
             return f"{self._address.rstrip('/')}{proxy_path(endpoint_name)}"
         endpoints = self.list_endpoint_instances(endpoint_name)
         if not endpoints:
-            raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
+            raise ConnectError(Code.NOT_FOUND, f"No {endpoint_name!r} endpoint registered on controller")
         return endpoints[0].address
 
     def list_workers(

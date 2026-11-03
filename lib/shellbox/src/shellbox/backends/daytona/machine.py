@@ -6,6 +6,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import re
 import shlex
@@ -13,6 +14,7 @@ import stat
 import tarfile
 import tempfile
 import uuid
+from asyncio import sleep
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
@@ -26,12 +28,14 @@ from daytona import (
     CreateSnapshotParams,
     DaytonaConflictError,
     DaytonaNotFoundError,
+    DaytonaRateLimitError,
     Image,
     Resources,
 )
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import (
@@ -47,8 +51,10 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
@@ -73,8 +79,19 @@ def _control_command(script: str) -> str:
     )
 
 
+def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage | DockerfileSource:
+    if isinstance(source, RegistryImage):
+        return source
+    source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
+    if source.dockerfile.parent != source.context:
+        raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
+    if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
+        raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
+    return source
+
+
 async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
-    """Get an active snapshot within the caller's startup deadline."""
+    """Build or await a snapshot identified by its source and resource requirements."""
     identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
     name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
     try:
@@ -93,6 +110,41 @@ async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSour
         await asyncio.sleep(backoff.next_interval())
         snapshot = await client.snapshot.get(name)
     return name
+
+
+async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float) -> AsyncSandbox:
+    """Retry throttling using a caller-owned name to recover an accepted creation."""
+    assert params.name is not None
+    backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
+    while True:
+        try:
+            try:
+                return await client.create(params, timeout=timeout)
+            except DaytonaConflictError:
+                sandbox = await client.get(params.name)
+                await sandbox.wait_for_sandbox_start(timeout=timeout)
+                return sandbox
+        except DaytonaRateLimitError as error:
+            retry_after = max(
+                (
+                    int(value)
+                    for name, value in (error.headers or {}).items()
+                    if name.lower().startswith("retry-after") and str(value).isdecimal()
+                ),
+                default=0,
+            )
+            delay = max(retry_after, backoff.next_interval())
+            logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
+            await sleep(delay)
+
+
+async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
+    async with asyncio.timeout(INTERRUPT_TIMEOUT):
+        try:
+            sandbox = await client.get(name)
+        except DaytonaNotFoundError:
+            return
+        await client.delete(sandbox)
 
 
 class DaytonaNetworkMode(StrEnum):
@@ -127,6 +179,71 @@ class DaytonaMachine:
         self.spec = spec
         self.resources = resources
         self._closed = False
+        self._sessions: set[DaytonaProcessSession] = set()
+        self._acquisitions: set[asyncio.Task[None]] = set()
+        self._closing: asyncio.Task[None] | None = None
+
+    async def _user_argv(self, argv: tuple[str, ...], user: str | None) -> tuple[str, ...]:
+        if user in (None, "root", "0"):
+            return argv
+        assert user is not None
+        if user.isdecimal():
+            account = await self.sandbox.process.exec(_control_command(f"getent passwd {shlex.quote(user)}"))
+            if account.exit_code or not account.result.strip():
+                raise ValueError(f"Execution user {user} has no guest account")
+            user = account.result.split(":", 1)[0]
+        capabilities = await self.sandbox.process.exec(_control_command("su --help"))
+        if capabilities.exit_code or "--session-command" not in capabilities.result:
+            raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
+        return ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
+
+    async def open_process(self, command: Command) -> DaytonaProcessSession:
+        """Attach persistent binary pipes through one provider session and log stream."""
+        if self._closed:
+            raise RuntimeError("Machine is closed")
+        if not command.argv or command.stdin or command.timeout is not None:
+            raise ValueError("Process sessions require argv and own stdin and their lifetime")
+        if command.output_limit_bytes < 0:
+            raise ValueError("Output limit must be nonnegative")
+
+        async def cleanup_failed() -> None:
+            if not self._closed:
+                await self.close()
+
+        session = DaytonaProcessSession(
+            self.sandbox.process,
+            f"shellbox-{uuid.uuid4().hex}",
+            stderr_limit=command.output_limit_bytes,
+            release=self._sessions.discard,
+            failed_cleanup=cleanup_failed,
+        )
+        self._sessions.add(session)
+
+        async def start() -> None:
+            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+                argv = await self._user_argv(command.argv, command.user)
+                await session.start(argv, command.cwd or self.spec.workdir or None, {**self.spec.env, **command.env})
+
+        acquisition = asyncio.create_task(start())
+        self._acquisitions.add(acquisition)
+        try:
+            await asyncio.shield(acquisition)
+            if self._closed:
+                raise RuntimeError("Machine was closed while opening a process session")
+            return session
+        except BaseException as error:
+            try:
+                await finish_owned(acquisition)
+            except BaseException as acquisition_error:
+                if acquisition_error is not error:
+                    error.add_note(f"Daytona process acquisition failed ({type(acquisition_error).__name__})")
+            try:
+                await finish_owned(own_cleanup(session.close()))
+            except Exception as cleanup_error:
+                error.add_note(f"Daytona process cleanup failed ({type(cleanup_error).__name__})")
+            raise
+        finally:
+            self._acquisitions.discard(acquisition)
 
     async def _read_output(self, path: str, limit: int) -> tuple[bytes, bool]:
         count = await self.sandbox.process.exec(_control_command(f"wc -c < {shlex.quote(path)}"))
@@ -173,18 +290,7 @@ class DaytonaMachine:
                     "shellbox-agent",
                     *command.argv,
                 )
-                if command.user not in (None, "root", "0"):
-                    user = command.user
-                    # su accepts names. Resolve a numeric UID in the guest's account database.
-                    if user.isdecimal():
-                        account = await self.sandbox.process.exec(_control_command(f"getent passwd {shlex.quote(user)}"))
-                        if account.exit_code or not account.result.strip():
-                            raise ValueError(f"Execution user {user} has no guest account")
-                        user = account.result.split(":", 1)[0]
-                    capabilities = await self.sandbox.process.exec(_control_command("su --help"))
-                    if capabilities.exit_code or "--session-command" not in capabilities.result:
-                        raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
-                    argv = ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
+                argv = await self._user_argv(argv, command.user)
                 argv = (
                     "/bin/sh",
                     "-c",
@@ -324,10 +430,29 @@ class DaytonaMachine:
         target.write_bytes(data)
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        await self.resources.aclose()
+        if self._closing is None:
+            self._closed = True
+            self._closing = own_cleanup(self._close())
+        try:
+            await asyncio.shield(self._closing)
+        except asyncio.CancelledError as error:
+            try:
+                await finish_owned(self._closing)
+            except Exception as cleanup_error:
+                error.add_note(f"Daytona cleanup failed ({type(cleanup_error).__name__})")
+            raise
+
+    async def _close(self) -> None:
+        try:
+            await asyncio.gather(*tuple(self._acquisitions), return_exceptions=True)
+            results = await asyncio.gather(
+                *(session.close() for session in tuple(self._sessions)), return_exceptions=True
+            )
+        finally:
+            await self.resources.aclose()
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
 
 class DaytonaMachineFactory:
@@ -376,20 +501,26 @@ class DaytonaMachineFactory:
             image_reference=reference,
         )
 
-    async def create(self, spec: MachineSpec) -> DaytonaMachine:
-        source = self._check_spec(spec)
-        if isinstance(source, DockerfileSource):
-            source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
-            if source.dockerfile.parent != source.context:
-                raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
-            if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
-                raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
+    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
+        source = _validated_source(self._check_spec(spec))
         resources = Resources(
             cpu=spec.cpus,
             memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
             disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
             gpu=spec.gpus or None,
         )
+        return await _snapshot(client, source, resources)
+
+    async def prepare(self, spec: MachineSpec) -> str:
+        """Prepare the snapshot used by create without starting a sandbox.
+
+        Pin registry sources by digest to reuse immutable image content.
+        """
+        timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
+        async with self.client_factory() as client, asyncio.timeout(timeout):
+            return await self._prepare(client, spec)
+
+    async def create(self, spec: MachineSpec) -> DaytonaMachine:
         network = (
             {"network_block_all": spec.network is NetworkPolicy.DENY}
             if self.network_policy is None
@@ -399,9 +530,13 @@ class DaytonaMachineFactory:
             client = await lifetime.enter_async_context(self.client_factory())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
-                snapshot = await _snapshot(client, source, resources)
-                sandbox = await client.create(
+                snapshot = await self._prepare(client, spec)
+                name = f"shellbox-{uuid.uuid4().hex}"
+                lifetime.push_async_callback(_delete_named_sandbox, client, name)
+                sandbox = await _create_sandbox(
+                    client,
                     CreateSandboxFromSnapshotParams(
+                        name=name,
                         snapshot=snapshot,
                         os_user="root",
                         env_vars=spec.env,
@@ -410,7 +545,6 @@ class DaytonaMachineFactory:
                     ),
                     timeout=timeout,
                 )
-            lifetime.push_async_callback(client.delete, sandbox)
             prepared = await sandbox.process.exec(_control_command("command -v setsid"), timeout=INTERRUPT_TIMEOUT)
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")

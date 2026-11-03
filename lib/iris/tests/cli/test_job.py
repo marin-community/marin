@@ -28,6 +28,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2 as _job_pb2
+from rigging.secrets import SecretBehavior
 
 
 def _make_config_with_zones(zones: list[str]) -> IrisClusterConfig:
@@ -52,6 +53,18 @@ def test_job_run_rejects_deprecated_gvisor_choice():
     assert result.exit_code == 2
     assert "Invalid value for '--container-profile'" in result.output
     assert "container_profile_sandbox" in result.output
+
+
+def test_job_run_resolves_secret_reference_and_isolation(recorded_job_submissions, monkeypatch):
+    value = "private-application-value"
+    monkeypatch.setenv("APPLICATION_CREDENTIAL", value)
+    result = _run_cli(["--secret-behavior", "isolate", "--secret", "arbitrary", "env:APPLICATION_CREDENTIAL"])
+    assert result.exit_code == 0, result.output
+    environment = recorded_job_submissions[0]["environment"]
+    assert environment.secrets == {"arbitrary": value}
+    assert environment.secret_behavior == SecretBehavior.ISOLATE
+    assert "arbitrary" not in environment.env_vars
+    assert value not in result.output
 
 
 def test_validate_region_zone_valid_region(recorded_job_submissions):

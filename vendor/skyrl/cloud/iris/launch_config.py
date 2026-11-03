@@ -55,14 +55,13 @@ class RunConfig:
     seed: int = 42
     mode: str = RunMode.TRAIN.value
     submission: str = SubmissionMode.WAIT.value
-    export_hf: bool = True
+    export_hf: bool = False
 
 
 @dataclass
 class RuntimeConfig:
-    """MarinSkyRL runtime provenance."""
+    """SkyRL execution settings."""
 
-    source_digest: str = MISSING
     profile: str = MISSING
     entrypoint: str = ""
     training_type: str | None = None
@@ -117,6 +116,7 @@ class IrisConfig:
     timeout: int = 0
     target_cluster: str | None = None
     parent_cluster_config: str | None = None
+    container_profile: str | None = None
 
 
 @dataclass

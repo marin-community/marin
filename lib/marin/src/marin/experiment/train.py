@@ -88,8 +88,8 @@ def _marin_mesh(tensor_parallel_size: int) -> MeshConfig:
 def _train_job(pod_config: TrainLmOnPodConfig) -> None:
     """Dispatch the assembled config as its own Fray training job."""
     # GPU: resolve the env now so XLA_FLAGS is in the pod environment before the
-    # worker imports JAX. TPU/CPU resolve in-worker, where the WANDB_API_KEY the
-    # TPU path requires is present (the GPU path skips that check).
+    # worker imports JAX. TPU/CPU resolve in-worker, where mounted secrets are
+    # available to the training client's credential lookup.
     env_vars = (
         resolve_training_env(pod_config.env_vars, pod_config.resources)
         if isinstance(pod_config.resources.device, GpuConfig)

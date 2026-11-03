@@ -1,26 +1,14 @@
 """Messages and Responses endpoints backed by the literal completion recorder."""
 
-from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any
 
 import httpx
-import litellm
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
-    AnthropicAdapter,
-)
-from litellm.responses.litellm_completion_transformation.streaming_iterator import (
-    LiteLLMCompletionStreamingIterator,
-)
-from litellm.responses.litellm_completion_transformation.transformation import (
-    LiteLLMCompletionResponsesConfig,
-)
-from litellm.types.utils import ModelResponse, ModelResponseStream
-from litellm.types.llms.openai import ResponsesAPIStreamingResponse
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncStream
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from harbor.literal.native_api import (
     CORRELATION_ID_HEADER,
@@ -30,12 +18,20 @@ from harbor.literal.native_api import (
     anthropic_chat_request,
     responses_chat_request,
 )
+from harbor.literal.native_output import native_events, native_output
 from harbor.llms.vllm_tokenization import (
     ContextBudgetExceeded,
     completion_budget_from_count,
 )
 
 LITERAL_API_BASE = "http://literal/v1"
+
+
+@dataclass(frozen=True)
+class NativeCompletion:
+    response: ChatCompletion | AsyncStream[ChatCompletionChunk]
+    resources: AsyncExitStack
+    prompt_tokens: int
 
 
 async def native_prompt_count(
@@ -84,7 +80,7 @@ async def native_completion(
     request: Request,
     limits: NativeAPILimits,
     task_agent: str,
-) -> tuple[ModelResponse | CustomStreamWrapper, AsyncExitStack]:
+) -> NativeCompletion:
     if not chat.get("tools") and chat.get("tool_choice") in (None, "auto", "none"):
         chat.pop("tool_choice", None)
     count, context = await native_prompt_count(
@@ -101,7 +97,7 @@ async def native_completion(
         )
     except ContextBudgetExceeded as exc:
         raise HTTPException(400, str(exc)) from exc
-    chat["model"] = f"openai/{limits.served_model}"
+    chat["model"] = limits.served_model
     resources = AsyncExitStack()
     try:
         client = await resources.enter_async_context(
@@ -118,56 +114,13 @@ async def native_completion(
                 ),
             )
         )
-        result = await litellm.acompletion(
-            **chat,
-            client=client,
-            api_base=LITERAL_API_BASE,
-            api_key="EMPTY",
-            allowed_openai_params=["reasoning_effort"],
-        )
+        if chat.get("stream"):
+            chat["stream_options"] = {"include_usage": True}
+        result = await client.chat.completions.create(**chat)
     except BaseException:
         await resources.aclose()
         raise
-    return result, resources
-
-
-async def messages_events(
-    events: AsyncIterator[bytes], resources: AsyncExitStack
-) -> AsyncIterator[bytes]:
-    async with resources:
-        async for event in events:
-            yield event
-
-
-async def anthropic_content_chunks(
-    chunks: AsyncIterator[ModelResponseStream],
-) -> AsyncIterator[ModelResponseStream]:
-    """Keep recorded metadata-only deltas from changing Anthropic content blocks."""
-    async for chunk in chunks:
-        if chunk.model_dump().get("usage") is not None or any(
-            choice.finish_reason is not None
-            or any(
-                choice.delta.model_dump(
-                    include={
-                        "content",
-                        "tool_calls",
-                        "function_call",
-                        "reasoning_content",
-                        "thinking_blocks",
-                    }
-                ).values()
-            )
-            for choice in chunk.choices
-        ):
-            yield chunk
-
-
-async def responses_events(
-    events: AsyncIterator[ResponsesAPIStreamingResponse], resources: AsyncExitStack
-) -> AsyncIterator[bytes]:
-    async with resources:
-        async for event in events:
-            yield f"event: {event.type}\ndata: {event.model_dump_json(exclude_none=True)}\n\n".encode()
+    return NativeCompletion(result, resources, count)
 
 
 def register_native_routes(
@@ -178,35 +131,33 @@ def register_native_routes(
     async def messages(request: Request):
         body = await request.json()
         try:
-            chat, names = anthropic_chat_request(body)
+            chat = anthropic_chat_request(body)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        result, resources = await native_completion(
+        completion = await native_completion(
             recorder, chat, request, limits, "claude-code"
         )
-        adapter = AnthropicAdapter()
-        if body.get("stream"):
-            events = adapter.translate_completion_output_params_streaming(
-                anthropic_content_chunks(result),
-                model=body["model"],
-                tool_name_mapping=names,
-                is_async=True,
-            )
+        result = completion.response
+        if isinstance(result, AsyncStream):
             return StreamingResponse(
-                messages_events(cast(AsyncIterator[bytes], events), resources),
+                native_events(
+                    result,
+                    completion.resources,
+                    "anthropic",
+                    body["model"],
+                    completion.prompt_tokens,
+                ),
                 media_type="text/event-stream",
             )
-        async with resources:
+        async with completion.resources:
             return JSONResponse(
-                adapter.translate_completion_output_params(
-                    result, tool_name_mapping=names
-                )
+                native_output(result.model_dump(), "anthropic", body["model"])
             )
 
     async def count_tokens(request: Request):
         body = await request.json()
         try:
-            chat, _ = anthropic_chat_request(
+            chat = anthropic_chat_request(
                 {**body, "max_tokens": limits.max_output_tokens}
             )
         except ValueError as exc:
@@ -222,27 +173,23 @@ def register_native_routes(
             chat = responses_chat_request(body)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        result, resources = await native_completion(
-            recorder, chat, request, limits, "codex"
-        )
-        if body.get("stream"):
-            events = LiteLLMCompletionStreamingIterator(
-                model=body["model"],
-                litellm_custom_stream_wrapper=result,
-                request_input=body["input"],
-                responses_api_request=body,
-                custom_llm_provider="openai",
-            )
+        completion = await native_completion(recorder, chat, request, limits, "codex")
+        result = completion.response
+        if isinstance(result, AsyncStream):
             return StreamingResponse(
-                responses_events(events, resources), media_type="text/event-stream"
+                native_events(
+                    result,
+                    completion.resources,
+                    "responses",
+                    body["model"],
+                    completion.prompt_tokens,
+                ),
+                media_type="text/event-stream",
             )
-        async with resources:
-            output = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input=body["input"],
-                responses_api_request=body,
-                chat_completion_response=result,
+        async with completion.resources:
+            return JSONResponse(
+                native_output(result.model_dump(), "responses", body["model"])
             )
-            return JSONResponse(output.model_dump(mode="json", exclude_none=True))
 
     api.add_route("/v1/messages", messages, methods=["POST"])
     api.add_route("/v1/messages/count_tokens", count_tokens, methods=["POST"])

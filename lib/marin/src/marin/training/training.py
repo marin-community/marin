@@ -483,9 +483,6 @@ def resolve_training_env(
         base_env or {},
         default_launch_config.env_for_accel(resources.device.variant),
     )
-    if isinstance(resources.device, TpuConfig):
-        _check_for_wandb_key(env)
-
     env = add_run_env_variables(env)
 
     if isinstance(resources.device, GpuConfig):
@@ -628,17 +625,3 @@ def _add_default_env_variables(env: dict, default_env: dict | None) -> dict:
 
     # Task environment values are serialized as strings.
     return {str(k): str(v) for k, v in merged.items()}
-
-
-def _check_for_wandb_key(env):
-    if env.get("WANDB_API_KEY") is None:
-        key = os.environ.get("WANDB_API_KEY")
-        if key is not None:
-            env["WANDB_API_KEY"] = key
-        else:
-            wandb_disabled = env.get("WANDB_MODE", os.environ.get("WANDB_MODE"))
-            if wandb_disabled is None or wandb_disabled.lower() not in {"disabled", "offline", "dryrun"}:
-                raise ValueError(
-                    "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
-                    "WANDB_API_KEY=..., or add it to the env dict."
-                )

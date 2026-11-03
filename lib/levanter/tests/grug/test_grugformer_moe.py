@@ -4,25 +4,24 @@
 import dataclasses
 import functools
 import importlib.util
-import os
-import subprocess
-import sys
-import textwrap
+import math
 from collections.abc import Callable
-
-import numpy as np
-import pytest
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
+from haliax.nn.ragged_dot import ragged_dot
 from jax._src import config as jax_config
 from jax.extend import core as jax_core
 from jax.extend.backend import get_backend
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
-from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
+from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug._moe.common import (
+    CapacityDrops,
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
     _deinterleave_gate_up,
     _interleave_gate_up,
     _interleave_halves,
@@ -30,26 +29,26 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _scaled_capacity,
     _swiglu_gate_up_backward,
-    CapacityDrops,
 )
+from levanter.grug._moe.ep_common import _combine_gather_sum
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
-    _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _interleaved_receiver_ranks,
+    _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _receiver_ranks,
 )
-from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug._moe.ep_ragged_all_to_all import (
-    _accepted_assignments,
-    _gather_dispatch_rows,
     _RaggedDotExpertMlp,
     _RoutingWeightGradient,
-    _transport_buffer,
     _TransportBufferSite,
+    _accepted_assignments,
+    _gather_dispatch_rows,
+    _transport_buffer,
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
+from levanter.grug._moe.ep_ring_filtered import destination_hit_fraction
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -60,6 +59,7 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
+from levanter.testing.devices import use_test_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -1046,7 +1046,14 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
 
 @pytest.mark.parametrize(
     "implementation",
-    ["ring", "ring_gather_combine", "ragged_all_to_all", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
+    [
+        "ring",
+        "ring_gather_combine",
+        "ring_filtered",
+        "ragged_all_to_all",
+        "fixed_all_to_all",
+        "fixed_pooled_wave_all_to_all",
+    ],
 )
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
@@ -1100,7 +1107,9 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                 activation=ActivationFunctionEnum.silu,
                 implementation=implementation,
                 mesh=mesh,
-                pooled_transport_capacity_factor=(1.05 if implementation == "fixed_pooled_wave_all_to_all" else None),
+                pooled_transport_capacity_factor=(
+                    1.05 if implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS else None
+                ),
                 num_expert_waves=1,
             )
 
@@ -1427,31 +1436,22 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
 
 
 @pytest.mark.parametrize(
-    "implementation", ["ring", "ring_gather_combine", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"]
+    "implementation",
+    ["ring", "ring_gather_combine", "ring_filtered", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
 )
 @pytest.mark.parametrize(
     "token_valid",
     [[True, True, True, True], [True, False, True, True]],
     ids=["all_valid", "padded"],
 )
+@pytest.mark.multidevice
 def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     implementation: MoeImplementation,
     token_valid: list[bool],
 ):
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.grug.grug_moe import moe_mlp
-
-        assert jax.device_count() == 4
+    with use_test_devices(4) as devices, jax.default_matmul_precision("highest"):
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(2, 2, 1),
+            np.asarray(devices).reshape(2, 2, 1),
             axis_names=("data", "expert", "model"),
             axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
         )
@@ -1461,7 +1461,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
             dtype=jnp.int32,
         )
         combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(1), (4, 2)), axis=-1)
-        token_valid = jnp.asarray(__TOKEN_VALID__)
+        token_valid = jnp.asarray(token_valid)
         w_up_gate = jax.random.normal(jax.random.key(2), (8, 4, 6))
         w_down = jax.random.normal(jax.random.key(3), (8, 3, 4))
         cotangent = jax.random.normal(jax.random.key(4), (4, 4))
@@ -1496,9 +1496,9 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
         w_down = jax.device_put(w_down, expert_sharding)
         cotangent = jax.device_put(cotangent, batch_sharding)
 
-        implementation = "__IMPLEMENTATION__"
+        implementation = implementation
         extra = {}
-        if implementation == "fixed_pooled_wave_all_to_all":
+        if implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
             extra["pooled_transport_capacity_factor"] = 4.0
 
         def backend_output(x, w_up_gate, w_down):
@@ -1536,17 +1536,6 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
             )
         assert int(overflow.dropped) == 0
         assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * 2
-    """
-    script = script.replace("__IMPLEMENTATION__", implementation).replace("__TOKEN_VALID__", repr(token_valid))
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1554,23 +1543,12 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     [[True] * 16, [True, False, True, True] * 4],
     ids=["all_valid", "padded"],
 )
+@pytest.mark.multidevice
 def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: list[bool]):
     """`ring_gather_combine` gives `ring`'s values, drops and gradients without token-buffer scatter-adds."""
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import functools
-
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.grug.grug_moe import moe_mlp
-
+    with use_test_devices(4) as devices:
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(2, 2, 1),
+            np.asarray(devices).reshape(2, 2, 1),
             axis_names=("data", "expert", "model"),
             axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
         )
@@ -1581,7 +1559,7 @@ def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: lis
         logits = jax.random.normal(keys[1], (tokens, experts)) + jnp.linspace(2.0, 0.0, experts)
         selected_experts = jax.lax.top_k(logits, topk)[1].astype(jnp.int32)
         combine_weights = jax.nn.softmax(jax.random.normal(keys[2], (tokens, topk)), axis=-1)
-        token_valid = jnp.asarray(__TOKEN_VALID__)
+        token_valid = jnp.asarray(token_valid)
         w_up_gate = jax.random.normal(keys[3], (experts, hidden, 2 * inter))
         w_down = jax.random.normal(keys[4], (experts, inter, hidden))
         cotangent = jax.random.normal(keys[5], (tokens, hidden))
@@ -1642,17 +1620,6 @@ def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: lis
         np.testing.assert_allclose(np.asarray(gather_value), np.asarray(ring_value), rtol=1e-5, atol=1e-5)
         for gather_grad, ring_grad in zip(gather_grads, ring_grads, strict=True):
             np.testing.assert_allclose(np.asarray(gather_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
-    """
-    script = script.replace("__TOKEN_VALID__", repr(token_valid))
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
@@ -1685,6 +1652,198 @@ def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
     np.add.at(expected_x_gradient, token[valid], rows_cotangent[valid])
     np.testing.assert_array_equal(np.asarray(combined), np.asarray(expected_combined, jnp.bfloat16))
     np.testing.assert_array_equal(np.asarray(x_gradient), np.asarray(expected_x_gradient, jnp.bfloat16))
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize(
+    ("transport_capacity_factor", "capacity_factor", "padding"),
+    [
+        (8.0, 8.0, "none"),
+        (0.5, 8.0, "none"),
+        (8.0, 0.75, "none"),
+        (0.5, 0.3, "uneven"),
+        (0.5, 0.3, "all"),
+    ],
+    ids=["no_drops", "sender_drops", "receiver_drops", "both_drops_uneven_padding", "all_padding"],
+)
+@pytest.mark.multidevice
+def test_ring_filtered_matches_ring_and_dense_with_drops(
+    transport_capacity_factor: float, capacity_factor: float, padding: str
+):
+    """On 4 expert shards, ring_filtered matches a dense reference that applies its sender capacity and then ring's
+    receiver capacity, and matches ring whenever no sender drops. Gradients include the combine weights, which
+    carry the router gradient. The uneven padding leaves shard 0 with no valid tokens."""
+    with use_test_devices(4) as devices, jax.default_matmul_precision("highest"):
+        shards, tokens_per_shard, hidden, inter, experts, topk = 4, 48, 8, 6, 32, 4
+
+        tokens = shards * tokens_per_shard
+        local_experts = experts // shards
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, shards, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        )
+        keys = jax.random.split(jax.random.key(0), 7)
+        x = jax.random.normal(keys[0], (tokens, hidden))
+        selected = jnp.argsort(jax.random.uniform(keys[1], (tokens, experts)), axis=1)[:, :topk].astype(jnp.int32)
+        combine_weights = jax.nn.softmax(jax.random.normal(keys[2], (tokens, topk)), axis=-1)
+        w_up_gate = jax.random.normal(keys[3], (experts, hidden, 2 * inter)) / math.sqrt(hidden)
+        w_down = jax.random.normal(keys[4], (experts, inter, hidden)) / math.sqrt(inter)
+        cotangent = jax.random.normal(keys[5], (tokens, hidden))
+        if padding == "uneven":
+            # Shard s keeps about s / 3 of its tokens.
+            keep_fraction = np.repeat(np.arange(shards) / (shards - 1), tokens_per_shard)
+            token_valid = np.asarray(jax.random.uniform(keys[6], (tokens,))) < keep_fraction
+        else:
+            token_valid = np.full(tokens, padding == "none")
+
+        # Sender capacity: per (source, destination) shard pair, the first C valid tokens that select an expert
+        # on the destination keep their assignments there, with C scaled by the source's valid tokens.
+        sel_np = np.asarray(selected)
+        keep = np.repeat(token_valid[:, None], topk, axis=1)
+        hit_fraction = destination_hit_fraction(num_experts=experts, local_experts=local_experts, topk=topk)
+        pair_capacity = min(tokens_per_shard, math.ceil(transport_capacity_factor * hit_fraction * tokens_per_shard))
+        for source in range(shards):
+            first = source * tokens_per_shard
+            source_valid = int(token_valid[first : first + tokens_per_shard].sum())
+            capacity = min(pair_capacity, max(1, math.ceil(transport_capacity_factor * hit_fraction * source_valid)))
+            for dest in range(shards):
+                seen = 0
+                for t in range(first, first + tokens_per_shard):
+                    on_dest = sel_np[t] // local_experts == dest
+                    if token_valid[t] and on_dest.any():
+                        if seen >= capacity:
+                            keep[t, on_dest] = False
+                        seen += 1
+        valid_assignments = int(token_valid.sum()) * topk
+        expected_sender_dropped = valid_assignments - int(keep.sum())
+
+        # Ring's receiver capacity: each destination runs at most L of the assignments it receives, in (expert,
+        # token) order, with L set by the valid demand before sender drops.
+        receiver_capacity = min(
+            max(local_experts, math.ceil(capacity_factor * valid_assignments / shards)),
+            max(local_experts, math.ceil(capacity_factor * tokens_per_shard * topk)),
+        )
+        expected_receiver_dropped = 0
+        for dest in range(shards):
+            accepted = 0
+            for expert in range(dest * local_experts, (dest + 1) * local_experts):
+                for t, k in zip(*np.nonzero(keep & (sel_np == expert))):
+                    if accepted < receiver_capacity:
+                        accepted += 1
+                    else:
+                        keep[t, k] = False
+                        expected_receiver_dropped += 1
+        keep = jnp.asarray(keep, jnp.float32)
+
+        def dense(x, cw, w_up_gate, w_down):
+            hidden_act = jnp.einsum("th,tkhi->tki", x, w_up_gate[selected])
+            gate, up = jnp.split(hidden_act, [inter], axis=-1)
+            out = jnp.einsum("tki,tkih->tkh", jax.nn.silu(gate) * up, w_down[selected])
+            return jnp.einsum("tkh,tk->th", out, cw * keep)
+
+        batch = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        args = (
+            jax.device_put(x, batch),
+            jax.device_put(combine_weights, batch),
+            jax.device_put(w_up_gate, expert_sharding),
+            jax.device_put(w_down, expert_sharding),
+        )
+        selected_sharded = jax.device_put(selected, batch)
+        token_valid_sharded = jax.device_put(jnp.asarray(token_valid), NamedSharding(mesh, P(("data", "expert"))))
+        cotangent_sharded = jax.device_put(cotangent, batch)
+
+        def backend(implementation):
+            def loss(x, cw, w_up_gate, w_down):
+                out, counts = moe_mlp(
+                    x,
+                    selected_sharded,
+                    cw,
+                    w_up_gate,
+                    w_down,
+                    token_valid=token_valid_sharded,
+                    activation=jax.nn.silu,
+                    implementation=implementation,
+                    mesh=mesh,
+                    capacity_factor=capacity_factor,
+                    pooled_transport_capacity_factor=transport_capacity_factor,
+                    report_capacity_overflow=True,
+                )
+                return jnp.sum(out * cotangent_sharded), (out, counts)
+
+            with jax.set_mesh(mesh):
+                grad_fn = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True))
+                (_, (out, counts)), grads = grad_fn(*args)
+            return out, counts, grads
+
+        expected = dense(x, combine_weights, w_up_gate, w_down)
+        expected_grads = jax.grad(lambda *a: jnp.sum(dense(*a) * cotangent), argnums=(0, 1, 2, 3))(
+            x, combine_weights, w_up_gate, w_down
+        )
+        actual, counts, actual_grads = backend("ring_filtered")
+        references = [(expected, expected_grads)]
+        if expected_sender_dropped == 0:
+            ring_out, ring_counts, ring_grads = backend("ring")
+            assert int(ring_counts.dropped) == expected_receiver_dropped
+            references.append((ring_out, ring_grads))
+
+        for ref_out, ref_grads in references:
+            np.testing.assert_allclose(np.asarray(actual), np.asarray(ref_out), rtol=1e-5, atol=1e-5)
+            for a, e in zip(actual_grads, ref_grads, strict=True):
+                np.testing.assert_allclose(np.asarray(a), np.asarray(e), rtol=1e-5, atol=1e-5)
+        assert int(counts.sender_dropped) == expected_sender_dropped
+        assert int(counts.receiver_dropped) == expected_receiver_dropped
+        # Each case drops what its parameters ask for; with no valid tokens nothing can drop.
+        assert (expected_sender_dropped > 0) == (padding != "all" and transport_capacity_factor < 1.0)
+        assert (expected_receiver_dropped > 0) == (padding != "all" and capacity_factor < 1.0)
+
+
+def test_ring_filtered_expert_combine_keeps_bf16_sums_in_float32():
+    """The expert-side combine sums each received row's bf16 expert outputs in float32 and rounds once. Its
+    backward rounds each output-row gradient once and returns the float32 routing-weight gradient unrounded."""
+    received_rows, topk, dispatch_rows, hidden = 6, 4, 16, 32
+    rng = np.random.default_rng(0)
+    # Dispatch rows hold 14 of the 24 (received row, k) assignments in random order; the last two are padding.
+    flat_idx = rng.permutation(received_rows * topk)[:dispatch_rows].astype(np.int32)
+    flat_idx[14:] = received_rows * topk
+    inv = np.full(received_rows * topk, dispatch_rows, np.int32)
+    inv[flat_idx[:14]] = np.arange(14)
+    inv = inv.reshape(received_rows, topk)
+    # Integers below 256, and their products with powers of two, are exact in bf16, and the float32 sums below
+    # are exact, so each value's final rounding to bf16 is its only one.
+    src = rng.integers(-255, 256, (dispatch_rows, hidden)).astype(np.float32)
+    weights = np.exp2(rng.integers(-2, 2, (received_rows, topk))).astype(np.float32)
+    cotangent = rng.integers(-255, 256, (received_rows, hidden)).astype(np.float32)
+
+    @jax.jit
+    def evaluate(src, weights, cotangent):
+        out, vjp = jax.vjp(
+            lambda src, weights: _combine_gather_sum(
+                src,
+                jnp.asarray(inv).reshape(-1),
+                jnp.asarray(flat_idx),
+                weights,
+                src.dtype,
+            ),
+            src,
+            weights,
+        )
+        return out, *vjp(cotangent)
+
+    out, src_gradient, weights_gradient = evaluate(
+        jnp.asarray(src, jnp.bfloat16), jnp.asarray(weights), jnp.asarray(cotangent, jnp.bfloat16)
+    )
+
+    gathered = np.concatenate([src, np.zeros((1, hidden), np.float32)])[inv]
+    expected_out = np.einsum("njh,nj->nh", gathered, weights)
+    expected_weights_gradient = np.einsum("njh,nh->nj", gathered, cotangent)
+    flat_weights = np.append(weights.reshape(-1), 0.0)
+    padded_cotangent = np.concatenate([cotangent, np.zeros((1, hidden), np.float32)])
+    expected_src_gradient = padded_cotangent[flat_idx // topk] * flat_weights[flat_idx][:, None]
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(expected_out, jnp.bfloat16))
+    np.testing.assert_array_equal(np.asarray(src_gradient), np.asarray(expected_src_gradient, jnp.bfloat16))
+    np.testing.assert_array_equal(np.asarray(weights_gradient), expected_weights_gradient)
 
 
 def _simulate_ragged_a2a(operands, outputs, params):

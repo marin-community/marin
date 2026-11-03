@@ -160,9 +160,15 @@ DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "skyrl-wheel": (
         "vendor/skyrl/",
-        "config/skyrl-migration",
-        "scripts/skyrl_migration.py",
-        "infra/ci/check_skyrl_marin.py",
+        "vendor/harbor/",
+        "lib/finelog/",
+        "lib/finestore/",
+        "lib/iris/",
+        "lib/rigging/",
+        "lib/rolloutengine/",
+        "lib/shellbox/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
     ),
@@ -218,6 +224,9 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/taskforge/",
         "experiments/post_training/capability_driven_envs/",
         "experiments/post_training/glm.py",
+        "lib/rolloutengine/",
+        "lib/zephyr/",
+        "lib/fray/",
         "lib/taskcompendium/",
         "lib/iris/",
         "lib/shellbox/",
@@ -1029,10 +1038,10 @@ def accelerator_suite_test_paths(
         selected = all_test_files("levanter", repo_root)
     for test_path in selected:
         markers = markers_for_test_file(repo_root / test_path)
-        # TPU coverage is opt-in, including for full-suite and scheduled runs.
+        # Accelerator and multi-device coverage is opt-in, including for full-suite and scheduled runs.
         if "torch" in markers:
             torch_paths.append(test_path)
-        if "tpu" in markers:
+        if {"tpu", "multidevice"} & markers:
             tpu_paths.append(test_path)
 
     suites: dict[str, list[str]] = {}

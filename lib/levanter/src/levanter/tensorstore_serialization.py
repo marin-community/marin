@@ -137,9 +137,18 @@ def build_kvstore_spec(path: str) -> dict:
             # tensorstore from trying (and failing) to discover the region via HEAD bucket.
             spec["aws_region"] = "us-east-1"
 
-        # Supplying credentials explicitly reduces noisy AWS CRT logs in containers.
+        # TensorStore's default chain does not reliably load a mounted shared
+        # credentials file in a task pod. Its profile provider also requires
+        # a readable config path, even if that config is empty.
         if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
             spec["aws_credentials"] = {"type": "environment"}
+        elif credentials_file := os.environ.get("AWS_SHARED_CREDENTIALS_FILE"):
+            spec["aws_credentials"] = {
+                "type": "profile",
+                "profile": os.environ.get("AWS_PROFILE") or "default",
+                "credentials_file": credentials_file,
+                "config_file": os.environ.get("AWS_CONFIG_FILE") or os.devnull,
+            }
 
         return spec
     elif parsed.scheme == "gs":
@@ -718,7 +727,9 @@ def _serialize_arrays(
             try:
                 store = future.result()
                 target = store if region is None else store[region.index]
-                write = target.write(data, can_reference_source_data_indefinitely=True)
+                # TensorStore's referenced-source fast path can commit only fill values
+                # for large bfloat16 chunks. Let it copy the staged snapshot instead.
+                write = target.write(data)
                 write.commit.add_done_callback(write_finished)
                 write.commit.force()
             except BaseException as error:

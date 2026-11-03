@@ -587,6 +587,8 @@ class InMemoryK8sService:
         # (overwriting would reset a running pod).
         if resource is K8sResource.PODS and (resource.plural, name) in self._resources:
             return
+        if resource is K8sResource.PODS:
+            manifest["metadata"].setdefault("uid", f"fake-pod-{name}")
 
         if resource is K8sResource.SECRETS:
             previous = self._resources.get((resource.plural, name))

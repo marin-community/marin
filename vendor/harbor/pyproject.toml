@@ -16,7 +16,8 @@ dependencies = [
     "toml>=0.10.2",
     "tenacity>=9.1.2",
     "python-dotenv>=1.1.1",
-    "litellm==1.92.0",
+    "openai>=2",
+    "tiktoken>=0.12",
     "orjson>=3.11.6",
     "jinja2>=3.1.6",
     "dirhash>=0.5.0",
@@ -36,7 +37,8 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona]", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,telemetry,daytona,sotopia]", "gcsfs", "s3fs", "pydantic-settings"]
+sotopia = ["harbor[archive,telemetry]", "numpy", "scipy", "scikit-learn"]
 analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
 telemetry = ["marin-rigging"]
@@ -72,6 +74,9 @@ requires = ["uv_build>=0.8.4,<0.9.0"]
 build-backend = "uv_build"
 
 [tool.uv]
+constraint-dependencies = ["nltk>=3.10.4", "oauthlib>=4.0.0"]
+# Mini-SWE's unused default model declares LiteLLM; our model uses OpenAI directly.
+exclude-dependencies = ["litellm"]
 default-groups = []
 # Local Rigging uses its development version while published FineStore pins a release floor.
 override-dependencies = ["marin-rigging"]

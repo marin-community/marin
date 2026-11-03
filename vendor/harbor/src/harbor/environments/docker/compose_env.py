@@ -1,11 +1,31 @@
 import logging
-import os
 from collections.abc import Mapping
 from typing import Literal
 
 from pydantic import BaseModel
 
 from harbor.models.trial.config import ServiceVolumeConfig
+
+# Docker's client needs connection and login paths, but task Compose interpolation must not see host tokens.
+DOCKER_CLIENT_ENVIRONMENT = (
+    "PATH",
+    "HOME",
+    "DOCKER_CONFIG",
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_CERT_PATH",
+    "XDG_CONFIG_HOME",
+    "XDG_RUNTIME_DIR",
+    "USERPROFILE",
+    "SYSTEMROOT",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
+    "COMSPEC",
+    "PATHEXT",
+)
 
 
 class ComposeInfraEnvVars(BaseModel):
@@ -17,8 +37,8 @@ class ComposeInfraEnvVars(BaseModel):
     cpus: int | None = None
     memory: str | None = None
 
-    def to_env_dict(self, include_os_env: bool = False) -> dict[str, str]:
-        env_dict = os.environ.copy() if include_os_env else {}
+    def to_env_dict(self) -> dict[str, str]:
+        env_dict = {}
         for field_name, value in self.model_dump(exclude_none=True).items():
             env_dict[field_name.upper()] = str(value)
         return env_dict

@@ -78,6 +78,8 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
     cluster_role_name,
     namespace_manifest,
     service_account_manifest,
+    task_secret_binding_manifest,
+    task_secret_role_manifest,
 )
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import parse_k8s_cpu
@@ -243,6 +245,8 @@ class ControllerTarget:
             service_account_manifest(self.namespace, "iris-controller"),
             cluster_role_manifest(role_name),
             cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
+            task_secret_role_manifest(self.namespace),
+            task_secret_binding_manifest(self.namespace, "iris-controller"),
         ):
             self.kubectl.apply_json(manifest)
         cm = c._config_json_for_configmap(cfg)
@@ -440,6 +444,8 @@ class CoreweaveTarget(ControllerTarget):
             service_account_manifest(self.namespace, "iris-controller"),
             cluster_role_manifest(role_name),
             cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
+            task_secret_role_manifest(self.namespace),
+            task_secret_binding_manifest(self.namespace, "iris-controller"),
         ):
             self.kubectl.apply_json(manifest)
 

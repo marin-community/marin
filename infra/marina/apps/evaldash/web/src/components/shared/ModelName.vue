@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 
 const props = defineProps<{ model: string }>()
-// The catalog identity is name@config-digest. Keep both parts visible and the exact ID searchable.
 const parts = computed(() => props.model.match(/^(.*)(@[a-f0-9]{12})$/))
 </script>
 

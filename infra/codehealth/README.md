@@ -6,7 +6,8 @@ weekly agent can inspect gaps in the lint catalog.
 ## Production lint telemetry
 
 `log_stats.py` records every `pre-commit.py --review`, `/code-review`,
-`/review-pr`, and `/review-pr-holistic` invocation in Finelog. The two primary
+`review-pr` correctness and holistic mode invocation (recorded as
+`review-pr` and `review-pr-holistic`) in Finelog. The two primary
 namespaces are `codehealth.autolint.invocations` and
 `codehealth.autolint.findings`, joined by
 `invocation_id`. A successful run that emitted no finding still has an

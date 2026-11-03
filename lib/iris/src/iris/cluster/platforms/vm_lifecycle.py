@@ -29,7 +29,6 @@ from dataclasses import dataclass
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
 from iris.cluster.config import GcpVmConfig, IrisClusterConfig, ManualVmConfig, VmConfig
-from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.platforms.gcp.controller_bootstrap import (
     CONTROLLER_CONTAINER_NAME,
     build_controller_bootstrap_script_from_config,
@@ -387,11 +386,9 @@ def start_controller(
         vm.terminate(wait=True)
         raise RuntimeError(f"Controller VM {vm_config.name} did not become reachable within 300s")
 
-    # Bootstrap. Fold operator-injected env into task_env here: the launcher's
-    # shell is the only place the values exist, and the shipped config is the
-    # only channel to the controller VM and its workers.
+    # Only secret references may enter bootstrap metadata.
     bootstrap_script = build_controller_bootstrap_script_from_config(
-        with_injected_task_env(config),
+        config,
         resolve_image=_resolve_image,
         fresh=fresh,
     )
@@ -433,9 +430,7 @@ def restart_controller(
 
     logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
 
-    bootstrap_script = build_controller_bootstrap_script_from_config(
-        with_injected_task_env(config), resolve_image=_resolve_image
-    )
+    bootstrap_script = build_controller_bootstrap_script_from_config(config, resolve_image=_resolve_image)
     vm.bootstrap(bootstrap_script)
 
     address = f"http://{vm.internal_address}:{port}"

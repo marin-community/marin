@@ -9,7 +9,7 @@ under-fed (Waiting=0). The quoted stacks were:
   1. the trajectory dump -> a SYNCHRONOUS ``s3://`` write (``fsspec/asyn.py
      sync`` -> s3fs ``flush/close``) plus the CPU-bound
      ``format_trajectory_json`` regex pass, on the loop thread, EVERY turn.
-  2. ``LiteLLM.get_model_context_limit`` -> a synchronous ``/v1/models`` HTTP GET
+  2. ``OpenAILLM.get_model_context_limit`` -> a synchronous ``/v1/models`` HTTP GET
      on EVERY proactive-summarization check (the context limit is constant).
   3. ``Terminus2._count_total_tokens`` -> a FRESH ``httpx.Client`` + a new SSL
      context (``ssl.py create_default_context``) built PER CALL.
@@ -21,7 +21,7 @@ other ``to_thread`` user. These tests lock the current fixes:
   - ``Terminus2._persist_trajectory`` and ``_split_trajectory_on_summarization``
     perform NO storage write on the caller thread — serialization + write run
     on the bounded background artifact writer;
-  - ``LiteLLM.get_model_context_limit`` memoizes its result -> no repeated HTTP;
+  - ``OpenAILLM.get_model_context_limit`` memoizes its result -> no repeated HTTP;
   - ``Terminus2._count_total_tokens`` reuses ONE process-wide pooled httpx
     client instead of constructing a client + SSL context per call.
 """
@@ -31,11 +31,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-
 from harbor.agents.terminus_2 import terminus_2 as t2
 from harbor.agents.terminus_2.terminus_2 import Terminus2
-from harbor.llms.lite_llm import LiteLLM
+from harbor.llms.openai_llm import OpenAILLM
 from harbor.utils.artifact_writer import ArtifactWriter
+
 from tests.unit.agents.terminus_2.bare_agent import make_bare_terminus2
 
 
@@ -69,9 +69,9 @@ async def test_persist_trajectory_never_writes_on_caller_thread(
 
     # The call returned with the background worker parked: a synchronous write
     # on the caller thread would already be visible here.
-    assert not (tmp_path / "trajectory.json").exists(), (
-        "trajectory dump wrote synchronously on the caller thread"
-    )
+    assert not (
+        tmp_path / "trajectory.json"
+    ).exists(), "trajectory dump wrote synchronously on the caller thread"
 
     gate.set()
     writer.flush(timeout=30)
@@ -93,9 +93,9 @@ async def test_split_trajectory_on_summarization_defers_boundary_write(
     agent._split_trajectory_on_summarization("handoff")
 
     # No synchronous write on the caller thread...
-    assert not (tmp_path / "trajectory.cont-1.json").exists(), (
-        "summarization-split dump wrote synchronously on the caller thread"
-    )
+    assert not (
+        tmp_path / "trajectory.cont-1.json"
+    ).exists(), "summarization-split dump wrote synchronously on the caller thread"
 
     gate.set()
     writer.flush(timeout=30)
@@ -111,7 +111,7 @@ async def test_split_trajectory_on_summarization_defers_boundary_write(
 
 @pytest.mark.unit
 def test_get_model_context_limit_memoized_no_repeat_probe() -> None:
-    llm = LiteLLM(
+    llm = OpenAILLM(
         model_name="test-integration/unknown-hash-model",
         api_base="http://localhost:8000/v1",
     )
@@ -136,7 +136,7 @@ def test_get_model_context_limit_does_not_cache_fallback() -> None:
     """When neither the registry nor the vLLM probe resolves a limit, the 1e6
     fallback must NOT be memoized so a later call can still resolve the real
     limit once the server is up."""
-    llm = LiteLLM(model_name="test-integration/no-base")  # no api_base -> probe None
+    llm = OpenAILLM(model_name="test-integration/no-base")  # no api_base -> probe None
     assert llm.get_model_context_limit() == 1000000
     assert getattr(llm, "_cached_context_limit", None) is None
 

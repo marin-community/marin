@@ -70,6 +70,7 @@ class MountKind(StrEnum):
     OUTPUT = "output"  # attempt-local files captured after task termination
     TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
     CACHE = "cache"  # persistent cross-task cache (uv, cargo); hostPath bind mount
+    SECRET = "secret"  # per-attempt credentials on host tmpfs, mounted read-only
 
 
 @dataclass(frozen=True)
@@ -100,8 +101,11 @@ class ContainerConfig:
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = NETWORK_MODE_HOST
+    # Host file mounted read-only at /etc/resolv.conf; None keeps the runtime's default.
+    resolv_conf: Path | None = None
     workdir_host_path: Path | None = None
     output_host_path: Path | None = None
+    secret_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
     attempt_uid: str | None = None

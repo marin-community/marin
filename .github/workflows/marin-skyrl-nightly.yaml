@@ -53,6 +53,8 @@ jobs:
       contents: read
       id-token: write
     env:
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
       JOB_NAME: skyrl-nightly-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
       TARGET_CLUSTER: ${{ github.event.inputs.target_cluster || 'cw-rno2a' }}
       GRUG_CUTLASS_WEEKLY: ${{ (github.event.schedule == '0 9 * * 0' || inputs.grug_cutlass) && '1' || '0' }}

@@ -8,23 +8,26 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
 
 - Model: d6144, 48 layers, 384 routed experts of width 3072, top-8 routing, latent width 3072, and
   two shared experts of width 3072. Depth rounds up to the nearest even count.
-- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 16384
-  (4096 through step 257553), query/key multiplier 1.48 (1.3 at 4K), sliding window 2048, and every
+- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 65536
+  (4096 through step 257553, 16384 through step 372000), query/key multiplier 1.66 (1.3 at 4K, 1.48 at
+  16K), sliding window 2048, and every
   fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Additional racks use
   the `replica_dcn` axis. Six experts are on each GPU in each rack.
-- Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 2816 global
-  sequences across 11 racks at 16K (11264 at 4K). A one-rack diagnostic defaults to 256 sequences.
+- Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 704 global
+  sequences across 11 racks at 65K (11264 at 4K, 2816 at 16K). A one-rack diagnostic defaults to 64
+  sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
 - MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
-  arrive grouped by expert, and local experts run in two chunks that share the 1.15 receiver
+  arrive grouped by expert, and local experts run in two chunks that share the 1.5 receiver
   capacity. The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
   PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
   reaches the stock plugin fails at startup.
   The production hero trained on `fixed_pooled_wave_all_to_all` through step 81716 (3.77T of its 18T
   tokens); `hero-ragged_a2a-ep-step81k` continues from that checkpoint on the ragged transport.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
+- Gradient clip: the global gradient norm is clipped to 1.0 (`HERO_MAX_GRAD_NORM`).
 - Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
   migrates in process on restore: its stored fp32 master is read directly into the run's params
   (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
@@ -119,7 +122,7 @@ paths = hero_checkpoint_paths()
 The function returns permanent checkpoint paths for the current run and its ancestors, in step order.
 Pass a run ID to select another run. The launcher and function share `CURRENT_HERO_RUN_ID` in [`current_run.py`](current_run.py).
 
-Use the [deployment checklist](../../../.agents/skills/deploy-hero-change/SKILL.md)
+Use the [deployment checklist](../../../.agents/skills/manage-hero-run/references/code-cutover.md)
 for preflight, the 200-step trial, and rollback. `current_run.py` records the
 current run ID. `trigger_hero.sh` records the handoff checkpoint and W&B fork point.
 Update the run ID, handoff checkpoint, and fork point together and land them on main.
@@ -169,15 +172,19 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 ## Context-length switches
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
-at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
+at 4K, 5632 at 8K, 2816 at 16K, and 704 at 65K with the same 390251-step schedule, learning rates, and weight
 decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
-(`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the
+(`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, `capacity_factor`, or
+`attention_context_layout` as needed), appends the
 context the run is leaving, with the step N it ended at, to `HERO_CONTEXT_PHASES` in
 `launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the parent's
 `throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later handoffs keep
-both. Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
+both. A context that needs context parallelism also sets `HERO_CONTEXT_AXIS_SIZE` in
+`hero_recipe.py`, and `HERO_BALANCE_ATTENTION_ROWS` when row balancing pays off at that context. Each
+rack's 64 GPUs then form 64 / CP expert shards of CP sequence shards each, and the eval batch follows
+(see [Scaling ladder](#scaling-ladder)). Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
 only `--qk-mult` and `--qk-mult-long-scale` on the command line. `qk_mult_long_scale` multiplies
 `qk_mult` on the global layers only. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
@@ -185,6 +192,13 @@ data seed, component order, and token store unchanged. The QK and capacity value
 evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
 thresholds; see the
 [context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
+
+Under context parallelism, `attention_context_layout` sets how FA4 assigns query rows to context
+shards. The default, `"zigzag"`, swaps the late half of each shard's queries with its mirror shard so
+every shard does equal causal work; `"contiguous"` keeps each shard's own rows and skips the swap.
+Keep `"zigzag"` at 262K and set `"contiguous"` at 65K; the measurements are in
+[#10610](https://github.com/marin-community/marin/pull/10610). The field has no effect without a
+context axis.
 
 ## Coordinated garbage collection
 
@@ -256,7 +270,7 @@ Three quantities set what a sweep can fit on one rack:
 - The receiver buffer is token assignments multiplied by the receiver capacity factor, split
   across the transport's two expert chunks.
 
-The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15.
+The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15 (1.5 at 65K).
 
 ## Diagnostic controls
 
@@ -267,7 +281,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--batch-size` | sets global sequences per step and the optimizer token budget; the default holds one hero rack's 4,194,304 tokens at the sequence length |
 | `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
-| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.48; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
+| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
@@ -339,8 +353,32 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
     --version dev --run
 ```
 
-The default batch, 256 at 16K, keeps the production local batch of 4 sequences per GPU. The trace
+The default batch, 64 at 65K, keeps the production local batch of 1 sequence per GPU. The trace
 does not include the 11-rack `replica_dcn` collectives or their global histogram reduction.
+
+### Daily hero canary
+
+[`marin-canary-hero-gb200.yaml`](../../../.github/workflows/marin-canary-hero-gb200.yaml) runs the
+hero model and training step from `main` daily on one rack through `launch_diagnostics.py`.
+It leaves out `gate_router_weight_decay` and `prior_context_phases`, which the production
+`launch_scaling_ladder.py` applies. The canary restores the pinned permanent checkpoint
+`step-372000` and trains 35 updates on the production mixture with a fixed seed. One dropless eval
+runs after the last update. A healthy run holds the rack for about 20 minutes. The diagnostic does
+not exercise cross-rack collectives or checkpoint recovery.
+
+The workflow submits at 11:00 UTC at `batch` priority, the band of the hero-completions sampler,
+so neither preempts the other. If the training job has not started within five hours,
+`iris_monitor.py wait --child-wait-timeout-policy shutdown` cancels it and the day is skipped with
+a warning; a failed run alerts through Slack and Loom.
+
+[`hero_canary_report.py`](../../../scripts/ci/hero_canary_report.py) drops 4 warmup steps and
+reports median step time, MFU and tokens/s, peak HBM, drop fraction, final train loss and dropless
+eval loss against a baseline: the per-metric median of the last 5 scheduled canaries from the same
+checkpoint, limiting the effect of one outlier. Manual dispatches (`hero-canary-manual-*`) never
+enter it. The run fails when the final train loss is above 1.5 or the dropless eval macro loss
+is above 2.5; one-rack runs end near 0.92 and 2.00. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to Slack.
+Re-pin `HERO_CANARY_CHECKPOINT` when the checkpoint layout or context length changes; the next run
+starts a new baseline.
 
 ### Profile-guided scheduling
 
@@ -436,11 +474,17 @@ checkpoint policy all follow `--size`:
 | d1024 | 2 | 2048 | 15,276 | every 5% | final only |
 | d1536 | 6 | 6144 | 15,128 | every 5% | final only |
 | d2048 | 11 | 11264 | 20,072 | every 5% | final only |
-| d6144 | 11 | 11264 at 4K, 2816 at 16K | 390,251 | every 3000 | every 6k |
+| d6144 | 11 | 11264 at 4K, 2816 at 16K, 704 at 65K | 390,251 | every 3000 | every 6k |
 
 At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
-batch is 64 × racks (one sequence per device). The step budget is 791 tokens per active parameter
+batch is one sequence per batch shard: 64 × racks (704 on the hero) without context parallelism, and
+(64 / CP) × racks with CP-way context parallelism (176 at CP4). The step budget is 791 tokens per active parameter
 (18T at d6144); pass `--num-steps` to override.
+
+The dropless eval folds the expert axis into `data` and keeps the context axis, so one sequence per
+batch shard gives every device max_seq_len / CP tokens per eval batch at any context. A batch held at
+its CP1 size would multiply that load by CP. The eval sets are read as one stream, so the batch size
+does not change the `eval_dropless/*` losses.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
 durable output root, and a rolling temporary checkpoint every hour goes to region-local temp

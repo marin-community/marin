@@ -77,7 +77,7 @@ jobs:
 
       # cw-us-west-04a.yaml's auth.signing_key falls through to a gcp-secret:// reference
       # (no IRIS_SIGNING_KEY is exported here) — `cluster start` resolves it via Secret
-      # Manager in this shell before projecting it into the controller's env Secret.
+      # Manager in this shell before mounting it through the controller-only Secret.
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -90,10 +90,39 @@ jobs:
           export KUBECONFIG=~/.kube/coreweave-iris
           kubectl delete pods -n "$IRIS_NAMESPACE" -l "$IRIS_MANAGED_LABEL=true" --grace-period=0 --ignore-not-found || true
 
-      # Rebuild images and (re)start the controller. `cluster start` is fully
-      # idempotent on K8s: it applies namespace/RBAC/ConfigMap/Deployment/Service
-      # and triggers a rollout restart, so both cold starts and warm restarts
-      # work without needing to tunnel to an existing controller first.
+      # CI rolls controller images without applying Pulumi. Reconcile the shared
+      # secret-delivery manifests in iris-ci before the controller's RBAC preflight.
+      - name: Prepare CI secret delivery permissions
+        run: |
+          cd lib/iris && uv run --group dev --extra controller python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from iris.cluster.config import load_config
+          from iris.cluster.platforms.k8s.rbac_manifests import (
+              task_secret_role_manifest,
+              task_secret_binding_manifest,
+          )
+          from iris.cluster.platforms.k8s.service import CloudK8sService
+
+          config = load_config("config/cw-us-west-04a.yaml")
+          namespace = os.environ["IRIS_NAMESPACE"]
+          assert namespace == config.kubernetes_provider.namespace == "iris-ci"
+          assert config.platform.coreweave is not None
+          kubectl = CloudK8sService(
+              namespace=namespace,
+              kubeconfig_path=str(Path.home() / ".kube/coreweave-iris"),
+              context=config.platform.coreweave.kube_context,
+          )
+          for manifest in (
+              task_secret_role_manifest(namespace),
+              task_secret_binding_manifest(namespace, "iris-controller"),
+          ):
+              kubectl.apply_json(manifest)
+          PY
+
+      # Rebuild images and roll the controller. Infrastructure and base RBAC
+      # remain managed by Pulumi.
       #
       # --extra controller: resolving the gcp-secret:// signing key above needs
       # marin-rigging[secrets] (Secret Manager client), which only the `controller`

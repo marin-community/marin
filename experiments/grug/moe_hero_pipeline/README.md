@@ -9,12 +9,20 @@ losses, and gradients against the unsplit model. Run them with
 checkpoint continuation test compares two AdamW updates after restore with an
 uninterrupted run, including a changing learning rate and a changed stage split.
 
-The synthetic runner can save and resume complete pipeline checkpoints.
+The runner can save and resume complete pipeline checkpoints.
 `--main-hero-recipe` uses FP32 parameters, BF16 compute and compute-scaled
 MuonH; it requires `--optimizer muonh` and an explicit `--processes-per-task`
 count. The legacy AdamW default is a bring-up configuration. The historical
 long-context recipe explicitly selects BF16 MuonH and both host offloads.
 Production continuation and long-run training stability remain unvalidated.
+The [GB200 launcher](GB200.md) provides NVIDIA worker commands. The
+[H100 adapter reference](../../../docs/references/hero-pipeline-h100.md) records
+the main-recipe flags, fresh-data path and bounded validation gates.
+
+Set `--context-axis-size` to split each sequence across context-parallel
+devices. Sequence length must be divisible by this size. Context replicas do
+not increase the global batch size or its required divisibility; data and
+expert parallelism still do.
 
 Set `--checkpoint-root` to restore the latest complete `step-N` checkpoint and
 `--checkpoint-every-steps` to save at that interval and on the final step. Keep
@@ -86,7 +94,7 @@ pieces are:
   original values and shardings.
 
 The runner retains `--synchronize-devices-after-step`: two unsynchronized full
-m8 trials produced NaNs, while synchronized trials passed. This is a timing
+trials with eight microbatches produced NaNs, while synchronized trials passed. This is a timing
 workaround with an unresolved root cause. Do not remove it from the validated
 recipe based only on successful small tests.
 
@@ -95,10 +103,10 @@ the dependency overlays, reproduce the worker configuration with:
 
 ```bash
 XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async \
-XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_CLIENT_MEM_FRACTION=0.91 \
+XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.91 \
 JAX_ENABLE_PGLE=false XLA_FLAGS=--xla_gpu_enable_command_buffer= \
 CUDA_MODULE_LOADING=EAGER JAXPP_DISABLE_SCHEDULE_TASK_FUSION=1 \
-uv run --no-sync python -m iris.hooks.multigpu_main --nproc 1 --devices-per-proc 8 -- \
+uv run --no-sync python -m iris.jax.multigpu_main --nproc 1 --devices-per-proc 8 -- \
   python -u -m experiments.grug.moe_hero_pipeline.pipeline_smoke --full-hero \
     --schedule standard_1f1b --stages 24 --expert-axis-size 8 \
     --microbatches 48 --batch-size 384 --sequence-length 65536 --expert-waves 6 \
@@ -120,7 +128,3 @@ local model/runner/dependency overlays. Launch manifests record exact hashes in
 baseline evidence. These ignored artifacts are not a published reproduction
 package. Subsequent runner cleanup removed per-leaf finite-state diagnostics
 and per-step memory dumps; it has not been benchmarked again on hardware.
-
-[PR #9662](https://github.com/marin-community/marin/pull/9662) extends this
-foundation with a GB200 launcher, tracked runtime setup, checkpoint/data support
-and bounded main-recipe hardware validation.

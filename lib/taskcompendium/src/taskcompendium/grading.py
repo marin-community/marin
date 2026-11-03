@@ -12,7 +12,7 @@ import json
 import math
 
 from openai import APIError
-from verifyit.candidate import Candidate, grade_candidate
+from verifyit.candidate import Candidate, grade_candidate, grade_ejection_candidate
 from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, empty_output_policy
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 from verifyit.spec import (
@@ -23,6 +23,7 @@ from verifyit.spec import (
     PredictedActionSpec,
     Spec,
     StructuredExactSpec,
+    UnsolvableSpec,
 )
 from verifyit.spec import FunctionCall as CandidateCall
 
@@ -45,7 +46,14 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import native_action_text, require_submission_compatibility
+from taskcompendium.submission import (
+    EJECT_CALL_NAME,
+    extract_submission,
+    has_ejection,
+    is_ejection,
+    native_action_text,
+    require_submission_compatibility,
+)
 
 
 def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
@@ -87,12 +95,24 @@ def answer_submission(task: TaskSpec, attempt: GradingAttempt) -> Submission:
     Raises ``SubmissionFailure`` when the attempt carries no valid submission.
     """
     if task.answer_type in CONVERSATION_ANSWERS:
-        return task.answer_format.extract(attempt)
+        submission = extract_submission(task.answer_format, attempt, context_length=len(task.context.events))
+        if is_ejection(submission) and not any(tool.name == EJECT_CALL_NAME for tool in task.final_tools):
+            raise SubmissionFailure("Ejection was not advertised for this task")
+        return submission
     if task.answer_type == AnswerType.STATE:
         if attempt.state is None:
             raise SubmissionFailure("State submission requires captured state")
         return attempt.state
     raise TypeError(f"A {task.answer_type} answer is not extracted from the attempt")
+
+
+def terminal_grade(verifier: Spec, submission: Submission) -> GradeResult | None:
+    """Score ejection or a normal answer to a privately unsolvable task."""
+    if is_ejection(submission):
+        return grade_result(verifier, grade_ejection_candidate(verifier))
+    if isinstance(verifier, UnsolvableSpec):
+        return GradeResult(Outcome.GRADED, 0.0)
+    return None
 
 
 def _candidate(verifier: Spec, submission: Submission) -> Candidate:
@@ -118,6 +138,8 @@ def _gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spe
     """Whether a blank final text is a candidate under the verifier's explicit policy."""
     if not isinstance(task.answer_format, PlainText):
         return False
+    if any(has_ejection(event) for event in attempt.conversation.events[len(task.context.events) :]):
+        return False
     policy = empty_output_policy(verifier)
     if policy is not EmptyOutputPolicy.GRADE:
         return False
@@ -134,7 +156,11 @@ def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
     if task.answer_type in CONVERSATION_ANSWERS:
         require_submission_compatibility(task)
     try:
-        candidate = _candidate(verifier, answer_submission(task, attempt))
+        submission = answer_submission(task, attempt)
+        terminal = terminal_grade(verifier, submission)
+        if terminal is not None:
+            return terminal
+        candidate = _candidate(verifier, submission)
     except SubmissionFailure as error:
         if not _gradeable_empty_text(task, attempt, verifier):
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
@@ -161,6 +187,9 @@ def grade_remote_judge_answer(
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         candidate = ""
     else:
+        terminal = terminal_grade(verifier, submission)
+        if terminal is not None:
+            return terminal
         if isinstance(submission, TextSubmission):
             candidate = submission.value
         elif isinstance(submission, ActionSubmission):

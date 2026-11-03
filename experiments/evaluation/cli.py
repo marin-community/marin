@@ -32,6 +32,7 @@ from experiments.evaluation.launch import (
     prepare_evaluation_batch,
 )
 from experiments.evaluation.models import models
+from experiments.evaluation.policy_finalization import load_policy_finalization
 
 logger = logging.getLogger(__name__)
 
@@ -244,12 +245,18 @@ def cli() -> None:
     default=None,
     help="Iris priority band for the orchestrator and serve jobs; defaults to inherit.",
 )
+@click.option(
+    "--policy-finalization-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Frozen judge and SOTOPIA cohort configuration; enabled by the policy campaign launcher.",
+)
 def launch(
     model: str | None,
     model_config: Path | None,
     judge_model: str | None,
     judge_model_config: Path | None,
     judge_accelerator: str | None,
+    policy_finalization_config: Path | None,
     evals_arg: str | None,
     evalchemy_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
@@ -315,6 +322,7 @@ def launch(
         description=description,
         resume_results_path=resume_results_path,
         run_id=run_id,
+        policy_finalization=load_policy_finalization(policy_finalization_config) if policy_finalization_config else None,
     )
     try:
         batch = prepare_evaluation_batch(spec)

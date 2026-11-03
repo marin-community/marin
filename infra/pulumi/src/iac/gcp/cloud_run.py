@@ -179,6 +179,9 @@ def dockerfile_image(
         # Cloud Run is linux/amd64; pin it so a build from an arm64 workstation still
         # produces a runnable image.
         platforms=[docker_build.Platform.LINUX_AMD64],
+        # Resolve base image tags against the registry so a workstation's stale local
+        # base image cannot carry an outdated trust store into the deployed service.
+        pull=True,
         tags=[image_tag],
         push=True,
         # Preview plans the graph without invoking buildx; the build + push happen on up.

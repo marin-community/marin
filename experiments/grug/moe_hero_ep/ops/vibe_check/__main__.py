@@ -19,6 +19,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleStore
 from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
+    FIRST_SAMPLED_STEP,
     SAMPLING_GPUS_PER_NODE,
     STORE_ROOT,
     TARGET_CLUSTER,
@@ -80,7 +81,12 @@ def main(action: str, store_root: str, priority: str | None, submission: str) ->
         return
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     requests = discover_requests(
-        hero_checkpoint_paths(), spec, sampling_model(), revision, target_cluster=TARGET_CLUSTER
+        hero_checkpoint_paths(),
+        spec,
+        sampling_model(),
+        revision,
+        first_step=FIRST_SAMPLED_STEP,
+        target_cluster=TARGET_CLUSTER,
     )
     if action == "inventory":
         for request in sorted(requests, key=lambda value: value.checkpoint.step):

@@ -4,7 +4,7 @@ Root cause (see agent_logs/2026-06-18_*summarization*): the summary subagent LLM
 calls set NO ``max_tokens``. Proactive summarization fires when the context is
 already nearly full (``free_tokens < proactive_summarization_threshold``), so the
 summary completion runs out of output room, returns ``finish_reason == "length"``,
-and ``lite_llm`` raises ``OutputLengthExceededError``. In the proactive path that
+and ``openai_llm`` raises ``OutputLengthExceededError``. In the proactive path that
 was swallowed (silent no-op); in the reactive path it degraded to a no-LLM
 "instruction + last 1000 chars" fallback. Measured: 59% of summarizing trials hit
 the degenerate fallback, reward 0.19 vs 0.82 for trials that never summarize.
@@ -36,13 +36,12 @@ import uuid
 from unittest.mock import AsyncMock
 
 import pytest
-
 from harbor.agents.terminus_2.terminus_2 import (
+    _OVERLONG_SUMMARY_MARKER,
+    RESERVED_SUMMARY_OUTPUT,
     EpisodeLoggingPaths,
     LLMRequestContext,
-    RESERVED_SUMMARY_OUTPUT,
     Terminus2,
-    _OVERLONG_SUMMARY_MARKER,
     _accepted_trajectory_step_count,
 )
 from harbor.context_management import ContextWindowManager
@@ -61,7 +60,7 @@ class FakeLLM:
     ``call`` raises ``OutputLengthExceededError`` whenever the caller does NOT
     reserve enough output budget (``max_tokens`` missing or below
     ``min_required_budget``) — exactly the ``finish_reason == "length"`` path in
-    ``lite_llm``. With a sufficient ``max_tokens`` it returns a short summary.
+    ``openai_llm``. With a sufficient ``max_tokens`` it returns a short summary.
     """
 
     def __init__(
@@ -524,9 +523,9 @@ async def test_proactive_summarization_output_exhaustion_returns_handoff():
     assert subagent_refs is None
     assert "partial handoff" in handoff
     assert handoff.endswith(_OVERLONG_SUMMARY_MARKER)
-    assert all("max_tokens" in c["kwargs"] for c in fake_llm.calls), (
-        "unexpected non-summary call dispatched during recovery"
-    )
+    assert all(
+        "max_tokens" in c["kwargs"] for c in fake_llm.calls
+    ), "unexpected non-summary call dispatched during recovery"
 
 
 @pytest.mark.asyncio

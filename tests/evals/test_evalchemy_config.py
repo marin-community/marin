@@ -4,18 +4,21 @@
 """Test Evalchemy configuration, command construction, and child cancellation."""
 
 import base64
+import http.client
 import io
 import json
 import os
 import subprocess
 import sys
+import urllib.error
 import zipfile
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from iris.cluster.client.bundle import create_workspace_zip
 from marin.evaluation.evalchemy import runtime
-from marin.evaluation.evalchemy.client import build_command, build_model_args
+from marin.evaluation.evalchemy.client import build_command, build_model_args, served_max_length
 from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
@@ -596,6 +599,14 @@ def test_extra_gen_kwargs_ride_on_gen_kwargs():
     assert gen_kwargs == "max_gen_toks=2048,skip_special_tokens=false,repetition_penalty=1.1"
 
 
+@pytest.mark.parametrize("prompt_budget_preflight,expected_cap", [(False, 130048), (True, 131072)])
+def test_prompt_preflight_owns_output_budget_selection(prompt_budget_preflight, expected_cap):
+    config = _payload(_config(max_gen_toks=131072, prompt_budget_preflight=prompt_budget_preflight))
+    command = build_command(config, config["tasks"][1], "/opt/py", 131072)
+
+    assert int(command[command.index("--max_tokens") + 1]) == expected_cap
+
+
 def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
     cmd = build_command(_payload(), _payload()["tasks"][1], "/opt/py", None)
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
@@ -634,9 +645,10 @@ def test_unset_budget_sizes_native_generation_task_from_served_context(monkeypat
     assert "--max_tokens" not in cmd
 
 
-def test_unset_budget_loglikelihood_task_gets_no_gen_kwargs(monkeypatch):
+@pytest.mark.parametrize("max_gen_toks", [None, 256])
+def test_loglikelihood_task_excludes_generation_overrides(monkeypatch, max_gen_toks):
     monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
-    config = _payload(_config(max_gen_toks=None))
+    config = _payload(_config(max_gen_toks=max_gen_toks, extra_gen_kwargs={"temperature": "0.7"}))
     cmd = build_command(config, config["tasks"][0], "/opt/py", 40960)  # arc_easy, loglikelihood
 
     assert "--gen_kwargs" not in cmd
@@ -694,6 +706,46 @@ def test_model_args_carry_served_max_length():
     args = dict(pair.split("=", 1) for pair in build_model_args(_payload(), False, 4096).split(","))
     assert args["max_length"] == "4096"
     assert args["tokenized_requests"] == "False"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.HTTPError("http://model/v1/models", 429, "busy", {}, None),
+        urllib.error.HTTPError("http://model/v1/models", 503, "unavailable", {}, None),
+        urllib.error.URLError("connection refused"),
+        TimeoutError("metadata request timed out"),
+        http.client.IncompleteRead(b'{"data":', 100),
+    ],
+)
+def test_served_max_length_recovers_from_transient_lookup_failure(monkeypatch, error):
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        Mock(side_effect=[error, io.BytesIO(b'{"data":[{"max_model_len":73728}]}')]),
+    )
+
+    assert served_max_length("http://model/v1") == 73728
+
+
+def test_served_max_length_exhausted_lookup_raises_instead_of_using_default(monkeypatch):
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("urllib.request.urlopen", Mock(side_effect=TimeoutError("metadata unavailable")))
+
+    with pytest.raises(TimeoutError):
+        served_max_length("http://model/v1")
+
+
+def test_served_max_length_does_not_retry_permanent_http_error(monkeypatch):
+    error = urllib.error.HTTPError("http://model/v1/models", 401, "unauthorized", {}, None)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        Mock(side_effect=[error, io.BytesIO(b'{"data":[{"max_model_len":73728}]}')]),
+    )
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        served_max_length("http://model/v1")
+    assert caught.value.code == 401
 
 
 def test_auto_overrides_clamps_context_and_leaves_plain_model_alone():

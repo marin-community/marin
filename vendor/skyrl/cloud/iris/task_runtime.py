@@ -92,7 +92,6 @@ from cloud.iris.ray_storage import (
 from cloud.iris.launch_config import RunMode, load_launch_config
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
-from cloud.iris.runtime_bundle import validate_bundled_runtime
 from cloud.iris.runtime_environment import RuntimeProfile
 
 try:
@@ -2165,7 +2164,6 @@ def _print_env_snapshot() -> None:
 
 
 def main() -> None:
-    validate_bundled_runtime()
     cli_args = parse_args()
     config_path = Path(materialize_launch_config(str(cli_args.config)))
     launch_config = load_launch_config(config_path)

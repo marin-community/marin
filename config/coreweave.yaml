@@ -6,6 +6,7 @@ data:
   # carry their `signing_region`. Consumed by rigging temp-path routing and the
   # shared infra/buckets Pulumi project.
   region_buckets:
+    rno2a: { bucket: marin-rno2a, store: coreweave, signing_region: RNO2A }
     us-east-02a: { bucket: marin-us-east-02a, store: coreweave, signing_region: US-EAST-02A }
     us-east-08a: { bucket: hero-checkpoints, store: coreweave, signing_region: US-EAST-08A }
     us-west-04a: { bucket: marin-us-west-04a, store: coreweave, signing_region: US-WEST-04A }

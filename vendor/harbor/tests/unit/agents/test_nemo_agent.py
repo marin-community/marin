@@ -3,12 +3,10 @@
 import json
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
-from unittest.mock import AsyncMock
-
 from harbor.agents.installed.nemo_agent import NemoAgent
 from harbor.models.agent.context import AgentContext
 from harbor.models.agent.name import AgentName
@@ -598,16 +596,6 @@ class TestMultiProviderSupport:
         assert env.get("AWS_ACCESS_KEY_ID") == "AKID"
         assert env.get("AWS_SECRET_ACCESS_KEY") == "secret"
         assert env.get("AWS_DEFAULT_REGION") == "us-west-2"
-
-    def test_litellm_config_generation(self, tmp_path: Path):
-        a = self._make_agent(tmp_path, llm_type="litellm")
-        with patch.dict(os.environ, {"LITELLM_API_KEY": "lt-key"}, clear=False):
-            result = a._generate_config_yaml("openai/gpt-4o", "lt-key")
-        parsed = yaml.safe_load(result)
-        llm = parsed["llms"]["litellm_llm"]
-        assert llm["_type"] == "litellm"
-        assert llm["model_name"] == "openai/gpt-4o"
-        assert llm["api_key"] == "lt-key"
 
     def test_huggingface_inference_config_generation(self, tmp_path: Path):
         a = self._make_agent(tmp_path, llm_type="huggingface_inference")

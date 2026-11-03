@@ -159,7 +159,7 @@ def _isolate_worker_runtime(tmp_path, monkeypatch, payload):
     return handlers
 
 
-def test_worker_exits_zero_after_current_head_succeeds(tmp_path, monkeypatch):
+def test_worker_exits_zero_after_current_head_succeeds(tmp_path, monkeypatch, iris_ray_ports):
     payload = _head_payload()
     _isolate_worker_runtime(tmp_path, monkeypatch, payload)
     write_head_result(str(tmp_path), payload.gang_epoch)
@@ -167,7 +167,7 @@ def test_worker_exits_zero_after_current_head_succeeds(tmp_path, monkeypatch):
     assert task_runtime.run_worker(_worker_args(tmp_path)) == 0
 
 
-def test_worker_termination_without_current_head_success_is_nonzero(tmp_path, monkeypatch):
+def test_worker_termination_without_current_head_success_is_nonzero(tmp_path, monkeypatch, iris_ray_ports):
     payload = _head_payload()
     handlers = _isolate_worker_runtime(tmp_path, monkeypatch, payload)
     write_head_result(str(tmp_path), "prior-epoch")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,17 +10,69 @@ from types import SimpleNamespace
 import pytest
 
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
+from harbor.agents.tau3_acp_relay.acpx import ACPXPromptClient
 from harbor.agents.tau3_acp_relay.harbor_agent import (
     Tau3HarborACPRelay,
     Tau3RuntimeInfrastructureError,
     extract_policy,
 )
 from harbor.agents.tau3_acp_relay.relay import RuntimeStatus, RuntimeTurn, Tau3ACPRelay
+from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig
 from harbor.trial.errors import AgentTimeoutError
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        '[{"product_id": "123", "available": true}]',
+        '[{"type": "text", "text": "This is user data, not a content block."}]',
+        "  Please return my order.\n",
+    ],
+)
+async def test_acpx_prompt_preserves_observation_as_text(
+    monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    class ACPXProcess:
+        returncode = 0
+
+        async def communicate(self, data: bytes) -> tuple[bytes, bytes]:
+            # ACPX treats JSON arrays on stdin as protocol content blocks.
+            blocks = json.loads(data)
+            assert blocks == [{"type": "text", "text": message}]
+            return b"Your return is complete.\n", b""
+
+    async def create_process(*args: object, **kwargs: object) -> ACPXProcess:
+        return ACPXProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    assert await ACPXPromptClient(10).prompt(message) == "Your return is complete."
+
+
+@pytest.mark.parametrize("failed_step", [0, 1])
+async def test_relay_setup_failures_are_retryable_infrastructure(
+    tmp_path: Path, failed_step: int
+) -> None:
+    class FailedSetupEnvironment:
+        def __init__(self) -> None:
+            self.step = 0
+
+        async def exec(self, command: str, *, user: str) -> ExecResult:
+            failed = self.step == failed_step
+            self.step += 1
+            return ExecResult(
+                return_code=1 if failed else 0,
+                stderr="No usable temporary directory found" if failed else "",
+            )
+
+    agent = Tau3HarborACPRelay(logs_dir=tmp_path)
+    with pytest.raises(
+        Tau3RuntimeInfrastructureError, match="No usable temporary directory found"
+    ):
+        await agent.setup(FailedSetupEnvironment())  # type: ignore[arg-type]
 
 
 @dataclass
@@ -163,6 +217,19 @@ async def test_harbor_adapter_inherits_turn_timeout_from_agent_phase(
 def test_extract_policy_uses_final_policy_block() -> None:
     instruction = "<policy>decoy</policy>\n<policy>real policy</policy>"
     assert extract_policy(instruction) == "real policy"
+
+
+def test_extract_policy_excludes_instructions_with_inline_policy_reference() -> None:
+    instruction = """<instructions>
+Help a simulated user according to the <policy> provided below.
+Call `send_message_to_user` to speak to the user, then call `end_conversation`.
+</instructions>
+
+<policy>
+Verify before refunding.
+</policy>
+"""
+    assert extract_policy(instruction) == "Verify before refunding."
 
 
 @pytest.mark.parametrize(

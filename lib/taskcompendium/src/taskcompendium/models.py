@@ -41,7 +41,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.27"
+SCHEMA_VERSION = "0.28"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
@@ -56,6 +56,16 @@ class AnswerType(StrEnum):
     STATE = "state"
     WORKSPACE_STATE = "workspace_state"
     NATIVE_ACTION = "native_action"
+
+
+class ReasoningMarkupPolicy(StrEnum):
+    """How a malformed reasoning span in a model reply affects the task's grade.
+
+    GRADE scores the attempt as usual. REJECT grades it as a reward-0 submission failure.
+    """
+
+    GRADE = "grade"
+    REJECT = "reject"
 
 
 class Source(BaseModel):
@@ -808,6 +818,11 @@ class AnswerCall(BaseAnswerFormat):
         return TextSubmission(arguments[ANSWER_FIELD])
 
 
+NormalAnswerFormat = Annotated[
+    PlainText | Boxed | JsonAnswer | JsonValueAnswer | AnswerCall, Field(discriminator="kind")
+]
+
+
 class FinalAction(BaseAnswerFormat):
     """The final assistant message itself: function calls to the task's final tools, or text."""
 
@@ -816,8 +831,17 @@ class FinalAction(BaseAnswerFormat):
 
     require_call: bool = False
     max_calls: int | None = Field(default=None, gt=0)
+    normal_submission: NormalAnswerFormat | None = None
+
+    @model_validator(mode="after")
+    def validate_normal_submission(self) -> "FinalAction":
+        if self.normal_submission is not None and (self.require_call or self.max_calls is not None):
+            raise ValueError("Normal presentation owns answer constraints")
+        return self
 
     def supports(self, answer_type: AnswerType) -> bool:
+        if self.normal_submission is not None:
+            return self.normal_submission.supports(answer_type)
         return answer_type == AnswerType.NATIVE_ACTION
 
     def validate_final_message(self, response: ConversationEvent) -> TextMessage | AssistantToolCalls:
@@ -863,6 +887,7 @@ class TaskSpec(BaseModel):
     answer_type: AnswerType
     answer_format: AnswerFormat
     grader: Grader
+    reasoning_markup: ReasoningMarkupPolicy = ReasoningMarkupPolicy.GRADE
     source: Source
     schema_version: str = SCHEMA_VERSION
     resources: ResourceGroups = Field(default_factory=ResourceGroups)

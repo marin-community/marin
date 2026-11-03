@@ -33,9 +33,8 @@ these descriptors for the weekly fork ferry.
 
 SkyRL lives in `vendor/skyrl` with its own `pyproject.toml` and `uv.lock`.
 Marin invokes its `marinskyrl` executable in an isolated child environment.
-GPU workers receive source, assets and the lock in a hash-verified Iris bundle.
-The [SkyRL migration guide](../../docs/dev-guide/skyrl-migration.md) covers
-refreshing the pruned source and reconciling active fork work before archival.
-`uv run config/update-external.py --skyrl-marin-packages` advances published
-Marin libraries within the nested project's version constraints. It checks the
-isolated import and constructor contract and restores the lock on failure.
+GPU workers receive the Marin repository through Iris's workspace bundle.
+SkyRL source updates land directly in Marin; see the
+[SkyRL runtime guide](../../docs/dev-guide/skyrl.md).
+SkyRL installs Marin libraries and Harbor from editable paths in the checkout.
+After dependency changes, refresh its lock with `uv lock --project vendor/skyrl`.

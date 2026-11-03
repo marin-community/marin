@@ -15,6 +15,7 @@ One-off analysis pages published to durable public hosting (see
 [Publishing an Analysis Site](../tutorials/publish-analysis-site.md)). The machine-readable list is
 [`gs://marin-public/index.json`](https://storage.googleapis.com/marin-public/index.json).
 
+- [SOTOPIA-hard paired samples](https://storage.googleapis.com/marin-public/penfever/sotopia-hard-samples/2026.10.20/index.html) — ten paired Snowball and Qwen3 Coder scenarios; mean rewards 0.390 and 0.630, respectively ([source and run provenance](https://github.com/marin-community/marin/pull/10166)).
 - [DataKit side-by-side](https://storage.googleapis.com/marin-public/held/datakit-sidebyside/2026.07.01/index.html) — cluster examples, side by side (held)
 - [Delphi mid-training dossier](https://storage.googleapis.com/marin-public/ahmad/delphi-midtraining/2026.07.01/index.html) — mid-training analysis dossier (ahmad)
 

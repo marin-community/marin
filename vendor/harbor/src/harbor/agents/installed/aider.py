@@ -3,8 +3,8 @@ import shlex
 
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
-    with_prompt_template,
     CliFlag,
+    with_prompt_template,
 )
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
@@ -76,19 +76,8 @@ class Aider(BaseInstalledAgent):
         return text
 
     async def install(self, environment: BaseEnvironment) -> None:
-        await self.exec_as_root(
-            environment,
-            command="apt-get update && apt-get install -y curl",
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-        )
-        await self.exec_as_agent(
-            environment,
-            command=(
-                "set -euo pipefail; "
-                "curl -LsSf https://aider.chat/install.sh | sh && "
-                'if [ -f "$HOME/.local/bin/env" ]; then source "$HOME/.local/bin/env"; fi && '
-                "aider --version"
-            ),
+        raise RuntimeError(
+            "This agent requires blocked dependency LiteLLM; use mini-swe-agent or terminus-2"
         )
 
     def populate_context_post_run(self, context: AgentContext) -> None:

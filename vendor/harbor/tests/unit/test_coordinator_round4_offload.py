@@ -1,34 +1,4 @@
-"""Round-4 regression: the per-turn `/tokenize` probe must be TRULY ASYNC (not
-``to_thread``), and the daytona download mkdirs must be offloaded off the loop.
-
-A LIVE py-spy on the CoreWeave RL path (v0i, running the round-3 HEAD) still
-caught the RolloutCoordinator's single asyncio loop saturation-bursty (~1/3 TDP,
-KV floor) despite the round-1/2/3 offloads. The remaining driver is a
-CONCURRENCY-MATH one, not an ordinary "move it off the loop" one:
-
-  1. ``Terminus2._acount_total_tokens`` -> the per-turn vLLM `/tokenize` POST,
-     reached EVERY turn (~169 concurrent trials per coordinator) via
-     ``_check_proactive_summarization`` (which always runs, even with
-     ``enable_summarize=False``). Round-3 moved it off the loop via
-     ``asyncio.to_thread`` — but that routes through the DEFAULT
-     ``ThreadPoolExecutor`` (bounded ~min(32, cpu+4) threads), so 169 per-turn
-     probes SERIALIZE ~32-wide AND contend the same default executor litellm's
-     ``acompletion`` uses for its ``run_in_executor(None, ...)`` preamble. The
-     fix for a HIGH-CONCURRENCY hot-path op is a TRULY-ASYNC ``httpx.AsyncClient``
-     POST ``await``-ed on the loop: all N probes are in-flight at once (each
-     yields during the network wait) instead of queueing behind 32 threads.
-     THIS is asserted by ``test_..._probes_run_concurrently_not_serialized``.
-
-     (Distinct from the LLM completion itself, which was ALREADY async —
-     ``lite_llm.call`` -> ``litellm.acompletion`` -> ``async_completion`` ->
-     ``await async_httpx_client.post``. No sync ``litellm.completion`` exists in
-     harbor, so there was nothing to swap there.)
-
-  2. ``DaytonaEnvironment._download_dir_to_local`` -> a blocking ``Path.mkdir``
-     per downloaded file ON the loop. Low-frequency (per download, not per turn),
-     so ``asyncio.to_thread`` is the correct offload (batched into one call for
-     the whole dir set). Asserted by ``test_download_dir_mkdirs_run_off_loop``.
-"""
+"""Tokenization runs concurrently; blocking artifact filesystem work runs off the event loop."""
 
 import asyncio
 import threading
@@ -36,10 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import httpx
 import pytest
-
 from harbor.agents.terminus_2.terminus_2 import Terminus2
-
 
 # ── site 1: the /tokenize probe is truly-async (concurrent, not serialized) ───
 
@@ -69,7 +38,7 @@ async def test_acount_total_tokens_probes_run_concurrently_not_serialized() -> N
             release.set()
         await release.wait()
         in_flight -= 1
-        return SimpleNamespace(status_code=200, json=lambda: {"count": 7})
+        return httpx.Response(200, json={"count": 7}, request=httpx.Request("POST", url))
 
     fake_async_client = SimpleNamespace(post=_barrier_post)
 
@@ -101,7 +70,7 @@ async def test_acount_total_tokens_probes_run_concurrently_not_serialized() -> N
 
 @pytest.mark.unit
 async def test_acount_total_tokens_falls_back_off_loop_when_no_vllm() -> None:
-    """No vLLM api_base -> litellm token_counter fallback, kept OFF the loop."""
+    """No vLLM api_base -> local token estimate, kept OFF the loop."""
     loop_thread = threading.get_ident()
 
     agent = object.__new__(Terminus2)

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.harness.shell import task_prompt
 from rolloutengine.models import TaskRolloutSpec
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
@@ -11,7 +12,6 @@ from taskcompendium.runtime.shell import resolve_shell_tool
 
 from skyrl_train.inference_engines.base import ConversationType
 from skyrl_train.rollouts.group_grader import GroupGraderSpec
-
 
 @dataclass(frozen=True)
 class TrajectoryMetadata:
@@ -37,6 +37,8 @@ class PreferenceInput:
 
 
 def task_messages(spec: TaskRolloutSpec) -> ConversationType:
+    if spec.harness == ASSISTANT_PREFIX_HARNESS:
+        return list(assistant_prefix_prompt(spec.task).messages)
     if not is_shell_harness(spec.harness):
         return list(episode_prompt(spec.task).messages)
     tool = resolve_shell_tool(spec.task, shell_harness(spec.harness).shell_tool)

@@ -19,6 +19,8 @@ from skyrl_gym.verification import RolloutEvidence
         ),
         (r"\frac{270}7\text{ degrees}", r"\frac{270}{7}", r"\frac{271}{7}"),
         (r"\frac9{19}", r"\frac{9}{19}", r"\frac{9}{20}"),
+        (r"\frac{3}{\pi}", r"\dfrac{3}{\pi}", r"\dfrac{4}{\pi}"),
+        (r"-\frac{1}{4}", "-1/4", "1/4"),
         ("42", "42", "42.00001"),
     ],
 )

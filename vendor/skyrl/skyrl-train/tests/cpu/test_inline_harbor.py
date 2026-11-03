@@ -30,7 +30,9 @@ async def test_worker_runs_outside_checkout_with_launcher_package_shadowed(tmp_p
             await client.run({"job": {"tasks": []}, "reward_key": "reward"}, 0)
 
 
-def test_validation_scores_preserve_infrastructure_missingness():
+@pytest.mark.parametrize("agent_error", ["AgentTimeoutError", "TurnCapExhaustedError", "ModelInitiatedTmuxFailure"])
+@pytest.mark.parametrize("unscored_error", ["ConnectionError", "VerifierRuntimeError", "VerifierTimeoutError"])
+def test_validation_scores_preserve_infrastructure_missingness(agent_error, unscored_error):
     tasks = [
         TaskConfig(path=f"task-{index}", git_url="https://example.com/tasks", git_commit_id="a" * 40)
         for index in range(4)
@@ -48,9 +50,14 @@ def test_validation_scores_preserve_infrastructure_missingness():
         )
         for index, (task, score) in enumerate(zip(tasks, [1, 0, 1, 0], strict=True))
     ]
-    trials[2].exception_info = ExceptionInfo.from_exception(ConnectionError("sandbox unavailable"))
+    trials[2].exception_info = ExceptionInfo(
+        exception_type=unscored_error,
+        exception_message="unverified outcome",
+        exception_traceback="",
+        occurred_at=datetime.now(timezone.utc),
+    )
     trials[3].exception_info = ExceptionInfo(
-        exception_type="AgentTimeoutError",
+        exception_type=agent_error,
         exception_message="budget exhausted",
         exception_traceback="",
         occurred_at=datetime.now(timezone.utc),
@@ -66,6 +73,11 @@ def test_validation_scores_preserve_infrastructure_missingness():
         "reward_sum": 1.0,
         "avg_verifier_score": pytest.approx(1 / 3),
     }
+    # A terminal agent error never manufactures a zero or discards a verified success.
+    trials[3].verifier_result.rewards["reward"] = 1.0
+    assert validation_metrics(result, config, "reward")["reward_sum"] == 2.0
+    trials[3].verifier_result = None
+    assert validation_metrics(result, config, "reward")["num_scored"] == 2.0
     result.trial_results = trials[:-1] + [trials[0]]
     with pytest.raises(ValueError, match="duplicate"):
         validation_metrics(result, config, "reward")
