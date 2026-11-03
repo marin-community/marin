@@ -19,7 +19,7 @@ PROMPTS_DIR = "prompts"
 SETTINGS_FILE = "policy.json"
 PROMPT_SUFFIX = ".md"
 
-type Setting = bool | int | float | str | list[str]
+type Setting = bool | int | float | str | tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -38,9 +38,14 @@ class Prompt:
 
 @dataclass(frozen=True)
 class Policy:
-    """Every prompt and setting of a run, by dotted key."""
+    """Every prompt and setting of a run, by dotted key; a JSON list setting is held as a tuple, so no caller can
+    change a setting of a shared policy through the value it read."""
 
     entries: Mapping[str, Prompt | Setting]
+
+    def __post_init__(self) -> None:
+        frozen = {key: tuple(value) if isinstance(value, list) else value for key, value in self.entries.items()}
+        object.__setattr__(self, "entries", frozen)
 
     def prompt(self, key: str) -> Prompt:
         return self._entry(key, Prompt)
@@ -75,6 +80,7 @@ class Policy:
                 old = entries[key]
                 new = Prompt(value) if isinstance(old, Prompt) and isinstance(value, str) else value
                 new = float(new) if type(old) is float and type(new) is int else new
+                new = tuple(new) if isinstance(new, list) else new
                 if type(new) is not type(old):
                     raise ValueError(f"policy entry {key} is a {type(old).__name__}, not {value!r}")
                 entries[key] = new

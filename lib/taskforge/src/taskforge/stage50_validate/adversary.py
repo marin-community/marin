@@ -228,7 +228,7 @@ def adversary_roster(policy: Policy, sampling: LLMPolicy) -> tuple[AdversaryPoli
             min_probes=setting("min_probes", int),
             prompts=policy,
         )
-        for name in setting("roster", list)
+        for name in setting("roster", tuple)
     )
 
 

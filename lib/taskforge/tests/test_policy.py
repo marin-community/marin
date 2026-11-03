@@ -21,6 +21,7 @@ def test_an_overlay_replaces_only_the_entries_it_names_and_the_digests_under_the
     assert policy.setting("band.low", float) == 0.0
     assert policy.stage_digest("author") != DEFAULT_POLICY.stage_digest("author")
     assert policy.stage_digest("proposer") == DEFAULT_POLICY.stage_digest("proposer")
+    assert policy.setting("adversary.roster", tuple) == DEFAULT_POLICY.setting("adversary.roster", tuple) == ()
     lines = {line.split()[1]: line for line in resolution_lines(DEFAULT_POLICY, policy)}
     assert lines.keys() == DEFAULT_POLICY.entries.keys()
     assert lines["band.low"] == "POLICY band.low declared=0.25 resolved=0.0"
