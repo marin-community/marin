@@ -329,7 +329,7 @@ class GrugTrainerConfig:
     # restarts at step 0.
     save_checkpoints: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # Grug builds its own compact (replica_dcn, data, expert, context, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
@@ -490,7 +490,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -502,6 +502,24 @@ def build_train_loader(
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
+
+
+def expert_collapsed_eval_mesh(train_mesh: Mesh) -> Mesh:
+    """Fold ``train_mesh``'s ``expert`` axis into ``data`` for the dropless eval.
+
+    ``data`` and ``expert`` are adjacent, so a reshape keeps every device's ``context`` group and
+    makes its eval ``data`` group its training ``(data, expert)`` group. A collective over a device
+    group training never used makes XLA create an NCCL communicator that stays resident outside the
+    allocator pool.
+    """
+    names = train_mesh.axis_names
+    if names[names.index("data") + 1] != "expert":
+        raise ValueError(f"expert must follow data in the training mesh, got {names}")
+    shape = dict(train_mesh.shape)
+    shape["data"] *= shape["expert"]
+    shape["expert"] = 1
+    devices = train_mesh.devices.reshape(tuple(shape[name] for name in names))
+    return Mesh(devices, names, axis_types=train_mesh.axis_types)
 
 
 def _reshard_tree_to_mesh(tree, mesh: Mesh):
@@ -589,7 +607,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -1198,12 +1216,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
             # into `data`), which the local backend requires. FSDP runs already have expert=1.
             if dropless:
-                dropless_eval_mesh = compact_grug_mesh(
-                    expert_axis_size=1,
-                    replica_axis_size=mesh.shape["replica_dcn"],
-                    model_axis_size=mesh.shape["model"],
-                    context_axis_size=mesh.shape["context"],
-                )
+                dropless_eval_mesh = expert_collapsed_eval_mesh(mesh)
                 # Build under the eval mesh so every constant the evaluator captures at construction
                 # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
                 # rather than the ambient train mesh; otherwise those leak a train-mesh aval into the

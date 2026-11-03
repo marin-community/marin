@@ -46,8 +46,8 @@ def test_context_parallel_logits_match_unsharded_sequence():
         logits = {}
         for context, expert in [(1, 4), (2, 2)]:
             mesh = Mesh(
-                np.asarray(devices).reshape(1, 1, context, expert, 1),
-                ("replica_dcn", "data", "context", "expert", "model"),
+                np.asarray(devices).reshape(1, 1, expert, context, 1),
+                ("replica_dcn", "data", "expert", "context", "model"),
                 axis_types=(AxisType.Explicit,) * 5,
             )
             with jax.set_mesh(mesh):

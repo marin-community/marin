@@ -69,7 +69,7 @@ def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
         expert_axis_size=16,
         replica_axis_size=4,
         model_axis_size=1,
-    ) == (4, 2, 1, 16, 1)
+    ) == (4, 2, 16, 1, 1)
 
 
 def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
@@ -102,10 +102,32 @@ def test_compact_grug_mesh_axis_sizes():
         assert tuple(mesh.shape.items()) == (
             ("replica_dcn", 1),
             ("data", device_count // 8),
-            ("context", 2),
             ("expert", 4),
+            ("context", 2),
             ("model", 1),
         ), mesh.shape
+
+
+_CONTEXT_BEFORE_EXPERT_AXES = ("replica_dcn", "data", "context", "expert", "model")
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize(("replica", "expert"), [(1, 8), (2, 4), (1, 2), (2, 1)])
+def test_compact_grug_mesh_keeps_cp1_device_assignment(replica, expert):
+    """At context=1 the expert-before-context mesh places every device where the old order did."""
+    with use_test_devices(8):
+        if jax.process_count() != 1 or len(jax.devices()) != 8:
+            pytest.skip("the layout comparison needs exactly eight devices in one process")
+        mesh = compact_grug_mesh(replica_axis_size=replica, expert_axis_size=expert, context_axis_size=1)
+        old_devices = np.asarray(jax.devices(), dtype=object).reshape(replica, 8 // (replica * expert), 1, expert, 1)
+
+        def coordinates(devices, axis_names):
+            return {
+                device.id: {name: int(index) for name, index in zip(axis_names, position, strict=True)}
+                for position, device in np.ndenumerate(devices)
+            }
+
+        assert coordinates(mesh.devices, mesh.axis_names) == coordinates(old_devices, _CONTEXT_BEFORE_EXPERT_AXES)
 
 
 @pytest.mark.multidevice
@@ -122,8 +144,8 @@ def test_legacy_checkpoint_restore_with_unit_context_axis():
             axis_types=(AxisType.Explicit,) * 4,
         )
         mesh = Mesh(
-            devices.reshape(1, device_count // 2, 1, 2, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            devices.reshape(1, device_count // 2, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
 
@@ -163,7 +185,7 @@ def test_legacy_checkpoint_restore_with_context_sharding():
         )
         mesh = Mesh(
             devices.reshape(1, device_count // 4, 2, 2, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
 
@@ -322,7 +344,7 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     always have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1
+    ``(replica_dcn, data, expert, context, model)`` contract the "expert" axis is kept at length 1
     instead of being dropped, so the data-loader pspec can name it unconditionally.
     """
     train_module = importlib.import_module("experiments.grug.moe.train")
@@ -391,7 +413,7 @@ def test_grug_moe_model_init_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1,
+    ``(replica_dcn, data, expert, context, model)`` contract the "expert" axis is kept at length 1,
     so MoEMLP.init reads ``mesh.shape["expert"] == 1`` rather than hitting an
     "axis absent" branch.
     """
