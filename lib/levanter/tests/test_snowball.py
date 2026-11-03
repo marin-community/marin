@@ -603,7 +603,11 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 ), moment_specs
             examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
             data = LmDataConfig(
-                components={"direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(examples)})},
+                components={
+                    "direct": DirectDatasetComponent(
+                        datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(examples)}
+                    )
+                },
                 tokenizer=str(hf_path),
             )
             main(
