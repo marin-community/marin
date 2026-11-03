@@ -247,6 +247,14 @@ and `uv.lock`, and merges only after the same identity, file, SHA, and CI gates
 pass. Manual dispatch retries a failed or missed update without republishing the
 wheels.
 
+## Snowball family-tree releases
+
+`marin-release-snowball-tree.yaml` publishes the Snowball family-tree app from
+`main` with `scripts/ci/snowball_release.py`. Scheduled runs require the
+repository variable `SNOWBALL_TREE_RELEASE=enabled`. The
+[tree maintenance guide](../../docs/references/snowball-family-tree.md#nightly-publication)
+covers activation and manual runs.
+
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
 This recipe replaces `peter-evans/create-pull-request@v7`. It creates the PR if missing, updates it (force-with-lease) if present, reconciles labels, and writes `pr_url` and `pr_created` to `$GITHUB_OUTPUT`.
@@ -341,21 +349,3 @@ steps:
 ```
 
 The README is the source of truth — when fixing the recipe, fix it here. The spec.md copy is illustrative.
-
-## Snowball family-tree releases
-
-`marin-release-snowball-tree.yaml` runs daily at 04:17 UTC when the repository
-variable `SNOWBALL_TREE_RELEASE` equals `enabled`, or by manual dispatch from main.
-`scripts/ci/snowball_release.py` skips unchanged source, validates changed
-source, and publishes once using the observed live version. It reuses Marina's
-clean-current-main checks and fails on conflicts. GitHub OIDC authenticates the
-main-only Cloud Run deployment identity; its IAP access is declared by the shared
-IAM stack. The command writes a publication record before verification. The job
-summary and artifact retain it even if verification fails.
-
-See the [tree maintenance guide](../../docs/references/snowball-family-tree.md#nightly-publication)
-for bootstrap of legacy unrecorded releases. Preview with a synced Marina environment:
-
-```bash
-uv run --no-sync python scripts/ci/snowball_release.py --dry-run --record /tmp/snowball-release.json
-```
