@@ -26,7 +26,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.plateau import PlateauDroppingConfig, PlateauState
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.devices import use_test_devices
 from levanter.tracker.tracker import NoopTracker, TrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
@@ -187,9 +187,11 @@ def test_plateau_dropping_starts_at_the_third_visit_and_resume_reproduces_it(tmp
         main(_resume(config, tmp_path, "full", "missing", resume_at))
 
 
+@pytest.mark.multidevice
 @pytest.mark.timeout(900)
 def test_plateau_dropping_under_context_parallelism():
-    run_on_cpu_devices(f"import runpy; runpy.run_path({__file__!r})['_check_context_parallel']()", device_count=8)
+    with use_test_devices(8):
+        _check_context_parallel()
 
 
 def _check_context_parallel():
