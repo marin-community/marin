@@ -380,7 +380,11 @@ the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
 `LEAN_GRADER_PACKAGES` adds the Lean 4 and Mathlib fragment
-`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image.
+`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image, and
+`LEAN_KERNEL_GRADER_PACKAGES` adds `datasets/lean/lean.Dockerfile` (Lean and Mathlib
+v4.34.1 with Prime Intellect's proof checker), built likewise. Unlike the scorers a
+grade script ships with its task, that checker is compiled into the image: it is a
+pinned toolchain component that the Lean proof grader runs on every grade.
 Converters declare agent requirements independently. A simulated shell requires
 explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation.
 Conversation-only tasks need no machine. Memory settings are advisory sizing hints.
