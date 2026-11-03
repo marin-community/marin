@@ -43,7 +43,7 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     fake_glm.stream(content=submission(PROGRAM))
     workpiece_dir = tmp_path / "workpiece"
 
-    authored = await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY.author)(
+    authored = await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY)(
         AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {}
     )
 
@@ -69,7 +69,7 @@ async def test_a_revision_continues_from_the_program_the_workpiece_holds(
     fake_glm.stream(content=submission(fixed))
     revision = Revision(RevisionKind.BUILD_FAILURE, "grader: the reference scored 0.0")
 
-    authored = await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY.author)(
+    authored = await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY)(
         AuthorContext(WORKPIECE, 2, workpiece_dir), proposal, revision, {}
     )
 
@@ -89,7 +89,7 @@ async def test_an_author_call_that_never_loads_keeps_its_completions(proposal, g
     workpiece_dir = tmp_path / "workpiece"
 
     with pytest.raises(StructuredOutputError):
-        await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY.author)(
+        await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY)(
             AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {}
         )
 
@@ -106,7 +106,7 @@ async def test_an_author_reply_cut_off_by_the_output_limit_fails_without_a_repai
     workpiece_dir = tmp_path / "workpiece"
 
     with pytest.raises(IncompleteOutput):
-        await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY.author)(
+        await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY)(
             AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {}
         )
 

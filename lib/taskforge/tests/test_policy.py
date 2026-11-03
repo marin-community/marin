@@ -1,49 +1,47 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Policy overlays replace selected prompts and reject invalid field mappings."""
+"""A policy is its prompt files and settings by dotted key; overlays replace entries by key."""
 
-import json
+import shutil
 
 import pytest
 
 from taskforge.defaults import DEFAULT_POLICY, DEFAULTS_DIR
-from taskforge.policy import POLICY_FILE, load_policy
+from taskforge.llm.policy import LLMPolicy
+from taskforge.policy import PROMPTS_DIR, load_policy, resolution_lines
+from taskforge.stage50_validate.adversary import AdversaryMode, adversary_roster
 
 
-def test_an_overlay_replaces_only_the_fields_it_names_and_changes_the_digest(tmp_path):
-    (tmp_path / "nudge.md").write_text("Call a tool; submit `{program}` when it builds.\n")
-    overlay = tmp_path / "overlay.json"
-    overlay.write_text(json.dumps({"author.nudge": "nudge.md"}))
+def test_an_overlay_replaces_only_the_entries_it_names_and_the_digests_under_their_prefix():
+    policy = DEFAULT_POLICY.overlaid({"author.nudge": "Call a tool; submit `{program}`."}, {"band.low": 0})
 
-    policy = load_policy(DEFAULTS_DIR, overlay)
-
-    assert policy.author.nudge.render(program="program.py") == "Call a tool; submit `program.py` when it builds."
-    assert policy.author.system == DEFAULT_POLICY.author.system
-    assert policy.proposer == DEFAULT_POLICY.proposer
-    assert policy.stage_digest != DEFAULT_POLICY.stage_digest
-    assert load_policy(DEFAULTS_DIR).stage_digest == DEFAULT_POLICY.stage_digest
-
-
-def test_a_proposer_overlay_leaves_the_stage_digest_unchanged(tmp_path):
-    (tmp_path / "plan.md").write_text("Plan {n} slots.\n")
-    overlay = tmp_path / "overlay.json"
-    overlay.write_text(json.dumps({"proposer.plan": "plan.md"}))
-
-    policy = load_policy(DEFAULTS_DIR, overlay)
-
-    assert policy.proposer.plan.render(n=2) == "Plan 2 slots."
-    assert policy.stage_digest == DEFAULT_POLICY.stage_digest
+    assert policy.prompt("author.nudge").render(program="program.py") == "Call a tool; submit `program.py`."
+    assert policy.prompt("author.system") == DEFAULT_POLICY.prompt("author.system")
+    assert policy.setting("band.low", float) == 0.0
+    assert policy.stage_digest("author") != DEFAULT_POLICY.stage_digest("author")
+    assert policy.stage_digest("proposer") == DEFAULT_POLICY.stage_digest("proposer")
+    lines = {line.split()[1]: line for line in resolution_lines(DEFAULT_POLICY, policy)}
+    assert lines.keys() == DEFAULT_POLICY.entries.keys()
+    assert lines["band.low"] == "POLICY band.low declared=0.25 resolved=0.0"
 
 
-def test_a_policy_file_naming_an_unknown_field_or_missing_one_is_refused(tmp_path):
-    overlay = tmp_path / "overlay.json"
-    overlay.write_text(json.dumps({"author.turns": "turns.md"}))
-    with pytest.raises(ValueError, match=r"names no such policy field: author\.turns"):
-        load_policy(DEFAULTS_DIR, overlay)
+def test_a_prompt_file_added_under_prompts_is_a_policy_entry(tmp_path):
+    shutil.copytree(DEFAULTS_DIR, tmp_path, dirs_exist_ok=True)
+    (tmp_path / PROMPTS_DIR / "adversary" / "off_by_one.md").write_text("Find an answer one unit off that passes.\n")
 
-    defaults = json.loads((DEFAULTS_DIR / POLICY_FILE).read_text())
-    del defaults["author.nudge"]
-    (tmp_path / POLICY_FILE).write_text(json.dumps(defaults))
-    with pytest.raises(ValueError, match=r"has no file for author\.nudge"):
-        load_policy(tmp_path)
+    policy = load_policy(tmp_path).overlaid({"adversary.roster": ["off_by_one"]})
+
+    (adversary,) = adversary_roster(policy, LLMPolicy())
+    assert (adversary.spec.name, adversary.spec.brief) == ("off_by_one", "Find an answer one unit off that passes.")
+    assert (adversary.k, adversary.mode, adversary.prompts) == (1, AdversaryMode.BLACKBOX, policy)
+
+
+@pytest.mark.parametrize(
+    ("overlay", "refusal"),
+    [({"author.turns": "Take {turns} turns."}, "no entry author.turns"), ({"solver.k": "8"}, "solver.k is a int")],
+    ids=["unknown key", "wrong type"],
+)
+def test_an_overlay_naming_an_unknown_key_or_a_value_of_another_type_is_refused(overlay, refusal):
+    with pytest.raises(ValueError, match=refusal):
+        DEFAULT_POLICY.overlaid(overlay)

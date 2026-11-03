@@ -3,7 +3,7 @@
 
 """An author that writes a build program for a proposal with one structured GLM call.
 
-``GlmAuthor`` sends the rules (``AuthorPolicy.system``), then the proposal, the SDK reference
+``GlmAuthor`` sends the rules (``author.system``), then the proposal, the SDK reference
 (``sdk_reference``, generated from signatures and docstrings) and the standard template's source.
 The model replies with a ``ProgramSubmission``, whose validator loads the source with
 ``program_sdk.load_program``, so a program the loader refuses goes back to the model in the client's
@@ -42,7 +42,7 @@ from taskforge.llm.client import Completion, ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
 from taskforge.llm.structured import IncompleteOutput, StructuredOutputError, schema_instruction
-from taskforge.policy import AuthorPolicy, Prompt
+from taskforge.policy import Policy, Prompt
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft, verdict
 from taskforge.stage10_proposal.model import TaskProposal, render
@@ -212,12 +212,12 @@ def sdk_reference(grading_reference: Prompt) -> str:
     return "\n".join(lines)
 
 
-def author_messages(proposal: TaskProposal, policy: AuthorPolicy) -> list[Message]:
+def author_messages(proposal: TaskProposal, policy: Policy) -> list[Message]:
     """The author request: ``policy``'s rules, then the proposal, the SDK reference and the template."""
-    system = policy.system.render(grader=GRADER_STEP, imports=", ".join(sorted(ALLOWED_IMPORTS)))
-    user = policy.user.render(
+    system = policy.prompt("author.system").render(grader=GRADER_STEP, imports=", ".join(sorted(ALLOWED_IMPORTS)))
+    user = policy.prompt("author.user").render(
         proposal=render(proposal),
-        reference=sdk_reference(policy.grading_reference),
+        reference=sdk_reference(policy.prompt("author.grading_reference")),
         template=inspect.getsource(standard),
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -238,7 +238,7 @@ class GlmAuthor:
     model: ModelClient
     sampling: LLMPolicy
     ledger: Ledger
-    prompts: AuthorPolicy
+    prompts: Policy
 
     async def __call__(
         self,
@@ -262,7 +262,10 @@ class GlmAuthor:
         if revision is not None:
             follow_up: list[Message] = [
                 {"role": "assistant", "content": (workpiece_dir / PROGRAM_FILE).read_text()},
-                {"role": "user", "content": self.prompts.revision.render(kind=revision.kind, detail=revision.detail)},
+                {
+                    "role": "user",
+                    "content": self.prompts.prompt("author.revision").render(kind=revision.kind, detail=revision.detail),
+                },
             ]
             messages += follow_up
         attempts = workpiece_dir / AUTHOR_DIR

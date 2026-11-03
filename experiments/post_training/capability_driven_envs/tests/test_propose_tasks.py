@@ -72,7 +72,7 @@ def test_a_capability_is_proposed_and_each_proposal_triaged_by_the_preflight_wit
     output = tmp_path / "run"
     output.mkdir()
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY.proposer))
+    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY))
     write_outputs(output, proposed)
 
     assert json.loads((output / SUMMARY_FILE).read_text()) == {CAPABILITY_ID: {"1": TriageDecision.ACCEPT}}
@@ -93,7 +93,7 @@ def test_a_plan_invalid_after_its_repair_fails_only_its_capability(tmp_path: Pat
     output = tmp_path / "run"
     output.mkdir()
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY.proposer))
+    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY))
     write_outputs(output, proposed)
 
     summary = json.loads((output / SUMMARY_FILE).read_text())
@@ -115,7 +115,7 @@ def test_a_slot_whose_model_runs_out_of_retries_fails_alone_and_keeps_the_plan_a
     output = tmp_path / "run"
     output.mkdir()
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 2, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY.proposer))
+    proposed = asyncio.run(propose_tasks(model, ideas, 2, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY))
     write_outputs(output, proposed)
 
     summary = json.loads((output / SUMMARY_FILE).read_text())

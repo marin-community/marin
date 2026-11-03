@@ -1,31 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The text a run sends its models, as data: ``Prompt`` templates grouped by stage into a ``Policy``.
+"""The prompts and settings of a run as one flat mapping from dotted key to value.
 
-``load_policy(defaults_dir, *overlays)`` reads ``policy.json`` in ``defaults_dir``, a JSON object from each
-dotted field name (``author.system``) to a prompt file relative to that directory. An overlay is a JSON object of
-the same shape, naming any subset of the fields, with paths relative to the overlay's own directory; each overlay
-replaces the files of the fields it names, in order. A key that names no field is refused, and so is a default
-that leaves a field without a file. ``taskforge.defaults.DEFAULT_POLICY`` is the policy of the package's own files.
-
-A prompt file holds its template and then one newline, which the loader drops, so a template that ends with a
-newline ends its file with a blank line. A template is rendered with ``str.format``: ``{name}`` is a field the
-stage fills, ``{{`` and ``}}`` are literal braces.
+The prompt file ``prompts/<group>/<name>.md`` is the key ``<group>.<name>``; ``policy.json`` holds the settings. A
+prompt file ends with one newline, which the loader drops; templates render with ``str.format``.
 """
 
-import dataclasses
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import get_type_hints
 
 from taskforge.content_hash import digest
 
-POLICY_FILE = "policy.json"
-STAGE_GROUPS = ("author", "adversary")
-"""The groups of ``Policy`` the stage coordinator's stages send, which ``Policy.stage_digest`` covers."""
+PROMPTS_DIR = "prompts"
+SETTINGS_FILE = "policy.json"
+PROMPT_SUFFIX = ".md"
+
+type Setting = bool | int | float | str | list[str]
 
 
 @dataclass(frozen=True)
@@ -43,154 +37,84 @@ class Prompt:
 
 
 @dataclass(frozen=True)
-class ProposerPolicy:
-    """The capability proposer's text: the planning call, then one proposal document per slot.
-
-    Attributes:
-        system: The system turn of every call. Field: ``solver_machine_rule``.
-        plan: The planning request. Fields: ``n``, ``environments``, ``max_per_pairing``,
-            ``research_criterion`` and ``capability_record``.
-        write: The request for one slot's document. Fields: ``slot``, ``document_template``,
-            ``solver_machine_rule``, ``research_criterion`` (indented two spaces), ``headings``,
-            ``capability_record``, ``portfolio`` and ``planned_slot``.
-        repair: The follow-up to a document the parser refused. Field: ``error``.
-        research_criterion: When a task's build needs research, quoted by ``plan`` and ``write``.
-        solver_machine_rule: The rule for the ``solver_machine`` header value. Fields: one per
-            ``SolverMachine`` member, named by its value.
-    """
-
-    system: Prompt
-    plan: Prompt
-    write: Prompt
-    repair: Prompt
-    research_criterion: Prompt
-    solver_machine_rule: Prompt
-
-
-@dataclass(frozen=True)
-class AuthorPolicy:
-    """The build-program author's text, for the one-shot and the agentic author.
-
-    Attributes:
-        system: The rules. Fields: ``grader`` (the grader step's name) and ``imports``.
-        user: The request. Fields: ``proposal``, ``reference`` and ``template``.
-        revision: A revision request. Fields: ``kind`` and ``detail``.
-        grading_reference: The SDK reference's section on what ``grade_candidate`` returns.
-        session: The agentic section appended to ``system``. Fields: ``program``, ``proposal``, ``sdk``,
-            ``template``, ``notes`` (workspace paths), ``write_chars`` and ``turns``.
-        seed: The first user turn of a session seeded from an earlier one. Fields: ``program``, ``notes``
-            and ``submitted``.
-        handoff: The lead of a session after one that did not submit. Field: ``reason``.
-        no_revision: The lead of a session after one that submitted, with nothing to revise.
-        edit_and_submit: What follows ``revision`` in a session. Field: ``program``.
-        length_nudge: The turn after a reply the output limit cut off. Field: ``limit``.
-        nudge: The turn after a reply without a tool call. Field: ``program``.
-    """
-
-    system: Prompt
-    user: Prompt
-    revision: Prompt
-    grading_reference: Prompt
-    session: Prompt
-    seed: Prompt
-    handoff: Prompt
-    no_revision: Prompt
-    edit_and_submit: Prompt
-    length_nudge: Prompt
-    nudge: Prompt
-
-
-@dataclass(frozen=True)
-class AdversaryPrompts:
-    """The validation adversary's text.
-
-    Attributes:
-        brief: The brief of every adversary and both modes. Fields: ``goal``, ``tools``, ``context``,
-            ``submissions`` and ``probes``.
-        whitebox: The header of the white-box section.
-        submit: The ``submit`` tool's description.
-        false_accept: The ``FALSE_ACCEPT`` adversary's goal.
-        false_reject: The ``FALSE_REJECT`` adversary's goal.
-        shortcut: The ``SHORTCUT`` adversary's goal.
-    """
-
-    brief: Prompt
-    whitebox: Prompt
-    submit: Prompt
-    false_accept: Prompt
-    false_reject: Prompt
-    shortcut: Prompt
-
-
-@dataclass(frozen=True)
 class Policy:
-    """Every prompt of a run, by stage.
+    """Every prompt and setting of a run, by dotted key."""
 
-    ``stage_digest`` covers the groups the stage coordinator's stages send, ``author`` and ``adversary``, and is the
-    digest ``OPENED`` records. The proposer's prompts are outside that relaunch contract: they are used before a
-    workpiece exists and no coordinator stage reads them, so editing one never blocks a workpiece's relaunch.
-    """
+    entries: Mapping[str, Prompt | Setting]
 
-    proposer: ProposerPolicy
-    author: AuthorPolicy
-    adversary: AdversaryPrompts
+    def prompt(self, key: str) -> Prompt:
+        return self._entry(key, Prompt)
 
-    @property
-    def stage_digest(self) -> str:
-        """The sha256 of each ``author`` and ``adversary`` template's sha256, by dotted field name; file names do not
-        count."""
+    def setting[T](self, key: str, kind: type[T]) -> T:
+        return self._entry(key, kind)
+
+    def _entry[T](self, key: str, kind: type[T]) -> T:
+        value = self.entries[key]
+        if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+            raise ValueError(f"policy entry {key} is {value!r}, not a {kind.__name__}")
+        return value
+
+    def stage_digest(self, prefix: str) -> str:
+        """The sha256 of the sorted entries under ``prefix``: a prompt by its template's sha256, a setting by value."""
+        under = {key: value for key, value in self.entries.items() if key.startswith(f"{prefix}.")}
         return digest(
-            {key: prompt.sha256 for key, prompt in _prompts(self).items() if key.split(".")[0] in STAGE_GROUPS}
+            {key: value.sha256 if isinstance(value, Prompt) else value for key, value in sorted(under.items())}
         )
 
+    def overlaid(self, *overlays: Mapping[str, object]) -> "Policy":
+        """This policy with each overlay's values in place, in order; a string replaces a prompt's template.
 
-def _fields() -> dict[str, type]:
-    """Each group of ``Policy`` with its record type."""
-    return get_type_hints(Policy)
-
-
-def policy_keys() -> tuple[str, ...]:
-    """The dotted name of every prompt field of ``Policy``, in declaration order."""
-    return tuple(f"{group}.{field.name}" for group, record in _fields().items() for field in dataclasses.fields(record))
-
-
-def _prompts(policy: Policy) -> dict[str, Prompt]:
-    return {key: getattr(getattr(policy, key.split(".")[0]), key.split(".")[1]) for key in policy_keys()}
-
-
-def _prompt_files(path: Path) -> dict[str, Path]:
-    """The fields ``path`` names, each with its prompt file's path."""
-    entries = json.loads(path.read_text())
-    unknown = sorted(set(entries) - set(policy_keys()))
-    if unknown:
-        raise ValueError(f"{path} names no such policy field: {', '.join(unknown)}")
-    return {key: path.parent / name for key, name in entries.items()}
+        Raises:
+            ValueError: an overlay names a key this policy lacks, or gives a key a value of another type.
+        """
+        entries = dict(self.entries)
+        for overlay in overlays:
+            for key, value in overlay.items():
+                if key not in entries:
+                    raise ValueError(f"the policy has no entry {key}")
+                old = entries[key]
+                new = Prompt(value) if isinstance(old, Prompt) and isinstance(value, str) else value
+                new = float(new) if type(old) is float and type(new) is int else new
+                if type(new) is not type(old):
+                    raise ValueError(f"policy entry {key} is a {type(old).__name__}, not {value!r}")
+                entries[key] = new
+        return Policy(entries)
 
 
-def _load_prompt(path: Path) -> Prompt:
-    text = path.read_text()
-    if not text.endswith("\n"):
-        raise ValueError(f"{path} does not end with a newline")
-    return Prompt(text[:-1])
-
-
-def load_policy(defaults_dir: Path, *overlays: Path) -> Policy:
-    """The policy of ``defaults_dir/policy.json`` with each overlay's files in its place, in order.
+def load_policy(defaults_dir: Path) -> Policy:
+    """The prompts under ``defaults_dir/prompts`` and the settings of ``defaults_dir/policy.json``.
 
     Raises:
-        ValueError: a file names a field ``Policy`` lacks, the defaults leave a field without a file, or a
-            prompt file does not end with a newline.
+        ValueError: a prompt file does not end with a newline, or a setting shares a prompt's key.
     """
-    files = _prompt_files(defaults_dir / POLICY_FILE)
-    missing = [key for key in policy_keys() if key not in files]
-    if missing:
-        raise ValueError(f"{defaults_dir / POLICY_FILE} has no file for {', '.join(missing)}")
-    for overlay in overlays:
-        files |= _prompt_files(overlay)
-    groups = {
-        group: record(
-            **{field.name: _load_prompt(files[f"{group}.{field.name}"]) for field in dataclasses.fields(record)}
-        )
-        for group, record in _fields().items()
-    }
-    return Policy(**groups)
+    prompts: dict[str, Prompt | Setting] = {}
+    for path in sorted((defaults_dir / PROMPTS_DIR).rglob(f"*{PROMPT_SUFFIX}")):
+        text = path.read_text()
+        if not text.endswith("\n"):
+            raise ValueError(f"{path} does not end with a newline")
+        prompts[".".join(path.relative_to(defaults_dir / PROMPTS_DIR).with_suffix("").parts)] = Prompt(text[:-1])
+    settings = json.loads((defaults_dir / SETTINGS_FILE).read_text())
+    shared = sorted(set(prompts) & set(settings))
+    if shared:
+        raise ValueError(f"{defaults_dir / SETTINGS_FILE} sets prompt keys: {', '.join(shared)}")
+    return Policy(prompts | settings)
+
+
+def parse_overlay(text: str) -> dict[str, object]:
+    """A driver's ``--policy`` argument: a JSON object from dotted key to value."""
+    overlay = json.loads(text)
+    if not isinstance(overlay, dict):
+        raise ValueError(f"a policy overlay is a JSON object, not {text!r}")
+    return overlay
+
+
+def resolution_lines(declared: Policy, resolved: Policy) -> list[str]:
+    """``POLICY <key> declared=<value> resolved=<value>`` for every entry, a prompt shown by its sha256 prefix."""
+
+    def shown(value: Prompt | Setting) -> str:
+        return f"sha256:{value.sha256[:12]}" if isinstance(value, Prompt) else json.dumps(value)
+
+    return [
+        f"POLICY {key} declared={shown(declared.entries[key])} resolved={shown(value)}"
+        for key, value in sorted(resolved.entries.items())
+    ]
