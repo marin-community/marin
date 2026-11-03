@@ -66,3 +66,25 @@ native attention checks alone cannot detect a Transformer Engine version cap.
 Publish the source commits, build environment, and checksums with the wheel
 assets. Adoption URLs and wheel hashes belong in the root dependency manifest
 and lock.
+
+## FA2-only Torch 2.14.1 packaging
+
+`package_flash_attn2.py` removes the unqualified optional `flash_attn.cute`
+namespace from the published Torch 2.14.1 FA2 wheels. The new wheel retains every
+FA2 native payload byte; its version, dist-info names, and RECORD change. This
+does not build CUDA code. The exact accepted input hashes are in the script.
+
+From `vendor/skyrl`, after reviewing and committing the packaging source:
+
+```bash
+python -m scripts.wheels.package_flash_attn2 '<published-input-wheel>' \
+  --output '<new-output-directory>' --proof '<new-proof-json>'
+```
+
+Retain the committed source identity, input release manifests, input/output
+wheel hashes, and generated payload proofs. Publish candidate bytes separately
+from the qualified release. Before promoting those exact bytes, qualify native
+forward/backward on H100/x86_64 and GB200/aarch64, plus the combined Megatron/vLLM
+runtime using `skyrl-train/ci/marin_nightly/run_grug_megatron.sh`. No worker may
+patch installed package files. Candidate assets and accepted hashes must not be
+replaced after qualification starts.
