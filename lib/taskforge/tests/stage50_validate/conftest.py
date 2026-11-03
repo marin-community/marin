@@ -48,7 +48,7 @@ from taskforge.spec.draft import (
     requirements,
     rollout_limits,
 )
-from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
+from tests.sandbox.fixture_images import FixtureImageFactory, ForwardingMachine, PortlessShellSimFactory, shell_grader
 
 MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
@@ -330,16 +330,12 @@ class FlakyFactory(ShellSimBacked):
 
 
 @dataclass
-class FaultyMachine:
+class FaultyMachine(ForwardingMachine):
     """A ShellSim machine whose ``close`` raises when ``close_error`` is set and whose commands raise
     ``MachineTerminated`` when ``terminated`` is set, as a killed sandbox's do."""
 
-    machine: Machine
     close_error: bool
     terminated: bool
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.machine, name)
 
     async def run(self, command: Command) -> Result:
         if self.terminated:

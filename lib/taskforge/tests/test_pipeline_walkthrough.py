@@ -712,7 +712,8 @@ async def test_a_failure_outside_the_program_holds_at_its_stage_unspent_and_a_re
     tmp_path, stage, error
 ):
     stages = replace(STAGES, author=Author(SOURCE))
-    stages = replace(stages, **{stage: FailsOn(getattr(stages, stage), error)})
+    failing: dict[str, Any] = {stage: FailsOn(getattr(stages, stage), error)}
+    stages = replace(stages, **failing)
     with pytest.raises(type(error), match=re.escape(str(error)) or None):
         await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, InMemoryEventLog())
     state = derive_state(stored_log(tmp_path, WORKPIECE).events())

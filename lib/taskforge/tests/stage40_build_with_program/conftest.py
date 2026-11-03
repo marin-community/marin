@@ -15,6 +15,7 @@ so a grader program the fake GLM writes is sh.
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from shellbox.machine import Backend
@@ -86,7 +87,7 @@ async def build_draft(
     proposal: TaskProposal,
     services: RLEnvBuildServices,
     model: ModelClient,
-    **options: object,
+    **options: Any,
 ) -> TaskDraft:
     """``run_build`` of round 0 into ``root / "round"`` and ``root / "store"``, research off unless ``options`` say."""
     options.setdefault("research", ResearchRequirement.OFF)

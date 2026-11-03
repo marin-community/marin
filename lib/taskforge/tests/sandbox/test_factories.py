@@ -10,6 +10,7 @@ import threading
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from rolloutengine.cleanup import _Cleanup
@@ -70,8 +71,10 @@ LIMITS = draft.rollout_limits(
 
 
 def selection(backend: Backend, **update) -> MachineRuntimeSpec:
-    unset = dict.fromkeys(("cpus", "memory_mb", "storage_mb", "user", "startup_timeout", "cleanup_timeout"))
-    return MachineRuntimeSpec(**(unset | dict(backend=backend.value, network=NetworkPolicy.DENY, gpus=0) | update))
+    unset: dict[str, Any] = dict.fromkeys(
+        ("cpus", "memory_mb", "storage_mb", "user", "startup_timeout", "cleanup_timeout")
+    )
+    return MachineRuntimeSpec(**(unset | {"backend": backend.value, "network": NetworkPolicy.DENY, "gpus": 0} | update))
 
 
 @dataclass(frozen=True)
