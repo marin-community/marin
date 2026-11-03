@@ -12,16 +12,11 @@ the factories about a spec's machines before any machine starts.
 import logging
 import shutil
 import subprocess
-import threading
-import time
 from collections.abc import Iterable, Mapping, Sequence
-from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 import shellsim
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
-from shellbox.backends.local.python_environment import resolve_python_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge
@@ -123,42 +118,6 @@ def machine_factories(backends: Sequence[Backend], controller_url: str | None) -
                 raise ValueError(f"Unsupported Taskforge backend: {backend}")
         factories[backend.value] = factory
     return factories
-
-
-@runtime_checkable
-class PythonEnvironmentFactory(Protocol):
-    """A factory that resolves ``PackageSpec`` machines into a cached Python environment, as the local one does."""
-
-    package_cache: Path
-    python_version: str
-
-
-WARM_THREAD = "warm-local-python"
-
-
-def warm_local_python(factories: Mapping[str, MachineFactory]) -> threading.Thread | None:
-    """Warm the local backend's bare CPython environment in a daemon thread.
-
-    Returns ``None`` without a local backend. Failures are logged and leave normal machine
-    creation to retry environment resolution.
-    """
-    factory = factories.get(Backend.LOCAL.value)
-    if not isinstance(factory, PythonEnvironmentFactory):
-        return None
-    cache, version = factory.package_cache, factory.python_version
-
-    def warm() -> None:
-        started = time.monotonic()
-        try:
-            resolve_python_environment(cache, (), version)
-        except Exception:
-            logger.warning("Warming the local Python %s environment in %s failed", version, cache, exc_info=True)
-            return
-        logger.info("Warmed the local Python %s environment in %s in %.1fs", version, cache, time.monotonic() - started)
-
-    thread = threading.Thread(target=warm, name=WARM_THREAD, daemon=True)
-    thread.start()
-    return thread
 
 
 def grading_environment(task: TaskSpec) -> EnvironmentRequirements | None:

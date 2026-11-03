@@ -155,7 +155,6 @@ spec, so a move of either is a single-site change.
 - `sandbox.factories.machine_factories(backends, controller_url)` returns exactly the requested
   factories, keyed by shellbox `Backend` value, and raises if one is unavailable. `spec.draft.lower`
   checks a spec's machines against them through `RolloutEngine.check` before any machine starts.
-  `warm_local_python(factories)` can warm the local backend's CPython cache in a background thread.
 
 Task-specific grading is the task's own code, private in `resources.verifier`, run by a
 `ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
