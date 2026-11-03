@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The JSON store round-trips a workpiece's events and refuses another schema."""
+"""The JSON store round-trips a workpiece's events and refuses another schema.
+
+Invariants: none (pins the store's round trip and schema refusal).
+"""
 
 import json
 

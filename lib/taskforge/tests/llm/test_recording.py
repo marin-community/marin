@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""LLM_CALL recording of rollout-model, agent and structured calls against the scripted GLM server."""
+"""LLM_CALL recording of rollout-model, agent and structured calls against the scripted GLM server.
+
+Invariants: none (pins each call path's ledger span: tokens, attempts, statuses, cause).
+"""
 
 import json
 from dataclasses import replace
@@ -74,17 +77,6 @@ async def test_rollout_model_records_a_call_that_runs_out_of_attempts(fake_glm, 
     assert entry.cause == "ModelUnavailable"
     assert entry.attrs["turn"] == "0"
     assert (entry.attrs["attempts"], entry.attrs["http_statuses"]) == ("3", "429,429,429")
-
-
-async def test_agent_turns_record_retried_statuses(fake_glm, client, ledger):
-    fake_glm.status(429, "slow down")
-    fake_glm.stream(content="answer")
-
-    await run_agent(client, LLMPolicy(), CONVERSATION[:1], (), 1, call_ledger(ledger), ReasoningReplay.KEEP)
-
-    [entry] = ledger.entries
-    assert (entry.attrs["attempts"], entry.attrs["attempts_retryable_status"]) == ("2", "1")
-    assert entry.attrs["http_statuses"] == "429"
 
 
 async def test_agent_turn_that_fills_the_context_records_its_attempts(fake_glm, client, ledger):

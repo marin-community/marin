@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""A batch assembled from slots written in separate calls equals the one-shot batch.
+
+Invariants: none (pins ``propose_all`` and ``proposal_batch`` over a persisted portfolio).
+"""
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -94,24 +99,13 @@ class TitlePlan:
     titles: tuple[str, ...]
 
 
-class DocumentModel:
-    """A scripted document writer with one reply per slot."""
-
-    def __init__(self, replies: Mapping[int, Completion]) -> None:
-        self.replies = replies
-        self.calls: list[int] = []
-
-    async def complete(self, slot: int) -> Completion:
-        self.calls.append(slot)
-        return self.replies[slot]
-
-
 class TitleSource:
-    """A ``ProposalSource[str, TitlePlan]``: slots in ``null_slots`` are planned null, the rest call ``model``."""
+    """A ``ProposalSource[str, TitlePlan]``: ``null_slots`` are planned null, the rest reply from ``replies``."""
 
-    def __init__(self, model: DocumentModel, null_slots: Mapping[int, str]) -> None:
-        self.model = model
+    def __init__(self, replies: Mapping[int, Completion], null_slots: Mapping[int, str]) -> None:
+        self.replies = replies
         self.null_slots = null_slots
+        self.calls: list[int] = []
 
     async def plan(self, idea: str, n: int) -> Portfolio[TitlePlan]:
         request: tuple[Message, ...] = ({"role": "user", "content": f"Plan {n} slots for {idea}."},)
@@ -126,7 +120,8 @@ class TitleSource:
             return SlotProposal(slot, parse(render(proposal)), (), (), None)
         title = portfolio.plan.titles[slot - 1]
         request: tuple[Message, ...] = ({"role": "user", "content": f"Write slot {slot} of {idea}: {title}."},)
-        reply = await self.model.complete(slot)
+        self.calls.append(slot)
+        reply = self.replies[slot]
         if reply.finish_reason is FinishReason.LENGTH:
             return SlotFailure(slot, "cut off by the output limit", request, (reply,))
         return SlotProposal(slot, parse(reply.content), request, (reply,), None)
@@ -138,8 +133,7 @@ def document(slot: int) -> Completion:
 
 def three_slot_source() -> TitleSource:
     """Slot 1 writes a document, slot 2's reply is cut off by the output limit, slot 3 is planned null."""
-    replies = {1: document(1), 2: completion('{"header":', FinishReason.LENGTH)}
-    return TitleSource(DocumentModel(replies), {3: NULL_REASON})
+    return TitleSource({1: document(1), 2: completion('{"header":', FinishReason.LENGTH)}, {3: NULL_REASON})
 
 
 async def test_slots_written_in_separate_calls_from_a_persisted_portfolio_assemble_the_one_shot_batch():
@@ -153,6 +147,6 @@ async def test_slots_written_in_separate_calls_from_a_persisted_portfolio_assemb
     missing = [await relaunch.write(IDEA, persisted, slot) for slot in (3, 2)]
     batch = proposal_batch(persisted, [*missing, slot_1])
 
-    assert relaunch.model.calls == [2]
+    assert relaunch.calls == [2]
     assert [(type(s), s.slot) for s in batch.slots] == [(SlotProposal, 1), (SlotFailure, 2), (SlotProposal, 3)]
     assert batch == one_shot

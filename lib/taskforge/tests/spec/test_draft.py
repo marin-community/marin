@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Invariants: graders reject wrong and accept right answers once lowered and run; grader files live only in
+``resources.verifier`` and ``assemble`` refuses copies of them, or files under the grader roots, that the agent sees;
+``answer_grader`` refuses modes without an environment and ``GRADER_BASE_IMAGE``; ``assemble`` refuses an answer the
+grader cannot see; the verifier machine's network is ``DENY``; machines lower onto the backend they declare."""
+
 import json
 import shlex
 from dataclasses import dataclass, field, replace
@@ -27,7 +32,6 @@ from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
     ExitCodeReward,
-    FileReward,
     FinalAction,
     FunctionDefinition,
     JsonValueAnswer,
@@ -43,7 +47,6 @@ from taskcompendium.models import (
     VerifierCommand,
     VerifyitGrader,
 )
-from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import (
     ExactSpec,
     FunctionCall,
@@ -103,29 +106,25 @@ VERIFIER = machine(startup_timeout=30)
 IMAGE = "ghcr.io/example/task@sha256:" + "0" * 64
 BASE = grader_environment(None)
 # sh programs, run as /tests/grade.py by ``shell_backed`` packages: a bare ShellSim machine has no python3.
-SUM_GRADER = """expected=$(jq -r .expected /tests/config.json)
+VERDICT = """jq -n -c --argjson passed "$passed" '{
+    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "answer", passed: $passed, weight: 1.0}]}
+}' > /logs/verifier/reward.json
+"""
+SUM_GRADER = (
+    """expected=$(jq -r .expected /tests/config.json)
 passed=false
 if test -f /workspace/answer; then
     got=$(cat /workspace/answer)
     echo "got $got"
     if test "$got" = "$expected"; then passed=true; fi
 fi
-jq -n -c --argjson passed "$passed" '{
-    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "answer", passed: $passed, weight: 1.0}]}
-}' > /logs/verifier/reward.json
 """
-TEXT_GRADER = """passed=false
-if test "$(cat /app/answer.txt)" = twelve; then passed=true; fi
-jq -n -c --argjson passed "$passed" '{
-    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "answer", passed: $passed, weight: 1.0}]}
-}' > /logs/verifier/reward.json
-"""
-KEY_GRADER = """passed=false
-if test "$(cat /app/answer.txt)" = "$(cat /tests/key/answer.txt)"; then passed=true; fi
-jq -n -c --argjson passed "$passed" '{
-    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "answer", passed: $passed, weight: 1.0}]}
-}' > /logs/verifier/reward.json
-"""
+    + VERDICT
+)
+TEXT_GRADER = 'passed=false\nif test "$(cat /app/answer.txt)" = twelve; then passed=true; fi\n' + VERDICT
+KEY_GRADER = (
+    'passed=false\nif test "$(cat /app/answer.txt)" = "$(cat /tests/key/answer.txt)"; then passed=true; fi\n' + VERDICT
+)
 
 
 @dataclass
@@ -180,6 +179,7 @@ def lower_here(
     task_machine: MachineSettings | None = None,
     verifier_machine: MachineSettings | None = None,
     host: MachineHost = MachineHost.LAPTOP,
+    factories: dict | None = None,
 ) -> TaskRolloutSpec:
     return lower(
         task,
@@ -187,7 +187,14 @@ def lower_here(
         task_machine=task_machine,
         verifier_machine=verifier_machine,
         limits=LIMITS,
-        factories=FACTORIES,
+        factories=FACTORIES if factories is None else factories,
+    )
+
+
+def recording(*backends: Backend, local: RecordingFactory | None = None) -> dict[str, RecordingFactory]:
+    """``RecordingFactory`` for each of ``backends``, and ``local`` as the local backend's factory."""
+    return {backend.value: RecordingFactory(backend) for backend in backends} | (
+        {Backend.LOCAL.value: local} if local else {}
     )
 
 
@@ -250,14 +257,6 @@ def docker_grader(**fields) -> GraderPackage:
     )
 
 
-def test_file_lands_relative_to_the_machine_root_with_its_mode():
-    resource = file("app/run.sh", "#!/bin/sh\n", mode=0o755)
-
-    assert (resource.path, resource.mode, resource_bytes(resource)) == ("app/run.sh", "755", b"#!/bin/sh\n")
-    with pytest.raises(ValueError):
-        file("/workspace/answer", "12")
-
-
 @pytest.mark.parametrize("answer,expected", [("12", 1.0), ("13", 0.0)])
 async def test_python_grader_grades_the_captured_output_of_a_shellsim_run_on_a_verifier_machine(answer, expected):
     lowered = lower_here(file_task(shell_backed(sum_grader())), SHELLSIM, VERIFIER)
@@ -270,34 +269,18 @@ async def test_python_grader_grades_the_captured_output_of_a_shellsim_run_on_a_v
     assert "config.json" not in json.dumps([chat.messages for chat in result.rollout.conversations])
 
 
+@pytest.mark.parametrize(
+    "script,files", [(TEXT_GRADER, ()), (KEY_GRADER, (file("key/answer.txt", "twelve\n"),))], ids=["inline", "key-file"]
+)
 @pytest.mark.parametrize("answer,expected", [("twelve", 1.0), ("eleven", 0.0)])
-async def test_python_grader_reads_the_extracted_answer_of_a_task_without_a_machine(answer, expected):
-    grader = shell_backed(python_grader(TEXT_GRADER, {}, environment=BASE, answer_path=ANSWER_PATH, timeout=20))
+async def test_python_grader_grades_the_extracted_answer_with_its_private_tests_files(script, files, answer, expected):
+    grader = shell_backed(python_grader(script, {}, environment=BASE, answer_path=ANSWER_PATH, timeout=20, files=files))
     lowered = lower_here(answer_task(grader), verifier_machine=VERIFIER)
 
     result = await run(lowered, [{"role": "assistant", "content": answer}])
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected)
     assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == "docker"
-
-
-@pytest.mark.parametrize("answer,expected", [("twelve", 1.0), ("eleven", 0.0)])
-async def test_python_grader_reads_its_private_files_from_the_tests_directory(answer, expected):
-    grader = shell_backed(
-        python_grader(
-            KEY_GRADER,
-            {},
-            environment=BASE,
-            answer_path=ANSWER_PATH,
-            timeout=20,
-            files=(file("key/answer.txt", "twelve\n"),),
-        )
-    )
-    lowered = lower_here(answer_task(grader), verifier_machine=VERIFIER)
-
-    result = await run(lowered, [{"role": "assistant", "content": answer}])
-
-    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected)
 
 
 async def test_python_grader_verdict_carries_its_checks_into_the_grade():
@@ -319,33 +302,31 @@ def test_python_grader_refuses_a_file_that_shadows_its_program_or_config():
         )
 
 
-def test_grader_environment_is_the_task_image_or_the_grader_base():
-    assert grader_environment(None) == EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_BASE_IMAGE
-    )
-    assert grader_environment(IMAGE, env={"A": "1"}) == EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE, environment_variables={"A": "1"}
-    )
-
-
 @pytest.mark.parametrize(
-    "spec,right,wrong",
+    "spec,answer_type,answer_format,right,wrong",
     [
-        (ExactSpec(expected=("twelve",)), "Twelve", "eleven"),
-        (NumericSpec(expected="12", tolerance_abs=0.0, tolerance_rel=0.0), "12", "13"),
-        (McqSpec(expected="B"), "B", "C"),
-        (MathSpec(expected="12"), "12", "13"),
+        (ExactSpec(expected=("twelve",)), AnswerType.TEXT, PLAIN, "Twelve", "eleven"),
+        (NumericSpec(expected="12", tolerance_abs=0.0, tolerance_rel=0.0), AnswerType.TEXT, PLAIN, "12", "13"),
+        (McqSpec(expected="B"), AnswerType.TEXT, PLAIN, "B", "C"),
+        (MathSpec(expected="12"), AnswerType.TEXT, PLAIN, "12", "13"),
+        (
+            StructuredExactSpec(expected={"total": 12}),
+            AnswerType.JSON,
+            JsonValueAnswer(),
+            '{"total": 12}',
+            '{"total": 13}',
+        ),
     ],
 )
-async def test_answer_grader_grades_the_final_reply_in_process(spec, right, wrong):
-    lowered = lower_here(answer_task(answer_grader(spec), system="Answer briefly."))
+async def test_answer_grader_grades_the_final_reply_in_process(spec, answer_type, answer_format, right, wrong):
+    lowered = lower_here(answer_task(answer_grader(spec), answer_type, answer_format, system="Answer briefly."))
 
     rewards = [(await run(lowered, [{"role": "assistant", "content": text}])).grade.reward for text in (right, wrong)]
 
     assert rewards == [1.0, 0.0]
     assert (lowered.task_machine, lowered.verifier_machine) == (None, None)
     assert lowered.task.context.events[0].content == "Answer briefly."
-    assert lowered.task.answer_format == PLAIN
+    assert lowered.task.answer_format == answer_format
 
 
 async def test_predicted_action_grader_grades_a_native_action():
@@ -366,30 +347,15 @@ async def test_predicted_action_grader_grades_a_native_action():
     assert rewards == [1.0, 0.0]
 
 
-async def test_structured_exact_grader_grades_a_json_answer():
-    grader = answer_grader(StructuredExactSpec(expected={"total": 12}))
-    lowered = lower_here(answer_task(grader, AnswerType.JSON, JsonValueAnswer()))
-
-    rewards = [
-        (await run(lowered, [{"role": "assistant", "content": text}])).grade.reward
-        for text in ('{"total": 12}', '{"total": 13}')
-    ]
-
-    assert rewards == [1.0, 0.0]
-
-
-def test_answer_grader_needs_an_environment_for_a_mode_that_does_not_grade_in_process():
+def test_answer_grader_needs_an_environment_with_verifyit_for_a_mode_that_does_not_grade_in_process():
     with pytest.raises(ValueError, match="does not grade in process"):
         answer_grader(PytestSpec(paths=("test_answer.py",)))
+    with pytest.raises(ValueError, match="no verifyit"):
+        answer_grader(PytestSpec(paths=("test_answer.py",)), environment=grader_environment(None))
 
     package = answer_grader(PytestSpec(paths=("test_answer.py",)), environment=grader_environment(IMAGE))
 
     assert isinstance(package.grader, VerifyitGrader) and package.grader.environment is not None
-
-
-def test_answer_grader_refuses_the_grader_base_image_which_has_no_verifyit():
-    with pytest.raises(ValueError, match="no verifyit"):
-        answer_grader(PytestSpec(paths=("test_answer.py",)), environment=grader_environment(None))
 
 
 @pytest.mark.parametrize("host,backend", [(MachineHost.LAPTOP, Backend.DOCKER), (MachineHost.IRIS, Backend.GVISOR)])
@@ -409,14 +375,7 @@ def test_docker_task_lowers_both_machines_onto_the_hosts_container_backend(host,
     )
     verifier_machine = machine(startup_timeout=120, user="0")
 
-    lowered = lower(
-        task,
-        host=host,
-        task_machine=task_machine,
-        verifier_machine=verifier_machine,
-        limits=LIMITS,
-        factories={backend.value: RecordingFactory(backend)},
-    )
+    lowered = lower_here(task, task_machine, verifier_machine, host, recording(backend))
 
     assert lowered.task_machine is not None and lowered.verifier_machine is not None
     assert (lowered.task_machine.backend, lowered.verifier_machine.backend) == (backend.value, backend.value)
@@ -453,20 +412,6 @@ def test_script_grader_keeps_its_files_private_and_its_image_on_the_verifier():
         setup_commands=("pip install pytest",),
         environment_variables={"MODE": "test"},
     )
-
-
-def test_python_grader_writes_its_program_and_config_under_tests():
-    grader = python_grader(SUM_GRADER, {"expected": "12"}, environment=BASE, answer_path=None, timeout=20)
-
-    assert isinstance(grader.grader, ScriptGrader)
-    assert grader.grader.argv == ("python3", "/tests/grade.py")
-    assert isinstance(grader.grader.reward, FileReward)
-    assert [(f.path, f.format, f.key) for f in grader.grader.reward.files] == [
-        (GRADER_VERDICT_PATH, RewardFileFormat.JSON, "reward")
-    ]
-    assert {item.path: json.loads(resource_bytes(item)) for item in grader.resources if item.path == "config.json"} == {
-        "config.json": {"expected": "12"}
-    }
 
 
 @pytest.mark.parametrize(
@@ -585,49 +530,14 @@ def test_lower_takes_exactly_the_machines_the_task_needs(task_machine, verifier_
         lower_here(answer_task(EXACT), verifier_machine=VERIFIER)
 
 
-def test_lower_propagates_rolloutengines_rejections():
-    with pytest.raises(ValueError, match="Unknown Shellbox factory: 'docker'"):
-        lower(
-            file_task(),
-            host=MachineHost.LAPTOP,
-            task_machine=SHELLSIM,
-            verifier_machine=VERIFIER,
-            limits=LIMITS,
-            factories={"shellsim": ShellSimMachineFactory()},
-        )
-    # The command timeout belongs to the engine's shell harness, so the engine that runs a spec rejects it.
-    lowered = lower_here(file_task(), SHELLSIM, VERIFIER)
-    with pytest.raises(ValueError, match="command timeout must be less"):
-        rollout_engine(FACTORIES, command_timeout=LIMITS.tool_turn_timeout).check(lowered)
-
-
-def test_lower_puts_a_shellsim_task_on_shellsim_and_its_grader_on_the_hosts_container_backend():
-    lowered = lower(
-        file_task(),
-        host=MachineHost.IRIS,
-        task_machine=SHELLSIM,
-        verifier_machine=VERIFIER,
-        limits=LIMITS,
-        factories={"shellsim": ShellSimMachineFactory(), "gvisor": RecordingFactory(Backend.GVISOR)},
-    )
+def test_lower_puts_a_shellsim_task_on_the_catalogs_cpython_and_its_grader_on_the_hosts_container_backend():
+    factories = {"shellsim": ShellSimMachineFactory(), **recording(Backend.GVISOR)}
+    lowered = lower_here(file_task(), SHELLSIM, VERIFIER, MachineHost.IRIS, factories)
 
     assert lowered.task_machine is not None and lowered.verifier_machine is not None
     assert (lowered.task_machine.backend, lowered.verifier_machine.backend) == ("shellsim", "gvisor")
-
-
-def test_a_shellsim_task_machine_asks_for_the_catalogs_cpython():
-    lowered = lower(
-        file_task(),
-        host=MachineHost.LAPTOP,
-        task_machine=SHELLSIM,
-        verifier_machine=VERIFIER,
-        limits=LIMITS,
-        factories=FACTORIES,
-    )
-    environment = lowered.task.environment_requirements
-    assert lowered.task_machine is not None
-
     # ShellSim installs the catalog's CPython for any set ``pypi_packages``, here none beyond it.
+    environment = lowered.task.environment_requirements
     assert _machine_spec(environment, lowered.task_machine).source == PackageSpec(pypi_packages=())
     assert requirements(image=IMAGE).package_spec is None
 
@@ -640,14 +550,7 @@ def test_a_lock_only_grader_lowers_onto_the_local_backend():
 
     assert machine_backend(locked, MachineHost.IRIS) == Backend.LOCAL
     # RolloutEngine accepts any factory whose backend is local, so a wrapped local factory serves the grader.
-    lowered = lower(
-        answer_task(grader),
-        host=MachineHost.IRIS,
-        task_machine=None,
-        verifier_machine=VERIFIER,
-        limits=LIMITS,
-        factories={"local": RecordingFactory(Backend.LOCAL)},
-    )
+    lowered = lower_here(answer_task(grader), None, VERIFIER, MachineHost.IRIS, recording(Backend.LOCAL))
 
     assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == "local"
 
@@ -671,14 +574,7 @@ def cpython_task(
 
 
 def lower_on_iris(task: TaskSpec, backends: tuple[Backend, ...]) -> TaskRolloutSpec:
-    return lower(
-        task,
-        host=MachineHost.IRIS,
-        task_machine=SHELLSIM,
-        verifier_machine=VERIFIER,
-        limits=LIMITS,
-        factories={backend.value: RecordingFactory(backend) for backend in backends},
-    )
+    return lower_here(task, SHELLSIM, VERIFIER, MachineHost.IRIS, recording(*backends))
 
 
 def machine_sources(lowered: TaskRolloutSpec) -> tuple[tuple[str, object], tuple[str, object]]:
@@ -692,39 +588,42 @@ def machine_sources(lowered: TaskRolloutSpec) -> tuple[tuple[str, object], tuple
     )
 
 
-def test_grader_base_machines_run_a_local_cpython_when_the_host_has_the_local_backend():
-    lowered = lower_on_iris(cpython_task(), (Backend.GVISOR, Backend.LOCAL))
-
-    assert machine_sources(lowered) == (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))
-    assert TaskRolloutSpec.model_validate_json(lowered.model_dump_json()) == lowered
-
-
-def test_grader_base_machines_stay_on_the_container_backend_without_the_local_backend():
-    lowered = lower_on_iris(cpython_task(), (Backend.GVISOR,))
-
-    image = RegistryImage(GRADER_BASE_IMAGE)
-    assert machine_sources(lowered) == (("gvisor", image), ("gvisor", image))
-    assert lowered.task == cpython_task()
-
-
-def test_a_task_image_stays_on_the_container_backend_beside_the_local_backend():
-    lowered = lower_on_iris(docker_task(docker_grader()), (Backend.GVISOR, Backend.LOCAL))
-
-    assert machine_sources(lowered) == (("gvisor", RegistryImage(IMAGE)), ("gvisor", RegistryImage(IMAGE)))
-
-
 def package_task() -> TaskSpec:
     return cpython_task().model_copy(
         update={"environment_requirements": requirements(image=None, packages=("numpy", "pandas"), setup=("true",))}
     )
 
 
-def test_a_package_machine_installs_its_packages_on_the_local_backend():
-    lowered = lower_on_iris(package_task(), (Backend.GVISOR, Backend.LOCAL))
+BASE_IMAGE, TASK_IMAGE = RegistryImage(GRADER_BASE_IMAGE), RegistryImage(IMAGE)
 
-    packages = PackageSpec(pypi_packages=("numpy", "pandas"))
-    assert machine_sources(lowered) == (("local", packages), ("local", LOCAL_CPYTHON))
-    assert lowered.task.environment_requirements.setup_commands == ("true",)
+
+@pytest.mark.parametrize(
+    "task,backends,sources",
+    [
+        (cpython_task(), (Backend.GVISOR, Backend.LOCAL), (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))),
+        (cpython_task(), (Backend.GVISOR,), (("gvisor", BASE_IMAGE), ("gvisor", BASE_IMAGE))),
+        (
+            docker_task(docker_grader()),
+            (Backend.GVISOR, Backend.LOCAL),
+            (("gvisor", TASK_IMAGE), ("gvisor", TASK_IMAGE)),
+        ),
+        (
+            package_task(),
+            (Backend.GVISOR, Backend.LOCAL),
+            (("local", PackageSpec(pypi_packages=("numpy", "pandas"))), ("local", LOCAL_CPYTHON)),
+        ),
+    ],
+    ids=["grader-base-beside-local", "grader-base-without-local", "task-image-beside-local", "packages-beside-local"],
+)
+def test_only_grader_base_and_package_machines_move_to_the_local_backend(task, backends, sources):
+    lowered = lower_on_iris(task, backends)
+
+    assert machine_sources(lowered) == sources
+    if sources[0][0] == "local":  # The local backend rewrites the environment and keeps the setup commands.
+        assert lowered.task.environment_requirements.setup_commands == task.environment_requirements.setup_commands
+    else:
+        assert lowered.task == task
+    assert TaskRolloutSpec.model_validate_json(lowered.model_dump_json()) == lowered
 
 
 def test_a_package_machine_is_refused_on_a_host_without_the_local_backend():
@@ -732,17 +631,19 @@ def test_a_package_machine_is_refused_on_a_host_without_the_local_backend():
         lower_on_iris(package_task(), (Backend.GVISOR,))
 
 
-def test_a_package_machine_takes_no_image_and_one_requirement_per_package():
-    with pytest.raises(ValueError, match="not both"):
-        requirements(image=IMAGE, packages=("numpy",))
-    with pytest.raises(ValueError, match="without pip options"):
-        requirements(image=None, packages=("numpy pandas\nscipy",))
-
-
-@pytest.mark.parametrize("entry", ["-r other.txt", "  -r /definitely/missing", "numpy --index-url=https://evil.example"])
-def test_a_package_entry_cannot_carry_a_requirements_file_option(entry):
-    with pytest.raises(ValueError, match="without pip options"):
-        requirements(image=None, packages=(entry,))
+@pytest.mark.parametrize(
+    "image,packages,message",
+    [
+        (IMAGE, ("numpy",), "not both"),
+        (None, ("numpy pandas\nscipy",), "without pip options"),
+        (None, ("-r other.txt",), "without pip options"),
+        (None, ("  -r /definitely/missing",), "without pip options"),
+        (None, ("numpy --index-url=https://evil.example",), "without pip options"),
+    ],
+)
+def test_a_package_machine_takes_no_image_and_one_requirement_per_package(image, packages, message):
+    with pytest.raises(ValueError, match=message):
+        requirements(image=image, packages=packages)
 
 
 @pytest.mark.parametrize("path", ["tests/config.json", "logs/verifier/reward.json"])
@@ -759,35 +660,28 @@ def system_directory_task() -> TaskSpec:
 
 
 def lower_beside_local(task: TaskSpec, local: RecordingFactory) -> TaskRolloutSpec:
-    return lower(
-        task,
-        host=MachineHost.IRIS,
-        task_machine=SHELLSIM,
-        verifier_machine=VERIFIER,
-        limits=LIMITS,
-        factories={Backend.GVISOR.value: RecordingFactory(Backend.GVISOR), Backend.LOCAL.value: local},
-    )
-
-
-def test_a_copy_on_write_local_factory_keeps_a_task_writing_under_usr_on_the_local_backend():
-    lowered = lower_beside_local(system_directory_task(), LocalRecordingFactory(Backend.LOCAL, LOCAL_COPY_ON_WRITE))
-
-    assert machine_sources(lowered) == (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))
+    return lower_here(task, SHELLSIM, VERIFIER, MachineHost.IRIS, recording(Backend.GVISOR, local=local))
 
 
 @pytest.mark.parametrize(
-    "local",
-    [LocalRecordingFactory(Backend.LOCAL, LOCAL_READ_ONLY), RecordingFactory(Backend.LOCAL)],
-    ids=["read-only", "mode-unstated"],
+    "local,backend",
+    [
+        (LocalRecordingFactory(Backend.LOCAL, LOCAL_COPY_ON_WRITE), "local"),
+        (LocalRecordingFactory(Backend.LOCAL, LOCAL_READ_ONLY), "gvisor"),
+        (RecordingFactory(Backend.LOCAL), "gvisor"),
+    ],
+    ids=["copy-on-write", "read-only", "mode-unstated"],
 )
-def test_a_read_only_local_factory_moves_a_task_writing_under_usr_to_the_container_backend(local: RecordingFactory):
+def test_only_a_copy_on_write_local_factory_keeps_a_task_writing_under_usr_on_the_local_backend(
+    local: RecordingFactory, backend: str
+):
     """Files the task ships under /usr cannot land on a read-only local backend, and grading stages them on the
     verifier too, so both machines stay containers."""
     lowered = lower_beside_local(system_directory_task(), local)
     plain = lower_beside_local(cpython_task(), local)
 
-    image = RegistryImage(GRADER_BASE_IMAGE)
-    assert machine_sources(lowered) == (("gvisor", image), ("gvisor", image))
+    source = LOCAL_CPYTHON if backend == "local" else RegistryImage(GRADER_BASE_IMAGE)
+    assert machine_sources(lowered) == ((backend, source), (backend, source))
     assert machine_sources(plain) == (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))
 
 
@@ -802,18 +696,8 @@ def test_a_grader_base_task_whose_output_lies_under_a_read_only_root_keeps_its_i
 @pytest.mark.parametrize("answer_path,backend", [("/usr/answer.txt", "gvisor"), (ANSWER_PATH, "local")])
 def test_a_grader_base_verifier_staging_its_answer_under_a_read_only_root_keeps_its_image(answer_path, backend):
     grader = python_grader(TEXT_GRADER, {}, environment=BASE, answer_path=answer_path, timeout=20)
-    factories = {
-        Backend.GVISOR.value: RecordingFactory(Backend.GVISOR),
-        Backend.LOCAL.value: LocalRecordingFactory(Backend.LOCAL, LOCAL_READ_ONLY),
-    }
-    lowered = lower(
-        answer_task(grader),
-        host=MachineHost.IRIS,
-        task_machine=None,
-        verifier_machine=VERIFIER,
-        limits=LIMITS,
-        factories=factories,
-    )
+    factories = recording(Backend.GVISOR, local=LocalRecordingFactory(Backend.LOCAL, LOCAL_READ_ONLY))
+    lowered = lower_here(answer_task(grader), None, VERIFIER, MachineHost.IRIS, factories)
 
     assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == backend
 

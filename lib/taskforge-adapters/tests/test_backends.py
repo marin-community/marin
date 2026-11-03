@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Invariants: ``machine_factories`` constructs exactly the selected backends and raises rather than shrink the
+selection."""
+
 import subprocess
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -47,35 +50,43 @@ class FakeFactory:
         raise AssertionError(f"Unexpected machine for {spec}")
 
 
-def test_requested_docker_fails_if_the_host_has_no_docker(monkeypatch):
+def no_docker_cli(monkeypatch):
     monkeypatch.setattr(backend_module.shutil, "which", lambda name: None)
 
-    with pytest.raises(RuntimeError, match="Requested docker backend unavailable: docker CLI not found"):
-        machine_factories((Backend.SHELLSIM, Backend.DOCKER), controller_url=None)
-    # The same host can explicitly request ShellSim without silently changing its selection.
-    built = machine_factories((Backend.SHELLSIM,), controller_url=None)
-    assert set(built) == {Backend.SHELLSIM.value}
 
-
-def test_requested_docker_fails_if_its_daemon_hangs(monkeypatch):
+def hung_docker_daemon(monkeypatch):
     def hang(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], backend_module.DOCKER_PROBE_TIMEOUT)
 
     monkeypatch.setattr(backend_module.shutil, "which", lambda name: "/usr/bin/docker")
     monkeypatch.setattr(backend_module.subprocess, "run", hang)
-    with pytest.raises(RuntimeError, match="docker daemon did not answer"):
-        machine_factories((Backend.DOCKER,), controller_url=None)
 
 
-def test_requested_local_backend_propagates_its_availability_failure(monkeypatch):
+def no_bwrap(monkeypatch):
     def unavailable():
         raise RuntimeError("no bwrap here")
 
     monkeypatch.setattr(backend_module, "local_factory", unavailable)
-    with pytest.raises(RuntimeError, match="no bwrap here"):
-        machine_factories((Backend.LOCAL,), controller_url=None)
-    built = machine_factories((Backend.GVISOR,), controller_url="http://controller.example:10000")
-    assert set(built) == {Backend.GVISOR.value}
+
+
+@pytest.mark.parametrize(
+    "host,requested,message,other",
+    [
+        (no_docker_cli, Backend.DOCKER, "Requested docker backend unavailable: docker CLI not found", Backend.SHELLSIM),
+        (hung_docker_daemon, Backend.DOCKER, "docker daemon did not answer", Backend.SHELLSIM),
+        (no_bwrap, Backend.LOCAL, "no bwrap here", Backend.GVISOR),
+    ],
+)
+def test_a_requested_backend_the_host_cannot_start_fails_without_shrinking_the_selection(
+    monkeypatch, host, requested, message, other
+):
+    host(monkeypatch)
+    controller = "http://controller.example:10000"
+
+    with pytest.raises(RuntimeError, match=message):
+        machine_factories((other, requested), controller_url=controller)
+    # The same host can explicitly request the other backend alone.
+    assert set(machine_factories((other,), controller_url=controller)) == {other.value}
 
 
 @pytest.mark.parametrize("backends", [(Backend.SHELLSIM,), (Backend.LOCAL, Backend.GVISOR), (Backend.DOCKER,)])

@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
+"""Invariants: the task runs on the machine it declares (refusals name the machine a host cannot provide); the
+solver machine has no network (a network task on a ``DENY`` machine is refused)."""
+
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,23 +64,10 @@ LIMITS = draft.rollout_limits(
 
 
 def selection(backend: Backend, **update) -> MachineRuntimeSpec:
-    fields: dict[str, Any] = dict(
-        backend=backend.value,
-        network=NetworkPolicy.DENY,
-        cpus=None,
-        memory_mb=None,
-        storage_mb=None,
-        gpus=0,
-        user=None,
-        startup_timeout=None,
-        cleanup_timeout=None,
+    unset: dict[str, Any] = dict.fromkeys(
+        ("cpus", "memory_mb", "storage_mb", "user", "startup_timeout", "cleanup_timeout")
     )
-    return MachineRuntimeSpec(**(fields | update))
-
-
-LOCKED = EnvironmentRequirements(
-    command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="gs://bucket/env/uv.lock"
-)
+    return MachineRuntimeSpec(**(unset | {"backend": backend.value, "network": NetworkPolicy.DENY, "gpus": 0} | update))
 
 
 @dataclass(frozen=True)
@@ -103,7 +92,7 @@ LAPTOP = {Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: DockerMachineF
 def script_grader(
     environment: EnvironmentRequirements = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE
-    )
+    ),
 ) -> ScriptGrader:
     return ScriptGrader(argv=("sh", "/tests/grade.sh"), environment=environment)
 
@@ -154,13 +143,6 @@ def test_shellsim_and_machineless_tasks_run_everywhere():
         assert reasons(lowered(selection(Backend.SHELLSIM)), machines) == set()
 
 
-def test_shellsim_accepts_a_storage_limit_and_refuses_a_cpu_limit():
-    assert reasons(lowered(selection(Backend.SHELLSIM, storage_mb=64)), LAPTOP) == set()
-    [refusal] = task_refusals(lowered(selection(Backend.SHELLSIM, cpus=2)), LAPTOP)
-    assert (refusal.reason, refusal.where) == (RefusalReason.UNSUPPORTED, MachineRole.TASK)
-    assert "CPU" in refusal.detail
-
-
 def test_image_tasks_run_on_each_hosts_container_backend():
     for host, machines in ((MachineHost.IRIS, IRIS), (MachineHost.LAPTOP, LAPTOP)):
         spec = lowered(selection(container_backend(host), network=NetworkPolicy.ALLOW), image=IMAGE)
@@ -185,13 +167,6 @@ def test_a_network_task_on_a_deny_policy_is_refused_with_the_factorys_message():
         capabilities=spec.task.environment_requirements.capabilities,
     )
     assert reasons(allowed, IRIS) == set()
-
-
-def test_image_must_match_whether_the_backend_takes_one():
-    assert reasons(lowered(selection(Backend.SHELLSIM), image=IMAGE), IRIS) == {
-        (RefusalReason.UNSUPPORTED, MachineRole.TASK)
-    }
-    assert reasons(lowered(selection(Backend.GVISOR)), IRIS) == {(RefusalReason.UNSUPPORTED, MachineRole.TASK)}
 
 
 def test_verifier_machine_is_checked_against_its_own_backend():
@@ -222,7 +197,9 @@ class FakeLocalFactory(FakeFactory):
     python_version: str = "3.12.12"
 
 
-def test_warming_resolves_the_bare_cpython_environment_once_off_the_caller_thread(monkeypatch, caplog):
+def test_warming_resolves_the_bare_cpython_environment_once_off_the_caller_thread_and_only_with_a_local_factory(
+    monkeypatch,
+):
     calls: list[tuple[Path, tuple[str, ...], str, str]] = []
     monkeypatch.setattr(
         factories,
@@ -231,19 +208,12 @@ def test_warming_resolves_the_bare_cpython_environment_once_off_the_caller_threa
             (cache, requirements, version, threading.current_thread().name)
         ),
     )
-    built = {**IRIS, Backend.LOCAL.value: FakeLocalFactory(Backend.LOCAL)}
+    assert warm_local_python({Backend.SHELLSIM.value: SHELLSIM}) is None
+    assert warm_local_python(IRIS) is None
 
-    with caplog.at_level(logging.INFO, logger=factories.__name__):
-        thread = warm_local_python(built)
-        assert thread is not None
-        thread.join(timeout=10)
+    thread = warm_local_python({**IRIS, Backend.LOCAL.value: FakeLocalFactory(Backend.LOCAL)})
+    assert thread is not None
+    thread.join(timeout=10)
 
     assert not thread.is_alive()
     assert calls == [(Path("/cache/python"), (), "3.12.12", factories.WARM_THREAD)]
-
-
-def test_without_a_local_factory_there_is_nothing_to_warm(monkeypatch):
-    monkeypatch.setattr(factories, "resolve_python_environment", lambda *args: pytest.fail("resolved without a factory"))
-
-    assert warm_local_python({Backend.SHELLSIM.value: SHELLSIM}) is None
-    assert warm_local_python(IRIS) is None

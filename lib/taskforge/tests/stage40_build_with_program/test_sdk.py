@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""The build SDK's model loop, research and grade diagnostics.
+
+Invariants: the build reaches the web only through the host's ``web_tools`` (``research``).
+"""
+
 import json
 
 import pytest
@@ -34,13 +39,14 @@ async def even(answer: Answer) -> str | None:
     return None if answer.value % 2 == 0 else f"{answer.value} is odd"
 
 
-async def test_structured_until_sends_each_problem_back_until_a_submission_passes(context, fake_glm):
-    fake_glm.stream(content=json.dumps({"value": 41}))
-    fake_glm.stream(content=json.dumps({"value": 42}))
+async def test_structured_until_sends_each_problem_back_past_the_old_three_attempt_cap(context, fake_glm):
+    for value in (41, 3, 5, 7, 42):
+        fake_glm.stream(content=json.dumps({"value": value}))
 
     answer = await structured_until(context(), [{"role": "user", "content": "Pick an even number."}], Answer, even)
 
     assert answer == Answer(value=42)
+    assert len(fake_glm.requests) == 5
     retry = fake_glm.requests[1]["messages"]
     assert retry[-3] == {"role": "assistant", "content": '{"value":41}'}
     assert "41 is odd" in retry[-2]["content"]
@@ -57,14 +63,6 @@ async def test_a_check_that_returns_another_checks_coroutine_is_awaited(context,
 
     assert answer == Answer(value=41)
     assert len(fake_glm.requests) == 1
-
-
-async def test_structured_checks_continue_past_the_old_three_attempt_cap(context, fake_glm):
-    for value in (1, 3, 5, 7, 42):
-        fake_glm.stream(content=json.dumps({"value": value}))
-    result = await structured_until(context(), [{"role": "user", "content": "Pick an even number."}], Answer, even)
-    assert result.value == 42
-    assert len(fake_glm.requests) == 5
 
 
 async def test_a_cut_structured_reply_holds_without_spending_build_attempts(context, fake_glm):
@@ -108,26 +106,19 @@ async def test_research_returns_the_finding_under_the_agent_limits(context, prop
     assert {request["max_tokens"] for request in fake_glm.requests} == {researching.services.agent_limits.max_tokens}
 
 
-def test_grade_diagnostics_shows_the_checks_a_grader_wrote_in_its_detail():
+def test_grade_diagnostics_shows_the_grader_detail_and_cuts_a_long_text_in_the_middle():
     detail = {"checks": [{"name": "reference query", "passed": False, "weight": 1.0}], "reason": "not authorized"}
-    grade = GradeResult(Outcome.GRADED, 0.0, detail=detail, diagnostics={"stdout": "", "stderr": "", "exit_code": 0})
+    short = {"stdout": "", "stderr": "", "exit_code": 0}
+    long = {"stdout": "x" * (3 * DIAGNOSTICS_CHARS), "stderr": "ValueError: bad row 7", "exit_code": 1}
 
-    assert json.loads(grade_diagnostics(grade)) == {
+    text = grade_diagnostics(GradeResult(Outcome.GRADED, 0.0, detail=detail, diagnostics=long))
+
+    assert json.loads(grade_diagnostics(GradeResult(Outcome.GRADED, 0.0, detail=detail, diagnostics=short))) == {
         "error": None,
         "detail": detail,
-        "stdout": "",
-        "stderr": "",
-        "exit_code": 0,
+        **short,
     }
-
-
-def test_grade_diagnostics_cuts_a_long_text_in_the_middle():
-    detail = {"checks": [{"name": "total", "passed": False, "weight": 1.0}]}
-    diagnostics = {"stdout": "x" * (3 * DIAGNOSTICS_CHARS), "stderr": "ValueError: bad row 7", "exit_code": 1}
-
-    text = grade_diagnostics(GradeResult(Outcome.GRADED, 0.0, detail=detail, diagnostics=diagnostics))
-
-    assert '"name": "total", "passed": false' in text
+    assert '"name": "reference query", "passed": false' in text
     assert "ValueError: bad row 7" in text
     assert "characters cut]" in text
     assert len(text) < DIAGNOSTICS_CHARS + 50

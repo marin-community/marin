@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The standard template built end to end on ShellSim, with the fake GLM writing every draft."""
+"""The standard template built end to end on ShellSim, with the fake GLM writing every draft.
+
+Invariants: reference gets full credit (grader step, ``BuildExpired`` on two timeouts); empty answer at most
+the ceiling; well-formed verdict in range; instruction keeps data in files and reveals no grading; declared
+solver machine (``packages_declared``).
+"""
 
 import inspect
 import json
@@ -179,17 +184,23 @@ async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_t
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
 
 
-async def test_a_grader_can_be_repaired_past_the_old_three_attempt_cap(context, proposal, fake_glm):
-    for _ in range(4):
+async def test_the_grader_step_sends_back_the_failed_checks_past_the_old_three_attempt_cap(context, proposal, fake_glm):
+    fake_glm.stream(content=json.dumps(grader_call(FAILED_CHECK_GRADER)))
+    for _ in range(3):
         fake_glm.stream(content=json.dumps(grader_call(WRONG_GRADER)))
     fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
+
     grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
+
     assert len(fake_glm.requests) == 5
     assert grader.prototyped[-2].reward == 1.0
     assert all(
         "the reference answer was graded graded reward=0.0" in request["messages"][-2]["content"]
         for request in fake_glm.requests[1:]
     )
+    feedback = fake_glm.requests[1]["messages"][-2]["content"]
+    assert '"checks": [{"name": "reference query", "passed": false, "weight": 1.0}]' in feedback
+    assert '"reason": "not authorized"' in feedback
 
 
 FIXTURES = Fixtures(
@@ -212,24 +223,16 @@ async def test_the_grader_step_sends_back_a_numeric_answer_that_is_not_a_literal
 
 
 async def test_the_grader_step_sends_back_a_reward_outside_the_score_range(context, proposal, fake_glm):
-    """A grader scoring 0 to 100 would read every reward as full credit; the step sends it back."""
+    """A grader scoring 0 to 100 would read every reward as full credit; the step sends it back. The next one
+    gives the empty answer 0.3, which its declared ceiling allows, and the ceiling reaches the ``Grader`` output."""
     fake_glm.stream(content=json.dumps(grader_call(PERCENT_GRADER)))
-    fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
-
-    grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
-
-    assert grader.rejection_ceiling == 0.0
-    feedback = fake_glm.requests[1]["messages"][-2]["content"]
-    assert "the reference answer got reward 100.0, outside the grader's score range [0.0, 1.0]" in feedback
-
-
-async def test_the_grader_step_keeps_the_declared_rejection_ceiling(context, proposal, fake_glm):
-    """The ceiling the grader declares reaches validation through the ``Grader`` output."""
     fake_glm.stream(content=json.dumps({**grader_call(LENIENT_GRADER), "rejection_ceiling": 0.3}))
 
     grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
 
     assert grader.rejection_ceiling == 0.3
+    feedback = fake_glm.requests[1]["messages"][-2]["content"]
+    assert "the reference answer got reward 100.0, outside the grader's score range [0.0, 1.0]" in feedback
 
 
 async def test_a_grader_that_times_out_twice_expires_the_build_instead_of_going_back_to_the_model(
@@ -259,18 +262,6 @@ async def test_the_grader_step_sends_back_a_grader_without_per_check_results(con
     assert "no per-check results" in fake_glm.requests[1]["messages"][-2]["content"]
 
 
-async def test_the_grader_step_sends_back_the_checks_its_reference_answer_failed(context, proposal, fake_glm):
-    fake_glm.stream(content=json.dumps(grader_call(FAILED_CHECK_GRADER)))
-    fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
-
-    await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
-
-    feedback = fake_glm.requests[1]["messages"][-2]["content"]
-    assert "the reference answer was graded graded reward=0.0" in feedback
-    assert '"checks": [{"name": "reference query", "passed": false, "weight": 1.0}]' in feedback
-    assert '"reason": "not authorized"' in feedback
-
-
 async def test_a_container_task_publishes_its_image_and_grades_in_a_copy_of_it(context, proposal, fake_glm):
     container = declaring(proposal, None)
     dockerfile = "FROM python:3.12-slim\nWORKDIR /workspace\n"
@@ -298,33 +289,44 @@ async def test_a_container_task_publishes_its_image_and_grades_in_a_copy_of_it(c
 
 
 @pytest.mark.parametrize(
-    ("machine", "packages", "facts"),
+    ("machine", "packages", "facts", "built", "image"),
     [
-        (SolverMachine.NONE, [], "The solver has no machine"),
-        (SolverMachine.SHELLSIM, [], "The task machine is ShellSim"),
-        (SolverMachine.CPYTHON, [], "The task machine is a container with CPython 3.12"),
-        (SolverMachine.PACKAGES, ["numpy"], "the PyPI packages you list"),
+        (SolverMachine.NONE, [], "The solver has no machine", "The solver has no machine", None),
+        (SolverMachine.SHELLSIM, [], "The task machine is ShellSim", "The task machine is ShellSim", None),
+        (
+            SolverMachine.CPYTHON,
+            [],
+            "The task machine is a container with CPython 3.12",
+            "The task machine is a container with CPython 3.12",
+            GRADER_BASE_IMAGE,
+        ),
+        (
+            SolverMachine.PACKAGES,
+            ["numpy", "pandas==2.2.3"],
+            "the PyPI packages you list",
+            "The task machine runs CPython 3.12 with its standard library and these PyPI packages: "
+            "`numpy`, `pandas==2.2.3`",
+            None,
+        ),
     ],
 )
 async def test_the_fixtures_and_requirements_steps_build_the_declared_solver_machine(
-    context, proposal, fake_glm, machine, packages, facts
+    context, proposal, fake_glm, machine, packages, facts, built, image
 ):
+    """The fixtures step describes the declared machine, the requirements step builds it, and the grader of
+    every non-container task runs on the grader base image."""
     declared = declaring(proposal, machine)
     fake_glm.stream(content=json.dumps({"agent_files": [], "private_files": [], "facts": "f", "packages": packages}))
 
     fixtures = await standard.fixtures.fn(context(), declared, Sources(notes="", findings=()))
     requirements = await standard.requirements.fn(context(), declared, fixtures)
+    package = grader_package(GraderDraft.model_validate(grader_call(GOOD_GRADER)), fixtures, requirements)
 
     assert facts in fake_glm.requests[0]["messages"][-2]["content"]
-    assert solver_machine(requirements) is machine
-
-
-async def test_cpython_fixtures_choose_the_grader_base_image(context, proposal):
-    requirements = await standard.requirements.fn(context(), declaring(proposal, SolverMachine.CPYTHON), FIXTURES)
-    package = grader_package(GraderDraft.model_validate(grader_call(GOOD_GRADER)), FIXTURES, requirements)
-
-    assert requirements.docker_image == GRADER_BASE_IMAGE
-    assert machine_facts(requirements).startswith("The task machine is a container with CPython 3.12")
+    assert solver_machine(requirements) is machine and requirements.docker_image == image
+    assert machine_facts(requirements).startswith(built)
+    if packages:
+        assert requirements.package_spec == PackageSpec(pypi_packages=tuple(packages))
     assert isinstance(package.grader, ScriptGrader) and package.grader.environment.docker_image == GRADER_BASE_IMAGE
 
 
@@ -365,19 +367,6 @@ async def test_the_instructions_step_sends_back_an_instruction_with_a_problem(
 
     assert text.instruction == good
     assert problem in fake_glm.requests[1]["messages"][-2]["content"]
-
-
-async def test_package_fixtures_choose_a_package_machine_without_an_image(context, proposal):
-    fixtures = replace(FIXTURES, packages=("numpy", "pandas==2.2.3"))
-    requirements = await standard.requirements.fn(context(), declaring(proposal, SolverMachine.PACKAGES), fixtures)
-    package = grader_package(GraderDraft.model_validate(grader_call(GOOD_GRADER)), fixtures, requirements)
-
-    assert (requirements.docker_image, requirements.package_spec) == (
-        None,
-        PackageSpec(pypi_packages=("numpy", "pandas==2.2.3")),
-    )
-    assert "`numpy`, `pandas==2.2.3`" in machine_facts(requirements)
-    assert isinstance(package.grader, ScriptGrader) and package.grader.environment.docker_image == GRADER_BASE_IMAGE
 
 
 @pytest.mark.parametrize(

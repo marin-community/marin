@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The registry credential's parsing and the environment of a publish's jobs, submitted through a recording fake."""
+"""The registry credential's parsing and the environment of a publish's jobs, submitted through a recording fake.
+
+Invariants: the task image is fixed by digest (``manifest_readback`` failures are host failures, never a reference)."""
 
 import json
 import subprocess
@@ -84,26 +86,19 @@ def submitted_env(cluster: RecordingCluster, name: str, env: dict[str, str]) -> 
     return cluster.env_vars[name]
 
 
-def test_the_credential_parses_from_its_secret_json_and_hides_its_password():
+def test_the_credential_parses_from_its_secret_json_and_never_shows_its_password():
     credential = RegistryCredential.from_json(CREDENTIAL_JSON)
 
     assert credential == RegistryCredential(registry="registry.example", user="publisher", password=PASSWORD)
     assert PASSWORD not in repr(credential)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
+    for malformed in (
         PASSWORD,
         json.dumps({"registry": "registry.example", "user": "publisher", "secret": PASSWORD}),
         json.dumps([PASSWORD]),
-    ],
-)
-def test_a_malformed_credential_fails_without_quoting_it(text):
-    with pytest.raises(ValueError) as error:
-        RegistryCredential.from_json(text)
-
-    assert PASSWORD not in str(error.value)
+    ):
+        with pytest.raises(ValueError) as error:
+            RegistryCredential.from_json(malformed)
+        assert PASSWORD not in str(error.value)
 
 
 @pytest.mark.parametrize(

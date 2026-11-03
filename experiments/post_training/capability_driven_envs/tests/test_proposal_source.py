@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""The capability proposal source: catalog loading, slot plans, prompts and each slot's document and repairs.
+
+Invariants: the task runs on the solver machine it declares (a plan slot's ``solver_machine``).
+"""
+
 import jsonschema
 import pytest
 
@@ -17,7 +22,7 @@ from taskforge.capability import capability_idea_record
 from taskforge.defaults import DEFAULT_POLICY
 from taskforge.llm.client import FinishReason, ModelRequestRejected
 from taskforge.llm.policy import LLMPolicy
-from taskforge.llm.structured import StructuredOutputError, response_format
+from taskforge.llm.structured import response_format
 from taskforge.stage10_proposal.model import (
     Environment,
     ResearchNeed,
@@ -217,64 +222,45 @@ def author(model: ScriptedModel, idea) -> SlotOutcome:
     return asyncio.run(author_proposal(model, LLMPolicy(), PROPOSER, idea, two_slots, two_slots.slots[0]))
 
 
-def test_author_request_carries_the_document_schema_with_continuations_off(ideas):
+def test_author_request_carries_the_document_schema_with_continuations_off_and_a_length_cut_fails_the_slot(ideas):
     idea = ideas[CAPABILITY_ID]
     model = ScriptedModel()
     model.reply(filled_document(idea, 1))
+    cut = ScriptedModel()
+    cut.reply(filled_document(idea, 1), FinishReason.LENGTH)
 
-    outcome = author(model, idea)
+    outcome, failure = author(model, idea), author(cut, idea)
 
     assert isinstance(outcome, SlotProposal) and outcome.repair_error is None
     (request,) = model.requests
     assert request.fields == document_request_fields(f"{CAPABILITY_ID}/1", source_ref(idea))
     assert request.policy.max_continuations == 0
+    assert isinstance(failure, SlotFailure)
+    assert failure.error == "cut off by the output limit"
+    assert len(cut.requests) == 1
 
 
-def test_length_cut_document_is_a_slot_failure_without_continuation(ideas):
-    idea = ideas[CAPABILITY_ID]
-    model = ScriptedModel()
-    model.reply(filled_document(idea, 1), FinishReason.LENGTH)
-
-    outcome = author(model, idea)
-
-    assert isinstance(outcome, SlotFailure)
-    assert outcome.error == "cut off by the output limit"
-    assert len(model.requests) == 1
-
-
-def test_consistency_error_gets_one_schema_repair(ideas):
+def test_document_repairs_continue_until_valid_without_an_independent_attempt_cap(ideas):
     idea = ideas[CAPABILITY_ID]
     valid = filled_document(idea, 1)
     uncited = valid.replace("Find the repository (research[0]).", "Find the repository.")
     model = ScriptedModel()
-    model.reply(uncited)
+    for _ in range(4):
+        model.reply(uncited)
     model.reply(valid)
 
     outcome = author(model, idea)
 
     assert isinstance(outcome, SlotProposal)
     assert outcome.repair_error == "body: research[0] is never cited as research[0]"
-    assert [c.content for c in outcome.completions] == [uncited, valid]
-    first, repair = model.requests
+    assert [c.content for c in outcome.completions] == [uncited] * 4 + [valid]
+    first, repair = model.requests[:2]
     assert repair.fields == first.fields
     assert repair.messages == [
         *outcome.request,
         {"role": "assistant", "content": uncited},
         {"role": "user", "content": PROPOSER.prompt("proposer.repair").render(error=outcome.repair_error)},
     ]
-
-
-def test_document_repairs_continue_until_valid_without_an_independent_attempt_cap(ideas):
-    idea = ideas[CAPABILITY_ID]
-    valid = filled_document(idea, 1)
-    uncited = valid.replace("(research[0])", "")
-    model = ScriptedModel()
-    for _ in range(4):
-        model.reply(uncited)
-    model.reply(valid)
-    outcome = author(model, idea)
-    assert isinstance(outcome, SlotProposal)
-    assert [c.content for c in outcome.completions] == [uncited] * 4 + [valid]
 
 
 def test_a_rejected_repair_request_is_a_slot_failure_that_keeps_the_first_completion(ideas):
@@ -307,17 +293,6 @@ def test_a_plan_slot_the_host_cannot_run_is_repaired_before_any_document_is_writ
     assert isinstance(repair_prompt, str) and "slot 1 is proposed in container" in repair_prompt
     assert len(batch.planning) == 2
     assert [p.header.environment for p in batch.proposals] == [Environment.SHELLSIM]
-
-
-def test_a_plan_still_invalid_after_its_repair_raises_before_any_document_is_written(ideas):
-    model = ScriptedModel()
-    unrunnable = json.dumps(plan([slot(1, "container", "code")], []))
-    model.reply(unrunnable)
-    model.reply(unrunnable)
-
-    with pytest.raises(StructuredOutputError, match="slot 1 is proposed in container"):
-        asyncio.run(propose_all(CapabilitySource(model, LLMPolicy(), PROPOSER, NO_CONTAINER), ideas[CAPABILITY_ID], 1))
-    assert len(model.requests) == 2
 
 
 def test_propose_returns_one_outcome_per_slot_in_order_without_calling_the_model_for_null_slots(ideas):

@@ -7,10 +7,14 @@
 sets each turn's tool calls and token usage exactly; one author call runs as many sessions as its replies
 reach. The sessions' ``ProgramBuilder`` runs ``run_build`` in process on a step store under ``tmp_path``,
 recording its step spans to a ``JsonlLedger``; the toy ``PROGRAM`` grades in process and calls no model.
+
+Invariants: empty answer at most the ceiling (``_check_empty_answer``); build program cannot reach the host
+(``LOAD_TIMEOUT`` child load); task runs on its declared machine (``machine_available`` before the author).
 """
 
 import inspect
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -19,22 +23,18 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.defaults import DEFAULT_POLICY
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
-from taskforge.ledger.records import EntryKind, Ledger
+from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import Completion, FinishReason, Usage
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage30_author import load_process
-from taskforge.stage30_author.author import (
-    AuthorContext,
-    AuthoredProgram,
-    Revision,
-    RevisionKind,
-)
+from taskforge.stage30_author.author import AuthorContext, AuthoredProgram, Revision, RevisionKind
 from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
 from taskforge.stage40_build_with_program import agentic_author as aa
 from taskforge.stage40_build_with_program.agentic_author import (
     AgenticAuthor,
     ProgramBuilder,
+    ProgramLoader,
     SessionBuild,
     SessionMode,
     plan_session,
@@ -58,10 +58,6 @@ from tests.stage40_build_with_program.scripted_author import (
 )
 
 FAILURE = Revision(RevisionKind.BUILD_FAILURE, "fixtures: KeyError 'rows'")
-SCHEDULING = BuildInfrastructureFailure(InfrastructureCause.SCHEDULING_TIMEOUT, "the machine factory gave up waiting")
-NO_FACTORY = BuildInfrastructureFailure(InfrastructureCause.NO_FACTORY, "this host has no docker machine factory")
-ALWAYS = 1_000
-"""A failure count no session reaches: the host fails every build."""
 assert CONFIG.turns is not None
 GIVE_UP = (answer("no"),) * CONFIG.turns
 """Replies that exercise an explicitly configured author invocation budget."""
@@ -71,6 +67,12 @@ def cut(reasoning_tokens: int = 49_152) -> Completion:
     """A turn cut at the output limit while reasoning, before any tool call."""
     usage = Usage(30_000, reasoning_tokens, reasoning_tokens, 29_000)
     return Completion("", "r" * 100, (), FinishReason.LENGTH, usage, 900.0, 0.1, 899.0, 0, ())
+
+
+def write_build_submit(source: str = PROGRAM, path: str = "program.py", submits: int = 1) -> tuple[Completion, ...]:
+    """Turns writing ``source`` to ``path``, building it once, and submitting it ``submits`` times."""
+    submit = [turn(("submit", {"path": path, "notes": "n"})) for _ in range(submits)]
+    return (turn(("write_file", {"path": path, "content": source})), turn(("run_build", {"path": path})), *submit)
 
 
 def session_ledger(root: Path) -> JsonlLedger:
@@ -104,36 +106,34 @@ def session_build(
     return SessionBuild(builder, store, services, ledger.path_for(WORKPIECE), in_process_loader)
 
 
-async def author_call(
-    build: SessionBuild,
-    model: ScriptedModel,
-    ledger: Ledger,
-    workpiece: Path,
-    proposal: TaskProposal,
-    round_no: int = 0,
-    revision: Revision | None = None,
-) -> AuthoredProgram:
-    """One ``AgenticAuthor`` call for ``WORKPIECE`` in ``workpiece``, whose sessions build with ``build``."""
-
-    def builds(context: AuthorContext, proposal: TaskProposal) -> SessionBuild:
-        return build
-
-    author = AgenticAuthor(CONFIG, model, LLMPolicy(), ledger, builds, DEFAULT_POLICY)
-    return await author(AuthorContext(WORKPIECE, round_no, workpiece), proposal, revision, {})
-
-
 @pytest.fixture
 def author(services, proposal, ledger):
-    """``author(workpiece_dir, model, round_no=0, revision=None)``: one author call on the in-process builds.
+    """``author(workpiece_dir, model, round_no, revision, *, proposal, services, builder, loader)``: one
+    ``AgenticAuthor`` call whose sessions build in process under ``workpiece_dir``'s parent.
 
-    The call's sessions build under ``workpiece_dir``'s parent.
+    ``proposal`` and ``services`` replace the fixtures, ``builder`` maps the in-process builder to the one the
+    sessions use, and ``loader`` replaces the in-process loader.
     """
+    default_proposal, default_services = proposal, services
 
     async def run(
-        workpiece_dir: Path, model: ScriptedModel, round_no: int = 0, revision: Revision | None = None
+        workpiece_dir: Path,
+        model: ScriptedModel,
+        round_no: int = 0,
+        revision: Revision | None = None,
+        *,
+        proposal: TaskProposal | None = None,
+        services: RLEnvBuildServices | None = None,
+        builder: Callable[[ProgramBuilder], ProgramBuilder] | None = None,
+        loader: ProgramLoader | None = None,
     ) -> AuthoredProgram:
-        build = session_build(workpiece_dir.parent, model, services, proposal, round_no)
-        return await author_call(build, model, ledger, workpiece_dir, proposal, round_no, revision)
+        proposal = proposal or default_proposal
+        build = session_build(workpiece_dir.parent, model, services or default_services, proposal, round_no)
+        build = replace(
+            build, builder=builder(build.builder) if builder else build.builder, loader=loader or build.loader
+        )
+        author = AgenticAuthor(CONFIG, model, LLMPolicy(), ledger, lambda *_: build, DEFAULT_POLICY)
+        return await author(AuthorContext(WORKPIECE, round_no, workpiece_dir), proposal, revision, {})
 
     return run
 
@@ -163,18 +163,23 @@ def session_outputs(workpiece: Path, k: int) -> list[str]:
 
 
 @dataclass
-class HostFailingBuilder:
-    """A ``ProgramBuilder`` whose first ``failures`` builds the host fails with ``failure``; ``calls`` counts builds."""
+class FailingBuilder:
+    """Raises ``error()`` on its first ``failures`` builds, then builds with the builder ``wrap`` was given."""
 
-    builder: ProgramBuilder
-    failure: BuildInfrastructureFailure
-    failures: int
+    error: Callable[[], Exception]
+    failures: int = 1_000
     calls: int = 0
+    builder: ProgramBuilder | None = None
+
+    def wrap(self, builder: ProgramBuilder) -> ProgramBuilder:
+        self.builder = builder
+        return self
 
     async def __call__(self, source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
         self.calls += 1
         if self.calls <= self.failures:
-            raise BuildInfrastructureFailure(self.failure.cause, self.failure.message)
+            raise self.error()
+        assert self.builder is not None
         return await self.builder(source, run_dir, invalidate=invalidate)
 
 
@@ -205,10 +210,9 @@ async def test_a_candidate_file_at_an_absolute_path_is_refused_and_the_session_g
     ids=["shellsim", "no-machine"],
 )
 async def test_a_task_with_or_without_a_machine_grades_in_its_build_and_through_the_tool(
-    tmp_path, services, proposal, ledger, machine, environment
+    tmp_path, author, proposal, machine, environment
 ):
     """The program's grader step and ``run_grade_candidate`` both pass the task's requirements as they are."""
-    declared = declaring(proposal, machine)
     program = PROGRAM.replace("context, draft.NO_MACHINE,", f"context, {environment},").replace(
         "environment=draft.requirements(image=None).model_copy(\n"
         '            update={"package_spec": replace(draft.SHELLSIM_CPYTHON, pypi_packages=None)}\n        )',
@@ -216,14 +220,12 @@ async def test_a_task_with_or_without_a_machine_grades_in_its_build_and_through_
     )
     assert program.count(environment) == 2
     model = ScriptedModel(
-        turn(("write_file", {"path": "program.py", "content": program})),
-        turn(("run_build", {"path": "program.py"})),
+        *write_build_submit(program, submits=0),
         turn(("run_grade_candidate", {"reply": "42"})),
         turn(("run_grade_candidate", {"reply": "41"})),
         turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
     )
-    build = session_build(tmp_path, model, services, declared, 0)
-    await author_call(build, model, ledger, tmp_path / "workpiece", declared)
+    await author(tmp_path / "workpiece", model, proposal=declaring(proposal, machine))
 
     built, right, wrong = tool_outputs(model)[1:4]
     assert built.startswith("built: program ")
@@ -319,22 +321,15 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
 
 async def test_a_grader_crediting_the_empty_answer_fails_the_build_in_the_grader_step(tmp_path, author, monkeypatch):
     """The program grades nothing but its reference; the library's empty-answer grade still fails the build."""
-    graded = (Outcome.GRADED, 1.0)
 
     async def credit_everything(
         services, workpiece_id, requirements, package, answer_type, answer_format, instruction, reply, **kw
     ):
-        status, reward = graded if reply == "" else (Outcome.GRADED, 1.0 if reply == "42" else 0.0)
-        return GradeResult(status=status, reward=reward)
+        return GradeResult(status=Outcome.GRADED, reward=1.0 if reply in ("", "42") else 0.0)
 
     monkeypatch.setattr(aa, "grade_candidate_on_host", credit_everything)
     workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(
-        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
-        turn(("run_build", {"path": "program.py"})),
-        turn(("submit", {"path": "program.py", "notes": "ships anyway"})),
-        turn(("submit", {"path": "program.py", "notes": "ships anyway"})),
-    )
+    model = ScriptedModel(*write_build_submit(submits=2))
     await author(workpiece, model)
 
     _, built, refused = tool_outputs(model)
@@ -375,7 +370,7 @@ SPINNING_CLASS = "class Spin:\n    while True:\n        pass\n\n\n"
 """An output model whose class body never returns; the template with it added is a program that spins on load."""
 
 
-async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tmp_path, services, proposal, ledger):
+async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tmp_path, author):
     """The default loader runs in a child process, so a spinning module body costs the session one refusal."""
 
     async def bounded(source: str) -> ProgramManifest:
@@ -392,10 +387,9 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
         answer("done"),
         *GIVE_UP,
     )
-    build = replace(session_build(workpiece.parent, model, services, proposal, 0), loader=bounded)
 
     with pytest.raises(BuildInfrastructureFailure):
-        await author_call(build, model, ledger, workpiece, proposal)
+        await author(workpiece, model, loader=bounded)
 
     _, loader, submitted = session_outputs(workpiece, 0)[:3]
     cut = "the program's module body ran for more than 2 seconds without returning"
@@ -403,37 +397,30 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
     assert submitted.startswith(f"refused by the loader, nothing handed in: {cut}")
 
 
-async def test_a_loader_child_the_host_killed_ends_the_round_as_infrastructure(
-    tmp_path, services, proposal, ledger, monkeypatch
-):
+async def test_a_loader_child_the_host_killed_ends_the_round_as_infrastructure(tmp_path, author, monkeypatch):
     """A loader child that dies before it writes a result, here because its module is missing, is the host's."""
     monkeypatch.setattr(load_process, "MODULE", "taskforge.no_such_loader")
-    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(turn(("run_loader", {"path": "program.py"})), answer("done"))
-    build = replace(session_build(tmp_path, model, services, proposal, 0), loader=aa.load_in_child)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_call(build, model, ledger, workpiece, proposal)
+        await author(tmp_path / "workpiece", model, loader=aa.load_in_child)
 
     assert raised.value.cause == InfrastructureCause.BUILD_PROCESS
     assert "the program loader process exited with status 1" in raised.value.message
     assert len(model.replies) == 1 and not tool_texts(model)
 
 
-async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(
-    tmp_path, services, proposal, ledger, monkeypatch
-):
+def scheduling_timeout() -> BuildInfrastructureFailure:
+    return BuildInfrastructureFailure(InfrastructureCause.SCHEDULING_TIMEOUT, "the machine factory gave up waiting")
+
+
+async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(tmp_path, author, monkeypatch):
     monkeypatch.setattr(aa, "HOST_RETRY_BACKOFF", 0.0)
     workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(
-        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
-        turn(("run_build", {"path": "program.py"})),
-        turn(("submit", {"path": "program.py", "notes": "n"})),
-    )
-    build = session_build(tmp_path, model, services, proposal, 0)
-    flaky = HostFailingBuilder(build.builder, SCHEDULING, failures=1)
+    model = ScriptedModel(*write_build_submit())
+    flaky = FailingBuilder(scheduling_timeout, failures=1)
 
-    authored = await author_call(replace(build, builder=flaky), model, ledger, workpiece, proposal)
+    authored = await author(workpiece, model, builder=flaky.wrap)
 
     assert authored.source == PROGRAM and flaky.calls == 2
     assert tool_outputs(model)[1].startswith("built: program ")
@@ -442,52 +429,89 @@ async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(
 
 @pytest.mark.parametrize("cause", [InfrastructureCause.NO_IMAGE_BUILDER, InfrastructureCause.NO_FACTORY])
 async def test_a_container_proposal_on_an_unavailable_host_ends_before_the_author_runs(
-    tmp_path, services, proposal, ledger, cause
+    tmp_path, author, services, proposal, cause
 ):
     if cause is InfrastructureCause.NO_FACTORY:
         services = replace(services, images=RecordingImageBuilder(), factories={})
-    container = declaring(proposal, None)
     workpiece = tmp_path / "workpiece"
     model = ScriptedModel()
-    build = session_build(tmp_path, model, services, container, 0)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_call(build, model, ledger, workpiece, container)
+        await author(workpiece, model, proposal=declaring(proposal, None), services=services)
 
     assert raised.value.cause == cause
     assert not model.requests, "the author never ran"
     assert not workpiece.exists(), "the round wrote no record and spent no revision"
 
 
+EXPIRED = "ran for more than 1800 seconds without returning"
+INFRASTRUCTURE = {"status": "infrastructure"}
+UNSEEN_FAILURES = {
+    "retried": (
+        scheduling_timeout,
+        BuildInfrastructureFailure,
+        {"cause": InfrastructureCause.SCHEDULING_TIMEOUT},
+        1 + aa.HOST_RETRIES,
+        INFRASTRUCTURE,
+    ),
+    "host-rejection": (
+        lambda: BuildInfrastructureFailure(InfrastructureCause.NO_FACTORY, "this host has no docker machine factory"),
+        BuildInfrastructureFailure,
+        {"cause": InfrastructureCause.NO_FACTORY},
+        1,
+        INFRASTRUCTURE,
+    ),
+    "unclassified": (
+        lambda: RuntimeError("Docker daemon disconnected"),
+        BuildInfrastructureFailure,
+        {"cause": "unclassified_build_failure"},
+        1,
+        INFRASTRUCTURE,
+    ),
+    "expired": (
+        lambda: BuildExpired(EXPIRED, ExpiredClock.STEP, "grader"),
+        BuildExpired,
+        {"clock": ExpiredClock.STEP, "step": "grader"},
+        1,
+        {"status": "expired", "clock": "step", "step": "grader", "text": EXPIRED},
+    ),
+    "storage": (
+        lambda: StoreCorruption("Blob sha256:00 of step grader does not match its digest"),
+        StoreCorruption,
+        {},
+        1,
+        {"status": "storage"},
+    ),
+}
+
+
 @pytest.mark.parametrize(
-    ("failure", "builds"), [(SCHEDULING, 1 + aa.HOST_RETRIES), (NO_FACTORY, 1)], ids=["retried", "host-rejection"]
+    ("error", "raises", "raised_fields", "builds", "run"), UNSEEN_FAILURES.values(), ids=UNSEEN_FAILURES.keys()
 )
-async def test_a_build_the_host_keeps_failing_ends_the_round_unseen_by_the_author(
-    tmp_path, services, proposal, ledger, monkeypatch, failure, builds
+async def test_a_build_the_host_or_store_fails_ends_the_round_unseen_by_the_author(
+    tmp_path, author, monkeypatch, error, raises, raised_fields, builds, run
 ):
+    """A host failure (retried while retryable), a build deadline or a storage fault ends the round with no
+    revision: the author sees no build result and the call writes no record."""
     monkeypatch.setattr(aa, "HOST_RETRY_BACKOFF", 0.0)
     workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(
-        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
-        turn(("run_build", {"path": "program.py"})),
-        turn(("submit", {"path": "program.py", "notes": "n"})),
-    )
-    build = session_build(tmp_path, model, services, proposal, 0)
-    failing = HostFailingBuilder(build.builder, failure, failures=ALWAYS)
+    model = ScriptedModel(*write_build_submit())
+    failing = FailingBuilder(error)
 
-    with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_call(replace(build, builder=failing), model, ledger, workpiece, proposal)
+    with pytest.raises(raises) as raised:
+        await author(workpiece, model, builder=failing.wrap)
 
-    assert raised.value.cause == failure.cause and failing.calls == builds
-    assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "infrastructure"
+    assert {name: getattr(raised.value, name) for name in raised_fields} == raised_fields
+    assert failing.calls == builds
+    record = read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")
+    assert {key: record[key] for key in run} == run
     assert len(model.replies) == 1, "the session ended at the build"
-    assert not any("infrastructure" in text for text in tool_texts(model))
+    hidden = ("infrastructure", str(error()))
+    assert not any(text in output for output in tool_texts(model) for text in hidden)
     assert not (agentic(workpiece, 0, 0) / "author.json").exists(), "the call wrote no record and spent no revision"
 
 
-async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_author(
-    tmp_path, services, proposal, ledger, monkeypatch
-):
+async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_author(tmp_path, author, monkeypatch):
     monkeypatch.setattr(aa, "HOST_RETRY_BACKOFF", 0.0)
     graded: list[str] = []
     grade_candidate = aa.grade_candidate_on_host
@@ -504,15 +528,13 @@ async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
 
     monkeypatch.setattr(aa, "grade_candidate_on_host", host_down_for_candidates)
     model = ScriptedModel(
-        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
-        turn(("run_build", {"path": "program.py"})),
+        *write_build_submit(submits=0),
         turn(("run_grade_candidate", {"reply": "41"})),
         turn(("submit", {"path": "program.py", "notes": "n"})),
     )
-    build = session_build(tmp_path, model, services, proposal, 0)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_call(build, model, ledger, tmp_path / "workpiece", proposal)
+        await author(tmp_path / "workpiece", model)
 
     assert raised.value.cause == InfrastructureCause.HOST_UNREACHABLE
     assert graded == ["41"] * (1 + aa.HOST_RETRIES)
@@ -520,67 +542,12 @@ async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
     assert not any("grading failed" in text or "infrastructure" in text for text in tool_texts(model))
 
 
-async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_unretried(
-    tmp_path, services, proposal, ledger
-):
-    builds: list[Path] = []
-
-    async def expiring(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
-        builds.append(run_dir)
-        raise BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP, "grader")
-
-    workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(
-        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
-        turn(("run_build", {"path": "program.py"})),
-        turn(("submit", {"path": "program.py", "notes": "n"})),
-    )
-    build = replace(session_build(tmp_path, model, services, proposal, 0), builder=expiring)
-
-    with pytest.raises(BuildExpired) as raised:
-        await author_call(build, model, ledger, workpiece, proposal)
-
-    assert (raised.value.clock, raised.value.step) == (ExpiredClock.STEP, "grader") and len(builds) == 1
-    run = read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")
-    assert (run["status"], run["clock"], run["step"]) == ("expired", "step", "grader")
-    assert run["text"] == "ran for more than 1800 seconds without returning"
-    assert len(model.replies) == 1, "the session ended at the build"
-    assert not any("ran for more than" in text for text in tool_texts(model))
-    assert not (agentic(workpiece, 0, 0) / "author.json").exists(), "the call wrote no record and spent no revision"
-
-
-async def test_a_storage_fault_in_a_build_ends_the_round_unseen_by_the_author(tmp_path, services, proposal, ledger):
-    async def corrupt_store(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
-        raise StoreCorruption("Blob sha256:00 of step grader does not match its digest")
-
-    workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(
-        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
-        turn(("run_build", {"path": "program.py"})),
-        turn(("submit", {"path": "program.py", "notes": "n"})),
-    )
-    build = replace(session_build(tmp_path, model, services, proposal, 0), builder=corrupt_store)
-
-    with pytest.raises(StoreCorruption):
-        await author_call(build, model, ledger, workpiece, proposal)
-
-    assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "storage"
-    assert len(model.replies) == 1, "the session ended at the build"
-    assert not any("does not match its digest" in text for text in tool_texts(model))
-    assert not (agentic(workpiece, 0, 0) / "author.json").exists(), "the call wrote no record and spent no revision"
-
-
 async def test_an_os_error_the_program_raises_reaches_the_author(tmp_path, author):
     missing = PROGRAM.replace(
         '    return Sources(notes="", findings=())', '    raise FileNotFoundError("fixtures/matrices.json")'
     )
     workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(
-        turn(("write_file", {"path": "program.py", "content": missing})),
-        turn(("run_build", {"path": "program.py"})),
-        turn(("submit", {"path": "program.py", "notes": "n"})),
-        turn(("submit", {"path": "program.py", "notes": "n"})),
-    )
+    model = ScriptedModel(*write_build_submit(missing, submits=2))
     await author(workpiece, model)
 
     assert tool_outputs(model)[1].startswith("build failed (")
@@ -597,12 +564,7 @@ async def test_a_crashing_step_leads_the_build_result_with_the_program_line_that
     )
     line = crashing.splitlines().index(raising) + 1
     workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(
-        turn(("write_file", {"path": "draft.py", "content": crashing})),
-        turn(("run_build", {"path": "draft.py"})),
-        turn(("submit", {"path": "draft.py", "notes": "n"})),
-        turn(("submit", {"path": "draft.py", "notes": "n"})),
-    )
+    model = ScriptedModel(*write_build_submit(crashing, "draft.py", submits=2))
     await author(workpiece, model)
 
     built = tool_outputs(model)[1]
@@ -661,17 +623,6 @@ async def test_exhausted_author_session_holds_and_resumes_from_its_workspace(tmp
     assert read(agentic(workpiece, 0, 1) / "session.json")["mode"] == "handoff"
 
 
-async def test_context_boundary_holds_after_saving_the_conversation(tmp_path, author):
-    workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(turn(("list_files", {}), prompt=220_000, out=1_000))
-    with pytest.raises(BuildInfrastructureFailure, match="context"):
-        await author(workpiece, model)
-    record = read(agentic(workpiece, 0, 0) / "author.json")
-    assert (record["status"], record["stop_reason"]) == ("handed_off", "context")
-    assert len(read(agentic(workpiece, 0, 0) / "conversation.json")) > 2
-    assert len(model.requests) == 1
-
-
 async def test_a_cut_turn_is_nudged_to_a_smaller_step_and_never_continued(tmp_path, author):
     workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
@@ -694,21 +645,34 @@ async def test_a_cut_turn_is_nudged_to_a_smaller_step_and_never_continued(tmp_pa
     assert session["turns"] == 5 and session["continuations"] == 0
 
 
-async def test_cut_turns_past_the_context_cap_hand_off_to_a_session_that_submits(tmp_path, author):
+@pytest.mark.parametrize(
+    ("first_session", "requests"),
+    [
+        ((turn(("list_files", {}), prompt=220_000, out=1_000),), 1),
+        ((cut(), Completion("", "", (), FinishReason.LENGTH, Usage(215_000, 1_000, 1_000, 0), 1.0, 0.1, 0.9, 0, ())), 2),
+    ],
+    ids=["tool-turn", "cut-turns"],
+)
+async def test_the_context_cap_saves_the_conversation_and_hands_off_to_a_session_that_submits(
+    tmp_path, author, first_session, requests
+):
     workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(
-        cut(),
-        Completion("", "", (), FinishReason.LENGTH, Usage(215_000, 1_000, 1_000, 0), 1.0, 0.1, 0.9, 0, ()),
-        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
-        turn(("submit", {"path": "program.py", "notes": ""})),
-        turn(("submit", {"path": "program.py", "notes": ""})),
-    )
+    model = ScriptedModel(*first_session)
     with pytest.raises(BuildInfrastructureFailure, match="context"):
         await author(workpiece, model)
-    authored = await author(workpiece, model)
 
     first = read(agentic(workpiece, 0, 0) / "author.json")
     assert (first["status"], first["stop_reason"]) == ("handed_off", "context")
+    assert len(read(agentic(workpiece, 0, 0) / "conversation.json")) > 2
+    assert len(model.requests) == requests
+    model.replies.extend(
+        (
+            turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+            turn(("submit", {"path": "program.py", "notes": ""})),
+            turn(("submit", {"path": "program.py", "notes": ""})),
+        )
+    )
+    authored = await author(workpiece, model)
     assert read(agentic(workpiece, 0, 1) / "session.json")["mode"] == "handoff"
     assert authored.source == PROGRAM and not model.replies
 
@@ -823,22 +787,3 @@ async def test_an_overlong_write_is_refused_briefly_and_counts_as_executed(tmp_p
     assert session["submit_refusals"] == {"refused_notes": 1} and session["first_submit_accepted"] is False
     submit = read(target / "submit.json")
     assert submit["accepted"] is False and [c["outcome"] for c in submit["calls"]] == ["refused_notes"]
-
-
-async def test_an_untyped_builder_failure_holds_without_author_repair_feedback(tmp_path, services, proposal, ledger):
-    workpiece = tmp_path / "workpiece"
-    model = ScriptedModel(
-        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
-        turn(("run_build", {"path": "program.py"})),
-        answer("should not receive repair feedback"),
-    )
-
-    async def unavailable(*args, **kwargs):
-        raise RuntimeError("Docker daemon disconnected")
-
-    build = replace(session_build(tmp_path, model, services, proposal, 0), builder=unavailable)
-    with pytest.raises(BuildInfrastructureFailure, match="unclassified_build_failure"):
-        await author_call(build, model, ledger, workpiece, proposal)
-    assert len(model.requests) == 2
-    record = read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")
-    assert record["status"] == "infrastructure"

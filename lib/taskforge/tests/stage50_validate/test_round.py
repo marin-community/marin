@@ -2,7 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """validate_round: the unit graph, resuming from the unit files, files keyed by what they cover, cancellation, and
-the adversary trials."""
+the adversary trials.
+
+Invariants: the grader rejects incorrect answers (each FALSE_ACCEPT submission graded; finish_search refuses prose or
+an uncited defect); the solver cannot read any grader file (the white-box brief holds the controls); the solve rate
+rests on complete graded evidence (no early stop without a MODIFY round); the validation evidence belongs to the exact
+task (trial files keyed by the lowered spec and control-set digests).
+"""
 
 import asyncio
 import json
@@ -72,8 +78,9 @@ from taskforge.stage50_validate.round import (
 from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff
 from taskforge.stage60_review.decision import Accept, BandOutcome, Hold, Modify
 from taskforge.stage60_review.rules import BandRules, default_review
-from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
+from tests.sandbox.fixture_images import FixtureImageFactory, shell_grader
 from tests.stage40_build_with_program.conftest import PROPOSAL
+from tests.stage50_validate.conftest import ENGINE_LIMITS, FACTORIES
 
 WORKPIECE = "workpiece"
 TASK = draft.assemble(
@@ -99,29 +106,15 @@ CONTROL_IDS = ["P-reference", "N1-shortcut", "N2-off-by-one", "N3"]
 
 def controls_reply(wrong: str) -> str:
     """A control set ``write_controls`` accepts, whose plausible-wrong control replies ``wrong``."""
-
-    def control(control_id: str, kind: str, category: str, concern: str, reply: str, low, high) -> dict:
-        return {
-            "id": control_id,
-            "kind": kind,
-            "category": category,
-            "concern": concern,
-            "final_reply": reply,
-            "files": [],
-            "reward_min": low,
-            "reward_max": high,
-            "rationale": "r",
-        }
-
+    fields = ("id", "kind", "category", "concern", "final_reply", "reward_min", "reward_max")
+    rows = (
+        ("P-reference", "positive", "known_correct", "reference", "42", 0.99, None),
+        ("N1-shortcut", "negative", "task_specific_shortcut", "shortcut", "6 * 7", None, 0.0),
+        ("N2-off-by-one", "negative", "plausible_wrong", "acceptance", wrong, None, 0.0),
+        ("N3", "malformed", "empty_or_malformed", "extraction", "", None, 0.0),
+    )
     return json.dumps(
-        {
-            "controls": [
-                control("P-reference", "positive", "known_correct", "reference", "42", 0.99, None),
-                control("N1-shortcut", "negative", "task_specific_shortcut", "shortcut", "6 * 7", None, 0.0),
-                control("N2-off-by-one", "negative", "plausible_wrong", "acceptance", wrong, None, 0.0),
-                control("N3", "malformed", "empty_or_malformed", "extraction", "", None, 0.0),
-            ]
-        }
+        {"controls": [{**dict(zip(fields, row, strict=True)), "files": [], "rationale": "r"} for row in rows]}
     )
 
 
@@ -174,21 +167,7 @@ def round_settings(
 ) -> ValidationSettings:
     return ValidationSettings(
         host=MachineHost.LAPTOP,
-        engine=EngineSettings(
-            factories={Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()},
-            command_timeout=10,
-            limits=limits
-            or RolloutLimits(
-                max_turns=4,
-                tool_turn_timeout=20,
-                model_turn_timeout=30,
-                cleanup_timeout=10,
-                total_turn_timeout=30,
-                attempt_timeout=60,
-                verifier_timeout=None,
-                max_total_tokens=None,
-            ),
-        ),
+        engine=EngineSettings(factories=FACTORIES, command_timeout=10, limits=limits or ENGINE_LIMITS),
         k=k,
         max_retries=1,
         retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=2.0, jitter=0.0),
@@ -363,6 +342,7 @@ class StepSignal:
             self.recorded.set()
 
 
+ALL_SOLVE_RATES = BandRules(0, 1, frozenset({BandOutcome.IN_BAND}))
 VIOLATED_CONTROL = "N2-off-by-one"
 """The control ``controls_reply("42")`` violates: a negative control replying the right answer."""
 
@@ -578,34 +558,12 @@ async def test_adversary_trials_start_once_lowering_and_controls_exist_and_wait_
     assert load_validation(context.round_dir) == result
 
 
-async def test_each_submission_is_graded_as_a_control_and_recorded_with_its_reward(
+async def test_each_submission_within_the_budget_is_graded_as_a_control_and_recorded_with_its_reward(
     glm_client, fake_glm, ledger, tmp_path
 ):
     fake_glm.stream(content=controls_reply("41"))
-    adversary = AdversaryScript(
-        (Submit("41"), Submit("42"), SearchReport((Defect((2,), "it accepts 42.", True),), "Found defect"))
-    )
-    context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
-
-    result = await validate_round(
-        built_draft(tmp_path / "store"), context, settings, SolverModel(), glm_client, adversary
-    )
-
-    (trial,) = result.adversary
-    graded = [(s.ordinal, s.status, s.reward, s.passed) for s in trial.submissions]
-    assert graded == [(1, GradeStatus.GRADED, 0.0, False), (2, GradeStatus.GRADED, 1.0, True)]
-    assert trial.report == SearchReport((Defect((2,), "it accepts 42.", True),), "Found defect")
-    for submission in trial.submissions:
-        grading = json.loads((context.round_dir / submission.attempt_file).read_bytes())
-        assert grading["grade"]["reward"] == submission.reward
-        assert Path(submission.attempt_file).parts[-3] == "control"
-    observations = [m for m in adversary.requests[-1] if m["role"] == "tool"]
-    assert [json.loads(str(m["content"]))["reward"] for m in observations] == [0.0, 1.0]
-
-
-async def test_the_submission_budget_grades_no_submission_past_it(glm_client, fake_glm, ledger, tmp_path):
-    fake_glm.stream(content=controls_reply("41"))
-    adversary = AdversaryScript((Submit("40"), Submit("41"), Submit("42"), SearchReport((), "No findings")))
+    report = SearchReport((Defect((2,), "it accepts 42.", True),), "Found defect")
+    adversary = AdversaryScript((Submit("41"), Submit("42"), Submit("43"), report))
     context, settings = round_context(tmp_path), round_settings(
         ledger, k=1, adversary=adversary_policy(k=1, submissions=2)
     )
@@ -615,9 +573,16 @@ async def test_the_submission_budget_grades_no_submission_past_it(glm_client, fa
     )
 
     (trial,) = result.adversary
-    assert [s.ordinal for s in trial.submissions] == [1, 2]
-    last_observation = [m for m in adversary.requests[-1] if m["role"] == "tool"][-1]
-    assert "submission budget spent" in json.loads(str(last_observation["content"]))["error"]
+    graded = [(s.ordinal, s.status, s.reward, s.passed) for s in trial.submissions]
+    assert graded == [(1, GradeStatus.GRADED, 0.0, False), (2, GradeStatus.GRADED, 1.0, True)]
+    assert trial.report == report
+    for submission in trial.submissions:
+        grading = json.loads((context.round_dir / submission.attempt_file).read_bytes())
+        assert grading["grade"]["reward"] == submission.reward
+        assert Path(submission.attempt_file).parts[-3] == "control"
+    observations = [json.loads(str(m["content"])) for m in adversary.requests[-1] if m["role"] == "tool"]
+    assert [observation["reward"] for observation in observations[:2]] == [0.0, 1.0]
+    assert "submission budget spent" in observations[2]["error"]
     graded_dir = context.round_dir / Path(trial.submissions[0].attempt_file).parents[1]
     assert sorted(path.name for path in graded_dir.iterdir()) == ["s1", "s2"]
 
@@ -679,26 +644,31 @@ async def test_a_search_under_another_policy_keeps_the_old_attempt_and_runs_with
     assert (again.solver, again.controls) == (first.solver, first.controls)
 
 
-async def test_an_adversary_attempt_deadline_records_an_ungraded_retry(glm_client, fake_glm, ledger, tmp_path):
+@pytest.mark.parametrize(
+    ("turns", "hold_at"),
+    [(PROBES, 0), ((Submit("41"), "unused"), 1)],
+    ids=["before-any-tool-call", "after-a-graded-submission"],
+)
+async def test_an_adversary_attempt_deadline_retains_an_ungraded_attempt_and_retries_then_holds(
+    glm_client, fake_glm, ledger, tmp_path, turns, hold_at
+):
+    adversary = AdversaryScript(turns, hold_at=hold_at)
     fake_glm.stream(content=controls_reply("41"))
     context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
     settings = replace(
         settings,
         engine=replace(settings.engine, limits=settings.engine.limits.model_copy(update={"attempt_timeout": 0.5})),
     )
+
     result = await validate_round(
-        built_draft(tmp_path / "store"),
-        context,
-        settings,
-        SolverModel(),
-        glm_client,
-        AdversaryScript(PROBES, hold_at=0),
+        built_draft(tmp_path / "store"), context, settings, SolverModel(), glm_client, adversary
     )
 
     (trial,) = result.adversary
     assert (trial.status, trial.cause) == (TrialStatus.UNGRADED, Cause.ATTEMPT_TIMEOUT)
     assert trial.attempt_file.endswith("adversary/false_accept-0/attempt-1.json")
     assert (context.round_dir / trial.attempt_file).exists()
+    assert isinstance(await default_review(result, band=ALL_SOLVE_RATES), Hold)
 
 
 async def test_an_adversary_attempt_cancelled_in_flight_leaves_no_attempt_file(glm_client, fake_glm, ledger, tmp_path):
@@ -872,9 +842,6 @@ async def test_an_adversary_verifier_outage_holds_after_bounded_retries(glm_clie
     assert first["cause"] == Cause.MACHINE_TERMINATED
 
 
-ALL_SOLVE_RATES = BandRules(0, 1, frozenset({BandOutcome.IN_BAND}))
-
-
 @pytest.mark.parametrize("spec", [FALSE_ACCEPT, FALSE_REJECT])
 @pytest.mark.parametrize("actionable", [True, False])
 async def test_defects_use_same_contract_without_second_review(glm_client, fake_glm, ledger, tmp_path, spec, actionable):
@@ -1014,25 +981,3 @@ def test_search_failure_precedence_accounts_for_every_submission(causes, stop, e
     outcome = trial_outcome(rollout, submissions)
 
     assert isinstance(outcome, Ungraded) and outcome.cause is expected
-
-
-async def test_a_deadline_after_tool_progress_retains_the_attempt(glm_client, fake_glm, ledger, tmp_path):
-    fake_glm.stream(content=controls_reply("41"))
-    context = round_context(tmp_path)
-    settings = round_settings(ledger, k=1, adversary=adversary_policy(k=1))
-    settings = replace(
-        settings,
-        engine=replace(settings.engine, limits=settings.engine.limits.model_copy(update={"attempt_timeout": 0.5})),
-    )
-    checked = await validate_round(
-        built_draft(tmp_path / "store"),
-        context,
-        settings,
-        SolverModel(),
-        glm_client,
-        AdversaryScript((Submit("41"), "unused"), hold_at=1),
-    )
-    (trial,) = checked.adversary
-    assert trial.status is TrialStatus.UNGRADED and trial.cause is Cause.ATTEMPT_TIMEOUT
-    assert trial.attempt_file.endswith("attempt-1.json")
-    assert isinstance(await default_review(checked, band=ALL_SOLVE_RATES), Hold)

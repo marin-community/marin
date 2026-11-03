@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Invariants: none (pins the ledger summary script's totals)."""
+
 import json
 import subprocess
 import sys

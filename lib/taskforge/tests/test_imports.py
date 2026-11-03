@@ -12,6 +12,9 @@ one agent. It may import every stage and shared module, and no package may impor
 
 No module imports a provider or cluster client (``ADAPTER_ROOTS``): those live in
 ``taskforge_adapters``, which implements the Protocols the library declares.
+
+Invariants: none (pins the package import order and the adapter boundary;
+``test_every_import_form_counts_and_an_upward_import_is_refused`` shows the check can fail).
 """
 
 import ast

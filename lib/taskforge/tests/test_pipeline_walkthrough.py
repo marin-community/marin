@@ -6,13 +6,19 @@
 ``numbers`` writes a resource and ``grader`` the grader, and the ``task`` sink uses both. ``SOURCE``
 holds the same program as module text, as an author writing Python would return it, and passes the
 restricted loader.
+
+Invariants: validation evidence belongs to the exact task (the build refuses a program other than the
+``AUTHORED`` one; a relaunch of a finished workpiece under another proposal, budget, model, research or policy is
+refused); the solve rate rests on complete graded evidence (a custom review cannot close a task with an evidence
+gap).
 """
 
 import asyncio
 import base64
 import inspect
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+import re
+from collections.abc import AsyncIterator, Awaitable, Callable, Container, Mapping, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, NoReturn
@@ -37,6 +43,7 @@ from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import ControlKind
 from taskforge.spec.draft import assemble, requirements
 from taskforge.stage10_proposal.model import (
+    REQUIRED_HEADINGS,
     Environment,
     ProposalFormatError,
     SolverMachine,
@@ -118,6 +125,11 @@ from tests.stage40_build_with_program.scripted_author import CONFIG, ScriptedMod
 from tests.stage40_build_with_program.scripted_author import PROGRAM as AGENTIC_SOURCE
 
 WORKPIECE = "toy-0"
+SECTION = (
+    "The build writes the two numbers six and seven to workspace/numbers.txt, and the solver reads the file, "
+    "multiplies them and replies with the product alone inside the answer box as a plain integer. The grader is "
+    "an exact match on 42 after stripping whitespace, so the sum 13 or an empty reply earns nothing."
+)
 PROPOSAL = parse(
     proposal_document(
         proposal_id="toy/0",
@@ -130,36 +142,9 @@ PROPOSAL = parse(
             {"name": "grader", "description": "checks the product"},
         ],
         resources=["workspace/numbers.txt"],
-        body="""## Task
-Multiply the two numbers in /workspace/numbers.txt. The file holds two positive integers on one
-line, separated by a space. Read them, multiply them, and reply with the product alone inside the
-answer box, written as a plain integer with no units, no separators and no explanation around it.
-
-## Realism and workflow
-A clerk checks a product before an invoice goes out. The clerk opens the order file, reads the
-quantity and the unit price, multiplies them, and compares the result with the total the system
-printed. The task keeps that one step: read two numbers from a file and report their product.
-
-## Research plan
-None. The numbers are written by the build into the task's own file, and the product is computed
-from them, so no external fact, document or dataset is needed. The proposal declares no research
-items, and the body names no lookup in any outside source for the builder or the solver.
-
-## Build plan
-Write the numbers and the grader. The build writes workspace/numbers.txt with the two numbers six
-and seven, and a grader that reads the answer box and compares the reply with the product. The
-build checks its own file by recomputing the product before it publishes the task.
-
-## Grader design and controls
-Full credit only for 42. The grader is an exact match on the integer in the answer box after
-stripping surrounding whitespace. A positive control replies 42 and earns full credit; a negative
-control replies 13, the sum of the numbers, and earns nothing; an empty reply earns nothing.
-
-## Risks and null conditions
-None. The numbers are small and fixed, so the product cannot overflow and the answer format is
-unambiguous. A solver that guesses cannot reach the product by chance often, and the file holds
-no hint of the answer. No condition makes this task impossible to build in ShellSim.
-""",
+        body="".join(f"## {heading}\n{SECTION}\n\n" for heading in REQUIRED_HEADINGS).replace(
+            "## Task\n", "## Task\nMultiply the two numbers in /workspace/numbers.txt. ", 1
+        ),
     )
 )
 BUDGET = WorkpieceBudget(max_triage_repairs=0, max_build_revisions=1, max_validation_retries=1, max_modify_rounds=1)
@@ -310,11 +295,14 @@ STAGES = StageFunctions(
 UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
 
-class RecordingAuthor:
-    """Returns ``programs`` in turn, the last one from then on, and records each context, revision and author state."""
+class Author:
+    """Gives each reply in turn and the last from then on: a program, a source to load, or an error to raise.
 
-    def __init__(self, *programs: RLEnvBuildProgram):
-        self.programs = list(programs)
+    It records each call's context, revision and author state.
+    """
+
+    def __init__(self, *replies: RLEnvBuildProgram | str | BaseException) -> None:
+        self.replies = list(replies)
         self.contexts: list[AuthorContext] = []
         self.revisions: list[Revision | None] = []
         self.states: list[Mapping[str, JsonValue]] = []
@@ -329,54 +317,53 @@ class RecordingAuthor:
         self.contexts.append(context)
         self.revisions.append(revision)
         self.states.append(author_state)
-        return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
-
-
-class SourceAuthor:
-    """Returns ``source`` with the program loaded from it, and records each revision asked for."""
-
-    def __init__(self, source: str = SOURCE) -> None:
-        self.source = source
-        self.revisions: list[Revision | None] = []
-
-    async def __call__(
-        self,
-        context: AuthorContext,
-        proposal: TaskProposal,
-        revision: Revision | None,
-        author_state: Mapping[str, JsonValue],
-    ) -> AuthoredProgram:
-        self.revisions.append(revision)
-        return AuthoredProgram(load_toy_program(self.source), self.source)
+        reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+        if isinstance(reply, BaseException):
+            raise reply
+        if isinstance(reply, str):
+            return AuthoredProgram(load_toy_program(reply), reply)
+        return AuthoredProgram(reply, None)
 
 
 HOST_FAILURE = BuildInfrastructureFailure("image_pull", "the sandbox image did not pull")
+UNAVAILABLE = ModelUnavailable("the hold ran out", ())
 
 
-class FailsOnce:
-    """A build function raising ``error`` on its first call and running ``run_build`` after."""
+class FailsOn:
+    """Runs ``then`` and records each call's arguments, raising ``error`` instead on the calls numbered in ``failing``.
 
-    def __init__(self, error: Exception = HOST_FAILURE) -> None:
-        self.error = error
-        self.calls = 0
+    With ``only``, a call that does not pass ``only`` as an argument runs ``then`` unrecorded.
+    """
 
-    async def __call__(self, *args: Any, **kwargs: Any) -> TaskDraft:
-        self.calls += 1
-        if self.calls == 1:
-            raise self.error
-        return await run_build(*args, **kwargs)
+    def __init__(
+        self,
+        then: Callable[..., Awaitable[Any]],
+        error: BaseException = HOST_FAILURE,
+        failing: Container[int] = (1,),
+        only: str | None = None,
+    ) -> None:
+        self.then, self.error, self.failing, self.only = then, error, failing, only
+        self.calls: list[tuple[Any, ...]] = []
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if self.only is None or self.only in args:
+            self.calls.append(args)
+            if len(self.calls) in self.failing:
+                raise self.error
+        return await self.then(*args, **kwargs)
 
 
-class SaveFailsOnce(JsonEventStore):
-    """A JSON event store whose first save finds the storage unreachable."""
+class FlakyStore(JsonEventStore):
+    """A JSON event store whose first save of events that ``fails`` accepts finds the storage unreachable."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, fails: Callable[[tuple[WorkpieceEvent, ...]], bool] = lambda events: True) -> None:
         super().__init__(root)
-        self.saves = 0
+        self.fails = fails
+        self.failed = False
 
     def save(self, workpiece_id: str, events: tuple[WorkpieceEvent, ...]) -> None:
-        self.saves += 1
-        if self.saves == 1:
+        if not self.failed and self.fails(events):
+            self.failed = True
             raise OSError("the event store is unreachable")
         super().save(workpiece_id, events)
 
@@ -439,10 +426,15 @@ ACCEPTED_EXITS = [
 
 
 async def test_run_workpiece_records_an_event_per_stage_and_a_relaunch_changes_nothing(tmp_path):
+    author = Author(PROGRAM)
     log = StoredLog(tmp_path)
-    assert await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
+    assert await run_workpiece(coordinator(tmp_path, replace(STAGES, author=author)), WORKPIECE, PROPOSAL) is (
+        Terminal.ACCEPTED
+    )
 
     assert exits(log) == ACCEPTED_EXITS
+    assert log.events()[1].attrs["author_state"] == "{}"
+    assert (author.states, derive_state(log.events()).author_state) == ([{}, {}], {})
     round_dir = tmp_path / "workpieces" / WORKPIECE / "rounds" / "0"
     for name in (f"{AUTHORED_DIR}/0/program.json", f"{DRAFT_DIR}/{TASK_FILE}", VALIDATION_FILE, DECISION_FILE):
         assert (round_dir / name).is_file(), name
@@ -485,7 +477,7 @@ async def test_a_failed_preflight_holds_before_any_later_stage(tmp_path, proposa
 
 
 async def test_a_failed_initial_checkpoint_holds_before_execution_and_resumes(tmp_path):
-    store = SaveFailsOnce(tmp_path)
+    store = FlakyStore(tmp_path)
     log = StoredLog(tmp_path)
     with pytest.raises(OSError, match="unreachable"):
         await run_workpiece(replace(coordinator(tmp_path), event_store=store), WORKPIECE, PROPOSAL)
@@ -498,7 +490,7 @@ async def test_a_failed_initial_checkpoint_holds_before_execution_and_resumes(tm
 
 
 async def test_an_author_returning_source_runs_once_and_the_build_loads_its_program_file(tmp_path):
-    author = SourceAuthor()
+    author = Author(SOURCE)
     loaded: list[str] = []
 
     def load_program(source: str) -> RLEnvBuildProgram:
@@ -578,7 +570,7 @@ async def test_a_relaunch_under_other_proposer_prompts_or_solver_settings_is_not
 
 
 async def test_a_program_other_than_the_authored_one_fails_the_workpiece_at_build(tmp_path):
-    stages = replace(STAGES, author=RecordingAuthor(PROGRAM, FAILING))
+    stages = replace(STAGES, author=Author(PROGRAM, FAILING))
     with pytest.raises(ValueError, match="now returns program"):
         await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL)
 
@@ -587,7 +579,7 @@ async def test_a_program_other_than_the_authored_one_fails_the_workpiece_at_buil
 
 
 async def test_a_program_file_changed_on_disk_fails_the_workpiece_at_build(tmp_path):
-    stages = replace(STAGES, author=SourceAuthor(), build=FailsOnce())
+    stages = replace(STAGES, author=Author(SOURCE), build=FailsOn(run_build))
     with pytest.raises(BuildInfrastructureFailure):
         await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL)
     program_file = tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / AUTHORED_DIR / "0" / PROGRAM_FILE
@@ -600,7 +592,7 @@ async def test_a_program_file_changed_on_disk_fails_the_workpiece_at_build(tmp_p
 
 
 async def test_a_build_failure_costs_a_revision_and_the_next_one_abandons_the_workpiece(tmp_path):
-    author = RecordingAuthor(FAILING)
+    author = Author(FAILING)
     log = StoredLog(tmp_path)
     terminal = await run_workpiece(coordinator(tmp_path, replace(STAGES, author=author)), WORKPIECE, PROPOSAL)
 
@@ -643,7 +635,7 @@ async def failure_heads(root: Path, source: str) -> tuple[str, str, str]:
     the revision detail the second author call received, and the ``failure`` attr of the first
     ``BUILD_FAILED`` event.
     """
-    author = SourceAuthor(source)
+    author = Author(source)
     log = StoredLog(root)
     assert (
         await run_workpiece(coordinator(root, replace(STAGES, author=author)), WORKPIECE, PROPOSAL) is Terminal.ABANDONED
@@ -717,31 +709,11 @@ CUT_REPLY = Completion(
 )
 
 
-class CutAuthor:
-    """An author whose first ``cuts`` replies are cut at the output limit, returning ``SOURCE`` after.
-
-    It records each revision asked for.
-    """
-
-    def __init__(self, cuts: int) -> None:
-        self.cuts = cuts
-        self.revisions: list[Revision | None] = []
-
-    async def __call__(
-        self,
-        context: AuthorContext,
-        proposal: TaskProposal,
-        revision: Revision | None,
-        author_state: Mapping[str, JsonValue],
-    ) -> AuthoredProgram:
-        self.revisions.append(revision)
-        if len(self.revisions) <= self.cuts:
-            raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
-        return AuthoredProgram(load_toy_program(SOURCE), SOURCE)
+CUT = StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
 
 
 async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_author_samples_again(tmp_path):
-    author = CutAuthor(cuts=1)
+    author = Author(CUT, SOURCE)
     log = StoredLog(tmp_path)
 
     assert (
@@ -757,64 +729,39 @@ async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_au
     assert (round_dir / AUTHORED_DIR / "1" / PROGRAM_FILE).read_text() == SOURCE
 
 
-async def test_author_replies_cut_past_the_budget_abandon_the_workpiece(tmp_path):
-    author = CutAuthor(cuts=2)
-    log = StoredLog(tmp_path)
-
-    assert (
-        await run_workpiece(coordinator(tmp_path, replace(STAGES, author=author)), WORKPIECE, PROPOSAL)
-        is Terminal.ABANDONED
-    )
-    assert exits(log) == [
-        *ACCEPTED_EXITS[:2],
-        ("author_failed", "revise"),
-        ("author_failed", "abandon"),
-        ("terminal", "abandoned"),
-    ]
-    assert log.events()[-1].attrs["kind"] == RejectKind.BUDGET
-    assert [None if revision is None else revision.kind for revision in author.revisions] == [
-        None,
-        RevisionKind.AUTHOR_FAILURE,
-    ]
-
-
-async def unavailable_author(
-    context: AuthorContext,
-    proposal: TaskProposal,
-    revision: Revision | None,
-    author_state: Mapping[str, JsonValue],
-) -> AuthoredProgram:
-    raise ModelUnavailable("the hold ran out", ())
-
-
-async def test_an_unavailable_model_fails_the_workpiece_at_the_author_with_its_revisions_unspent(tmp_path):
-    with pytest.raises(ModelUnavailable):
-        await run_workpiece(coordinator(tmp_path, replace(STAGES, author=unavailable_author)), WORKPIECE, PROPOSAL)
-    state = derive_state(JsonEventStore(tmp_path).load(WORKPIECE) or ())
-    assert (state.stage, state.terminal, state.build_revisions) == (Stage.AUTHOR, Terminal.HELD, 0)
-    assert not (tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / FAILURES_DIR).exists()
+STAGE_ORDER = ("author", "build", "validate")
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("stage", "error"),
     [
-        HOST_FAILURE,
-        FileNotFoundError("blobs/ab/abcdef is missing"),
-        BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP, "numbers"),
+        ("author", UNAVAILABLE),
+        ("build", HOST_FAILURE),
+        ("build", FileNotFoundError("blobs/ab/abcdef is missing")),
+        ("build", BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP, "numbers")),
+        ("validate", UNAVAILABLE),
+        ("validate", asyncio.CancelledError()),
     ],
-    ids=["build host", "missing file", "expired clock"],
+    ids=["author model", "build host", "missing file", "expired clock", "validation model", "cancelled"],
 )
-async def test_a_failure_outside_the_program_fails_the_workpiece_at_build_and_a_relaunch_resumes_there(tmp_path, error):
-    stages = replace(STAGES, author=SourceAuthor(), build=FailsOnce(error))
-    with pytest.raises(type(error), match=str(error)):
+async def test_a_failure_outside_the_program_holds_at_its_stage_unspent_and_a_relaunch_resumes_there(
+    tmp_path, stage, error
+):
+    stages = replace(STAGES, author=Author(SOURCE))
+    failing: dict[str, Any] = {stage: FailsOn(getattr(stages, stage), error)}
+    stages = replace(stages, **failing)
+    with pytest.raises(type(error), match=re.escape(str(error)) or None):
         await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL)
-    state = derive_state(JsonEventStore(tmp_path).load(WORKPIECE) or ())
-    assert (state.stage, state.terminal, state.build_revisions) == (Stage.BUILD, Terminal.HELD, 0)
+    state = derive_state(StoredLog(tmp_path, WORKPIECE).events())
+    assert (state.stage, state.terminal, state.build_revisions) == (stage, Terminal.HELD, 0)
+    assert not (tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / FAILURES_DIR).exists()
 
+    earlier = STAGE_ORDER[: STAGE_ORDER.index(stage)]
     log = StoredLog(tmp_path)
-    resumed = replace(stages, author=no_call)
+    resumed = replace(stages, **dict.fromkeys(earlier, no_call))
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
-    assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "held"), *ACCEPTED_EXITS[3:]]
+    at = 2 + len(earlier)
+    assert exits(log) == [*ACCEPTED_EXITS[:at], ("terminal", "held"), *ACCEPTED_EXITS[at:]]
 
 
 async def builds_then_the_host_fails(*args: Any, **kwargs: Any) -> TaskDraft:
@@ -837,24 +784,13 @@ async def test_a_corrupt_memo_fails_the_workpiece_at_build_with_its_revisions_un
     assert not (tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / FAILURES_DIR).exists()
 
 
-async def fails_in_the_program(*args: Any, **kwargs: Any) -> TaskDraft:
-    raise BuildFailure("the numbers do not multiply to the answer", "task")
-
-
 async def test_a_failed_checkpoint_after_re_author_resumes_the_recorded_program(tmp_path):
-    class SaveAfterAuthorFailsOnce(JsonEventStore):
-        failed = False
-
-        def save(self, workpiece_id, events):
-            if not self.failed and events[-1].kind is EventKind.AUTHORED and len(events) > 4:
-                self.failed = True
-                raise OSError("the event store is unreachable")
-            super().save(workpiece_id, events)
-
     other = SOURCE.replace("6 7", "6 8")
-    first = coordinator(tmp_path, replace(STAGES, author=SourceAuthor(other), build=fails_in_the_program))
+    build = FailsOn(run_build, BuildFailure("the numbers do not multiply to the answer", "task"))
+    first = coordinator(tmp_path, replace(STAGES, author=Author(other), build=build))
+    store = FlakyStore(tmp_path, lambda events: events[-1].kind is EventKind.AUTHORED and len(events) > 4)
     with pytest.raises(OSError, match="unreachable"):
-        await run_workpiece(replace(first, event_store=SaveAfterAuthorFailsOnce(tmp_path)), WORKPIECE, PROPOSAL)
+        await run_workpiece(replace(first, event_store=store), WORKPIECE, PROPOSAL)
     authored = tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / AUTHORED_DIR
     assert (authored / "1" / PROGRAM_FILE).read_text() == other
 
@@ -866,41 +802,10 @@ async def test_a_failed_checkpoint_after_re_author_resumes_the_recorded_program(
     assert (authored / "0" / PROGRAM_FILE).read_text() == other
 
 
-class UnavailableOnce:
-    """A validate function whose call numbered ``failing`` finds the model unavailable, recording each context."""
-
-    def __init__(self, failing: int = 1) -> None:
-        self.failing = failing
-        self.contexts: list[ValidationContext] = []
-
-    @property
-    def calls(self) -> int:
-        return len(self.contexts)
-
-    async def __call__(self, draft: TaskDraft, context: ValidationContext) -> ValidationResult:
-        self.contexts.append(context)
-        if self.calls == self.failing:
-            raise ModelUnavailable("the hold ran out", ())
-        return passing_result(context)
-
-
-async def test_an_unavailable_model_fails_the_workpiece_at_validation_and_a_relaunch_resumes_there(tmp_path):
-    validate_once = UnavailableOnce()
-    with pytest.raises(ModelUnavailable):
-        await run_workpiece(coordinator(tmp_path, replace(STAGES, validate=validate_once)), WORKPIECE, PROPOSAL)
-    state = derive_state(JsonEventStore(tmp_path).load(WORKPIECE) or ())
-    assert (state.stage, state.terminal) == (Stage.VALIDATE, Terminal.HELD)
-
-    resumed = replace(STAGES, author=no_call, build=no_call, validate=validate_once)
-    log = StoredLog(tmp_path)
-    assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
-    assert exits(log) == [*ACCEPTED_EXITS[:4], ("terminal", "held"), *ACCEPTED_EXITS[4:]]
-
-
-async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds_left_across_a_relaunch(
+async def test_a_modify_re_authors_in_round_one_and_validate_and_review_receive_each_rounds_context_across_a_relaunch(
     tmp_path,
 ):
-    validate_once = UnavailableOnce(failing=2)
+    validate_once = FailsOn(validate, UNAVAILABLE, (2,))
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     reviewed: list[ValidationResult] = []
 
@@ -908,19 +813,26 @@ async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds
         reviewed.append(result)
         return decisions.pop(0)
 
-    stages = replace(STAGES, author=RecordingAuthor(PROGRAM), validate=validate_once, review=review_in_turn)
+    author = Author(PROGRAM)
+    stages = replace(STAGES, author=author, validate=validate_once, review=review_in_turn)
     with pytest.raises(ModelUnavailable):
         await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL)
 
     log = StoredLog(tmp_path)
     resumed = replace(stages, author=no_call, build=no_call)
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
-    rounds = tmp_path / "workpieces" / WORKPIECE / "rounds"
+    assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
+    assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
+    # The author stage and the build stage's call again, as the author returns no source, in each round.
+    directory = tmp_path / "workpieces" / WORKPIECE
+    assert author.contexts == [AuthorContext(WORKPIECE, 0, directory)] * 2 + [AuthorContext(WORKPIECE, 1, directory)] * 2
+    rounds = directory / "rounds"
+    assert (rounds / "1" / DRAFT_DIR / TASK_FILE).is_file()
     first, second = (
         ValidationContext(WORKPIECE, number, rounds / str(number), PROPOSAL, str(tmp_path / STORE_DIR), left)
         for number, left in ((0, 1), (1, 0))
     )
-    assert validate_once.contexts == [first, second, second]
+    assert [context for _, context in validate_once.calls] == [first, second, second]
     assert load_validation(rounds / "1") == passing_result(second)
     assert reviewed == [passing_result(first), passing_result(second)]
     assert [(event.kind, event.round) for event in log.events()][-4:] == [
@@ -951,36 +863,18 @@ class GradedFromCall:
         return replace(result, solver=solver)
 
 
-async def test_repeated_holds_resume_validation_without_spending_author_revisions(tmp_path):
-    validate = GradedFromCall(graded_from=3)
+@pytest.mark.parametrize("holds", [1, 2])
+async def test_holds_resume_validation_without_spending_author_revisions(tmp_path, holds):
+    validate = GradedFromCall(graded_from=holds + 1)
     stages = replace(STAGES, validate=validate)
     log = StoredLog(tmp_path)
-    for _ in range(2):
+    for _ in range(holds):
         assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL) is Terminal.HELD
         held = derive_state(log.events())
         assert (held.stage, held.round, held.build_revisions, held.retries) == (Stage.VALIDATE, 0, 0, 0)
     resumed = replace(stages, triage=no_call, author=no_call, build=no_call)
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
-    assert validate.calls == 3 and derive_state(log.events()).round == 0
-
-
-async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings_and_context(tmp_path):
-    decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
-    author = RecordingAuthor(PROGRAM)
-
-    async def review_in_turn(result: ValidationResult, *, band: BandRules) -> Decision:
-        return decisions.pop(0)
-
-    stages = replace(STAGES, author=author, review=review_in_turn)
-    log = StoredLog(tmp_path)
-
-    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
-    assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
-    assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
-    # The author stage and the build stage's call again, as the author returns no source, in each round.
-    directory = tmp_path / "workpieces" / WORKPIECE
-    assert author.contexts == [AuthorContext(WORKPIECE, 0, directory)] * 2 + [AuthorContext(WORKPIECE, 1, directory)] * 2
-    assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
+    assert validate.calls == holds + 1 and derive_state(log.events()).round == 0
 
 
 async def always_modify(result: ValidationResult, *, band: BandRules) -> Decision:
@@ -992,18 +886,34 @@ async def always_modify(result: ValidationResult, *, band: BandRules) -> Decisio
     [(0, [(0, "abandon")]), (1, [(0, "modify"), (1, "abandon")])],
     ids=["no rounds", "one round"],
 )
-async def test_a_modify_past_the_modify_rounds_abandons_the_workpiece(tmp_path, max_modify_rounds, decided):
-    author = RecordingAuthor(PROGRAM)
-    stages = replace(STAGES, author=author, review=always_modify)
-    budget = replace(BUDGET, max_modify_rounds=max_modify_rounds)
+async def test_a_modify_past_the_modify_rounds_abandons_and_a_larger_budget_resumes_review_before_a_new_round(
+    tmp_path, max_modify_rounds, decided
+):
+    stages = replace(STAGES, author=Author(PROGRAM), review=always_modify)
+    first = coordinator(tmp_path, stages, replace(BUDGET, max_modify_rounds=max_modify_rounds))
     log = StoredLog(tmp_path)
 
-    assert await run_workpiece(coordinator(tmp_path, stages, budget), WORKPIECE, PROPOSAL) is Terminal.ABANDONED
+    assert await run_workpiece(first, WORKPIECE, PROPOSAL) is Terminal.ABANDONED
     assert [(event.round, event.attrs[EXIT]) for event in log.events() if event.kind == "decided"] == decided
     closed = log.events()[-1]
     assert (closed.attrs["terminal"], closed.attrs["kind"]) == ("abandoned", RejectKind.BUDGET)
     assert "the file states the product" in closed.attrs["reason"]
     assert derive_state(log.events()).round == max_modify_rounds
+    rounds = tmp_path / "workpieces" / WORKPIECE / "rounds"
+    old_rounds = [tree_bytes(rounds / str(number)) for number in range(max_modify_rounds + 1)]
+
+    async def review(result: ValidationResult, *, band: BandRules) -> Decision:
+        if result.round <= max_modify_rounds:
+            return await always_modify(result, band=band)
+        return await default_review(result, band=band)
+
+    budget = replace(BUDGET, max_modify_rounds=max_modify_rounds + 1)
+    log = StoredLog(tmp_path)
+    assert await run_workpiece(
+        replace(first, stages=replace(STAGES, review=review), policy=budgeted(budget)), WORKPIECE, PROPOSAL
+    ) is (Terminal.ACCEPTED)
+    assert derive_state(log.events()).round == max_modify_rounds + 1
+    assert [tree_bytes(rounds / str(number)) for number in range(max_modify_rounds + 1)] == old_rounds
 
 
 class TriageInTurn:
@@ -1047,11 +957,11 @@ async def test_a_repair_verdict_triages_the_repaired_proposal_and_the_later_stag
 ):
     triage, repair = TriageInTurn(TriageDecision.REPAIR, TriageDecision.ACCEPT), MachineRepair()
     stages = replace(STAGES, triage=triage, repair=repair)
-    failing = coordinator(tmp_path, replace(stages, author=unavailable_author), REPAIRING)
+    failing = coordinator(tmp_path, replace(stages, author=Author(UNAVAILABLE)), REPAIRING)
     with pytest.raises(ModelUnavailable):
         await run_workpiece(failing, WORKPIECE, MACHINELESS_SHELLSIM)
 
-    author = RecordingAuthor(PROGRAM)
+    author = Author(PROGRAM)
     proposals: list[TaskProposal] = []
 
     async def build(program: RLEnvBuildProgram, proposal: TaskProposal, *args: Any, **kwargs: Any) -> TaskDraft:
@@ -1081,30 +991,6 @@ async def test_a_repair_verdict_triages_the_repaired_proposal_and_the_later_stag
     assert repaired.attrs["proposal_file"] == f"{REPAIRED_DIR}/1.json"
     assert (triage.proposals, repair.calls, proposals) == ([MACHINELESS_SHELLSIM, PROPOSAL], 1, [PROPOSAL])
     assert derive_state(log.events()).triage_repairs == 1
-
-
-async def test_a_second_repair_verdict_abandons_without_a_second_repair(tmp_path):
-    triage, repair = TriageInTurn(TriageDecision.REPAIR, TriageDecision.REPAIR), MachineRepair()
-    stages = replace(STAGES, triage=triage, repair=repair, author=no_call)
-    log = StoredLog(tmp_path)
-
-    assert (
-        await run_workpiece(coordinator(tmp_path, stages, REPAIRING), WORKPIECE, MACHINELESS_SHELLSIM)
-        is Terminal.ABANDONED
-    )
-    assert exits(log) == [("opened", None), ("triaged", "repair"), ("triaged", "abandon"), ("terminal", "abandoned")]
-    rejected, closed = log.events()[2:]
-    assert (rejected.digest, rejected.attrs["decision"], rejected.attrs["repairs"]) == (
-        content_hash.digest(PROPOSAL),
-        "repair",
-        "1",
-    )
-    assert closed.attrs == {
-        "terminal": "abandoned",
-        "reason": "triage returned REPAIR with 1 of 1 rewrites spent",
-        "kind": RejectKind.BUDGET,
-    }
-    assert (triage.proposals, repair.calls) == ([MACHINELESS_SHELLSIM, PROPOSAL], 1)
 
 
 async def test_an_invalid_rewrite_holds_with_its_error(tmp_path):
@@ -1139,15 +1025,15 @@ async def test_a_verdicts_author_state_reaches_every_author_call_through_the_eve
     triage = TriageInTurn(TriageDecision.ACCEPT, author_state=AUTHOR_STATE)
     with pytest.raises(ModelUnavailable):
         await run_workpiece(
-            coordinator(tmp_path, replace(STAGES, triage=triage, author=unavailable_author)),
-            WORKPIECE,
-            PROPOSAL,
+            coordinator(tmp_path, replace(STAGES, triage=triage, author=Author(UNAVAILABLE))), WORKPIECE, PROPOSAL
         )
     triaged = (JsonEventStore(tmp_path).load(WORKPIECE) or ())[1]
     assert triaged.attrs["author_state"] == content_hash.canonical_json(AUTHOR_STATE)
 
-    author = RecordingAuthor(PROGRAM)
-    resumed = replace(STAGES, triage=no_call, author=author, build=FailsOnce(BuildFailure("wrong product", "task")))
+    author = Author(PROGRAM)
+    resumed = replace(
+        STAGES, triage=no_call, author=author, build=FailsOn(run_build, BuildFailure("wrong product", "task"))
+    )
     log = StoredLog(tmp_path)
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
 
@@ -1161,17 +1047,6 @@ async def test_a_verdicts_author_state_reaches_every_author_call_through_the_eve
     assert derive_state(log.events()).author_state == AUTHOR_STATE
 
 
-async def test_the_default_triage_records_an_empty_author_state(tmp_path):
-    author = RecordingAuthor(PROGRAM)
-    log = StoredLog(tmp_path)
-
-    assert await run_workpiece(coordinator(tmp_path, replace(STAGES, author=author)), WORKPIECE, PROPOSAL) is (
-        Terminal.ACCEPTED
-    )
-    assert log.events()[1].attrs["author_state"] == "{}"
-    assert (author.states, derive_state(log.events()).author_state) == ([{}, {}], {})
-
-
 ARRIVAL_TIMEOUT = 10
 """Seconds a proposal iterable waits for a workpiece's progress before the test fails instead of hanging."""
 
@@ -1179,28 +1054,6 @@ ARRIVAL_TIMEOUT = 10
 async def arriving(*workpiece_ids: str) -> AsyncIterator[tuple[str, TaskProposal]]:
     for workpiece_id in workpiece_ids:
         yield workpiece_id, PROPOSAL
-
-
-class FailsFor:
-    """A build function raising ``error`` on the first ``times`` builds of ``workpiece_id``, counted in ``calls``.
-
-    Every other build runs ``run_build``.
-    """
-
-    def __init__(self, workpiece_id: str, times: int, error: Exception = HOST_FAILURE) -> None:
-        self.workpiece_id = workpiece_id
-        self.times = times
-        self.error = error
-        self.calls = 0
-
-    async def __call__(
-        self, program: RLEnvBuildProgram, proposal: TaskProposal, workpiece_id: str, *args: Any, **kwargs: Any
-    ) -> TaskDraft:
-        if workpiece_id == self.workpiece_id:
-            self.calls += 1
-            if self.calls <= self.times:
-                raise self.error
-        return await run_build(program, proposal, workpiece_id, *args, **kwargs)
 
 
 async def test_run_workpieces_fails_a_workpiece_in_place_and_cancels_no_sibling_in_flight(tmp_path):
@@ -1228,7 +1081,7 @@ async def test_run_workpieces_fails_a_workpiece_in_place_and_cancels_no_sibling_
 
 
 async def test_a_held_workpiece_resumes_at_the_stage_that_raised_on_the_next_run_and_spends_no_revision(tmp_path):
-    build = FailsFor("toy-1", 1)
+    build = FailsOn(run_build, only="toy-1")
     first = coordinator(tmp_path, replace(STAGES, build=build))
     assert await run_workpieces(first, arriving("toy-0", "toy-1")) == {
         "toy-0": Terminal.ACCEPTED,
@@ -1243,10 +1096,12 @@ async def test_a_held_workpiece_resumes_at_the_stage_that_raised_on_the_next_run
     log = StoredLog(tmp_path, "toy-1")
     assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "held"), *ACCEPTED_EXITS[3:]]
     assert derive_state(log.events()).build_revisions == 0
-    assert build.calls == 2
+    assert len(build.calls) == 2
 
 
-async def test_run_workpieces_starts_a_workpiece_before_the_next_proposal_arrives(tmp_path):
+async def test_run_workpieces_starts_a_workpiece_before_the_next_proposal_arrives_and_returns_once_all_are_terminal(
+    tmp_path,
+):
     order: list[str] = []
     triaged = asyncio.Event()
 
@@ -1266,32 +1121,6 @@ async def test_run_workpieces_starts_a_workpiece_before_the_next_proposal_arrive
 
     assert terminals == {"toy-0": Terminal.ACCEPTED, "toy-1": Terminal.ACCEPTED}
     assert order == ["triaged", "toy-1 arrives", "triaged"]
-
-
-class SignallingStore(JsonEventStore):
-    """A JSON event store setting ``saved`` once it has saved a workpiece's events."""
-
-    def __init__(self, root: Path) -> None:
-        super().__init__(root)
-        self.saved = asyncio.Event()
-
-    def save(self, workpiece_id: str, events: tuple[WorkpieceEvent, ...]) -> None:
-        super().save(workpiece_id, events)
-        self.saved.set()
-
-
-async def test_run_workpieces_returns_only_once_its_proposals_are_exhausted_and_every_workpiece_is_terminal(tmp_path):
-    store = SignallingStore(tmp_path)
-
-    async def proposals() -> AsyncIterator[tuple[str, TaskProposal]]:
-        yield "toy-0", PROPOSAL
-        async with asyncio.timeout(ARRIVAL_TIMEOUT):
-            await store.saved.wait()
-        yield "toy-1", PROPOSAL
-
-    terminals = await run_workpieces(replace(coordinator(tmp_path), event_store=store), proposals())
-
-    assert terminals == {"toy-0": Terminal.ACCEPTED, "toy-1": Terminal.ACCEPTED}
     for workpiece_id in terminals:
         assert exits(StoredLog(tmp_path, workpiece_id)) == ACCEPTED_EXITS
 
@@ -1338,24 +1167,13 @@ def agentic_author(model: ScriptedModel, root: Path) -> AgenticAuthor:
     return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.ledger, builds, DEFAULT_POLICY)
 
 
-class RecordingValidate:
-    """Returns ``passing_result`` for every draft's context and keeps the drafts it validated."""
-
-    def __init__(self) -> None:
-        self.drafts: list[TaskDraft] = []
-
-    async def __call__(self, draft: TaskDraft, context: ValidationContext) -> ValidationResult:
-        self.drafts.append(draft)
-        return passing_result(context)
-
-
 async def test_the_coordinator_runs_the_agentic_author_as_its_author_stage_through_build_and_validation(tmp_path):
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": AGENTIC_SOURCE})),
         turn(("run_build", {"path": "program.py"})),
         turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
     )
-    validate_drafts = RecordingValidate()
+    validate_drafts = FailsOn(validate, failing=())
     stages = replace(STAGES, author=agentic_author(model, tmp_path), load_program=load_program, validate=validate_drafts)
     log = StoredLog(tmp_path)
 
@@ -1366,7 +1184,7 @@ async def test_the_coordinator_runs_the_agentic_author_as_its_author_stage_throu
     assert (round_dir / "agentic" / "0" / "workspace" / PROGRAM_FILE).read_text() == AGENTIC_SOURCE
     built = next(event for event in log.events() if event.kind == "built")
     assert built.attrs["hits"] == built.attrs["steps"] == "3", "the build stage reran no step the session built"
-    [draft] = validate_drafts.drafts
+    [(draft, _)] = validate_drafts.calls
     assert draft.task.id == WORKPIECE
 
 
@@ -1379,7 +1197,9 @@ async def test_a_build_failure_returns_to_the_agentic_session_that_submitted_the
         turn(("submit", {"path": "program.py", "notes": "the grader holds"})),
     )
     failure = BuildFailure("the reference reply does not parse", "grader")
-    stages = replace(STAGES, author=agentic_author(model, tmp_path), load_program=load_program, build=FailsOnce(failure))
+    stages = replace(
+        STAGES, author=agentic_author(model, tmp_path), load_program=load_program, build=FailsOn(run_build, failure)
+    )
     log = StoredLog(tmp_path)
 
     assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
@@ -1392,13 +1212,24 @@ async def test_a_build_failure_returns_to_the_agentic_session_that_submitted_the
     assert (round_dir / AUTHORED_DIR / "1" / PROGRAM_FILE).read_text() == AGENTIC_SOURCE
 
 
-async def test_abandoned_author_budget_resumes_with_failure_and_preserves_old_files(tmp_path):
-    author = CutAuthor(cuts=2)
+async def test_author_replies_cut_past_the_budget_abandon_and_a_larger_budget_resumes_keeping_old_files(tmp_path):
+    author = Author(CUT, CUT, SOURCE)
     first = coordinator(tmp_path, replace(STAGES, author=author))
     log = StoredLog(tmp_path)
     assert await run_workpiece(first, WORKPIECE, PROPOSAL) is Terminal.ABANDONED
-    before = tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds")
+    assert exits(log) == [
+        *ACCEPTED_EXITS[:2],
+        ("author_failed", "revise"),
+        ("author_failed", "abandon"),
+        ("terminal", "abandoned"),
+    ]
+    assert log.events()[-1].attrs["kind"] == RejectKind.BUDGET
+    assert [None if revision is None else revision.kind for revision in author.revisions] == [
+        None,
+        RevisionKind.AUTHOR_FAILURE,
+    ]
     assert derive_state(log.events()).stage is Stage.AUTHOR
+    before = tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds")
 
     resumed = replace(first, policy=budgeted(replace(BUDGET, max_build_revisions=3)))
     assert await run_workpiece(resumed, WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
@@ -1410,28 +1241,27 @@ async def test_abandoned_author_budget_resumes_with_failure_and_preserves_old_fi
     assert revision is not None and revision.kind is RevisionKind.AUTHOR_FAILURE
 
 
-async def test_abandoned_modify_budget_resumes_review_before_starting_a_new_round(tmp_path):
-    first = coordinator(tmp_path, replace(STAGES, review=always_modify), replace(BUDGET, max_modify_rounds=0))
-    assert await run_workpiece(first, WORKPIECE, PROPOSAL) is Terminal.ABANDONED
-    old_round = tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds" / "0")
-
-    async def review(result, *, band):
-        return await always_modify(result, band=band) if result.round == 0 else await default_review(result, band=band)
-
-    resumed = replace(
-        first, stages=replace(STAGES, review=review), policy=budgeted(replace(BUDGET, max_modify_rounds=1))
-    )
-    log = StoredLog(tmp_path)
-    assert await run_workpiece(resumed, WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
-    assert derive_state(log.events()).round == 1
-    assert tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds" / "0") == old_round
-
-
-async def test_abandoned_triage_budget_resumes_with_the_last_rewritten_proposal(tmp_path):
+async def test_a_second_repair_verdict_abandons_without_a_second_repair_and_a_relaunch_resumes_the_rewrite(tmp_path):
     triage = TriageInTurn(TriageDecision.REPAIR, TriageDecision.REPAIR, TriageDecision.ACCEPT)
-    stages = replace(STAGES, triage=triage, repair=MachineRepair())
-    first = coordinator(tmp_path, stages, REPAIRING)
+    repair = MachineRepair()
+    first = coordinator(tmp_path, replace(STAGES, triage=triage, repair=repair), REPAIRING)
+    log = StoredLog(tmp_path)
+
     assert await run_workpiece(first, WORKPIECE, MACHINELESS_SHELLSIM) is Terminal.ABANDONED
+    assert exits(log) == [("opened", None), ("triaged", "repair"), ("triaged", "abandon"), ("terminal", "abandoned")]
+    rejected, closed = log.events()[2:]
+    assert (rejected.digest, rejected.attrs["decision"], rejected.attrs["repairs"]) == (
+        content_hash.digest(PROPOSAL),
+        "repair",
+        "1",
+    )
+    assert closed.attrs == {
+        "terminal": "abandoned",
+        "reason": "triage returned REPAIR with 1 of 1 rewrites spent",
+        "kind": RejectKind.BUDGET,
+    }
+    assert (triage.proposals, repair.calls) == ([MACHINELESS_SHELLSIM, PROPOSAL], 1)
+
     assert await run_workpiece(first, WORKPIECE, MACHINELESS_SHELLSIM) is Terminal.ACCEPTED
     assert triage.proposals[-1] == PROPOSAL
     state = derive_state(StoredLog(tmp_path, WORKPIECE).events())
@@ -1464,30 +1294,9 @@ async def test_custom_review_cannot_close_a_task_with_missing_evidence(tmp_path,
     assert derive_state(log.events()).stage is Stage.VALIDATE
 
 
-async def test_cancellation_holds_at_the_interrupted_stage_and_resumes(tmp_path):
-    async def interrupted(draft, context):
-        raise asyncio.CancelledError()
-
-    first = coordinator(tmp_path, replace(STAGES, validate=interrupted))
-    with pytest.raises(asyncio.CancelledError):
-        await run_workpiece(first, WORKPIECE, PROPOSAL)
-    state = derive_state(StoredLog(tmp_path, WORKPIECE).events())
-    assert (state.stage, state.terminal, state.build_revisions) == (Stage.VALIDATE, Terminal.HELD, 0)
-    resumed = replace(first, stages=replace(STAGES, author=no_call, build=no_call))
-    assert await run_workpiece(resumed, WORKPIECE, PROPOSAL) is Terminal.ACCEPTED
-
-
 async def test_failed_final_checkpoint_preserves_a_conclusive_decision(tmp_path):
-    class SaveFinalFailsOnce(JsonEventStore):
-        failed = False
-
-        def save(self, workpiece_id, events):
-            if not self.failed and events[-1].attrs.get("terminal") == "accepted":
-                self.failed = True
-                raise OSError("the event store is unreachable")
-            super().save(workpiece_id, events)
-
-    first = replace(coordinator(tmp_path), event_store=SaveFinalFailsOnce(tmp_path))
+    store = FlakyStore(tmp_path, lambda events: events[-1].attrs.get("terminal") == "accepted")
+    first = replace(coordinator(tmp_path), event_store=store)
     with pytest.raises(OSError, match="unreachable"):
         await run_workpiece(first, WORKPIECE, PROPOSAL)
     assert derive_state(StoredLog(tmp_path, WORKPIECE).events()).terminal is Terminal.ACCEPTED
@@ -1497,7 +1306,7 @@ async def test_failed_final_checkpoint_preserves_a_conclusive_decision(tmp_path)
 
 async def test_explicit_inner_budget_abandons_without_automatic_retry(tmp_path):
     error = BuildInfrastructureFailure(InfrastructureCause.BUDGET_EXHAUSTED, "model call budget exhausted")
-    build = FailsOnce(error)
+    build = FailsOn(run_build, error)
     first = coordinator(tmp_path, replace(STAGES, build=build))
     assert await run_workpieces(first, arriving(WORKPIECE)) == {WORKPIECE: Terminal.ABANDONED}
     state = derive_state(StoredLog(tmp_path, WORKPIECE).events())

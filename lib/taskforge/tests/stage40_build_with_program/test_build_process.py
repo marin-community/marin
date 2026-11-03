@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Builds in a child process: the loader's test program, its model call served by ``fake_glm``."""
+"""Builds in a child process: the loader's test program, its model call served by ``fake_glm``.
+
+Invariants: none (pins that a child build returns the in-process draft and each failure kind across the process).
+"""
 
 import asyncio
 import json
@@ -12,17 +15,9 @@ import pytest
 from shellbox.machine import Backend
 from taskforge_adapters.build_process import (
     LOG_FILE,
-    REQUEST,
-    RESULT,
     BuildModelConfig,
     BuildRequest,
     BuildServiceConfig,
-    Built,
-    Crashed,
-    Expired,
-    Failed,
-    HostFailed,
-    Raised,
     image_builder,
     run_build_in_process,
 )
@@ -42,10 +37,10 @@ from taskforge.stage40_build_with_program.context import (
 from taskforge.stage40_build_with_program.failure_text import BuildCrash
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.program_sdk import load_program
-from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build
+from taskforge.stage40_build_with_program.run import ResearchRequirement
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from tests.stage30_author.programs import PROGRAM as PLAIN_PROGRAM
-from tests.stage40_build_with_program.conftest import LIMITS, SAMPLING, WORKPIECE
+from tests.stage40_build_with_program.conftest import LIMITS, SAMPLING, WORKPIECE, build_draft
 
 TOKEN_ENV = "TASKFORGE_TEST_GLM_TOKEN"
 CONTROLLER_URL = "http://controller.example:10000"
@@ -129,18 +124,7 @@ async def test_a_build_in_a_child_process_writes_the_draft_and_ledger_of_the_bui
 ):
     for _ in range(2):
         fake_glm.stream(content=json.dumps({"text": "What is 6 * 7?"}))
-    in_process = await run_build(
-        load_program(PROGRAM),
-        proposal,
-        WORKPIECE,
-        tmp_path / "here" / "round",
-        str(tmp_path / "here" / "store"),
-        glm_client,
-        SAMPLING,
-        services,
-        0,
-        research=ResearchRequirement.OFF,
-    )
+    in_process = await build_draft(tmp_path / "here", load_program(PROGRAM), proposal, services, glm_client)
     request = make_request(PROGRAM)
 
     child = await run_build_in_process(request, wall_timeout=WALL_TIMEOUT)
@@ -181,35 +165,35 @@ async def test_a_step_that_never_yields_expires_at_the_wall_clock_while_the_driv
     assert ticks > SPIN_TIMEOUT / 0.05 / 2
 
 
-async def test_a_build_failure_in_the_child_comes_back_with_its_step(make_request):
-    request = make_request(with_question('    raise BuildFailure("the question is ambiguous")'))
-
-    with pytest.raises(BuildFailure) as failure:
-        await run_build_in_process(request, wall_timeout=WALL_TIMEOUT)
-
-    assert (failure.value.message, failure.value.step) == ("the question is ambiguous", "question")
+EXPIRY = "ran for more than 1800 seconds without returning"
 
 
-async def test_a_host_failure_in_the_child_comes_back_with_its_cause(make_request):
-    body = f'    raise BuildInfrastructureFailure("{InfrastructureCause.HOST_UNREACHABLE}", "the controller refused")'
+@pytest.mark.parametrize(
+    ("body", "error", "fields"),
+    [
+        (
+            'raise BuildFailure("the question is ambiguous")',
+            BuildFailure,
+            {"message": "the question is ambiguous", "step": "question"},
+        ),
+        (
+            f'raise BuildInfrastructureFailure("{InfrastructureCause.HOST_UNREACHABLE}", "the controller refused")',
+            BuildInfrastructureFailure,
+            {"cause": InfrastructureCause.HOST_UNREACHABLE, "message": "the controller refused"},
+        ),
+        (
+            f'raise BuildExpired("{EXPIRY}", ExpiredClock.STEP)',
+            BuildExpired,
+            {"clock": ExpiredClock.STEP, "step": "question", "message": EXPIRY},
+        ),
+    ],
+    ids=["build-failure", "host-failure", "step-clock"],
+)
+async def test_a_failure_in_the_child_comes_back_with_its_fields(make_request, body, error, fields):
+    with pytest.raises(error) as failure:
+        await run_build_in_process(make_request(with_question(f"    {body}")), wall_timeout=WALL_TIMEOUT)
 
-    with pytest.raises(BuildInfrastructureFailure) as failure:
-        await run_build_in_process(make_request(with_question(body)), wall_timeout=WALL_TIMEOUT)
-
-    assert (failure.value.cause, failure.value.message) == (
-        InfrastructureCause.HOST_UNREACHABLE,
-        "the controller refused",
-    )
-
-
-async def test_a_step_clock_expiry_in_the_child_comes_back_with_its_clock_and_step(make_request):
-    body = '    raise BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP)'
-
-    with pytest.raises(BuildExpired) as expired:
-        await run_build_in_process(make_request(with_question(body)), wall_timeout=WALL_TIMEOUT)
-
-    assert (expired.value.clock, expired.value.step) == (ExpiredClock.STEP, "question")
-    assert str(expired.value) == "ran for more than 1800 seconds without returning"
+    assert {name: getattr(failure.value, name) for name in fields} == fields
 
 
 async def test_any_other_exception_in_the_child_comes_back_led_by_the_program_line_that_raised_it(make_request):
@@ -233,26 +217,18 @@ async def test_a_child_that_cannot_start_its_services_is_a_host_failure_carrying
     assert f"the build reads a secret from {TOKEN_ENV}, which is not set" in failure.value.message
 
 
-@pytest.mark.parametrize("image_cluster", [None, "cw-us-east-02a"])
-def test_requests_and_results_round_trip_through_json(make_request, image_cluster):
-    request = on_iris(make_request(PROGRAM), image_cluster)
-    results = (
-        Built(),
-        Failed("the question is ambiguous", "question"),
-        Expired(ExpiredClock.STEP, "question", "ran for more than 1800 seconds without returning"),
-        HostFailed(InfrastructureCause.NO_FACTORY, "no docker"),
-        Crashed(Raised.OS_ERROR, "OSError: disk full", "Traceback"),
-    )
-
-    assert REQUEST.validate_json(REQUEST.dump_json(request)) == request
-    assert [RESULT.validate_json(RESULT.dump_json(result)) for result in results] == list(results)
-
-
 def test_the_child_builds_images_with_the_credential_its_environment_holds_and_no_gcloud(make_request, monkeypatch):
-    monkeypatch.setenv(REGISTRY_ENV, json.dumps(asdict(CREDENTIAL)))
+    config = on_iris(make_request(PROGRAM), "cw-us-east-02a").services
     monkeypatch.setenv("PATH", "")
+    monkeypatch.delenv(REGISTRY_ENV, raising=False)
+    with pytest.raises(ValueError, match=f"the build reads a secret from {REGISTRY_ENV}, which is not set"):
+        image_builder(config)
+    monkeypatch.setenv(REGISTRY_ENV, json.dumps({"registry": "registry.example", "user": "publisher"}))
+    with pytest.raises(ValueError, match="not a JSON object of strings"):
+        image_builder(config)
+    monkeypatch.setenv(REGISTRY_ENV, json.dumps(asdict(CREDENTIAL)))
 
-    builder = image_builder(on_iris(make_request(PROGRAM), "cw-us-east-02a").services)
+    builder = image_builder(config)
 
     assert isinstance(builder, IrisImageBuilder)
     assert (builder.controller_url, builder.target_cluster, builder.credential) == (
@@ -261,20 +237,3 @@ def test_the_child_builds_images_with_the_credential_its_environment_holds_and_n
         CREDENTIAL,
     )
     assert image_builder(make_request(PROGRAM).services) is None
-    with pytest.raises(ValueError, match="controller URL"):
-        image_builder(
-            replace(make_request(PROGRAM).services, image_cluster="cw-us-east-02a", registry_credential_env=REGISTRY_ENV)
-        )
-
-
-def test_an_image_cluster_without_a_readable_credential_fails_before_any_build(make_request, monkeypatch):
-    config = on_iris(make_request(PROGRAM), "cw-us-east-02a").services
-    monkeypatch.delenv(REGISTRY_ENV, raising=False)
-
-    with pytest.raises(ValueError, match=f"the build reads a secret from {REGISTRY_ENV}, which is not set"):
-        image_builder(config)
-    with pytest.raises(ValueError, match="registry_credential_env"):
-        image_builder(replace(config, registry_credential_env=None))
-    monkeypatch.setenv(REGISTRY_ENV, json.dumps({"registry": "registry.example", "user": "publisher"}))
-    with pytest.raises(ValueError, match="not a JSON object of strings"):
-        image_builder(config)

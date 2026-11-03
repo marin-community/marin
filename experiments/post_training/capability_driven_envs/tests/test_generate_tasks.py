@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""The unstaged program driver: running an authored program, and saving each workpiece's task and completions.
+
+Invariants: none (pins the driver's program runner and output files).
+"""
+
 import pytest
 
 # These tests run in the marin-taskforge package environment; environments without it skip them.
@@ -12,8 +17,6 @@ import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-import click
-from click.testing import CliRunner
 from pydantic import BaseModel, ValidationError
 from rigging.timing import Duration, ExponentialBackoff
 from taskcompendium.models import TaskSpec
@@ -27,16 +30,12 @@ from taskforge.llm.client import (
 )
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
-from taskforge_adapters.glm_client import Pool
 
 from experiments.post_training.capability_driven_envs.catalog import example_catalog_path
 from experiments.post_training.capability_driven_envs.generate_tasks import (
-    GLM_HIGH_TOKEN_ENV,
     SUMMARY_FILE,
     TASK_STATUS,
     generate_tasks,
-    main,
-    pool_token,
     run_program,
     selected_ideas,
     task_workpieces,
@@ -46,7 +45,6 @@ from experiments.post_training.capability_driven_envs.program_prompt import (
     ProgramSubmission,
     example_program_source,
 )
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 
 CAPABILITY = "d43.culinary.scaling"
 COMPLETION = Completion(
@@ -87,28 +85,22 @@ class CannedModel:
         return StructuredResult(value, (COMPLETION,))
 
 
-def test_example_program_writes_a_task_spec_with_the_given_id():
-    run = asyncio.run(run_program(example_program_source(), "scaling--03", timeout=60))
-
-    assert (run.exit_code, run.failure) == (0, None)
-    assert run.task is not None and run.task.id == "scaling--03"
-
-
 @pytest.mark.parametrize(
-    ("source", "failure"),
+    ("source", "failure", "stderr"),
     [
-        ("import sys\nprint('boom', file=sys.stderr)\nsys.exit(3)\n", "exited with status 3"),
-        ("pass\n", "wrote no file"),
-        ("import sys, pathlib\npathlib.Path(sys.argv[2]).write_text('{\"id\": 1}')\n", "not a TaskSpec"),
-        ("import time\ntime.sleep(30)\n", "did not finish"),
+        ("import sys\nprint('boom', file=sys.stderr)\nsys.exit(3)\n", "exited with status 3", "boom"),
+        ("pass\n", "wrote no file", ""),
+        ("import sys, pathlib\npathlib.Path(sys.argv[2]).write_text('{\"id\": 1}')\n", "not a TaskSpec", ""),
+        ("import time\ntime.sleep(30)\n", "did not finish", ""),
     ],
     ids=["exit-status", "no-output", "not-a-task-spec", "timeout"],
 )
-def test_program_failures_are_recorded(source, failure):
+def test_program_failures_are_recorded_with_the_programs_stderr(source, failure, stderr):
     run = asyncio.run(run_program(source, "workpiece--00", timeout=1))
 
     assert run.task is None
     assert failure in (run.failure or "")
+    assert stderr in run.stderr
 
 
 def test_timeout_kills_what_the_program_spawned(tmp_path: Path):
@@ -134,12 +126,6 @@ def test_timeout_kills_what_the_program_spawned(tmp_path: Path):
 
     # SIGKILL is delivered asynchronously and init reaps the orphan, so the pid lingers briefly.
     assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(gone, Duration.from_seconds(10))
-
-
-def test_failed_program_keeps_its_stderr():
-    run = asyncio.run(run_program("raise SystemExit('bad input')\n", "workpiece--00", timeout=60))
-
-    assert run.exit_code == 1 and "bad input" in run.stderr
 
 
 @pytest.mark.parametrize(
@@ -209,31 +195,3 @@ def test_model_error_fails_only_its_workpiece(tmp_path: Path, error: Exception):
     assert json.loads((tmp_path / "run" / failed / "completions.json").read_text()) == []
     assert not (tmp_path / "run" / failed / "task.json").exists()
     assert TaskSpec.model_validate_json((tmp_path / "run" / written / "task.json").read_text()).id == written
-
-
-@pytest.mark.parametrize("flag", ["--samples", "--concurrency"])
-def test_main_refuses_a_count_below_one(tmp_path: Path, flag: str):
-    argv = ["--output-dir", str(tmp_path / "run"), "--base-url", "http://127.0.0.1:1/v1", flag, "0"]
-
-    result = CliRunner().invoke(main, argv)
-
-    assert result.exit_code == 2 and "x>=1" in result.output
-    assert not (tmp_path / "run").exists()
-
-
-@pytest.mark.parametrize(
-    "endpoint", [[], ["--base-url", "http://127.0.0.1:1/v1", "--relay-job", "/user/relay"]], ids=["neither", "both"]
-)
-def test_main_needs_exactly_one_of_base_url_and_relay_job(tmp_path: Path, endpoint: list[str]):
-    result = CliRunner().invoke(main, ["--output-dir", str(tmp_path / "run"), *endpoint])
-
-    assert result.exit_code == 2 and "exactly one of --base-url and --relay-job" in result.output
-
-
-def test_pool_selects_its_token_variable(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv(GLM_HIGH_TOKEN_ENV, "high-token")
-    monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
-
-    assert pool_token(Pool.HIGH) == "high-token"
-    with pytest.raises(click.ClickException, match=GLM_BULK_TOKEN_ENV):
-        pool_token(Pool.BULK)

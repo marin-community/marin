@@ -7,6 +7,8 @@ messages trace.
 The live checks write ``<evidence_root>/validate/rollout_model/<check>-<utc>.json``: every rollout
 (messages, per-turn usage) plus, per turn, how many prompt tokens the server reported cached.
 ``evidence_root`` is the fixture in ``tests/conftest.py``.
+
+Invariants: none (pins the solver model's messages-trace contract: usage, reasoning replay, length stops).
 """
 
 import asyncio
@@ -176,21 +178,21 @@ async def test_two_turn_rollout_records_usage_and_replays_reasoning(fake_glm, fa
     assert second["messages"][2]["role"] == "tool"
 
 
-async def test_length_cut_turn_is_graded_with_length_stop(fake_glm, fake_client):
-    fake_glm.stream(content="I will", finish="length")
-
-    result = await run(GlmRolloutModel(fake_client, POLICY, call_ledger()), shellsim(shell_task()))
-
-    assert result.rollout.stop_reason == "length"
-    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 0.0)
-    assert len(fake_glm.requests) == 1
-
-
-async def test_tool_call_cut_at_the_budget_ends_the_rollout_with_length_unexecuted(fake_glm, fake_client):
-    # vLLM's GLM tool parser reports a tool call cut by max_tokens as finish_reason "tool_calls".
-    command = '{"command": "touch /workspace/done.txt"}'
-    fake_glm.stream(tool_calls=(("shell", command),), finish="tool_calls", completion_tokens=3)
-    policy = LLMPolicy(max_tokens=3, max_continuations=0)
+@pytest.mark.parametrize(
+    ("reply", "policy"),
+    [
+        ({"content": "I will", "finish": "length"}, POLICY),
+        # vLLM's GLM tool parser reports a tool call cut by max_tokens as finish_reason "tool_calls"; the
+        # tool call would create the graded file, so a reward of 0 shows it did not run.
+        (
+            {"tool_calls": (("shell", '{"command": "touch /workspace/done.txt"}'),), "finish": "tool_calls"},
+            LLMPolicy(max_tokens=3, max_continuations=0),
+        ),
+    ],
+    ids=["text", "tool-call-at-budget"],
+)
+async def test_a_length_cut_turn_ends_the_rollout_graded_with_length_stop(fake_glm, fake_client, reply, policy):
+    fake_glm.stream(**reply, completion_tokens=3)
 
     result = await run(GlmRolloutModel(fake_client, policy, call_ledger()), shellsim(shell_task()))
 
@@ -224,22 +226,6 @@ async def test_request_with_token_ids_is_refused_before_any_call(fake_glm, fake_
         await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
 
     assert fake_glm.requests == []
-
-
-def live_task():
-    return assemble(
-        "rollout-model-live",
-        "Work in /workspace with the shell tool, one command per call. Before each call, reason briefly "
-        "about what it must do. First write the primes below 50, one per line, to /workspace/primes.txt. "
-        "Then, in a separate call, write the number of lines of that file to /workspace/count.txt. "
-        "Then show both files with cat, and say when you are done.",
-        AnswerType.FILE,
-        PlainText(),
-        output_check("workspace/count.txt", ["15"]),
-        Source(dataset="taskforge-tests", revision="1", row="live", importer_revision="1"),
-        environment=requirements(image=None),
-        output_paths=("/workspace/primes.txt", "/workspace/count.txt"),
-    )
 
 
 def turn_record(result: GradedRollout) -> list[dict[str, Any]]:
@@ -290,24 +276,6 @@ async def live_rollouts(
     return list(results), time.monotonic() - started
 
 
-@pytest.mark.live_glm
-@pytest.mark.timeout(1800)
-async def test_live_multi_turn_shellsim_rollout_is_graded(glm_source, live_provider, evidence_dir):
-    rollouts, wall_time = await live_rollouts(glm_source, live_provider, live_task(), count=3, max_turns=10)
-    path = write_live_evidence(
-        evidence_dir,
-        "multi-turn",
-        "multi-turn ShellSim rollouts through RolloutEngine under the messages trace, with reasoning "
-        "replayed and prefix caching on",
-        wall_time,
-        rollouts,
-    )
-
-    assert all(len(steps(result)) >= 2 for result in rollouts), path
-    assert any(step.turn.metadata["usage"]["cached_tokens"] > 0 for result in rollouts for step in steps(result)), path
-    assert all(result.grade.status == Outcome.GRADED for result in rollouts), path
-
-
 def reasoning_task():
     return assemble(
         "rollout-model-reasoning",
@@ -333,12 +301,14 @@ def reasoning_task():
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(3600)
-async def test_live_reasoning_heavy_rollout_replays_long_reasoning(glm_source, live_provider, evidence_dir):
+async def test_live_multi_turn_rollout_is_graded_with_prefix_caching_and_long_reasoning_replayed(
+    glm_source, live_provider, evidence_dir
+):
     rollouts, wall_time = await live_rollouts(glm_source, live_provider, reasoning_task(), count=3, max_turns=12)
     path = write_live_evidence(
         evidence_dir,
         "reasoning",
-        "reasoning-heavy multi-turn ShellSim rollouts under the messages trace: long reasoning_content "
+        "multi-turn ShellSim rollouts under the messages trace with prefix caching on: long reasoning_content "
         "replayed on later turns and multi-line heredoc tool arguments",
         wall_time,
         rollouts,
@@ -346,6 +316,8 @@ async def test_live_reasoning_heavy_rollout_replays_long_reasoning(glm_source, l
 
     turns = [turn for rollout in rollouts for turn in turn_record(rollout)]
     assert all(len(steps(result)) >= 3 for result in rollouts), path
+    assert all(result.grade.status == Outcome.GRADED for result in rollouts), path
+    assert any(turn["usage"]["cached_tokens"] > 0 for turn in turns), path
     # Long reasoning is replayed only once a later turn follows it, so some turn before a rollout's
     # last must reason at length; how many do depends on the puzzles' luck.
     replayed = [turn for rollout in rollouts for turn in turn_record(rollout)[:-1]]

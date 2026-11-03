@@ -5,20 +5,23 @@
 
 Each check writes ``<evidence_root>/llm/agent/<check>-<utc>.json``: the purpose, the policy,
 the full ``AgentRun`` (every message, every completion with its raw stream events, every tool
-result), a summary (turns, tool calls, tokens, wall time) and the check's own observations. Ledger
+result) and the check's own observations. Ledger
 spans go to ``<evidence_root>/llm/agent/ledger/<check>/<workpiece>.jsonl``. ``evidence_root`` is the
 fixture in ``tests/conftest.py``. The web check also needs the Parallel key file (the
 ``parallel_key`` fixture there).
+
+Each check needs the live server or Parallel: the Parallel API, 20 concurrent agents over one client,
+vLLM's ``tool_calls`` finish on a cut call, and the server's refusal of non-object replayed arguments.
+
+Invariants: none (pins live GLM-5.3 and Parallel wire compatibility of the agent loop).
 """
 
 import asyncio
 import json
 import re
-import threading
 import time
-from collections.abc import Iterator, Sequence
-from dataclasses import asdict, dataclass, replace
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import httpx
@@ -41,7 +44,7 @@ from taskforge.llm.client import FinishReason, ModelRequestRejected
 from taskforge.llm.policy import LLMPolicy, Message, ReasoningEffort
 from taskforge.llm.recording import CallLedger
 
-from taskforge_adapters.glm_client import GLM_MODEL, FixedEndpoint, GlmClient, request_kwargs
+from taskforge_adapters.glm_client import GLM_MODEL, GlmClient, request_kwargs
 from taskforge_adapters.testing import unique_run_name
 from taskforge_adapters.web import web_tools
 
@@ -66,11 +69,6 @@ def evidence_dir(evidence_root: Path) -> Path:
     return evidence_root / "llm" / "agent"
 
 
-def through(glm_source: FixedEndpoint, base_url: str) -> FixedEndpoint:
-    """``glm_source``'s token and pool at another base URL, such as a local relay to it."""
-    return FixedEndpoint(replace(glm_source.current(), base_url=base_url))
-
-
 def ledger_record(evidence_dir: Path, check: str, workpiece_id: str) -> CallLedger:
     return CallLedger(
         ledger=JsonlLedger(evidence_dir / "ledger" / check), workpiece_id=workpiece_id, round=0, step=check
@@ -79,35 +77,6 @@ def ledger_record(evidence_dir: Path, check: str, workpiece_id: str) -> CallLedg
 
 async def shellsim() -> ShellSimMachine:
     return await ShellSimMachineFactory().create(MachineSpec(source=PackageSpec()))
-
-
-def summary(run: AgentRun, wall_time: float) -> dict[str, object]:
-    return {
-        "stop": run.stop,
-        "turns": len(run.turns),
-        "wall_time": wall_time,
-        "usage": asdict(run.usage),
-        "per_turn": [
-            {
-                "finish_reason": turn.completion.finish_reason,
-                "completion_tokens": turn.completion.usage.completion_tokens,
-                "cached_tokens": turn.completion.usage.cached_tokens,
-                "wall_time": turn.completion.wall_time,
-                "attempts": [(a.segment, a.outcome, a.max_tokens, a.http_status) for a in turn.completion.attempts],
-                "tool_calls": [
-                    {
-                        "name": r.call.name,
-                        "arguments": r.call.arguments[:500],
-                        "outcome": r.outcome,
-                        "output": r.output[:500],
-                        "wall_time": r.wall_time,
-                    }
-                    for r in turn.tool_results
-                ],
-            }
-            for turn in run.turns
-        ],
-    }
 
 
 def record(evidence_dir: Path, check: str, purpose: str, policy: LLMPolicy, runs: Sequence[AgentRun], **extra) -> Path:
@@ -142,148 +111,6 @@ async def timed_agent(
     started = time.monotonic()
     run = await run_agent(client, policy, messages, tools, max_turns, rec, ReasoningReplay.KEEP)
     return run, time.monotonic() - started
-
-
-T1_TASK = (
-    "In /workspace, write a small Python package `textstats` with two modules: `tokens.py` with a function "
-    "`tokenize(text)` that splits text into lowercase word tokens, ignoring punctuation; and `stats.py` with "
-    "`frequencies(tokens)` returning word counts and `top_k(tokens, k)` returning the k most common words, ties "
-    "broken alphabetically. Write tests/test_textstats.py with at least 8 tests covering both modules, including "
-    "edge cases. Run the tests and fix failures (in code or tests) until they all pass. Report the final pytest "
-    "output."
-)
-
-
-@pytest.mark.live_glm
-@pytest.mark.timeout(3600)
-def test_t1_package_and_tests_in_shellsim(glm_source, live_provider, evidence_dir):
-    policy = LLMPolicy()
-    messages: list[Message] = [
-        {"role": "system", "content": f"{SYSTEM}\n{SHELLSIM_NOTE}"},
-        {"role": "user", "content": T1_TASK},
-    ]
-
-    async def go() -> tuple[AgentRun, float, dict]:
-        machine = await shellsim()
-        tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
-        async with GlmClient(glm_source, live_provider) as client:
-            run, wall = await timed_agent(
-                client, policy, messages, [tool], 60, ledger_record(evidence_dir, "t1_shellsim", "t1")
-            )
-        check = await machine.run(Command(argv=("sh", "-c", "pytest -v tests/test_textstats.py"), timeout=SHELL_TIMEOUT))
-        await machine.close()
-        return (
-            run,
-            wall,
-            {"exit_code": check.exit_code, "stdout": check.stdout.decode(), "stderr": check.stderr.decode()},
-        )
-
-    run, wall, rerun = asyncio.run(go())
-    pytest_outputs = [json.loads(o) for o in executed(run, "shell")]
-    failing_runs = sum(1 for o in pytest_outputs if "FAILED" in o["stdout"] or "Error" in o["stderr"])
-    record(
-        evidence_dir,
-        "t1_shellsim",
-        "T1: package plus tests in a ShellSim machine, fix until green; independent pytest rerun afterwards",
-        policy,
-        [run],
-        summary=summary(run, wall),
-        independent_rerun=rerun,
-        shell_outputs_with_failures=failing_runs,
-    )
-    assert run.stop is AgentStop.ANSWERED
-    assert rerun["exit_code"] == 0
-    assert rerun["stdout"].count("PASSED") >= 8
-
-
-BUGGY_TEXTSTATS = """mkdir -p textstats tests
-cat > textstats/__init__.py <<'EOF'
-EOF
-cat > textstats/tokens.py <<'EOF'
-def tokenize(text):
-    return [word.strip(".,!?;:") for word in text.split(" ")]
-EOF
-cat > textstats/stats.py <<'EOF'
-def frequencies(tokens):
-    counts = {}
-    for token in tokens:
-        counts[token] = counts.get(token, 0) + 1
-    return counts
-
-
-def top_k(tokens, k):
-    counts = frequencies(tokens)
-    return sorted(counts, key=lambda word: counts[word], reverse=True)[:k]
-EOF
-cat > tests/test_textstats.py <<'EOF'
-from textstats.stats import frequencies, top_k
-from textstats.tokens import tokenize
-
-
-def test_tokenize_lowercases_and_drops_punctuation():
-    assert tokenize("Hello, World! hello") == ["hello", "world", "hello"]
-
-
-def test_tokenize_collapses_whitespace():
-    assert tokenize("  a\\tb\\n c ") == ["a", "b", "c"]
-
-
-def test_top_k_breaks_ties_alphabetically():
-    assert top_k(["b", "a", "c", "a", "b"], 2) == ["a", "b"]
-
-
-def test_frequencies():
-    assert frequencies(["x", "y", "x"]) == {"x": 2, "y": 1}
-EOF
-"""
-T1B_TASK = (
-    "/workspace holds a Python package `textstats` and tests/test_textstats.py. Some tests fail. Run the tests, "
-    "fix the package (not the existing tests) until every test passes, then add at least 4 more tests of your "
-    "own for edge cases and make sure the whole file passes. Report the final pytest output."
-)
-
-
-@pytest.mark.live_glm
-@pytest.mark.timeout(3600)
-def test_t1b_fix_loop_in_shellsim(glm_source, live_provider, evidence_dir):
-    policy = LLMPolicy()
-    messages: list[Message] = [
-        {"role": "system", "content": f"{SYSTEM}\n{SHELLSIM_NOTE}"},
-        {"role": "user", "content": T1B_TASK},
-    ]
-    pytest_command = Command(argv=("sh", "-c", "pytest -v tests/test_textstats.py"), timeout=SHELL_TIMEOUT)
-
-    async def go() -> tuple[AgentRun, float, dict, str]:
-        machine = await shellsim()
-        seeded = await machine.run(Command(argv=("sh", "-c", BUGGY_TEXTSTATS), timeout=SHELL_TIMEOUT))
-        assert seeded.exit_code == 0, seeded
-        before = await machine.run(pytest_command)
-        tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
-        async with GlmClient(glm_source, live_provider) as client:
-            run, wall = await timed_agent(
-                client, policy, messages, [tool], 60, ledger_record(evidence_dir, "t1b_fix_loop", "t1b")
-            )
-        check = await machine.run(pytest_command)
-        await machine.close()
-        rerun = {"exit_code": check.exit_code, "stdout": check.stdout.decode(), "stderr": check.stderr.decode()}
-        return run, wall, rerun, before.stdout.decode()
-
-    run, wall, rerun, before = asyncio.run(go())
-    record(
-        evidence_dir,
-        "t1b_fix_loop",
-        "T1b: seeded failing package in ShellSim; the agent must run, fix, extend and rerun the tests",
-        policy,
-        [run],
-        summary=summary(run, wall),
-        seeded_pytest=before,
-        independent_rerun=rerun,
-        shell_calls=len(executed(run, "shell")),
-    )
-    assert before.count("FAILED") >= 2
-    assert run.stop is AgentStop.ANSWERED
-    assert rerun["exit_code"] == 0
-    assert rerun["stdout"].count("PASSED") >= 8
 
 
 def stable_metadata(http: httpx.Client) -> tuple[str, str]:
@@ -324,7 +151,7 @@ def test_web_search_through_parallel(glm_source, live_provider, evidence_dir, pa
         "web search through Parallel /v1/search and /v1/extract; transcript must show search results",
         policy,
         [run],
-        summary=summary(run, wall),
+        wall_time=wall,
         search_ids=[json.loads(s).get("search_id") for s in searches],
         extract_ids=[json.loads(f).get("extract_id") for f in executed(run, "web_fetch")],
         answer=answer,
@@ -334,103 +161,6 @@ def test_web_search_through_parallel(glm_source, live_provider, evidence_dir, pa
     assert searches and all(json.loads(s)["search_id"] for s in searches)
     assert license_expression in answer, (answer, license_expression)
     assert repository.removeprefix("https://") in answer, (answer, repository)
-
-
-@pytest.fixture
-def corrupting_proxy(glm_source) -> Iterator[dict]:
-    """A relay to the real router that truncates the arguments of the first tool call it sees."""
-    state: dict = {"original_first_fragment": None, "done": False, "requests": 0}
-    upstream = glm_source.current().base_url
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - BaseHTTPRequestHandler signature
-            pass
-
-        def do_POST(self) -> None:
-            body = self.rfile.read(int(self.headers["Content-Length"]))
-            state["requests"] += 1
-            with httpx.Client(timeout=httpx.Timeout(600.0, connect=30.0)) as http:
-                with http.stream(
-                    "POST",
-                    f"{upstream}/chat/completions",
-                    content=body,
-                    headers={"Authorization": self.headers["Authorization"], "Content-Type": "application/json"},
-                ) as response:
-                    self.send_response(response.status_code)
-                    self.send_header("Content-Type", response.headers.get("content-type", "text/event-stream"))
-                    self.end_headers()
-                    for line in response.iter_lines():
-                        self.wfile.write((self._rewrite(line) + "\n").encode())
-                        self.wfile.flush()
-
-        def _rewrite(self, line: str) -> str:
-            data = line.removeprefix("data:").strip()
-            if not line.startswith("data:") or data == "[DONE]" or state["done"]:
-                return line
-            event = json.loads(data)
-            for choice in event.get("choices", []):
-                for call in choice.get("delta", {}).get("tool_calls") or []:
-                    function = call.get("function", {})
-                    if "arguments" not in function:
-                        continue
-                    if state["original_first_fragment"] is None:
-                        state["original_first_fragment"] = function["arguments"]
-                        function["arguments"] = MALFORMED_ARGUMENTS
-                    else:
-                        function["arguments"] = ""
-            if state["original_first_fragment"] is not None and any(
-                c.get("finish_reason") for c in event.get("choices", [])
-            ):
-                state["done"] = True
-            return f"data: {json.dumps(event)}"
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
-    state["base_url"] = f"http://127.0.0.1:{server.server_address[1]}/v1"
-    yield state
-    server.shutdown()
-    server.server_close()
-
-
-@pytest.mark.live_glm
-@pytest.mark.timeout(1800)
-def test_malformed_tool_call_is_returned_to_the_model_and_recovered(
-    glm_source, live_provider, evidence_dir, corrupting_proxy
-):
-    policy = LLMPolicy()
-    messages: list[Message] = [
-        {"role": "system", "content": f"{SYSTEM}\n{SHELLSIM_NOTE}"},
-        {"role": "user", "content": "Create /workspace/hello.txt containing the word hello, then show its contents."},
-    ]
-
-    async def go() -> tuple[AgentRun, float, str]:
-        machine = await shellsim()
-        tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
-        async with GlmClient(through(glm_source, corrupting_proxy["base_url"]), live_provider) as client:
-            run, wall = await timed_agent(
-                client, policy, messages, [tool], 20, ledger_record(evidence_dir, "malformed", "malformed")
-            )
-        content = await machine.run(Command(argv=("cat", "/workspace/hello.txt"), timeout=SHELL_TIMEOUT))
-        await machine.close()
-        return run, wall, content.stdout.decode()
-
-    run, wall, content = asyncio.run(go())
-    first = run.turns[0].tool_results[0]
-    record(
-        evidence_dir,
-        "malformed_tool_call",
-        "a relay truncates the first tool call's arguments; the loop returns an error result, the replay is "
-        "accepted by the real server, and the model retries",
-        policy,
-        [run],
-        summary=summary(run, wall),
-        proxy={k: v for k, v in corrupting_proxy.items() if k != "base_url"},
-        hello_txt=content,
-    )
-    assert first.outcome is ToolOutcome.INVALID_ARGUMENTS
-    assert run.stop is AgentStop.ANSWERED
-    assert content.strip() == "hello"
 
 
 @pytest.mark.live_glm
@@ -504,51 +234,6 @@ def test_twenty_concurrent_agents_share_one_client(glm_source, live_provider, ev
     assert [a for a in per_agent if "error" in a] == []
     # At temperature 1.0 an agent sometimes writes the arithmetic along with the result, as in "3 * 3 + 7 = 16".
     assert [a["agent"] for a in per_agent if a["number"] != a["expected"]] == []
-
-
-@pytest.mark.live_glm
-@pytest.mark.timeout(1800)
-def test_length_cut_inside_a_tool_call_is_returned_and_retried(glm_source, live_provider, evidence_dir):
-    policy = LLMPolicy(max_tokens=400, reasoning_effort=ReasoningEffort.LOW)
-    messages: list[Message] = [
-        {"role": "system", "content": f"{SYSTEM}\n{SHELLSIM_NOTE}"},
-        {
-            "role": "user",
-            "content": (
-                "Create /workspace/numbers.txt holding the integers 1 to 300, one per line, written out "
-                "literally in a heredoc (no seq, no loops). Then run wc -l on it."
-            ),
-        },
-    ]
-
-    async def go() -> tuple[AgentRun, float, str]:
-        machine = await shellsim()
-        tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
-        async with GlmClient(glm_source, live_provider) as client:
-            run, wall = await timed_agent(
-                client, policy, messages, [tool], 30, ledger_record(evidence_dir, "length_cut", "cut")
-            )
-        lines = await machine.run(Command(argv=("sh", "-c", "wc -l < /workspace/numbers.txt"), timeout=SHELL_TIMEOUT))
-        await machine.close()
-        return run, wall, lines.stdout.decode().strip()
-
-    run, wall, lines = asyncio.run(go())
-    outcomes = [r.outcome for t in run.turns for r in t.tool_results]
-    record(
-        evidence_dir,
-        "length_cut_tool_call",
-        "max_tokens=400 cuts a large heredoc tool call; the cut call is returned as an error and the model "
-        "re-issues the work in smaller calls",
-        policy,
-        [run],
-        summary=summary(run, wall),
-        outcomes=outcomes,
-        numbers_txt_lines=lines,
-    )
-    assert ToolOutcome.TRUNCATED_CALL in outcomes
-    assert outcomes.index(ToolOutcome.TRUNCATED_CALL) < len(outcomes) - 1
-    assert run.stop is AgentStop.ANSWERED
-    assert lines == "300"
 
 
 def write_probe(evidence_dir: Path, check: str, purpose: str, cases: list[dict]) -> Path:

@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A policy is its prompt files and settings by dotted key; overlays replace entries by key."""
+"""A policy is its prompt files and settings by dotted key; overlays replace entries by key.
+
+Invariants: none (pins which entries an overlay replaces and which digests it moves).
+"""
 
 import shutil
 
