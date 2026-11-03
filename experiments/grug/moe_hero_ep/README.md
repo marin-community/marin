@@ -367,7 +367,8 @@ a warning; a failed run alerts through Slack and Loom.
 reports median step time, MFU and tokens/s, peak HBM, drop fraction, final train loss and dropless
 eval loss against a baseline: the per-metric median of the last 5 scheduled canaries from the same
 checkpoint, limiting the effect of one outlier. Manual dispatches (`hero-canary-manual-*`) never
-enter it. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to Slack.
+enter it. The run fails when the final train loss is above 1.5 or the dropless eval macro loss
+is above 2.5; one-rack runs end near 0.92 and 2.00. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to Slack.
 Re-pin `HERO_CANARY_CHECKPOINT` when the checkpoint layout or context length changes; the next run
 starts a new baseline.
 

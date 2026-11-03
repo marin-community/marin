@@ -36,6 +36,10 @@ jobs:
       HERO_SCHEDULE_STEPS: "390251"
       # Unique per concurrent gang; the hero itself uses 32614.
       IRIS_PORT_JAX: "32650"
+      # Loose loss ceilings, like the H100 canary's: one-rack runs from a nearby checkpoint
+      # ended at train loss 0.917 and dropless eval macro loss 1.998.
+      HERO_CANARY_MAX_TRAIN_LOSS: "1.5"
+      HERO_CANARY_MAX_EVAL_LOSS: "2.5"
       # Five hours for the training job to start before the day is skipped.
       QUEUE_WAIT_TIMEOUT: "18000"
       # Backstop if this workflow dies: queue wait plus run, from coordinator start.
@@ -133,6 +137,8 @@ jobs:
             --start-step "$HERO_CANARY_START_STEP" \
             --steps "$HERO_CANARY_STEPS" \
             --checkpoint "$HERO_CANARY_CHECKPOINT" \
+            --max-train-loss "$HERO_CANARY_MAX_TRAIN_LOSS" \
+            --max-eval-loss "$HERO_CANARY_MAX_EVAL_LOSS" \
             --github-output
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}

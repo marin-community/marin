@@ -3,7 +3,7 @@
 
 """Score a hero GB200 canary against recent scheduled runs from its checkpoint.
 
-Missing steps or eval fail the report. A step-time change beyond
+Missing steps or eval, or a loss above its ceiling, fail the report. A step-time change beyond
 STEP_TIME_WARN_FRACTION emits a GitHub warning and a regression output for Slack.
 """
 
@@ -73,12 +73,16 @@ def score_run(run_id: str, git_commit: str | None, rows: list[dict], summary: di
     )
 
 
-def incomplete_reasons(score: CanaryScore, expected_steps: int) -> list[str]:
+def failure_reasons(score: CanaryScore, expected_steps: int, max_train_loss: float, max_eval_loss: float) -> list[str]:
     reasons = []
     if score.steps_logged < expected_steps:
         reasons.append(f"logged {score.steps_logged} of {expected_steps} steps")
+    if score.train_loss > max_train_loss:
+        reasons.append(f"final train loss {score.train_loss:.4f} is above {max_train_loss}")
     if score.eval_loss is None:
         reasons.append("the dropless eval did not report")
+    elif score.eval_loss > max_eval_loss:
+        reasons.append(f"dropless eval macro loss {score.eval_loss:.4f} is above {max_eval_loss}")
     return reasons
 
 
@@ -183,9 +187,19 @@ def _baseline_runs(api: wandb.Api, entity: str, project: str, run_id: str, check
 @click.option("--start-step", type=int, required=True, help="Step of the restored checkpoint.")
 @click.option("--steps", type=int, required=True, help="Updates the canary trains after the restore.")
 @click.option("--checkpoint", required=True, help="Restored checkpoint path; only runs from it are compared.")
+@click.option("--max-train-loss", type=float, required=True, help="Fail when the final train loss is higher.")
+@click.option("--max-eval-loss", type=float, required=True, help="Fail when the dropless eval macro loss is higher.")
 @click.option("--github-output", is_flag=True, help="Write regression and its description to $GITHUB_OUTPUT.")
 def main(
-    run_id: str, entity: str, project: str, start_step: int, steps: int, checkpoint: str, github_output: bool
+    run_id: str,
+    entity: str,
+    project: str,
+    start_step: int,
+    steps: int,
+    checkpoint: str,
+    max_train_loss: float,
+    max_eval_loss: float,
+    github_output: bool,
 ) -> None:
     api = wandb.Api(timeout=60)
     current = _load_score(api.run(f"{entity}/{project}/{run_id}"), start_step)
@@ -208,8 +222,8 @@ def main(
             raise click.UsageError("--github-output needs $GITHUB_OUTPUT to be set")
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(f"regression={'true' if regression else 'false'}\nregression_detail={regression or ''}\n")
-    if reasons := incomplete_reasons(current, steps):
-        print(f"Hero canary incomplete: {'; '.join(reasons)}", file=sys.stderr)
+    if reasons := failure_reasons(current, steps, max_train_loss, max_eval_loss):
+        print(f"Hero canary failed: {'; '.join(reasons)}", file=sys.stderr)
         sys.exit(1)
 
 
