@@ -8,23 +8,20 @@ import json
 from datetime import datetime
 
 from fastapi import FastAPI
+from marin.rl.evaluation_identity import validate_evaluation_identity
 from sqlalchemy import text
 
 
 def comparison_fields(run: dict) -> dict:
     """Retain the dashboard's content/protocol/timing comparison boundary."""
     evaluation = run["evaluation"]
-    task_ids = evaluation.get("task_ids")
-    if task_ids is not None:
-        membership = hashlib.sha256(json.dumps(sorted(task_ids), separators=(",", ":")).encode()).hexdigest()
-        if len(set(task_ids)) != len(task_ids) or membership != evaluation.get("membership_sha256"):
-            raise ValueError("Evaluation membership does not match its recorded identity")
-        if evaluation.get("task_count") is not None and evaluation["task_count"] != len(task_ids):
-            raise ValueError("Evaluation task count disagrees with membership")
-    if evaluation.get("protocol") is not None:
-        protocol = json.dumps(evaluation["protocol"], sort_keys=True, separators=(",", ":"), allow_nan=False)
-        if hashlib.sha256(protocol.encode()).hexdigest() != evaluation.get("protocol_sha256"):
-            raise ValueError("Evaluation protocol does not match its recorded identity")
+    validate_evaluation_identity(
+        task_ids=evaluation.get("task_ids"),
+        task_count=evaluation.get("task_count"),
+        membership_sha256=evaluation.get("membership_sha256"),
+        protocol=evaluation.get("protocol"),
+        protocol_sha256=evaluation.get("protocol_sha256"),
+    )
     expected = evaluation.get("task_count")
     if expected is None and evaluation.get("task_ids") is not None:
         expected = len(evaluation["task_ids"])

@@ -6,11 +6,10 @@
 import json
 from dataclasses import dataclass
 
-import fsspec
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import SkyRLRun
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.inventory.loop_result import LoopRunConfig, run_loop
 from experiments.post_training.inventory.publish_loop_result import publish_result
@@ -29,11 +28,12 @@ class LoopPublication(Artifact):
 
 def publish_summary(config: PublicationConfig) -> LoopPublication:
     """Read the retained summary and confirm one immutable dashboard attempt."""
-    with fsspec.open(config.summary_uri, "rt") as stream:
+    with StoragePath(config.summary_uri).open("rt") as stream:
         summary = json.load(stream)
     receipt = publish_result(summary)
-    with fsspec.open(config.receipt_uri, "wt", auto_mkdir=True) as stream:
-        json.dump(receipt, stream, allow_nan=False)
+    destination = StoragePath(config.receipt_uri)
+    destination.parent.mkdirs()
+    destination.write_text(json.dumps(receipt, allow_nan=False))
     return LoopPublication(path=config.receipt_uri, run_id=summary["run_id"], attempt_id=summary["attempt_id"])
 
 

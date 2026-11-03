@@ -14,6 +14,9 @@ adopt a fixed wheel and frozen lock before submitting this recipe. The worker
 checks the installed helper before tokenizer/model/placement setup; this check
 occurs after Iris allocation. It never patches installed source. A passing
 source check alone does not attest the complete wheel or a successful GPU run.
+The checked file is `vllm/v1/attention/ops/triton_attention_helpers.py` in the
+installed `vllm` distribution. Follow the [GPU wheel release and adoption
+procedure](../../.agents/skills/refresh-fork/docs/vllm.md) to satisfy this prerequisite.
 
 The historical four-arm screen qualified its frozen runtime with a temporary
 source overlay. Those jobs are complete; they are not a qualification of a
@@ -21,8 +24,12 @@ newly assembled runtime, and must not be resumed to test this integration.
 
 ## Plan an experiment
 
-Use a durable checkout and a `codex/` branch. Follow the repository's launch and
-pull-request skills. Keep credentials in the supported secret delivery path;
+Use a durable checkout and a `codex/` branch. Follow the repository's
+[launch](../../.agents/skills/launch-rl/SKILL.md) and
+[pull-request](../../.agents/skills/manage-pr/SKILL.md) skills.
+The run requires existing HF, W&B, CoreWeave storage, Daytona evaluation and
+Together judge credentials. Follow [secret delivery](../references/rl-launching.md#experiment-entry-point).
+Keep credentials in the supported secret delivery path;
 never put values in a recipe, report, command history, or pull request.
 
 Build without `--run` first:
@@ -37,6 +44,9 @@ Datakit SFT revision `fe666478454e79fe6027a0bab0388d9abd68f51a`.
 The recipe uses 40 H100s, 24,576-token context, 8,192-token replies,
 128 prompt groups per update and four training answers per group. Evaluation
 uses the complete declared 100-task panel with seeded greedy decoding.
+The command prints the artifact graph and resolved versions to stdout. Check
+the initializer revision, selection version, five-node/eight-GPU allocation,
+`skyrl` recipe, and final `-report` artifact in that output.
 
 | Arm | Change from control |
 | --- | --- |
@@ -44,6 +54,12 @@ uses the complete declared 100-task panel with seeded greedy decoding.
 | `b` | Learning rate 2e-6 |
 | `c` | Sequence-mean loss; also changes effective gradient scale |
 | `d` | Async scheduling, maximum age two, inflight 192, full batches |
+
+RLOO-N computes leave-one-out advantages within a prompt's answer group, with
+at least two eligible answers. Age counts optimizer updates between rollout
+policy and consumption. Inflight counts prompt groups; a full update consumes
+128 groups, each with four answers. The async arm permits 192 groups in flight
+while retaining the same update size.
 
 All runs start from SFT, disable resume and HF export, and retain native
 checkpoints. Use a fresh immutable version for each experiment and runtime
@@ -57,6 +73,11 @@ An authorized launch uses the same command with `--run`. Check startup and
 optimizer progress through Iris, then use heartbeat monitoring. Do not cancel,
 restart, or resubmit a failed run without authorization. The loop does not
 retry training or regenerate answers to repair evaluation.
+Submission prints the coordinator ID; use the [Iris guide](../../lib/iris/OPS.md)
+to bind its child training job. Result files live under the training artifact's
+output directory, whose suffix is the printed artifact name/version under the
+configured `MARIN_PREFIX`. Retain that directory and both job IDs. Failures
+before the wrapper starts may have no summary and require operational diagnosis.
 
 Incomplete declared baseline scoring raises after preserving evaluation dumps,
 before optimization. Runtime callbacks retain numeric observations in
@@ -67,6 +88,9 @@ final checkpoint marker before writing `exports/loop-result.json`.
 
 The report explicitly leaves unattested runtime task/protocol identities and
 allocated GPU-hours unknown. Such records remain descriptive and unranked.
+Every record currently emitted by this recipe has that qualification. Ranking
+requires measured task membership and the actual generation/scoring protocol,
+not just hashes of submitted configuration.
 Elapsed time covers the blocking launcher, not coordinator submission or
 measured GPU allocation. Callback metrics are observations, not independent
 per-token accounting. Review these limits before comparing results.
@@ -76,7 +100,10 @@ per-token accounting. Review these limits before comparing results.
 Successful training is cached separately from publication. If dashboard
 publication fails after training succeeds, retry the terminal publication stage
 with the same unchanged recipe/version; the completed training dependency is
-reused. For failed training, use its saved summary directly rather than
+reused. Run the same `train_quick_loop --version YYYY.MM.DD --arm a --steps 25 --run`
+command; the artifact runner should report the training dependency as cached and
+execute its report stage. A cache miss requires investigation before spending
+more GPU time. For failed training, use its saved summary directly rather than
 rerunning the training command:
 
 ```bash
@@ -99,6 +126,9 @@ before launch. A changed eval policy starts a separate comparison group; fast
 panel results guide search, while baseline promotion requires an agreed Evals
 confirmation gate. A single-seed development panel is not broad quality or
 async noninferiority evidence.
+Agree the confirmation suite and acceptance criteria with the Evals policy
+owners before promotion; this development recipe does not define or automate
+that approval.
 
 Publish the branch with focused behavioral tests, the affected safe checks and
 required review. A merge does not publish a runtime wheel or release a Marina

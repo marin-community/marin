@@ -3,7 +3,6 @@
 
 """Publish a persisted Snowball loop summary without replacing historical attempts."""
 
-import hashlib
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
 import click
+from marin.rl.evaluation_identity import validate_evaluation_identity
 from marina.client import DEFAULT_MARINA_URL, LOCAL_HOSTS, marina_request
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
 
@@ -49,16 +49,13 @@ class EvaluationIdentity(BaseModel):
 
     @model_validator(mode="after")
     def matching_evaluation_identity(self):
-        if self.task_ids is not None:
-            membership = hashlib.sha256(json.dumps(sorted(self.task_ids), separators=(",", ":")).encode()).hexdigest()
-            if len(set(self.task_ids)) != self.task_count or len(self.task_ids) != self.task_count:
-                raise ValueError("Evaluation membership disagrees with the fixed task count")
-            if membership != self.membership_sha256:
-                raise ValueError("Evaluation membership does not match its digest")
-        if self.protocol is not None:
-            protocol = json.dumps(self.protocol, sort_keys=True, separators=(",", ":"), allow_nan=False)
-            if hashlib.sha256(protocol.encode()).hexdigest() != self.protocol_sha256:
-                raise ValueError("Runtime evaluation protocol does not match its digest")
+        validate_evaluation_identity(
+            task_ids=self.task_ids,
+            task_count=self.task_count,
+            membership_sha256=self.membership_sha256,
+            protocol=self.protocol,
+            protocol_sha256=self.protocol_sha256,
+        )
         return self
 
 
@@ -120,6 +117,7 @@ def publish_result(record: dict[str, Any], service_url: str = DEFAULT_MARINA_URL
     ):
         raise ValueError("Use the maintained Marina origin or an explicit loopback preview origin")
     details = marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
+    assert isinstance(details, dict), "Marina metadata response must be an object"
     location = urlparse(details["authenticated_url"])
     origin = f"{location.scheme}://{location.netloc}" if location.netloc else service_url.rstrip("/")
     query_path = f"/a/{APPLET_ID}/query"
@@ -130,12 +128,15 @@ def publish_result(record: dict[str, Any], service_url: str = DEFAULT_MARINA_URL
         query_path,
         json_body={"sql": INSERT, "parameters": identity | {"record": encoded}},
     )
+    assert isinstance(inserted, dict), "Marina insertion response must be an object"
     if inserted["row_count"] not in (0, 1):
         raise RuntimeError("Unexpected insertion count")
     readback = marina_request(origin, "POST", query_path, json_body={"sql": READ, "parameters": identity})
+    assert isinstance(readback, dict), "Marina readback response must be an object"
     if len(readback["rows"]) != 1 or readback["rows"][0]["record"] != record:
         raise ValueError("Attempt identity already contains a different record; historical data was not overwritten")
     api = marina_request(origin, "GET", f"/a/{APPLET_ID}/api/runs")
+    assert isinstance(api, dict), "Dashboard response must be an object"
     matching = [run for run in api["runs"] if (run["run_id"], run["attempt_id"]) == (summary.run_id, summary.attempt_id)]
     if len(matching) != 1:
         raise RuntimeError("Published attempt is missing or duplicated in the dashboard API")

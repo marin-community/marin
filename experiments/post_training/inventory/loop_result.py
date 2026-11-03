@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-import fsspec
 import yaml
 from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, run_skyrl
+from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 
 FIXED_PANEL_DECLARED_SHA256 = "33af492d1d1cbe0602effd0b0f5154c87d6e733b8d9e8b48178be7030f3e0426"
@@ -27,9 +27,9 @@ class LoopRunConfig:
     expected_steps: int
 
 
-def _bounded_text(uri: str, limit: int = MAX_EVIDENCE_BYTES) -> str | None:
+def _bounded_text(uri: StoragePath, limit: int = MAX_EVIDENCE_BYTES) -> str | None:
     try:
-        with fsspec.open(uri, "rb") as source:
+        with uri.open("rb") as source:
             content = source.read(limit + 1)
     except FileNotFoundError:
         return None
@@ -38,7 +38,7 @@ def _bounded_text(uri: str, limit: int = MAX_EVIDENCE_BYTES) -> str | None:
     return content.decode("utf-8")
 
 
-def _json_observation(uri: str, issues: list[str]) -> dict[str, Any] | None:
+def _json_observation(uri: StoragePath, issues: list[str]) -> dict[str, Any] | None:
     try:
         text = _bounded_text(uri)
         if text is None:
@@ -78,9 +78,9 @@ def _persist_result(config: LoopRunConfig, started: datetime, native_succeeded: 
     launch = yaml.safe_load(skyrl.launch_config_yaml)
     recipe = launch["skyrl"]
     expected_count = recipe["data"]["expected_eval_rows"] * recipe["generator"].get("eval_n_samples_per_prompt", 1)
-    export = skyrl.output.export_root.rstrip("/")
+    export = StoragePath(skyrl.output.export_root)
     issues = []
-    observations = _json_observation(f"{export}/loop-evidence.json", issues)
+    observations = _json_observation(export / "loop-evidence.json", issues)
     if observations is not None:
         try:
             observation_start = datetime.fromisoformat(observations["started_at"])
@@ -116,7 +116,7 @@ def _persist_result(config: LoopRunConfig, started: datetime, native_succeeded: 
         issues.append("Retained observations do not establish every expected finite applied optimizer update.")
     checkpoint = None
     try:
-        marker = _bounded_text(skyrl.output.checkpoint_root.rstrip("/") + "/latest_ckpt_global_step.txt", 1024)
+        marker = _bounded_text(StoragePath(skyrl.output.checkpoint_root) / "latest_ckpt_global_step.txt", 1024)
         checkpoint = None if marker is None else int(marker.strip())
     except (OSError, ValueError) as error:
         issues.append(f"Checkpoint marker could not be validated: {type(error).__name__}.")
@@ -128,7 +128,7 @@ def _persist_result(config: LoopRunConfig, started: datetime, native_succeeded: 
         metrics = evaluations.get(str(step))
         if metrics is None and observations is not None:
             metrics = _json_observation(
-                f"{export}/dumped_evals/global_step_{step}_evals/aggregated_results.jsonl", issues
+                export / "dumped_evals" / f"global_step_{step}_evals" / "aggregated_results.jsonl", issues
             )
         phases.append(_evaluation_result(metrics, issues))
     baseline, final = phases
@@ -195,8 +195,8 @@ def _persist_result(config: LoopRunConfig, started: datetime, native_succeeded: 
             "no independent per-token accounting is claimed.",
         ],
     }
-    with fsspec.open(f"{export}/{RESULT_FILENAME}", "wt", auto_mkdir=True) as destination:
-        json.dump(result, destination, allow_nan=False, indent=2)
+    export.mkdirs()
+    (export / RESULT_FILENAME).write_text(json.dumps(result, allow_nan=False, indent=2))
     return result
 
 
