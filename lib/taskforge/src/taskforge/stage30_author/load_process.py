@@ -8,13 +8,14 @@ steps it runs, but a caller that only loads a program (the agentic author's load
 tools) would block its event loop on a module body that spins. ``load_program_in_process`` runs the
 loader in a child process for at most ``wall_timeout`` seconds, with the source and the caller's
 ``SdkExports`` on its stdin, and reads back the program's manifest (``author.program_manifest``) or the
-loader's refusal.
+loader's refusal from its stdout. Whatever the module body prints goes to the child's stderr.
 
 A child that exits without a result, as when the kernel kills it for memory, raises
 ``LoaderProcessFailed``.
 """
 
 import asyncio
+import contextlib
 import json
 import sys
 from asyncio.subprocess import PIPE
@@ -96,11 +97,13 @@ async def load_program_in_process(source: str, sdk: SdkExports, *, wall_timeout:
 
 def main() -> None:
     request = LoadRequest.model_validate_json(sys.stdin.read())
-    try:
-        program = load_program_source(request.source, request.sdk)
-        result = LoadResult(manifest=ProgramManifest.model_validate(program_manifest(program)))
-    except ValueError as error:
-        result = LoadResult(error=str(error))
+    # The result is the child's only stdout: what the module body prints goes to stderr.
+    with contextlib.redirect_stdout(sys.stderr):
+        try:
+            program = load_program_source(request.source, request.sdk)
+            result = LoadResult(manifest=ProgramManifest.model_validate(program_manifest(program)))
+        except ValueError as error:
+            result = LoadResult(error=str(error))
     sys.stdout.write(json.dumps(result.model_dump()))
 
 

@@ -15,12 +15,13 @@ from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.program_sdk import sdk_exports
 from taskforge.stage40_build_with_program.template import standard
 
+FIRST_STEP = "\n\n\n@rl_env_build_step\n"
 SPINNING_CLASS = "class Spin:\n    while True:\n        pass\n\n\n"
 """An output model whose class body never returns: the loader runs it when it loads the module."""
 
 
 def spinning_program() -> str:
-    return inspect.getsource(standard).replace("PROGRAM = ", f"{SPINNING_CLASS}PROGRAM = ")
+    return inspect.getsource(standard).replace(FIRST_STEP, f"\n\n\n{SPINNING_CLASS}@rl_env_build_step\n", 1)
 
 
 async def test_the_child_returns_the_manifest_the_loader_gives_in_process():
@@ -29,6 +30,17 @@ async def test_the_child_returns_the_manifest_the_loader_gives_in_process():
     manifest = await load_program_in_process(source, sdk_exports(), wall_timeout=60)
 
     assert manifest == ProgramManifest.model_validate(program_manifest(load_program_source(source, sdk_exports())))
+
+
+async def test_a_module_body_that_prints_still_returns_the_manifest():
+    """The child's stdout carries only its result, so a class body that prints does not corrupt it."""
+    noisy = 'class Noisy:\n    print("loader stdout noise")\n\n\n'
+    source = inspect.getsource(standard).replace(FIRST_STEP, f"\n\n\n{noisy}@rl_env_build_step\n", 1)
+    assert noisy in source
+
+    manifest = await load_program_in_process(source, sdk_exports(), wall_timeout=60)
+
+    assert manifest.order == list(standard.PROGRAM.order)
 
 
 async def test_the_loaders_refusal_comes_back_as_the_error():

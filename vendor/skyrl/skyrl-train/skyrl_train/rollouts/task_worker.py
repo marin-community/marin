@@ -16,7 +16,7 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.models import NoGrader
+from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
@@ -61,6 +61,7 @@ from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propaga
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
+    REASONING_VIOLATIONS_KEY,
     DirectModelClient,
     GenerationBudgetExceededError,
     ModelClient,
@@ -71,7 +72,7 @@ from skyrl_train.rollouts.task_projections import (
     WholeTaskProjection,
     logprobs_requested,
 )
-from skyrl_train.rollouts.training_record import TrainingRollout, training_rollout
+from skyrl_train.rollouts.training_record import TrainingRollout, reject_malformed_reasoning, training_rollout
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
@@ -206,6 +207,7 @@ async def _model_turn(
             },
             "generation_token_budget": (output.get("generation_token_budgets") or [None])[0],
         },
+        reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
     )
 
 
@@ -399,6 +401,9 @@ class TaskRolloutWorker:
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
+        if lowered.harness == ASSISTANT_PREFIX_HARNESS and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
+            # The assistant-prefix transport records no reasoning violation, so rejection would never fire.
+            raise ValueError("Assistant-prefix tasks cannot reject malformed reasoning spans")
         if lowered.harness == ASSISTANT_PREFIX_HARNESS:
             harnesses[lowered.harness] = AssistantPrefixHarness()
         elif is_shell_harness(lowered.harness):
@@ -482,6 +487,9 @@ class TaskRolloutWorker:
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
+                if task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
+                    # Before group grading, so a malformed rollout never enters a GenRM comparison.
+                    result = reject_malformed_reasoning(result)
                 if (
                     isinstance(task.grader, NoGrader)
                     and result.grade.status == Outcome.UNAVAILABLE

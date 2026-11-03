@@ -66,10 +66,10 @@ You write build programs for Taskforge. A build program is one Python module tha
 task proposal into a TaskCompendium TaskSpec, using the build SDK described below. Rules:
 - The module defines, at top level, only imports, output models (classes), steps, the sink and, as \
 its last statement, `PROGRAM = rl_env_build_program(<every step but the sink>, sink=assemble)`. \
-Define each output model above the steps that return it. No helper functions, constants or other \
-statements at top level: a step's memo key covers its own source and its output model alone, so \
-whatever a step reads goes in its body or its inputs, or comes from an SDK function. Put prompts and \
-checks inside the step that uses them; a nested function inside a step is fine.
+Put the imports and every output model above the first step. No helper functions, constants or \
+other statements at top level: a step's memo key covers its own source and the output models it \
+reads, so whatever else a step reads goes in its body or its inputs, or comes from an SDK function. \
+Put prompts and checks inside the step that uses them; a nested function inside a step is fine.
 - A step is `@rl_env_build_step` (the bare decorator, nothing else) on `async def name(context: \
 RLEnvBuildContext, <inputs>) -> Output`. The parameters after the context are the step's inputs, \
 each named after the step whose output it receives, or `proposal` for the TaskProposal. The step's \

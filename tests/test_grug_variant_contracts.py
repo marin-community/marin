@@ -31,7 +31,7 @@ from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
 from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -60,7 +60,7 @@ def _variant_module_name(variant: str, module: str) -> str:
 
 
 def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
-    assert _compact_grug_mesh_shape(
+    assert compact_grug_mesh_shape(
         process_count=32,
         local_device_count=4,
         expert_axis_size=16,
@@ -76,7 +76,7 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
     size 1 instead of dropping it so size-1 cases (e.g. the GPU canary) don't fall through
     a separate "axis absent" code path. See #6252 for the bug this contract prevents.
     """
-    assert _compact_grug_mesh_shape(
+    assert compact_grug_mesh_shape(
         process_count=1,
         local_device_count=4,
         expert_axis_size=1,
