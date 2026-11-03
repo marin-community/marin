@@ -77,14 +77,12 @@ class FixtureImageFactory:
 
 
 @dataclass
-class ShellGradedMachine:
-    """A fixture machine that runs ``PYTHON_GRADER_ARGV`` (``python3 /tests/grade.py``) with ``sh``."""
+class ForwardingMachine:
+    """A fixture machine that passes every call to ``machine``; subclasses override ``run``."""
 
     machine: Machine
 
     async def run(self, command: Command) -> Result:
-        if command.argv == PYTHON_GRADER_ARGV:
-            command = replace(command, argv=("sh", *PYTHON_GRADER_ARGV[1:]))
         return await self.machine.run(command)
 
     async def upload(self, source: Path, target: str) -> None:
@@ -95,6 +93,16 @@ class ShellGradedMachine:
 
     async def close(self) -> None:
         await self.machine.close()
+
+
+@dataclass
+class ShellGradedMachine(ForwardingMachine):
+    """A fixture machine that runs ``PYTHON_GRADER_ARGV`` (``python3 /tests/grade.py``) with ``sh``."""
+
+    async def run(self, command: Command) -> Result:
+        if command.argv == PYTHON_GRADER_ARGV:
+            command = replace(command, argv=("sh", *PYTHON_GRADER_ARGV[1:]))
+        return await self.machine.run(command)
 
 
 @dataclass(frozen=True)
@@ -120,10 +128,9 @@ class ShellGraderImageFactory:
 
 
 @dataclass
-class SlowGraderMachine:
+class SlowGraderMachine(ForwardingMachine):
     """A fixture machine whose grader command may come back ``TIMED_OUT``, as ``SlowGraderFactory`` decides."""
 
-    machine: Machine
     factory: "SlowGraderFactory"
 
     async def run(self, command: Command) -> Result:
@@ -132,15 +139,6 @@ class SlowGraderMachine:
             if self.factory.grader_runs <= self.factory.timeouts:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         return await self.machine.run(command)
-
-    async def upload(self, source: Path, target: str) -> None:
-        await self.machine.upload(source, target)
-
-    async def download(self, source: str, target: Path) -> None:
-        await self.machine.download(source, target)
-
-    async def close(self) -> None:
-        await self.machine.close()
 
 
 @dataclass

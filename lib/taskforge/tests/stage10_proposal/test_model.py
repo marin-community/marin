@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Proposal documents: JSON round trip, canonical digest and the parser's refusals.
+
+Invariants: the task runs on the solver machine it declares (``solver_machine_violation``).
+"""
+
 import json
 from dataclasses import replace
 
@@ -99,64 +104,64 @@ def test_escaped_strings_and_fenced_headings_survive_round_trip(proposal):
     jsonschema.validate(json.loads(render(parsed)), schema)
 
 
-@pytest.mark.parametrize(
-    "environment,machine",
-    [
-        *((Environment.REASONING, machine) for machine in SolverMachine),
-        *((Environment.SHELLSIM, machine) for machine in SolverMachine if machine is not SolverMachine.NONE),
-    ],
-)
-def test_imageless_proposal_round_trip_preserves_machine(proposal, environment, machine):
+COMPATIBLE = [
+    *((Environment.REASONING, machine) for machine in SolverMachine),
+    *((Environment.SHELLSIM, machine) for machine in SolverMachine if machine is not SolverMachine.NONE),
+]
+INCOMPATIBLE = [(Environment.CONTAINER, SolverMachine.CPYTHON), (Environment.SHELLSIM, SolverMachine.NONE)]
+
+
+@pytest.mark.parametrize("environment,machine", [*COMPATIBLE, *INCOMPATIBLE, (Environment.REASONING, None)])
+def test_the_solver_machine_must_fit_the_environment(proposal, environment, machine):
     expected = replace(proposal, header=replace(proposal.header, environment=environment, solver_machine=machine))
-    assert parse(render(expected)) == expected
+    if (environment, machine) in COMPATIBLE:
+        assert parse(render(expected)) == expected
+    else:
+        with pytest.raises(ProposalFormatError, match="solver_machine"):
+            parse(render(expected))
+
+
+def forged_key(raw: str, key: str) -> str:
+    return raw.replace(f'"{key}":', f'"{key}": "forged", "{key}":', 1)
+
+
+def with_header(raw: str, key: str, value: object) -> str:
+    document = json.loads(raw)
+    document["header"][key] = value
+    return json.dumps(document)
 
 
 @pytest.mark.parametrize(
-    "environment,machine",
+    ("edit", "match"),
     [
-        (Environment.CONTAINER, SolverMachine.CPYTHON),
-        (Environment.SHELLSIM, SolverMachine.NONE),
-        (Environment.REASONING, None),
+        (lambda raw: with_header(raw, "unexpected", 1), None),
+        (lambda raw: with_header(raw, "source", {"kind": "capability", "ref": "x", "hash": 7}), None),
+        (lambda raw: forged_key(raw, "id"), r"duplicate.*key"),
+        (lambda raw: forged_key(raw, "hash"), r"duplicate.*key"),
+        (lambda raw: with_header(raw, "resources", ["../private/key"]), "resources"),
+        (lambda raw: with_header(raw, "resources", ["/absolute/path"]), "resources"),
+        (lambda raw: with_header(raw, "build", [{"name": "same", "description": d} for d in ("a", "b")]), "build"),
     ],
+    ids=["unknown-field", "wrong-type", "duplicate-id", "duplicate-hash", "escape", "absolute", "same-artifact-name"],
 )
-def test_incompatible_environment_and_machine_are_rejected(proposal, environment, machine):
-    invalid = replace(proposal, header=replace(proposal.header, environment=environment, solver_machine=machine))
-    with pytest.raises(ProposalFormatError, match="solver_machine"):
-        parse(render(invalid))
-
-
-@pytest.mark.parametrize("key,value", [("unexpected", 1), ("source", {"kind": "capability", "ref": "x", "hash": 7})])
-def test_json_header_contract_rejects_unknown_fields_and_wrong_types(proposal, key, value):
-    raw = json.loads(render(proposal))
-    raw["header"][key] = value
-    with pytest.raises(ProposalFormatError):
-        parse(json.dumps(raw))
-
-
-@pytest.mark.parametrize("key", ["id", "hash"])
-def test_duplicate_json_keys_cannot_replace_identity(proposal, key):
-    raw = render(proposal)
-    raw = raw.replace(f'"{key}":', f'"{key}": "forged", "{key}":', 1)
-    with pytest.raises(ProposalFormatError, match=r"duplicate.*key"):
-        parse(raw)
+def test_a_header_with_unknown_forged_or_escaping_fields_is_refused(proposal, edit, match):
+    with pytest.raises(ProposalFormatError, match=match):
+        parse(edit(render(proposal)))
 
 
 @pytest.mark.parametrize(
-    "body",
+    ("body", "match"),
     [
-        BODY.replace("## Build plan", "## Construction"),
-        BODY.replace("## Build plan", "## Research plan"),
-        BODY.replace("Find the kernel of the map.", "Find the kernel.\n```"),
+        (BODY.replace("## Build plan", "## Construction"), "body"),
+        (BODY.replace("## Build plan", "## Research plan"), "body"),
+        (BODY.replace("Find the kernel of the map.", "Find the kernel.\n```"), "body"),
+        (BODY.replace(", research[0]", ""), "research"),
+        (BODY + "Use research[1].\n", "research"),
     ],
+    ids=["unknown-heading", "repeated-heading", "open-fence", "uncited-research", "undeclared-research"],
 )
-def test_malformed_section_boundaries_are_rejected(proposal, body):
-    with pytest.raises(ProposalFormatError, match="body"):
-        parse(render(replace(proposal, body=body)))
-
-
-@pytest.mark.parametrize("body", [BODY.replace(", research[0]", ""), BODY + "Use research[1].\n"])
-def test_research_references_must_cover_exactly_the_declared_items(proposal, body):
-    with pytest.raises(ProposalFormatError, match="research"):
+def test_a_body_with_malformed_sections_or_research_references_is_refused(proposal, body, match):
+    with pytest.raises(ProposalFormatError, match=match):
         parse(render(replace(proposal, body=body)))
 
 
@@ -187,18 +192,3 @@ def test_generation_schema_pins_identity(proposal):
     raw["header"]["source"]["hash"] = "wrong hash"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(raw, schema)
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("resources", ["../private/key"]),
-        ("resources", ["/absolute/path"]),
-        ("build", [{"name": "same", "description": "first"}, {"name": "same", "description": "second"}]),
-    ],
-)
-def test_build_manifest_cannot_escape_root_or_replace_named_artifact(proposal, field, value):
-    raw = json.loads(render(proposal))
-    raw["header"][field] = value
-    with pytest.raises(ProposalFormatError, match=field):
-        parse(json.dumps(raw))

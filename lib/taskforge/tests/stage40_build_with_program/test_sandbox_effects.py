@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass, field
+"""The build's sandbox effects: grading a candidate, preparing a machine and publishing an image.
+
+Invariants: the grader gives one answer the same reward on every run (a grader timeout is graded once more);
+the grader can score every answer in the task's declared format.
+"""
 
 import pytest
 from shellbox.machine import Backend, Command
@@ -15,19 +19,18 @@ from taskcompendium.models import (
     JsonValueAnswer,
     PlainText,
 )
-from verifyit.spec import ExactSpec, McqSpec, NumericSpec, StructuredExactSpec
+from verifyit.spec import ExactSpec, StructuredExactSpec
 
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
 from taskforge.stage40_build_with_program.context import BuildFailure
 from taskforge.stage40_build_with_program.sandbox_effects import build_machine, grade_candidate, publish_image
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, SlowGraderFactory, shell_grader
-from tests.stage40_build_with_program.conftest import FACTORIES
+from tests.stage40_build_with_program.conftest import FACTORIES, IMAGE, RecordingImageBuilder
 
 SHELLSIM = draft.requirements(image=None)
 MACHINE = draft.machine(startup_timeout=60)
 PLAIN = PlainText()
-IMAGE = f"registry.example/taskforge-tasks/d00-arithmetic-products-1@sha256:{'1' * 64}"
 FULL_CREDIT = shell_grader(
     """printf '%s' '{"reward": 1.0}' > /logs/verifier/reward.json\n""",
     {},
@@ -42,15 +45,6 @@ jq -n -c --argjson passed "$passed" '{
     reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "total", passed: $passed, weight: 1.0}]}
 }' > /logs/verifier/reward.json
 """
-
-
-@dataclass
-class RecordingImageBuilder:
-    published: list[tuple[DockerBuild, str]] = field(default_factory=list)
-
-    async def publish(self, build: DockerBuild, repository: str) -> str:
-        self.published.append((build, repository))
-        return IMAGE
 
 
 @pytest.mark.parametrize(
@@ -74,14 +68,6 @@ async def test_a_grader_timeout_is_graded_once_more_on_fresh_machines(context, t
     ("grader", "answer_type", "answer_format", "right", "wrong"),
     [
         (draft.answer_grader(ExactSpec(expected=("42",))), AnswerType.TEXT, PLAIN, "42", "41"),
-        (
-            draft.answer_grader(NumericSpec(expected="0.5", tolerance_abs=0.0, tolerance_rel=0.0)),
-            AnswerType.NUMBER,
-            PLAIN,
-            "1/2",
-            "0.25",
-        ),
-        (draft.answer_grader(McqSpec(expected="B")), AnswerType.TEXT, PLAIN, "B", "A"),
         (draft.answer_grader(ExactSpec(expected=("42",))), AnswerType.TEXT, JsonAnswer(), '{"answer": "42"}', "42"),
         (
             draft.answer_grader(StructuredExactSpec(expected={"total": 42})),

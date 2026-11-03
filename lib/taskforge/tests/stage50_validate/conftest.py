@@ -8,17 +8,13 @@ null-environment task with a JSON answer. ``file_task`` is a ShellSim task whose
 grader runs in a verifier machine from the grader-base image and checks the captured file the agent
 must create. Each is lowered for a laptop (``lowered``) onto ``FACTORIES``: ShellSim, and for the
 verifier machine the ShellSim-backed ``FixtureImageFactory`` registered as Docker; ``relower`` lowers
-a variant the same way.
-
-``TemplateTokenizer`` stands in for the server's chat template in control replay; the loop and queue
-tests import it.
+a variant the same way. ``ENGINE_LIMITS`` are ``LIMITS`` as ``EngineSettings`` takes them.
 """
 
 import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Self
 
 import pytest
@@ -67,6 +63,8 @@ LIMITS = rollout_limits(
     verifier_timeout=30,
     cleanup_timeout=10,
 )
+ENGINE_LIMITS = LIMITS.model_copy(update={"verifier_timeout": None})
+"""Validation derives the verifier deadline from the grader, so ``EngineSettings`` refuses one."""
 SHELLSIM = machine(startup_timeout=30)
 SUM_GRADER = """expected=$(jq -r .expected /tests/config.json)
 passed=false
@@ -166,11 +164,15 @@ def file_task_with() -> Callable[..., TaskRolloutSpec]:
     )
 
 
-def control(
-    name: str, kind: ControlKind, category: ControlCategory, concern: ControlConcern, payload, expect: Expectation
-) -> Control:
+def control(name: str, kind: str, category: str, concern: str, payload, expect: Expectation) -> Control:
     return Control(
-        id=name, kind=kind, category=category, concern=concern, author="tests", payload=payload, expect=expect
+        id=name,
+        kind=ControlKind(kind),
+        category=ControlCategory(category),
+        concern=ControlConcern(concern),
+        author="tests",
+        payload=payload,
+        expect=expect,
     )
 
 
@@ -182,39 +184,17 @@ NO_SUBMISSION = Expectation(status=Outcome.SUBMISSION_FAILURE)
 @pytest.fixture
 def math_controls() -> tuple[Control, ...]:
     return (
+        control("correct", "positive", "known_correct", "reference", Transcript((reply("395"),)), CORRECT),
+        control("wrong", "negative", "plausible_wrong", "acceptance", Transcript((reply("391"),)), WRONG),
         control(
-            "correct",
-            ControlKind.POSITIVE,
-            ControlCategory.KNOWN_CORRECT,
-            ControlConcern.REFERENCE,
-            Transcript((reply("395"),)),
-            CORRECT,
+            "two-answers", "negative", "task_specific_shortcut", "shortcut", Transcript((reply("395 or 391"),)), WRONG
         ),
-        control(
-            "wrong",
-            ControlKind.NEGATIVE,
-            ControlCategory.PLAUSIBLE_WRONG,
-            ControlConcern.ACCEPTANCE,
-            Transcript((reply("391"),)),
-            WRONG,
-        ),
-        control(
-            "two-answers",
-            ControlKind.NEGATIVE,
-            ControlCategory.TASK_SPECIFIC_SHORTCUT,
-            ControlConcern.SHORTCUT,
-            Transcript((reply("395 or 391"),)),
-            WRONG,
-        ),
-        control(
-            "empty",
-            ControlKind.MALFORMED,
-            ControlCategory.EMPTY_OR_MALFORMED,
-            ControlConcern.EXTRACTION,
-            Transcript((reply(""),)),
-            NO_SUBMISSION,
-        ),
+        control("empty", "malformed", "empty_or_malformed", "extraction", Transcript((reply(""),)), NO_SUBMISSION),
     )
+
+
+def shell_then_done(command: str) -> Transcript:
+    return Transcript((shell_turn(("c1", command)), reply("Done.")))
 
 
 @pytest.fixture
@@ -222,44 +202,37 @@ def file_controls() -> tuple[Control, ...]:
     return (
         control(
             "correct",
-            ControlKind.POSITIVE,
-            ControlCategory.KNOWN_CORRECT,
-            ControlConcern.REFERENCE,
-            Transcript((shell_turn(("c1", f"echo {NUMBERS_SUM} > /workspace/sum.txt")), reply("Done."))),
+            "positive",
+            "known_correct",
+            "reference",
+            shell_then_done(f"echo {NUMBERS_SUM} > /workspace/sum.txt"),
             CORRECT,
         ),
         control(
             "wrong",
-            ControlKind.NEGATIVE,
-            ControlCategory.PLAUSIBLE_WRONG,
-            ControlConcern.ACCEPTANCE,
-            Transcript((shell_turn(("c1", "head -n 1 /workspace/numbers.txt > /workspace/sum.txt")), reply("Done."))),
+            "negative",
+            "plausible_wrong",
+            "acceptance",
+            shell_then_done("head -n 1 /workspace/numbers.txt > /workspace/sum.txt"),
             WRONG,
         ),
         control(
             "workspace-correct",
-            ControlKind.POSITIVE,
-            ControlCategory.KNOWN_CORRECT,
-            ControlConcern.ACCEPTANCE,
+            "positive",
+            "known_correct",
+            "acceptance",
             Workspace((file("workspace/sum.txt", f"{NUMBERS_SUM}\n"),)),
             CORRECT,
         ),
         control(
             "plant-grader",
-            ControlKind.NEGATIVE,
-            ControlCategory.REWARD_HACK,
-            ControlConcern.SHORTCUT,
-            Transcript((shell_turn(("c1", "mkdir -p /tests && echo 'print(1)' > /tests/grader.py")), reply("Done."))),
+            "negative",
+            "reward_hack",
+            "shortcut",
+            shell_then_done("mkdir -p /tests && echo 'print(1)' > /tests/grader.py"),
             WRONG,
         ),
-        control(
-            "no-work",
-            ControlKind.MALFORMED,
-            ControlCategory.EMPTY_OR_MALFORMED,
-            ControlConcern.EXTRACTION,
-            Transcript((reply("Done."),)),
-            WRONG,
-        ),
+        control("no-work", "malformed", "empty_or_malformed", "extraction", Transcript((reply("Done."),)), WRONG),
     )
 
 
@@ -327,14 +300,8 @@ class RaisingModel:
         raise self.error()
 
 
-@dataclass
-class FlakyFactory:
-    """Raises ``error()`` on the first ``failures`` creates (after ``delay``), then delegates to ShellSim."""
-
-    failures: int
-    error: Callable[[], Exception]
-    delay: float = 0.0
-    creates: int = 0
+class ShellSimBacked:
+    """A factory that checks environments as ShellSim does."""
 
     @property
     def backend(self) -> Backend:
@@ -342,6 +309,16 @@ class FlakyFactory:
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
         ShellSimMachineFactory().check_environment(requirements, spec)
+
+
+@dataclass
+class FlakyFactory(ShellSimBacked):
+    """Raises ``error()`` on the first ``failures`` creates (after ``delay``), then delegates to ShellSim."""
+
+    failures: int
+    error: Callable[[], Exception]
+    delay: float = 0.0
+    creates: int = 0
 
     async def create(self, spec: MachineSpec) -> Machine:
         self.creates += 1
@@ -361,16 +338,13 @@ class FaultyMachine:
     close_error: bool
     terminated: bool
 
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.machine, name)
+
     async def run(self, command: Command) -> Result:
         if self.terminated:
             raise MachineTerminated("sandbox task was killed")
         return await self.machine.run(command)
-
-    async def upload(self, source: Path, target: str) -> None:
-        await self.machine.upload(source, target)
-
-    async def download(self, source: str, target: Path) -> None:
-        await self.machine.download(source, target)
 
     async def close(self) -> None:
         await self.machine.close()
@@ -379,16 +353,9 @@ class FaultyMachine:
 
 
 @dataclass
-class FaultyFactory:
+class FaultyFactory(ShellSimBacked):
     close_error: bool = False
     terminated: bool = False
-
-    @property
-    def backend(self) -> Backend:
-        return Backend.SHELLSIM
-
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
-        ShellSimMachineFactory().check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:
         return FaultyMachine(await PortlessShellSimFactory().create(spec), self.close_error, self.terminated)

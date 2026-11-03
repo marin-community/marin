@@ -8,21 +8,26 @@
 so a grader program the fake GLM writes is sh.
 ``context`` is a step context for calling SDK functions outside a program; its model is the
 ``glm_client`` on ``fake_glm``. ``web_tool`` is a ``web_search`` tool that records its queries.
-``declaring`` changes the proposal's solver machine, and ``RecordingImageBuilder`` publishes no image.
+``declaring`` changes the proposal's solver machine, ``RecordingImageBuilder`` publishes no image, and
+``build_draft`` runs ``run_build`` for ``WORKPIECE`` under a directory.
 """
 
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from shellbox.machine import Backend
 
 from taskforge.llm.agent import AgentTool, ReasoningReplay
+from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import DockerBuild
 from taskforge.stage10_proposal.model import Environment, SolverMachine, TaskProposal, parse
+from taskforge.stage30_author.program import RLEnvBuildProgram
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
+from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft, run_build
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
 from tests.proposals import proposal_document
 from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory
@@ -73,6 +78,21 @@ def declaring(proposal: TaskProposal, machine: SolverMachine | None) -> TaskProp
     """``proposal`` declaring ``machine``, as a container proposal when ``machine`` is ``None``."""
     environment = Environment.CONTAINER if machine is None else proposal.header.environment
     return replace(proposal, header=replace(proposal.header, environment=environment, solver_machine=machine))
+
+
+async def build_draft(
+    root: Path,
+    program: RLEnvBuildProgram,
+    proposal: TaskProposal,
+    services: RLEnvBuildServices,
+    model: ModelClient,
+    **options: object,
+) -> TaskDraft:
+    """``run_build`` of round 0 into ``root / "round"`` and ``root / "store"``, research off unless ``options`` say."""
+    options.setdefault("research", ResearchRequirement.OFF)
+    return await run_build(
+        program, proposal, WORKPIECE, root / "round", str(root / "store"), model, SAMPLING, services, 0, **options
+    )
 
 
 class RecordingImageBuilder:

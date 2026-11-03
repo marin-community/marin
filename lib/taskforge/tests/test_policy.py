@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Policy overlays replace selected prompts and reject invalid field mappings."""
+"""Policy overlays replace selected prompts and reject invalid field mappings.
+
+Invariants: none (pins which overlay fields move the stage digest).
+"""
 
 import json
 

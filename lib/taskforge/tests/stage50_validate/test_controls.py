@@ -1,12 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Control replay through the real engine with a deterministic stand-in for the server's chat template."""
+"""Control replay through the real engine with a deterministic stand-in for the server's chat template.
+
+Invariants: grader rejects incorrect answers and accepts correct ones (a control's expectation is checked against
+its replayed grade).
+"""
 
 from dataclasses import replace
 
 import pytest
-from rolloutengine.models import RolloutLimits
 from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome
 
@@ -16,22 +19,14 @@ from taskforge.stage50_validate.controls import ControlPlan, ControlVerdict, rep
 from taskforge.stage50_validate.outcome import Graded
 from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff
 from tests.sandbox.fixture_images import FixtureImageFactory
+from tests.stage50_validate.conftest import LIMITS
 
 
 def settings(factory, max_turns: int = 6) -> EngineSettings:
     return EngineSettings(
         factories={Backend.SHELLSIM.value: factory, Backend.DOCKER.value: FixtureImageFactory()},
         command_timeout=10,
-        limits=RolloutLimits(
-            max_turns=max_turns,
-            tool_turn_timeout=20,
-            model_turn_timeout=30,
-            cleanup_timeout=10,
-            total_turn_timeout=30,
-            attempt_timeout=60,
-            verifier_timeout=None,
-            max_total_tokens=None,
-        ),
+        limits=LIMITS.model_copy(update={"max_turns": max_turns, "verifier_timeout": None}),
     )
 
 
@@ -48,12 +43,7 @@ def plan(tmp_path, first_attempts: dict[str, int] | None = None) -> ControlPlan:
 
 
 async def test_transcript_and_workspace_controls_meet_their_expectations(tmp_path, file_task, file_controls, fakes):
-    outcomes = await replay(
-        file_task,
-        file_controls,
-        plan(tmp_path),
-        settings(fakes.flaky_factory(0, RuntimeError)),
-    )
+    outcomes = await replay(file_task, file_controls, plan(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)))
 
     assert [(o.control.id, o.verdict) for o in outcomes] == [(c.id, ControlVerdict.MET) for c in file_controls]
     rewards = {o.control.id: o.outcome.reward for o in outcomes if isinstance(o.outcome, Graded)}
@@ -67,27 +57,11 @@ async def test_workspace_files_land_after_environment_setup(tmp_path, file_task_
     # A setup step that clears the output path must not erase a workspace control's file.
     task = file_task_with(setup=("rm -f /workspace/sum.txt",))
 
-    outcomes = await replay(
-        task,
-        file_controls,
-        plan(tmp_path),
-        settings(fakes.flaky_factory(0, RuntimeError)),
-    )
+    outcomes = await replay(task, file_controls, plan(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)))
 
     workspace = next(o for o in outcomes if o.control.id == "workspace-correct")
     assert workspace.verdict is ControlVerdict.MET
     assert isinstance(workspace.outcome, Graded) and workspace.outcome.reward == 1.0
-
-
-async def test_math_controls(tmp_path, math_task, math_controls, fakes):
-    outcomes = await replay(
-        math_task,
-        math_controls,
-        plan(tmp_path),
-        settings(fakes.flaky_factory(0, RuntimeError)),
-    )
-
-    assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(math_controls)
 
 
 async def test_wrong_expectation_is_violated(tmp_path, math_task, math_controls, fakes):
@@ -100,12 +74,7 @@ async def test_wrong_expectation_is_violated(tmp_path, math_task, math_controls,
     )
     controls = (*math_controls, mislabeled)
 
-    outcomes = await replay(
-        math_task,
-        controls,
-        plan(tmp_path),
-        settings(fakes.flaky_factory(0, RuntimeError)),
-    )
+    outcomes = await replay(math_task, controls, plan(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)))
 
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(math_controls) + [ControlVerdict.VIOLATED]
 
@@ -119,6 +88,7 @@ async def test_a_retried_control_replays_from_its_first_turn(tmp_path, file_task
     assert factory.creates == len(file_controls) + 1
 
 
+# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_a_re_entered_control_numbers_attempts_after_the_ones_on_disk(tmp_path, file_task, file_controls, fakes):
     earlier = tmp_path / "control" / "correct"
     earlier.mkdir(parents=True)

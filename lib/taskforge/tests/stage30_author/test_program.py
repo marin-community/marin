@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""The build program's step graph and each step's source digest, its memo key.
+
+Invariants: none (pins program construction and what a step's memo key covers).
+"""
+
 import inspect
 import linecache
 import sys

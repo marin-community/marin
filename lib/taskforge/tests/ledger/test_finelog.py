@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Invariants: none (pins Finelog ledger delivery and its off-cluster absence)."""
+
 import logging
 
 import pytest

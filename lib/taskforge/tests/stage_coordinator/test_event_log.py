@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The in-memory log numbers and stamps events, and the JSON store round-trips them."""
+"""The in-memory log numbers and stamps events, and the JSON store round-trips them.
+
+Invariants: none (pins event numbering and the store's schema refusal).
+"""
 
 import json
 

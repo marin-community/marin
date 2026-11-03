@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A program loads in a child process: the manifest comes back, a refusal comes back, a spinning body is cut off."""
+"""A program loads in a child process: the manifest comes back, a refusal comes back, a spinning body is cut off.
+
+Invariants: the build program cannot open files or sockets on the host (the child process and its load timeout).
+"""
 
 import inspect
 import time
@@ -24,23 +27,16 @@ def spinning_program() -> str:
     return inspect.getsource(standard).replace(FIRST_STEP, f"\n\n\n{SPINNING_CLASS}@rl_env_build_step\n", 1)
 
 
-async def test_the_child_returns_the_manifest_the_loader_gives_in_process():
+async def test_the_child_returns_the_manifest_the_loader_gives_in_process_even_when_the_module_prints():
     source = inspect.getsource(standard)
+    # The child's stdout carries only its result, so a class body that prints does not corrupt it.
+    noisy = source.replace(FIRST_STEP, f'\n\n\nclass Noisy:\n    print("loader stdout noise")\n\n\n{FIRST_STEP[3:]}', 1)
+    assert noisy != source
 
     manifest = await load_program_in_process(source, sdk_exports(), wall_timeout=60)
 
     assert manifest == ProgramManifest.model_validate(program_manifest(load_program_source(source, sdk_exports())))
-
-
-async def test_a_module_body_that_prints_still_returns_the_manifest():
-    """The child's stdout carries only its result, so a class body that prints does not corrupt it."""
-    noisy = 'class Noisy:\n    print("loader stdout noise")\n\n\n'
-    source = inspect.getsource(standard).replace(FIRST_STEP, f"\n\n\n{noisy}@rl_env_build_step\n", 1)
-    assert noisy in source
-
-    manifest = await load_program_in_process(source, sdk_exports(), wall_timeout=60)
-
-    assert manifest.order == list(standard.PROGRAM.order)
+    assert (await load_program_in_process(noisy, sdk_exports(), wall_timeout=60)).order == list(standard.PROGRAM.order)
 
 
 async def test_the_loaders_refusal_comes_back_as_the_error():

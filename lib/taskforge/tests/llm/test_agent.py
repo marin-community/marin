@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""``run_agent`` and ``shell_tool`` against a scripted GLM server and a ShellSim machine.
+
+Invariants: none (pins the agent loop's tool dispatch, cut-call refusal, stop conditions and replay).
+"""
+
 import asyncio
 import json
 from collections.abc import Mapping
@@ -99,16 +104,18 @@ def test_tool_call_then_answer_replays_reasoning_and_records_turns(fake_glm, led
 
 
 @pytest.mark.parametrize(
-    ("name", "arguments", "outcome"),
+    ("name", "arguments", "outcome", "replay"),
     [
-        ("echo", '{"text": "unterminated', ToolOutcome.INVALID_ARGUMENTS),
-        ("echo", '["text"]', ToolOutcome.INVALID_ARGUMENTS),
-        ("echo", '{"txt": "hi"}', ToolOutcome.INVALID_ARGUMENTS),
-        ("missing", '{"text": "hi"}', ToolOutcome.UNKNOWN_TOOL),
+        ("echo", '{"text": "cut', ToolOutcome.INVALID_ARGUMENTS, {INVALID_ARGUMENTS_KEY: '{"text": "cut'}),
+        ("echo", '["text"]', ToolOutcome.INVALID_ARGUMENTS, {INVALID_ARGUMENTS_KEY: '["text"]'}),
+        ("echo", '{"txt": "hi"}', ToolOutcome.INVALID_ARGUMENTS, {"txt": "hi"}),
+        ("missing", '{"text": "hi"}', ToolOutcome.UNKNOWN_TOOL, {"text": "hi"}),
     ],
     ids=["unparseable", "not-an-object", "schema-violation", "unknown-tool"],
 )
-def test_bad_tool_call_returns_an_error_result_and_the_run_continues(fake_glm, ledger, run, name, arguments, outcome):
+def test_bad_tool_call_returns_an_error_result_and_the_run_continues(
+    fake_glm, ledger, run, name, arguments, outcome, replay
+):
     fake_glm.stream(tool_calls=((name, arguments),), finish="tool_calls")
     fake_glm.stream(tool_calls=(("echo", '{"text": "again"}'),), finish="tool_calls")
     fake_glm.stream(content="done")
@@ -120,8 +127,8 @@ def test_bad_tool_call_returns_an_error_result_and_the_run_continues(fake_glm, l
     assert calls == [{"text": "again"}]
     assert result.turns[0].tool_results[0].outcome is outcome
     assert tool_messages(fake_glm, 1)[0]["content"].startswith("error:")
-    replayed = json.loads(fake_glm.requests[1]["messages"][2]["tool_calls"][0]["function"]["arguments"])
-    assert isinstance(replayed, dict)
+    replayed = fake_glm.requests[1]["messages"][2]["tool_calls"][0]["function"]["arguments"]
+    assert json.loads(replayed) == replay
 
 
 def test_a_schema_violation_names_the_constraint_without_the_offending_value(fake_glm, ledger, run):
@@ -140,16 +147,6 @@ def test_a_schema_violation_names_the_constraint_without_the_offending_value(fak
     assert result.turns[0].tool_results[0].outcome is ToolOutcome.INVALID_ARGUMENTS
     message = tool_messages(fake_glm, 1)[0]["content"]
     assert message == "error: tool arguments do not match the schema at $.text: maxLength 10"
-
-
-def test_unparseable_arguments_are_replayed_wrapped_in_an_object(fake_glm, ledger, run):
-    fake_glm.stream(tool_calls=(("echo", '{"text": "unterminated'),), finish="tool_calls")
-    fake_glm.stream(content="done")
-
-    run([echo_tool([])])
-
-    replayed = fake_glm.requests[1]["messages"][2]["tool_calls"][0]["function"]["arguments"]
-    assert json.loads(replayed) == {INVALID_ARGUMENTS_KEY: '{"text": "unterminated'}
 
 
 @pytest.mark.parametrize(
@@ -291,27 +288,16 @@ async def test_shell_tool_offers_the_shell_rolloutengine_binds_for_a_shell_task(
     assert tool.definition()["function"] == bound.definition.model_dump(exclude_none=True)
 
 
-@pytest.mark.parametrize("replay", list(ReasoningReplay))
-def test_drop_replays_assistant_turns_without_reasoning(fake_glm, ledger, run, replay):
-    fake_glm.stream(reasoning="I should echo.", tool_calls=(("echo", '{"text": "hi"}'),), finish="tool_calls")
-    fake_glm.stream(content="done")
-
-    run([echo_tool([])], replay=replay)
-
-    replayed = fake_glm.requests[1]["messages"][2]
-    assert replayed["role"] == "assistant"
-    if replay is ReasoningReplay.DROP:
-        assert "reasoning_content" not in replayed
-    else:
-        assert replayed["reasoning_content"] == "I should echo."
-
-
-def test_drop_keeps_reasoning_in_the_recorded_turns(fake_glm, ledger, run):
+def test_drop_replays_assistant_turns_without_reasoning_and_keeps_it_in_the_recorded_turns(fake_glm, ledger, run):
+    """The KEEP replay is pinned by ``test_tool_call_then_answer_replays_reasoning_and_records_turns``."""
     fake_glm.stream(reasoning="I should echo.", tool_calls=(("echo", '{"text": "hi"}'),), finish="tool_calls")
     fake_glm.stream(content="done", reasoning="echoed")
 
     result = run([echo_tool([])], replay=ReasoningReplay.DROP)
 
+    replayed = fake_glm.requests[1]["messages"][2]
+    assert replayed["role"] == "assistant"
+    assert "reasoning_content" not in replayed
     assert [turn.completion.reasoning for turn in result.turns] == ["I should echo.", "echoed"]
     assert all("reasoning_content" not in m for m in result.messages if m["role"] == "assistant")
 

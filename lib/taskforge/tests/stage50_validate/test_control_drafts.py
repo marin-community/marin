@@ -1,14 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validation writes the controls from the grader's stored output, then replays them."""
+"""Validation writes the controls from the grader's stored output, then replays them.
+
+Invariants: grader rejects incorrect answers (controls never repeat a prototyped candidate); empty answer at most
+the rejection ceiling (negative bounds follow the ceiling).
+"""
 
 import json
 from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
-from rolloutengine.models import RolloutLimits
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, MachineSpec, PackageSpec
 from taskcompendium.grading_result import Outcome
@@ -38,6 +41,7 @@ from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
 from tests.stage40_build_with_program.conftest import FACTORIES, PROPOSAL
+from tests.stage50_validate.conftest import LIMITS
 
 TASK = draft.assemble(
     "workpiece",
@@ -90,34 +94,22 @@ def controls(wrong: str) -> str:
     )
 
 
-def engine_settings() -> EngineSettings:
-    return EngineSettings(
-        factories={Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()},
-        command_timeout=10,
-        limits=RolloutLimits(
-            max_turns=4,
-            tool_turn_timeout=20,
-            model_turn_timeout=30,
-            cleanup_timeout=10,
-            total_turn_timeout=30,
-            attempt_timeout=60,
-            verifier_timeout=None,
-            max_total_tokens=None,
-        ),
-    )
+async def write(task, grader, glm_client, ledger, tmp_path):
+    record = CallLedger(ledger, "workpiece", 0, "controls")
+    return await write_controls(task, grader, parse(PROPOSAL), glm_client, LLMPolicy(), record, tmp_path)
 
 
 async def test_validation_writes_controls_the_grader_has_not_seen_and_replays_them(
     glm_client, fake_glm, ledger, tmp_path
 ):
-    # "40" is a candidate the grader step graded, so the first set goes back to the model.
-    fake_glm.stream(content=controls("40"))
+    # "40" is a candidate the grader step graded, so each such set goes back to the model, past the old cap of three.
+    for _ in range(4):
+        fake_glm.stream(content=controls("40"))
     fake_glm.stream(content=controls("41"))
 
-    written = await write_controls(
-        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
-    )
+    written = await write(TASK, GRADER, glm_client, ledger, tmp_path)
 
+    assert len(fake_glm.requests) == 5
     assert (
         "controls ['N2-off-by-two'] are candidates the grader step graded"
         in fake_glm.requests[1]["messages"][-2]["content"]
@@ -133,27 +125,13 @@ async def test_validation_writes_controls_the_grader_has_not_seen_and_replays_th
         ledger=JsonlLedger(tmp_path / "ledger"),
         first_attempts={},
     )
-    outcomes = await replay(
-        lower(TASK, MachineHost.LAPTOP, FACTORIES, engine_settings().limits), written, plan, engine_settings()
+    engine = EngineSettings(
+        factories={Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()},
+        command_timeout=10,
+        limits=LIMITS.model_copy(update={"verifier_timeout": None}),
     )
+    outcomes = await replay(lower(TASK, MachineHost.LAPTOP, FACTORIES, engine.limits), written, plan, engine)
     assert {o.control.id: o.verdict for o in outcomes} == {c.id: ControlVerdict.MET for c in written}
-
-
-async def test_control_checks_continue_past_the_old_three_attempt_cap(glm_client, fake_glm, ledger, tmp_path):
-    for _ in range(4):
-        fake_glm.stream(content=controls("40"))
-    fake_glm.stream(content=controls("41"))
-    written = await write_controls(
-        TASK,
-        GRADER,
-        parse(PROPOSAL),
-        glm_client,
-        LLMPolicy(),
-        CallLedger(ledger, "workpiece", 0, "controls"),
-        tmp_path,
-    )
-    assert len(fake_glm.requests) == 5
-    assert len(written) == 4
 
 
 async def test_control_bounds_follow_the_graders_rejection_ceiling(glm_client, fake_glm, ledger, tmp_path):
@@ -166,9 +144,7 @@ async def test_control_bounds_follow_the_graders_rejection_ceiling(glm_client, f
     fake_glm.stream(content=json.dumps(over))
     fake_glm.stream(content=json.dumps(within))
 
-    written = await write_controls(
-        TASK, lenient, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
-    )
+    written = await write(TASK, lenient, glm_client, ledger, tmp_path)
 
     request = fake_glm.requests[0]["messages"][-2]["content"]
     assert "lets a submission wrong in substance score up to 0.4" in request
@@ -183,15 +159,7 @@ async def test_cut_controls_hold_with_the_partial_reply_preserved(glm_client, fa
     fake_glm.stream(content=partial, finish="length")
     fake_glm.stream(content=controls("41"))
     with pytest.raises(IncompleteOutput) as failure:
-        await write_controls(
-            TASK,
-            GRADER,
-            parse(PROPOSAL),
-            glm_client,
-            LLMPolicy(),
-            CallLedger(ledger, "workpiece", 0, "controls"),
-            tmp_path,
-        )
+        await write(TASK, GRADER, glm_client, ledger, tmp_path)
     assert len(fake_glm.requests) == 1
     assert failure.value.completions[0].content == partial
 
@@ -204,9 +172,7 @@ async def test_a_control_writing_files_outside_the_output_paths_goes_back_to_the
     fake_glm.stream(content=json.dumps(written_out))
     fake_glm.stream(content=controls("41"))
 
-    written = await write_controls(
-        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
-    )
+    written = await write(TASK, GRADER, glm_client, ledger, tmp_path)
 
     assert "the task has no output paths" in fake_glm.requests[0]["messages"][-2]["content"].lower()
     repair = fake_glm.requests[1]["messages"][-2]["content"]
@@ -230,9 +196,7 @@ async def test_a_control_writes_an_output_path_outside_the_workspace(glm_client,
     submitted["controls"][0]["files"] = [{"path": report, "content": "select 42;\n"}]
     fake_glm.stream(content=json.dumps(submitted))
 
-    written = await write_controls(
-        task, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
-    )
+    written = await write(task, GRADER, glm_client, ledger, tmp_path)
 
     assert report in fake_glm.requests[0]["messages"][-2]["content"]
     assert len(fake_glm.requests) == 1

@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""``RelayEndpoint`` resolution of the relay job's ``glm-5.3`` endpoint through a fake Iris resolver.
+
+Invariants: none (pins relay endpoint resolution).
+"""
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast

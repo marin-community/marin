@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""``generate_tasks`` with a scripted agent, solver and reviewer on real ShellSim machines and the real gate."""
+"""``generate_tasks`` with a scripted agent, solver and reviewer on real ShellSim machines and the real gate.
+
+Invariants: grader rejects wrong answers and the empty answer (``submit``'s wrong-answer probes), scores every
+answer in its format (refused graders), no shortcut (guesses, option tasks), solve rate in band over graded
+evidence (gate), fresh values per instance (variants), digest-fixed environment (no env vars or setup commands).
+"""
 
 import dataclasses
 import io
@@ -10,7 +15,7 @@ import json
 import shlex
 import tarfile
 import urllib.request
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -214,28 +219,52 @@ class AcceptingJudge:
         return StructuredResult(output_type.model_validate(replies[output_type]), ())
 
 
-def agentic_config(agent_model: Callable[[ModelRequest], Awaitable[ModelTurn]], budget: ToolBudget, web: ParallelWeb):
-    return AgenticConfig(
-        agent_model=agent_model,
-        workspace_factory=ShellSimMachineFactory(),
-        solver_model=Solver(),
-        solver_factory=ShellSimMachineFactory(),
-        judge=AcceptingJudge(),
-        judge_policy=LLMPolicy(),
-        web=web,
-        agent_limits=LIMITS,
-        solver_limits=LIMITS,
-        gate=Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4),
-        budget=budget,
-        command_timeout=10,
-        max_concurrent_rollouts=4,
-    )
+def budget(solver: int | None, judge: int | None = 0) -> ToolBudget:
+    return ToolBudget(solver_rollouts=solver, judge_calls=judge, web_calls=0)
 
 
-async def test_submit_accepts_only_the_task_version_with_complete_evidence():
+FULL = budget(20, 2)
+
+
+def write(task_json: str = TASK_JSON, path: str = TASK) -> tuple[str, dict[str, object]]:
+    return call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task_json)} > {path}")
+
+
+def one_rollout(task_json: str = TASK_JSON, n: int = 1, role: str = "solver") -> tuple[tuple[str, dict], ...]:
+    """Write the task, ask for one rollout call of ``n`` ``role`` runs, and finish."""
+    return (write(task_json), call("rollout", paths=[TASK], n=n, role=role), call("finish", report="done"))
+
+
+async def run(
+    agent: ScriptedAgent | Sequence[tuple[str, dict[str, object]]], tools: ToolBudget, count: int = 1, **changes: Any
+) -> AgentResult:
+    """``generate_tasks`` for ``count`` tasks of ``IDEA`` with the scripted agent, under ``changes`` to the config."""
+    agent = agent if isinstance(agent, ScriptedAgent) else ScriptedAgent(tuple(agent))
     async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+        config = AgenticConfig(
+            agent_model=agent,
+            workspace_factory=ShellSimMachineFactory(),
+            solver_model=Solver(),
+            solver_factory=ShellSimMachineFactory(),
+            judge=AcceptingJudge(),
+            judge_policy=LLMPolicy(),
+            web=web,
+            agent_limits=LIMITS,
+            solver_limits=LIMITS,
+            gate=Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4),
+            budget=tools,
+            command_timeout=10,
+            max_concurrent_rollouts=4,
+        )
+        return await generate_tasks(IDEA, count, dataclasses.replace(config, **changes))
+
+
+FINISHED = (*SCRIPT, call("finish", report="done"))
+
+
+@pytest.mark.parametrize("tools", [FULL, budget(None, None)], ids=["limited", "unlimited"])
+async def test_submit_accepts_only_the_task_version_with_complete_evidence(tools):
+    result = await run(SCRIPT, tools)
 
     assert result.failure is None
     replies = {
@@ -272,37 +301,28 @@ async def test_bubblewrap_solvers_accept_a_linux_process_task():
         solvers = LocalMachineFactory()
     except SandboxUnavailable as error:
         pytest.skip(str(error))
-    example = example_build.task_spec(TASK_ID)
     # Without Python the machine needs no environment build, and the scripted solver runs no command.
-    requirements = example.environment_requirements.model_copy(
+    requirements = EXAMPLE_TASK.environment_requirements.model_copy(
         update={
             "capabilities": ("shell", "filesystem"),
             "command_semantics": CommandSemantics.LINUX_PROCESS,
             "package_spec": PackageSpec(),
         }
     )
-    task_json = example.model_copy(update={"environment_requirements": requirements}).model_dump_json()
+    task_json = EXAMPLE_TASK.model_copy(update={"environment_requirements": requirements}).model_dump_json()
     write = f"mkdir -p tasks; printf '%s' {shlex.quote(task_json)} > task.json; cp task.json {TASK}; "
     script = (
         call("shell", command=write + f"printf '%s\\n' {shlex.quote(BUILD)} > build.sh"),
         *SCRIPT[2:7],  # The controls and the solver and adversary rollouts.
         call("submit", path=TASK, program="build.sh"),
     )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_factory=solvers))
-
-    [accepted] = result.tasks
+    [accepted] = (await run(script, FULL, solver_factory=solvers)).tasks
     assert accepted.task.environment_requirements.command_semantics == CommandSemantics.LINUX_PROCESS
 
 
 async def test_submit_refuses_a_task_whose_answer_selects_an_option():
     options = ("Lower the cooling water flow.", "Raise the cooling water flow.", "Raise the feed rate.")
-    judge = AcceptingJudge(option_lists=(OptionList(options=options),))
-    script = (*SCRIPT, call("finish", report="done"))
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=judge))
+    result = await run(FINISHED, FULL, judge=AcceptingJudge(option_lists=(OptionList(options=options),)))
 
     [submit] = tool_replies(result, "call-10")
     assert not submit["accepted"]
@@ -318,9 +338,7 @@ async def test_submit_refuses_a_program_that_gives_other_ids_its_own_task_id():
         call("submit", path=TASK, program="fixed.sh"),
         call("finish", report="done"),
     )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    result = await run(script, FULL)
 
     [submit] = tool_replies(result, "call-11")
     assert submit["accepted"] is False
@@ -328,10 +346,7 @@ async def test_submit_refuses_a_program_that_gives_other_ids_its_own_task_id():
 
 
 async def test_submit_refuses_a_task_whose_answer_the_prompt_alone_gives():
-    script = (*SCRIPT, call("finish", report="done"))
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=Solver(guesses_right=True)))
+    result = await run(FINISHED, FULL, solver_model=Solver(guesses_right=True))
 
     [submit] = tool_replies(result, "call-10")
     assert any("guessed the answer in 4 of 4" in problem for problem in submit["problems"])
@@ -348,10 +363,7 @@ class OverflowJudge(AcceptingJudge):
 
 
 async def test_a_task_too_long_for_the_reviewer_holds_without_repair_feedback():
-    script = (*SCRIPT, call("finish", report="done"))
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=OverflowJudge()))
+    result = await run(FINISHED, FULL, judge=OverflowJudge())
     assert result.tasks == ()
     assert result.failure is not None and "ContextExhausted" in result.failure
 
@@ -360,9 +372,7 @@ async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
     # An agent that ignores its empty budget and asks for a web search on every turn.
     assert LIMITS.max_turns is not None
     agent = ScriptedAgent(tuple(call("web_search", objective="any", queries=["any"]) for _ in range(LIMITS.max_turns)))
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(agent, ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    result = await run(agent, budget(0))
 
     assert agent.turns == MAX_EMPTY_BUDGET_CALLS
     assert result.tasks == ()
@@ -371,10 +381,7 @@ async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
 
 async def test_a_session_at_its_turn_limit_gets_a_report_of_the_tools():
     assert LIMITS.max_turns is not None
-    script = tuple(call("shell", command="echo still working") for _ in range(LIMITS.max_turns))
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    result = await run([call("shell", command="echo still working")] * LIMITS.max_turns, budget(20))
 
     assert result.rollout.stop_reason == "max_turns"
     assert result.report is not None and "max_turns" in result.report
@@ -382,14 +389,7 @@ async def test_a_session_at_its_turn_limit_gets_a_report_of_the_tools():
 
 async def test_the_tools_refuse_a_task_whose_id_cannot_name_a_directory():
     task = example_build.task_spec("../" + "x" * 300)
-    script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
-        call("rollout", paths=[TASK], n=1, role="solver"),
-        call("finish", report="done"),
-    )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    result = await run(one_rollout(task.model_dump_json()), budget(1))
 
     [refusal] = tool_replies(result, "call-2")
     assert "must be at most 128 letters, digits" in refusal["error"]
@@ -399,9 +399,7 @@ async def test_the_tools_refuse_a_task_whose_id_cannot_name_a_directory():
 async def test_a_task_cannot_take_the_id_of_an_accepted_task():
     # CHANGED is another version of TASK with the same id, and TASK is accepted first.
     script = (*SCRIPT, call("rollout", paths=[CHANGED], n=1, role="solver"), call("finish", report="done"))
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
-        result = await generate_tasks(IDEA, 2, config)
+    result = await run(script, FULL, count=2)
 
     [refusal] = tool_replies(result, "call-11")
     assert f"An accepted task already has the id {TASK_ID!r}" in refusal["error"]
@@ -410,15 +408,13 @@ async def test_a_task_cannot_take_the_id_of_an_accepted_task():
 
 async def test_a_control_that_the_answer_format_rejects_is_no_control():
     script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        write(),
         call("grade", path=TASK, answer="", expect="fail"),
         call("grade", path=TASK, answer=EXPECTED, expect="pass"),
         call("submit", path=TASK, program="build.sh"),
         call("finish", report="done"),
     )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    result = await run(script, budget(0))
 
     [empty], [submit] = tool_replies(result, "call-2"), tool_replies(result, "call-4")
     assert empty["control"] is False
@@ -426,24 +422,20 @@ async def test_a_control_that_the_answer_format_rejects_is_no_control():
 
 
 async def test_the_tools_refuse_environment_variables_and_setup_commands():
-    requirements = example_build.task_spec(TASK_ID).environment_requirements
+    requirements = EXAMPLE_TASK.environment_requirements
     tasks = {
         "tasks/env.json": requirements.model_copy(update={"environment_variables": {"K": "${PARALLEL_API_KEY}"}}),
         "tasks/setup.json": requirements.model_copy(update={"setup_commands": ("echo 0 > /workspace/ledger.csv",)}),
     }
-    writes = [
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {path}")
-        for path, environment in tasks.items()
-        for task in [example_build.task_spec(TASK_ID).model_copy(update={"environment_requirements": environment})]
-    ]
     script = (
-        *writes,
+        *(
+            write(EXAMPLE_TASK.model_copy(update={"environment_requirements": e}).model_dump_json(), p)
+            for p, e in tasks.items()
+        ),
         *(call("rollout", paths=[path], n=1, role="solver") for path in tasks),
         call("finish", report="x"),
     )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=2, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    result = await run(script, budget(2))
 
     [env], [setup] = tool_replies(result, "call-3"), tool_replies(result, "call-4")
     assert "cannot set environment_variables" in env["error"]
@@ -451,18 +443,16 @@ async def test_the_tools_refuse_environment_variables_and_setup_commands():
     assert result.spend.solver_rollouts == 0
 
 
-async def test_a_solver_that_runs_out_of_turns_holds_without_scoring_the_task():
-    script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
-        call("rollout", paths=[TASK], n=1, role="solver"),
-        call("finish", report="done"),
-    )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
-        solver_limits = LIMITS.model_copy(update={"max_turns": 3})
-        result = await generate_tasks(
-            IDEA, 1, dataclasses.replace(config, solver_model=LoopingSolver(), solver_limits=solver_limits)
-        )
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"solver_model": LoopingSolver(), "solver_limits": LIMITS.model_copy(update={"max_turns": 3})},
+        {"solver_model": NullCallSolver()},
+    ],
+    ids=["out-of-turns", "tool-call-without-function"],
+)
+async def test_a_solver_rollout_without_an_answer_holds_without_scoring_the_task(changes):
+    result = await run(one_rollout(), budget(1), **changes)
 
     assert result.tasks == ()
     assert result.failure is not None and "validation_incomplete" in result.failure
@@ -470,14 +460,7 @@ async def test_a_solver_that_runs_out_of_turns_holds_without_scoring_the_task():
 
 
 async def test_the_pass_rate_of_a_rollout_counts_only_graded_answers():
-    script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
-        call("rollout", paths=[TASK], n=4, role="solver"),
-        call("finish", report="done"),
-    )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=4, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=Solver(wrong="")))
+    result = await run(one_rollout(n=4), budget(4), solver_model=Solver(wrong=""))
 
     [rollout] = tool_replies(result, "call-2")
     reply = rollout["results"][TASK]
@@ -485,24 +468,14 @@ async def test_the_pass_rate_of_a_rollout_counts_only_graded_answers():
 
 
 async def test_an_adversary_rollout_without_a_graded_answer_does_not_count():
-    script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
-        call("rollout", paths=[TASK], n=4, role="adversary"),
-        call("finish", report="done"),
-    )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=4, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=Solver(adversary_answer="")))
+    result = await run(one_rollout(n=4, role="adversary"), budget(4), solver_model=Solver(adversary_answer=""))
 
     [rollout] = tool_replies(result, "call-2")
     assert rollout["results"][TASK]["evidence"]["adversary_runs"] == 0
 
 
 async def test_a_review_needs_the_judge_budget_for_all_of_its_calls():
-    script = (*SCRIPT, call("finish", report="done"))
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=1, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    result = await run(FINISHED, budget(20, 1))
 
     [submit] = tool_replies(result, "call-10")
     assert "1 judge calls left" in submit["error"]
@@ -510,64 +483,28 @@ async def test_a_review_needs_the_judge_budget_for_all_of_its_calls():
 
 
 async def test_rollout_refuses_a_task_that_submit_cannot_accept():
-    example = example_build.task_spec(TASK_ID)
-    shared = example.resources.model_copy(update={"all": example.resources.worker, "worker": ()})
-    task = example.model_copy(update={"resources": shared})
-    script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
-        call("rollout", paths=[TASK], n=1, role="solver"),
-        call("finish", report="done"),
-    )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    shared = EXAMPLE_TASK.resources.model_copy(update={"all": EXAMPLE_TASK.resources.worker, "worker": ()})
+    task = EXAMPLE_TASK.model_copy(update={"resources": shared})
+    result = await run(one_rollout(task.model_dump_json()), budget(1))
 
     [refusal] = tool_replies(result, "call-2")
     assert "not in resources.all" in refusal["error"]
     assert result.spend.solver_rollouts == 0
 
 
-async def test_a_solver_tool_call_with_no_function_is_saved():
-    script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
-        call("rollout", paths=[TASK], n=1, role="solver"),
-        call("finish", report="done"),
-    )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=NullCallSolver()))
-
-    assert result.tasks == ()
-    assert result.failure is not None and "validation_incomplete" in result.failure
-    assert tool_replies(result, "call-2") == []
-
-
 async def test_finish_refuses_once_while_most_of_the_budget_is_left():
-    script = (call("finish", report="too easy"), call("finish", report="too easy"))
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    result = await run([call("finish", report="too easy")] * 2, budget(20))
 
     [refusal] = tool_replies(result, "call-1")
     assert "20 of 20 solver rollouts are left" in refusal["error"]
     assert result.report == "too easy"
 
 
-async def test_unlimited_validation_budgets_can_complete_a_task():
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(), ToolBudget(None, None, None), web)
-        result = await generate_tasks(IDEA, 1, config)
-    assert len(result.tasks) == 1
-    assert result.spend.solver_rollouts == 12 and result.spend.judge_calls == 2
-    assert result.failure is None
-
-
 async def test_submit_refuses_a_grader_that_accepts_a_wrong_answer_made_from_the_controls():
     # The reference is an integer, so a tolerance of 1 also accepts the right control plus or minus 1.
     loose = GRADER.model_copy(update={"parameters": {**GRADER.parameters, "tolerance_abs": 1.0}})
-    task = SHELL_TASK.model_copy(update={"grader": loose})
     script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
+        write(SHELL_TASK.model_copy(update={"grader": loose}).model_dump_json()),
         call("grade", path=TASK, answer=EXPECTED, expect="pass"),
         call("grade", path=TASK, answer="999999", expect="fail"),
         call("rollout", paths=[TASK], n=8, role="solver"),
@@ -575,9 +512,7 @@ async def test_submit_refuses_a_grader_that_accepts_a_wrong_answer_made_from_the
         call("submit", path=TASK, program="build.sh"),
         call("finish", report="done"),
     )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=12, judge_calls=2, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, config)
+    result = await run(script, budget(12, 2))
 
     [submit] = tool_replies(result, "call-6")
     assert not submit["accepted"]

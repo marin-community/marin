@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""The proposal driver: each capability's plan, slot documents, triage verdicts and failures on disk.
+
+Invariants: none (pins the driver's output files and per-capability and per-slot failure isolation).
+"""
+
 import pytest
 
 # These tests run in the marin-taskforge package environment; environments without it skip them.
@@ -64,20 +69,29 @@ def proposal_document(capability_hash: str) -> str:
     )
 
 
-def test_a_capability_is_proposed_and_each_proposal_triaged_by_the_preflight_without_a_model_call(tmp_path: Path):
-    ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
+def propose(tmp_path: Path, n: int, *replies: str | Exception) -> tuple[ScriptedModel, Path, dict]:
+    """Run the driver for ``n`` slots of ``CAPABILITY_ID`` on the scripted ``replies``; return the model, the
+    capability's directory and the summary."""
     model = ScriptedModel()
-    model.reply(json.dumps(PLAN))
-    model.reply(proposal_document(ideas[CAPABILITY_ID].capability_hash))
-    output = tmp_path / "run"
-    output.mkdir()
+    for reply in replies:
+        if isinstance(reply, Exception):
+            model.fail(reply)
+        else:
+            model.reply(reply)
+    ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
+    proposed = asyncio.run(propose_tasks(model, ideas, n, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY.proposer))
+    write_outputs(tmp_path, proposed)
+    return model, tmp_path / CAPABILITY_ID, json.loads((tmp_path / SUMMARY_FILE).read_text())
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY.proposer))
-    write_outputs(output, proposed)
 
-    assert json.loads((output / SUMMARY_FILE).read_text()) == {CAPABILITY_ID: {"1": TriageDecision.ACCEPT}}
+DOCUMENT = proposal_document(selected_ideas(example_catalog_path(), [CAPABILITY_ID])[CAPABILITY_ID].capability_hash)
+
+
+def test_a_capability_is_proposed_and_each_proposal_triaged_by_the_preflight_without_a_model_call(tmp_path: Path):
+    model, directory, summary = propose(tmp_path, 1, json.dumps(PLAN), DOCUMENT)
+
+    assert summary == {CAPABILITY_ID: {"1": TriageDecision.ACCEPT}}
     assert len(model.requests) == 2
-    directory = output / CAPABILITY_ID
     assert parse((directory / "slot-01.json").read_text()).header.id == f"{CAPABILITY_ID}/1"
     verdict = Verdict.from_json((directory / "slot-01.verdict.json").read_text())
     assert (verdict.decision, verdict.reasons) == (TriageDecision.ACCEPT, ())
@@ -85,20 +99,10 @@ def test_a_capability_is_proposed_and_each_proposal_triaged_by_the_preflight_wit
 
 
 def test_a_plan_invalid_after_its_repair_fails_only_its_capability(tmp_path: Path):
-    ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
-    model = ScriptedModel()
     unrunnable = json.dumps({**PLAN, "slots": [{**SLOT, "environment": "container", "solver_machine": None}]})
-    model.reply(unrunnable)
-    model.reply(unrunnable)
-    output = tmp_path / "run"
-    output.mkdir()
+    model, directory, summary = propose(tmp_path, 1, unrunnable, unrunnable)
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY.proposer))
-    write_outputs(output, proposed)
-
-    summary = json.loads((output / SUMMARY_FILE).read_text())
     assert "slot 1 is proposed in container" in summary[CAPABILITY_ID]
-    directory = output / CAPABILITY_ID
     assert sorted(path.name for path in directory.iterdir()) == ["plan.completions.json", "plan.request.json"]
     assert json.loads((directory / "plan.request.json").read_text()) == model.requests[0].messages
     completions = json.loads((directory / "plan.completions.json").read_text())
@@ -106,21 +110,11 @@ def test_a_plan_invalid_after_its_repair_fails_only_its_capability(tmp_path: Pat
 
 
 def test_a_slot_whose_model_runs_out_of_retries_fails_alone_and_keeps_the_plan_and_its_sibling(tmp_path: Path):
-    ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
     unavailable = ModelUnavailable("the router answered 503 on every retry", ())
-    model = ScriptedModel()
-    model.reply(json.dumps({**PLAN, "slots": [SLOT, {**SLOT, "slot": 2, "verification": "judge"}]}))
-    model.reply(proposal_document(ideas[CAPABILITY_ID].capability_hash))
-    model.fail(unavailable)
-    output = tmp_path / "run"
-    output.mkdir()
+    plan = json.dumps({**PLAN, "slots": [SLOT, {**SLOT, "slot": 2, "verification": "judge"}]})
+    _, directory, summary = propose(tmp_path, 2, plan, DOCUMENT, unavailable)
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 2, REASONING_ONLY, LLMPolicy(), DEFAULT_POLICY.proposer))
-    write_outputs(output, proposed)
-
-    summary = json.loads((output / SUMMARY_FILE).read_text())
     assert summary == {CAPABILITY_ID: {"1": TriageDecision.ACCEPT, "2": str(unavailable)}}
-    directory = output / CAPABILITY_ID
     assert len(json.loads((directory / "plan.completions.json").read_text())) == 1
     assert parse((directory / "slot-01.json").read_text()).header.id == f"{CAPABILITY_ID}/1"
     assert (directory / "slot-02.failure.txt").read_text() == str(unavailable)

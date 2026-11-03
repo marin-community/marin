@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""The triage's structural checks on a proposal document.
+
+Invariants: none (pins the deterministic preflight checks; the preflight's verdicts are in ``test_preflight.py``).
+"""
+
 from dataclasses import replace
 
 import pytest
@@ -23,31 +28,24 @@ def null_version(p, reason="the capability has no gradable artifact in this envi
     return replace(p, header=replace(p.header, research=(), build=(), resources=(), null_reason=reason))
 
 
-def test_valid_proposal_passes_every_check(proposal):
-    results = {r.name: r.status for r in run_checks(proposal, CHECKS)}
-    assert results == {c.name: CheckStatus.PASS for c in CHECKS}
-
-
 @pytest.mark.parametrize(
-    ("verification", "grader_text", "expected"),
+    ("verification", "resource", "grader_sentence", "expected"),
     [
-        ("code", "A judge scores the essay against anchored criteria. " * 10, CheckStatus.FAIL),
-        ("composite", "The checker parses the output and recomputes every total. " * 10, CheckStatus.FAIL),
-        ("composite", "The checker parses the output; a judge rubric scores the memo. " * 10, CheckStatus.PASS),
-        ("judge", "The checker parses the output and recomputes every total. " * 10, CheckStatus.FAIL),
-        ("simple", "The answer key is compared after whitespace normalization. " * 10, CheckStatus.PASS),
+        ("code", "prompt.md", "A judge scores the essay against anchored criteria. ", CheckStatus.FAIL),
+        ("composite", "prompt.md", "The checker parses the output and recomputes every total. ", CheckStatus.FAIL),
+        ("composite", "prompt.md", "The checker parses the output; a judge rubric scores the memo. ", CheckStatus.PASS),
+        ("judge", "prompt.md", "The checker parses the output and recomputes every total. ", CheckStatus.FAIL),
+        ("simple", "prompt.md", "The answer key is compared after whitespace normalization. ", CheckStatus.PASS),
+        # A code file among the resources counts as the executable check.
+        ("code", "grader/score.py", "Every item is worth one point toward the total. ", CheckStatus.PASS),
     ],
 )
-def test_grader_section_must_match_verification(make_document, section_replaced, verification, grader_text, expected):
-    p = parse(make_document(verification=verification, resources='["prompt.md"]'))
-    p = section_replaced(p, "Grader design and controls", grader_text)
+def test_grader_section_must_match_verification(
+    make_document, section_replaced, verification, resource, grader_sentence, expected
+):
+    p = parse(make_document(verification=verification, resources=f'["{resource}"]'))
+    p = section_replaced(p, "Grader design and controls", grader_sentence * 10)
     assert grader_matches_verification(p)[0] is expected
-
-
-def test_code_file_resource_counts_as_an_executable_check(make_document, section_replaced):
-    p = parse(make_document(verification="code", resources='["grader/score.py"]'))
-    p = section_replaced(p, "Grader design and controls", "Every item is worth one point toward the total. " * 10)
-    assert grader_matches_verification(p)[0] is CheckStatus.PASS
 
 
 def test_required_sections_flags_thin_and_placeholder_sections(proposal, section_replaced):
@@ -59,13 +57,15 @@ def test_required_sections_flags_thin_and_placeholder_sections(proposal, section
     assert result is CheckStatus.FAIL and "placeholder" in reason
 
 
-def test_answer_format_in_angle_brackets_is_not_a_placeholder(proposal, section_replaced):
-    p = section_replaced(proposal, "Task", "Answer with `injective: <yes|no>` and `rate: <...>` per row. " * 10)
-    assert required_sections(p)[0] is CheckStatus.PASS
-
-
-def test_fenced_heading_example_does_not_end_the_section(proposal, section_replaced):
-    task = "The deliverable looks like:\n```markdown\n## Build plan\n```\n" + PROSE
+@pytest.mark.parametrize(
+    "task",
+    [
+        "Answer with `injective: <yes|no>` and `rate: <...>` per row. " * 10,
+        "The deliverable looks like:\n```markdown\n## Build plan\n```\n" + PROSE,
+    ],
+    ids=["answer-format-in-angle-brackets", "fenced-heading-example"],
+)
+def test_a_task_section_with_bracketed_formats_or_fenced_headings_passes(proposal, section_replaced, task):
     assert required_sections(section_replaced(proposal, "Task", task))[0] is CheckStatus.PASS
 
 

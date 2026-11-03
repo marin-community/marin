@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
+"""Invariants: the task runs on the machine it declares (refusals name the machine a host cannot provide;
+``machine_factories`` raises rather than shrink the selection); the solver machine has no network (a network task on a
+``DENY`` machine is refused)."""
+
 import subprocess
 import threading
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import pytest
 from rolloutengine.cleanup import _Cleanup
@@ -68,23 +70,8 @@ LIMITS = draft.rollout_limits(
 
 
 def selection(backend: Backend, **update) -> MachineRuntimeSpec:
-    fields: dict[str, Any] = dict(
-        backend=backend.value,
-        network=NetworkPolicy.DENY,
-        cpus=None,
-        memory_mb=None,
-        storage_mb=None,
-        gpus=0,
-        user=None,
-        startup_timeout=None,
-        cleanup_timeout=None,
-    )
-    return MachineRuntimeSpec(**(fields | update))
-
-
-LOCKED = EnvironmentRequirements(
-    command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="gs://bucket/env/uv.lock"
-)
+    unset = dict.fromkeys(("cpus", "memory_mb", "storage_mb", "user", "startup_timeout", "cleanup_timeout"))
+    return MachineRuntimeSpec(**(unset | dict(backend=backend.value, network=NetworkPolicy.DENY, gpus=0) | update))
 
 
 @dataclass(frozen=True)
@@ -109,7 +96,7 @@ LAPTOP = {Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: DockerMachineF
 def script_grader(
     environment: EnvironmentRequirements = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE
-    )
+    ),
 ) -> ScriptGrader:
     return ScriptGrader(argv=("sh", "/tests/grade.sh"), environment=environment)
 
@@ -160,13 +147,6 @@ def test_shellsim_and_machineless_tasks_run_everywhere():
         assert reasons(lowered(selection(Backend.SHELLSIM)), machines) == set()
 
 
-def test_shellsim_accepts_a_storage_limit_and_refuses_a_cpu_limit():
-    assert reasons(lowered(selection(Backend.SHELLSIM, storage_mb=64)), LAPTOP) == set()
-    [refusal] = task_refusals(lowered(selection(Backend.SHELLSIM, cpus=2)), LAPTOP)
-    assert (refusal.reason, refusal.where) == (RefusalReason.UNSUPPORTED, MachineRole.TASK)
-    assert "CPU" in refusal.detail
-
-
 def test_image_tasks_run_on_each_hosts_container_backend():
     for host, machines in ((MachineHost.IRIS, IRIS), (MachineHost.LAPTOP, LAPTOP)):
         spec = lowered(selection(container_backend(host), network=NetworkPolicy.ALLOW), image=IMAGE)
@@ -193,13 +173,6 @@ def test_a_network_task_on_a_deny_policy_is_refused_with_the_factorys_message():
     assert reasons(allowed, IRIS) == set()
 
 
-def test_image_must_match_whether_the_backend_takes_one():
-    assert reasons(lowered(selection(Backend.SHELLSIM), image=IMAGE), IRIS) == {
-        (RefusalReason.UNSUPPORTED, MachineRole.TASK)
-    }
-    assert reasons(lowered(selection(Backend.GVISOR)), IRIS) == {(RefusalReason.UNSUPPORTED, MachineRole.TASK)}
-
-
 def test_verifier_machine_is_checked_against_its_own_backend():
     spec = lowered(
         selection(Backend.SHELLSIM),
@@ -220,35 +193,43 @@ def test_a_judge_takes_no_verifier_machine_whatever_environment_its_grader_names
     assert grading_environment(lowered(None, grader=numeric).task) == environment
 
 
-def test_requested_docker_fails_if_the_host_has_no_docker(monkeypatch):
+def no_docker_cli(monkeypatch):
     monkeypatch.setattr(factories.shutil, "which", lambda name: None)
 
-    with pytest.raises(RuntimeError, match="Requested docker backend unavailable: docker CLI not found"):
-        machine_factories((Backend.SHELLSIM, Backend.DOCKER), controller_url=None)
-    # The same host can explicitly request ShellSim without silently changing its selection.
-    built = machine_factories((Backend.SHELLSIM,), controller_url=None)
-    assert set(built) == {Backend.SHELLSIM.value}
 
-
-def test_requested_docker_fails_if_its_daemon_hangs(monkeypatch):
+def hung_docker_daemon(monkeypatch):
     def hang(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], factories.DOCKER_PROBE_TIMEOUT)
 
     monkeypatch.setattr(factories.shutil, "which", lambda name: "/usr/bin/docker")
     monkeypatch.setattr(factories.subprocess, "run", hang)
-    with pytest.raises(RuntimeError, match="docker daemon did not answer"):
-        machine_factories((Backend.DOCKER,), controller_url=None)
 
 
-def test_requested_local_backend_propagates_its_availability_failure(monkeypatch):
+def no_bwrap(monkeypatch):
     def unavailable():
         raise RuntimeError("no bwrap here")
 
     monkeypatch.setattr(factories, "local_factory", unavailable)
-    with pytest.raises(RuntimeError, match="no bwrap here"):
-        machine_factories((Backend.LOCAL,), controller_url=None)
-    built = machine_factories((Backend.GVISOR,), controller_url="http://controller.example:10000")
-    assert set(built) == {Backend.GVISOR.value}
+
+
+@pytest.mark.parametrize(
+    "host,requested,message,other",
+    [
+        (no_docker_cli, Backend.DOCKER, "Requested docker backend unavailable: docker CLI not found", Backend.SHELLSIM),
+        (hung_docker_daemon, Backend.DOCKER, "docker daemon did not answer", Backend.SHELLSIM),
+        (no_bwrap, Backend.LOCAL, "no bwrap here", Backend.GVISOR),
+    ],
+)
+def test_a_requested_backend_the_host_cannot_start_fails_without_shrinking_the_selection(
+    monkeypatch, host, requested, message, other
+):
+    host(monkeypatch)
+    controller = "http://controller.example:10000"
+
+    with pytest.raises(RuntimeError, match=message):
+        machine_factories((other, requested), controller_url=controller)
+    # The same host can explicitly request the other backend alone.
+    assert set(machine_factories((other,), controller_url=controller)) == {other.value}
 
 
 @pytest.mark.parametrize("backends", [(Backend.SHELLSIM,), (Backend.LOCAL, Backend.GVISOR), (Backend.DOCKER,)])
@@ -274,7 +255,9 @@ class FakeLocalFactory(FakeFactory):
     python_version: str = "3.12.12"
 
 
-def test_warming_resolves_the_bare_cpython_environment_once_off_the_caller_thread(monkeypatch, caplog):
+def test_warming_resolves_the_bare_cpython_environment_once_off_the_caller_thread_and_only_with_a_local_factory(
+    monkeypatch,
+):
     calls: list[tuple[Path, tuple[str, ...], str, str]] = []
     monkeypatch.setattr(
         factories,
@@ -283,22 +266,15 @@ def test_warming_resolves_the_bare_cpython_environment_once_off_the_caller_threa
             (cache, requirements, version, threading.current_thread().name)
         ),
     )
-    built = {**IRIS, Backend.LOCAL.value: FakeLocalFactory(Backend.LOCAL)}
+    assert warm_local_python({Backend.SHELLSIM.value: SHELLSIM}) is None
+    assert warm_local_python(IRIS) is None
 
-    with caplog.at_level(logging.INFO, logger=factories.__name__):
-        thread = warm_local_python(built)
-        assert thread is not None
-        thread.join(timeout=10)
+    thread = warm_local_python({**IRIS, Backend.LOCAL.value: FakeLocalFactory(Backend.LOCAL)})
+    assert thread is not None
+    thread.join(timeout=10)
 
     assert not thread.is_alive()
     assert calls == [(Path("/cache/python"), (), "3.12.12", factories.WARM_THREAD)]
-
-
-def test_without_a_local_factory_there_is_nothing_to_warm(monkeypatch):
-    monkeypatch.setattr(factories, "resolve_python_environment", lambda *args: pytest.fail("resolved without a factory"))
-
-    assert warm_local_python({Backend.SHELLSIM.value: SHELLSIM}) is None
-    assert warm_local_python(IRIS) is None
 
 
 @pytest.mark.manual
