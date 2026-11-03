@@ -54,12 +54,13 @@ import os
 import sys
 import traceback
 from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
 
+import httpx
 from pydantic import Field, TypeAdapter
 from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.log_setup import configure_logging
@@ -67,10 +68,9 @@ from shellbox.machine import Backend
 from taskforge.child_process import stop_process_group
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.ledger.records import DiscardingLedger
-from taskforge.llm.agent import AgentTool, ReasoningReplay
+from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
-from taskforge.llm.web import web_tools
 from taskforge.sandbox.factories import MachineHost
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import program_file
@@ -93,7 +93,7 @@ from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuil
 from taskforge_adapters.backends import machine_factories
 from taskforge_adapters.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 from taskforge_adapters.image_builder import IrisImageBuilder, RegistryCredential
-from taskforge_adapters.parallel import ParallelWeb
+from taskforge_adapters.web import web_tools
 
 MODULE = "taskforge_adapters.build_process"
 REQUEST_FILE = "build-request.json"
@@ -328,16 +328,15 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
         if model.relay_job is None
         else RelayEndpoint(model.relay_job, token, model.pool, model.provider.model)
     )
-    async with AsyncExitStack() as stack:
-        client = await stack.enter_async_context(GlmClient(endpoint, model.provider))
-        tools: tuple[AgentTool, ...] = ()
-        if config.parallel_key_env is not None:
-            tools = web_tools(await stack.enter_async_context(ParallelWeb(_secret(config.parallel_key_env))))
+    async with (
+        GlmClient(endpoint, model.provider) as client,
+        httpx.AsyncClient() as http,
+    ):
         yield client, RLEnvBuildServices(
             host=config.host,
             factories=machine_factories(config.backends, config.controller_url),
             images=image_builder(config),
-            web_tools=tools,
+            web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),
             ledger=DiscardingLedger() if config.ledger_root is None else JsonlLedger(config.ledger_root),
             reasoning_replay=config.reasoning_replay,
             agent_limits=config.agent_limits,

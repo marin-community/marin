@@ -4,11 +4,12 @@ Taskforge turns task ideas into TaskCompendium `TaskSpec`s with a model's help. 
 `marin-taskforge` member of the repository's uv workspace.
 
 The library declares the Protocols it calls (`llm.client.ModelClient`, `sandbox.images.ImageBuilder`,
-`ledger.records.Ledger`, `agentic.config.Web`, shellbox's `MachineFactory`) and imports no provider or
-cluster client; `tests/test_imports.py` refuses one. The implementations it runs with in production, the
-GLM-5.3 client, Parallel web search, Iris image builds, the Finelog ledger, shellbox backend
-construction and the build child process, are the sibling package `marin-taskforge-adapters`
-(`lib/taskforge-adapters`).
+`ledger.records.Ledger`, shellbox's `MachineFactory`) and imports no `openai`, `iris`, `finelog` or
+adapter module; `tests/test_imports.py` refuses one. The implementations the pipeline runs with in
+production, the GLM-5.3 client, Parallel web tools, Iris image builds, the Finelog ledger, shellbox
+backend construction and the build child process, are the sibling package `marin-taskforge-adapters`
+(`lib/taskforge-adapters`). The agentic session (`agentic/`) is outside this split and keeps its own
+Parallel client, `agentic/parallel.py`.
 
 ## Package layout
 
@@ -22,7 +23,7 @@ src/taskforge/
                                run.py: InfrastructureRetry, `run_workpieces`
   agentic/                     agent.py: `generate_tasks`, one managed agent that makes tasks for an idea;
                                tools.py: the agent's Taskforge tools; gate.py: the acceptance rule;
-                               config.py, prompts.py, example_build.py
+                               config.py, prompts.py, parallel.py (web search), example_build.py
   capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
   policy.py                    Policy: every prompt by stage, `load_policy` and the policy digest
@@ -262,7 +263,7 @@ run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
 `llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
 own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each assistant turn's
 `reasoning_content`. `shell_tool` offers RolloutEngine's default shell tool on a shellbox
-`Machine`, and `llm.web.web_tools(web)` adds web search and extract over a `Web`, such as `taskforge_adapters.parallel.ParallelWeb`. The policy defaults to no application output cap: `max_tokens=None` omits both
+`Machine`, and `taskforge_adapters.web` adds Parallel search and extract. The policy defaults to no application output cap: `max_tokens=None` omits both
 provider output-limit fields. Explicit caps remain available. A physical context or output
 boundary interrupts the attempt and preserves its partial trace for a hold. Agent turn,
 continuation and structured-repair limits are optional; `None` leaves them unbounded.

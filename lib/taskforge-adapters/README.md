@@ -9,7 +9,7 @@ src/taskforge_adapters/
   glm_client.py      GlmClient, the GLM-5.3 ModelClient: streamed chat completions through the openai
                      SDK, retries, infrastructure holds, and the endpoint sources (FixedEndpoint,
                      RelayEndpoint resolving an Iris GLM relay job)
-  parallel.py        ParallelWeb, the taskforge.llm.web.Web over Parallel's REST API, with retries
+  web.py             web_tools, the build agents' web_search and web_fetch tools over Parallel's REST API
   image_builder.py   IrisImageBuilder, the ImageBuilder that builds with kaniko and pushes with crane in
                      two Iris jobs; image_push.py is the push job's program
   finelog_ledger.py  FinelogLedger, the Ledger that writes spans to Finelog under an Iris task

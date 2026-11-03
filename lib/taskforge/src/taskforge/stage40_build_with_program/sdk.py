@@ -95,7 +95,7 @@ DIAGNOSTICS_CHARS = 4000
 """The longest ``grade_diagnostics`` text, the cut marker aside: a longer one keeps half at each end."""
 WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
 WEB_ERROR_PREFIX = "error:"
-"""How a web tool's output starts when the request failed (``taskforge.llm.web``)."""
+"""How a web tool's output starts when the request failed (``taskforge_adapters.web``)."""
 
 TASK_CONTEXT = """\
 You are building one reinforcement-learning task from an accepted task proposal. The task is \

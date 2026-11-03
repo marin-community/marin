@@ -46,7 +46,7 @@ class RLEnvBuildServices:
         factories: Machine factories keyed by shellbox ``Backend`` value, as
             ``taskforge_adapters.backends.machine_factories(backends, ...)`` returns them.
         images: Publishes task images by digest, or ``None`` when this host cannot.
-        web_tools: Web search and fetch tools (``taskforge.llm.web.web_tools``), or empty.
+        web_tools: Web search and fetch tools (``taskforge_adapters.web.web_tools``), or empty.
         ledger: Where steps, model calls and tool calls are recorded, use ``DiscardingLedger`` to record nothing.
         reasoning_replay: Whether every agent loop replays its assistant turns' reasoning.
         agent_limits: The bounds of every agent loop.

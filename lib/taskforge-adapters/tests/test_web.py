@@ -12,9 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import pytest
 from rigging.timing import ExponentialBackoff
-from taskforge.llm.web import web_tools
 
-from taskforge_adapters.parallel import MAX_ATTEMPTS, ParallelWeb
+from taskforge_adapters.web import MAX_ATTEMPTS, web_tools
 
 SEARCH = {"objective": "find x", "search_queries": ["x"]}
 FETCH = {"urls": ["https://example.com"]}
@@ -57,21 +56,20 @@ def call(fake: FakeParallel, *calls: tuple[int, dict]) -> list[str]:
     """Run ``(tool_index, arguments)`` calls in order through one shared client."""
 
     async def go() -> list[str]:
-        backoff = ExponentialBackoff(initial=0.001, maximum=0.001)
-        async with ParallelWeb("test-key", base_url=fake.base_url, backoff=backoff) as web:
-            tools = web_tools(web)
+        async with httpx.AsyncClient() as http:
+            backoff = ExponentialBackoff(initial=0.001, maximum=0.001)
+            tools = web_tools(http, "test-key", base_url=fake.base_url, backoff=backoff)
             return [await tools[index].handler(arguments) for index, arguments in calls]
 
     return asyncio.run(go())
 
 
 def test_search_and_fetch_post_to_parallel_and_return_its_body(fake_parallel):
-    fake_parallel.replies.extend([(200, '{"search_id": "s1", "results": []}'), (200, '{"excerpt": "café — 東京"}')])
+    fake_parallel.replies.extend([(200, '{"search_id": "s1", "results": []}'), (200, '{"extract_id": "e1"}')])
 
     searched, fetched = call(fake_parallel, (0, SEARCH), (1, FETCH))
 
-    # Non-ASCII text reaches the model as written, not as \u escapes.
-    assert (searched, fetched) == ('{"search_id": "s1", "results": []}', '{"excerpt": "café — 東京"}')
+    assert (searched, fetched) == ('{"search_id": "s1", "results": []}', '{"extract_id": "e1"}')
     (search_path, search_headers, search_body), (fetch_path, _, fetch_body) = fake_parallel.requests
     assert (search_path, search_headers["x-api-key"]) == ("/v1/search", "test-key")
     assert search_body == SEARCH

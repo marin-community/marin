@@ -43,7 +43,6 @@ lib/taskforge/src/taskforge/stage50_validate/control_drafts.py 3e860b5b8427b461
 
 # Tool descriptions and tool-call errors: part of a tool's schema or result, defined beside the tool.
 lib/taskforge/src/taskforge/llm/agent.py 024ddf39a29b24f6
-lib/taskforge/src/taskforge/llm/web.py 5ec106dc8ae5ab39
 lib/taskforge/src/taskforge/stage40_build_with_program/agentic_author.py 7b86ff06903abd5a
 lib/taskforge/src/taskforge/stage40_build_with_program/agentic_author.py 4c55e87ad62dee6d
 lib/taskforge/src/taskforge/stage40_build_with_program/agentic_author.py 4ad4cc7e32a26cbd

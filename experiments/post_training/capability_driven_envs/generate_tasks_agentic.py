@@ -47,10 +47,10 @@ from shellbox.machine import Backend, MachineFactory
 from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
+from taskforge.agentic.parallel import ParallelWeb
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.policy import LLMPolicy
 from taskforge_adapters.glm_client import EndpointSource, GlmClient, GlmEndpoint, Pool
-from taskforge_adapters.parallel import ParallelWeb
 
 from experiments.post_training.capability_driven_envs.catalog import example_catalog_path
 from experiments.post_training.capability_driven_envs.generate_tasks import (

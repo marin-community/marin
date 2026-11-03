@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Live validation of taskforge.llm.agent and taskforge.llm.web over ParallelWeb against GLM-5.3 (interactive tier).
+"""Live validation of taskforge.llm.agent and taskforge_adapters.web against GLM-5.3 (interactive tier).
 
 Each check writes ``<evidence_root>/llm/agent/<check>-<utc>.json``: the purpose, the policy,
 the full ``AgentRun`` (every message, every completion with its raw stream events, every tool
@@ -40,11 +40,10 @@ from taskforge.llm.agent import (
 from taskforge.llm.client import FinishReason, ModelRequestRejected
 from taskforge.llm.policy import LLMPolicy, Message, ReasoningEffort
 from taskforge.llm.recording import CallLedger
-from taskforge.llm.web import web_tools
 
 from taskforge_adapters.glm_client import GLM_MODEL, FixedEndpoint, GlmClient, request_kwargs
-from taskforge_adapters.parallel import ParallelWeb
 from taskforge_adapters.testing import unique_run_name
+from taskforge_adapters.web import web_tools
 
 PYPI_PACKAGE_URL = "https://pypi.org/pypi/shellsim/json"
 RUNS = TypeAdapter(tuple[AgentRun, ...])
@@ -309,8 +308,8 @@ def test_web_search_through_parallel(glm_source, live_provider, evidence_dir, pa
     ]
 
     async def go() -> tuple[AgentRun, float]:
-        async with GlmClient(glm_source, live_provider) as client, ParallelWeb(parallel_key.value) as web:
-            tools = web_tools(web)
+        async with GlmClient(glm_source, live_provider) as client, httpx.AsyncClient() as http:
+            tools = web_tools(http, parallel_key.value)
             return await timed_agent(client, policy, messages, tools, 20, ledger_record(evidence_dir, "web", "web"))
 
     # Parallel serves cached pages, so the check uses metadata that does not change between releases.
