@@ -139,7 +139,7 @@ def test_slot_plan_requires_n_slots_and_rejects_using_an_excluded_pairing():
 def test_slot_plan_declares_a_solver_machine_exactly_for_an_imageless_slot(environment, machine):
     slots = [{**slot(1, environment, "code"), "solver_machine": machine}]
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"slot 1: a .* proposal"):
         slot_plan_type(1, ALL_ENVIRONMENTS).model_validate(plan(slots, []))
 
 

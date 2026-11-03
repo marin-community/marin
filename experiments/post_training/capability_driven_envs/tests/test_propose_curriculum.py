@@ -9,6 +9,7 @@ pytest.importorskip("taskforge")
 
 import asyncio
 import json
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -234,7 +235,7 @@ def test_the_control_file_sets_the_limit_and_the_window_follows_it(tmp_path):
     ],
     ids=["missing", "stale", "zero", "no-timestamp", "zoneless"],
 )
-def test_a_missing_stale_or_refused_control_file_holds_the_limit(tmp_path, control):
+def test_a_missing_stale_or_refused_control_file_is_logged_as_an_error_and_the_limit_held(tmp_path, caplog, control):
     root = tmp_path / "run"
     root.mkdir()
     if control is not None:
@@ -244,6 +245,7 @@ def test_a_missing_stale_or_refused_control_file_holds_the_limit(tmp_path, contr
     apply(root, limit)
 
     assert limit.limit == 4
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
 
 
 def test_pause_stops_new_requests_until_the_controller_resumes(ideas, tmp_path, monkeypatch):  # noqa: F811
