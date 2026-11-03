@@ -10,6 +10,8 @@ but no stage. A package in ``TOP``
 runs the whole pipeline: ``stage_coordinator`` runs the stages, and ``agentic`` replaces them with
 one agent. It may import every stage and shared module, and no package may import it.
 
+No module imports a provider or cluster client (``ADAPTER_ROOTS``): those live in
+``taskforge_adapters``, which implements the Protocols the library declares.
 """
 
 import ast
@@ -21,12 +23,22 @@ import taskforge
 
 SHARED = ("capability", "child_process", "content_hash", "defaults", "ledger", "llm", "policy", "sandbox", "spec")
 TOP = ("agentic", "stage_coordinator")
+ADAPTER_ROOTS = frozenset({"taskforge_adapters", "openai", "iris", "finelog"})
 STAGE = re.compile(r"stage(\d+)_[a-z0-9_]+")
 ROOT = Path(taskforge.__file__).parent
 
 
 def package_of(module: Path) -> str:
     return module.relative_to(ROOT).parts[0].removesuffix(".py")
+
+
+def imported_roots(module: Path) -> Iterator[tuple[int, str]]:
+    """Yield ``(line, top-level package)`` for every absolute import in ``module``."""
+    for node in ast.walk(ast.parse(module.read_text(), filename=str(module))):
+        if isinstance(node, ast.Import):
+            yield from ((node.lineno, alias.name.split(".")[0]) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            yield node.lineno, node.module.split(".")[0]
 
 
 def imported_packages(module: Path) -> Iterator[tuple[int, str]]:
@@ -103,3 +115,13 @@ def test_every_import_form_counts_and_an_upward_import_is_refused(tmp_path):
     assert not import_allowed("llm", "stage30_author")
     assert import_allowed("stage_coordinator", "stage60_review")
     assert not import_allowed("stage60_review", "stage_coordinator")
+
+
+def test_the_library_imports_no_adapter():
+    wrong = [
+        f"{module.relative_to(ROOT)}:{line}: imports {root}"
+        for module in modules()
+        for line, root in imported_roots(module)
+        if root in ADAPTER_ROOTS
+    ]
+    assert not wrong, "\n".join(wrong)

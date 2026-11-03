@@ -6,7 +6,7 @@
 ``run_build`` runs a program's steps on its caller's event loop. A step that computes in pure
 Python never yields, so neither ``STEP_TIMEOUT`` nor any other deadline on that loop can fire, and
 every other workpiece on the loop waits with it. ``run_build_in_process`` runs one workpiece's round in a
-child process instead, ``python -m taskforge.stage40_build_with_program.build_process <request> <result>``, and
+child process instead, ``python -m taskforge_adapters.build_process <request> <result>``, and
 the driver's loop goes on serving other workpieces while it waits.
 
 Everything a step uses is a network or file service already: the GLM router over HTTP, the Iris
@@ -65,17 +65,13 @@ from pydantic import Field, TypeAdapter
 from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.log_setup import configure_logging
 from shellbox.machine import Backend
-
 from taskforge.child_process import stop_process_group
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import ModelClient, ModelUnavailable
-from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
-from taskforge.llm.web import web_tools
-from taskforge.sandbox.factories import MachineHost, machine_factories
-from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
+from taskforge.sandbox.factories import MachineHost
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import program_file
 from taskforge.stage40_build_with_program.context import (
@@ -88,13 +84,19 @@ from taskforge.stage40_build_with_program.failure_text import BuildCrash, failur
 from taskforge.stage40_build_with_program.infrastructure import (
     InfrastructureCause,
     authored_failure,
+    failure_chain_text,
     infrastructure_failure,
 )
 from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, TaskDraft, load_draft, run_build
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
 
-MODULE = "taskforge.stage40_build_with_program.build_process"
+from taskforge_adapters.backends import machine_factories
+from taskforge_adapters.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
+from taskforge_adapters.image_builder import IrisImageBuilder, RegistryCredential
+from taskforge_adapters.web import web_tools
+
+MODULE = "taskforge_adapters.build_process"
 REQUEST_FILE = "build-request.json"
 RESULT_FILE = "build-result.json"
 LOG_FILE = "build-process.log"
@@ -135,11 +137,14 @@ class BuildServiceConfig:
         ledger_root: The ``JsonlLedger`` root, or ``None`` to record nothing.
         reasoning_replay: Whether every agent loop replays its assistant turns' reasoning.
         agent_limits: The bounds of every agent loop.
-        image_cluster: The Iris cluster the image builder's build and push jobs run on, submitted
-            through ``controller_url``, or ``None`` for a build without an image builder. The
-            registry is the credential's; ``sandbox_effects.image_repository`` names the repository.
+        image_cluster: The federation peer the image builder's build and push jobs are pinned
+            to when submitted through ``controller_url``, or ``None`` to let that controller place
+            them (a child inside a cluster submits to its own controller, which refuses a pin
+            naming itself). The registry is the credential's; ``sandbox_effects.image_repository``
+            names the repository.
         registry_credential_env: The environment variable holding the registry credential's JSON
-            (``registry``, ``user``, ``password``), required with ``image_cluster``. The host's
+            (``registry``, ``user``, ``password``), or ``None`` for a build without an image
+            builder. The host's
             launcher reads it from Secret Manager with ``image_builder.registry_credential_json``
             at submit time and sets it, conventionally as ``image_builder.REGISTRY_CREDENTIAL_ENV``;
             the host itself never reads Secret Manager.
@@ -301,16 +306,20 @@ def _secret(name: str) -> str:
 
 
 def image_builder(config: BuildServiceConfig) -> IrisImageBuilder | None:
-    """The child's image builder, or ``None`` when ``config`` names no image cluster.
+    """The child's image builder, or ``None`` when ``config`` names no registry credential.
 
     Raises:
-        ValueError: ``config`` names an image cluster but no controller URL or no credential
-            variable, or the variable is unset or does not hold a registry credential.
+        ValueError: ``config`` names a credential variable but no controller URL, or the variable
+            is unset or does not hold a registry credential.
     """
-    if config.image_cluster is None:
-        return None
     if config.registry_credential_env is None:
-        raise ValueError("an image cluster needs registry_credential_env, the variable holding the registry credential")
+        if config.image_cluster is not None:
+            raise ValueError(
+                "an image cluster pin needs registry_credential_env, the variable holding the registry credential"
+            )
+        return None
+    if config.controller_url is None:
+        raise ValueError("an image builder needs a controller URL, the Iris controller its jobs are submitted through")
     credential = RegistryCredential.from_json(_secret(config.registry_credential_env))
     return IrisImageBuilder(
         controller_url=config.controller_url, target_cluster=config.image_cluster, credential=credential
@@ -331,14 +340,17 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
         GlmClient(endpoint, model.provider) as client,
         httpx.AsyncClient() as http,
     ):
-        yield client, RLEnvBuildServices(
-            host=config.host,
-            factories=machine_factories(config.backends, config.controller_url),
-            images=image_builder(config),
-            web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),
-            ledger=DiscardingLedger() if config.ledger_root is None else JsonlLedger(config.ledger_root),
-            reasoning_replay=config.reasoning_replay,
-            agent_limits=config.agent_limits,
+        yield (
+            client,
+            RLEnvBuildServices(
+                host=config.host,
+                factories=machine_factories(config.backends, config.controller_url),
+                images=image_builder(config),
+                web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),
+                ledger=DiscardingLedger() if config.ledger_root is None else JsonlLedger(config.ledger_root),
+                reasoning_replay=config.reasoning_replay,
+                agent_limits=config.agent_limits,
+            ),
         )
 
 
@@ -382,7 +394,7 @@ async def build_result(request: BuildRequest) -> BuildResult:
             if infrastructure is not None:
                 return HostFailed(infrastructure.cause, infrastructure.message)
             if not authored_failure(error, {program_file(request.program_source)}):
-                return HostFailed("unclassified_build_failure", str(error))
+                return HostFailed("unclassified_build_failure", failure_chain_text(error))
             head = failure_head(error, {program_file(request.program_source)}, steps)
             return _crashed(Raised.OTHER, head, error)
     return Built()
@@ -393,7 +405,7 @@ def _crashed(raised: Raised, head: str, error: Exception) -> Crashed:
 
 
 def main() -> None:
-    """``python -m taskforge.stage40_build_with_program.build_process <request.json> <result.json>``."""
+    """``python -m taskforge_adapters.build_process <request.json> <result.json>``."""
     _, request_path, result_path = sys.argv
     configure_logging(logging.INFO)
     request = REQUEST.validate_json(Path(request_path).read_bytes())

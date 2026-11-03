@@ -16,7 +16,6 @@ from typing import ClassVar, Protocol
 
 from finelog.client import FlushResult, LogClient, TableSpec
 from iris.runtime import telemetry as runtime_telemetry
-
 from taskforge.ledger.records import LedgerEntry
 
 logger = logging.getLogger(__name__)

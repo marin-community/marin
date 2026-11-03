@@ -76,7 +76,6 @@ from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel
 from rigging.timing import ExponentialBackoff
-
 from taskforge.llm.client import (
     RETRYABLE_STATUSES,
     Attempt,

@@ -4,12 +4,12 @@
 import pytest
 
 # These tests run in the marin-taskforge package environment; environments without it skip them.
-pytest.importorskip("taskforge")
+pytest.importorskip("taskforge_adapters")
 
 import httpx
 import openai
 from rolloutengine.models import Model, ModelRequest, ModelTurn, TokenUsage
-from taskforge.llm.glm_client import GlmEndpoint, Pool
+from taskforge_adapters.glm_client import GlmEndpoint, Pool
 
 from experiments.post_training.capability_driven_envs.generate_tasks_agentic import RelayModel
 

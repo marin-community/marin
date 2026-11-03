@@ -6,7 +6,7 @@
 import httpx
 import pytest
 
-from taskforge.llm.test_support import GLM_MODEL
+from taskforge_adapters.glm_client import GLM_MODEL
 
 
 @pytest.mark.live_glm

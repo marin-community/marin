@@ -34,13 +34,13 @@ from rolloutengine.models import (
 )
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
+from taskforge_adapters.glm_client import GlmClient
+from taskforge_adapters.testing import fake_source
 
 from taskforge.ledger.records import EntryKind
-from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.llm.test_support import fake_source
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import (
     assemble,

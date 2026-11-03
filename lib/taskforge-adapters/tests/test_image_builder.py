@@ -20,7 +20,7 @@ from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import job_pb2
 from rigging.secrets import SECRETS_DIR_ENV
 
-from taskforge.sandbox.image_builder import (
+from taskforge_adapters.image_builder import (
     BLANKED_ENV,
     BUILD_SCRIPT,
     BUILD_SETUP_FAILED_EXIT,
@@ -32,7 +32,7 @@ from taskforge.sandbox.image_builder import (
     submit_job,
     wait_succeeded,
 )
-from taskforge.sandbox.image_push import ARCHIVE_URI_ENV, REGISTRY_AUTH_ENV, archive_request
+from taskforge_adapters.image_push import ARCHIVE_URI_ENV, REGISTRY_AUTH_ENV, archive_request
 
 PASSWORD = "registry-password"
 CREDENTIAL_JSON = json.dumps({"registry": "registry.example", "user": "publisher", "password": PASSWORD})

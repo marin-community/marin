@@ -19,14 +19,14 @@ import pytest
 from rolloutengine.models import RolloutLimits, TaskRolloutSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory, UnsupportedMachineSpec
+from taskforge_adapters.glm_client import GlmClient
+from taskforge_adapters.testing import unique_run_name
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind
-from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.llm.test_support import unique_run_name
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import Control
 from taskforge.stage50_validate.controls import ControlOutcome, ControlPlan, ControlVerdict, replay

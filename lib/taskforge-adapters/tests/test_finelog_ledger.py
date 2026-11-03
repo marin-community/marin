@@ -8,9 +8,9 @@ from finelog.client import FlushResult, LogClient
 from finelog.embedded import is_available, require_embedded_server
 from iris.runtime import telemetry as runtime_telemetry
 from iris.runtime.telemetry import FinelogRuntime
-
-from taskforge.ledger.finelog import LEDGER_NAMESPACE, connect_finelog_ledger
 from taskforge.ledger.records import EntryKind, LedgerEntry, span
+
+from taskforge_adapters.finelog_ledger import LEDGER_NAMESPACE, connect_finelog_ledger
 
 ENTRY = LedgerEntry(
     workpiece_id="workpiece-1",
@@ -86,7 +86,7 @@ def test_undelivered_rows_never_fail_the_run_and_are_logged_at_exit(monkeypatch,
     monkeypatch.setattr(runtime_telemetry, "resolve", lambda run_id: runtime)
     monkeypatch.setattr(LogClient, "connect", lambda endpoint, resolver: client)
 
-    with caplog.at_level(logging.WARNING, logger="taskforge.ledger.finelog"):
+    with caplog.at_level(logging.WARNING, logger="taskforge_adapters.finelog_ledger"):
         with connect_finelog_ledger("run-1") as ledger:
             assert ledger is not None
             for _ in range(3):

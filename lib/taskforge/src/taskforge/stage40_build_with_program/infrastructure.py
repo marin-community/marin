@@ -20,7 +20,7 @@ a hostname is a typo rather than an unavailable service. The classified executio
 * ``NO_IMAGE_BUILDER``: the build publishes a task image and this host has no ``ImageBuilder``.
   Also deterministic on the host.
 * ``IMAGE_JOB_FAILED``: a job publishing the task image failed for a host reason
-  (``sandbox.image_builder.ImageJobFailed``): it did not schedule, its worker was lost, it was
+  (``sandbox.images.ImageJobFailed``): it did not schedule, its worker was lost, it was
   killed, the push failed, or the registry did not serve back the pushed image. An image whose build
   job ran and failed (``BuildFailed``) is the program's.
 * ``SCHEDULING_TIMEOUT``: the factory itself gave up waiting for a machine (Iris could not
@@ -107,7 +107,7 @@ class InfrastructureCause(StrEnum):
     NO_FACTORY = "no_factory"
     NO_IMAGE_BUILDER = "no_image_builder"
     IMAGE_JOB_FAILED = "image_job_failed"
-    """A build or push job of ``publish_image`` failed for a host reason (``image_builder.ImageJobFailed``)."""
+    """A build or push job of ``publish_image`` failed for a host reason (``images.ImageJobFailed``)."""
     SCHEDULING_TIMEOUT = "scheduling_timeout"
     SANDBOX_DEADLINE = "sandbox_deadline"
     """A startup or verifier deadline expired while a machine started, received files or ran a command."""
@@ -150,6 +150,17 @@ def machine_available(services: RLEnvBuildServices, proposal: TaskProposal) -> N
             InfrastructureCause.NO_FACTORY,
             f"the proposal declares solver_machine {machine} and this host has no {Backend.LOCAL} machine factory",
         )
+
+
+def failure_chain_text(error: BaseException) -> str:
+    """``error`` and every cause behind it, outermost first, so a wrapper never hides the fault.
+
+    ``RolloutInterrupted`` says only ``interrupted during start``; the catalog fetch or machine
+    error that interrupted it is what the operator needs to read.
+    """
+    return " <- ".join(
+        f"{type(link).__name__}: {link}" if str(link) else type(link).__name__ for link in exception_chain(error)
+    )
 
 
 def exception_chain(error: BaseException) -> list[BaseException]:

@@ -10,14 +10,7 @@ from dataclasses import asdict, replace
 
 import pytest
 from shellbox.machine import Backend
-
-from taskforge.ledger.jsonl import JsonlLedger, read_entries
-from taskforge.ledger.records import EntryKind
-from taskforge.llm.agent import ReasoningReplay
-from taskforge.llm.glm_client import Pool
-from taskforge.sandbox.factories import MachineHost
-from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
-from taskforge.stage40_build_with_program.build_process import (
+from taskforge_adapters.build_process import (
     LOG_FILE,
     REQUEST,
     RESULT,
@@ -33,6 +26,13 @@ from taskforge.stage40_build_with_program.build_process import (
     image_builder,
     run_build_in_process,
 )
+from taskforge_adapters.glm_client import Pool
+from taskforge_adapters.image_builder import IrisImageBuilder, RegistryCredential
+
+from taskforge.ledger.jsonl import JsonlLedger, read_entries
+from taskforge.ledger.records import EntryKind
+from taskforge.llm.agent import ReasoningReplay
+from taskforge.sandbox.factories import MachineHost
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
     BuildFailure,
@@ -261,6 +261,8 @@ def test_the_child_builds_images_with_the_credential_its_environment_holds_and_n
         CREDENTIAL,
     )
     assert image_builder(make_request(PROGRAM).services) is None
+    unpinned = image_builder(replace(on_iris(make_request(PROGRAM), "cw-us-east-02a").services, image_cluster=None))
+    assert isinstance(unpinned, IrisImageBuilder) and unpinned.target_cluster is None
     with pytest.raises(ValueError, match="controller URL"):
         image_builder(
             replace(make_request(PROGRAM).services, image_cluster="cw-us-east-02a", registry_credential_env=REGISTRY_ENV)

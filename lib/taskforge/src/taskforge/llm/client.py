@@ -9,7 +9,7 @@ made up to that point.
 
 Callers go through ``ModelClient`` for free-text replies (``complete``) and for replies validated
 against a pydantic output type (``complete_structured``, which also returns every completion the call took).
-``taskforge.llm.glm_client.GlmClient`` implements it.
+``taskforge_adapters.glm_client.GlmClient`` implements it.
 """
 
 from collections.abc import Mapping, Sequence
