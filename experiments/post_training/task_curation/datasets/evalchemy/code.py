@@ -5,7 +5,16 @@
 
 from functools import partial
 
-from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, OperationKind, Sampling, SummaryKind, TrialPolicy
+from taskcompendium.evaluation.spec import (
+    ChatGeneration,
+    EvaluationProtocol,
+    Metrics,
+    OperationKind,
+    Sampling,
+    SummaryKind,
+    TextGeneration,
+    TrialPolicy,
+)
 from taskcompendium.importers.evalchemy.assets.code_protocol import HUMANEVAL_REQUEST_STOPS
 from taskcompendium.importers.evalchemy.code import CODE_REVISION, convert_python, python_item, read_crux, read_mbpp
 from taskcompendium.pipeline.inputs import SourceFormat
@@ -64,7 +73,7 @@ def python_source(
                 summary=SummaryKind.MEAN,
                 expected_population=rows,
             ),
-            item_builder=partial(python_item, completion=completion),
+            item_builder=partial(python_item, generation=TextGeneration() if completion else ChatGeneration()),
         ),
         pipeline=curate,
     )

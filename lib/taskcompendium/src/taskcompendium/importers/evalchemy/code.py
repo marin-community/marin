@@ -20,7 +20,7 @@ from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.code import THREAD_ENVIRONMENT
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
-from taskcompendium.evaluation.spec import EvaluationItem, TextGeneration
+from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem, TextGeneration
 from taskcompendium.grader import GraderPackage
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import function_prompt, mbpp_prompt
@@ -107,11 +107,12 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", f"benchmark:{suite}", "code")})
 
 
-def python_item(task: TaskSpec, *, completion: bool) -> EvaluationItem:
+def python_item(task: TaskSpec, *, generation: ChatGeneration | TextGeneration) -> EvaluationItem:
     item = chat_item(task)
     row = source_evidence(task)
-    if completion:
-        item = item.model_copy(update={"operation": TextGeneration()})
     return item.model_copy(
-        update={"groups": {"direction": row["direction"]} if "direction" in row else {"language": "python"}}
+        update={
+            "operation": generation,
+            "groups": {"direction": row["direction"]} if "direction" in row else {"language": "python"},
+        }
     )

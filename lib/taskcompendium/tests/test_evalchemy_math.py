@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from verifyit.grade import GradingInfraError
 
+from taskcompendium.importers.evalchemy.scorers import minerva
 from taskcompendium.importers.evalchemy.scorers.harness_generation import grade_harness_generation_candidate
 from taskcompendium.importers.evalchemy.scorers.main import score
 from taskcompendium.importers.evalchemy.scorers.minerva import is_equiv
@@ -56,6 +57,15 @@ def test_minerva_symbolic_timeout_is_a_nonmatch(threaded):
     else:
         result = is_equiv(r"9^{9^{9}}", "2")
     assert result is False
+
+
+def test_minerva_unexpected_sympy_error_does_not_score_as_wrong(monkeypatch):
+    def fail(_expression):
+        raise RuntimeError("sympy unavailable")
+
+    monkeypatch.setattr(minerva.sympy, "simplify", fail)
+    with pytest.raises(RuntimeError, match="sympy unavailable"):
+        is_equiv(r"\sqrt{4}", "2")
 
 
 @pytest.mark.slow

@@ -214,7 +214,7 @@ def _sympy_is_equiv(candidate: str, reference: str) -> bool:
         raise
     except TimeoutError:
         return False
-    except Exception:
+    except (ArithmeticError, NotImplementedError, TypeError, ValueError, sympy.SympifyError):
         # Invalid expressions and unsupported subtraction are non-matches.
         return False
     finally:

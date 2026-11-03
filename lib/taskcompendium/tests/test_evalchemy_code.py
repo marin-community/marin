@@ -15,7 +15,16 @@ from shellbox.machine import PackageSpec
 from zephyr.context import ZephyrContext
 
 from taskcompendium.evaluation.corpus import evaluation_cases
-from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, OperationKind, Sampling, SummaryKind, TrialPolicy
+from taskcompendium.evaluation.spec import (
+    ChatGeneration,
+    EvaluationProtocol,
+    Metrics,
+    OperationKind,
+    Sampling,
+    SummaryKind,
+    TextGeneration,
+    TrialPolicy,
+)
 from taskcompendium.importers.evalchemy.code import convert_python, python_item, read_crux
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -99,7 +108,7 @@ def test_python_publication_keeps_tests_private_and_expands_crux_directions(case
             publish_evaluation_corpus(
                 recipe,
                 protocol,
-                partial(python_item, completion=suite == "humaneval"),
+                partial(python_item, generation=TextGeneration() if suite == "humaneval" else ChatGeneration()),
                 context,
                 str(root),
                 output,
