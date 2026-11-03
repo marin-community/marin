@@ -3,7 +3,8 @@
 
 """Failures produced by a real RolloutEngine run, or raised in the chains it builds, map to the right Cause.
 
-The chain rows are host failures of a 2,049-workpiece run's infrastructure revisions; each must stay retryable.
+The host-failure chain rows come from a 2,049-workpiece run's infrastructure revisions and must stay retryable;
+the output-capture rows are task defects and must not.
 
 Invariants: grader returns a well-formed verdict in range (GRADER_REWARD_RANGE); solve rate rests on complete
 graded evidence (interrupted or ungraded trials are ``Ungraded``).

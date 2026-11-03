@@ -19,7 +19,7 @@ from taskcompendium.models import (
     JsonValueAnswer,
     PlainText,
 )
-from verifyit.spec import ExactSpec, StructuredExactSpec
+from verifyit.spec import ExactSpec, McqSpec, NumericSpec, StructuredExactSpec
 
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
@@ -68,6 +68,14 @@ async def test_a_grader_timeout_is_graded_once_more_on_fresh_machines(context, t
     ("grader", "answer_type", "answer_format", "right", "wrong"),
     [
         (draft.answer_grader(ExactSpec(expected=("42",))), AnswerType.TEXT, PLAIN, "42", "41"),
+        (
+            draft.answer_grader(NumericSpec(expected="0.5", tolerance_abs=0.0, tolerance_rel=0.0)),
+            AnswerType.NUMBER,
+            PLAIN,
+            "1/2",
+            "0.25",
+        ),
+        (draft.answer_grader(McqSpec(expected="B")), AnswerType.TEXT, PLAIN, "B", "A"),
         (draft.answer_grader(ExactSpec(expected=("42",))), AnswerType.TEXT, JsonAnswer(), '{"answer": "42"}', "42"),
         (
             draft.answer_grader(StructuredExactSpec(expected={"total": 42})),

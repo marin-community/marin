@@ -417,6 +417,12 @@ async def test_a_custom_grader_gets_its_own_timeout_before_the_host_deadline(con
         (ModelUnavailable("model unavailable", ()), "model_request_unavailable"),
         (
             httpx.HTTPStatusError(
+                "missing response", request=httpx.Request("GET", "https://service.invalid"), response=httpx.Response(404)
+            ),
+            "http_unavailable",
+        ),
+        (
+            httpx.HTTPStatusError(
                 "unavailable response",
                 request=httpx.Request("GET", "https://service.invalid"),
                 response=httpx.Response(503),

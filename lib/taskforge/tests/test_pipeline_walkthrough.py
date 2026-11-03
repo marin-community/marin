@@ -8,8 +8,9 @@ holds the same program as module text, as an author writing Python would return 
 restricted loader.
 
 Invariants: validation evidence belongs to the exact task (the build refuses a program other than the
-``AUTHORED`` one; a relaunch under another proposal, budget, model, research or policy is refused); the solve
-rate rests on complete graded evidence (a custom review cannot close a task with an evidence gap).
+``AUTHORED`` one; a relaunch of a finished workpiece under another proposal, budget, model, research or policy is
+refused); the solve rate rests on complete graded evidence (a custom review cannot close a task with an evidence
+gap).
 """
 
 import asyncio
