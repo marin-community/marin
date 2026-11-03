@@ -1,14 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""NVIDIA Open-SWE-Traces as structured agent conversations."""
+"""NVIDIA Open-SWE-Traces as structured agent conversations.
+
+The two Qwen3.8-27B mini-swe-agent partitions get two fixes from the audit in marin-community/marin#10865. Their
+task messages regain the Solution Originality section that the export dropped, and the traces on the pinned
+``Min-Li/marin-sft-data-audit`` exclusion list are dropped. At the pinned source and list revisions, the exclusions
+drop 3,562 of the 53,553 scale-swe rows and 5,052 of the 53,714 swe-rebench-v2 rows, all of them resolved. The
+transform counts dropped rows in ``open_swe_traces/audit_exclusion_filtered``.
+"""
 
 import json
 from collections import deque
+from functools import partial
 from types import MappingProxyType
 
 import pyarrow as pa
 from fray.types import ResourceConfig
+from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -77,17 +86,25 @@ OPEN_SWE_TRACES_PARTITIONS = MappingProxyType(
     }
 )
 
+# Rows each Qwen3.8 partition loses to the exclusion list. The list holds the resolved traces with 8 or more
+# assistant turns that reason about the hidden tests, the grader or the upstream fix, and 4 traces that read
+# the upstream fix from the environment.
+QWEN38_SOURCE_EXCLUDED_ROWS = MappingProxyType(
+    {
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe": 3562,
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2": 5052,
+    }
+)
+EXCLUSION_DATASET_ID = "Min-Li/marin-sft-data-audit"
+EXCLUSION_REVISION = "5cc076cc822550f96287c861cf70c00c7ee8b4a6"
+EXCLUSION_FILE = "open_swe/pinned_f967cba3/exclusions.jsonl"
+EXCLUSION_LIST_SIZE = 8614
+
 # The Qwen3.8-27B mini-swe-agent teacher was prompted with the NeMo-Skills template
 # nemo_skills/prompt/config/eval/swe-bench/mini-swe-agent/swebench.yaml at commit
 # 592ebaec5a80e17a3535623d0f5704d29e13a64f (Apache-2.0), which ends the task message with this
 # section between </CRITICAL> and </instructions>. The export drops the section, although 32% of
 # the successful traces quote it. Every row of both pinned partitions ends with the anchor below.
-SOLUTION_ORIGINALITY_SOURCES = frozenset(
-    {
-        "open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe",
-        "open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2",
-    }
-)
 TASK_END_TAG = "</instructions>"
 SOLUTION_ORIGINALITY_ANCHOR = "</CRITICAL>\n" + TASK_END_TAG
 SOLUTION_ORIGINALITY_SECTION = "\n".join(
@@ -126,6 +143,23 @@ def restore_solution_originality(row: dict) -> dict:
     return {**row, "messages": [messages[0], {**messages[1], "content": restored_task}, *messages[2:]]}
 
 
+def excluded_trajectory_ids(exclusion_path: str) -> frozenset[str]:
+    """Load the pinned Open-SWE trace exclusions from the downloaded JSONL file."""
+    with open_url(prefix_join(exclusion_path, EXCLUSION_FILE), "rt") as source:
+        trajectory_ids = frozenset(json.loads(line)["trajectory_id"] for line in source)
+    if len(trajectory_ids) != EXCLUSION_LIST_SIZE:
+        raise ValueError(f"Expected {EXCLUSION_LIST_SIZE} excluded Open-SWE traces, found {len(trajectory_ids)}")
+    return trajectory_ids
+
+
+def repaired_qwen38_rows(row: dict, excluded_trajectory_ids: frozenset[str]) -> list[dict]:
+    """Drop an excluded Qwen3.8 trace, or restore the Solution Originality section of a kept one."""
+    if row["trajectory_id"] in excluded_trajectory_ids:
+        counters.pipeline.update_counter("open_swe_traces/audit_exclusion_filtered", 1)
+        return []
+    return [restore_solution_originality(row)]
+
+
 def row_to_chat_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
     if not messages:
@@ -158,10 +192,11 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     )
 
 
-def transform_chat(input_path: str, output_path: str, source_name: str) -> None:
-    rows = Dataset.from_files(prefix_join(input_path, "**/*.parquet")).flat_map(load_parquet_batched)
-    if source_name in SOLUTION_ORIGINALITY_SOURCES:
-        rows = rows.map(restore_solution_originality)
+def source_rows(input_path: str) -> Dataset:
+    return Dataset.from_files(prefix_join(input_path, "**/*.parquet")).flat_map(load_parquet_batched)
+
+
+def write_chat(rows: Dataset, output_path: str) -> None:
     pipeline = rows.flat_map(row_to_chat_doc).write_parquet(
         prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
         schema=SOURCE_CHAT_SCHEMA,
@@ -170,16 +205,44 @@ def transform_chat(input_path: str, output_path: str, source_name: str) -> None:
     ZephyrContext(name="open-swe-traces-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
 
+def transform_chat(input_path: str, output_path: str) -> None:
+    write_chat(source_rows(input_path), output_path)
+
+
+def transform_qwen38_chat(input_path: str, exclusion_path: str, output_path: str) -> None:
+    trajectory_ids = excluded_trajectory_ids(exclusion_path)
+    rows = source_rows(input_path).flat_map(partial(repaired_qwen38_rows, excluded_trajectory_ids=trajectory_ids))
+    write_chat(rows, output_path)
+
+
 def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ...]:
     """Download one Open-SWE-Traces partition and normalize its structured chat."""
     glob, _ = OPEN_SWE_TRACES_PARTITIONS[source_name]
     raw = download_hf_step(f"raw/{source_name}", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=[glob])
-    processed = StepSpec(
-        name=f"processed-chat/{source_name}",
-        deps=[raw],
-        fn=lambda output_path: transform_chat(raw.output_path, output_path, source_name),
-        hash_attrs={"version": TRANSFORM_VERSION},
-    )
+    if source_name in QWEN38_SOURCE_EXCLUDED_ROWS:
+        exclusions = download_hf_step(
+            "raw/open-swe-traces-audit-exclusions",
+            hf_dataset_id=EXCLUSION_DATASET_ID,
+            revision=EXCLUSION_REVISION,
+            hf_urls_glob=[EXCLUSION_FILE],
+        )
+        processed = StepSpec(
+            name=f"processed-chat/{source_name}",
+            deps=[raw, exclusions],
+            fn=lambda output_path: transform_qwen38_chat(raw.output_path, exclusions.output_path, output_path),
+            hash_attrs={
+                "version": TRANSFORM_VERSION,
+                "exclusion_revision": EXCLUSION_REVISION,
+                "excluded_source_rows": QWEN38_SOURCE_EXCLUDED_ROWS[source_name],
+            },
+        )
+    else:
+        processed = StepSpec(
+            name=f"processed-chat/{source_name}",
+            deps=[raw],
+            fn=lambda output_path: transform_chat(raw.output_path, output_path),
+            hash_attrs={"version": TRANSFORM_VERSION},
+        )
     return processed, normalize_chat_step(
         name=f"normalized-chat/{source_name}", download=processed, output_schema=SOURCE_CHAT_SCHEMA
     )
