@@ -45,7 +45,10 @@ submitting client resolves), and reads it with ``rigging.secrets.require_secret`
 Iris copies a parent task's explicit environment into every job the task submits, and by default
 its mounted secrets too. ``submit_job`` therefore blanks inherited variables and isolates the
 secret map: both jobs receive only the CoreWeave storage credentials as Iris secrets, and the push
-job alone also receives the registry credential, as the secret ``REGISTRY_AUTH``.
+job alone also receives the registry credential, as the secret ``REGISTRY_AUTH``. The exception is
+a parent that carries its CoreWeave keys as explicit environment (``iris job run -e CW_KEY_ID ...``):
+Iris copies those into both jobs' environments, where they override the secrets, and blanking them
+would leave the jobs with empty storage credentials.
 
 The registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
 there is no short-lived scoped token to hand the push job instead. Exposure that remains: secret
@@ -258,10 +261,12 @@ def submit_job(
 
     Inherited environment values are blanked and mounted-secret inheritance is disabled. The job
     receives explicit ``env`` values, and as Iris secrets (files) only ``secrets`` and the
-    submitter's CoreWeave storage credentials.
+    submitter's CoreWeave storage credentials. Inherited CoreWeave keys are not blanked: Iris lets
+    a CoreWeave key in the environment override the secret of the same name, so a blank would
+    replace the storage credential with an empty one.
     """
     job_info = get_job_info()
-    inherited = {} if job_info is None else dict.fromkeys(job_info.env, "")
+    inherited = {} if job_info is None else {name: "" for name in job_info.env if name not in COREWEAVE_SECRET_NAMES}
     storage = {name: value for name in COREWEAVE_SECRET_NAMES if (value := get_secret(name)) is not None}
     return client.submit(
         entrypoint=entrypoint,

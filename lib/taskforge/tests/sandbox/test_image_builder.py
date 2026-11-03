@@ -16,9 +16,10 @@ from iris.client import IrisClient, Job
 from iris.client.client import IrisContext, iris_ctx_scope
 from iris.client.workload import JobState
 from iris.cluster.client import ClusterClient, JobInfo, set_job_info
+from iris.cluster.secrets import task_secret_values
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import job_pb2
-from rigging.secrets import SECRETS_DIR_ENV
+from rigging.secrets import COREWEAVE_SECRET_NAMES, SECRETS_DIR_ENV
 
 from taskforge.sandbox.image_builder import (
     BUILD_SCRIPT,
@@ -37,10 +38,14 @@ PASSWORD = "registry-password"
 CREDENTIAL_JSON = json.dumps({"registry": "registry.example", "user": "publisher", "password": PASSWORD})
 GLM_TOKEN = "glm-token-value"
 PARENT_ENV = {REGISTRY_CREDENTIAL_ENV: CREDENTIAL_JSON, "GLM_HIGH_TOKEN": GLM_TOKEN}
+STORAGE = {"CW_KEY_ID": "storage-id", "CW_KEY_SECRET": "storage-secret"}
 
 
 class RecordingCluster:
-    """A ``ClusterClient``'s ``submit_job``, the only method ``IrisClient.submit`` calls, recording environments."""
+    """A ``ClusterClient``'s ``submit_job``, the only method ``IrisClient.submit`` calls.
+
+    It records each job's environment and the secrets Iris will mount for it (``task_secret_values``).
+    """
 
     def __init__(self):
         self.env_vars: dict[str, dict[str, str]] = {}
@@ -57,7 +62,7 @@ class RecordingCluster:
     ) -> JobName:
         assert environment is not None
         self.env_vars[job_id.name] = dict(environment.env_vars)
-        self.secrets[job_id.name] = dict(environment.secrets)
+        self.secrets[job_id.name] = task_secret_values(environment)
         return job_id
 
 
@@ -111,9 +116,9 @@ def test_a_malformed_credential_fails_without_quoting_it(text):
 
 @pytest.mark.parametrize(
     "in_a_coordinator_task",
-    [PARENT_ENV, {"GLM_HIGH_TOKEN": GLM_TOKEN}],
+    [PARENT_ENV, {"GLM_HIGH_TOKEN": GLM_TOKEN}, {**PARENT_ENV, **STORAGE}],
     indirect=True,
-    ids=["env-and-mounted", "mounted-only"],
+    ids=["env-and-mounted", "mounted-only", "storage-in-env"],
 )
 def test_image_jobs_only_receive_explicit_secrets_and_storage_credentials(in_a_coordinator_task, tmp_path, monkeypatch):
     (tmp_path / "UNRELATED_SERVICE_TOKEN").write_text("private-parent-token")
@@ -125,12 +130,16 @@ def test_image_jobs_only_receive_explicit_secrets_and_storage_credentials(in_a_c
     build_env, build_secrets = submit(cluster, "taskforge-image-build-x", {"DESTINATION": "registry.example/r:t"}, {})
     push_env, push_secrets = submit(cluster, "taskforge-image-push-x", {}, {REGISTRY_AUTH_SECRET: "push-auth"})
 
-    storage = {"CW_KEY_ID": "storage-id", "CW_KEY_SECRET": "storage-secret"}
+    blanked = [name for name in in_a_coordinator_task if name not in COREWEAVE_SECRET_NAMES]
     for env in (build_env, push_env):
-        assert {name: env[name] for name in in_a_coordinator_task} == dict.fromkeys(in_a_coordinator_task, "")
-        assert not any(PASSWORD in value or GLM_TOKEN in value or "storage-" in value for value in env.values())
-    assert build_secrets == storage
-    assert push_secrets == {**storage, REGISTRY_AUTH_SECRET: "push-auth"}
+        assert {name: env[name] for name in blanked} == dict.fromkeys(blanked, "")
+        assert not any(PASSWORD in value or GLM_TOKEN in value for value in env.values())
+        # A CoreWeave key reaches a job's environment only as the parent's own copy, never blanked.
+        assert {name: value for name, value in env.items() if name in COREWEAVE_SECRET_NAMES} == {
+            name: value for name, value in in_a_coordinator_task.items() if name in COREWEAVE_SECRET_NAMES
+        }
+    assert build_secrets == STORAGE
+    assert push_secrets == {**STORAGE, REGISTRY_AUTH_SECRET: "push-auth"}
 
 
 @dataclass(frozen=True)
