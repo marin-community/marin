@@ -213,6 +213,9 @@ class JourneyWorld:
         tasks: int = 1,
         failure_retries: int = 0,
         preemption_retries: int = 0,
+        max_task_failures: int | None = None,
+        scheduling_timeout: float | None = None,
+        execution_timeout: float | None = None,
     ) -> JobRef:
         """Submit a child Job under a live parent."""
         child = JobName.from_wire(parent.wire_id).child(name)
@@ -221,6 +224,9 @@ class JourneyWorld:
             tasks=tasks,
             failure_retries=failure_retries,
             preemption_retries=preemption_retries,
+            max_task_failures=max_task_failures,
+            scheduling_timeout=scheduling_timeout,
+            execution_timeout=execution_timeout,
         )
 
     def _launch(

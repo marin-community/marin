@@ -208,3 +208,35 @@ def test_mixed_kick_peer_outage_preserves_local_success_without_retry(federation
     federation.parent.settle()
     assert federation.parent.task(local[0]).current_attempt_id == 1
     assert federation.peer_tasks(job)[0].state == job_pb2.TASK_STATE_RUNNING
+
+
+@pytest.mark.parametrize(
+    "failure_retries,preemption_retries,execution_timeout,scheduling_timeout", [(2, 7, 600, 120), (0, 0, 0, 0)]
+)
+def test_peer_child_requested_limits_survive_federation_sync(
+    federation: FederationJourney,
+    failure_retries: int,
+    preemption_retries: int,
+    execution_timeout: int,
+    scheduling_timeout: int,
+) -> None:
+    root = federation.submit("limits")
+    federation.promote()
+    federation.sync()
+    child = federation.peer.submit_child(
+        root,
+        "train",
+        failure_retries=failure_retries,
+        preemption_retries=preemption_retries,
+        max_task_failures=4,
+        scheduling_timeout=scheduling_timeout,
+        execution_timeout=execution_timeout,
+    )
+    for _ in range(2):
+        federation.sync()
+        request = federation.parent.controller.get_job_status(child.wire_id).request
+        assert request.timeout.milliseconds == execution_timeout * 1000
+        assert request.scheduling_timeout.milliseconds == scheduling_timeout * 1000
+        assert request.max_retries_failure == failure_retries
+        assert request.max_retries_preemption == preemption_retries
+        assert request.max_task_failures == 4

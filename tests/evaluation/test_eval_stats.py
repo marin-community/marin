@@ -900,3 +900,66 @@ def test_record_adapter_reads_the_standard_error_of_a_repeated_sample_task():
     interval = measurement_interval(measurement)
     assert interval.low > 0.1
     assert interval.high < 0.25
+
+
+@pytest.mark.parametrize(
+    "name,metrics,metric,value,kind,correct",
+    [
+        ("piqa", {"acc": 0.25, "acc_norm": 0.75}, "normalized_accuracy", 0.75, MetricKind.BINARY, 3),
+        (
+            "ifbench",
+            {"strict_prompt_accuracy": 0.25, "loose_prompt_accuracy": 0.75},
+            "strict_prompt_accuracy",
+            0.25,
+            MetricKind.BINARY,
+            1,
+        ),
+        ("truthfulqa", {"acc": 1.0}, "accuracy", 1.0, MetricKind.CONTINUOUS, None),
+    ],
+)
+def test_publication_metric_projects_score_and_coverage_without_changing_record(
+    name, metrics, metric, value, kind, correct
+):
+    record = _record(
+        eval_name=name,
+        metrics={name: metrics},
+        coverage={name: TaskCoverage(n_benchmark=5, n_attempted=5, n_scored=4, n_correct=2, errors={"ungraded": 1})},
+    )
+    original = record.model_dump()
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert (measurement.metric, measurement.value, measurement.kind) == (metric, value, kind)
+    assert measurement.n_correct == correct
+    assert measurement.coverage.n_correct == correct
+    assert measurement.coverage.n_scored == 4
+    assert measurement.coverage.n_attempted == 5
+    assert measurement.coverage.errors == {"ungraded": 1}
+    assert record.model_dump() == original
+
+
+def test_publication_metric_uses_canonical_results_without_rewriting_evaluator_metadata():
+    record = _record(
+        eval_name="piqa",
+        metrics={"piqa": {"acc": 0.25, "acc_norm": 0.75}},
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+        source_metric="acc",
+        canonical_metrics={"piqa": {"accuracy": 0.25, "normalized_accuracy": 0.75}},
+        coverage={"piqa": TaskCoverage(n_benchmark=4, n_attempted=4, n_scored=4, n_correct=1)},
+    )
+    original = record.model_dump()
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.metric == "normalized_accuracy"
+    assert measurement.value == 0.75
+    assert measurement.n_correct == 3
+    assert record.model_dump() == original
+
+
+def test_missing_publication_metric_does_not_fall_back_to_another_score():
+    record = _record(eval_name="piqa", metrics={"piqa": {"acc": 1.0}})
+    assert measurement_from_record(record) is None
