@@ -52,7 +52,6 @@ class DaytonaEnvironment(BaseEnvironment):
         create_timeout: float = 600,
         model_endpoint: str | None = None,
         model_name: str | None = None,
-        verifier_model_endpoint: str | None = None,
         candidate_model_endpoint: str | None = None,
         candidate_model_name: str | None = None,
         **kwargs,
@@ -86,7 +85,6 @@ class DaytonaEnvironment(BaseEnvironment):
             network_policy=policy,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
-        self.verifier_model_endpoint = verifier_model_endpoint
         self.candidate_model_endpoint, self.candidate_model_name = candidate_model_endpoint, candidate_model_name
         self.machine: DaytonaMachine | None = None
         self._relay = AsyncExitStack()
@@ -106,9 +104,7 @@ class DaytonaEnvironment(BaseEnvironment):
         return EnvironmentResourceCapabilities(cpu_request=True, memory_request=True)
 
     def _validate_definition(self) -> None:
-        if self.extra_docker_compose_paths or any(
-            (self.environment_dir / name).exists() for name in COMPOSE_FILENAMES
-        ):
+        if any((self.environment_dir / name).exists() for name in COMPOSE_FILENAMES):
             raise ValueError(
                 "Shellbox Daytona supports single-container tasks; use local for Compose service groups"
             )
@@ -155,14 +151,10 @@ class DaytonaEnvironment(BaseEnvironment):
             memory_mb=self._effective_memory_mb,
             storage_mb=self._effective_storage_mb,
         )
-        if self.verifier_model_endpoint is not None and (
-            self.model_endpoint is None or self.model_name is None
-        ):
+        if (self.model_endpoint is None) != (self.model_name is None):
             raise ValueError(
                 "Daytona model capability requires a host endpoint and model"
             )
-        if self.verifier_model_endpoint is not None and self.verifier_model_endpoint != self.model_endpoint:
-            raise ValueError("Daytona supports a single host model endpoint for runtime and verifier calls")
         if (self.candidate_model_endpoint is None) != (self.candidate_model_name is None):
             raise ValueError("Daytona candidate capability requires a host endpoint and model")
         self._stopping = None

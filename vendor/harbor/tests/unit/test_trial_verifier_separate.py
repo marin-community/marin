@@ -210,31 +210,6 @@ class TestSingleStepSeparateVerifierLifecycle:
             # additive mounts (mounts_json was consolidated into mounts).
             assert "mounts_json" not in verifier_kwargs
 
-    async def test_verifier_env_does_not_inherit_extra_compose(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = _single_step_task_with_separate_verifier(Path(tmp))
-            trials_dir = Path(tmp) / "trials"
-            trials_dir.mkdir()
-            extra_compose = Path(tmp) / "extra-compose.yaml"
-            extra_compose.write_text("services: {}\n")
-
-            agent_env = _stock_mock_env()
-            verifier_env = _stock_mock_env()
-            fake_create, calls = _make_factory_recorder(agent_env, [verifier_env])
-
-            await _run_trial(
-                task_dir,
-                trials_dir,
-                fake_create,
-                environment=EnvironmentConfig(
-                    type="local",
-                    extra_docker_compose=[extra_compose],
-                ),
-            )
-
-            assert calls[0]["config"].extra_docker_compose == [extra_compose]
-            assert calls[1]["config"].extra_docker_compose == []
-
     async def test_verifier_env_stopped_immediately_after_verify(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = _single_step_task_with_separate_verifier(Path(tmp))

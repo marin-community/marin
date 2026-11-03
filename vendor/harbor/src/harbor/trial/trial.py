@@ -820,11 +820,8 @@ class Trial(ABC):
         key: str,
         step_cfg: StepConfig | None = None,
     ) -> AsyncGenerator[BaseEnvironment, None]:
-        verifier_runtime_config = self.config.environment.model_copy(
-            update={"extra_docker_compose": []}
-        )
         env = EnvironmentFactory.create_environment_from_config(
-            config=verifier_runtime_config,
+            config=self.config.environment,
             environment_dir=self._verifier_env_build_context(step_cfg),
             environment_name=self.task.short_name,
             session_id=self._separate_verifier_session_id(key),

@@ -184,7 +184,6 @@ class TrialLock(BaseModel):
     bridge_inputs: dict[str, ExtraInstructionLock] = Field(default_factory=dict)
     skills: list[AgentSkillLock] = Field(default_factory=list)
     environment: EnvironmentConfig
-    extra_docker_compose: list["ExtraDockerComposeLock"] | None = None
     verifier: VerifierConfig
 
     def __eq__(self, other):
@@ -222,27 +221,8 @@ class TrialLock(BaseModel):
             ),
             tuple(skill._equality_key() for skill in self.skills),
             _environment_equality_key(self.environment, candidate_model_identity=self.agent.model_name),
-            _lock_list_equality_key(self.extra_docker_compose),
             _frozen_value(self.verifier.identity_fingerprint()),
         )
-
-
-class ExtraDockerComposeLock(BaseModel):
-    path: Path
-    digest: str
-
-    @field_validator("digest")
-    @classmethod
-    def validate_digest(cls, value: str) -> str:
-        return _validate_digest(value)
-
-    def __eq__(self, other):
-        if not isinstance(other, ExtraDockerComposeLock):
-            return NotImplemented
-        return self._equality_key() == other._equality_key()
-
-    def _equality_key(self) -> tuple[str]:
-        return (self.digest,)
 
 
 class JobLock(BaseModel):
@@ -325,7 +305,6 @@ def _agent_equality_key(agent: AgentConfig) -> Any:
 
 def _environment_equality_key(environment: EnvironmentConfig, *, candidate_model_identity: str | None) -> Any:
     fingerprint = environment.identity_fingerprint(candidate_model_identity=candidate_model_identity)
-    fingerprint.pop("extra_docker_compose", None)
     for key in TrialConfig._PROVISIONING_ENV_KWARG_KEYS:
         fingerprint["kwargs"].pop(key, None)
     return _frozen_value(fingerprint)
@@ -438,9 +417,6 @@ def _build_lock_trial(
         bridge_inputs=_build_bridge_input_locks(trial_config),
         skills=_build_agent_skill_locks(trial_config.agent.skills),
         environment=trial_config.environment,
-        extra_docker_compose=_build_extra_docker_compose_locks(
-            trial_config.environment.extra_docker_compose
-        ),
         verifier=trial_config.verifier,
     )
 
@@ -465,17 +441,6 @@ def _build_bridge_input_locks(
         name: ExtraInstructionLock(path=path, digest=_file_sha256_digest(path))
         for name, path in bridge_input_files(trial_config.user_agent.bridge).items()
     }
-
-
-def _build_extra_docker_compose_locks(
-    paths: Sequence[Path],
-) -> list[ExtraDockerComposeLock] | None:
-    if not paths:
-        return None
-    return [
-        ExtraDockerComposeLock(path=path, digest=_file_sha256_digest(path))
-        for path in paths
-    ]
 
 
 def _file_sha256_digest(path: Path) -> str:

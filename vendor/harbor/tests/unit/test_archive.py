@@ -526,7 +526,7 @@ def test_finalize_preserves_harbor_job_files(tmp_path: Path):
         assert json.loads(source) == {"source": name}
 
 
-def test_non_end_event_writes_nothing(tmp_path: Path):
+def test_non_end_event_does_not_archive_attempt(tmp_path: Path):
     root = str(tmp_path / "archive")
     archive = _open_archive(root)
     event = _end_event(tmp_path, reward=1.0)
@@ -535,7 +535,8 @@ def test_non_end_event_writes_nothing(tmp_path: Path):
     archive.seal()
     archive.close()
 
-    assert _sample_rows(root) == []
+    assert event.result is not None
+    assert ReadView(root).read_blob(f"sources/harbor/t0/attempts/{event.result.id}/result.json") is None
 
 
 @pytest.mark.parametrize("operation", ["add_sample", "add_source_artifact"])

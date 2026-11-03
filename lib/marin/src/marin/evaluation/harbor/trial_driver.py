@@ -84,7 +84,6 @@ _MODEL_RELAY_ENVIRONMENT_KWARGS = frozenset(
     {
         "model_endpoint",
         "model_name",
-        "verifier_model_endpoint",
         "candidate_model_endpoint",
         "candidate_model_name",
     }
@@ -226,8 +225,8 @@ def _validate_prepared_policy(config: JobConfig) -> None:
     """Keep model transport and credentials in the trusted harness for offline tasks."""
     environment = config.environment
     label = f"Shellbox {environment.type.value}"
-    if environment.force_build or environment.extra_docker_compose or environment.mounts or environment.env:
-        raise ValueError(f"{label} does not accept builds, Compose overlays, mounts, or forwarded environment variables")
+    if environment.force_build or environment.mounts or environment.env:
+        raise ValueError(f"{label} does not accept builds, mounts, or forwarded environment variables")
     unknown_kwargs = environment.kwargs.keys() - _LOCAL_ENVIRONMENT_KWARGS
     if unknown_kwargs:
         raise ValueError(f"Unsupported {label} environment kwargs: {sorted(unknown_kwargs)}")
@@ -572,7 +571,6 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
                     **environment.kwargs,
                     "model_endpoint": endpoint,
                     "model_name": model_name,
-                    "verifier_model_endpoint": endpoint,
                 }
             }
         )

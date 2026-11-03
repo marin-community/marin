@@ -642,15 +642,6 @@ def start(
             show_default=False,
         ),
     ] = None,
-    extra_docker_compose: Annotated[
-        list[Path] | None,
-        Option(
-            "--extra-docker-compose",
-            help="Additional Docker Compose overlay file. Can be used multiple times.",
-            rich_help_panel="Environment",
-            show_default=False,
-        ),
-    ] = None,
     environment_kwargs: Annotated[
         list[str] | None,
         Option(
@@ -1115,8 +1106,6 @@ def start(
         config.environment.override_tpu = parse_tpu_spec(override_tpu)
     if mounts is not None:
         config.environment.mounts = json.loads(mounts)
-    if extra_docker_compose is not None:
-        config.environment.extra_docker_compose.extend(extra_docker_compose)
     if environment_kwargs is not None:
         config.environment.kwargs.update(parse_kwargs(environment_kwargs))
 

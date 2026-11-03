@@ -278,8 +278,8 @@ supports image-provided Pi and Pi/ACP agents and the benchmark-owned Tau3 user r
 agents, arbitrary agent imports and custom host mounts are rejected. Its Compose importer supports `main` plus prepared
 sidecars, commands, environment values, exposed TCP ports, readiness checks and `main` dependencies
 on started or healthy services. MCP URLs must name an exposed endpoint inside the container group.
-Unknown Compose fields, published host ports, host networking, extra Compose files and dependencies
-between sidecars fail explicitly.
+A task may contain one Compose file. Unknown fields, published host ports, host
+networking and dependencies between sidecars fail explicitly.
 
 Containers share only the group's loopback network. External egress remains denied. Tau3's user model
 and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. The relay fixes the upstream

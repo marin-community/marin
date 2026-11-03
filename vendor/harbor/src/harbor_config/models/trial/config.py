@@ -204,7 +204,6 @@ class EnvironmentConfig(BaseModel):
         description="Deprecated; has no effect.",
     )
     mounts: list[ServiceVolumeConfig] | None = None
-    extra_docker_compose: list[Path] = Field(default_factory=list)
     env: EnvironmentVariables = Field(default_factory=dict)
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
@@ -272,7 +271,6 @@ class EnvironmentConfig(BaseModel):
         for endpoint_name, model_name in (
             ("candidate_model_endpoint", "candidate_model_name"),
             ("model_endpoint", "model_name"),
-            ("verifier_model_endpoint", "model_name"),
         ):
             endpoint = self.kwargs.get(endpoint_name)
             if endpoint and self.kwargs.get(model_name):

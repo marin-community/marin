@@ -202,15 +202,15 @@ async def test_local_candidate_and_judge_relays_route_independently_without_gues
         "AsyncClient",
         lambda **kwargs: original_client(transport=httpx.MockTransport(provider), **kwargs),
     )
+    factory = ProcessTaskFactory(tmp_path / "guest")
+    monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
     adapter = local_environment(
         tmp_path,
         candidate_model_endpoint="https://candidate.test/proxy/t/private-capability/v1",
         candidate_model_name="candidate",
         model_endpoint="https://judge.test/v1",
         model_name="judge",
-        verifier_model_endpoint="https://judge.test/v1",
     )
-    adapter.factory = ProcessTaskFactory(tmp_path / "guest")
     with host_model_authentication({
         "https://candidate.test/proxy/t/private-capability/v1": "candidate-private",
         "https://judge.test/v1": "judge-private",
@@ -300,13 +300,13 @@ async def test_local_interrupted_operation_keeps_original_error_through_relay_cl
             self.machine = ClosingProcessMachine(self.root, spec.primary_container.machine)
             return Task({spec.primary: self.machine}, spec, self.machine.close)
 
+    factory = ClosingTaskFactory(tmp_path / "guest")
+    monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
     adapter = local_environment(
         tmp_path,
         candidate_model_endpoint="https://candidate.test/v1",
         candidate_model_name="candidate",
     )
-    factory = ClosingTaskFactory(tmp_path / "guest")
-    adapter.factory = factory
     if phase != "readiness":
         # Harbor's startup phase finishes before later I/O phases use the relay.
         await asyncio.create_task(adapter.start(force_build=False))

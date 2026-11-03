@@ -231,93 +231,6 @@ def test_package_task_uses_resolved_ref_digest() -> None:
     assert lock.trials[0].task.digest == task_digest
 
 
-def test_extra_docker_compose_lock_changes_with_file_content(tmp_path: Path) -> None:
-    extra = tmp_path / "compose.extra.yaml"
-    extra.write_text("services:\n  sidecar:\n    image: redis:7\n")
-    task = TaskConfig(name="test-org/test-task", ref=_sha("b"))
-    environment = EnvironmentConfig(extra_docker_compose=[extra])
-    trial = _trial(task, environment=environment)
-
-    first_lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], environment=environment),
-        trial_configs=[trial],
-        invocation=["harbor", "run"],
-    )
-    extra.write_text("services:\n  sidecar:\n    image: redis:8\n")
-    second_lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], environment=environment),
-        trial_configs=[trial],
-        invocation=["harbor", "run"],
-    )
-
-    first_extra = first_lock.trials[0].extra_docker_compose
-    second_extra = second_lock.trials[0].extra_docker_compose
-    assert first_extra is not None
-    assert second_extra is not None
-    assert first_extra[0].path == extra
-    assert first_extra[0].digest.startswith("sha256:")
-    assert first_extra[0].digest != second_extra[0].digest
-    assert first_lock != second_lock
-
-
-def test_extra_docker_compose_lock_equality_uses_digest_only() -> None:
-    digest = _sha("b")
-    assert lock_models.ExtraDockerComposeLock(
-        path=Path("compose.extra.yaml"), digest=digest
-    ) == lock_models.ExtraDockerComposeLock(path=Path("other.yaml"), digest=digest)
-
-
-def test_job_lock_equality_ignores_extra_docker_compose_path(tmp_path: Path) -> None:
-    extra = tmp_path / "compose.extra.yaml"
-    extra.write_text("services:\n  sidecar:\n    image: redis:7\n")
-    task = TaskConfig(name="test-org/test-task", ref=_sha("b"))
-    environment = EnvironmentConfig(extra_docker_compose=[extra])
-    lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], environment=environment),
-        trial_configs=[_trial(task, environment=environment)],
-        invocation=["harbor", "run"],
-    )
-
-    extra_lock = lock.trials[0].extra_docker_compose
-    assert extra_lock is not None
-    other_trial = lock.trials[0].model_copy(
-        update={
-            "extra_docker_compose": [
-                extra_lock[0].model_copy(update={"path": Path("other.yaml")})
-            ]
-        }
-    )
-    other_lock = lock.model_copy(update={"trials": [other_trial]})
-
-    assert lock == other_lock
-
-
-def test_job_lock_equality_ignores_extra_docker_compose_input_path(
-    tmp_path: Path,
-) -> None:
-    first_extra = tmp_path / "first.compose.yaml"
-    second_extra = tmp_path / "second.compose.yaml"
-    compose_content = "services:\n  sidecar:\n    image: redis:7\n"
-    first_extra.write_text(compose_content)
-    second_extra.write_text(compose_content)
-    task = TaskConfig(name="test-org/test-task", ref=_sha("b"))
-    first_environment = EnvironmentConfig(extra_docker_compose=[first_extra])
-    second_environment = EnvironmentConfig(extra_docker_compose=[second_extra])
-
-    first_lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], environment=first_environment),
-        trial_configs=[_trial(task, environment=first_environment)],
-        invocation=["harbor", "run"],
-    )
-    second_lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], environment=second_environment),
-        trial_configs=[_trial(task, environment=second_environment)],
-        invocation=["harbor", "run"],
-    )
-
-    assert first_lock == second_lock
-
-
 def test_job_lock_equality_ignores_trial_order() -> None:
     first_task = TaskConfig(name="test-org/first", ref=_sha("1"))
     second_task = TaskConfig(name="test-org/second", ref=_sha("2"))
@@ -1030,7 +943,6 @@ def test_judge_endpoint_rotation_without_model_identity_is_rejected() -> None:
                 "candidate_model_endpoint": "https://iris.example:8443/proxy/t/new-capability/serve.new/v1",
                 "candidate_model_name": "new-serving-alias",
                 "model_endpoint": "https://judge.example/proxy/t/new-capability/serve.new/v1",
-                "verifier_model_endpoint": "https://judge.example/proxy/t/new-capability/serve.new/v1",
                 "auto_snapshot": True,
             },
             "org/candidate",
@@ -1042,7 +954,7 @@ def test_judge_endpoint_rotation_without_model_identity_is_rejected() -> None:
         ({"candidate_model_endpoint": "http://iris.example/v1"}, "org/candidate", False),
         *[
             ({endpoint: "https://other.example/v1"}, "org/candidate", False)
-            for endpoint in ("candidate_model_endpoint", "model_endpoint", "verifier_model_endpoint")
+            for endpoint in ("candidate_model_endpoint", "model_endpoint")
         ],
     ],
 )
@@ -1052,7 +964,6 @@ def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(ov
         "candidate_model_endpoint": "https://iris.example/proxy/t/old-capability/serve.old/v1",
         "candidate_model_name": "old-serving-alias",
         "model_endpoint": "https://judge.example/proxy/t/old-capability/serve.old/v1",
-        "verifier_model_endpoint": "https://judge.example/proxy/t/old-capability/serve.old/v1",
         "model_name": "judge-model",
         "network_block_all": True,
     }
@@ -1082,7 +993,7 @@ def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(ov
     assert new_trial.environment.kwargs == new_kwargs
 
 
-@pytest.mark.parametrize("endpoint", ["candidate_model_endpoint", "model_endpoint", "verifier_model_endpoint"])
+@pytest.mark.parametrize("endpoint", ["candidate_model_endpoint", "model_endpoint"])
 def test_environment_relay_rotation_without_model_identity_is_rejected(endpoint):
     task = TaskConfig(name="test-org/test-task", ref=_sha("a"))
     trials = [

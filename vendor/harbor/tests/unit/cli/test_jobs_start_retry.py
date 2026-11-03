@@ -98,32 +98,6 @@ def test_jobs_start_hugging_face_dataset_without_revision(
     assert captured[0].datasets[0].ref is None
 
 
-def test_jobs_start_appends_repeated_extra_docker_compose_flags(
-    tmp_path: Path, monkeypatch
-) -> None:
-    first = tmp_path / "first.yaml"
-    second = tmp_path / "second.yaml"
-    first.write_text("services: {}\n")
-    second.write_text("services: {}\n")
-    captured = _capture_job_config(monkeypatch, tmp_path)
-
-    result = runner.invoke(
-        app,
-        [
-            "jobs",
-            "start",
-            "--extra-docker-compose",
-            str(first),
-            "--extra-docker-compose",
-            str(second),
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert len(captured) == 1
-    assert captured[0].environment.extra_docker_compose == [first, second]
-
-
 def test_jobs_start_retry_exclude_cli_flag_overrides_yaml(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -106,7 +106,6 @@ class EnvironmentFactory:
             "override_gpus": config.override_gpus,
             "override_tpu": config.override_tpu,
             "persistent_env": config.env,
-            "extra_docker_compose": config.extra_docker_compose,
             **config.kwargs,
             **kwargs,
         }

@@ -58,7 +58,6 @@ BASE_ENVIRONMENT_ARGUMENTS = frozenset(
         "memory_enforcement_policy",
         "persistent_env",
         "mounts",
-        "extra_docker_compose",
     }
 )
 
@@ -104,7 +103,6 @@ class BaseEnvironment(ABC):
     session_id: str
     trial_paths: TrialPaths
     task_env_config: EnvironmentConfig
-    extra_docker_compose_paths: list[Path]
     logger: logging.Logger
 
     default_user: str | int | None
@@ -133,7 +131,6 @@ class BaseEnvironment(ABC):
         memory_enforcement_policy: ResourceMode = ResourceMode.AUTO,
         persistent_env: dict[str, str] | None = None,
         mounts: list[ServiceVolumeConfig] | None = None,
-        extra_docker_compose: Sequence[Path | str] | None = None,
         *args,
         **kwargs,
     ):
@@ -157,8 +154,6 @@ class BaseEnvironment(ABC):
                 that bind-mount may apply a back-compat default. Subclasses
                 that don't bind-mount (cloud providers) may ignore the list
                 or use the target paths only as mkdir hints.
-            extra_docker_compose: Additional Docker Compose overlay files to
-                layer on top of the task's environment definition.
         """
         if "suppress_override_warnings" in kwargs:
             warnings.warn(
@@ -174,12 +169,7 @@ class BaseEnvironment(ABC):
         self.trial_paths = trial_paths
         self.default_user = None
         self.agent_timeout_sec = None
-        self.extra_docker_compose_paths = self._normalize_extra_docker_compose_paths(
-            extra_docker_compose
-        )
-
         self.task_env_config = task_env_config
-        self._validate_extra_docker_compose_support()
 
         self._override_cpus = override_cpus
         self._override_memory_mb = override_memory_mb
@@ -207,27 +197,9 @@ class BaseEnvironment(ABC):
         self._validate_internet_config()
         self._validate_windows_support()
 
-    @staticmethod
-    def _normalize_extra_docker_compose_paths(
-        paths: Sequence[Path | str] | None,
-    ) -> list[Path]:
-        normalized: list[Path] = []
-        for raw_path in paths or []:
-            path = Path(raw_path).expanduser()
-            if not path.is_file():
-                raise FileNotFoundError(f"Extra Docker Compose file not found: {path}")
-            normalized.append(path.resolve())
-        return normalized
-
     @property
     def _uses_compose(self) -> bool:
         return False
-
-    def _validate_extra_docker_compose_support(self):
-        if self.extra_docker_compose_paths and not self.capabilities.docker_compose:
-            raise ValueError(
-                f"{self.type()} environment does not support --extra-docker-compose."
-            )
 
     def _maybe_resolve_task_env(self):
         if self.task_env_config.env and not self._uses_compose:

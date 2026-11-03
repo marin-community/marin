@@ -43,7 +43,6 @@ class LocalEnvironment(BaseEnvironment):
         ttl: float = 3600,
         model_endpoint: str | None = None,
         model_name: str | None = None,
-        verifier_model_endpoint: str | None = None,
         candidate_model_endpoint: str | None = None,
         candidate_model_name: str | None = None,
         **kwargs,
@@ -61,7 +60,6 @@ class LocalEnvironment(BaseEnvironment):
         self._service_log_paths: tuple[tuple[str, str], ...] = ()
         self.model_endpoint = model_endpoint
         self.model_name = model_name
-        self.verifier_model_endpoint = verifier_model_endpoint
         self.candidate_model_endpoint = candidate_model_endpoint
         self.candidate_model_name = candidate_model_name
         super().__init__(*args, **kwargs)
@@ -139,14 +137,12 @@ class LocalEnvironment(BaseEnvironment):
             ),
         )
         needs_model = any("OPENAI_BASE_URL" in container.machine.env for container in task_spec.containers)
-        if (needs_model or self.verifier_model_endpoint is not None) and (
-            self.model_endpoint is None or self.model_name is None
-        ):
+        if (self.model_endpoint is None) != (self.model_name is None):
+            raise ValueError("Task model capability requires a host endpoint and model")
+        if needs_model and self.model_endpoint is None:
             raise ValueError(
                 "Task model calls require an explicit hosted judge (--judge-model) or standalone host model endpoint"
             )
-        if self.verifier_model_endpoint is not None and self.verifier_model_endpoint != self.model_endpoint:
-            raise ValueError("Prepared sandbox supports a single host model endpoint for runtime and verifier calls")
         if (self.candidate_model_endpoint is None) != (self.candidate_model_name is None):
             raise ValueError("Prepared sandbox candidate capability requires a host endpoint and model")
         self._stopping = None
@@ -154,7 +150,8 @@ class LocalEnvironment(BaseEnvironment):
         self.execution = execution
         self.machine = execution.primary
         try:
-            if needs_model or self.verifier_model_endpoint is not None:
+            if self.model_endpoint is not None:
+                assert self.model_name is not None
                 await self._relay.enter_async_context(
                     serve_http(
                         self.machine,
