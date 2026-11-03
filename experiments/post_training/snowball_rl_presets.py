@@ -24,6 +24,7 @@ from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
     MISSING_CONFIG_VALUE,
+    RESOLVED_LAUNCH_FILENAME,
     ArtifactDataSource,
     MegatronGeometry,
     SkyRLRolePlan,
@@ -43,6 +44,7 @@ from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_RO
 from experiments.post_training.task_curation.inventory import (
     FULL_VALIDATION_FILENAME,
     SELECTION_PREFIX,
+    SUMMARY_FILENAME,
     TASK_MANIFEST_FILENAME,
     TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
@@ -51,6 +53,10 @@ from experiments.post_training.task_curation.inventory import (
 
 REPO_ROOT = find_project_root(Path(__file__))
 PRESET_REVISION = "2026.10.27"
+RUN_PREFIX = "checkpoints/snowball-rl"
+TRAIN_LONG_RUN = f"{RUN_PREFIX}/train-long-"
+# Fraction of a native panel that must be scored before its scores count.
+MINIMUM_PANEL_COVERAGE = 0.99
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
@@ -531,19 +537,19 @@ TRAIN_LONG_RECIPES = MappingProxyType(
 
 def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate: int, *, control: bool) -> str:
     if control:
-        return f"checkpoints/snowball-rl/control/{preset.name}-{provenance.base_commit}-r{replicate}"
-    name = f"checkpoints/snowball-rl/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
+        return f"{RUN_PREFIX}/control/{preset.name}-{provenance.base_commit}-r{replicate}"
+    name = f"{RUN_PREFIX}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if preset.focus != Focus.TRAIN:
         name += f"-r{replicate}"
     return user_owned_name(name)
 
 
 def run_tree_hash(name: str) -> str:
-    return name.partition("train-long-")[2].partition("-in-")[0]
+    return name.partition(TRAIN_LONG_RUN)[2].partition("-in-")[0]
 
 
 def selection_summary(selection: ArtifactStep) -> dict:
-    return json.loads(read_text(StoragePath(selection.path()) / "summary.json"))
+    return json.loads(read_text(StoragePath(selection.path()) / SUMMARY_FILENAME))
 
 
 def evaluation_answer_count(evaluation: Evaluation, tasks: ArtifactStep) -> int:
@@ -576,7 +582,7 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, local_on
     fs.makedirs(str(PurePosixPath(key).parent), exist_ok=True)
     with fs.open(key, "wb") as stream:
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), stream)
-    for name in (TASK_MANIFEST_FILENAME, "summary.json"):
+    for name in (TASK_MANIFEST_FILENAME, SUMMARY_FILENAME):
         source_fs, source_key = filesystem_for(prefix_join(selection, name))
         if source_fs.exists(source_key):
             fs, key = filesystem_for(prefix_join(output, name))
@@ -687,8 +693,12 @@ def default_selection() -> ArtifactStep[Artifact]:
     return selection_artifact(f"snowball-100k@{DEFAULT_SELECTION_VERSION}")
 
 
+def cluster_config_path(cluster: str) -> str:
+    return f"lib/iris/config/{cluster}.yaml"
+
+
 def artifact_prefix(cluster: str) -> str:
-    config = yaml.safe_load((REPO_ROOT / f"lib/iris/config/{cluster}.yaml").read_text())
+    config = yaml.safe_load((REPO_ROOT / cluster_config_path(cluster)).read_text())
     return config["defaults"]["task_env"]["MARIN_PREFIX"]
 
 
@@ -711,7 +721,7 @@ def published_artifact(value: str) -> ArtifactStep:
         raise click.BadParameter("use an immutable artifact version instead of dev")
     for layout in (P40, L112):
         root = str(StoragePath(artifact_prefix(layout.cluster)) / name / version)
-        if exists(StoragePath(root) / "resolved-launch.yaml"):
+        if exists(StoragePath(root) / RESOLVED_LAUNCH_FILENAME):
             return ArtifactStep.adopt(name, version, root, kind=SkyRLRun)
         path = StoragePath(root) / RECORD_FILENAME
         if exists(path):

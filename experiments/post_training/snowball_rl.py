@@ -48,6 +48,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_status import get_status_path
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
+    BEST_CHECKPOINT_CALLBACK,
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
@@ -220,9 +221,9 @@ def _callbacks(preset: presets.Preset, evaluations: tuple[presets.Evaluation, ..
         callbacks.extend(
             [
                 {
-                    "type": "best_checkpoint",
+                    "type": BEST_CHECKPOINT_CALLBACK,
                     "expected_tasks": expected_tasks,
-                    "minimum_scored_tasks": math.ceil(0.99 * expected_tasks),
+                    "minimum_scored_tasks": math.ceil(presets.MINIMUM_PANEL_COVERAGE * expected_tasks),
                 },
                 {
                     "type": "hf_model_save",
@@ -250,7 +251,7 @@ def _resume_checkpoint_root(source: ArtifactStep[SkyRLRun], model: SkyRLModelSou
     if result.state not in ("succeeded", "failed"):
         raise click.BadParameter(f"source Iris job {result.iris_job_id} is {result.state}; wait for a terminal state")
     if (
-        "/checkpoints/snowball-rl/train-long-" not in f"/{source.name}"
+        f"/{presets.TRAIN_LONG_RUN}" not in f"/{source.name}"
         or not config["run"]["export_hf"]
         or config["run"]["id"] != f"{source.name}-{source.version}"
     ):
@@ -296,7 +297,7 @@ def _run_step(
         ),
         IrisSkyRLExecution(
             cluster=layout.cluster,
-            cluster_config=f"lib/iris/config/{layout.cluster}.yaml",
+            cluster_config=presets.cluster_config_path(layout.cluster),
             cpu=32,
             memory=layout.host_memory,
             disk="2TB",
@@ -580,7 +581,8 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
     "evaluations",
     multiple=True,
     type=click.Choice(sorted(presets.EVALUATIONS)),
-    help="Add an evaluation to train-long, beside its in-run panel and final 910-task evaluation. Repeatable.",
+    help="Add an evaluation to train-long, which already runs panel-100 during training and panel-910 on its "
+    "final export. Repeatable.",
 )
 @click.option(
     "--replicates",
@@ -632,7 +634,12 @@ def main(
             text=True,
             check=False,
         )
-        if changes.returncode == 0 and changes.stdout.strip():
+        if changes.returncode != 0:
+            click.echo(
+                f"Cannot compare this checkout with resume source tree {source_tree}: {changes.stderr.strip()}; "
+                "verify optimizer and checkpoint compatibility before continuing."
+            )
+        elif changes.stdout.strip():
             click.echo(
                 "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
             )

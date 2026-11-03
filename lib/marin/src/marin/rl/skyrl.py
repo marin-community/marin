@@ -46,6 +46,10 @@ _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
+RESOLVED_LAUNCH_FILENAME = "resolved-launch.yaml"
+TERMINAL_MANIFEST_FILENAME = "terminal.json"
+GENERATE_ENTRYPOINT = "generate"
+BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
 
 
@@ -644,7 +648,7 @@ def _validate_skyrl_recipe(
     _validate_role_plan_config(config, topology.role_plan)
     entrypoint = declared_config_value(config, "entrypoint")
     generate_only = topology.role_plan.generate_only
-    if entrypoint is not MISSING_CONFIG_VALUE and (entrypoint == "generate") != generate_only:
+    if entrypoint is not MISSING_CONFIG_VALUE and (entrypoint == GENERATE_ENTRYPOINT) != generate_only:
         raise ValueError("SkyRL entrypoint must agree with the role plan's generate_only setting")
     if (
         declared_config_value(config, "generator.weight_sync_transport") == "expert_block"
@@ -716,29 +720,26 @@ class SkyRLReceiptLookupError(ValueError):
 class SkyRLLaunchReceipt(BaseModel):
     config: dict
     result: SkyRLLaunchResponse
-    receipt_uri: str
 
 
 def read_skyrl_launch_config(run_output: str) -> dict:
     """Read the native resolved-launch envelope's compiled configuration."""
-    fs, key = filesystem_for(prefix_join(run_output, "resolved-launch.yaml"))
+    fs, key = filesystem_for(prefix_join(run_output, RESOLVED_LAUNCH_FILENAME))
     return yaml.safe_load(fs.cat(key))["config"]
 
 
 def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
-    terminal = prefix_join(run_output, "terminal.json")
-    fs, key = filesystem_for(terminal)
+    fs, key = filesystem_for(prefix_join(run_output, TERMINAL_MANIFEST_FILENAME))
     if fs.exists(key):
-        return SkyRLLaunchReceipt.model_validate({**json.loads(fs.cat(key)), "receipt_uri": terminal})
-    resolved = prefix_join(run_output, "resolved-launch.yaml")
-    fs, key = filesystem_for(resolved)
+        return SkyRLLaunchReceipt.model_validate_json(fs.cat(key))
+    fs, key = filesystem_for(prefix_join(run_output, RESOLVED_LAUNCH_FILENAME))
     if not fs.exists(key):
         return None
     config = read_skyrl_launch_config(run_output)
     attempt = prefix_join(config["artifacts"]["attempts_root"], f"{config['run']['attempt_id']}.json")
     fs, key = filesystem_for(attempt)
     if fs.exists(key):
-        return SkyRLLaunchReceipt.model_validate({**json.loads(fs.cat(key)), "receipt_uri": attempt})
+        return SkyRLLaunchReceipt.model_validate_json(fs.cat(key))
     name = config["iris"]["job_name"]
     info = get_job_info()
     with ExitStack() as stack:
@@ -767,7 +768,6 @@ def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
     return SkyRLLaunchReceipt.model_validate(
         {
             "config": config,
-            "receipt_uri": resolved,
             "result": {
                 "state": state,
                 "iris_job_id": str(JobName.from_wire(job.job_id)),
@@ -923,11 +923,11 @@ def _launch_config_yaml(
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     if spec.topology.role_plan.generate_only:
-        recipe["entrypoint"] = "generate"
+        recipe["entrypoint"] = GENERATE_ENTRYPOINT
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
     callbacks = recipe.get("trainer", {}).get("callbacks", [])
     for index, callback in enumerate(callbacks):
-        if callback["type"] == "best_checkpoint":
+        if callback["type"] == BEST_CHECKPOINT_CALLBACK:
             callbacks[index] = {
                 "type": callback["type"],
                 "initial_model_uri": model.uri,
@@ -1033,8 +1033,8 @@ def skyrl_step(
             checkpoint_root=spec.resume_checkpoint_root or prefix_join(temporary_root, "checkpoints"),
             export_root=prefix_join(ctx.output_path, "exports"),
             attempts_root=attempts_root,
-            resolved_config_uri=prefix_join(ctx.output_path, "resolved-launch.yaml"),
-            terminal_manifest_uri=prefix_join(ctx.output_path, "terminal.json"),
+            resolved_config_uri=prefix_join(ctx.output_path, RESOLVED_LAUNCH_FILENAME),
+            terminal_manifest_uri=prefix_join(ctx.output_path, TERMINAL_MANIFEST_FILENAME),
         )
         draft_training = declared_config_value(
             _parsed_config(spec.config_yaml), "generator.speculative_decoding.training"

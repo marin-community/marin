@@ -102,13 +102,13 @@ the submitting environment; every run forwards its required keys through Iris.
 
 | gap | implication and follow-up |
 |---|---|
-| remote judge | Together grades 6,653 training tasks; replace it with a local judge in Phase 1.5 |
-| layout-p40-only; no-async-speed-gate | medium gates cover the 40-GPU synchronous layout; add async speed-long in Phase 2 |
+| remote judge | Together grades 6,653 training tasks; replace it with a local judge |
+| layout-p40-only; no-async-speed-gate | medium gates cover the 40-GPU synchronous layout; add an asynchronous speed gate |
 | AAII coverage; no-agentic-tasks | current tasks cover only part of AAII; add missing task families and agentic tasks |
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
 | no-grading-timer | generation includes grader tails; add separate grader timings |
-| eval-uses-training-sampling | Panel answers use the training temperature because the engine applies `generator.sampling_params` to native requests. Separate evaluation sampling belongs with the Phase 1.5 panel and new controls. |
+| eval-uses-training-sampling | Panel answers use the training temperature because the engine applies `generator.sampling_params` to native requests. Separate evaluation sampling needs a new panel and new controls. |
 | mismatch-is-agreement | agreement can miss shared errors; learning remains a separate check |
 
 Speed-short measures engines only. A speed claim also needs speed-medium, whose
