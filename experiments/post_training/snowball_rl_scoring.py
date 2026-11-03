@@ -16,7 +16,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training.task_curation.inventory import TASK_MANIFEST_FILENAME
+from experiments.post_training.task_curation.inventory import TASK_MANIFEST_FILENAME, TRAIN_FILENAME
 
 EVAL_SCORE_SCHEMA = pa.schema(
     [
@@ -34,6 +34,7 @@ EVAL_SCORE_SCHEMA = pa.schema(
 PASS_RATES_NAME = f"rl-data/snowball-pass-rates/{presets.MODEL_REVISION}"
 PASS_RATE_REVISION = "2026.10.30"
 PASS_RATES_FILENAME = "pass_rates.parquet"
+TRAIN_STEM = PurePosixPath(TRAIN_FILENAME).stem
 PASS_RATE_EVALUATION = replace(presets.EVALUATIONS["panel-910"], name="pass-rates-910x8", answers=8)
 
 
@@ -81,7 +82,7 @@ def panel_scores(
         if not item:
             raise InvalidComparison(f"evaluation answer lacks a TaskSpec id: {path}")
         metadata = manifest.get(item, {})
-        if evaluation.file != "train" and not metadata:
+        if evaluation.file != TRAIN_STEM and not metadata:
             raise InvalidComparison(f"panel task {item} is absent from its task manifest")
         verdict = row.get("verification")
         score = 0.0
