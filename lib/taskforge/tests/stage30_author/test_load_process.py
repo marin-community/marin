@@ -15,12 +15,13 @@ from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.program_sdk import sdk_exports
 from taskforge.stage40_build_with_program.template import standard
 
+FIRST_STEP = "\n\n\n@rl_env_build_step\n"
 SPINNING_CLASS = "class Spin:\n    while True:\n        pass\n\n\n"
 """An output model whose class body never returns: the loader runs it when it loads the module."""
 
 
 def spinning_program() -> str:
-    return inspect.getsource(standard).replace("PROGRAM = ", f"{SPINNING_CLASS}PROGRAM = ")
+    return inspect.getsource(standard).replace(FIRST_STEP, f"\n\n\n{SPINNING_CLASS}@rl_env_build_step\n", 1)
 
 
 async def test_the_child_returns_the_manifest_the_loader_gives_in_process():
