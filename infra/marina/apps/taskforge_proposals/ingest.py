@@ -1,0 +1,463 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Load the n=25 proposal run into the viewer's Postgres tables through Marina's SQL API.
+
+Reads the run tree (one folder per capability), the capability catalog and the per-file usage summaries
+``slot_usage.py`` writes, then upserts one ``capabilities`` row per catalog capability and one
+``proposals`` row per planned slot. Request and completions files are never loaded; rows keep their
+paths and the usage summary. Each row records ``source_key``, a digest of the ETags and sizes of the
+files it was built from, so a rerun reads and uploads only rows whose sources changed. Rerunning is
+always safe: rows are upserted by capability and slot.
+
+    uv run infra/marina/apps/taskforge_proposals/ingest.py --app-id UUID [--url ORIGIN]
+"""
+
+import hashlib
+import importlib.util
+import json
+import threading
+import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import click
+import fsspec
+import requests
+from marina.client import DEFAULT_MARINA_URL, applet_query, marina_token_provider
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+# The serving package's section splitter, loaded by path: this script runs outside Marina's package layout.
+_spec = importlib.util.spec_from_file_location(
+    "taskforge_proposal_sections", Path(__file__).parent / "server" / "proposal.py"
+)
+_sections = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_sections)
+body_sections, first_sentence = _sections.body_sections, _sections.first_sentence
+
+INGEST_VERSION = "1"
+DEFAULT_RUN_ROOT = "s3://marin-us-east-02a/marin/taskforge/proposals/curriculum-v3-n25-20261102/run"
+DEFAULT_USAGE = "s3://marin-us-east-02a/marin/taskforge/proposals/curriculum-v3-n25-20261102/derived/slot-usage"
+DEFAULT_CATALOG = (
+    "s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/curriculum.json"
+)
+MAX_BATCH_BYTES = 1_000_000
+KEY_PAGE = 10_000
+USAGE_FIELDS = ("prompt_tokens", "completion_tokens", "reasoning_tokens", "cached_tokens")
+CUT_OFF_TEXT = "cut off"
+
+CAPABILITY_COLUMNS = (
+    "id TEXT, name TEXT, outcome TEXT, subject_id TEXT, domain TEXT, area TEXT, section_path TEXT, status TEXT, "
+    "slots_planned INTEGER, proposed INTEGER, accepted INTEGER, rejected INTEGER, cut_off INTEGER, "
+    "requests INTEGER, prompt_tokens BIGINT, completion_tokens BIGINT, reasoning_tokens BIGINT, "
+    "cached_tokens BIGINT, wall_time DOUBLE PRECISION, plan_prompt_tokens INTEGER, plan_completion_tokens INTEGER, "
+    "plan_reasoning_tokens INTEGER, coverage_rationale TEXT, git_sha TEXT, plan JSONB, result JSONB, "
+    "failure JSONB, catalog_entry JSONB, plan_request_path TEXT, plan_completions_path TEXT, source_key TEXT"
+)
+PROPOSAL_COLUMNS = (
+    "capability_id TEXT, slot INTEGER, subject_id TEXT, domain TEXT, area TEXT, status TEXT, title TEXT, "
+    "workflow TEXT, challenge TEXT, summary TEXT, plan_status TEXT, planned_verification TEXT, "
+    "planned_environment TEXT, verification TEXT, environment TEXT, solver_machine TEXT, grounding TEXT, "
+    "research_need TEXT, verdict TEXT, reason TEXT, cut_off BOOLEAN, failure TEXT, completions INTEGER, "
+    "prompt_tokens INTEGER, completion_tokens INTEGER, reasoning_tokens INTEGER, cached_tokens INTEGER, "
+    "finish_reasons JSONB, wall_time DOUBLE PRECISION, body_chars INTEGER, request_path TEXT, "
+    "completions_path TEXT, completions_bytes BIGINT, proposal JSONB, verdict_record JSONB, source_key TEXT"
+)
+
+
+def names(columns: str) -> list[str]:
+    return [column.strip().split()[0] for column in columns.split(",")]
+
+
+def upsert_sql(table: str, columns: str, key: str) -> str:
+    cols = names(columns)
+    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c not in key.split(", "))
+    return (
+        f"INSERT INTO {table} ({', '.join(cols)}) SELECT {', '.join(cols)} "
+        f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns}) "
+        f"ON CONFLICT ({key}) DO UPDATE SET {updates}, loaded_at = now()"
+    )
+
+
+def batches(rows: list[dict[str, Any]]) -> list[str]:
+    """Row arrays whose encoding, escaped once more as a JSON string, stays under ``MAX_BATCH_BYTES``."""
+    out, batch, size = [], [], 2
+    for row in rows:
+        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        length = len(json.dumps(encoded).encode()) + 1
+        if length + 2 > MAX_BATCH_BYTES:
+            raise ValueError(f"row {row.get('id') or (row['capability_id'], row['slot'])} exceeds the batch budget")
+        if batch and size + length > MAX_BATCH_BYTES:
+            out.append("[" + ",".join(batch) + "]")
+            batch, size = [], 2
+        batch.append(encoded)
+        size += length
+    if batch:
+        out.append("[" + ",".join(batch) + "]")
+    return out
+
+
+def digest(*parts: Any) -> str:
+    return hashlib.sha256(json.dumps([INGEST_VERSION, *parts], sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
+def file_key(info: dict[str, Any] | None) -> str | None:
+    return None if info is None else f"{info['name']}|{info['size']}|{info.get('ETag', '')}"
+
+
+def catalog_capabilities(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Every capability section with its subject and the names of the groups above it."""
+    out = {}
+    for entry in catalog["curricula"]:
+        curriculum = entry["curriculum"]
+        sections = {s["id"]: s for s in curriculum["sections"]}
+        for section in curriculum["sections"]:
+            if section["kind"] != "capability":
+                continue
+            chain, parent = [], section.get("parent_id")
+            while parent and parent in sections:
+                chain.append(sections[parent].get("name") or parent)
+                parent = sections[parent].get("parent_id")
+            chain.reverse()
+            out[section["id"]] = {
+                "name": section.get("name"),
+                "outcome": section.get("outcome"),
+                "subject_id": curriculum["subject_id"],
+                "domain": curriculum["subject_name"],
+                "area": chain[0] if chain else None,
+                "section_path": " › ".join(chain),  # noqa: RUF001 (a display separator)
+                "entry": section,
+            }
+    return out
+
+
+def read_usage(fs: fsspec.AbstractFileSystem, usage_root: str) -> dict[str, dict[str, Any]]:
+    """Usage summaries by file key; a later part replaces an earlier one for the same key."""
+    out = {}
+    for path in sorted(fs.glob(f"{usage_root}/*.jsonl")):
+        for line in fs.cat(path).decode().splitlines():
+            if line.strip():
+                record = json.loads(line)
+                out[record["key"]] = record
+    return out
+
+
+class Uploader:
+    """Byte-bounded upserts through per-thread SQL clients."""
+
+    def __init__(self, url: str, app_id: str, threads: int):
+        self.url, self.app_id, self.threads = url, app_id, threads
+        self.local = threading.local()
+        self.provider = marina_token_provider()
+        self.requests = 0
+
+    def query(self, sql: str, params: dict[str, Any]) -> dict[str, Any]:
+        if not hasattr(self.local, "query"):
+            self.local.query = applet_query(
+                self.url, self.app_id, session=requests.Session(), token_provider=self.provider
+            )
+        for attempt in range(5):
+            try:
+                self.requests += 1
+                return self.local.query(sql, params)
+            except Exception as error:  # transport errors and 5xx are retried; the upsert is idempotent
+                if attempt == 4 or "(4" in str(error)[:30]:
+                    raise
+                print(f"retrying after {type(error).__name__}: {str(error)[:200]}", flush=True)
+                time.sleep(2**attempt)
+        raise AssertionError("unreachable")
+
+    def upsert(self, table: str, columns: str, key: str, rows: list[dict[str, Any]]) -> int:
+        sql = upsert_sql(table, columns, key)
+        bodies = batches(rows)
+        done = 0
+
+        def send(body: str) -> int:
+            nonlocal done
+            count = self.query(sql, {"rows": body})["row_count"]
+            done += 1
+            if done % 50 == 0:
+                print(f"  {table}: {done}/{len(bodies)} batches", flush=True)
+            return count
+
+        with ThreadPoolExecutor(self.threads) as pool:
+            return sum(pool.map(send, bodies))
+
+    def keys(self, sql: str) -> dict[Any, str]:
+        out, offset = {}, 0
+        while True:
+            page = self.query(f"{sql} LIMIT {KEY_PAGE} OFFSET {offset}", {})["rows"]
+            for row in page:
+                out[row["k"]] = row["source_key"]
+            if len(page) < KEY_PAGE:
+                return out
+            offset += KEY_PAGE
+
+
+@click.command(help=__doc__)
+@click.option("--app-id", required=True, help="The viewer's Marina app UUID.")
+@click.option("--url", default=DEFAULT_MARINA_URL, show_default=True, help="Marina origin (a local preview's origin).")
+@click.option("--run-root", default=DEFAULT_RUN_ROOT, show_default=True)
+@click.option("--usage-root", default=DEFAULT_USAGE, show_default=True)
+@click.option("--catalog", "catalog_url", default=DEFAULT_CATALOG, show_default=True)
+@click.option("--read-threads", default=48, show_default=True)
+@click.option("--upload-threads", default=4, show_default=True)
+@click.option("--limit", type=int, default=None, help="Load only the first N capabilities (a preview).")
+def main(
+    app_id: str,
+    url: str,
+    run_root: str,
+    usage_root: str,
+    catalog_url: str,
+    read_threads: int,
+    upload_threads: int,
+    limit: int | None,
+) -> None:
+    started_at = datetime.now(UTC).isoformat()
+    started = time.monotonic()
+    configure_coreweave_s3()
+    fs = fsspec.filesystem("s3")
+    root = run_root.removeprefix("s3://").rstrip("/")
+    uploader = Uploader(url, app_id, upload_threads)
+
+    catalog_doc = json.loads(fs.cat(catalog_url))
+    catalog = catalog_capabilities(catalog_doc)
+    listing = fs.find(root, detail=True)
+    files: dict[str, dict[str, dict[str, Any]]] = {}
+    for path, info in listing.items():
+        rel = path[len(root) + 1 :].split("/")
+        if len(rel) == 2 and rel[0] in catalog:
+            files.setdefault(rel[0], {})[rel[1]] = info
+    if not files:
+        raise SystemExit(f"no capability folders under {run_root}; check the CoreWeave keys and the root")
+    usage = read_usage(fs, usage_root.removeprefix("s3://").rstrip("/"))
+    if not usage:
+        raise SystemExit(f"no usage summaries under {usage_root}; run slot_usage.py first")
+    print(
+        f"catalog {len(catalog)} capabilities, {len(files)} folders, {len(listing)} files, "
+        f"{len(usage)} usage summaries ({time.monotonic() - started:.0f}s)",
+        flush=True,
+    )
+    ids = sorted(catalog)[:limit] if limit else sorted(catalog)
+
+    existing_caps = uploader.keys("SELECT id AS k, source_key FROM capabilities ORDER BY id")
+    existing_slots = uploader.keys(
+        "SELECT capability_id || '/' || slot AS k, source_key FROM proposals ORDER BY capability_id, slot"
+    )
+    print(f"stored: {len(existing_caps)} capabilities, {len(existing_slots)} proposals", flush=True)
+    problems: Counter[str] = Counter()
+
+    def usage_of(info: dict[str, Any] | None) -> dict[str, Any] | None:
+        key = file_key(info)
+        if key is None:
+            return None
+        record = usage.get(key)
+        if record is None:
+            problems["completions file without a current usage summary"] += 1
+        return record
+
+    def cat_json(info: dict[str, Any] | None) -> Any:
+        return None if info is None else json.loads(fs.cat(info["name"]))
+
+    def capability_rows(cap: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        meta, folder = catalog[cap], files.get(cap, {})
+        plan_info, result_info, failure_info = (folder.get(n) for n in ("plan.json", "result.json", "failure.json"))
+        plan_usage_info = folder.get("plan.completions.json")
+        slot_numbers = sorted({int(n[5:7]) for n in folder if n.startswith("slot-")})
+        slot_sources: dict[int, dict[str, Any]] = {}
+        for n in slot_numbers:
+            prefix = f"slot-{n:02d}."
+            slot_sources[n] = {
+                kind: file_key(folder.get(prefix + kind))
+                for kind in ("proposal.json", "verdict.json", "failure.txt", "completions.json")
+            }
+            slot_sources[n]["usage"] = slot_sources[n]["completions.json"] in usage
+        cap_key = digest(
+            [file_key(i) for i in (plan_info, result_info, failure_info, plan_usage_info)],
+            (usage_of(plan_usage_info) or {}).get("key"),
+            {str(n): s for n, s in slot_sources.items()},
+            catalog_doc["catalog_version"],
+        )
+        if existing_caps.get(cap) == cap_key:
+            return None, []
+        plan, result, failure = cat_json(plan_info), cat_json(result_info), cat_json(failure_info)
+        planned = {s["slot"]: s for s in (plan or {}).get("slots", [])}
+        slot_results = (result or {}).get("slots", {})
+        slots = sorted(set(planned) | set(slot_numbers))
+        proposal_rows = []
+        counts: Counter[str] = Counter()
+        slot_usage_total = Counter()
+        for n in slots:
+            prefix = f"slot-{n:02d}."
+            plan_slot = planned.get(n, {})
+            completions_info = folder.get(prefix + "completions.json")
+            slot_usage = usage_of(completions_info)
+            for name in USAGE_FIELDS:
+                slot_usage_total[name] += (slot_usage or {}).get(name) or 0
+            key = digest(slot_sources.get(n), file_key(plan_info), (slot_usage or {}).get("key"), meta["subject_id"])
+            proposal_info, verdict_info, failure_txt = (
+                folder.get(prefix + k) for k in ("proposal.json", "verdict.json", "failure.txt")
+            )
+            failure_text = fs.cat(failure_txt["name"]).decode().strip() if failure_txt else None
+            slot_result = slot_results.get(str(n))
+            cut_off = CUT_OFF_TEXT in (failure_text or "") or CUT_OFF_TEXT in str(slot_result or "")
+            status = "proposed" if proposal_info else "cut_off" if cut_off else "failed" if failure_text else "pending"
+            counts[status] += 1
+            if existing_slots.get(f"{cap}/{n}") == key:
+                continue
+            proposal, verdict = cat_json(proposal_info), cat_json(verdict_info)
+            header = (proposal or {}).get("header") or {}
+            body = (proposal or {}).get("body") or ""
+            sections = {s["heading"]: s["text"] for s in body_sections(body)}
+            verdict_decision = (verdict or {}).get("decision")
+            proposal_rows.append(
+                {
+                    "capability_id": cap,
+                    "slot": n,
+                    "subject_id": meta["subject_id"],
+                    "domain": meta["domain"],
+                    "area": meta["area"],
+                    "status": status,
+                    "title": plan_slot.get("title"),
+                    "workflow": plan_slot.get("workflow"),
+                    "challenge": plan_slot.get("distinctive_challenge"),
+                    "summary": first_sentence(sections.get("Task", "")) or None,
+                    "plan_status": plan_slot.get("status"),
+                    "planned_verification": plan_slot.get("verification"),
+                    "planned_environment": plan_slot.get("environment"),
+                    "verification": header.get("verification") or plan_slot.get("verification"),
+                    "environment": header.get("environment") or plan_slot.get("environment"),
+                    "solver_machine": header.get("solver_machine") or plan_slot.get("solver_machine"),
+                    "grounding": header.get("grounding"),
+                    "research_need": header.get("research_need") or plan_slot.get("research_need"),
+                    "verdict": verdict_decision,
+                    "reason": "; ".join((verdict or {}).get("reasons") or []) or None,
+                    "cut_off": cut_off,
+                    "failure": failure_text,
+                    "completions": (slot_usage or {}).get("completions"),
+                    **{name: (slot_usage or {}).get(name) for name in USAGE_FIELDS},
+                    "finish_reasons": (slot_usage or {}).get("finish_reasons"),
+                    "wall_time": (slot_usage or {}).get("wall_time"),
+                    "body_chars": len(body) if proposal else None,
+                    "request_path": (
+                        f"s3://{root}/{cap}/{prefix}request.json" if folder.get(prefix + "request.json") else None
+                    ),
+                    "completions_path": f"s3://{root}/{cap}/{prefix}completions.json" if completions_info else None,
+                    "completions_bytes": completions_info["size"] if completions_info else None,
+                    "proposal": proposal,
+                    "verdict_record": verdict,
+                    "source_key": key,
+                }
+            )
+        plan_usage = usage_of(plan_usage_info) or {}
+        decisions = Counter(v if isinstance(v, str) else "other" for v in slot_results.values())
+        if result is not None:
+            observed = {name: slot_usage_total[name] + (plan_usage.get(name) or 0) for name in USAGE_FIELDS}
+            if any(observed[name] != (result.get("usage") or {}).get(name) for name in USAGE_FIELDS):
+                problems["capability usage differs from result.json"] += 1
+        usage_total = (result or {}).get("usage") or {
+            name: slot_usage_total[name] + (plan_usage.get(name) or 0) for name in USAGE_FIELDS
+        }
+        cap_row = {
+            "id": cap,
+            "name": meta["name"],
+            "outcome": meta["outcome"],
+            "subject_id": meta["subject_id"],
+            "domain": meta["domain"],
+            "area": meta["area"],
+            "section_path": meta["section_path"],
+            "status": "done" if result else "failed" if failure else "planned" if plan else "pending",
+            "slots_planned": len(planned) or None,
+            "proposed": counts["proposed"],
+            "accepted": decisions["accept"] if result else None,
+            "rejected": decisions["reject"] if result else None,
+            "cut_off": counts["cut_off"],
+            "requests": (result or {}).get("requests"),
+            **{name: usage_total.get(name) for name in USAGE_FIELDS},
+            "wall_time": (result or {}).get("wall_time"),
+            "plan_prompt_tokens": plan_usage.get("prompt_tokens"),
+            "plan_completion_tokens": plan_usage.get("completion_tokens"),
+            "plan_reasoning_tokens": plan_usage.get("reasoning_tokens"),
+            "coverage_rationale": (plan or {}).get("coverage_rationale"),
+            "git_sha": ((result or {}).get("provenance") or {}).get("git_sha"),
+            "plan": plan,
+            "result": result,
+            "failure": failure,
+            "catalog_entry": meta["entry"],
+            "plan_request_path": f"s3://{root}/{cap}/plan.request.json" if folder.get("plan.request.json") else None,
+            "plan_completions_path": f"s3://{root}/{cap}/plan.completions.json" if plan_usage_info else None,
+            "source_key": cap_key,
+        }
+        return cap_row, proposal_rows
+
+    read_started = time.monotonic()
+    with ThreadPoolExecutor(read_threads) as pool:
+        built = list(pool.map(capability_rows, ids))
+    cap_rows = [row for row, _ in built if row is not None]
+    slot_rows = [row for _, rows in built for row in rows]
+    print(
+        f"read {len(cap_rows)} changed capabilities and {len(slot_rows)} changed proposals "
+        f"in {time.monotonic() - read_started:.0f}s",
+        flush=True,
+    )
+    upload_started = time.monotonic()
+    uploaded_caps = uploader.upsert("capabilities", CAPABILITY_COLUMNS, "id", cap_rows) if cap_rows else 0
+    uploaded_slots = uploader.upsert("proposals", PROPOSAL_COLUMNS, "capability_id, slot", slot_rows) if slot_rows else 0
+    print(
+        f"upserted {uploaded_caps} capabilities, {uploaded_slots} proposals in {time.monotonic() - upload_started:.0f}s"
+    )
+
+    stored = uploader.query(
+        "SELECT (SELECT COUNT(*) FROM capabilities) AS capabilities, (SELECT COUNT(*) FROM proposals) AS proposals, "
+        "(SELECT COUNT(*) FROM proposals WHERE status = 'proposed') AS proposed, "
+        "(SELECT COUNT(*) FROM capabilities WHERE status = 'done') AS done, "
+        "(SELECT COUNT(*) FROM capabilities WHERE status = 'failed') AS failed, "
+        "(SELECT COALESCE(SUM(slots_planned), 0) FROM capabilities) AS planned",
+        {},
+    )["rows"][0]
+    ingest = {
+        "started_at": started_at,
+        "finished_at": datetime.now(UTC).isoformat(),
+        "seconds": round(time.monotonic() - started),
+        "run_root": run_root,
+        "catalog": catalog_url,
+        "catalog_version": catalog_doc["catalog_version"],
+        "catalog_capabilities": len(catalog),
+        "folders": len(files),
+        "files": len(listing),
+        "result_files": sum(1 for f in files.values() if "result.json" in f),
+        "failure_files": sum(1 for f in files.values() if "failure.json" in f),
+        "usage_summaries": len(usage),
+        "changed_capabilities": uploaded_caps,
+        "changed_proposals": uploaded_slots,
+        "problems": dict(problems),
+        "stored": stored,
+        "sql_requests": uploader.requests,
+        "ingest_version": INGEST_VERSION,
+    }
+    uploader.query(
+        "INSERT INTO run_stats (key, value) VALUES ('ingest', CAST(:value AS JSONB)) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+        {"value": json.dumps(ingest)},
+    )
+    uploader.query(
+        "INSERT INTO run_stats (key, value) SELECT 'provenance', jsonb_build_object("
+        "'git_sha', (SELECT jsonb_object_agg(git_sha, n) FROM (SELECT git_sha, COUNT(*) AS n FROM capabilities "
+        "WHERE git_sha IS NOT NULL GROUP BY 1) g), "
+        "'policy', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'policy') FROM capabilities), "
+        "'catalog', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'catalog') FROM capabilities), "
+        "'max_tokens', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'max_tokens') FROM capabilities), "
+        "'slots', (SELECT jsonb_agg(DISTINCT result -> 'provenance' -> 'slots') FROM capabilities)) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+        {},
+    )
+    print(json.dumps(ingest, indent=2))
+    if problems:
+        print(f"warning: {dict(problems)}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
