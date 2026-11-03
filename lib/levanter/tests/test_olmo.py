@@ -7,11 +7,10 @@ import chex
 import equinox as eqx
 import haliax as hax
 import haliax.nn as hnn
-import jax
 import numpy as np
 import pytest
 from jax import random
-from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
+from levanter.testing.helpers import assert_grads_finite_and_nonzero, skip_if_no_torch, use_test_mesh
 from transformers import AutoModelForCausalLM, Olmo2ForCausalLM
 
 from levanter.layers.attention import AttentionMask
@@ -267,12 +266,7 @@ def test_olmo2_lm_head_model_bwd(use_flash, num_kv_heads):
 
     _, grads = eqx.filter_value_and_grad(f)(olmo2_model, input_ids, mask)
 
-    grad_leaves = jax.tree_util.tree_leaves_with_path(eqx.filter(grads, eqx.is_inexact_array))
-    assert grad_leaves
-    for path, leaf in grad_leaves:
-        name = jax.tree_util.keystr(path)
-        assert np.all(np.isfinite(leaf)), f"non-finite gradient for {name}"
-        assert np.any(leaf != 0), f"all-zero gradient for {name}"
+    assert_grads_finite_and_nonzero(grads)
 
 
 @skip_if_no_torch
