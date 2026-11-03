@@ -20,6 +20,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, PositiveInt
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.structure_closure import structure_closure_task
+from taskcompendium.grader import grader_config
 from taskcompendium.models import (
     SCHEMA_VERSION,
     EnvironmentRequirements,
@@ -33,7 +34,6 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import IntendedUse, NormalizedTask, RawRow
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
-from taskcompendium.runtime.resources import resource_bytes
 from verifyit.json_objects import unique_object
 from zephyr.writers import write_parquet_file
 
@@ -153,12 +153,11 @@ class SourceCounts:
 
 
 def _grader_contract(task: TaskSpec) -> dict[str, Any]:
-    config = next(resource for resource in task.resources.verifier if resource.path == "config.json")
-    return json.loads(resource_bytes(config), object_pairs_hook=unique_object)["contract"]
+    return grader_config(task)["contract"]
 
 
 def validation_task(row: dict[str, Any], grader_environments: Mapping[str, EnvironmentRequirements]) -> TaskSpec:
-    """Import a historical task with its matching admitted component's grader environment."""
+    """Import a historical task; an image-based script grader takes its admitted component's environment."""
     raw = row["lowered_task_spec"]
     document = json.loads(raw, object_pairs_hook=unique_object)
     original = document["task"]
