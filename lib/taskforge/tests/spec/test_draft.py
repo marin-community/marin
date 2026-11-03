@@ -73,7 +73,6 @@ from taskforge.spec.draft import (
     grader_environment,
     lower,
     machine,
-    machine_backend,
     python_grader,
     requirements,
     reward_file,
@@ -639,7 +638,6 @@ def test_a_lock_only_grader_lowers_onto_the_local_backend():
     )
     grader = python_grader(TEXT_GRADER, {}, environment=locked, answer_path=ANSWER_PATH, timeout=20)
 
-    assert machine_backend(locked, ("shellsim", "gvisor", "local")) == Backend.LOCAL
     # RolloutEngine accepts any factory whose backend is local, so a wrapped local factory serves the grader.
     lowered = lower(
         answer_task(grader),

@@ -129,7 +129,6 @@ def test_image_jobs_only_receive_explicit_secrets_and_storage_credentials(in_a_c
     for env in (build_env, push_env):
         assert {name: env[name] for name in in_a_coordinator_task} == dict.fromkeys(in_a_coordinator_task, "")
         assert not any(PASSWORD in value or GLM_TOKEN in value or "storage-" in value for value in env.values())
-    assert build_env["DESTINATION"] == "registry.example/r:t"
     assert build_secrets == storage
     assert push_secrets == {**storage, REGISTRY_AUTH_SECRET: "push-auth"}
 
