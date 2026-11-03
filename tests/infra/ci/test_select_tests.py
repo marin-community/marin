@@ -307,7 +307,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
         ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit", "skyrl-wheel"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
-        ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
+        ("lib/taskforge-adapters/src/taskforge_adapters/glm_client.py", ["taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
         ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
     ],

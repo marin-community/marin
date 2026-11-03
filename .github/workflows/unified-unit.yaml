@@ -473,8 +473,17 @@ jobs:
           -c lib/taskforge/pyproject.toml lib/taskforge/tests
           experiments/post_training/capability_driven_envs/tests -q
 
+      - name: Test Taskforge adapters
+        run: >-
+          uv run --package marin-taskforge-adapters --frozen --group test pytest
+          -c lib/taskforge-adapters/pyproject.toml lib/taskforge-adapters/tests -q
+
       - name: Type-check Taskforge
         working-directory: lib/taskforge
+        run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+
+      - name: Type-check Taskforge adapters
+        working-directory: lib/taskforge-adapters
         run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 
   iris_e2e_smoke:

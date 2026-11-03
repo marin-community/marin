@@ -11,15 +11,15 @@ from rolloutengine.models import TRACE_METRIC, Rollout, RolloutLimits, TraceMode
 from shellbox.machine import Backend
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import JsonAnswer, PlainText
+from taskforge_adapters.glm_client import GlmClient
+from taskforge_adapters.testing import fake_source
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import ModelRequestRejected
-from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.llm.test_support import fake_source
 from taskforge.sandbox.factories import MachineHost
 from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind, Ungraded

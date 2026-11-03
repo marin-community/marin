@@ -9,7 +9,7 @@ shell runs in a bubblewrap sandbox, so the Iris job needs ``--container-profile 
 agent's web tools.
 Inside an Iris task::
 
-    uv run --package marin-taskforge --frozen python -m \\
+    uv run --package marin-taskforge-adapters --frozen python -m \\
         experiments.post_training.capability_driven_envs.generate_tasks_agentic \\
         --output-dir s3://<bucket>/<prefix> --relay-job /muchanem/glm53-relay --capability d43.culinary.scaling
 
@@ -49,8 +49,8 @@ from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
 from taskforge.capability import CapabilityIdea
-from taskforge.llm.glm_client import EndpointSource, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
+from taskforge_adapters.glm_client import EndpointSource, GlmClient, GlmEndpoint, Pool
 
 from experiments.post_training.capability_driven_envs.catalog import example_catalog_path
 from experiments.post_training.capability_driven_envs.generate_tasks import (

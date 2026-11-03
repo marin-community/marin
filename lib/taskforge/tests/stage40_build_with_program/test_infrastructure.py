@@ -26,8 +26,7 @@ from taskcompendium.models import AnswerType, PlainText, TaskSpec
 
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import ModelUnavailable
-from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
-from taskforge.sandbox.images import DockerBuild
+from taskforge.sandbox.images import BuildFailed, DockerBuild, ImageJobFailed
 from taskforge.spec import draft
 from taskforge.stage10_proposal.model import SolverMachine
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step

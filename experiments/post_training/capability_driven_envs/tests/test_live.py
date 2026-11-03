@@ -13,7 +13,7 @@ planned and written research decision, wall time, and tokens per slot.
 import pytest
 
 # These tests run in the marin-taskforge package environment; environments without it skip them.
-pytest.importorskip("taskforge")
+pytest.importorskip("taskforge_adapters")
 
 import asyncio
 import json
@@ -27,10 +27,10 @@ from pathlib import Path
 
 from taskforge.defaults import DEFAULT_POLICY
 from taskforge.llm.client import Completion
-from taskforge.llm.glm_client import FixedEndpoint, GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import Environment
 from taskforge.stage10_proposal.source import SlotFailure, SlotProposal
+from taskforge_adapters.glm_client import FixedEndpoint, GlmClient
 
 from experiments.post_training.capability_driven_envs.catalog import load_capability_ideas
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER

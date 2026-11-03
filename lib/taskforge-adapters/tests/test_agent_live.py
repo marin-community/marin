@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Live validation of taskforge.llm.agent and taskforge.llm.web against GLM-5.3 (interactive tier).
+"""Live validation of taskforge.llm.agent and taskforge_adapters.web against GLM-5.3 (interactive tier).
 
 Each check writes ``<evidence_root>/llm/agent/<check>-<utc>.json``: the purpose, the policy,
 the full ``AgentRun`` (every message, every completion with its raw stream events, every tool
@@ -26,7 +26,6 @@ import pytest
 from pydantic import TypeAdapter
 from shellbox.backends.shellsim.machine import ShellSimMachine, ShellSimMachineFactory
 from shellbox.machine import Command, MachineSpec, PackageSpec
-
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.agent import (
     AgentRun,
@@ -39,11 +38,12 @@ from taskforge.llm.agent import (
     shell_tool,
 )
 from taskforge.llm.client import FinishReason, ModelRequestRejected
-from taskforge.llm.glm_client import FixedEndpoint, GlmClient, request_kwargs
 from taskforge.llm.policy import LLMPolicy, Message, ReasoningEffort
 from taskforge.llm.recording import CallLedger
-from taskforge.llm.test_support import GLM_MODEL, unique_run_name
-from taskforge.llm.web import web_tools
+
+from taskforge_adapters.glm_client import GLM_MODEL, FixedEndpoint, GlmClient, request_kwargs
+from taskforge_adapters.testing import unique_run_name
+from taskforge_adapters.web import web_tools
 
 PYPI_PACKAGE_URL = "https://pypi.org/pypi/shellsim/json"
 RUNS = TypeAdapter(tuple[AgentRun, ...])

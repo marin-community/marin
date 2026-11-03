@@ -37,8 +37,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure
 from taskcompendium.models import AnswerFormat, AnswerType, EnvironmentRequirements, Source, TaskResource
 
 from taskforge.sandbox.factories import grading_environment
-from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
-from taskforge.sandbox.images import BUILD_LIMITS, DockerBuild, check_build_limits
+from taskforge.sandbox.images import BUILD_LIMITS, BuildFailed, DockerBuild, ImageJobFailed, check_build_limits
 from taskforge.spec import draft
 from taskforge.spec.controls import ScriptedModel, candidate_turns
 from taskforge.spec.draft import GRADING_MACHINE, MachineSettings, machine_runtime
@@ -253,9 +252,9 @@ async def publish_image(context: RLEnvBuildContext, build: DockerBuild) -> str:
 
     Raises:
         BuildFailure: the build context exceeds ``BUILD_LIMITS``, or the image failed to build from it
-            (``image_builder.BuildFailed``).
+            (``images.BuildFailed``).
         BuildInfrastructureFailure: this host has no image builder (``NO_IMAGE_BUILDER``), or a build or
-            push job failed for a host reason (``IMAGE_JOB_FAILED``, from ``image_builder.ImageJobFailed``).
+            push job failed for a host reason (``IMAGE_JOB_FAILED``, from ``images.ImageJobFailed``).
     """
     return await publish_image_on_host(context.services, context.workpiece_id, build)
 

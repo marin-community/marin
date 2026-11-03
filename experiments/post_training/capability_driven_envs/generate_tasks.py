@@ -26,7 +26,7 @@ request, so ``--pool`` must match the token's pool. ``--pool`` also picks the po
 client's ``/health`` check counts. On a laptop, with the GLM router port-forwarded and
 ``GLM_BULK_TOKEN`` exported::
 
-    uv run --package marin-taskforge --frozen python -m \\
+    uv run --package marin-taskforge-adapters --frozen python -m \\
         experiments.post_training.capability_driven_envs.generate_tasks \\
         --output-dir /tmp/capability-tasks --base-url http://127.0.0.1:18000/v1 --pool bulk
 
@@ -54,9 +54,9 @@ from taskcompendium.models import TaskSpec
 from taskforge.capability import FILE_SAFE_ID, CapabilityIdea
 from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, ModelClient, ModelRequestRejected, ModelUnavailable
-from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
+from taskforge_adapters.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 
 from experiments.post_training.capability_driven_envs.catalog import example_catalog_path, load_capability_ideas
 from experiments.post_training.capability_driven_envs.program_prompt import (

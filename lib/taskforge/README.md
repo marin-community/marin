@@ -3,6 +3,14 @@
 Taskforge turns task ideas into TaskCompendium `TaskSpec`s with a model's help. It is the
 `marin-taskforge` member of the repository's uv workspace.
 
+The library declares the Protocols it calls (`llm.client.ModelClient`, `sandbox.images.ImageBuilder`,
+`ledger.records.Ledger`, shellbox's `MachineFactory`) and imports no `openai`, `iris`, `finelog` or
+adapter module; `tests/test_imports.py` refuses one. The implementations the pipeline runs with in
+production, the GLM-5.3 client, Parallel web tools, Iris image builds, the Finelog ledger, shellbox
+backend construction and the build child process, are the sibling package `marin-taskforge-adapters`
+(`lib/taskforge-adapters`). The agentic session (`agentic/`) is outside this split and keeps its own
+Parallel client, `agentic/parallel.py`.
+
 ## Package layout
 
 ```
@@ -20,12 +28,11 @@ src/taskforge/
   content_hash.py              canonical JSON and its sha256 digests
   policy.py                    Policy: every prompt by stage, `load_policy` and the policy digest
   defaults/                    policy.json and prompts/**.md, the package's DEFAULT_POLICY
-  ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
-  llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
-                               output, ledger recording, agent loop, web tools, the
-                               RolloutEngine model
-  sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
-                               the host-failure messages build and validation both classify
+  ledger/                      timed spans, and their per-workpiece JSONL backend
+  llm/                         the ModelClient protocol, sampling policy, structured output, ledger
+                               recording, agent loop, the RolloutEngine model
+  sandbox/                     up-front task refusals, image build contexts and the ImageBuilder
+                               protocol, the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/            model.py: the TaskProposal JSON document and generation schema;
                                source.py: Portfolio, SlotProposal, SlotFailure, the ProposalSource
@@ -75,11 +82,7 @@ that program) all live there. The coordinator
 package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import any stage
 and shared module, and `tests/test_imports.py` refuses an import of it from any other package, along
 with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
-and step over JSONL ledgers. The cluster scripts run on Iris and document their submit commands in
-their docstrings: `scripts/build_image_job.py` builds a directory's `DockerBuild` context with
-`taskforge.sandbox.image_builder` and prints the pinned registry digest, and
-`scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved from
-a relay job.
+and step over JSONL ledgers. The cluster scripts are in `lib/taskforge-adapters/scripts`.
 
 ## Prompts and policy
 
@@ -212,7 +215,7 @@ spec, so a move of either is a single-site change.
   category (`spec.controls.CONCERNS`). A task's control set needs a `reference`, an `acceptance`
   and a `shortcut` control, so its coverage never rests on extraction controls, which pin today's
   answer parser. `validate_controls(task, controls)` checks a set against its task.
-- `sandbox.factories.machine_factories(backends, controller_url)` returns exactly the requested
+- `taskforge_adapters.backends.machine_factories(backends, controller_url)` returns exactly the requested
   factories, keyed by shellbox `Backend` value, and raises if one is unavailable. Before a trial
   starts, `task_refusals(spec, factories)` asks each factory to check its machine requirements.
   `warm_local_python(factories)` can warm the local backend's CPython cache in a background thread.
@@ -227,12 +230,12 @@ process are preferred whenever a task fits one.
 
 ## Machine backends
 
-Call `sandbox.factories.machine_factories(backends, controller_url)` with the exact shellbox
+Call `taskforge_adapters.backends.machine_factories(backends, controller_url)` with the exact shellbox
 `Backend` values the run uses. A requested backend that cannot start on the host raises during
 factory construction; the selection never silently shrinks. Supply a controller URL exactly when
 selecting `Backend.GVISOR`. A ShellSim-only run does not probe Docker or the local sandbox.
 
-Custom-image builds remain available through `sandbox.image_builder`; selecting a backend and
+Custom-image builds remain available through `taskforge_adapters.image_builder`; selecting a backend and
 choosing or building its image are separate caller decisions.
 
 ## Model calls
@@ -260,7 +263,7 @@ run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
 `llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
 own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each assistant turn's
 `reasoning_content`. `shell_tool` offers RolloutEngine's default shell tool on a shellbox
-`Machine`, and `llm.web` adds Parallel search and extract. The policy defaults to no application output cap: `max_tokens=None` omits both
+`Machine`, and `taskforge_adapters.web` adds Parallel search and extract. The policy defaults to no application output cap: `max_tokens=None` omits both
 provider output-limit fields. Explicit caps remain available. A physical context or output
 boundary interrupts the attempt and preserves its partial trace for a hold. Agent turn,
 continuation and structured-repair limits are optional; `None` leaves them unbounded.
@@ -359,15 +362,15 @@ an unreachable controller, or a startup or verifier deadline that expired while 
 received files or ran a command (`SANDBOX_DEADLINE`): the grader's own command has its own timeout,
 so the deadline is the sandbox's latency. A task image publish fails as the host's
 (`IMAGE_JOB_FAILED`) when a build or push job did not schedule, was lost or killed, or the push
-failed (`image_builder.ImageJobFailed`), and as the program's `BuildFailure` when the build job ran
-and kaniko failed on the Dockerfile (`image_builder.BuildFailed`). `grade_candidate` grades once
+failed (`sandbox.images.ImageJobFailed`), and as the program's `BuildFailure` when the build job ran
+and kaniko failed on the Dockerfile (`sandbox.images.BuildFailed`). `grade_candidate` grades once
 more on fresh machines when the grader command timed out, and returns the second grade. A step-store
 memo or blob that reads back unreadable or altered raises `step_store.StoreCorruption`, an `OSError`,
 which the build child reports as a storage fault.
 
 A build that runs past a clock raises `BuildExpired`, a third outcome beside `BuildFailure` (the
 program's) and `BuildInfrastructureFailure` (the host's), carrying the `ExpiredClock` it ran past and
-the step: `WALL` when `build_process.run_build_in_process` kills the build at its wall clock, `STEP`
+the step: `WALL` when `taskforge_adapters.build_process.run_build_in_process` kills the build at its wall clock, `STEP`
 when a step runs past `run.STEP_TIMEOUT`, and `GRADER` when the standard grader step's reference
 timed out on both of `grade_candidate`'s gradings. Until someone reads the record nobody knows whether
 Taskforge or the program was slow, so the library does not presume: the driver holds the workpiece as
@@ -778,6 +781,10 @@ uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/p
 cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
+The test group holds `marin-taskforge-adapters`: the library's tests drive their model calls through
+`GlmClient` on `taskforge_adapters.testing.FakeGlm`, a fake router. The adapters' own tests run in
+their package (`lib/taskforge-adapters/README.md`).
+
 `tests/test_pipeline_walkthrough.py` exercises `run_workpiece` with a three-step toy program.
 
 Live tests carry `@pytest.mark.live_glm`. The default marker expression excludes them, and they
@@ -790,6 +797,8 @@ export TASKFORGE_GLM_BASE_URL=http://127.0.0.1:18000/v1
 export GLM_HIGH_TOKEN=<high-pool bearer token>
 uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/pyproject.toml \
     lib/taskforge/tests -m live_glm
+uv run --package marin-taskforge-adapters --frozen --group test pytest \
+    -c lib/taskforge-adapters/pyproject.toml lib/taskforge-adapters/tests -m live_glm
 ```
 
 `-m live_glm` replaces the default marker expression. The agent live tests also take

@@ -10,7 +10,7 @@ from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.types import JobName
 
-from taskforge.llm.glm_client import GLM_MODEL, GlmEndpoint, Pool, RelayEndpoint
+from taskforge_adapters.glm_client import GLM_MODEL, GlmEndpoint, Pool, RelayEndpoint
 
 RELAY_JOB = "/someone/glm53-relay"
 TOKEN = "bulk-token"
