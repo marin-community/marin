@@ -36,6 +36,8 @@ def _skipped_grading_config(tmp_path: Path, *, eval_interval: int) -> Path:
         "coefficient": 1.0,
         "reward_mode": "replace",
     }
+    # Replace mode cannot take the default marker-token reasoning-span credit.
+    raw.setdefault("generator", {}).setdefault("trajectory_reward_shaping", {})["reasoning_span"] = {"target": "rollout"}
     raw["teachers"] = {
         "primary": {
             "source": "openai_compatible",

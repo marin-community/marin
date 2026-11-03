@@ -214,6 +214,9 @@ def test_launch_config_composes_and_loads_as_structured_hydra(
     path = tmp_path / "resolved-launch.yaml"
     raw = _raw_config()
     raw["skyrl"]["trainer"]["algorithm"].update(policy_loss_type=loss, loss_reduction=reduction)
+    if loss == "gspo":
+        # Sequence-level losses cannot take the default marker-token reasoning-span credit.
+        raw["skyrl"]["generator"].setdefault("trajectory_reward_shaping", {})["reasoning_span"] = {"target": "rollout"}
     trainer = raw["skyrl"]["trainer"]
     trainer["resume_mode"] = "from_path"
     trainer["resume_path"] = f"{storage_prefix}/checkpoints/global_step_1"

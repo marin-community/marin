@@ -511,7 +511,8 @@ generator:
       penalty: 0.1
       # `rollout` subtracts it once from the reward. `marker` subtracts it from the loop credit at the token
       # where each span goes wrong, or charges the reward when a violation has no such token.
-      target: rollout
+      # GSPO and distillation reward_mode=replace cannot take token credit; those recipes set `rollout`.
+      target: marker
 
   trajectory_retention:
     enabled: true
