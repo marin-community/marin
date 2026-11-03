@@ -40,6 +40,8 @@ import hashlib
 import json
 import logging
 import math
+import os
+import sys
 import tempfile
 import time
 from collections import Counter, deque
@@ -283,12 +285,15 @@ class OutputRoot:
     async def glob(self, *parts: str) -> list[str]:
         return sorted(await self._bounded(self.fs.glob, self.path(*parts)))
 
-    async def read_many(self, paths: Sequence[str]) -> dict[str, str]:
-        """Read ``paths`` (as ``glob`` returns them), ``STORAGE_READ_BATCH`` per bounded call."""
+    async def read_present(self, names: Sequence[str]) -> dict[str, str]:
+        """Read the files of ``names`` (relative to the root) that exist, ``STORAGE_READ_BATCH`` per bounded
+        call, keyed by name. A missing file is left out; listing is never used, so the cost is the shard's
+        own file count, not the tree's."""
         texts: dict[str, str] = {}
-        for start in range(0, len(paths), STORAGE_READ_BATCH):
-            batch = list(paths[start : start + STORAGE_READ_BATCH])
-            texts.update({p: b.decode() for p, b in (await self._bounded(self.fs.cat, batch)).items()})
+        for start in range(0, len(names), STORAGE_READ_BATCH):
+            batch = [self.path(n) for n in names[start : start + STORAGE_READ_BATCH]]
+            found = await self._bounded(lambda: self.fs.cat(batch, on_error="omit"))
+            texts.update({p[len(self.root) + 1 :]: b.decode() for p, b in found.items()})
         return texts
 
     async def write(self, files: Mapping[str, str]) -> None:
@@ -400,21 +405,25 @@ class ShardSpec:
         )
 
 
-async def done_capabilities(out: OutputRoot, ideas: Mapping[str, CapabilityIdea], provenance: Provenance) -> set[str]:
-    """The capability ids with a ``result.json`` under ``out``.
+async def done_capabilities(
+    out: OutputRoot, ideas: Mapping[str, CapabilityIdea], provenance: Provenance, capability_ids: Sequence[str]
+) -> set[str]:
+    """The ids among ``capability_ids`` with a ``result.json`` under ``out``.
+
+    Reads the shard's own result files by name; a listing of the whole tree (1,999 capabilities, ~100 files
+    each) exceeded ``STORAGE_TIMEOUT`` once the run was complete.
 
     Raises:
-        ProvenanceMismatch: a ``result.json`` records another provenance, or a capability outside the catalog.
+        ProvenanceMismatch: a ``result.json`` records another provenance.
     """
-    texts = await out.read_many(await out.glob("*", RESULT_FILE))
+    texts = await out.read_present([f"{c}/{RESULT_FILE}" for c in capability_ids])
     done: set[str] = set()
     mismatched: list[str] = []
-    for path, text in texts.items():
-        capability_id = path.rsplit("/", 2)[-2]
+    for name, text in texts.items():
+        capability_id = name.rsplit("/", 1)[0]
         recorded = json.loads(text).get("provenance")
-        idea = ideas.get(capability_id)
-        key = None if idea is None else provenance.resume_key(idea)
-        if idea is None or {k: v for k, v in (recorded or {}).items() if k != "git_sha"} != key:
+        key = provenance.resume_key(ideas[capability_id])
+        if {k: v for k, v in (recorded or {}).items() if k != "git_sha"} != key:
             mismatched.append(f"{capability_id}: {recorded}")
         done.add(capability_id)
     if mismatched:
@@ -751,7 +760,7 @@ async def run_shard(
         ProvenanceMismatch: the output root holds results of another provenance.
     """
     provenance = spec.provenance()
-    done = await done_capabilities(out, ideas, provenance)
+    done = await done_capabilities(out, ideas, provenance, capability_ids)
     pending = [c for c in capability_ids if c not in done]
     logger.info(
         "shard: %d capabilities, %d already done, %d to run; provenance %s",
@@ -898,6 +907,11 @@ def main(
     out = OutputRoot(output_root)
     summary = asyncio.run(_run(endpoint, ideas=ideas, capability_ids=capability_ids, out=out, spec=spec))
     asyncio.run(out.write({f"{SHARDS_DIR}/shard-{shard:04d}.json": json.dumps(asdict(summary), indent=2)}))
+    # A storage call that outlived its STORAGE_TIMEOUT still occupies an executor thread, and the interpreter
+    # joins every such thread at exit (four shards of the 2026-11-02 run hung there after "shard done").
+    logging.shutdown()
+    sys.stdout.flush()
+    os._exit(0)
     logger.info("shard %d done: failed %d halted %s", shard, len(summary.failed), summary.halted)
     if summary.failed or summary.halted:
         raise SystemExit(1)
