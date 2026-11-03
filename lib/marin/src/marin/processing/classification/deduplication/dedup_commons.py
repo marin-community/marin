@@ -160,10 +160,7 @@ class _DupTally:
 
 
 def finalize_dedup(shard_results: list[dict], mode: DedupMode, method: str, level: str) -> dict:
-    """Aggregate shard counters, log summary, finish wandb, and return result dict.
-
-    Epilogue for paragraph-level exact dedup.
-    """
+    """Aggregate shard counters, log summary, finish wandb, and return result dict."""
     counter_dict = _aggregate_shard_counters(shard_results, method=method, level=level)
     logger.info(
         "%s %s total: %s, dups: %s, unique: %s",
