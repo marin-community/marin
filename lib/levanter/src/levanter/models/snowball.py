@@ -574,7 +574,7 @@ def snowball_loss_with_dispatch_stats(
     model: "SnowballLMHeadModel", example: LmExample, *, key=None
 ) -> tuple[NamedArray | Array, dict[str, Array]]:
     """Compute next-token loss and dispatch counts in one validity-masked forward."""
-    hidden, stats = model.activations_with_stats(example.tokens, dispatch_token_validity(example), example.attn_mask)
+    hidden, stats = model.activations_with_stats(example.tokens, dispatch_token_validity(example), attn_mask=example.attn_mask)
     loss = maybe_fused_next_token_loss(
         model.Pos,
         model.Embed,
