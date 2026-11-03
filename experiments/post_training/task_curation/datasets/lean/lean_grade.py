@@ -347,7 +347,7 @@ def has_lean_error(log: Path) -> bool:
     return False
 
 
-class StepRunner:
+class GraderSteps:
     """Runs the grader's steps against one overall deadline."""
 
     def __init__(self, start: float, lean: str, lean_path: str) -> None:
@@ -429,7 +429,7 @@ def copy_untrusted(source: Path, destination: Path, limit: int) -> bool:
     return True
 
 
-def check_users(steps: StepRunner) -> None:
+def check_users(steps: GraderSteps) -> None:
     """Fail as the grader, not as the proof, when a step's user cannot run the toolchain."""
     for uid in STEP_USERS:
         result = subprocess.run(
@@ -480,7 +480,7 @@ class Rejected(Exception):
         self.details = details
 
 
-def compile_reference(contract: Contract, steps: StepRunner) -> Path:
+def compile_reference(contract: Contract, steps: GraderSteps) -> Path:
     """Compile and check the reference; its object file, which only root can read. Fails as the grader."""
     reference = make_step_dir("reference", REFERENCE_UID)
     (reference / MODULE_FILE).write_text(reference_source(contract))
@@ -505,7 +505,7 @@ def graded_block(reply: bytes) -> str:
     return block
 
 
-def compile_candidate(contract: Contract, block: str, steps: StepRunner, shared: Path) -> Path:
+def compile_candidate(contract: Contract, block: str, steps: GraderSteps, shared: Path) -> Path:
     """Compile the candidate as ``COMPILE_UID``; its object file, copied into ``shared``."""
     candidate = make_step_dir("candidate", COMPILE_UID)
     (candidate / MODULE_FILE).write_text(candidate_source(contract, block))
@@ -526,7 +526,7 @@ def compile_candidate(contract: Contract, block: str, steps: StepRunner, shared:
     return shared / "candidate.olean"
 
 
-def export_candidate(candidate: Path, steps: StepRunner, shared: Path) -> Path:
+def export_candidate(candidate: Path, steps: GraderSteps, shared: Path) -> Path:
     """Export the candidate's object file to proof data as ``EXPORT_UID``; the data, copied into ``shared``."""
     export = make_step_dir("export", EXPORT_UID)
     result = steps.run("export", EXPORT_UID, [str(EXPORT_BIN), str(candidate), str(export / "proof.json")], export)
@@ -545,7 +545,7 @@ def export_candidate(candidate: Path, steps: StepRunner, shared: Path) -> Path:
     return shared / "proof.json"
 
 
-def verify_candidate(contract: Contract, reference: Path, proof_data: Path, steps: StepRunner) -> tuple[float, dict]:
+def verify_candidate(contract: Contract, reference: Path, proof_data: Path, steps: GraderSteps) -> tuple[float, dict]:
     """Replay the proof data against the reference as ``VERIFY_UID``; the reward and ``lean-verify``'s verdict."""
     shared = proof_data.parent
     (shared / "reference.olean").write_bytes(reference.read_bytes())
@@ -564,7 +564,7 @@ def verify_candidate(contract: Contract, reference: Path, proof_data: Path, step
     return (1.0 if ok else 0.0), {"status": "accepted" if ok else "rejected", "verdict": verdict}
 
 
-def grade(contract: Contract, reply: bytes, steps: StepRunner) -> tuple[float, dict]:
+def grade(contract: Contract, reply: bytes, steps: GraderSteps) -> tuple[float, dict]:
     """The reward and its details: the reference is checked first, so a broken one never yields a score."""
     reference = compile_reference(contract, steps)
     shared = WORK / "shared"
@@ -594,7 +594,7 @@ def main() -> None:
     WORK.mkdir(mode=0o755)
     close_shared_directories()
     resource.setrlimit(resource.RLIMIT_MSGQUEUE, (0, 0))
-    steps = StepRunner(start, lean, lean_path)
+    steps = GraderSteps(start, lean, lean_path)
     check_users(steps)
     try:
         reward, details = grade(contract, reply, steps)
