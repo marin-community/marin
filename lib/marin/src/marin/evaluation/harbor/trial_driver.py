@@ -49,7 +49,6 @@ from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyre
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.s3_compat import s3_credential_options
-from upath import UPath
 
 from marin.evaluation.harbor.agent_context import (
     MAX_INPUT_TOKENS_KEY,
@@ -467,10 +466,11 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
         )
         verifier_env = _guest_model_environment(verifier_env, model_name)
     agent = agent.model_copy(update={"env": _dummy_model_keys(agent.env)})
-    effective = config.model_copy(
-        update={
+    effective = JobConfig.model_validate(
+        {
+            **dict(config),
             "job_name": overlay.job_name,
-            "jobs_dir": UPath(overlay.jobs_dir),
+            "jobs_dir": overlay.jobs_dir,
             "agents": [agent],
             "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
             "datasets": [dataset],
