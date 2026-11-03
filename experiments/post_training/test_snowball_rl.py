@@ -190,7 +190,7 @@ print(json.dumps([
     )
 
 
-def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path):
+def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     learning = presets.PRESETS["learning-medium"]
     data = presets.PRESETS["data-short"]
     long = presets.PRESETS["train-long"]

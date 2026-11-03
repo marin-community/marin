@@ -413,7 +413,7 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     assert (agentic["run"], agentic["initializer"], agentic["tasks"]) == pytest.approx((1.4 / 3, 0.5, 3))
     assert rows["panel-910/aaii_category/x/mean"]["run"] == pytest.approx(1.4 / 3)
     assert agentic["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 5, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25))
-    # A declared metric keeps k = 1 inside a breakdown table; a detail row with constant controls has no change.
+    # A declared metric keeps k = 1 inside a breakdown table; constant controls leave a detail row unavailable.
     assert rows["panel-910/mean"]["tolerance"] == pytest.approx(
         t.ppf(0.975, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25)
     )
