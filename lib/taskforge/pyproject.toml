@@ -50,6 +50,8 @@ known-first-party = ["taskforge"]
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
 project-includes = ["src", "tests", "../../experiments/post_training/capability_driven_envs"]
+# The acceptance measurement's kit is reference text its authors read, digested into the arms; it is not checked.
+project-excludes = ["../../experiments/post_training/capability_driven_envs/acceptance_measure/kit"]
 search-path = [
     "src",
     ".",
