@@ -55,7 +55,6 @@ from verifyit.spec import (
     StructuredExactSpec,
 )
 
-from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec.draft import (
     ANSWER_PATH,
@@ -74,7 +73,6 @@ from taskforge.spec.draft import (
     grader_environment,
     lower,
     machine,
-    machine_backend,
     python_grader,
     requirements,
     reward_file,
@@ -179,11 +177,9 @@ def lower_here(
     task: TaskSpec,
     task_machine: MachineSettings | None = None,
     verifier_machine: MachineSettings | None = None,
-    host: MachineHost = MachineHost.LAPTOP,
 ) -> TaskRolloutSpec:
     return lower(
         task,
-        host=host,
         task_machine=task_machine,
         verifier_machine=verifier_machine,
         limits=LIMITS,
@@ -392,8 +388,8 @@ def test_answer_grader_refuses_the_grader_base_image_which_has_no_verifyit():
         answer_grader(PytestSpec(paths=("test_answer.py",)), environment=grader_environment(None))
 
 
-@pytest.mark.parametrize("host,backend", [(MachineHost.LAPTOP, Backend.DOCKER), (MachineHost.IRIS, Backend.GVISOR)])
-def test_docker_task_lowers_both_machines_onto_the_hosts_container_backend(host, backend):
+@pytest.mark.parametrize("backend", [Backend.DOCKER, Backend.GVISOR])
+def test_docker_task_lowers_both_machines_onto_the_selected_container_backend(backend):
     grader = docker_grader(
         collect=(VerifierCommand(argv=("cp", "-r", "/app", "/tmp/app")),),
         artifacts=(VerifierArtifact(source="/app", target="/submission", kind=ArtifactKind.DIRECTORY),),
@@ -411,7 +407,6 @@ def test_docker_task_lowers_both_machines_onto_the_hosts_container_backend(host,
 
     lowered = lower(
         task,
-        host=host,
         task_machine=task_machine,
         verifier_machine=verifier_machine,
         limits=LIMITS,
@@ -586,25 +581,31 @@ def test_lower_takes_exactly_the_machines_the_task_needs(task_machine, verifier_
 
 
 def test_lower_propagates_rolloutengines_rejections():
-    with pytest.raises(ValueError, match="Unknown Shellbox factory: 'docker'"):
-        lower(
-            file_task(),
-            host=MachineHost.LAPTOP,
-            task_machine=SHELLSIM,
-            verifier_machine=VERIFIER,
-            limits=LIMITS,
-            factories={"shellsim": ShellSimMachineFactory()},
-        )
+    # ShellSim cannot limit CPUs; RolloutEngine.check asks the factory and rejects the machine.
+    with pytest.raises(ValueError, match="CPU"):
+        lower_here(file_task(), replace(SHELLSIM, limits=MachineLimits(cpus=2)), VERIFIER)
     # The command timeout belongs to the engine's shell harness, so the engine that runs a spec rejects it.
     lowered = lower_here(file_task(), SHELLSIM, VERIFIER)
     with pytest.raises(ValueError, match="command timeout must be less"):
         rollout_engine(FACTORIES, command_timeout=LIMITS.tool_turn_timeout).check(lowered)
 
 
-def test_lower_puts_a_shellsim_task_on_shellsim_and_its_grader_on_the_hosts_container_backend():
+@pytest.mark.parametrize(
+    "factories",
+    [
+        {"shellsim": ShellSimMachineFactory()},
+        {"docker": RecordingFactory(Backend.DOCKER), "gvisor": RecordingFactory(Backend.GVISOR)},
+    ],
+    ids=["none", "both"],
+)
+def test_lower_refuses_an_image_machine_without_exactly_one_selected_container_backend(factories):
+    with pytest.raises(ValueError, match="exactly one container backend"):
+        lower(file_task(), task_machine=SHELLSIM, verifier_machine=VERIFIER, limits=LIMITS, factories=factories)
+
+
+def test_lower_puts_a_shellsim_task_on_shellsim_and_its_grader_on_the_selected_container_backend():
     lowered = lower(
         file_task(),
-        host=MachineHost.IRIS,
         task_machine=SHELLSIM,
         verifier_machine=VERIFIER,
         limits=LIMITS,
@@ -618,7 +619,6 @@ def test_lower_puts_a_shellsim_task_on_shellsim_and_its_grader_on_the_hosts_cont
 def test_a_shellsim_task_machine_asks_for_the_catalogs_cpython():
     lowered = lower(
         file_task(),
-        host=MachineHost.LAPTOP,
         task_machine=SHELLSIM,
         verifier_machine=VERIFIER,
         limits=LIMITS,
@@ -638,11 +638,9 @@ def test_a_lock_only_grader_lowers_onto_the_local_backend():
     )
     grader = python_grader(TEXT_GRADER, {}, environment=locked, answer_path=ANSWER_PATH, timeout=20)
 
-    assert machine_backend(locked, MachineHost.IRIS) == Backend.LOCAL
     # RolloutEngine accepts any factory whose backend is local, so a wrapped local factory serves the grader.
     lowered = lower(
         answer_task(grader),
-        host=MachineHost.IRIS,
         task_machine=None,
         verifier_machine=VERIFIER,
         limits=LIMITS,
@@ -673,7 +671,6 @@ def cpython_task(
 def lower_on_iris(task: TaskSpec, backends: tuple[Backend, ...]) -> TaskRolloutSpec:
     return lower(
         task,
-        host=MachineHost.IRIS,
         task_machine=SHELLSIM,
         verifier_machine=VERIFIER,
         limits=LIMITS,
@@ -761,7 +758,6 @@ def system_directory_task() -> TaskSpec:
 def lower_beside_local(task: TaskSpec, local: RecordingFactory) -> TaskRolloutSpec:
     return lower(
         task,
-        host=MachineHost.IRIS,
         task_machine=SHELLSIM,
         verifier_machine=VERIFIER,
         limits=LIMITS,
@@ -808,7 +804,6 @@ def test_a_grader_base_verifier_staging_its_answer_under_a_read_only_root_keeps_
     }
     lowered = lower(
         answer_task(grader),
-        host=MachineHost.IRIS,
         task_machine=None,
         verifier_machine=VERIFIER,
         limits=LIMITS,

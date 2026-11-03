@@ -32,7 +32,6 @@ from taskforge.llm.client import (
     Usage,
 )
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
 from taskforge.stage10_proposal.model import parse
 from taskforge.stage30_author.loader import GRADER_STEP
@@ -174,7 +173,6 @@ def round_settings(
     adversary: AdversaryPolicy | None = None,
 ) -> ValidationSettings:
     return ValidationSettings(
-        host=MachineHost.LAPTOP,
         engine=EngineSettings(
             factories={Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()},
             command_timeout=10,
