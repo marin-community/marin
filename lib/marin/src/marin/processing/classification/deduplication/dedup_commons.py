@@ -3,7 +3,7 @@
 
 import logging
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum, auto
 
@@ -11,16 +11,13 @@ import pyarrow as pa
 import pyarrow.json as pa_json
 import pyarrow.parquet as pq
 import wandb
-from rigging.filesystem.storage_path import StoragePath, rebase_file_path
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
-from zephyr.writers import write_parquet_file
 
 from marin.utilities.wandb_utils import init_wandb
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_FILETYPES: list[str] = ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"]
 
 
 class DedupMode(StrEnum):
@@ -29,10 +26,6 @@ class DedupMode(StrEnum):
     EXACT_PARAGRAPH = auto()
     """
     Identify exact duplicate paragraphs within documents.
-    """
-    EXACT_DOCUMENT = auto()
-    """
-    Identify exact duplicate documents.
     """
     FUZZY_DOCUMENT = auto()
     """
@@ -166,48 +159,10 @@ class _DupTally:
         return {**base, "total": self.total, "dups": self.dups, "unique": self.unique}
 
 
-def make_document_dedup_aggregator(
-    *,
-    idx_to_path: dict[int, str],
-    input_paths: str | list[str],
-    output_path: str,
-    counter_prefix: str,
-) -> Callable[[int, Iterator[dict]], dict]:
-    """Return a group_by reducer that counts dedup stats and writes parquet output.
-
-    The returned callable maps ``(file_idx, records) -> dict`` with keys
-    ``total``, ``dups``, ``unique`` plus whatever ``write_parquet_file`` returns.
-
-    Used identically by both exact-document and fuzzy-document dedup.
-    """
-
-    def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
-        input_path = idx_to_path[file_idx]
-        output_file = rebase_file_path(
-            _find_base_path(input_paths, [input_path]),
-            input_path,
-            f"{output_path}/data/",
-            old_extension=_get_extension(input_path),
-            new_extension=".parquet",
-        )
-
-        tally = _DupTally(counter_prefix)
-
-        def only_dups(records: Iterator[dict]) -> Iterator[dict]:
-            for record in records:
-                if record["is_dup"]:
-                    yield {"id": record["id"], "dup_doc": True}
-
-        result = write_parquet_file(only_dups(tally.tally(records)), output_file)
-        return tally.as_result(result)
-
-    return aggregate
-
-
 def finalize_dedup(shard_results: list[dict], mode: DedupMode, method: str, level: str) -> dict:
     """Aggregate shard counters, log summary, finish wandb, and return result dict.
 
-    Shared epilogue for all three dedup entry points.
+    Epilogue for paragraph-level exact dedup.
     """
     counter_dict = _aggregate_shard_counters(shard_results, method=method, level=level)
     logger.info(
