@@ -131,6 +131,12 @@ Qwen3-0.6B with thinking off answers the thinking probe but narrates the
 command and URL probes without calling a tool, which the labels report as
 `no_invocation` and `not_attempted` with wrong answers.
 
+To run all four probes against the same model served by vLLM on one H100,
+including the answer file graded in the local sandbox, submit
+`uv run python -m experiments.post_training.inventory.protocol_probes_smoke
+--version <label>-dev --run`. It trains one dry step so the probes are
+evaluated before and after it, and writes the same metrics and dumps.
+
 The final update saves a checkpoint; HF export is opt-in with `--export-hf` and
 adds a separate export job after training. Local graders require the privileged
 container profile; image graders and host judges use their configured backends.
