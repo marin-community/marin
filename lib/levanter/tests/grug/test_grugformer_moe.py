@@ -48,6 +48,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
+from levanter.testing.devices import use_test_devices
 from levanter.grug._moe.ep_ring_filtered import destination_hit_fraction
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
@@ -1654,24 +1655,13 @@ def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
     np.testing.assert_array_equal(np.asarray(x_gradient), np.asarray(expected_x_gradient, jnp.bfloat16))
 
 
-@pytest.mark.timeout(240)
-def test_combine_in_fp32_matches_an_fp32_combine_reference_on_8_cpu_devices():
-    """`combine_in_fp32` keeps the weighted rows, their sums and the ring's psum-scatter in float32 and rounds to
-    bfloat16 once; without it the bfloat16 weights and partial sums round several times."""
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        import pytest
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+@pytest.mark.multidevice
+def test_combine_in_fp32_matches_an_fp32_combine_reference_on_eight_devices():
+    with use_test_devices(8) as devices:
 
-        from levanter.grug.grug_moe import moe_mlp
 
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(2, 4, 1),
+            np.asarray(devices).reshape(2, 4, 1),
             axis_names=("data", "expert", "model"),
             axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
         )
@@ -1707,7 +1697,7 @@ def test_combine_in_fp32_matches_an_fp32_combine_reference_on_8_cpu_devices():
 
         def run(implementation, combine_in_fp32, mesh):
             def forward(x, selected, weights, w_up_gate, w_down):
-                return moe_mlp(
+                return grug_moe.moe_mlp(
                     x,
                     selected,
                     weights,
@@ -1743,7 +1733,7 @@ def test_combine_in_fp32_matches_an_fp32_combine_reference_on_8_cpu_devices():
             assert off_error > 1.5 * on_error, (implementation, off_error, on_error)
 
         with jax.set_mesh(mesh), pytest.raises(ValueError, match="combine_in_fp32"):
-            moe_mlp(
+            grug_moe.moe_mlp(
                 args["x"],
                 args["selected"],
                 args["weights"],
@@ -1754,18 +1744,6 @@ def test_combine_in_fp32_matches_an_fp32_combine_reference_on_8_cpu_devices():
                 mesh=mesh,
                 combine_in_fp32=True,
             )
-        print("OK")
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "OK" in result.stdout
 
 
 @pytest.mark.timeout(240)
