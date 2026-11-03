@@ -310,21 +310,6 @@ def null_slot_proposal(idea: CapabilityIdea, slot: PlannedSlot) -> SlotProposal:
     return SlotProposal(slot.slot, parse(render(TaskProposal(header=header, body=body))), (), (), None)
 
 
-def plan_request(
-    proposer: ProposerPolicy, rule: Prompt, idea: CapabilityIdea, n: int, environments: frozenset[Environment]
-) -> tuple[Message, ...]:
-    """Build the first planning request for ``n`` slots on a host that runs ``environments``, as sent.
-
-    It is the system prompt, ``plan_prompt``, and the final user turn holding the plan type's field
-    instruction, which ``complete_structured`` appends to the messages it is given.
-    """
-    return (
-        {"role": "system", "content": system_prompt(proposer, rule)},
-        {"role": "user", "content": plan_prompt(proposer, idea, n, environments)},
-        {"role": "user", "content": schema_instruction(slot_plan_type(n, environments))},
-    )
-
-
 async def plan_slots(
     model: ModelClient,
     policy: LLMPolicy,
@@ -342,12 +327,18 @@ async def plan_slots(
     Raises:
         StructuredOutputError: the output limit cut the plan off, or every reply failed validation.
     """
-    request = plan_request(proposer, rule, idea, n, environments)
-    # complete_structured appends the field instruction itself, so the call gets the turns before it.
-    result = await model.complete_structured(list(request[:-1]), slot_plan_type(n, environments), policy)
+    plan_type = slot_plan_type(n, environments)
+    request: tuple[Message, ...] = (
+        {"role": "system", "content": system_prompt(proposer, rule)},
+        {"role": "user", "content": plan_prompt(proposer, idea, n, environments)},
+    )
+    result = await model.complete_structured(list(request), plan_type, policy)
     plan = result.value
     slots = tuple(_portfolio_slot(s) for s in plan.slots)
-    return Portfolio(request, result.completions, plan, slots)
+    # The request as sent: complete_structured appends the plan type's field instruction as the last user turn.
+    instruction: Message = {"role": "user", "content": schema_instruction(plan_type)}
+    sent = (*request, instruction)
+    return Portfolio(sent, result.completions, plan, slots)
 
 
 def _portfolio_slot(slot: PlannedSlot) -> PortfolioSlot:

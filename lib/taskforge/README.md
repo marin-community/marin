@@ -125,7 +125,14 @@ non-null body cites every item, and only listed items, as `research[i]`. `solver
 solver's machine: `null` for a container proposal, which runs in the image its build publishes, and
 `none`, `shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one, where
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
-The proposer writes it, and the build keeps it. `parse` also refuses a `resources` entry that is
+The proposer writes it, and the build keeps it. `verification` is one `Verification` kind:
+`answer_in_box`, `code`, `decision_model`, `llm_as_judge`, or the reserved `composite`, whose
+`composite` parts weight the other kinds; generation offers every kind but `composite`, and `parse`
+refuses parts on any other kind. Triage checks that the grader section names the kind's evidence. The
+build tags the task with the kind and the author reads it in the proposal, but the grader a build
+keeps is whichever grades its reference at full credit through `grade_candidate`, which calls no
+model, so a `decision_model` or `llm_as_judge` proposal is built today with a deterministic grader or
+not at all. `parse` also refuses a `resources` entry that is
 not a relative path inside the build root and a `build` name that repeats.
 `document_request_fields(proposal_id, source)` returns the `response_format` JSON-schema request
 field that constrains a completion to the typed object for that id and source. A reply cut off
@@ -137,10 +144,37 @@ source for catalog capabilities, which takes its model, sampling policy and host
 construction. Its `plan(idea, n)` plans `n` slots in one structured call, each with a solver
 machine and a research decision, and its `write(idea, portfolio, slot)` writes one slot's document
 under the regex with GLM thinking first.
-`propose_tasks` in the same package proposes the catalog's capabilities from the command line and
-triages each proposal with `preflight`. A slot whose model call runs out of retries or is rejected
-is a `SlotFailure` like any other, so the capability keeps its plan and its other slots; only a
-failed planning call fails the whole capability.
+Its system turn quotes a verification rule, a prompt the source is given:
+`proposal_source.VERIFICATION_RULE` names the default, `proposer.determinate_first_preferred`
+(`defaults/prompts/proposer/determinate_first_preferred.md`), the rule the 2026-11-02 n=25 curriculum run
+used. With it the default policy renders that run's requests byte for byte.
+
+`propose_curriculum` in the same package proposes one shard of a catalog and triages each proposal
+with `preflight`; its module docstring lists the files it writes. To run a curriculum, from the repo
+root, with `CW_KEY_ID`/`CW_KEY_SECRET` and `GLM_BULK_TOKEN` exported:
+
+```bash
+ROOT=s3://marin-us-east-02a/marin/taskforge/proposals/<run>
+for s in 0 1 2 3 4 5 6 7; do
+  uv run iris --cluster=marin job run --no-wait --job-name tfprop-<stamp>-s0${s}of8 --target-cluster cw-rno2a \
+    --cpu 4 --memory 16GB --disk 20GB --enable-extra-resources --max-retries 5 \
+    -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" -- \
+    uv run --frozen --package marin-taskforge python -u -m \
+    experiments.post_training.capability_driven_envs.propose_curriculum --catalog <catalog.json URL> \
+    --output-root "$ROOT/run" --shard $s --shards 8 --concurrency 40 --relay-job <exact relay job id> \
+    --git-sha "$(git rev-parse HEAD)"
+done
+```
+
+- Change the load live: write `$ROOT/run/control.json` as
+  `{"concurrency_per_shard": N, "written_at": "<ISO 8601 with zone>"}` (or `"pause": true`) with
+  `fsutil cp`. Shards poll it every 15 s and hold their limit, logging an error, once it is older than
+  300 s, so a controller rewrites it as a heartbeat; total load is N times the running shards.
+- Progress is the count of `*/result.json` (done) and `*/failure.json` (retried by a rerun) under the
+  root, and each shard's log line per capability with its in-flight count and limit.
+- Relaunch a shard under a new job name; it skips its capabilities with a `result.json`. A root
+  refuses a shard whose provenance (slots, catalog, environments, rule, prompt and schema hashes,
+  token budget, repair cap) differs from its results', so a new rule or prompt needs a new root.
 
 ## Triage
 
