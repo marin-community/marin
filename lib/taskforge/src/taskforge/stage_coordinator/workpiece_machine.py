@@ -11,9 +11,8 @@ exhaustion resumes triage, authoring, review or validation as appropriate.
 
 An explicit relaunch of ABANDONED records RESUMED. It starts a fresh budget window
 while retaining cumulative revision/round counters, so new evidence never overwrites
-old files. A changed budget is allowed only at that recorded resumption. Legacy
-ABANDONED validation records still resume validation, and legacy FAILED records are
-read as HELD at their original stage. Existing final decisions remain immutable.
+old files. A changed budget is allowed only at that recorded resumption. Final
+decisions remain immutable.
 
 The fold checks sequence order, stage ownership, transition edges and closing
 terminals. Only DONE consumes a closing; an exception may record HELD in place.
@@ -118,11 +117,9 @@ TRANSITIONS: Mapping[tuple[Stage, Exit], Stage] = MappingProxyType(
         (Stage.TRIAGE, Exit.ABANDON): Stage.DONE,
         (Stage.AUTHOR, Exit.AUTHORED): Stage.BUILD,
         (Stage.AUTHOR, Exit.REVISE): Stage.AUTHOR,
-        (Stage.AUTHOR, Exit.REJECT): Stage.DONE,
         (Stage.AUTHOR, Exit.ABANDON): Stage.DONE,
         (Stage.BUILD, Exit.BUILT): Stage.VALIDATE,
         (Stage.BUILD, Exit.REVISE): Stage.AUTHOR,
-        (Stage.BUILD, Exit.REJECT): Stage.DONE,
         (Stage.BUILD, Exit.ABANDON): Stage.DONE,
         (Stage.VALIDATE, Exit.VALIDATED): Stage.REVIEW,
         (Stage.REVIEW, Exit.ACCEPT): Stage.DONE,
@@ -142,8 +139,6 @@ class Terminal(StrEnum):
     """Incomplete evidence or an execution failure; resume without spending an author revision."""
     ABANDONED = "abandoned"
     """A workpiece retry/revision budget ran out; a relaunch starts a new budget window."""
-    FAILED = "failed"
-    """Legacy spelling read as HELD; new execution failures never write FAILED."""
 
 
 FINAL = frozenset({Terminal.ACCEPTED, Terminal.REJECTED})
@@ -200,8 +195,6 @@ class WorkpieceState:
         build_revisions: The build failures and failed author calls so far.
         retries: The review ``Retry`` decisions since the workpiece opened or was last abandoned: the count
             ``max_validation_retries`` bounds.
-        validation_passes: The ``VALIDATED`` events of the current round, across retries and re-entries after
-            an abandonment; a new round starts it at zero.
         closing: The ``TERMINAL`` event due, while the stage is ``DONE``.
         terminal: The workpiece's terminal, until a later event clears it.
     """
@@ -217,7 +210,6 @@ class WorkpieceState:
     author_state: Mapping[str, JsonValue]
     build_revisions: int
     retries: int
-    validation_passes: int
     closing: Closing | None
     terminal: Terminal | None
     triage_repairs_at_resume: int = 0
@@ -242,7 +234,6 @@ def opened(event: WorkpieceEvent) -> WorkpieceState:
         author_state=MappingProxyType({}),
         build_revisions=0,
         retries=0,
-        validation_passes=0,
         closing=None,
         terminal=None,
     )
@@ -291,7 +282,7 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
         case (EventKind.TRIAGED, Exit.ACCEPT):
             return replace(state, author_state=MappingProxyType(json.loads(attrs[AUTHOR_STATE_ATTR])))
         case (EventKind.VALIDATED, Exit.VALIDATED):
-            return replace(state, validation_passes=state.validation_passes + 1)
+            return state
         case (EventKind.TRIAGED, Exit.REPAIR):
             assert event.digest is not None, "a repair exit carries the rewrite's digest"
             return replace(state, proposal_digest=event.digest, triage_repairs=state.triage_repairs + 1)
@@ -310,15 +301,11 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
         case (EventKind.AUTHOR_FAILED, Exit.REVISE):
             return replace(state, build_revisions=state.build_revisions + 1, revision=RevisionKind.AUTHOR_FAILURE)
         case (EventKind.AUTHOR_FAILED, Exit.ABANDON):
-            return _out_of_revisions(state, RevisionKind.AUTHOR_FAILURE, Terminal.ABANDONED)
-        case (EventKind.AUTHOR_FAILED, Exit.REJECT):
-            return _out_of_revisions(state, RevisionKind.AUTHOR_FAILURE, Terminal.REJECTED)
+            return _out_of_revisions(state, RevisionKind.AUTHOR_FAILURE)
         case (EventKind.BUILD_FAILED, Exit.REVISE):
             return replace(state, build_revisions=state.build_revisions + 1, revision=RevisionKind.BUILD_FAILURE)
         case (EventKind.BUILD_FAILED, Exit.ABANDON):
-            return _out_of_revisions(state, RevisionKind.BUILD_FAILURE, Terminal.ABANDONED)
-        case (EventKind.BUILD_FAILED, Exit.REJECT):
-            return _out_of_revisions(state, RevisionKind.BUILD_FAILURE, Terminal.REJECTED)
+            return _out_of_revisions(state, RevisionKind.BUILD_FAILURE)
         case (EventKind.DECIDED, Exit.ACCEPT):
             band = BandOutcome(attrs["band"])
             reason = CALIBRATED if band is BandOutcome.IN_BAND else f"{OUTSIDE_BAND}: {band}"
@@ -332,33 +319,24 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
         case (EventKind.DECIDED, Exit.ABANDON):
             return replace(
                 state,
-                closing=Closing(
-                    Terminal.ABANDONED,
-                    attrs.get("reasons", attrs.get("cause", "retry budget exhausted")),
-                    RejectKind.BUDGET,
-                    Stage(attrs.get("resume_stage", Stage.VALIDATE)),
-                ),
+                closing=Closing(Terminal.ABANDONED, attrs["reasons"], RejectKind.BUDGET, Stage(attrs["resume_stage"])),
             )
         case (EventKind.DECIDED, Exit.MODIFY):
-            return replace(
-                state, round=state.round + 1, validation_passes=0, task_digest=None, revision=RevisionKind.MODIFY
-            )
+            return replace(state, round=state.round + 1, task_digest=None, revision=RevisionKind.MODIFY)
         case _:
             raise ValueError(f"{kind} cannot exit {way}")
 
 
-def _out_of_revisions(state: WorkpieceState, revision: RevisionKind, terminal: Terminal) -> WorkpieceState:
-    """Retain the last failure for the next author call; old REJECT edges remain readable."""
+def _out_of_revisions(state: WorkpieceState, revision: RevisionKind) -> WorkpieceState:
+    """Abandon at the author, keeping the last failure for the author call a relaunch makes."""
     failures = state.build_revisions + 1
     reason = f"no buildable program after {failures} build and author failures"
-    closing = Closing(terminal, reason, RejectKind.BUDGET, Stage.AUTHOR)
+    closing = Closing(Terminal.ABANDONED, reason, RejectKind.BUDGET, Stage.AUTHOR)
     return replace(state, build_revisions=failures, revision=revision, closing=closing)
 
 
 def _terminal(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
     terminal = Terminal(event.attrs[TERMINAL_ATTR])
-    if terminal is Terminal.FAILED:
-        terminal = Terminal.HELD
     closing = state.closing
     if terminal is Terminal.HELD and (closing is None or closing.terminal is not Terminal.HELD):
         return replace(state, terminal=terminal)
@@ -369,7 +347,8 @@ def _terminal(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
         raise ValueError(f"TERMINAL {terminal} in stage {state.stage} with closing {found}")
     state = replace(state, terminal=terminal, closing=None)
     if terminal in (Terminal.ABANDONED, Terminal.HELD):
-        return replace(state, stage=closing.resume_stage or Stage.VALIDATE, retries=0)
+        assert closing.resume_stage is not None, f"a {terminal} closing names the stage a relaunch resumes"
+        return replace(state, stage=closing.resume_stage, retries=0)
     return state
 
 

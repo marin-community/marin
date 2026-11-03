@@ -94,7 +94,7 @@ def test_a_triage_reject_closes_rejected_as_a_task_with_the_events_reason():
 
 def test_a_retry_past_the_budget_abandons_and_a_relaunch_re_enters_validation_with_no_retries():
     retry = decided(exit="retry", cause="model_unavailable", count="3", retries_used="1")
-    abandon = decided(exit="abandon", cause="model_unavailable", count="4", retries_used="2")
+    abandon = decided(exit="abandon", reasons="model_unavailable", resume_stage="validate", retries_used="2")
     log = [*VALIDATED_LOG, retry]
     retried = derive_state(numbered(*log))
     log += [VALIDATED, abandon]
@@ -111,9 +111,9 @@ def test_a_retry_past_the_budget_abandons_and_a_relaunch_re_enters_validation_wi
 
 @pytest.mark.parametrize(
     ("way", "stage", "closing"),
-    [("revise", Stage.AUTHOR, None), ("reject", Stage.DONE, (Terminal.REJECTED, RejectKind.BUDGET))],
+    [("revise", Stage.AUTHOR, None), ("abandon", Stage.DONE, (Terminal.ABANDONED, RejectKind.BUDGET))],
 )
-def test_a_build_failure_revises_or_rejects_as_its_event_says(way, stage, closing):
+def test_a_build_failure_revises_or_abandons_as_its_event_says(way, stage, closing):
     failed = WorkpieceEvent(
         EventKind.BUILD_FAILED, 0, "prog1", {EXIT: way, "step": "grader", "failure": "boom", "failure_file": "f"}
     )
@@ -126,9 +126,9 @@ def test_a_build_failure_revises_or_rejects_as_its_event_says(way, stage, closin
 
 @pytest.mark.parametrize(
     ("way", "stage", "closing"),
-    [("revise", Stage.AUTHOR, None), ("reject", Stage.DONE, (Terminal.REJECTED, RejectKind.BUDGET))],
+    [("revise", Stage.AUTHOR, None), ("abandon", Stage.DONE, (Terminal.ABANDONED, RejectKind.BUDGET))],
 )
-def test_an_author_failure_revises_or_rejects_as_its_event_says(way, stage, closing):
+def test_an_author_failure_revises_or_abandons_as_its_event_says(way, stage, closing):
     failed = WorkpieceEvent(EventKind.AUTHOR_FAILED, 0, "p1", {EXIT: way, "failure": "cut", "failure_file": "f"})
 
     state = derive_state(numbered(OPENED, TRIAGED, failed))
@@ -179,8 +179,8 @@ def test_an_accept_closes_accepted_with_where_the_task_fell(band, reason):
     assert accepted.terminal is Terminal.ACCEPTED
 
 
-def test_a_failed_workpiece_keeps_its_stage_and_a_final_terminal_ends_the_log():
-    log = [*VALIDATED_LOG, terminal(terminal="failed", reason="RuntimeError: boom")]
+def test_a_held_workpiece_keeps_its_stage_and_a_final_terminal_ends_the_log():
+    log = [*VALIDATED_LOG, terminal(terminal="held", reason="RuntimeError: boom")]
     failed = derive_state(numbered(*log))
     log += [decided(exit="reject", kind="host", reasons="no machine"), terminal(terminal="rejected", reason="r")]
     rejected = derive_state(numbered(*log))

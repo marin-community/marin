@@ -54,7 +54,7 @@ from taskforge.stage50_validate.round import (
 from taskforge.stage60_review.decision import BandOutcome
 from taskforge.stage60_review.rules import BandRules, default_review
 from taskforge.stage_coordinator.coordinator import StageCoordinator, WorkpieceBudget, run_workpiece
-from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore
+from taskforge.stage_coordinator.event_log import JsonEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import Terminal
 from tests.proposals import proposal_document
@@ -172,7 +172,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         policy_digest=DEFAULT_POLICY.stage_digest,
     )
 
-    assert await run_workpiece(coordinator, WORKPIECE, proposal, InMemoryEventLog()) is Terminal.ACCEPTED
+    assert await run_workpiece(coordinator, WORKPIECE, proposal) is Terminal.ACCEPTED
     written = load_draft(tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / DRAFT_DIR).task
     assert written.id == WORKPIECE
     assert written.tags == (CAPABILITY,)

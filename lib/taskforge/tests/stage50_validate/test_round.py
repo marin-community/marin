@@ -155,7 +155,7 @@ def adversary_policy(k: int, submissions: int = 3, mode: AdversaryMode = Adversa
     )
 
 
-def round_context(tmp_path: Path, modify_rounds_left: int = 0, validation_pass: int = 1) -> ValidationContext:
+def round_context(tmp_path: Path, modify_rounds_left: int = 0) -> ValidationContext:
     return ValidationContext(
         workpiece_id=WORKPIECE,
         round=0,
@@ -163,7 +163,6 @@ def round_context(tmp_path: Path, modify_rounds_left: int = 0, validation_pass: 
         proposal=parse(PROPOSAL),
         store_root=str(tmp_path / "store"),
         modify_rounds_left=modify_rounds_left,
-        validation_pass=validation_pass,
     )
 
 
@@ -650,6 +649,36 @@ async def test_a_relaunch_reruns_only_a_missing_adversary_attempt(glm_client, fa
     assert (again.solver, again.controls) == (first.solver, first.controls)
 
 
+async def test_a_search_under_another_policy_keeps_the_old_attempt_and_runs_with_its_full_retries(
+    glm_client, fake_glm, ledger, tmp_path
+):
+    """Evidence binds to the exact search: a relaunch with another adversary policy reads no earlier attempt as done."""
+    fake_glm.stream(content=controls_reply("41"))
+    context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
+    first = await validate_round(
+        built_draft(tmp_path / "store"), context, settings, SolverModel(), glm_client, AdversaryScript(PROBES)
+    )
+    saved = (context.round_dir / first.adversary[0].attempt_file).read_bytes()
+    recorded = len(ledger.entries)
+
+    changed = replace(settings, adversary=(adversary_policy(k=1, submissions=2),))
+    again = await validate_round(
+        built_draft(tmp_path / "store"),
+        context,
+        changed,
+        SolverModel(allowed=frozenset()),
+        UncalledClient(),
+        AdversaryScript(PROBES),
+    )
+
+    assert {step for step in trial_steps(ledger, recorded) if not step.startswith("control/s")} == {
+        "adversary/false_accept-0/0"
+    }
+    assert again.adversary[0].attempt_file != first.adversary[0].attempt_file
+    assert (context.round_dir / first.adversary[0].attempt_file).read_bytes() == saved
+    assert (again.solver, again.controls) == (first.solver, first.controls)
+
+
 async def test_an_adversary_attempt_deadline_records_an_ungraded_retry(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
@@ -779,7 +808,7 @@ async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cau
     ]
     assert first.solver.trials[0].attempt_file.endswith("solver/0/attempt-1.json")
 
-    retried = round_context(tmp_path, validation_pass=2)
+    retried = round_context(tmp_path)
     solver = FailingTrials(UNAVAILABLE)
     again = await validate_round(
         built_draft(tmp_path / "store"), retried, settings, solver, UncalledClient(), UncalledClient()
@@ -793,27 +822,10 @@ async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cau
     assert sorted(path.name for path in trial_dir.iterdir()) == [f"attempt-{n}.json" for n in range(4)]
     assert again.controls == first.controls
 
-    # The same retry relaunched finds every budget spent and runs nothing.
-    unchanged = await validate_round(
-        built_draft(tmp_path / "store"),
-        retried,
-        settings,
-        SolverModel(allowed=frozenset()),
-        UncalledClient(),
-        UncalledClient(),
-    )
-    assert unchanged == again
-
-    # A relaunch of the workpiece abandoned after that retry validates the round's third pass: trial 0 alone runs
-    # again, with a full budget.
+    # Graded trials and task defects are done; another validation, a relaunch included, runs trial 0 alone again.
     relaunched = FailingTrials(UNAVAILABLE)
     third = await validate_round(
-        built_draft(tmp_path / "store"),
-        round_context(tmp_path, validation_pass=3),
-        settings,
-        relaunched,
-        UncalledClient(),
-        UncalledClient(),
+        built_draft(tmp_path / "store"), retried, settings, relaunched, UncalledClient(), UncalledClient()
     )
     assert relaunched.steps == ["solver/0/4", "solver/0/5"]
     assert third.solver is not None and third.solver.trials[1:] == again.solver.trials[1:]
@@ -965,7 +977,7 @@ async def test_interrupted_search_retains_evidence_and_explicit_resume_starts_a_
     # Explicit resume grants another attempt, retaining the original failed search and its evidence.
     resumed = await validate_round(
         built,
-        replace(context, validation_pass=2),
+        context,
         settings,
         SolverModel(allowed=frozenset()),
         UncalledClient(),
