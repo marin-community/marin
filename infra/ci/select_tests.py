@@ -1038,10 +1038,10 @@ def accelerator_suite_test_paths(
         selected = all_test_files("levanter", repo_root)
     for test_path in selected:
         markers = markers_for_test_file(repo_root / test_path)
-        # TPU coverage is opt-in, including for full-suite and scheduled runs.
+        # Accelerator and multi-device coverage is opt-in, including for full-suite and scheduled runs.
         if "torch" in markers:
             torch_paths.append(test_path)
-        if "tpu" in markers:
+        if {"tpu", "multidevice"} & markers:
             tpu_paths.append(test_path)
 
     suites: dict[str, list[str]] = {}
