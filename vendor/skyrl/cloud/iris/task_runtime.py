@@ -29,10 +29,12 @@ import argparse
 import contextlib
 from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
+import fnmatch
 import glob
 import json
 import os
 from pathlib import Path
+import posixpath
 import queue
 import shutil
 import signal
@@ -383,6 +385,38 @@ def _copy_tokenizer_metadata(source: Path, destination: Path) -> None:
         shutil.copy2(metadata_file, destination / metadata_file.name)
 
 
+def _stage_remote_tokenizer_metadata(model_uri: str, local_path: str) -> None:
+    """Copy tokenizer metadata from a snapshot that carries no SkyRL model manifest.
+
+    An object-store mirror written by the inference cache path (``resolve_model_path``)
+    holds a complete Hugging Face snapshot but no ``.marinskyrl-model-manifest.json``,
+    so its tokenizer files are selected by name instead of by manifest entry.
+    """
+    target = Path(local_path)
+    filesystem, root = fs_and_path(model_uri)
+    names = sorted(
+        entry.path
+        for _, entry in file_inventory(filesystem, root)
+        if any(
+            fnmatch.fnmatch(entry.path, pattern)
+            for pattern in TOKENIZER_METADATA_PATTERNS + TOKENIZER_CLASS_RESOLUTION_FILES
+        )
+    )
+    if not names:
+        raise ValueError(f"Tokenizer source contains no tokenizer metadata: {model_uri}")
+    with atomic_directory_update(target, staging_prefix=f".{target.name}.tokenizer-") as staging:
+        staging.mkdir()
+        for name in names:
+            destination = staging / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            filesystem.get_file(posixpath.join(root, name), str(destination))
+
+
+def _has_model_manifest(model_uri: str) -> bool:
+    filesystem, root = fs_and_path(model_uri)
+    return filesystem.exists(posixpath.join(root, MODEL_MANIFEST_FILENAME))
+
+
 def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenizer | None:
     """Stage the requested tokenizer independently from the policy weights."""
     tokenizer_path = args.policy_tokenizer
@@ -393,8 +427,10 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
     local_path = _metadata_path(tokenizer_path, revision or "main")
     target = Path(local_path)
     if is_cloud_uri(tokenizer_path):
-        manifest = load_model_manifest(tokenizer_path)
-        stage_model_metadata(tokenizer_path, manifest, local_path)
+        if _has_model_manifest(tokenizer_path):
+            stage_model_metadata(tokenizer_path, load_model_manifest(tokenizer_path), local_path)
+        else:
+            _stage_remote_tokenizer_metadata(tokenizer_path, local_path)
         _require_tokenizer_metadata(target, tokenizer_path)
         (target / MODEL_MANIFEST_FILENAME).unlink(missing_ok=True)
     else:

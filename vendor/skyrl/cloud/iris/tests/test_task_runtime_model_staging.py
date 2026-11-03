@@ -149,6 +149,31 @@ def test_requested_local_policy_tokenizer_is_staged_independently(tmp_path, monk
     assert (destination / "tokenizer_config.json").read_text() == '{"chat_template": "requested"}'
 
 
+def test_manifest_less_cloud_tokenizer_stages_metadata_without_weights(tmp_path, monkeypatch) -> None:
+    """An inference-cache mirror holds a full snapshot but no SkyRL model manifest."""
+    filesystem = fsspec.filesystem("memory")
+    root = f"/mirror/{tmp_path.name}"
+    payloads = {
+        "config.json": b"{}",
+        "tokenizer.json": b'{"identity": "mirror"}',
+        "tokenizer_config.json": b'{"chat_template": "mirror"}',
+        "model.safetensors": b"weights",
+    }
+    for path, payload in payloads.items():
+        with filesystem.open(f"{root}/{path}", "wb") as destination:
+            destination.write(payload)
+    staged = tmp_path / "prepared-tokenizer"
+    monkeypatch.setattr(task_runtime, "_metadata_path", lambda _uri, _revision: str(staged))
+    monkeypatch.setattr(task_runtime, "is_cloud_uri", lambda _uri: True)
+    monkeypatch.setattr(task_runtime, "fs_and_path", lambda _uri: (filesystem, root))
+
+    prepared = prepare_policy_tokenizer(Namespace(policy_tokenizer="s3://bucket/mirror", policy_tokenizer_revision=""))
+
+    assert prepared is not None
+    assert sorted(path.name for path in staged.iterdir()) == ["config.json", "tokenizer.json", "tokenizer_config.json"]
+    assert (staged / "tokenizer.json").read_text() == '{"identity": "mirror"}'
+
+
 def test_staged_models_are_written_as_structured_config(tmp_path, monkeypatch) -> None:
     identity = "sha256:" + "a" * 64
     policy = task_runtime.PreparedPolicyModel("s3://models/policy", identity, "/tmp/policy-metadata")
