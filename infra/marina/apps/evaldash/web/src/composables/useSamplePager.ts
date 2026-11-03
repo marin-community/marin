@@ -95,7 +95,7 @@ export function useSamplePager(
       extractionFilters.value = resp.extraction_filters ?? []
       resolvedExtractionFilter.value = resp.extraction_filter
       if (resp.counts) counts.value = resp.counts
-      error.value = null
+      error.value = resp.error ?? null
     } catch (e) {
       if (gen !== generation) return
       error.value = e instanceof Error ? e.message : String(e)

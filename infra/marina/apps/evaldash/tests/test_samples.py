@@ -562,5 +562,6 @@ def test_missing_selected_sample_metric_is_reported_without_using_saved_verdict(
         primary_metric_name="acc_norm",
         primary_metric_kind=MetricKind.BINARY,
     )
+    assert page.available is False
     assert page.error is not None
     assert page.rows == ()

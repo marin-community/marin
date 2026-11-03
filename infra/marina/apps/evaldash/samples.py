@@ -403,7 +403,7 @@ def fetch_samples(
     if primary_metric_name is not None:
         if primary is None:
             return _empty_samples(
-                available=True,
+                available=False,
                 error=f"selected metric {primary_metric_name!r} is missing",
                 task=task,
                 offset=offset,
