@@ -42,10 +42,21 @@ def result():
     }
 
 
+@pytest.fixture
+def api_result(result):
+    return result | {
+        "partial_coverage": False,
+        "comparison_key": None,
+        "provisional": True,
+        "pareto_eligible": False,
+    }
+
+
 class ReportTransport:
-    def __init__(self):
+    def __init__(self, api_runs=()):
         self.rows = {}
         self.requests = []
+        self.api_runs = api_runs
 
     def __call__(self, origin, method, path, *, json_body=None):
         self.requests.append((origin, method, path))
@@ -60,26 +71,11 @@ class ReportTransport:
                 self.rows[key] = json.loads(parameters["record"])
                 return {"row_count": 1}
             return {"rows": [{"record": copy.deepcopy(self.rows[key])}]}
-        runs = []
-        for record in self.rows.values():
-            complete = all(
-                phase is not None and phase["scored"] == phase["attempted"] == 100
-                for phase in (record["baseline"], record["final"])
-            )
-            runs.append(
-                record
-                | {
-                    "partial_coverage": not complete,
-                    "comparison_key": None,
-                    "provisional": True,
-                    "pareto_eligible": False,
-                }
-            )
-        return {"runs": runs}
+        return {"runs": list(self.api_runs)}
 
 
-def test_publication_retries_are_idempotent_and_conflicts_preserve_original(monkeypatch, result):
-    transport = ReportTransport()
+def test_publication_retries_are_idempotent_and_conflicts_preserve_original(monkeypatch, result, api_result):
+    transport = ReportTransport([api_result])
     monkeypatch.setattr(publication, "marina_request", transport)
     first = publication.publish_result(result)
     repeated = publication.publish_result(copy.deepcopy(result))
@@ -94,14 +90,15 @@ def test_publication_retries_are_idempotent_and_conflicts_preserve_original(monk
     assert all(origin == "https://applets.marina.oa.dev" for origin, method, _ in transport.requests if method == "POST")
 
 
-def test_incomplete_success_rejected_before_io_but_failed_attempt_remains_visible(monkeypatch, result):
-    transport = ReportTransport()
+def test_incomplete_success_rejected_before_io_but_failed_attempt_remains_visible(monkeypatch, result, api_result):
+    transport = ReportTransport([api_result])
     monkeypatch.setattr(publication, "marina_request", transport)
     result["baseline"]["scored"] = 99
     with pytest.raises(ValidationError, match="complete baseline"):
         publication.publish_result(result)
     assert transport.requests == []
     result["status"] = "failed"
+    api_result.update(result, partial_coverage=True)
     receipt = publication.publish_result(result)
     assert receipt["verified"]
     assert next(iter(transport.rows.values()))["baseline"]["scored"] == 99
@@ -128,8 +125,8 @@ def test_invalid_evaluation_identity_cannot_poison_report_api(monkeypatch, resul
     assert transport.requests == []
 
 
-def test_pre_evaluation_failure_publishes_no_fabricated_measurements(monkeypatch, result):
-    transport = ReportTransport()
+def test_pre_evaluation_failure_publishes_no_fabricated_measurements(monkeypatch, result, api_result):
+    transport = ReportTransport([api_result])
     monkeypatch.setattr(publication, "marina_request", transport)
     result.update(
         status="failed",
@@ -140,6 +137,7 @@ def test_pre_evaluation_failure_publishes_no_fabricated_measurements(monkeypatch
         timing_scope="loop_launcher_to_terminal",
     )
     result["evaluation"]["task_set_sha256"] = None
+    api_result.update(result, partial_coverage=True)
     receipt = publication.publish_result(result)
     assert receipt["verified"]
     stored = next(iter(transport.rows.values()))

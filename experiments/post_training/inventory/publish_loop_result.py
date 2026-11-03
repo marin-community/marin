@@ -109,7 +109,7 @@ class RunSummary(BaseModel):
 
 
 def marina_request(service_url: str, method: str, path: str, *, json_body: object | None = None) -> object | None:
-    """Load the deployment client only when publishing, outside ML graph construction."""
+    """Send an authenticated request, raising if the publication client is unavailable."""
     try:
         from marina.client import marina_request as request  # noqa: PLC0415  # optional deployment dependency
     except ModuleNotFoundError as error:
