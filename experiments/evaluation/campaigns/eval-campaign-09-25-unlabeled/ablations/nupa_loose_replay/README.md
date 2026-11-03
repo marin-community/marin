@@ -18,10 +18,11 @@ when the tracker points to an earlier replay. Each result records
 thinking marker. This count describes the stored text, not the server's
 original decoding settings.
 
-Regrading cannot restore thinking markers removed during generation. Rerun
-Grug/Snowball NUPA cells whose archives lost those markers with the updated
-campaign model configs; do not replace those cells with replay scores. The
-configs explicitly set `generation.extra_gen_kwargs.skip_special_tokens` to
+Regrading cannot restore thinking markers removed during generation. For
+Grug/Snowball NUPA cells, require fresh generations when the stored run config
+does not explicitly establish `skip_special_tokens: "false"`; the marker count
+alone cannot establish that boundaries were preserved. Do not promote replay
+scores for these cells. The updated campaign model configs explicitly set `generation.extra_gen_kwargs.skip_special_tokens` to
 `"false"`, which is retained in the evaluation run record. Publish the fresh
 results before comparing those cells with other runs that retain boundaries.
 
@@ -42,7 +43,10 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --model "$REPLAY_MODEL"
 ```
 
-After the job succeeds, run `update_tracker` locally while the campaign refill
-lock is held. Each replacement cell links to its per-trial replay JSON. The JSON
-retains corrected binary trial rewards for uncertainty calculations and links
-back to the immutable raw-response archive.
+Before promotion, the output prefix must contain a replay result for every
+sealed NUPA cell in the tracker. Repeat the model-filtered command as needed.
+Run [update_tracker](update_tracker.py) locally with `--tracker`, `--output-prefix`,
+`--summary`, and `--lock` set to the campaign's `artifacts/.auto-refill.lock`;
+the updater acquires the [refill tracker lock](../../analysis/harbor_verifier_audit/README.md).
+Each replacement cell links to its per-trial replay JSON, retaining binary
+rewards and the immutable raw-response source.
