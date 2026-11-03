@@ -33,6 +33,7 @@ EVAL_SCORE_SCHEMA = pa.schema(
 )
 PASS_RATES_NAME = f"rl-data/snowball-pass-rates/{presets.MODEL_REVISION}"
 PASS_RATE_REVISION = "2026.10.30"
+PASS_RATES_FILENAME = "pass_rates.parquet"
 PASS_RATE_EVALUATION = replace(presets.EVALUATIONS["panel-910"], name="pass-rates-910x8", answers=8)
 
 
@@ -179,7 +180,7 @@ def evaluation_statistics(scores: pa.Table, rates: pa.Table | None = None) -> di
 
 
 def read_pass_rates(path: str) -> pa.Table:
-    fs, key = filesystem_for(str(StoragePath(path) / "pass_rates.parquet"))
+    fs, key = filesystem_for(str(StoragePath(path) / PASS_RATES_FILENAME))
     with fs.open(key, "rb") as stream:
         table = pq.read_table(stream)
     rows = table.to_pylist()

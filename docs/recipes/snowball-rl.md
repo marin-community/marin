@@ -78,7 +78,7 @@ other metrics use their mean. A guard fails below negative tolerance. Guards and
 reported metrics determine `improves`, `trade-off`, `regression` or `no change`.
 Declared reported metrics use `k=1`. Other breakdown rows use a separate `k` equal
 to each table’s row count; they do not determine the label, and a row whose controls
-never vary reports no change.
+never vary reports its change as unavailable.
 
 Add repeatable requirements to a gated candidate with `--require 'KEY<=NUMBER'`,
 `--require 'KEY>=NUMBER'`, `--require 'KEY<=control'` or `--require 'KEY>=control'`.
