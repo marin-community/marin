@@ -58,6 +58,15 @@ def load_parquet_batched(path: str) -> Iterator[dict]:
                 yield {k: rows[k][i] for k in rows}
 
 
+def pinned_jsonl_ids(path: str, key: str, expected_count: int) -> frozenset[str]:
+    """Load the distinct ``key`` values of a pinned JSONL list and check how many there are."""
+    with open_url(path, "rt") as source:
+        ids = frozenset(json.loads(line)[key] for line in source)
+    if len(ids) != expected_count:
+        raise ValueError(f"Expected {expected_count} distinct {key} values in {path}, found {len(ids)}")
+    return ids
+
+
 def text_document(text: str, source: str) -> dict:
     """Build a datakit document with a content-addressed ``id`` derived from ``text``.
 

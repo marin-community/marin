@@ -18,12 +18,10 @@ CalibForge relay episodes. The transform also counts dropped episodes in
 ``calibforge_relay/chat/benchmark_task_filtered``.
 """
 
-import json
 from functools import partial
 
 import pyarrow as pa
 from fray.types import ResourceConfig
-from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -36,6 +34,7 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_SOLVED_TAG,
     checked_openai_chat_document,
     load_parquet_batched,
+    pinned_jsonl_ids,
 )
 from marin.datakit.download.terminus import TerminusParseMode, ThinkTokens, terminus_protocol_messages
 from marin.execution.step_spec import StepSpec
@@ -63,11 +62,7 @@ SOURCE_CHAT_SCHEMA = pa.schema(
 
 def excluded_task_ids(exclusion_path: str) -> frozenset[str]:
     """Load the pinned CalibForge task exclusions from the downloaded JSONL file."""
-    with open_url(prefix_join(exclusion_path, "excluded_tasks.jsonl"), "rt") as source:
-        task_ids = frozenset(json.loads(line)["task_id"] for line in source)
-    if len(task_ids) != EXCLUSION_LIST_SIZE:
-        raise ValueError(f"Expected {EXCLUSION_LIST_SIZE} excluded CalibForge tasks, found {len(task_ids)}")
-    return task_ids
+    return pinned_jsonl_ids(prefix_join(exclusion_path, "excluded_tasks.jsonl"), "task_id", EXCLUSION_LIST_SIZE)
 
 
 def row_to_chat_doc(row: dict, excluded_task_ids: frozenset[str]) -> list[dict]:
