@@ -51,7 +51,7 @@ def _write_pass_rates(run_output: str, output: str) -> Artifact:
             ]
         ),
     )
-    fs, key = filesystem_for(str(StoragePath(output) / "pass_rates.parquet"))
+    fs, key = filesystem_for(str(StoragePath(output) / scoring.PASS_RATES_FILENAME))
     fs.makedirs(key.rsplit("/", 1)[0], exist_ok=True)
     with fs.open(key, "wb") as stream:
         pq.write_table(table, stream)

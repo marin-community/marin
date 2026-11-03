@@ -46,6 +46,7 @@ from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
 GATE_REVISION = "2026.11.03.1"
+GATE_REPORT_FILENAME = "gate_report.json"
 
 
 @dataclass(frozen=True)
@@ -348,7 +349,12 @@ def _session_invariants(
     if _gated(evaluation, preset):
         coverage = len({row["item"] for row in rows if row["scored"]}) / (expected / evaluation.answers)
         result.append(
-            Invariant(name=f"{name}/panel_scored_fraction", value=coverage, limit=0.99, holds=coverage >= 0.99)
+            Invariant(
+                name=f"{name}/panel_scored_fraction",
+                value=coverage,
+                limit=presets.MINIMUM_PANEL_COVERAGE,
+                holds=coverage >= presets.MINIMUM_PANEL_COVERAGE,
+            )
         )
     return result
 
@@ -675,7 +681,7 @@ def _write_gate(
     )
     for name, value in (
         (
-            "gate_report.json",
+            GATE_REPORT_FILENAME,
             json.dumps(report.model_dump(mode="json", exclude={"path"}), indent=2, allow_nan=False) + "\n",
         ),
         ("gate_report.md", _render_markdown(report)),
@@ -815,7 +821,7 @@ def main(preset_name: str, candidate_name: str | None, leave_out: str | None, re
     step = _gate_artifact(f"{namespace}/gate-n1-{pins[0].main_commit}", preset, (source,), inputs, index)
     report = run(step)[0]
     payload = {
-        "report": str(StoragePath(report.path) / "gate_report.json"),
+        "report": str(StoragePath(report.path) / GATE_REPORT_FILENAME),
         **report.model_dump(mode="json", exclude={"path"}),
     }
     click.echo(json.dumps(payload))

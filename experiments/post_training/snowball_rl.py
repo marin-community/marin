@@ -503,7 +503,8 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
     verdict = {}
     if run.gate is not None:
         path = (
-            StoragePath(run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))) / "gate_report.json"
+            StoragePath(run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster)))
+            / snowball_rl_gate.GATE_REPORT_FILENAME
         )
         if presets.exists(path):
             report = snowball_rl_gate.GateReport.model_validate_json(presets.read_text(path))
