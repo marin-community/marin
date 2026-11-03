@@ -838,7 +838,7 @@ message Controller {
     iris.job.JobStatus summary = 2;               // job state + counts (+ spend once reported)
     repeated iris.job.TaskStatus changed_tasks = 3;  // full row for each task changed since the cursor
     bool tombstone = 4;                           // peer has pruned the job; parent drops its projection
-    FederationJobLimits limits = 5;               // requested limits for the parent's job display
+    FederationJobLimits limits = 5;
   }
 
   // One service endpoint exported by a handed-off (RECEIVED) job on the peer.
