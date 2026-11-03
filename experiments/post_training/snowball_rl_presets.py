@@ -553,7 +553,7 @@ def selection_summary(selection: ArtifactStep) -> dict:
 
 
 def evaluation_answer_count(evaluation: Evaluation, tasks: ArtifactStep) -> int:
-    key = "training_rows" if evaluation.file == "train" else f"{evaluation.file}_rows"
+    key = "training_rows" if evaluation.file == Path(TRAIN_FILENAME).stem else f"{evaluation.file}_rows"
     return (evaluation.sample or selection_summary(tasks)[key]) * evaluation.answers
 
 

@@ -50,6 +50,7 @@ from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     BEST_CHECKPOINT_CALLBACK,
     IRIS_HUB_CLUSTER_CONFIG,
+    SKYRL_TEMPORARY_STORAGE_TTL_DAYS,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
@@ -73,6 +74,9 @@ from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     GraderKind,
 )
+
+# Iris limit for one Snowball run, coordinator and job alike.
+RUN_TIMEOUT_HOURS = 72
 
 
 def training_config(
@@ -262,7 +266,9 @@ def _resume_checkpoint_root(source: ArtifactStep[SkyRLRun], model: SkyRLModelSou
         raise click.BadParameter("resume source uses another model or tokenizer; use its matching --init artifact")
     root = config["artifacts"]["checkpoint_root"]
     marker = StoragePath(root) / "latest_ckpt_global_step.txt"
-    missing = f"no checkpoint remains at {root}; temporary checkpoints expire after 14 days"
+    missing = (
+        f"no checkpoint remains at {root}; temporary checkpoints expire after {SKYRL_TEMPORARY_STORAGE_TTL_DAYS} days"
+    )
     if not presets.exists(marker) or not presets.exists(marker.parent / f"global_step_{int(presets.read_text(marker))}"):
         raise click.BadParameter(missing)
     return root
@@ -305,8 +311,8 @@ def _run_step(
             max_retries=0,
             target_cluster=layout.cluster,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=72,
-            job_timeout_seconds=72 * 3600,
+            coordinator_timeout_hours=RUN_TIMEOUT_HOURS,
+            job_timeout_seconds=RUN_TIMEOUT_HOURS * 3600,
             wandb_entity="dogml",
             required_env_vars=tuple(sorted(required | {"WANDB_API_KEY"})),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
