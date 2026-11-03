@@ -88,7 +88,8 @@ def test_stats_forward_preserves_observer_and_loss():
         np.testing.assert_array_equal(stats.routes, routes)
         np.testing.assert_array_equal(stats.dropped, np.zeros(2))
         example = hax.vmap(LmExample.causal, batch)(
-            ids, segment_ids=hax.named(jnp.broadcast_to(jnp.arange(ids.array.shape[-1]) // 4, ids.array.shape), ids.axes)
+            ids,
+            segment_ids=hax.named(jnp.broadcast_to(jnp.arange(ids.array.shape[-1]) // 4, ids.array.shape), ids.axes),
         )
         example = hax.auto_sharded(example)
         loss, metrics = eqx.filter_jit(snowball_loss_with_dispatch_stats)(model, example)
