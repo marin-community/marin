@@ -31,7 +31,7 @@ from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,
     load_capability_ideas,
 )
-from experiments.post_training.capability_driven_envs.proposal_source import (
+from taskforge.defaults.proposer import (
     VERIFICATION_RULE,
     CapabilitySource,
     SlotStatus,

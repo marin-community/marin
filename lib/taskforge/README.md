@@ -139,17 +139,17 @@ field that constrains a completion to the typed object for that id and source. A
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `ProposerPolicy.repair`.
 
-`experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
+`taskforge.defaults.proposer` holds `CapabilitySource`, the
 source for catalog capabilities, which takes its model, sampling policy and host environments at
 construction. Its `plan(idea, n)` plans `n` slots in one structured call, each with a solver
 machine and a research decision, and its `write(idea, portfolio, slot)` writes one slot's document
 under the regex with GLM thinking first.
 Its system turn quotes a verification rule, a prompt the source is given:
-`proposal_source.VERIFICATION_RULE` names the default, `proposer.determinate_first_preferred`
+`proposer.VERIFICATION_RULE` names the default, `proposer.determinate_first_preferred`
 (`defaults/prompts/proposer/determinate_first_preferred.md`), the rule the 2026-11-02 n=25 curriculum run
 used. With it the default policy renders that run's requests byte for byte.
 
-`propose_curriculum` in the same package proposes one shard of a catalog and triages each proposal
+`experiments/post_training/capability_driven_envs/propose_curriculum.py` proposes one shard of a catalog and triages each proposal
 with `preflight`; its module docstring lists the files it writes. To run a curriculum, from the repo
 root, with `CW_KEY_ID`/`CW_KEY_SECRET` and `GLM_BULK_TOKEN` exported:
 

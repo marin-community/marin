@@ -8,7 +8,8 @@ import, in any form and at any depth. A stage package ``stageNN_<name>`` may imp
 lower number and the shared modules in ``SHARED``. A shared module may import other shared modules
 but no stage. A package in ``TOP``
 runs the whole pipeline: ``stage_coordinator`` runs the stages, and ``agentic`` replaces them with
-one agent. It may import every stage and shared module, and no package may import it.
+one agent. It may import every stage and shared module, and no package may import it. A default
+implementation in ``defaults`` of a stage's interface, listed in ``STAGE_DEFAULTS``, belongs to that stage.
 
 """
 
@@ -22,11 +23,13 @@ import taskforge
 SHARED = ("capability", "child_process", "content_hash", "defaults", "ledger", "llm", "policy", "sandbox", "spec")
 TOP = ("agentic", "stage_coordinator")
 STAGE = re.compile(r"stage(\d+)_[a-z0-9_]+")
+STAGE_DEFAULTS = {Path("defaults/proposer.py"): "stage10_proposal"}
 ROOT = Path(taskforge.__file__).parent
 
 
 def package_of(module: Path) -> str:
-    return module.relative_to(ROOT).parts[0].removesuffix(".py")
+    relative = module.relative_to(ROOT)
+    return STAGE_DEFAULTS.get(relative) or relative.parts[0].removesuffix(".py")
 
 
 def imported_packages(module: Path) -> Iterator[tuple[int, str]]:

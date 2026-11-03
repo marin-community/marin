@@ -28,13 +28,15 @@ from pathlib import Path
 from typing import Any
 
 import click
-import fsspec
 from pydantic import BaseModel
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from taskforge.capability import FILE_SAFE_ID, CapabilityIdea
 from taskforge.content_hash import pretty_json
 from taskforge.defaults import DEFAULT_POLICY
+from taskforge.defaults import proposer as ps
 from taskforge.llm import client as llm
 from taskforge.llm.glm_client import EndpointSource, GlmClient, Pool
 from taskforge.llm.policy import LLMPolicy, Message
@@ -43,7 +45,6 @@ from taskforge.stage10_proposal.model import Environment, document_request_field
 from taskforge.stage10_proposal.source import SlotProposal, propose_all
 from taskforge.stage20_triage.preflight import preflight
 
-from experiments.post_training.capability_driven_envs import proposal_source as ps
 from experiments.post_training.capability_driven_envs.catalog import load_capability_ideas
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER, endpoint_source
 
@@ -57,8 +58,8 @@ STORAGE_TIMEOUT = 60.0
 STORAGE_READ_BATCH = 256
 MAX_REPAIRS = 4
 WINDOW_FACTOR = 4
-"""Capabilities open per ``concurrency / slots``: one averages a quarter of its slots in flight (5-9 of 25 on
-2026-11-02), so a factor of 2 left the request limit unreachable."""
+"""Capabilities open per ``concurrency / slots``: an open capability has about a quarter of its slots in flight,
+so a smaller factor leaves the request limit unreachable."""
 RESULT_FILE = "result.json"
 FAILURE_FILE = "failure.json"
 REPAIRS_EXHAUSTED = f"no valid document after {MAX_REPAIRS} repairs"
@@ -132,7 +133,7 @@ class OutputRoot:
     """A local directory or object-store prefix; each call is bounded by ``STORAGE_TIMEOUT`` (a ``TimeoutError``)."""
 
     def __init__(self, url: str):
-        self.fs, self.root = fsspec.core.url_to_fs(url.rstrip("/"))
+        self.fs, self.root = url_to_fs(url.rstrip("/"))
 
     async def _bounded[T](self, call: Callable[[], T]) -> T:
         return await asyncio.wait_for(asyncio.to_thread(call), STORAGE_TIMEOUT)
@@ -322,9 +323,8 @@ async def run_shard(
 
 
 def read_catalog(url: str) -> dict[str, CapabilityIdea]:
-    fs, path = fsspec.core.url_to_fs(url)
     with tempfile.TemporaryDirectory() as tmp:
-        (Path(tmp) / "catalog.json").write_bytes(fs.cat_file(path))
+        (Path(tmp) / "catalog.json").write_bytes(StoragePath(url).read_bytes())
         return load_capability_ideas(Path(tmp) / "catalog.json")
 
 
@@ -362,8 +362,8 @@ def main(catalog: str, output_root: str, shard: int, shards: int, capabilities: 
     spec = ShardSpec(environments=environments, catalog=catalog, **options)
     failed = asyncio.run(_run(endpoint, selected, OutputRoot(output_root), spec))
     logger.info("shard %d done: %d of %d failed", shard, len(failed), len(selected))
-    # A storage call that outlived STORAGE_TIMEOUT still holds an executor thread, which interpreter exit joins:
-    # four shards of the 2026-11-02 run hung there. Exit without joining, with the shard's status.
+    # A storage call that outlived STORAGE_TIMEOUT still holds an executor thread, which interpreter exit would
+    # join forever. Exit without joining, with the shard's status.
     logging.shutdown()
     sys.stdout.flush()
     os._exit(1 if failed else 0)

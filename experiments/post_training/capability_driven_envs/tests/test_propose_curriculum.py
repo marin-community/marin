@@ -32,7 +32,7 @@ from experiments.post_training.capability_driven_envs.propose_curriculum import 
     run_shard,
 )
 from experiments.post_training.capability_driven_envs.tests.scripted_model import ScriptedModel
-from experiments.post_training.capability_driven_envs.tests.test_proposal_source import (
+from experiments.post_training.capability_driven_envs.tests.test_proposer import (
     CAPABILITY_ID,
     filled_document,
     ideas,  # noqa: F401 (fixture)

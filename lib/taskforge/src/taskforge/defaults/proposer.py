@@ -68,7 +68,7 @@ CUT_OFF = "cut off by the output limit"
 SLOT_MODEL_ERRORS = (ModelUnavailable, ModelRequestRejected)
 """The model errors that fail one slot, rather than the batch."""
 VERIFICATION_RULE = "proposer.determinate_first_preferred"
-"""The policy key of the default verification rule, the text the 2026-11-02 n=25 curriculum run used."""
+"""The policy key of the default verification rule."""
 
 
 class SlotStatus(StrEnum):
