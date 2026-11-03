@@ -1,4 +1,5 @@
-# Cohorts from #10190 experiments/post_training/smartie/benchmark_selection.json.
+# Cohorts from experiments/post_training/smartie/benchmark_selection.json at marin commit
+# b3e18a5906795bf7b9feaac20e56125b89c1cdd8 (blob 340dca6265de5c741dfca97d7d87628d9ada07e4).
 # Selection salt: smartie-target-benchmarks-20261015-v1.
 timeout: 10800
 minimum_coverage: 0.9
