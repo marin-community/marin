@@ -3,8 +3,6 @@
 
 """The work-log API and its slug migration against a real Postgres."""
 
-import uuid
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import cast
@@ -13,7 +11,6 @@ import pytest
 import sqlalchemy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from marina.db import UrlDatabase, engine_for
 
 from echo import app as echo
 from echo import schema
@@ -24,24 +21,14 @@ CALLER = "agent@openathena.ai"
 
 @dataclass(frozen=True)
 class PostgresServices:
+    """Hands the app the test's engine, so API calls and direct inserts share one fresh schema."""
+
     engine_: sqlalchemy.Engine
     name: str = "echo"
     data_url: str = "memory://echo"
 
     def engine(self) -> sqlalchemy.Engine:
         return self.engine_
-
-
-@pytest.fixture
-def schema_engine(database_url: str) -> Iterator[sqlalchemy.Engine]:
-    name = f"echo_work_log_{uuid.uuid4().hex[:8]}"
-    engine = engine_for(UrlDatabase(database_url), name)
-    try:
-        yield engine
-    finally:
-        with engine.begin() as conn:
-            conn.execute(sqlalchemy.text(f'DROP SCHEMA "{name}" CASCADE'))
-        engine.dispose()
 
 
 @pytest.fixture
