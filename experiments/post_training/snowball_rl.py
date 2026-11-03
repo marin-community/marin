@@ -563,7 +563,8 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
     multiple=True,
     type=click.Choice(sorted(presets.EVALUATIONS)),
     help="Add an evaluation to train-long, which already runs panel-100 before training and every 10 updates. "
-    "Repeatable.",
+    "Repeatable. harbor-smartie runs 90 fixed benchmark tasks in Daytona sandboxes alongside each panel-100 "
+    "evaluation and needs DAYTONA_EVAL_API_KEY.",
 )
 @click.option(
     "--replicates",
