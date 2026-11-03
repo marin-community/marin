@@ -31,8 +31,10 @@ class Crossing:
 def confirmed_crossings(points: Sequence[ProgressPoint], level: float) -> list[Crossing]:
     """Interpolate upward crossings confirmed by the following scored checkpoint.
 
-    The checkpoint after the upper bracket must lie within five percentage points
-    of the level. A terminal crossing cannot be confirmed. Points must include
+    The checkpoint after the upper bracket must not fall more than five percentage
+    points below the level; continued progress above it confirms the crossing. The
+    guard rejects transient spikes that fall back. A terminal crossing cannot be
+    confirmed. Points must include
     measured baseline metrics if interpolation from step zero is needed; unknown
     baseline metrics must not be filled with zero.
     """
@@ -42,7 +44,7 @@ def confirmed_crossings(points: Sequence[ProgressPoint], level: float) -> list[C
     for lower, upper, confirmation in zip(points, points[1:], points[2:], strict=False):
         if not lower.progress < level <= upper.progress:
             continue
-        if abs(confirmation.progress - level) > CONFIRMATION_DISTANCE + 1e-12:
+        if confirmation.progress < level - CONFIRMATION_DISTANCE - 1e-12:
             continue
         fraction = (level - lower.progress) / (upper.progress - lower.progress)
         metrics = {

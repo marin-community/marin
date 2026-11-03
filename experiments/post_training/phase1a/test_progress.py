@@ -12,13 +12,13 @@ from experiments.post_training.phase1a.progress import (
 )
 
 
-def test_crossings_reject_overshoot_and_retain_first_and_last_confirmed_matches():
-    # The first crossing overshoots; later crossings have the required confirmation.
+def test_crossings_reject_spikes_and_retain_first_and_last_confirmed_matches():
+    # The crossing at step 4 falls back to 0.4; the others hold the level.
     points = [
         ProgressPoint(step, progress, {"drift": drift})
         for step, progress, drift in [
             (0, 0, 0),
-            (2, 0.6, 2),
+            (2, 0.4, 2),
             (4, 0.8, 4),
             (6, 0.4, 6),
             (8, 0.6, 8),
@@ -34,8 +34,8 @@ def test_crossings_reject_overshoot_and_retain_first_and_last_confirmed_matches(
     assert hits[-1].metrics["drift"] == pytest.approx(40)
 
 
-@pytest.mark.parametrize("confirmation,expected", [(0.45, 1), (0.55, 1), (0.449, 0), (0.551, 0)])
-def test_crossing_confirmation_uses_absolute_five_point_distance(confirmation, expected):
+@pytest.mark.parametrize("confirmation,expected", [(0.449, 0), (0.45, 1), (0.551, 1), (0.9, 1)])
+def test_crossing_confirmation_rejects_only_a_fall_below_the_level(confirmation, expected):
     points = [ProgressPoint(0, 0.4, {}), ProgressPoint(2, 0.5, {}), ProgressPoint(4, confirmation, {})]
     assert len(confirmed_crossings(points, 0.5)) == expected
 

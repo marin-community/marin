@@ -159,6 +159,18 @@ def test_m1_step_trains_on_the_m4_steps_prompts_in_order():
     assert {row["env_class"] for row in m4_rows} == {"prompt_only"}
 
 
+def test_a_longer_layout_extends_the_100_step_order():
+    run = RunPlan(Method.M4, Condition.X, 2, 2e-6)
+    ids = [f"x-{index}" for index in range(125 * 8)]
+    samples = {Task.X: eligible_samples(_samples(Task.X, ids, 4), Task.X)}
+    prompts = {Task.X: {task_id: {"prompt": [{"role": "user", "content": task_id}]} for task_id in ids}}
+    m4_rows, m1_rows = layout(run, prompts, samples)
+    longer_m4, longer_m1 = layout(run, prompts, samples, steps=125)
+    assert len(longer_m4) == 125 * 8
+    assert longer_m4[: len(m4_rows)] == m4_rows and longer_m1[: len(m1_rows)] == m1_rows
+    assert len({row["task_id"] for row in longer_m4}) == len(longer_m4), "each prompt is used once"
+
+
 def test_a_short_prompt_pool_raises():
     run = RunPlan(Method.M1, Condition.X_PRIME, 0, 1e-6)
     ids = [f"x-{index}" for index in range(STEPS * 16 - 1)]
@@ -168,8 +180,16 @@ def test_a_short_prompt_pool_raises():
 
 
 @pytest.mark.timeout(300)  # A cold cache installs the independently locked launcher.
-@pytest.mark.parametrize("max_steps", [10, 100])
-@pytest.mark.parametrize("resume_from", [None, "s3://bucket/previous-run/checkpoints/global_step_10"])
+@pytest.mark.parametrize(
+    "resume_from,max_steps",
+    [
+        (None, 10),
+        (None, 100),
+        ("s3://bucket/previous-run/checkpoints/global_step_10", 10),
+        ("s3://bucket/previous-run/checkpoints/global_step_10", 100),
+        ("s3://bucket/previous-run/checkpoints/global_step_100", 125),
+    ],
+)
 def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path, resume_from, max_steps):
     model = ArtifactStep.adopt("models/phase1a-test-b", "2026.10.23", "s3://bucket/b", kind=LevanterCheckpoint)
     data = ArtifactStep.adopt("documents/phase1a-test-data", "2026.10.23", "s3://bucket/data")
@@ -196,18 +216,25 @@ def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path, resu
     for index, (condition, _) in enumerate(cells):
         m1, m4 = composed[2 * index], composed[2 * index + 1]
         assert m1.pop("env_class") == "fixed_completion" and m4.pop("env_class") == "prompt_only"
-        assert m1.pop("checkpoints") == [
-            [s for s in [10, 20, 30, 40, 50, 75, 100] if s <= max_steps],
-            [s for s in [10, 50, 100] if s <= max_steps],
-        ]
-        assert m4.pop("checkpoints") == [
-            [s for s in [2, 4, 6, 8, 10, 20, 30, 40, 50, 75, 100] if s <= max_steps],
-            [s for s in [10, 50, 100] if s <= max_steps],
-        ]
-        assert m1.pop("exports") == [s for s in [10, 30, 50, 100] if s <= max_steps]
-        assert m4.pop("exports") == [s for s in [2, 4, 6, 8, 10, 30, 50, 100] if s <= max_steps]
-        assert m1.pop("retention") == (1 if max_steps == 10 else 7)
-        assert m4.pop("retention") == (5 if max_steps == 10 else 11)
+        if max_steps > 100:
+            # An extension saves, keeps the optimizer for, and exports only its final step.
+            for config in (m1, m4):
+                assert config.pop("checkpoints") == [[max_steps], [max_steps]]
+                assert config.pop("exports") == [max_steps]
+                assert config.pop("retention") == 1
+        else:
+            assert m1.pop("checkpoints") == [
+                [s for s in [10, 20, 30, 40, 50, 75, 100] if s <= max_steps],
+                [s for s in [10, 50, 100] if s <= max_steps],
+            ]
+            assert m4.pop("checkpoints") == [
+                [s for s in [2, 4, 6, 8, 10, 20, 30, 40, 50, 75, 100] if s <= max_steps],
+                [s for s in [10, 50, 100] if s <= max_steps],
+            ]
+            assert m1.pop("exports") == [s for s in [10, 30, 50, 100] if s <= max_steps]
+            assert m4.pop("exports") == [s for s in [2, 4, 6, 8, 10, 30, 50, 100] if s <= max_steps]
+            assert m1.pop("retention") == (1 if max_steps == 10 else 7)
+            assert m4.pop("retention") == (5 if max_steps == 10 else 11)
         assert m1 == m4, condition
         assert m4["steps"][0] == max_steps
         assert m4["order"] == [False, None]

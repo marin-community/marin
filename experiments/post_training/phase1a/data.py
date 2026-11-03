@@ -64,11 +64,16 @@ def eligible_samples(m1_rows: list[dict[str, Any]], task: Task) -> dict[str, lis
     }
 
 
-def prompt_order(run: RunPlan, eligible: Mapping[Task, Mapping[str, list]]) -> dict[Task, list[str]]:
-    """The seeded order of each task's prompts over the run's 100 steps."""
+def prompt_order(
+    run: RunPlan, eligible: Mapping[Task, Mapping[str, list]], *, steps: int = STEPS
+) -> dict[Task, list[str]]:
+    """The seeded order of each task's prompts over the run's steps.
+
+    A longer run extends the same order: its first ``STEPS`` steps match the 100-step layout.
+    """
     order = {}
     for task, per_step in run.prompts_per_step.items():
-        needed = per_step * STEPS
+        needed = per_step * steps
         pool = sorted(eligible[task])
         if len(pool) < needed:
             raise ValueError(
@@ -80,13 +85,17 @@ def prompt_order(run: RunPlan, eligible: Mapping[Task, Mapping[str, list]]) -> d
 
 
 def layout(
-    run: RunPlan, prompts: Mapping[Task, Mapping[str, dict]], samples: Mapping[Task, Mapping[str, list[dict]]]
+    run: RunPlan,
+    prompts: Mapping[Task, Mapping[str, dict]],
+    samples: Mapping[Task, Mapping[str, list[dict]]],
+    *,
+    steps: int = STEPS,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """M4 prompt rows and M1 rows, step by step and task by task in condition order."""
-    order = prompt_order(run, samples)
+    order = prompt_order(run, samples, steps=steps)
     m4_rows: list[dict[str, Any]] = []
     m1_rows: list[dict[str, Any]] = []
-    for step in range(STEPS):
+    for step in range(steps):
         for task, per_step in run.prompts_per_step.items():
             for task_id in order[task][step * per_step : (step + 1) * per_step]:
                 m4_rows.append(
@@ -103,7 +112,12 @@ def layout(
 
 
 def build_run_data(
-    run: RunPlan, *, task_files: Mapping[Task, Path], m1_files: Mapping[Task, Path], output_dir: Path
+    run: RunPlan,
+    *,
+    task_files: Mapping[Task, Path],
+    m1_files: Mapping[Task, Path],
+    output_dir: Path,
+    steps: int = STEPS,
 ) -> dict[str, Any]:
     """Write ``m4.parquet`` and ``m1.parquet`` for one condition and seed; return their counts.
 
@@ -116,7 +130,7 @@ def build_run_data(
         if task in run.tasks
     }
     samples = {task: eligible_samples(_read_jsonl(m1_files[task]), task) for task in run.tasks}
-    m4_rows, m1_rows = layout(run, prompts, samples)
+    m4_rows, m1_rows = layout(run, prompts, samples, steps=steps)
     output_dir.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(m4_rows), output_dir / M4_FILE)
     pq.write_table(pa.Table.from_pylist(m1_rows), output_dir / M1_FILE)

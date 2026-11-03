@@ -67,6 +67,8 @@ POLICY_CHAT_TEMPLATE = "../../experiments/post_training/chat_templates/grug_shar
 # checkpoint copies and Ray above that peak; cw-rno2a H100 nodes have 2 TiB RAM.
 LEARNER_MEMORY = "1500GB"
 # Every scheduled checkpoint stays until the weight analysis has read it.
+# Stage B extends theta_X past step 100 so the 0.8 crossing has a confirming checkpoint (decision 2026-11-03).
+EXTENDED_STEPS = 125
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=len(CHECKPOINT_STEPS), temporary_storage_ttl_days=90)
 
 
@@ -118,14 +120,26 @@ def run_spec(
 ) -> SkyRLSpec:
     repo, revision = FAMILY_TOKENIZER_REVISIONS["grug"]
     recipe = skyrl_recipe(run, teachers)
-    if max_steps != STEPS:
-        trainer = recipe["trainer"]
+    trainer = recipe["trainer"]
+    if max_steps < STEPS:
         trainer["max_steps"] = max_steps
         for field in ("checkpoint_steps", "optimizer_checkpoint_steps", "hf_export_steps"):
             trainer[field] = [step for step in trainer[field] if step <= max_steps]
+    elif max_steps > STEPS:
+        # An extension resumes a finished run's last full checkpoint and saves, keeps the
+        # optimizer for, and exports only its new final step.
+        if resume_from is None:
+            raise ValueError(f"extending {run.name} to {max_steps} steps requires its step-{STEPS} checkpoint")
+        trainer.update(
+            max_steps=max_steps,
+            checkpoint_steps=[max_steps],
+            optimizer_checkpoint_steps=[max_steps],
+            hf_export_steps=[max_steps],
+            ckpt_interval=max_steps,
+        )
     if resume_from is not None:
-        recipe["trainer"].update(resume_mode="from_path", resume_path=resume_from)
-    suffix = f"-smoke{max_steps}" if max_steps != STEPS else ""
+        trainer.update(resume_mode="from_path", resume_path=resume_from)
+    suffix = "" if max_steps == STEPS else f"-smoke{max_steps}" if max_steps < STEPS else f"-ext{max_steps}"
     name = user_owned_name(f"checkpoints/phase1a/{run.name}{suffix}")
     return SkyRLSpec(
         name=name,
@@ -210,7 +224,10 @@ def selected_runs(
     "--resume-from", help="Full optimizer checkpoint global_step directory; requires exactly one selected run."
 )
 @click.option(
-    "--max-steps", type=click.Choice([10, STEPS]), default=STEPS, help="10 for setup smokes; 100 for full runs."
+    "--max-steps",
+    type=click.Choice([10, STEPS, EXTENDED_STEPS]),
+    default=STEPS,
+    help=f"10 for setup smokes; {STEPS} for full runs; {EXTENDED_STEPS} extends a finished run (needs --resume-from).",
 )
 @rl_build_options
 def main(
