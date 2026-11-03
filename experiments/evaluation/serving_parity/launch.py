@@ -8,6 +8,7 @@ import contextlib
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -110,7 +111,7 @@ def collect_items(archive: str) -> list[dict]:
 
 
 @contextlib.contextmanager
-def serving_model(hardware, model, engine):
+def serving_model(hardware, model, engine, cpus_per_host: float):
     """Reuse the single-host backend or the multi-host TPU launcher."""
     if hardware == "h100":
         with local_inference(model, engine, num_chips=8) as session:
@@ -131,7 +132,9 @@ def serving_model(hardware, model, engine):
             with patch.object(IsolatedTpuVllm, "command", command):
                 launcher = vllm_launcher(engine)
                 assert isinstance(launcher, IsolatedTpuVllm)
-                with tpu_ray_gang(launcher, chips_per_host=4, timeout_seconds=2400) as gang:
+                with tpu_ray_gang(
+                    launcher, cpus_per_host=max(1, math.floor(cpus_per_host)), chips_per_host=4, timeout_seconds=2400
+                ) as gang:
                     if gang.leader:
                         with iris_vllm_followers(gang.identity):
                             spec = _vllm_model_spec(model, 16, 16)
@@ -153,7 +156,7 @@ def serving_model(hardware, model, engine):
                     yield None
 
 
-def run_arm(hardware: str, weights: str, output: str) -> None:
+def run_arm(hardware: str, weights: str, output: str, cpus_per_host: float) -> None:
     """Own the server and evaluator in one bounded Iris job; release on exit."""
     configure_coreweave_s3()
     root = StoragePath(output)
@@ -194,7 +197,7 @@ def run_arm(hardware: str, weights: str, output: str) -> None:
             else ()
         ),
     )
-    with serving_model(hardware, model, engine) as running_model:
+    with serving_model(hardware, model, engine, cpus_per_host) as running_model:
         if running_model is None:
             return
         ready = time.monotonic()
@@ -239,7 +242,7 @@ def main() -> None:
         with IrisClient.remote(endpoint.url, workspace=Path.cwd(), credentials=endpoint.credentials) as client:
             job = client.submit(
                 name=args.name,
-                entrypoint=Entrypoint.from_callable(run_arm, args.hardware, args.weights, args.output),
+                entrypoint=Entrypoint.from_callable(run_arm, args.hardware, args.weights, args.output, resources.cpu),
                 replicas=resources.replicas,
                 coscheduling=coscheduling,
                 ports=ports,
