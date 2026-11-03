@@ -29,6 +29,11 @@ from marin.evaluation.lm_eval_samples import read_evalchemy_results
 from marin.inference.config import ServedModelConfig, VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.iris import _vllm_model_spec
 from marin.inference.iris_tpu_vllm import RAY_PORTS, tpu_ray_gang
+from marin.inference.iris_vllm import (
+    iris_vllm_followers,
+    notify_iris_vllm_stopped,
+    wait_for_iris_vllm_shutdown,
+)
 from marin.inference.serve import local_inference
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
@@ -127,18 +132,25 @@ def serving_model(hardware, model, engine):
                 launcher = vllm_launcher(engine)
                 assert isinstance(launcher, IsolatedTpuVllm)
                 with tpu_ray_gang(launcher, chips_per_host=4, timeout_seconds=2400) as gang:
-                    if not gang.leader:
-                        yield None
-                        return
-                    spec = _vllm_model_spec(model, 16, 16)
-                    with VllmBackend(engine).start(
-                        spec, extra_args=("--distributed-executor-backend", "ray"), subprocess_env=gang.subprocess_env
-                    ) as environment:
-                        environment.wait_until_ready()
-                        url = environment.server_url.rstrip("/").removesuffix("/v1") + "/v1"
-                        yield RunningModel(OpenAIEndpoint(url, MODEL), tokenizer=MODEL)
-                        gang.check_alive()
-                        environment.check_alive()
+                    if gang.leader:
+                        with iris_vllm_followers(gang.identity):
+                            spec = _vllm_model_spec(model, 16, 16)
+                            with VllmBackend(engine).start(
+                                spec,
+                                extra_args=("--distributed-executor-backend", "ray"),
+                                subprocess_env=gang.subprocess_env,
+                            ) as environment:
+                                environment.wait_until_ready()
+                                url = environment.server_url.rstrip("/").removesuffix("/v1") + "/v1"
+                                yield RunningModel(OpenAIEndpoint(url, MODEL), tokenizer=MODEL)
+                                gang.check_alive()
+                                environment.check_alive()
+
+                    else:
+                        wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
+                if not gang.leader:
+                    notify_iris_vllm_stopped(gang.identity)
+                    yield None
 
 
 def run_arm(hardware: str, weights: str, output: str) -> None:
