@@ -13,7 +13,8 @@ hourly Marina Cloud Run runner keeps the corpus current.
 - `wiki_entries` holds durable agent-authored notes and incident records: a title, a
   one-sentence `use_when` hint, lowercase kebab-case tags, a body, embeddings, and
   deliberate-reference counters.
-- `work_log` is an append-only agent logbook, one row per distilled milestone.
+- `work_log` is an append-only agent logbook, one row per distilled milestone. Project slugs
+  are stored in lowercase, and the project filter ignores case.
 - `search_executions` and `search_execution_results` record every API search and the ranked
   snapshot it returned; `search_feedback` and `search_feedback_grades` record the 0–10
   judgments a caller ties back to those rows.
@@ -33,6 +34,7 @@ uv run infra/marina/apps/echo/cli.py wiki search "grafana access" --tag ops
 uv run infra/marina/apps/echo/cli.py wiki add --file note.md   # OKF markdown
 uv run infra/marina/apps/echo/cli.py wiki show <id> > note.md  # edit, then `wiki edit`
 uv run infra/marina/apps/echo/cli.py history export > echo-search-history.jsonl
+uv run infra/marina/apps/echo/cli.py work-log projects --days 30
 uv run infra/marina/apps/echo/cli.py work-log recent --project <slug>
 uv run infra/marina/apps/echo/cli.py work-log add --project <slug> --title "..." --body - <<< "..."
 ```
@@ -129,7 +131,7 @@ route is under `/echo/api/`, and `/echo/api/docs` serves the OpenAPI documentati
 `search`, `federated-search`, `search-configuration`, `repository-index`,
 `repository-files/{owner}/{repository}@main:{path}`, `grep`, `chunks/{id}`,
 `search-results/{id}`, `search-executions`, `wiki/search`, `wiki/{id}`, `wiki`,
-`wiki/{id}/references`, `feedback`, `work_log`, `work_log/{id}`, and `health`.
+`wiki/{id}/references`, `feedback`, `work_log`, `work_log/projects`, `work_log/{id}`, and `health`.
 
 The kernel authenticates every request and binds the caller, so the API attributes wiki
 writes, work-log entries, feedback, and search history to that identity; it reads no

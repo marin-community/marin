@@ -16,12 +16,14 @@ works on it:
 
 ```bash
 uv run infra/marina/apps/echo/cli.py work-log recent --days 7
+uv run infra/marina/apps/echo/cli.py work-log projects --days 30
 uv run infra/marina/apps/echo/cli.py work-log recent --project <slug>
 uv run infra/marina/apps/echo/cli.py work-log show <id>
 ```
 
-`recent` prints one summary line per entry, newest first. `show` prints one
-entry with its body.
+`recent` prints one summary line per entry, newest first. `projects` prints
+each project slug with its entry count, most recently active first. `show`
+prints one entry with its body.
 
 ## Write
 
@@ -33,9 +35,9 @@ uv run infra/marina/apps/echo/cli.py work-log add --project <slug> --title "<res
 EOF
 ```
 
-- Use one stable lowercase kebab-case `--project` slug for each thread of work,
-  across sessions and agents. Run `recent` to find an existing slug before you
-  make a new one.
+- Use one stable `--project` slug for each thread of work, across sessions and
+  agents, for example `harbor:issue-161`. Run `projects` to find an existing
+  slug before you make a new one. Echo stores slugs in lowercase.
 - Write the title as the result or decision. Keep the body short and link the
   evidence. Do not paste transcripts, raw logs, or secrets.
 - Echo records the signed-in caller as the author.

@@ -14,6 +14,7 @@ Echo is a Marina app, so this talks to ``<marina>/echo/api``. Run it from the re
     uv run infra/marina/apps/echo/cli.py wiki search "grafana access" --tag ops
     uv run infra/marina/apps/echo/cli.py wiki add --file note.md   # OKF: title/use_when + body
     uv run infra/marina/apps/echo/cli.py wiki show 12 > note.md    # edit, then `wiki edit`
+    uv run infra/marina/apps/echo/cli.py work-log projects
     uv run infra/marina/apps/echo/cli.py work-log recent --project grug-moe
     uv run infra/marina/apps/echo/cli.py work-log add --project grug-moe --title "..." --body -
 
@@ -483,6 +484,15 @@ def cmd_work_log_recent(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_work_log_projects(args: argparse.Namespace) -> None:
+    projects = response_objects(request("GET", "/work_log/projects", params={"days": args.days}))
+    if not projects:
+        print(f"No work-log projects in the last {args.days} days.")
+        return
+    for project in projects:
+        print(f"{str(project['last_at'])[:10]}  {project['entries']:>5}  {project['project']}")
+
+
 def cmd_work_log_show(args: argparse.Namespace) -> None:
     entry = response_object(request("GET", f"/work_log/{args.id}"))
     print(f"#{entry['id']} {entry['at']} {entry['author']} [{entry['project']}]")
@@ -639,6 +649,11 @@ def build_parser() -> argparse.ArgumentParser:
     work_log_recent.add_argument("--project", help="only entries with this project slug")
     work_log_recent.add_argument("--limit", type=bounded_limit, default=30)
     work_log_recent.set_defaults(func=cmd_work_log_recent)
+    work_log_projects = work_log.add_parser(
+        "projects", help="list project slugs with entry counts, most recently active first"
+    )
+    work_log_projects.add_argument("--days", type=int, default=30)
+    work_log_projects.set_defaults(func=cmd_work_log_projects)
     work_log_show = work_log.add_parser("show", help="print one entry with its body")
     work_log_show.add_argument("id", type=int)
     work_log_show.set_defaults(func=cmd_work_log_show)
