@@ -45,7 +45,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
-GATE_REVISION = "2026.10.30.2"
+GATE_REVISION = "2026.11.03.1"
 
 
 @dataclass(frozen=True)
@@ -123,20 +123,21 @@ def parse_requirement(text: str) -> Requirement:
 
 
 def check_requirements(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
+    """Refuse, before any GPU step, a requirement whose key the gate does not compute for control r0."""
     if not requirements:
         return
     if control or preset.name not in CONTROLS:
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
-    prefixes = tuple(evaluation.name + "/" for evaluation in preset.evaluations)
-    raw = [item.key for item in map(parse_requirement, requirements) if not item.key.startswith(prefixes)]
-    if raw:
-        pin = CONTROLS[preset.name][0]
-        root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
-        path = root / presets.control_name(pin.preset, pin.main_commit, 0) / pin.revision
-        metrics = json.loads(presets.read_text(path / f"exports/metrics/step-{preset.measured[0]:06d}.json"))
-        for key in raw:
-            if key not in metrics:
-                raise click.BadParameter(f"requirement metric absent from control r0 first measured step: {key}")
+    keys = [parse_requirement(text).key for text in requirements]
+    pins = _pins(preset.name)
+    if not pins:
+        return  # gate_step names the missing control pin.
+    rates_path = _pass_rates_path(preset)
+    rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
+    control = _load_run(_control_path(preset, pins[0], 0), preset, rates)
+    missing = [key for key in keys if key not in control.values]
+    if missing:
+        raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
 
 
 def gate_inputs(
@@ -316,7 +317,7 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
     values = {}
     declared = {metric.key: metric for metric in (*preset.guards, *preset.reported)}
     extra = set().union(*(row.keys() for row in metrics.values())) - declared.keys()
-    for metric in (*declared.values(), *(declared.get(key, presets.Metric(key, True)) for key in extra)):
+    for metric in (*declared.values(), *(presets.Metric(key, True) for key in sorted(extra))):
         if metric.key.startswith("startup/"):
             first = next((row[metric.key] for _, row in sorted(metrics.items()) if metric.key in row), None)
             if first is not None:
@@ -491,6 +492,8 @@ def _change(row: Comparison) -> Change:
 def _breakdown_group(key: str) -> str:
     if key.startswith("reward/domain/"):
         return "Training reward per source"
+    if key.endswith(("/initial", "/gain")):
+        return key.split("/", 1)[0] + ": initial weights"
     parts = key.split("/")
     dimension = parts[1] if len(parts) > 2 else "overall"
     if dimension == "agentic":
@@ -553,7 +556,7 @@ def _compare(
             n_control,
             (
                 counts[_breakdown_group(metric.key)]
-                if metric.key.startswith(prefixes) or metric.key.startswith("reward/domain/")
+                if metric.key not in declared and metric.key.startswith((*prefixes, "reward/domain/"))
                 else 1
             ),
         )
@@ -570,7 +573,7 @@ def _compare(
         reported.append(
             ReportedComparison(
                 **row.model_dump(),
-                change=_change(row),
+                change=Change.UNAVAILABLE if metric.key not in declared and row.sd == 0 else _change(row),
                 tasks=tasks,
                 initializer=initializer,
                 control_min=min(control_values) if row.control is not None else None,
@@ -688,6 +691,18 @@ def _pins(preset: str) -> tuple[ControlPin, ...]:
     return tuple(pin for pin in CONTROLS[preset] if pin.revision == presets.PRESET_REVISION)
 
 
+def _control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
+    root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
+    return str(root / presets.control_name(pin.preset, pin.main_commit, index) / pin.revision)
+
+
+def _pass_rates_path(preset: presets.Preset) -> str | None:
+    if not any(evaluation.source == "default" and _gated(evaluation, preset) for evaluation in preset.evaluations):
+        return None
+    root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
+    return str(root / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION)
+
+
 def _gate_artifact(
     name: str,
     preset: presets.Preset,
@@ -696,16 +711,10 @@ def _gate_artifact(
     leave_out: int | None = None,
 ) -> ArtifactStep[GateReport]:
     pins = _pins(preset.name)
-    root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
     controls = tuple(
-        tuple(
-            str(root / presets.control_name(pin.preset, pin.main_commit, index) / pin.revision)
-            for index in range(pin.runs)
-            if pin != pins[0] or index != leave_out
-        )
+        tuple(_control_path(preset, pin, index) for index in range(pin.runs) if pin != pins[0] or index != leave_out)
         for pin in pins
     )
-    rates = any(evaluation.source == "default" and _gated(evaluation, preset) for evaluation in preset.evaluations)
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
     return apply(
         name,
@@ -717,7 +726,7 @@ def _gate_artifact(
         control_paths=controls,
         pins=pins,
         inputs=inputs,
-        pass_rates_path=str(root / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION) if rates else None,
+        pass_rates_path=_pass_rates_path(preset),
         output=OUT,
     )
 

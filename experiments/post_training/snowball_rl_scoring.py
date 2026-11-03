@@ -130,6 +130,11 @@ def score_slices(scores: pa.Table, rates: pa.Table | None = None) -> dict[str, l
             keys.append(f"{evaluation}/difficulty/{band}/mean")
         for key in keys:
             groups[key].append(row)
+    for evaluation in {key.split("/", 1)[0] for key in groups}:
+        agentic = [key for key in groups if key.startswith(f"{evaluation}/agentic/")]
+        if len(agentic) == 1:
+            # A panel without both kinds of task has no agentic split; its one slice repeats the overall mean.
+            del groups[agentic[0]]
     return dict(groups)
 
 
