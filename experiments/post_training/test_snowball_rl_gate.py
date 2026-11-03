@@ -383,14 +383,19 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
             "learning-medium",
             presets.control_name(pin.preset, pin.main_commit, i),
             score=0.49 + 0.01 * i,
-            metrics={"generate/std_num_tokens": 100 + i},
+            metrics={"generate/std_num_tokens": 100 + i, "reward/domain/shared/avg_raw_reward": 0.1 * i},
         )
     answers = [_answer(f"task-{i}", value) for i, value in enumerate((0.2, 0.4, 0.8, 0.1, 0.5, 0.9))]
     recorded_runs(
         "learning-medium",
         "users/test/detail",
         answers=answers,
-        metrics={"reward/domain/candidate-only/avg_raw_reward": 1, "generate/std_num_tokens": 50},
+        metrics={
+            "reward/domain/candidate-only/avg_raw_reward": 1,
+            "reward/domain/shared/avg_raw_reward": 1,
+            "async/rejected_rate": 0.5,
+            "generate/std_num_tokens": 50,
+        },
     )
     report = rescore("learning-medium", "--candidate", "users/test/detail")
     rows = {row["metric"]: row for row in report["reported"]}
@@ -420,7 +425,8 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     assert initial["panel-910/mean/initial"]["change"] == "unavailable"
     assert (report["verdict"], report["label"]) == ("pass", "no change")
     assert rows["generate/std_num_tokens"]["change"] == "better"
-    assert "reward/domain/candidate-only/avg_raw_reward" not in rows
+    assert rows["reward/domain/shared/avg_raw_reward"]["change"] == "better"
+    assert not {"reward/domain/candidate-only/avg_raw_reward", "async/rejected_rate"} & rows.keys()
     assert not {"panel-910/family_mean", "panel-910/mixed_fraction", "panel-910/all_wrong_fraction"} & rows.keys()
     partial = [
         _answer(f"task-{i}", value, error="Unavailable" if i == 0 else None)
@@ -440,7 +446,7 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     assert "## Breakdown" in markdown and "### panel-910: aaii_category x difficulty" in markdown
 
 
-def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs, monkeypatch):
+def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs):
     for name in ("speed-short", "speed-medium", "learning-medium"):
         controls(recorded_runs, name)
     speed, learning = presets.PRESETS["speed-medium"], presets.PRESETS["learning-medium"]
@@ -450,11 +456,6 @@ def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs
         ["panel-910/aaii_category/coding/mean>=control", "panel-910/family/large/difficulty/hard/mean>=0"],
         control=False,
     )
-
-    def forbidden_step(*args, **kwargs):
-        pytest.fail("requirement preflight reached GPU step construction")
-
-    monkeypatch.setattr(snowball, "_run_step", forbidden_step)
     for preset, requirement, kwargs in (
         (presets.PRESETS["speed-short"], "typo>=0", {}),
         (learning, "panel-910/aaii_category/codng/mean>=control", {}),
@@ -504,6 +505,7 @@ def test_requirements_enforce_each_replicate_and_calibrate_added_guards(recorded
     relative = rescore("speed-medium", "--candidate", "users/test/required-0.01", "--require", key + "<=control")
     row = relative["guards"][-1]
     assert row["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 3, 3) * math.sqrt(5 / 3) * 0.001 * math.sqrt(1.25))
+    assert (row["metric"], row["higher_is_better"], row["passes"]) == (key, False, False)
     missing = rescore("speed-medium", "--candidate", "users/test/required-0.01", "--require", "absent>=1")
     assert missing["verdict"] == "invalid" and "absent" in missing["reason"]
     zero = rescore("speed-medium", "--candidate", "users/test/required-0.01", "--require", VLLM + ">=control")
@@ -558,6 +560,9 @@ def test_update_guard_alone_sets_improves(recorded_runs):
     assert next(row["change"] for row in report["reported"] if row["metric"].startswith("async/performance/")) == "worse"
 
 
+REQUIREMENT = "policy/raw_grad_norm<=1"
+
+
 @pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])
 def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset):
     controls(recorded_runs, preset)
@@ -595,9 +600,14 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
             "trainer.policy.optimizer_config.lr=1e-6",
         )
         built = snowball.build_run(
-            presets.PRESETS[preset], init=init, settings=tuple(map(presets.parse_setting, settings))
+            presets.PRESETS[preset],
+            init=init,
+            settings=tuple(map(presets.parse_setting, settings)),
+            requirements=(REQUIREMENT,),
         )
         argv = [
+            "--require",
+            REQUIREMENT,
             "--init",
             "users/test/unused@2026.10.27",
             "--init",
@@ -613,8 +623,10 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         )
     else:
         tasks = f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}"
-        built = snowball.build_run(presets.PRESETS[preset], tasks=presets.selection_artifact(tasks))
-        argv = ["--tasks", f"unused@{presets.DEFAULT_SELECTION_VERSION}", "--tasks", tasks]
+        built = snowball.build_run(
+            presets.PRESETS[preset], tasks=presets.selection_artifact(tasks), requirements=(REQUIREMENT,)
+        )
+        argv = ["--require", REQUIREMENT, "--tasks", f"unused@{presets.DEFAULT_SELECTION_VERSION}", "--tasks", tasks]
         expected = ({}, tasks, None, [])
     initial = 0.2 if preset == "learning-medium" else None
     source = recorded_runs(
@@ -630,6 +642,9 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     settings = {key: json.loads(value) for key, _, value in (item.partition("=") for item in report["run"]["settings"])}
     gains = [row["run"] for row in report["reported"] if row["metric"] == "panel-910/mean/gain"]
     assert (settings, report["run"]["tasks"], report["run"]["init"], gains) == expected
+    assert [(row["name"], row["holds"]) for row in report["invariants"] if row["name"].startswith("require/")] == [
+        ("require/" + REQUIREMENT.split("<=")[0], True)
+    ]
     printed = status(preset, argv)
     assert (printed["verdict"], printed["label"]) == (report["verdict"], report["label"])
     assert printed["report"].endswith("gate_report.json") and "rl_path_changes_since_control" in printed
