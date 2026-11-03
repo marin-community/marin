@@ -88,7 +88,6 @@ async def test_a_retried_control_replays_from_its_first_turn(tmp_path, file_task
     assert factory.creates == len(file_controls) + 1
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_a_re_entered_control_numbers_attempts_after_the_ones_on_disk(tmp_path, file_task, file_controls, fakes):
     earlier = tmp_path / "control" / "correct"
     earlier.mkdir(parents=True)

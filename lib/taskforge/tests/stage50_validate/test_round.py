@@ -399,7 +399,6 @@ async def test_solver_trials_start_before_the_controls_exist_and_replay_waits_fo
     assert load_validation(context.round_dir) == result
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_a_relaunch_redoes_only_the_units_whose_files_are_missing(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     context, settings = round_context(tmp_path), round_settings(ledger)
@@ -444,7 +443,6 @@ async def test_the_trials_of_another_lowered_spec_are_not_read_as_done(glm_clien
     assert not any(name.startswith(str(trials_dir.relative_to(tmp_path / "round"))) for name in evidence_files(other))
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_a_rewritten_control_set_is_replayed_again(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     fake_glm.stream(content=controls_reply("43"))
@@ -471,7 +469,6 @@ async def test_a_rewritten_control_set_is_replayed_again(glm_client, fake_glm, l
     )
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_a_trial_cancelled_in_flight_leaves_no_attempt_and_is_rerun(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     fake_glm.stream(content=controls_reply("41"))
@@ -591,7 +588,6 @@ async def test_each_submission_within_the_budget_is_graded_as_a_control_and_reco
     assert sorted(path.name for path in graded_dir.iterdir()) == ["s1", "s2"]
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_a_relaunch_reruns_only_a_missing_adversary_attempt(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=2))
@@ -646,7 +642,6 @@ async def test_an_adversary_attempt_deadline_retains_an_ungraded_attempt_and_ret
     assert isinstance(await default_review(result, band=ALL_SOLVE_RATES), Hold)
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_an_adversary_attempt_cancelled_in_flight_leaves_no_attempt_file(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
@@ -732,7 +727,6 @@ UNAVAILABLE = {"0": lambda: ModelUnavailable("the hold ran out", ())}
 """Trial 0 fails for a retryable cause on every attempt."""
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cause_with_a_full_budget(
     glm_client, fake_glm, ledger, tmp_path
 ):
@@ -836,7 +830,6 @@ async def test_an_adversary_verifier_outage_holds_after_bounded_retries(glm_clie
     assert first["cause"] == Cause.MACHINE_TERMINATED
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 @pytest.mark.parametrize("spec", [FALSE_ACCEPT, FALSE_REJECT])
 @pytest.mark.parametrize("actionable", [True, False])
 async def test_defects_use_same_contract_without_second_review(glm_client, fake_glm, ledger, tmp_path, spec, actionable):
@@ -911,7 +904,6 @@ async def test_each_roster_spec_runs_under_its_own_name_brief_and_budgets(glm_cl
     assert sorted(FALSE_REJECT.brief in system for system in systems) == [False, True]
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_interrupted_search_retains_evidence_and_explicit_resume_starts_a_new_attempt(
     glm_client, fake_glm, ledger, tmp_path
 ):

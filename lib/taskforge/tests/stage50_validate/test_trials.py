@@ -90,7 +90,6 @@ async def test_failed_starts_are_retried_and_every_attempt_is_recorded(tmp_path,
     assert all(record["grade"]["reward"] == 1.0 for record in graded)
 
 
-# resume-collapse: exercises a round.py/trials.py recovery path the resume-collapse PR deletes.
 async def test_a_re_entered_trial_numbers_attempts_after_the_ones_on_disk(tmp_path, file_task, fakes):
     earlier = tmp_path / "evidence" / "solver" / "0" / "attempt-1.json"
     earlier.parent.mkdir(parents=True)
