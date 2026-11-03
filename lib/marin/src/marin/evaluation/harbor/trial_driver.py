@@ -518,19 +518,6 @@ def _judge_settings(config: JobConfig, overlay: RuntimeOverlay) -> tuple[str, st
         if not model:
             raise ValueError("A judge endpoint requires an explicit verifier model role")
         return endpoint, model
-    agent = config.agents[0]
-    if agent.name == "sotopia":
-        partner_endpoint = agent.kwargs.get("partner_api_base")
-        evaluator_endpoint = agent.kwargs.get("evaluator_api_base")
-        partner_model = agent.kwargs.get("partner_model")
-        evaluator_model = agent.kwargs.get("evaluator_model")
-        if (
-            not partner_endpoint
-            or not partner_model
-            or (partner_endpoint, partner_model) != (evaluator_endpoint, evaluator_model)
-        ):
-            raise ValueError("Sotopia requires one explicit shared host model capability for partner and evaluator")
-        return str(partner_endpoint), str(partner_model).removeprefix("openai/")
     return None
 
 

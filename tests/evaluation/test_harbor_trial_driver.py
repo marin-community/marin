@@ -652,7 +652,7 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
     capability_token = "dummy-capability-token"
     capability_url = f"https://iris.example/proxy/t/{capability_token}/serve.inference-test/v1"
     policy_path = tmp_path / "policy.json"
-    policy_path.write_text(json.dumps(yaml.safe_load((_POLICIES / "aime-smoke.yaml").read_text())))
+    policy_path.write_text(json.dumps(yaml.safe_load((_POLICIES / "aime-harbor.yaml").read_text())))
     overlay_path = tmp_path / "overlay.json"
     write_runtime_overlay(
         overlay_path,
@@ -686,15 +686,11 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
     assert "<redacted>" in serialized_json
 
 
-@pytest.mark.parametrize("agent_name", ["pi", "opencode", "mini-swe-agent", "acp:pi-acp", "sotopia", "terminus-2"])
+@pytest.mark.parametrize("agent_name", ["pi", "opencode", "mini-swe-agent", "codex", "terminus-2", "terminus-kira"])
 def test_effective_candidate_endpoint_stays_on_host_for_installed_agents(tmp_path, agent_name):
     endpoint = "https://iris.example/proxy/t/private-capability/serve.candidate/v1"
     policy_path = tmp_path / "policy.json"
-    policy_agent = (
-        {"import_path": "harbor.agents.installed.sotopia:SotopiaAgent"}
-        if agent_name == "sotopia"
-        else {"name": agent_name}
-    )
+    policy_agent = {"name": agent_name}
     policy_agent["env"] = {"OPENAI_API_KEY": "${OPENAI_API_KEY}", "OPENAI_API_BASE": endpoint}
     if agent_name == "opencode":
         policy_agent["kwargs"] = {
@@ -740,7 +736,7 @@ def test_effective_candidate_endpoint_stays_on_host_for_installed_agents(tmp_pat
     )
     result = json.loads(external_python("-c", script, str(policy_path), str(overlay_path)).stdout)
     agent = result["agent"]
-    if agent_name == "terminus-2":
+    if agent_name in {"terminus-2", "terminus-kira"}:
         assert result["live_endpoint"] == endpoint
         assert result["candidate_endpoint"] is None
         return
@@ -760,9 +756,8 @@ def test_effective_candidate_endpoint_stays_on_host_for_installed_agents(tmp_pat
 @pytest.mark.parametrize(
     ("name", "import_path", "selected_class", "expected_endpoint"),
     [
-        ("terminus-2", "harbor.agents.installed.pi:Pi", "Terminus2", "https://iris.example/capability/v1"),
-        ("pi", "harbor.agents.terminus_2:Terminus2", "Pi", "http://127.0.0.1:8788/v1"),
-        ("acp:pi-acp", "harbor.agents.terminus_2:Terminus2", "AcpAgent", "http://127.0.0.1:8788/v1"),
+        ("terminus-2", "harbor.agents.installed.pi:Pi", "Pi", "http://127.0.0.1:8788/v1"),
+        ("pi", "harbor.agents.terminus_2.terminus_2:Terminus2", "Terminus2", "https://iris.example/capability/v1"),
     ],
 )
 def test_candidate_routing_matches_factory_when_name_and_import_path_are_both_set(

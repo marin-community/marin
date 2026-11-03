@@ -6,7 +6,6 @@
 import json
 import os
 import subprocess
-import textwrap
 from pathlib import Path
 
 from marin.evaluation.harbor.driver_config import _driver_environment
@@ -65,106 +64,6 @@ def write_runtime_overlay(path: Path, tmp_path: Path, **overrides: object) -> No
         "archive_dataset": "terminal-bench",
     }
     path.write_text(json.dumps({**overlay, **overrides}))
-
-
-def run_single_turn_aime_agent(
-    tmp_path: Path,
-    *,
-    content: str | None,
-    finish_reason: str | None = None,
-    reasoning_content: str | None = None,
-    transient_failures: int = 0,
-    model_alias: str | None = None,
-) -> dict[str, object]:
-    """Exercise the agent in Harbor's frozen environment with fake HTTP and sandbox I/O boundaries."""
-    logs_dir = tmp_path / "logs"
-    logs_dir.mkdir()
-    answer_path = tmp_path / "answer.txt"
-    message: dict[str, object] = {"content": content}
-    if reasoning_content is not None:
-        message["reasoning_content"] = reasoning_content
-    choice: dict[str, object] = {"message": message}
-    if finish_reason is not None:
-        choice["finish_reason"] = finish_reason
-    response_bytes = json.dumps({"choices": [choice]}).encode()
-    script = textwrap.dedent(
-        f"""
-        import asyncio
-        import io
-        import json
-        import subprocess
-        import urllib.error
-        from types import SimpleNamespace
-
-        from marin.evaluation.harbor import single_turn_aime_agent as agent_module
-
-
-        class Response(io.BytesIO):
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc_value, traceback):
-                self.close()
-
-
-        class UrlOpen:
-            def __init__(self):
-                self.attempts = 0
-                self.models = []
-
-            def __call__(self, request, timeout):
-                self.attempts += 1
-                self.models.append(json.loads(request.data)["model"])
-                if self.attempts <= {transient_failures}:
-                    raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", None, None)
-                return Response({response_bytes!r})
-
-
-        class Environment:
-            async def exec(self, command, **kwargs):
-                completed = subprocess.run(
-                    ["/bin/sh", "-c", command],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                return SimpleNamespace(
-                    return_code=completed.returncode,
-                    stdout=completed.stdout,
-                    stderr=completed.stderr,
-                )
-
-
-        urlopen = UrlOpen()
-        agent_module.urllib.request.urlopen = urlopen
-        agent = agent_module.SingleTurnAimeAgent(
-            logs_dir=agent_module.Path({str(logs_dir)!r}),
-            model_name="hosted_vllm/iceball-micro",
-            model_alias={model_alias!r},
-            api_base="https://inference.example/v1",
-            answer_path={str(answer_path)!r},
-            max_tokens=256,
-            request_retry_initial=0.001,
-        )
-        async def drive_agent():
-            environment = Environment()
-            await agent.setup(environment=environment)
-            await agent.run(
-                instruction="Solve this AIME problem",
-                environment=environment,
-                context=object(),
-            )
-
-        asyncio.run(drive_agent())
-        print(json.dumps({{
-            "answer": agent_module.Path({str(answer_path)!r}).read_text(),
-            "response": agent_module.Path({str(logs_dir / "response.txt")!r}).read_text(),
-            "attempts": urlopen.attempts,
-            "models": urlopen.models,
-        }}))
-        """
-    )
-    return json.loads(external_python("-c", script).stdout)
 
 
 def preflight(

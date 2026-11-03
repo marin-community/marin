@@ -4,7 +4,6 @@
 """Offline regressions for model provenance, resume identity, and request routing."""
 
 import json
-import subprocess
 import tempfile
 import textwrap
 from pathlib import Path
@@ -12,59 +11,9 @@ from pathlib import Path
 import pytest
 from marin.evaluation.harbor.driver_config import preflight_harbor_configs
 
-from tests.evaluation.harbor_runtime import external_python, run_single_turn_aime_agent, write_runtime_overlay
+from tests.evaluation.harbor_runtime import external_python, write_runtime_overlay
 
 pytestmark = pytest.mark.timeout(180)
-
-
-@pytest.mark.parametrize(
-    "model_alias, expected_model", [(None, "iceball-micro"), ("hosted_vllm/resumed-endpoint", "resumed-endpoint")]
-)
-def test_single_turn_aime_routes_requests_using_serving_alias(tmp_path, model_alias, expected_model):
-    result = run_single_turn_aime_agent(tmp_path, content="The answer is 42", model_alias=model_alias)
-    assert result["models"] == [expected_model]
-    assert result["answer"] == "42\n"
-
-
-def test_single_turn_aime_agent_grades_length_finished_response(tmp_path):
-    content = "A long incomplete derivation mentions 12. The final result is \\boxed{137}."
-    result = run_single_turn_aime_agent(tmp_path, content=content, finish_reason="length")
-
-    assert result == {"answer": "137\n", "response": content, "attempts": 1, "models": ["iceball-micro"]}
-
-
-@pytest.mark.parametrize("reasoning_content", [None, "An incomplete derivation suggests \\boxed{137}."])
-def test_single_turn_aime_agent_writes_invalid_answer_when_length_budget_exhausts_before_final_text(
-    tmp_path, reasoning_content
-):
-    result = run_single_turn_aime_agent(
-        tmp_path, content=None, reasoning_content=reasoning_content, finish_reason="length"
-    )
-
-    assert result == {"answer": "-1\n", "response": "", "attempts": 1, "models": ["iceball-micro"]}
-
-
-@pytest.mark.parametrize("finish_reason", [None, "stop"])
-def test_single_turn_aime_agent_rejects_null_final_text_without_length_truncation(tmp_path, finish_reason):
-    with pytest.raises(subprocess.CalledProcessError):
-        run_single_turn_aime_agent(tmp_path, content=None, finish_reason=finish_reason)
-
-    assert not (tmp_path / "answer.txt").exists()
-
-
-def test_single_turn_aime_agent_retries_transient_proxy_failure(tmp_path):
-    result = run_single_turn_aime_agent(
-        tmp_path,
-        content="Final answer: 42",
-        transient_failures=1,
-    )
-
-    assert result == {
-        "answer": "42\n",
-        "response": "Final answer: 42",
-        "attempts": 2,
-        "models": ["iceball-micro", "iceball-micro"],
-    }
 
 
 @pytest.mark.parametrize("identity", ["org/original-model", "gs://models/export/step-10", "s3://models/export/step-10"])
@@ -100,19 +49,16 @@ def test_runtime_alias_change_preserves_identity_and_rejects_different_model(tmp
         trials = [
             TrialConfig(task=TaskConfig(path=Path('/tasks/problem')), agent=config.agents[0]) for config in configs
         ]
-        # Exercise the factory used by actual trials, including imported and registry agents.
+        # Exercise the factory used by actual trials, including explicit import paths.
         infos = []
         agents = [
             ('terminus-2', None), ('pi', None), ('opencode', None), ('mini-swe-agent', None),
-            (None, 'harbor.agents.installed.sotopia:SotopiaAgent'), ('acp:pi-acp@0.0.33', None),
-            (None, 'marin.evaluation.harbor.single_turn_aime_agent:SingleTurnAimeAgent'),
+            ('codex', None), (None, 'harbor.agents.terminus_kira.terminus_kira:TerminusKira'),
         ]
         for index, (name, import_path) in enumerate(agents):
             kwargs = {**configs[1].agents[0].kwargs, 'thinking_format': 'chat-template'}
             if name == 'mini-swe-agent':
                 kwargs['version'] = '2.1.0'
-            if import_path and 'SingleTurnAimeAgent' in import_path:
-                kwargs.update(answer_path='/tmp/answer.txt', max_tokens=256)
             configured = configs[1].agents[0].model_copy(update={
                 'name': name,
                 'import_path': import_path,
@@ -132,7 +78,7 @@ def test_runtime_alias_change_preserves_identity_and_rejects_different_model(tmp
     result = json.loads(external_python("-c", script, str(policy), *overlays).stdout)
     assert result["same_resume_identity"]
     assert result["different_model_fields"] == ["agent.model_name"]
-    assert result["infos"] == [{"name": identity, "provider": "hosted_vllm"}] * 7
+    assert result["infos"] == [{"name": identity, "provider": "hosted_vllm"}] * 6
     assert result["alias"] == "hosted_vllm/resumed-endpoint"
     assert result["cohort_model"] == identity
 

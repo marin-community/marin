@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from shellbox.process import ProcessScope
 from upath import UPath
 
 from harbor.agents.installed.base import (
@@ -68,6 +69,9 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
 
         async def upload_file(self, source_path, target_path):
             shutil.copyfile(source_path, target_path)
+
+        async def process_scope(self) -> ProcessScope:
+            return ProcessScope(python=sys.executable)
 
         async def exec(self, command, **kwargs):
             completed = subprocess.run(

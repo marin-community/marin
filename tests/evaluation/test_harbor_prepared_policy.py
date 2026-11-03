@@ -6,10 +6,8 @@
 import json
 import shutil
 import textwrap
-from pathlib import Path
 
 import pytest
-import yaml
 
 from tests.evaluation.harbor_runtime import external_python as _external_python
 from tests.evaluation.harbor_runtime import preflight as _preflight
@@ -63,13 +61,16 @@ def test_prepared_compose_preflight_accepts_pinned_peers(tmp_path, prepared_poli
     assert json.loads(completed.stdout)[0]["benchmark_metadata"]["n_benchmark"] == 1
 
 
-def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_capabilities(tmp_path, prepared_policy):
-    campaign = (
-        Path(__file__).parents[2]
-        / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs/tau3-pi.yaml"
-    )
-    document = yaml.safe_load(campaign.read_text())
-    document["environment"] = {"type": "local"}
+def test_prepared_installed_policy_uses_separate_host_candidate_and_judge_capabilities(tmp_path, prepared_policy):
+    document = json.loads(prepared_policy.read_text())
+    document["agents"] = [{"name": "pi", "kwargs": {"thinking_format": "chat-template"}}]
+    document["verifier"] = {
+        "env": {
+            "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+            "OPENAI_BASE_URL": "${OPENAI_BASE_URL}",
+            "MODEL_NAME": "judge",
+        }
+    }
     document["datasets"] = [{"path": "dataset"}]
     prepared_policy.write_text(json.dumps(document))
     preflight = json.loads(_preflight(tmp_path, [(prepared_policy, {})], judge_model="judge").stdout)[0]
@@ -171,7 +172,6 @@ def test_preflight_rejects_docker_execution_before_task_launch(tmp_path, prepare
 @pytest.mark.parametrize(
     ("section", "replacement"),
     [
-        ("agents", [{"name": "mini-swe-agent"}]),
         ("agents", [{"name": "pi", "env": {"STOLEN": "${HF_TOKEN}"}}]),
         ("agents", [{"name": "acp", "kwargs": {"registry_entry": {"id": "another-agent"}}}]),
         ("agents", [{"name": "terminus-2", "env": {"STOLEN": "${AWS_SECRET_ACCESS_KEY}"}}]),
@@ -446,11 +446,8 @@ def test_verifier_model_roles_call_hosted_judge_through_guest_loopback(tmp_path,
     assert "host-judge-private" not in completed.stdout
 
 
-@pytest.mark.parametrize("agent_name", ["terminus-2", "sotopia"])
-def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_routing(
-    tmp_path, agent_name, prepared_policy
-):
-    agent = {"name": agent_name}
+def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_routing(tmp_path, prepared_policy):
+    agent = {"name": "terminus-2"}
     verifier = {
         "env": {
             "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
@@ -459,20 +456,6 @@ def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_rout
             "JUDGE_MODEL": "together_ai/openai/gpt-oss-120b",
         }
     }
-    if agent_name == "sotopia":
-        agent["import_path"] = "harbor.agents.installed.sotopia:SotopiaAgent"
-        agent.update(
-            {
-                "env": {"CUSTOM_API_KEY": "${TOGETHER_API_KEY}", "OPENAI_API_KEY": "${TOGETHER_API_KEY}"},
-                "kwargs": {
-                    "partner_model": "openai/openai/gpt-oss-120b",
-                    "evaluator_model": "openai/openai/gpt-oss-120b",
-                    "partner_api_base": "https://api.together.xyz/v1",
-                    "evaluator_api_base": "https://api.together.xyz/v1",
-                },
-            }
-        )
-        verifier = {}
     policy_path = tmp_path / "policy.json"
     document = {
         "environment": {"type": "daytona"},
@@ -480,8 +463,6 @@ def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_rout
         "datasets": [{"path": "dataset"}],
         "verifier": verifier,
     }
-    if agent_name == "sotopia":
-        document["sotopia_cohort"] = {"version": "test-v1", "models": []}
     policy_path.write_text(json.dumps(document))
     preflight_result = _preflight(tmp_path, [(policy_path, {})], check=False)
     assert preflight_result.returncode == 0, preflight_result.stderr
@@ -535,14 +516,4 @@ def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_rout
     assert result["verifier"]["OPENAI_API_KEY"] == "EMPTY"
     assert result["verifier"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
     assert "host-provider-private" not in completed.stdout
-    if agent_name == "sotopia":
-        assert result["agent"] == {
-            "CUSTOM_API_KEY": "EMPTY",
-            "OPENAI_API_KEY": "EMPTY",
-            "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1",
-            "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
-        }
-        assert result["kwargs"]["partner_api_base"] == "http://127.0.0.1:8787/v1"
-        assert result["kwargs"]["evaluator_api_base"] == "http://127.0.0.1:8787/v1"
-    else:
-        assert result["verifier"]["JUDGE_MODEL"] == "openai/openai/gpt-oss-120b"
+    assert result["verifier"]["JUDGE_MODEL"] == "openai/openai/gpt-oss-120b"
