@@ -223,6 +223,8 @@ def apply_openai_payload_controls() -> bool:
         if not payload.get("stop"):
             # No sentinels to send: the endpoint ends the turn at EOS.
             payload.pop("stop", None)
+        # Retain thinking boundaries: vLLM otherwise joins reasoning to the final answer.
+        payload.setdefault("skip_special_tokens", False)
         payload.update(getattr(self, _EXTRA_BODY_ATTR, None) or {})
         chat_template_kwargs = getattr(self, _CHAT_TEMPLATE_KWARGS_ATTR, None)
         if chat_template_kwargs is not None:
@@ -259,6 +261,8 @@ def apply_openai_payload_controls() -> bool:
             eos=None,
             **kwargs,
         )
+        if not isinstance(self, OpenAICompletionsAPI):
+            payload.setdefault("skip_special_tokens", False)
         return _finalize_generation_payload(self, payload, context_output_cap)
 
     def _create_openai_payload(

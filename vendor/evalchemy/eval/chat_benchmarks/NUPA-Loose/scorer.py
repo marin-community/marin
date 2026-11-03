@@ -19,11 +19,14 @@ SCIENTIFIC = "ScientificNotation"
 _ANSWER_MARKER_RE = re.compile(r"(?i)^(?:the\s+answer\s+is|so\s+the\s+answer\s+is)\s+")
 _BOXED_RE = re.compile(r"\\boxed\{([^{}]+)\}")
 _INLINE_MATH_RE = re.compile(r"\\\(([^()]*)\\\)")
+_DOLLAR_MATH_RE = re.compile(r"\$([^$\n]+)\$")
+_BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 _EQUATION_TAIL_RE = re.compile(r"=\s*([^\s=]+)\s*$")
 _ANSWER_TAIL_RE = re.compile(
     r"(?i)(?:^|\n)\s*(?:(?:so|therefore|thus)[, ]+)?(?:the\s+)?(?:final\s+)?"
     r"(?:answer|result|output)\s*(?:is\s*)?[:=]?\s*([^\s]+)\s*\Z"
 )
+_NUMBER_CONTINUATION_RE = re.compile(r"(?:[\d+-]|\d[.,/eE])\Z")
 _ANSWER_PATTERNS = {
     INTEGER: re.compile(r"^\d+"),
     FLOAT: re.compile(r"^\d+\.\d+"),
@@ -52,13 +55,16 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
     """Extract a direct or clearly marked final numeric answer."""
     if answer_format not in _ANSWER_PATTERNS:
         raise ValueError(f"Unsupported NUPA answer format: {answer_format}")
-    text = _final_content(text)
     if text is None:
         return None
+    if "<|end_think|>" in text:
+        text = text.rsplit("<|end_think|>", 1)[1]
+    if "<|start_think|>" in text:
+        return None
     stripped = text.strip()
-    tail = stripped.rstrip(" \t\r\n.,;:!?$")
+    tail = stripped.rstrip(" \t\r\n.,;:!?")
 
-    for pattern in (_BOXED_RE, _INLINE_MATH_RE):
+    for pattern in (_BOXED_RE, _INLINE_MATH_RE, _DOLLAR_MATH_RE, _BOLD_RE):
         match = list(pattern.finditer(tail))
         if match and not tail[match[-1].end() :].strip(" \t\r\n.,;:!?$\\)"):
             answer = _full_answer(match[-1].group(1).strip(), answer_format)
@@ -72,31 +78,36 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
             if answer is not None:
                 return answer
 
+    final_line = tail.splitlines()[-1].strip() if tail else ""
+    if len(stripped.splitlines()) > 1:
+        return _full_answer(final_line, answer_format) or _answer_after_terminal_period(tail, answer_format)
+
     direct = _ANSWER_MARKER_RE.sub("", stripped, count=1)
     match = _ANSWER_PATTERNS[answer_format].match(direct)
     if match is None:
-        final_line = tail.splitlines()[-1].strip() if tail else ""
-        return _full_answer(final_line, answer_format) or _answer_after_terminal_period(tail, answer_format)
+        return _answer_after_terminal_period(tail, answer_format)
     return _normalize_answer(match.group())
-
-
-def _final_content(text: str | None) -> str | None:
-    if text is None:
-        return None
-    if "<|end_think|>" in text:
-        text = text.rsplit("<|end_think|>", 1)[1]
-    return None if "<|start_think|>" in text else text
 
 
 def _answer_after_terminal_period(text: str, answer_format: str) -> str | None:
     """Extract a typed answer appended after sentence-ending punctuation."""
     for boundary in range(len(text) - 1, -1, -1):
-        if text[boundary] != "." or (boundary > 0 and text[boundary - 1].isdigit()):
+        if text[boundary] != ".":
             continue
-        answer = _full_answer(text[boundary + 1 :].strip(), answer_format)
+        candidate = text[boundary + 1 :].strip()
+        # A sentence ending in N followed by final answer N can arrive as N.N without think markers.
+        if boundary > 0 and text[boundary - 1].isdigit() and not _ends_with_number(text[:boundary], candidate):
+            continue
+        answer = _full_answer(candidate, answer_format)
         if answer is not None:
             return answer
     return None
+
+
+def _ends_with_number(text: str, number: str) -> bool:
+    if not number or not text.endswith(number):
+        return False
+    return _NUMBER_CONTINUATION_RE.search(text[: -len(number)]) is None
 
 
 def _full_answer(candidate: str, answer_format: str) -> str | None:
@@ -112,10 +123,6 @@ def _normalize_answer(answer: str) -> str:
 def score_prediction(prediction: str | None, gold: str, answer_format: str) -> ExampleScore:
     """Score a completion with permissive extraction and exact numeric components."""
     extracted = extract_answer(prediction, answer_format)
-    if extracted != _normalize_answer(gold):
-        repeated_reference = _repeated_terminal_reference(prediction, gold, answer_format)
-        if repeated_reference is not None:
-            extracted = repeated_reference
     gold_parts = _digit_parts(gold, answer_format)
     prediction_parts = _digit_parts(extracted or "", answer_format)
     format_valid = extracted is not None
@@ -127,22 +134,6 @@ def score_prediction(prediction: str | None, gold: str, answer_format: str) -> E
         format_valid=1.0 if format_valid else 0.0,
         no_answer=0.0 if format_valid else 1.0,
     )
-
-
-def _repeated_terminal_reference(prediction: str | None, gold: str, answer_format: str) -> str | None:
-    """Recover repetition only when a separate final answer confirms it."""
-    prediction = _final_content(prediction)
-    if prediction is None:
-        return None
-    tail = prediction.strip().rstrip(" \t\r\n.,;:!?$")
-    terminal_token = tail.rsplit(maxsplit=1)[-1] if tail else ""
-    normalized_gold = _normalize_answer(gold)
-    if _normalize_answer(terminal_token) != normalized_gold * 2:
-        return None
-    preceding = tail[: -len(terminal_token)].rstrip()
-    if extract_answer(preceding, answer_format) == normalized_gold:
-        return normalized_gold
-    return None
 
 
 def length_bucket(digit: int, *, max_digit: int | None = None) -> str:

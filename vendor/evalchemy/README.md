@@ -13,10 +13,10 @@ graders, streaming execution, FineStore output and resume support. Marin owns
 serving and evaluation orchestration. A local GraphWalks adapter adds the pinned
 `openai/graphwalks` dataset to the shared execution and grading flow, selecting
 examples with the served tokenizer and preserving their output budgets.
-The NUPA Loose grader incorporates the upstream
-[terminal-suffix](https://github.com/marin-community/evalchemy/commit/abe104f405e7e964f9f5a27f96e622744d4ca076)
-and [repeated-answer](https://github.com/marin-community/evalchemy/commit/2baaab1b9c0c9c8caffcd8f6df45355539aef436)
-corrections adapted to the vendored grader contract.
+The NUPA Loose grader adapts the upstream
+[terminal-suffix correction](https://github.com/marin-community/evalchemy/commit/abe104f405e7e964f9f5a27f96e622744d4ca076)
+and [equal-number period rule](https://github.com/XiaoyuanWang111/marin/commit/6285305fbc04ed56bf1677af5d1e5d71706b3392).
+It accepts dollar math and bold final numbers but does not recover concatenated repeats.
 Database tracking, Curator dispatch,
 W&B reporting, standalone serving launchers, benchmark websites and unused
 leaderboard outputs have been removed. Nested benchmark packages retain only
@@ -26,6 +26,12 @@ are removed.
 
 The evaluator's import packages, `eval` and `evalchemy_config`, belong to this
 environment. Marin calls the `evalchemy` CLI in a child process.
+Local generation requests default to `skip_special_tokens: false` so vLLM
+preserves thinking boundaries. Without the Grug reasoning parser or this request
+setting, vLLM drops `<|end_think|>` and can join the last reasoning number to the
+final answer. Explicit caller settings still take precedence. OpenAI provider
+requests and echo/logprob requests keep their existing settings.
+
 Configuration validation requires the installed lm-eval task catalog; missing
 catalog dependencies fail validation instead of using an incomplete task list.
 

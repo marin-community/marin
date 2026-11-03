@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Replay sealed NUPA5K responses through the pinned NUPA Loose grader."""
+"""Replay sealed NUPA5K responses through the imported NUPA Loose grader."""
 
 import argparse
 import concurrent.futures
@@ -11,6 +11,7 @@ import json
 import logging
 import re
 from importlib import import_module
+from pathlib import Path
 
 from finestore.reader import ReadView
 from rigging.filesystem.buckets import filesystem_for
@@ -19,7 +20,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 LOGGER = logging.getLogger(__name__)
 SCORER = import_module("eval.chat_benchmarks.NUPA-Loose.scorer")
-EVALCHEMY_COMMIT = "2baaab1b9c0c9c8caffcd8f6df45355539aef436"
+SCORER_SHA256 = hashlib.sha256(Path(SCORER.__file__).read_bytes()).hexdigest()
 BENCHMARK = "NUPA"
 BENCHMARK_SIZE = 5_000
 SCORE_CELL = re.compile(r"^([01](?:\.\d+)?)\s+\((s3://[^)]+)\)$")
@@ -174,7 +175,7 @@ def regrade(cell: dict) -> dict:
         "corrected_metrics": aggregates,
         "changed_trials": changed_trials,
         "num_trials": BENCHMARK_SIZE,
-        "evalchemy_commit": EVALCHEMY_COMMIT,
+        "scorer_sha256": SCORER_SHA256,
         "trials": trials,
     }
 
@@ -201,12 +202,15 @@ def main() -> None:
     prefix = args.output_prefix
     provenance_uri = prefix_join(prefix, "provenance.json")
     filesystem, key = filesystem_for(provenance_uri)
-    if not filesystem.exists(key):
+    if filesystem.exists(key):
+        if read_json(provenance_uri).get("scorer_sha256") != SCORER_SHA256:
+            raise ValueError("output prefix uses a different scorer; choose a new output prefix")
+    else:
         write_json(
             provenance_uri,
             {
                 "benchmark": BENCHMARK,
-                "evalchemy_commit": EVALCHEMY_COMMIT,
+                "scorer_sha256": SCORER_SHA256,
                 "tracker_uri": args.tracker_uri,
                 "tracker_sha256": hashlib.sha256(tracker_bytes).hexdigest(),
                 "tracker": tracker,

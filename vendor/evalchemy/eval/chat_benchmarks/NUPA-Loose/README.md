@@ -13,16 +13,15 @@ chain-of-thought (Section 2.4 and Appendix A.2). The
 extracts a numeric prefix after its answer delimiter or marker.
 
 Evalchemy's [permissive extraction change](https://github.com/marin-community/evalchemy/pull/187)
-also accepts trailing boxed numbers, inline math, equations, explicit answer
-lines, a bare number on the last line, and a type-valid numeric suffix after a
-sentence-ending period. It also recovers a terminal numeric token that exactly
-repeats the reference answer twice without a separator, provided the preceding
-content separately states the same final answer. A doubled token alone is
-ambiguous and does not qualify. Periods immediately after digits do not count
-as sentence boundaries. The extracted answer stored
-with each sample is the one actually used for scoring. The grader discards
-content before the last `<|end_think|>` marker and rejects an unfinished
-`<|start_think|>` block.
+also accepts trailing boxed numbers, inline math (`\(...\)` or `$...$`),
+bold numbers (`**...**`), equations, explicit answer lines, a bare number on the
+last line, and a type-valid numeric suffix after a sentence-ending period.
+A period immediately after a digit qualifies only when it separates two copies
+of the same number, such as `1046.1046`. Concatenated repeats such as `1818`
+for target `18` and `486.612486.612` for target `486.612` receive no repetition
+recovery. The extracted answer stored with each sample is the one used for
+scoring. The grader discards content before the last `<|end_think|>` marker
+and rejects an unfinished `<|start_think|>` block.
 These rules can credit a correct number after a reasoning response even when the
 model did not follow the direct-answer instruction. They measure numeracy with
 less dependence on output formatting and instruction following.

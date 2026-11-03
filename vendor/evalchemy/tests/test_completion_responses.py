@@ -322,3 +322,21 @@ def _scored_record(output):
             assert completed.error is None
     asyncio.run(run())
     return sink.samples["task"][0]
+
+
+@pytest.mark.parametrize("payload_factory", [_local_chat_payload, _local_completions_payload])
+def test_local_generation_retains_thinking_boundaries(payload_factory):
+    # vLLM defaults this to true, joining `1046.<|end_think|>1046` into `1046.1046`.
+    payload = payload_factory(["<|im_end|>"])
+    assert payload["skip_special_tokens"] is False
+
+
+def test_local_chat_explicit_special_token_setting_is_preserved():
+    adapter = _adapter()
+    adapter.model = "served-model"
+    adapter._max_gen_toks = 256
+    payload = adapter._create_payload(
+        messages=[{"role": "user", "content": "Question"}],
+        gen_kwargs={"max_gen_toks": 32, "skip_special_tokens": True},
+    )
+    assert payload["skip_special_tokens"] is True
