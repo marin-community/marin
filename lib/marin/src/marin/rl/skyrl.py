@@ -729,6 +729,11 @@ def read_skyrl_launch_config(run_output: str) -> dict:
 
 
 def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
+    """Read a launch's terminal or attempt receipt, or build one from its Iris job's state.
+
+    Returns None when the output has no resolved launch. Without a receipt file, the job state comes from the Iris
+    controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
+    """
     fs, key = filesystem_for(prefix_join(run_output, TERMINAL_MANIFEST_FILENAME))
     if fs.exists(key):
         return SkyRLLaunchReceipt.model_validate_json(fs.cat(key))
