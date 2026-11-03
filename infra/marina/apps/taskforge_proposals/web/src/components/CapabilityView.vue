@@ -62,7 +62,8 @@ const tiles = computed(() => {
       <div v-for="[name, value, note] in tiles" :key="name" class="tile"><div class="label">{{ name }}</div><div class="value">{{ value }}</div><div class="note">{{ note }}</div></div>
     </div>
 
-    <div v-if="c.failure" class="section error">This capability failed and has no result: {{ c.failure.error || c.failure.kind }}. Its finished slots are listed below.</div>
+    <div v-if="c.failure && !c.result" class="section error">This capability failed and has no result: {{ c.failure.error || c.failure.kind }}. Its finished slots are listed below.</div>
+    <div v-else-if="c.failure" class="section muted small">An earlier attempt failed ({{ c.failure.error || c.failure.kind }}); a rerun produced the result.json shown here, which is authoritative. The old failure.json is kept as history in the failure.json tab below.</div>
 
     <div class="section">
       <div class="section-head"><h2>Slots</h2><span class="sub">the plan's assignment and what each slot produced</span></div>

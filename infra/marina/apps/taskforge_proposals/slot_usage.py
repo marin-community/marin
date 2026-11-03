@@ -84,7 +84,9 @@ def main(run_root: str, output: str, shard: int, shards: int, threads: int, stam
     if not files:
         raise SystemExit(f"no completions files under {run_root}; refusing to write an empty part")
     done = covered(fs, output)
-    todo = [info for info in files if file_key(info) not in done][shard::shards]
+    # Stride over the full sorted listing, then drop covered files: striding after the filter would let a
+    # shard that finished first shift every later shard's selection and leave files unread.
+    todo = [info for info in files[shard::shards] if file_key(info) not in done]
     print(f"{len(files)} completions files, {len(done)} covered, shard {shard}/{shards} reads {len(todo)}", flush=True)
 
     def row(info: dict[str, Any]) -> dict[str, Any]:
