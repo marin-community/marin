@@ -70,6 +70,7 @@ from iris.testing.federation import (
 from iris.testing.federation import (
     make_service as _make_service,
 )
+from iris.testing.k8s import k8s_backend_descriptor
 from iris.testing.transitions import commit_dispatch_updates
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Timestamp
@@ -243,6 +244,29 @@ def test_a_federated_job_carries_its_container_profile_to_the_peer(tmp_path, log
             template = tx.caches[RunTemplatesProjection].get(tx, job_id)
         assert template is not None
         assert template.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
+
+
+def test_a_worker_fleet_parent_hands_a_bubblewrap_job_to_a_kubernetes_peer(tmp_path, log_client):
+    """The parent's docker workers cannot run BUBBLEWRAP, but a job pinned to a
+    Kubernetes peer never runs there: the parent queues it, and the peer checks the
+    profile against its own backend on the handoff."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        peer_service._controller.backend.descriptor = k8s_backend_descriptor()
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        request = _cluster_pinned_request("fed-bubblewrap")
+        request.container_profile = job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
+        parent_service.launch_job(request, None)
+        promote_queued_federation(manager, parent_state)
+        manager.sync_once()
+
+        job_id = JobName.root(_USER, "fed-bubblewrap")
+        with peer_state._db.read_snapshot() as tx:
+            template = tx.caches[RunTemplatesProjection].get(tx, job_id)
+        assert template is not None
+        assert template.container_profile == job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
 
 
 # ---------------------------------------------------------------------------

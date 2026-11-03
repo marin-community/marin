@@ -643,15 +643,6 @@ def _validate_launch_profile(
             "host docker socket); this cluster's backend does not support it. Use a privileged "
             "profile with an in-pod runtime, or submit to a docker-worker cluster.",
         )
-    if (
-        resolve_container_profile(request.container_profile) == job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
-        and BackendCapability.WORKER_FLEET in dependencies.runtime.backend.descriptor.capabilities
-    ):
-        raise ConnectError(
-            Code.INVALID_ARGUMENT,
-            "Container profile bubblewrap requires the Kubernetes backend; "
-            "docker workers do not support nested bubblewrap.",
-        )
     if request.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX) and (
         request.resources.device.WhichOneof("device") in ("gpu", "tpu")
     ):
@@ -672,6 +663,26 @@ def _validate_launch_profile(
         logger.warning(
             "Job %s uses deprecated CONTAINER_PROFILE_GVISOR; upgrade the submitter to SANDBOX",
             launch.job_id.to_wire(),
+        )
+
+
+def _validate_local_profile(
+    dependencies: JobDependencies,
+    request: controller_pb2.Controller.LaunchJobRequest,
+) -> None:
+    """Reject a profile this controller's own backend cannot run.
+
+    Runs only for jobs placed locally: a job queued for a peer is checked by the peer
+    against its backend when it receives the handoff.
+    """
+    if (
+        resolve_container_profile(request.container_profile) == job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
+        and BackendCapability.WORKER_FLEET in dependencies.runtime.backend.descriptor.capabilities
+    ):
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            "Container profile bubblewrap requires the Kubernetes backend; "
+            "docker workers do not support nested bubblewrap.",
         )
 
 
@@ -1004,6 +1015,7 @@ def launch_job(
     request = _inject_resource_constraints(request)
     plan = _plan_launch(dependencies, request, launch)
     if plan.disposition == SubmitDisposition.LOCAL:
+        _validate_local_profile(dependencies, request)
         _resolve_egress(dependencies, request, launch)
         error = dependencies.runtime.backend.validate_job(request)
         if error:
