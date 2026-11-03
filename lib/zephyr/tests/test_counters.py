@@ -131,6 +131,7 @@ def test_stage_scoped_counters():
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "Worker counters are keyed by name only (_InProcessWorkerContext._counters and "
         "CounterSnapshot.counters), so a stage update to an existing pipeline counter merges "

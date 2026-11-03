@@ -387,6 +387,7 @@ def test_olmo2_seq_len_doesnt_change_predictions(num_kv_heads):
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
+        num_layers=4,
         gradient_checkpointing=False,
     )
     Vocab = hax.Axis("vocab", 1000)
@@ -406,4 +407,4 @@ def test_olmo2_seq_len_doesnt_change_predictions(num_kv_heads):
     jax_out_1 = compute(model, input_prefix)
     jax_out_2 = compute(model, input_full)[config.max_Pos, :64]
 
-    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-4, atol=1e-4)
+    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-5, atol=1e-5)
