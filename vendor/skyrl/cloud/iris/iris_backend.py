@@ -814,11 +814,14 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
 def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     """Submit a resolved launch config and, unless detached, wait for its terminal state."""
     if get_job_info() is not None and (args.target_cluster or args.parent_cluster_config):
-        raise ValueError(
-            "In-task SkyRL launches must use the coordinator's controller. "
-            "Clear target_cluster and parent_cluster_config to submit through IrisClient.in_cluster; "
-            "to use another cluster, submit a new root job from outside the task."
+        print(
+            f"[rl-iris] In-task launch: ignoring target_cluster={args.target_cluster!r} and "
+            f"parent_cluster_config={args.parent_cluster_config!r}. Child jobs run on the "
+            "parent's cluster; submitting through IRIS_CONTROLLER_URL.",
+            flush=True,
         )
+        args.target_cluster = None
+        args.parent_cluster_config = None
     if not args.job_name:
         args.job_name = f"rl-iris-{time.strftime('%Y%m%d-%H%M%S')}"
 
@@ -936,7 +939,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     env_vars.update(args.launch_config_bundle.task_environment())
     # ── Per-cluster infra-env DEFAULTS (fill-gap belt for cluster-specific footguns) ──────────
     # Some clusters need a specific network/NCCL interface that a cluster-AGNOSTIC RL config
-    # won't (and shouldn't) carry. Fill it in here, keyed on --target-cluster, only if the
+    # won't (and shouldn't) carry. Fill it in here, keyed on the execution cluster, only if the
     # config's extra_env did not set it (lowest precedence — an explicit
     # value always wins). cw-rno2a: its host_network:true nodes expose IB/IPoIB (ibs*/ibp*) +
     # virtual ifaces, so NCCL AND Ray's raylet/GCS mis-detect the bootstrap interface and the
@@ -944,7 +947,6 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     # zero progress before this was diagnosed). Pin the bootstrap socket to the host ethernet PF
     # via the exclude pattern (value = cw-rno2a.yaml:128). No-op on cw-us-east-02a (auto-detect
     # already lands on the PF). Add a cluster row here rather than editing every RL config.
-    _target_cluster = str(getattr(args, "target_cluster", "") or "")
     # Do NOT add GLOO_SOCKET_IFNAME here with this value. Gloo does not accept
     # NCCL's `^exclude` syntax — it wants a literal interface name and fails with
     # `Unable to find address for: ^ibs` at engine init. Gloo picking loopback on
@@ -953,10 +955,10 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     _CLUSTER_ENV_DEFAULTS: dict[str, dict[str, str]] = {
         "cw-rno2a": {"NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc"},
     }
-    for _k, _v in _CLUSTER_ENV_DEFAULTS.get(_target_cluster, {}).items():
+    for _k, _v in _CLUSTER_ENV_DEFAULTS.get(args.cluster, {}).items():
         if _k not in env_vars:
             env_vars[_k] = _v
-            print(f"[rl-iris] Cluster infra-env default for {_target_cluster}: {_k}={_v}", flush=True)
+            print(f"[rl-iris] Cluster infra-env default for {args.cluster}: {_k}={_v}", flush=True)
     # FR-slug fix: a config may hardcode a JOB-SCOPED NCCL flight-recorder dump path
     # (/tmp/fr_dumps/<slug>/nccl_fr_rank) with a STALE slug from the config it was
     # copied from. Re-scope the slug to the live --job-name so a future FR dump lands

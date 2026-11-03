@@ -20,7 +20,6 @@ from typing import Literal, cast
 
 import fsspec
 import yaml
-from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
@@ -799,9 +798,6 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
-    submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
-    target_cluster = None if submit_through_ambient_controller else execution.target_cluster
-    parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
     launch = {
         "schema_version": 1,
         "run": {
@@ -834,8 +830,8 @@ def _launch_config_yaml(
             "priority": execution.priority,
             "max_retries": execution.max_retries,
             "timeout": execution.job_timeout_seconds,
-            "target_cluster": target_cluster,
-            "parent_cluster_config": parent_cluster_config,
+            "target_cluster": execution.target_cluster,
+            "parent_cluster_config": execution.parent_cluster_config,
         },
         "ray": {
             "spill_backend": "local",
