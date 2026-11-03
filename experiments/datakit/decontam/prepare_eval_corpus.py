@@ -98,7 +98,7 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v7"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v8"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
 LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
@@ -126,7 +126,7 @@ def _lmh_output_root() -> str:
 # step rewrites (does not skip) any shard whose sidecar doesn't match. Without this,
 # a policy change like the cluster-B passage drop (marin#6852) never reaches an
 # already-staged corpus — the bloom keeps reading the old passage-bearing text.
-_LMH_EXTRACTION_VERSION = "4-fields-without-labels"
+_LMH_EXTRACTION_VERSION = "5-question-view"
 _LMH_VERSION_SIDECAR = ".extraction_version"
 
 
@@ -355,8 +355,10 @@ _PASSAGE_FIELDS: frozenset[str] = frozenset(
 )
 
 
-# Suffix of the record id for an lm-eval doc's raw-field view (see `_lmh_doc_views`).
+# Suffixes of the record ids for an lm-eval doc's raw-field and question-only views
+# (see `_lmh_doc_views`).
 LMH_FIELDS_ID_SUFFIX = "-fields"
+LMH_QUESTION_ID_SUFFIX = "-question"
 # Hidden grader fields, left out of the raw-field view: copies of a coding item
 # hold its prompt and solution, rarely its tests. Harness prompts or targets that
 # render the tests (HumanEval's target, MBPP's prompt) still index them.
@@ -382,6 +384,14 @@ def _field_lines(record: dict[str, Any], exclude: frozenset[str]) -> str:
     return "\n".join(lines)
 
 
+def _question_line(record: dict[str, Any]) -> str:
+    """The first multi-word string field of a multiple-choice record (one with a string-list field), else ``""``."""
+    if not any(isinstance(v, list) and v and all(isinstance(x, str) for x in v) for v in record.values()):
+        return ""
+    strings = (v for k, v in record.items() if k.lower() not in _GRADER_FIELDS and isinstance(v, str))
+    return next((v for v in strings if len(v.split()) > 1), "")
+
+
 def _lmh_doc_views(doc: Any, prompt_fn: Callable, target_fn: Callable) -> list[tuple[str, str]]:
     """Indexed eval records for one lm-eval-harness doc, as ``(id_suffix, text)`` pairs.
 
@@ -391,7 +401,9 @@ def _lmh_doc_views(doc: Any, prompt_fn: Callable, target_fn: Callable) -> list[t
     rule can match a copy of either one; joined, a copy of one rendering holds only
     part of the record. Passage-bearing docs (a field in :data:`_PASSAGE_FIELDS`)
     give one record, the answer and the raw fields without the passage, since
-    ``doc_to_text`` renders the passage.
+    ``doc_to_text`` renders the passage. A multiple-choice doc without a passage
+    also gets its question alone: copies in quiz pages and SFT prompts often drop
+    the choices, and short choices are too few n-grams to carry the item.
     """
     has_passage = isinstance(doc, dict) and any(k.lower() in _PASSAGE_FIELDS for k in doc)
     try:
@@ -407,7 +419,12 @@ def _lmh_doc_views(doc: Any, prompt_fn: Callable, target_fn: Callable) -> list[t
         prompt = str(prompt_fn(doc) or "")
     except Exception:
         prompt = ""
-    views = [("", "\n\n".join(p for p in (prompt, target) if p.strip())), (LMH_FIELDS_ID_SUFFIX, fields)]
+    question = _question_line(doc) if isinstance(doc, dict) else ""
+    views = [
+        ("", "\n\n".join(p for p in (prompt, target) if p.strip())),
+        (LMH_FIELDS_ID_SUFFIX, fields),
+        (LMH_QUESTION_ID_SUFFIX, question),
+    ]
     return [(suffix, text) for suffix, text in views if text.strip()]
 
 

@@ -26,7 +26,7 @@ def test_uncheatable_records_group_by_subset_and_lm_eval_records_by_task():
 
 
 def test_uncheatable_eval_text_loads_from_its_subset_artifact(tmp_path, monkeypatch):
-    artifact = tmp_path / "datakit/decontam/evals/aa-index-v4.1.1-v7/uncheatable/bbc_news/test.parquet"
+    artifact = tmp_path / "datakit/decontam/evals/aa-index-v4.1.1-v8/uncheatable/bbc_news/test.parquet"
     artifact.parent.mkdir(parents=True)
     pq.write_table(
         pa.table({"id": ["uncheatable-bbc_news-0", "uncheatable-bbc_news-1"], "text": ["First.", "Second."]}),
