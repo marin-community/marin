@@ -85,7 +85,14 @@ def test_mistral_lm_head_model_bwd(use_flash, num_kv_heads):
         out = llama_model(input_ids, mask)
         return hax.sum(out).scalar()
 
-    _, grads = eqx.filter_eval_shape(eqx.filter_value_and_grad(f), llama_model, input_ids, mask)
+    _, grads = eqx.filter_value_and_grad(f)(llama_model, input_ids, mask)
+
+    grad_leaves = jax.tree_util.tree_leaves_with_path(eqx.filter(grads, eqx.is_inexact_array))
+    assert grad_leaves
+    for path, leaf in grad_leaves:
+        name = jax.tree_util.keystr(path)
+        assert np.all(np.isfinite(leaf)), f"non-finite gradient for {name}"
+        assert np.any(leaf != 0), f"all-zero gradient for {name}"
 
 
 @skip_if_no_torch

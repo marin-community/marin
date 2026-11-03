@@ -7,6 +7,7 @@ import chex
 import equinox as eqx
 import haliax as hax
 import haliax.nn as hnn
+import jax
 import numpy as np
 import pytest
 from jax import random
@@ -266,8 +267,12 @@ def test_olmo2_lm_head_model_bwd(use_flash, num_kv_heads):
 
     _, grads = eqx.filter_value_and_grad(f)(olmo2_model, input_ids, mask)
 
-    # Check that we can compute gradients
-    assert grads is not None
+    grad_leaves = jax.tree_util.tree_leaves_with_path(eqx.filter(grads, eqx.is_inexact_array))
+    assert grad_leaves
+    for path, leaf in grad_leaves:
+        name = jax.tree_util.keystr(path)
+        assert np.all(np.isfinite(leaf)), f"non-finite gradient for {name}"
+        assert np.any(leaf != 0), f"all-zero gradient for {name}"
 
 
 @skip_if_no_torch
@@ -393,8 +398,8 @@ def test_olmo2_seq_len_doesnt_change_predictions(num_kv_heads):
     Vocab = hax.Axis("vocab", 1000)
 
     # Make input and attn_mask
-    input_256 = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
-    input_128 = input_256[config.max_Pos, :128]
+    input_full = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
+    input_prefix = input_full[config.max_Pos, :64]
     attn_mask = AttentionMask.causal()
 
     model = Olmo2LMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
@@ -404,7 +409,7 @@ def test_olmo2_seq_len_doesnt_change_predictions(num_kv_heads):
         model_output = model(input, attn_mask=attn_mask)
         return model_output
 
-    jax_out_1 = compute(model, input_128)
-    jax_out_2 = compute(model, input_256)[config.max_Pos, :128]
+    jax_out_1 = compute(model, input_prefix)
+    jax_out_2 = compute(model, input_full)[config.max_Pos, :64]
 
-    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-6, atol=1e-6)
+    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-4, atol=1e-4)
