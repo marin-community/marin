@@ -354,6 +354,9 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # The decon report renderer embeds CSS/JS/HTML as long string literals; wrapping
 # those lines hurts readability far more than the length limit helps.
 "experiments/datakit/decontam/viewer/report.py" = ["E501"]
+# The generational-perplexity probes embed canary/carrier payloads verbatim so
+# planted text byte-matches the data; wrapping would change the measured tokens.
+"experiments/evaluation/mini_policy_runtime/generational_perplexity.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
