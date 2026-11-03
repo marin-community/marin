@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -407,6 +408,16 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     assert (agentic["run"], agentic["initializer"], agentic["tasks"]) == pytest.approx((1.4 / 3, 0.5, 3))
     assert rows["panel-910/aaii_category/x/mean"]["run"] == pytest.approx(1.4 / 3)
     assert agentic["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 5, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25))
+    # A declared metric keeps k = 1 inside a breakdown table; a detail row with constant controls has no change.
+    assert rows["panel-910/mean"]["tolerance"] == pytest.approx(
+        t.ppf(0.975, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25)
+    )
+    assert rows["panel-910/scored_fraction"]["change"] == "unavailable"
+    recorded_runs("learning-medium", "users/test/initial", answers=answers, initial_score=0.3)
+    initial = {row["metric"]: row for row in rescore("learning-medium", "--candidate", "users/test/initial")["reported"]}
+    for key in ("panel-910/agentic/true/mean", "panel-910/family/a/mean", "panel-910/difficulty/hard/mean"):
+        assert initial[key]["tolerance"] == pytest.approx(rows[key]["tolerance"])
+    assert initial["panel-910/mean/initial"]["change"] == "unavailable"
     assert (report["verdict"], report["label"]) == ("pass", "no change")
     assert rows["generate/std_num_tokens"]["change"] == "better"
     assert "reward/domain/candidate-only/avg_raw_reward" not in rows
@@ -427,6 +438,34 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     assert category.run == pytest.approx(8 / 15)
     markdown = Path(report["report"]).with_suffix(".md").read_text()
     assert "## Breakdown" in markdown and "### panel-910: aaii_category x difficulty" in markdown
+
+
+def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs, monkeypatch):
+    for name in ("speed-short", "speed-medium", "learning-medium"):
+        controls(recorded_runs, name)
+    speed, learning = presets.PRESETS["speed-medium"], presets.PRESETS["learning-medium"]
+    gate.check_requirements(speed, ["speed/update_seconds<=120", VLLM + "<=control"], control=False)
+    gate.check_requirements(
+        learning,
+        ["panel-910/aaii_category/coding/mean>=control", "panel-910/family/large/difficulty/hard/mean>=0"],
+        control=False,
+    )
+
+    def forbidden_step(*args, **kwargs):
+        pytest.fail("requirement preflight reached GPU step construction")
+
+    monkeypatch.setattr(snowball, "_run_step", forbidden_step)
+    for preset, requirement, kwargs in (
+        (presets.PRESETS["speed-short"], "typo>=0", {}),
+        (learning, "panel-910/aaii_category/codng/mean>=control", {}),
+        # Every fixture task is non-agentic, so the panel has no agentic split.
+        (learning, "panel-910/agentic/false/mean>=0", {}),
+        (presets.PRESETS["train-long"], "panel-910/mean>=0", {}),
+        (learning, "panel-910/mean>=0", {"control": True}),
+        (learning, "invalid", {}),
+    ):
+        with pytest.raises(click.BadParameter):
+            snowball.build_run(preset, requirements=(requirement,), **kwargs)
 
 
 def test_requirements_enforce_each_replicate_and_calibrate_added_guards(recorded_runs):

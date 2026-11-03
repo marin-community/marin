@@ -76,8 +76,9 @@ Tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, with `k` g
 and calibrated run-to-run spread `sd`. Each run reduces update time to its median;
 other metrics use their mean. A guard fails below negative tolerance. Guards and declared
 reported metrics determine `improves`, `trade-off`, `regression` or `no change`.
-Non-panel reported metrics use `k=1`. Breakdown rows use a separate `k` equal to
-each table’s row count; detail rows do not determine the label.
+Declared reported metrics use `k=1`. Other breakdown rows use a separate `k` equal
+to each table’s row count; they do not determine the label, and a row whose controls
+never vary reports no change.
 
 Add repeatable requirements to a gated candidate with `--require 'KEY<=NUMBER'`,
 `--require 'KEY>=NUMBER'`, `--require 'KEY<=control'` or `--require 'KEY>=control'`.
@@ -85,14 +86,15 @@ For example, `--require 'policy/mismatch/staleness0/log_ratio_abs_max<=0'` requi
 zero mismatch on every replicate; `--require 'panel-910/aaii_category/coding/mean>=control'`
 adds a calibrated guard. Numeric bounds produce per-replicate invariants. Relative
 bounds count with the preset guards; zero control spread requires a numeric bound.
-Launch preflight checks raw keys against control r0's first measured metrics file;
-panel keys need a preset evaluation prefix. Candidate keys must exist at scoring.
+Launch preflight computes control r0's comparison values and refuses any key outside
+them, such as a mistyped panel slice. Candidate keys must exist at scoring.
 Train-long and control collection refuse requirements. Python callers pass the same
 strings as `build_run(requirements=(...))`. Requirements change the report identity;
 training names and configs stay fixed. Re-scoring appends `--require` to any recorded
 requirements, so completed runs can receive new constraints on CPU.
 
-The Breakdown tables show overall and agentic results, family, AAII category,
+The Breakdown tables show overall results, agentic results when the panel has both
+agentic and other tasks, family, AAII category,
 difficulty, category × difficulty, family × difficulty and training reward per source.
 Each populated mean slice includes its scored task count, initializer normalized score,
 control mean and replicate range, candidate mean, signed difference, tolerance and change.
@@ -114,7 +116,8 @@ A candidate straddling 1% is `invalid` if every other check passes, otherwise `f
 An ambiguous control is `invalid`. Both bounds remain in the report.
 
 For another initializer, the report includes update-0 score and final-minus-initial
-score. Their comparisons are unavailable when controls have no update-0 evaluation.
+score in their own Breakdown table. Their comparisons are unavailable when controls have
+no update-0 evaluation.
 
 Re-score saved runs on CPU:
 
