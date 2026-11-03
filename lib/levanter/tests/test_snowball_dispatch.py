@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from dataclasses import replace
 
 import equinox as eqx
 import haliax as hax
@@ -9,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import AxisType, Mesh
 
 from levanter.data.text.datasets import ChatDataset
 from levanter.data.text.examples import named_lm_example_from_grug
@@ -101,14 +103,6 @@ def test_stats_forward_preserves_observer_and_loss():
 @pytest.mark.multidevice
 def test_dropless_bos_routes_ignore_companions_and_padding():
     with use_test_devices(8) as devices:
-        from dataclasses import replace
-        import equinox as eqx
-        import haliax as hax
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh
-        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
         mesh = Mesh(np.array(devices).reshape(1, 2, 4, 1, 1, 1),
             ('replica_dcn', 'data', 'expert', 'context', 'replica', 'model'),
