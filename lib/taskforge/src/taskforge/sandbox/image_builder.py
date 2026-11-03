@@ -312,11 +312,12 @@ class IrisImageBuilder:
         self.credential = credential
 
     async def publish(self, build: DockerBuild, repository: str) -> str:
-        """``ImageBuilder.publish``: ``publish_with_timings`` in a worker thread.
+        """Publish ``build`` under ``repository`` and return its digest-pinned reference.
 
-        A publish blocks for up to ``SCHEDULING_TIMEOUT + JOB_TIMEOUT`` seconds while it waits on
-        Iris, and its callers await it on an event loop that runs other builds concurrently.
+        The reference is ``registry/repository@sha256:...``. A failed build raises ``BuildFailed``,
+        and a failure of the host or the registry raises ``ImageJobFailed``.
         """
+        # A publish waits on Iris for up to SCHEDULING_TIMEOUT + JOB_TIMEOUT seconds; keep the loop free.
         return (await asyncio.to_thread(self.publish_with_timings, build, repository)).image
 
     def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
