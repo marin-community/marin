@@ -22,8 +22,6 @@ every run. Each run writes `result.json` (scores and timings) and `eval.log`.
 
 ## Notes
 
-- v4 needs an attention-tile patch that the pinned TPU runtime lacks. The v4
-  job applies it inside the job only.
 - The v4 job uses the multi-host launcher: four hosts, one model at TP16.
 - Missing or partial results fail the check.
 

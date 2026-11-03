@@ -14,7 +14,6 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import patch
 
 from finestore.reader import ReadView
 from fray.iris_backend import convert_constraints, convert_resources, resolve_coscheduling
@@ -118,42 +117,29 @@ def serving_model(hardware, model, engine, cpus_per_host: float):
             yield session.model
             session.check_alive()
         return
-    original_command = IsolatedTpuVllm.command
-
-    def command(launcher):
-        bootstrap = Path("experiments/evaluation/serving_parity/patch_v4_tiles.py").resolve()
-        return [*original_command(launcher)[:-1], "python", str(bootstrap), "vllm"]
-
-    # Patching a private uv environment leaves the shared pin and other jobs untouched.
-    with tempfile.TemporaryDirectory(prefix=".v4-score-", dir=Path.cwd()) as directory:
-        temporary = Path(directory) / "tmp"
-        temporary.mkdir()
-        with patch.dict(os.environ, UV_CACHE_DIR=str(Path(directory) / "uv"), TMPDIR=str(temporary)):
-            with patch.object(IsolatedTpuVllm, "command", command):
-                launcher = vllm_launcher(engine)
-                assert isinstance(launcher, IsolatedTpuVllm)
-                with tpu_ray_gang(
-                    launcher, cpus_per_host=max(1, math.floor(cpus_per_host)), chips_per_host=4, timeout_seconds=2400
-                ) as gang:
-                    if gang.leader:
-                        with iris_vllm_followers(gang.identity):
-                            spec = _vllm_model_spec(model, 16, 16)
-                            with VllmBackend(engine).start(
-                                spec,
-                                extra_args=("--distributed-executor-backend", "ray"),
-                                subprocess_env=gang.subprocess_env,
-                            ) as environment:
-                                environment.wait_until_ready()
-                                url = environment.server_url.rstrip("/").removesuffix("/v1") + "/v1"
-                                yield RunningModel(OpenAIEndpoint(url, MODEL), tokenizer=MODEL)
-                                gang.check_alive()
-                                environment.check_alive()
-
-                    else:
-                        wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
-                if not gang.leader:
-                    notify_iris_vllm_stopped(gang.identity)
-                    yield None
+    launcher = vllm_launcher(engine)
+    assert isinstance(launcher, IsolatedTpuVllm)
+    with tpu_ray_gang(
+        launcher, cpus_per_host=max(1, math.floor(cpus_per_host)), chips_per_host=4, timeout_seconds=2400
+    ) as gang:
+        if gang.leader:
+            with iris_vllm_followers(gang.identity):
+                spec = _vllm_model_spec(model, 16, 16)
+                with VllmBackend(engine).start(
+                    spec,
+                    extra_args=("--distributed-executor-backend", "ray"),
+                    subprocess_env=gang.subprocess_env,
+                ) as environment:
+                    environment.wait_until_ready()
+                    url = environment.server_url.rstrip("/").removesuffix("/v1") + "/v1"
+                    yield RunningModel(OpenAIEndpoint(url, MODEL), tokenizer=MODEL)
+                    gang.check_alive()
+                    environment.check_alive()
+        else:
+            wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
+    if not gang.leader:
+        notify_iris_vllm_stopped(gang.identity)
+        yield None
 
 
 def run_arm(hardware: str, weights: str, output: str, cpus_per_host: float) -> None:

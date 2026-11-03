@@ -11,7 +11,7 @@ import cloudpickle
 from experiments.evaluation.serving_parity import launch
 
 
-def test_requested_cpus_reach_the_tpu_gang(monkeypatch, tmp_path):
+def test_requested_cpus_reach_the_tpu_gang(monkeypatch):
     original_resources = launch.ResourceConfig.with_tpu
     monkeypatch.setattr(
         launch.ResourceConfig,
@@ -57,7 +57,6 @@ def test_requested_cpus_reach_the_tpu_gang(monkeypatch, tmp_path):
     monkeypatch.setattr(launch, "tpu_ray_gang", gang)
     monkeypatch.setattr(launch, "wait_for_iris_vllm_shutdown", lambda *args, **kwargs: None)
     monkeypatch.setattr(launch, "notify_iris_vllm_stopped", lambda *args, **kwargs: None)
-    monkeypatch.chdir(tmp_path)
     engine = launch.VllmEngineConfig(launcher=launch.VllmLauncherType.TPU)
     with launch.serving_model("v4", None, engine, args[-1]) as model:
         assert model is None
