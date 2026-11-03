@@ -15,7 +15,7 @@ import asyncio
 import inspect
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
 from pydantic import TypeAdapter
@@ -26,6 +26,7 @@ from taskforge.ledger.records import check_workpiece_id
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.policy import Policy
 from taskforge.stage10_proposal.model import ProposalFormatError, TaskProposal, parse, render
 from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import (
@@ -52,7 +53,7 @@ from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage50_validate.round import ValidationContext, load_validation, write_validation
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Hold, Modify, Reject, RejectKind, Retry
-from taskforge.stage60_review.rules import evidence_gaps
+from taskforge.stage60_review.rules import BandRules, evidence_gaps
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import (
@@ -84,6 +85,10 @@ POLICY_DIGEST = "policy_digest"
 RESEARCH = "research"
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build or author failure for the author's revision."""
+STAGE_PREFIXES = ("author", "adversary", "band", "solver")
+"""The policy entries a workpiece's stages depend on, which ``OPENED`` records. The ``budget`` entries are recorded
+apart, as ``budget_digest``, so an abandoned workpiece may resume under a new budget; the ``proposer`` entries are
+used before a workpiece exists."""
 ATTR_CHARS = 500
 """The length of the failure's head kept in a ``BUILD_FAILED`` or ``AUTHOR_FAILED`` event.
 
@@ -113,11 +118,12 @@ class WorkpieceBudget:
 
 @dataclass(frozen=True)
 class StageCoordinator:
-    """The stage functions, budget and storage shared by a run's workpieces.
+    """The stage functions, policy and storage shared by a run's workpieces.
 
     Attributes:
-        stages: The caller's function for each stage.
-        budget: The budget of every workpiece. ``OPENED`` records its digest.
+        stages: The caller's function for each stage. Review is called with the policy's band.
+        policy: The prompts and settings of the run: ``band.*`` places a solve rate for review, ``budget.*`` is every
+            workpiece's ``WorkpieceBudget``. ``OPENED`` records the budget's digest and ``policy_digest``.
         root: The run root holding ``workpieces/`` and the step store in ``store/``.
         event_store: The store checkpointed after each stage event and terminal.
         model: The model build steps call.
@@ -128,11 +134,10 @@ class StageCoordinator:
             records it.
         model_digest: The model part of every step key, usually
             ``run.build_model_digest(model, sampling, services)``. ``OPENED`` records it.
-        policy_digest: The ``Policy.stage_digest`` of the prompts the stages were made with. ``OPENED`` records it.
     """
 
     stages: StageFunctions
-    budget: WorkpieceBudget
+    policy: Policy
     root: Path
     event_store: WorkpieceEventStore
     model: ModelClient
@@ -140,7 +145,20 @@ class StageCoordinator:
     services: RLEnvBuildServices
     research: ResearchRequirement
     model_digest: str
-    policy_digest: str
+
+    @property
+    def budget(self) -> WorkpieceBudget:
+        return WorkpieceBudget(**{f.name: self.policy.setting(f"budget.{f.name}", int) for f in fields(WorkpieceBudget)})
+
+    @property
+    def band(self) -> BandRules:
+        low, high = (self.policy.setting(key, float) for key in ("band.low", "band.high"))
+        return BandRules(low, high, frozenset({BandOutcome.IN_BAND}))
+
+    @property
+    def policy_digest(self) -> str:
+        """The digest of the policy's ``stage_digest`` for each of ``STAGE_PREFIXES``."""
+        return digest({prefix: self.policy.stage_digest(prefix) for prefix in STAGE_PREFIXES})
 
 
 @dataclass
@@ -485,7 +503,7 @@ async def _review(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
     coordinator = workpiece.coordinator
     round_dir = workpiece.round_dir(state.round)
     result = load_validation(round_dir)
-    decision = await coordinator.stages.review(result)
+    decision = await coordinator.stages.review(result, band=coordinator.band)
     if isinstance(decision, Accept) or (isinstance(decision, Reject) and decision.kind is RejectKind.TASK):
         gaps = evidence_gaps(result)
         if isinstance(decision, Accept) and decision.band is not BandOutcome.IN_BAND:

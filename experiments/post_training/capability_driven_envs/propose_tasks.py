@@ -51,7 +51,7 @@ from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavail
 from taskforge.llm.glm_client import EndpointSource, GlmClient, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
-from taskforge.policy import ProposerPolicy
+from taskforge.policy import Policy, parse_overlay, resolution_lines
 from taskforge.stage10_proposal.model import Environment, render
 from taskforge.stage10_proposal.source import ProposalBatch, SlotProposal, propose_all
 from taskforge.stage20_triage.preflight import preflight
@@ -115,7 +115,7 @@ async def propose_tasks(
     slots: int,
     environments: frozenset[Environment],
     policy: LLMPolicy,
-    proposer: ProposerPolicy,
+    proposer: Policy,
 ) -> list[ProposedCapability]:
     """Propose and triage every capability of ``ideas`` concurrently, with ``proposer``'s text."""
     source = CapabilitySource(model, policy, proposer, environments)
@@ -166,9 +166,10 @@ async def _propose(
     ideas: Mapping[str, CapabilityIdea],
     slots: int,
     environments: frozenset[Environment],
+    proposer: Policy,
 ) -> list[ProposedCapability]:
     async with GlmClient(source, GLM_PROVIDER) as client:
-        return await propose_tasks(client, ideas, slots, environments, LLMPolicy(), DEFAULT_POLICY.proposer)
+        return await propose_tasks(client, ideas, slots, environments, LLMPolicy(), proposer)
 
 
 @click.command()
@@ -209,6 +210,12 @@ async def _propose(
         "must match the token's pool."
     ),
 )
+@click.option(
+    "--policy",
+    "overlays",
+    multiple=True,
+    help='A JSON policy overlay from dotted key to value, e.g. \'{"proposer.plan": "..."}\'; repeatable.',
+)
 def main(
     output_dir: Path,
     catalog: Path | None,
@@ -218,12 +225,15 @@ def main(
     base_url: str | None,
     relay_job: str | None,
     pool: str,
+    overlays: tuple[str, ...],
 ) -> None:
     """Propose tasks from the capability catalog and triage each proposal with the preflight.
 
     Give exactly one of --base-url (a port-forwarded router) and --relay-job (inside an Iris task).
     """
     configure_logging(logging.INFO)
+    policy = DEFAULT_POLICY.overlaid(*(parse_overlay(overlay) for overlay in overlays))
+    click.echo("\n".join(resolution_lines(DEFAULT_POLICY, policy)))
     source = endpoint_source(base_url, relay_job, Pool(pool))
     if output_dir.exists():
         raise click.BadParameter(f"{output_dir} already exists", param_hint="'--output-dir'")
@@ -233,7 +243,7 @@ def main(
         raise click.ClickException(f"capability ids unsafe as directory names: {unsafe}")
     output_dir.mkdir(parents=True)
     hosted = frozenset(Environment(environment) for environment in environments)
-    proposed = asyncio.run(_propose(source, ideas, slots, hosted))
+    proposed = asyncio.run(_propose(source, ideas, slots, hosted, policy))
     write_outputs(output_dir, proposed)
     click.echo(output_dir / SUMMARY_FILE)
 
