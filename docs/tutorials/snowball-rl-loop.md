@@ -8,9 +8,9 @@ remains failed even when it has useful intermediate measurements.
 ## Runtime admission
 
 The fixed recipe requires the qualified Triton attention helper digest
-`fe39ea5a707a1979f9576595f580a2f70506a5868a389ee150202b45963b5f03`.
-The currently pinned SkyRL vLLM wheel does not contain those bytes. Publish and
-adopt a fixed wheel and frozen lock before submitting this recipe. The worker
+`08cdc141ebf05c4773b7328864549e93dd4600ba4e172a404c1b0de56ab2a940`
+from release `marin-vllm-gpu-20261103-02872a7e5530`. Use its compatible frozen
+SkyRL dependency profile before submitting this recipe. The worker
 checks the installed helper before tokenizer/model/placement setup; this check
 occurs after Iris allocation. It never patches installed source. A passing
 source check alone does not attest the complete wheel or a successful GPU run.
