@@ -11,11 +11,13 @@ import argparse
 import json
 import time
 from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 
 from experiments.post_training.task_curation.swesmith_staged import (
     WORKSPACE,
     DockerPilot,
+    Stage1Contract,
     sha256,
     source_tasks,
     write_json,
@@ -69,7 +71,7 @@ for task in tasks:
                   or git('symbolic-ref','--short','HEAD') != task['branch'] or git('diff','--name-only','HEAD')):
                 result.update(status='control_error',reason='checkout is not pristine at required branch')
             else:
-                contract = {'origin':origin,'branch':task['branch'],'commit':commit,'workspace':'/testbed',
+                contract = {'origin':origin,'branch':task['branch'],'commit':commit,'workspace':WORKSPACE,
                             'import_name':task['import_name'], 'symlink_targets': links,
                             'tracked_sha256':{p:hashlib.sha256((root/p).read_bytes()).hexdigest()
                                               for p in paths if p not in links}}
@@ -78,6 +80,11 @@ for task in tasks:
         result.update(status='control_error',reason=str(exc))
     print(json.dumps(result),flush=True)
 """
+
+
+def cohort_contract(row: dict, seed: dict) -> dict:
+    """The shared-cache program cannot observe pip metadata, so the seed supplies its name."""
+    return asdict(Stage1Contract(**row, distribution_name=seed["distribution_name"]))
 
 
 def qualify(data: Path, output: Path, max_repositories: int | None) -> dict:
@@ -137,8 +144,8 @@ def qualify(data: Path, output: Path, max_repositories: int | None) -> dict:
             source = sources[row["parent_id"]]
             if row["status"] == "stage1_controls_validated":
                 root = output / "cohort-stage1" / row["parent_id"].rsplit("/", 1)[1]
-                write_json(root / "private/stage1-contract.json", row.pop("contract"))
-                stage_contract = json.loads((root / "private/stage1-contract.json").read_text())
+                stage_contract = cohort_contract(row.pop("contract"), contract)
+                write_json(root / "private/stage1-contract.json", stage_contract)
                 write_json(
                     root / "result.json",
                     {

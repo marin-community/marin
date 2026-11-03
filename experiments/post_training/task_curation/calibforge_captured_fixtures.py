@@ -14,7 +14,7 @@ import subprocess
 import tarfile
 from pathlib import Path, PurePosixPath
 
-from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_SCRIPT
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
 
 
 def captured_payload(reference_image: str, roots: tuple[str, ...] = ("app",)) -> tuple[bytes, list[dict]]:
@@ -101,9 +101,9 @@ def main() -> None:
                 "#!/bin/sh",
                 "set -eu",
                 *[f'test ! -d /{root} || test -z "$(ls -A /{root})"' for root in roots],
-                f"tar -xzf /setup_files/{FIXTURE_ARCHIVE} -C /",
-                f"rm -f /setup_files/{FIXTURE_ARCHIVE} /setup_files/{SETUP_SCRIPT}",
-                "rmdir /setup_files",
+                f"tar -xzf {SETUP_ROOT}/{FIXTURE_ARCHIVE} -C /",
+                f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}",
+                f"rmdir {SETUP_ROOT}",
                 "",
             ]
         )

@@ -66,6 +66,7 @@ def test_native_timeout_preserves_evidence_and_other_candidate_results(tmp_path,
         ("build_timeout", None),
         ("built", "sha256:resolved"),
     ]
+    assert all(row["public_fixture_roots"] == ["app"] for row in results)
     log = (output / "logs/timeout.txt").read_bytes()
     assert b"partial build output" in log and b"download stalled" in log
     assert results[0]["build_log_sha256"] == hashlib.sha256(log).hexdigest()

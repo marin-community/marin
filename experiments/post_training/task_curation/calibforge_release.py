@@ -14,7 +14,7 @@ import tomlkit
 from taskcompendium.pipeline.inputs import ConversionContext
 from tomlkit.items import Table
 
-from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_SCRIPT
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     archive_files,
     unpack_task_binary,
@@ -52,7 +52,7 @@ def transformed_task(row: dict, record: dict, bundles: Path, source: Path, timeo
     environment["docker_image"] = record["base_image"]
     environment["workdir"] = record["workdir"]
     environment["setup"] = {
-        "command": f"sh /setup_files/{SETUP_SCRIPT}",
+        "command": f"sh {SETUP_ROOT}/{SETUP_SCRIPT}",
         "timeout_sec": timeout,
     }
     output = {name: content for name, content in files.items() if not name.startswith(ENVIRONMENT_PREFIX)}

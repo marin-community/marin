@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 BUILD_NETWORK = "none"
+CAPTURE_ROOTS = ("app", "data")
 
 
 def reference_records(records: list[dict], base: str) -> list[dict]:
@@ -18,7 +19,7 @@ def reference_records(records: list[dict], base: str) -> list[dict]:
     return [r for r in records if r.get("base_image") == base and r["status"].startswith("compiled")]
 
 
-def build_reference(record: dict, source: Path, output: Path) -> dict:
+def build_reference(record: dict, source: Path, output: Path, roots: tuple[str, ...] = ("app",)) -> dict:
     """Build the unmodified public source and retain failures without admitting it."""
     context = source / record["task_id"] / "environment"
     if hashlib.sha256((context / "Dockerfile").read_bytes()).hexdigest() != record["source_dockerfile_sha256"]:
@@ -48,6 +49,7 @@ def build_reference(record: dict, source: Path, output: Path) -> dict:
         "status": status,
         "reference_image": image,
         "build_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+        "public_fixture_roots": list(roots),
     }
 
 
@@ -58,6 +60,7 @@ def main() -> None:
     parser.add_argument("--base", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int, required=True)
+    parser.add_argument("--roots", nargs="+", choices=CAPTURE_ROOTS, default=["app"])
     args = parser.parse_args()
     if "@sha256:" not in args.base:
         raise ValueError("Native references require an immutable base")
@@ -65,8 +68,9 @@ def main() -> None:
     (args.output / "logs").mkdir()
     manifest = json.loads((args.bundles / "manifest.json").read_text())
     records = reference_records(manifest["tasks"], args.base)
+    roots = tuple(args.roots)
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        results = list(executor.map(lambda r: build_reference(r, args.source, args.output), records))
+        results = list(executor.map(lambda r: build_reference(r, args.source, args.output, roots), records))
     evidence = {"build_network": BUILD_NETWORK, "admission": "not_run", "tasks": results}
     (args.output / "manifest.json").write_text(json.dumps(evidence, indent=2) + "\n")
     print(json.dumps({"candidates": len(results), "built": sum(r["status"] == "built" for r in results)}))

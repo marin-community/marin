@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 
 FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 SETUP_SCRIPT = "calibforge-initialize.sh"
+SETUP_ROOT = "/setup_files"
 COMPILED_PENDING = "compiled_pending_equivalence_and_admission"
 
 
@@ -32,7 +33,7 @@ class DeferredEnvironment(ValueError):
 
 def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
     """Compile ordered public copies without executing source commands or using private files."""
-    if any("/setup_files" in argument for item in instructions for argument in item["args"]):
+    if any(SETUP_ROOT in argument for item in instructions for argument in item["args"]):
         raise DeferredEnvironment("requires_reserved_setup_path_support")
     unsupported = {item["command"] for item in instructions} - {"from", "workdir", "copy", "run"}
     if unsupported:
@@ -49,7 +50,7 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
         "set -eu",
         "stage=$(mktemp -d /tmp/calibforge-setup.XXXXXXXX)",
         "trap 'rm -rf \"$stage\"' EXIT",
-        f'tar -xzf /setup_files/{FIXTURE_ARCHIVE} -C "$stage"',
+        f'tar -xzf {SETUP_ROOT}/{FIXTURE_ARCHIVE} -C "$stage"',
     ]
     resources: dict[str, Path] = {}
     copied_files: set[str] = set()
@@ -126,8 +127,8 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
                 parent = target if directory_target else str(PurePosixPath(target).parent)
                 commands.append("mkdir -p " + shlex.quote(parent))
                 commands.append("cp -a " + staged + " " + shlex.quote(target + ("/" if directory_target else "")))
-    commands.append(f"rm -f /setup_files/{FIXTURE_ARCHIVE} /setup_files/{SETUP_SCRIPT}")
-    commands.append("rmdir /setup_files")
+    commands.append(f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}")
+    commands.append(f"rmdir {SETUP_ROOT}")
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as archive:
         for name, path in sorted(resources.items()):

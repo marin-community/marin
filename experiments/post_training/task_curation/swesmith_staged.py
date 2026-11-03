@@ -26,6 +26,8 @@ import pyarrow.parquet as pq
 
 VERSION = "swesmith-staged-v1"
 WORKSPACE = "/testbed"
+# Docker exec/report-launch failures and signal kills (exit 128 + n) are infrastructure outcomes.
+INFRASTRUCTURE_EXIT_CODES = (125, 126, 127)
 SOURCE_PREFIX = "open-athena/task-trove:laion__swesmith-oracle-filtered-v2/"
 SOURCE_RELEASE = "swesmith-release-v1-20261016"
 SOURCE_SPLIT = "swesmith-split-v1-20261016"
@@ -213,8 +215,29 @@ class DockerPilot:
         )
 
     def snapshot(self, container: str, label: str) -> str:
-        image = self.command(["docker", "commit", container, f"{VERSION}-{label}"]).stdout.decode().strip()
+        image = self.command(["docker", "commit", container, f"{VERSION}-{label}".lower()]).stdout.decode().strip()
         return image
+
+    def flatten(self, container: str, label: str) -> str:
+        """Rebuild the image as one layer so deleted tests and git history leave no trace.
+
+        Docker commit records deletions as whiteouts in a new layer, so image tarballs
+        still carry the parent layers' hidden tests and fixed history. Exporting the
+        live filesystem and importing it keeps only what the running container holds;
+        the container's working directory and environment are restamped on the import.
+        """
+        image = f"{VERSION}-{label.lower()}".lower()
+        config = json.loads(
+            self.command(["docker", "inspect", container, "--format", "{{json .Config}}"]).stdout.decode()
+        )
+        changes: list[str] = []
+        for entry in config["Env"]:
+            changes += ["-c", "ENV " + entry]
+        if config["WorkingDir"]:
+            changes += ["-c", "WORKDIR " + config["WorkingDir"]]
+        bundle = self.command(["docker", "export", container], timeout=1800)
+        self.command(["docker", "import", *changes, "-", image], stdin=bundle.stdout, timeout=1800)
+        return self.command(["docker", "image", "inspect", "--format", "{{.Id}}", image]).stdout.decode().strip()
 
     def upload(self, container: str, files: dict[str, bytes], root: str = WORKSPACE) -> None:
         payload = io.BytesIO()
@@ -319,6 +342,7 @@ def stage1_result(pilot: DockerPilot, container: str, contract: Stage1Contract) 
 
 
 def pytest_result(pilot: DockerPilot, container: str, verifier: dict, report: str) -> dict:
+    """Return required-node pytest evidence, marked infrastructure when the run is inconclusive."""
     paths = verifier["paths"]
     args = [
         "docker",
@@ -345,10 +369,34 @@ def pytest_result(pilot: DockerPilot, container: str, verifier: dict, report: st
         *paths,
     ]
     result = pilot.command(args, check=False)
+    if result.returncode in INFRASTRUCTURE_EXIT_CODES or result.returncode > 128:
+        # Docker launch failures and signal kills (for example an OOM 137) say nothing about the task.
+        return {
+            "passed": False,
+            "returncode": result.returncode,
+            "error": "pytest_process_killed",
+            "infrastructure": True,
+            "outcomes": {},
+        }
     read = pilot.command(["docker", "exec", container, "cat", f"/tmp/{report}.json"], check=False)
     if read.returncode:
-        return {"passed": False, "returncode": result.returncode, "error": "missing_pytest_report"}
-    payload = json.loads(read.stdout)
+        return {
+            "passed": False,
+            "returncode": result.returncode,
+            "error": "missing_pytest_report",
+            "infrastructure": True,
+            "outcomes": {},
+        }
+    try:
+        payload = json.loads(read.stdout)
+    except json.JSONDecodeError:
+        return {
+            "passed": False,
+            "returncode": result.returncode,
+            "error": "unreadable_pytest_report",
+            "infrastructure": True,
+            "outcomes": {},
+        }
     outcomes = {test["nodeid"]: test["outcome"] for test in payload.get("tests", [])}
     required = verifier.get("must_pass", []) + verifier.get("must_not_break", [])
     failed = {test: outcomes.get(test, "missing") for test in required if outcomes.get(test) != "passed"}
@@ -358,6 +406,7 @@ def pytest_result(pilot: DockerPilot, container: str, verifier: dict, report: st
         "required": len(required),
         "collected": len(outcomes),
         "failed_required": failed,
+        "outcomes": outcomes,
         "summary": payload.get("summary", {}),
     }
 
@@ -456,18 +505,20 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
             pilot.shell(container, f"git checkout {shlex.quote(fixed_commit)} -- " + " ".join(map(shlex.quote, changed)))
             gold = pilot.files(container, changed)
             result["controls"]["stage3_complete"] = pytest_result(pilot, container, verifier, "complete")
+            if result["controls"]["stage3_complete"].get("infrastructure"):
+                raise RuntimeError(f"Gold correctness run was inconclusive: {result['controls']['stage3_complete']}")
             if not result["controls"]["stage3_complete"]["passed"]:
                 raise ValueError("Complete handoff failed original correctness tests")
         with pilot.container(mutated) as container:
             pilot.upload(container, gold)
-            pilot.shell(container, "rm -rf /testbed/.git")
-            result["complete_image"] = pilot.snapshot(container, task.parent_id.rsplit("/", 1)[1] + "-complete")
+            pilot.shell(container, f"rm -rf {WORKSPACE}/.git")
+            result["complete_image"] = pilot.flatten(container, task.parent_id.rsplit("/", 1)[1] + "-complete")
         with pilot.container(base_image) as empty:
             result["controls"]["stage1_empty_false_submission"] = stage1_result(pilot, empty, contract)
         negative_commands = {
             "stage1_wrong_origin": "git remote set-url origin https://github.com/example/wrong",
             "stage1_wrong_branch": "git checkout -b wrong-branch",
-            "stage1_wrong_workspace": "mv /testbed /wrongbed; mkdir /testbed",
+            "stage1_wrong_workspace": f"mv {WORKSPACE} /wrongbed; mkdir {WORKSPACE}",
             "stage1_missing_install": f"python -m pip uninstall -y {shlex.quote(contract.distribution_name)}",
             "stage1_healthy_default": f"git checkout {shlex.quote(fixed_commit)}",
             "stage1_spoofed_metadata": (
@@ -503,6 +554,8 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
                     stdin=patch.encode(),
                 )
                 partial = pytest_result(pilot, container, verifier, "partial")
+                if partial.get("infrastructure"):
+                    raise RuntimeError(f"Partial recipe run was inconclusive: {partial['error']}")
                 if partial["passed"] or not any(
                     value == "failed" for value in partial.get("failed_required", {}).values()
                 ):
@@ -528,8 +581,11 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
                     ["docker", "exec", "-i", "-w", WORKSPACE, container, "git", "apply", "--recount", "-"],
                     stdin=(directory / "private" / "partial.patch").read_bytes(),
                 )
-                pilot.shell(container, "rm -rf /testbed/.git")
-                result["partial_image"] = pilot.snapshot(container, task.parent_id.rsplit("/", 1)[1] + "-partial")
+                pilot.shell(container, f"rm -rf {WORKSPACE}/.git")
+                result["partial_image"] = pilot.flatten(container, task.parent_id.rsplit("/", 1)[1] + "-partial")
+        inconclusive = sorted(key for key, value in result["controls"].items() if value.get("infrastructure"))
+        if inconclusive:
+            raise RuntimeError(f"Infrastructure failure invalidated controls: {inconclusive}")
         negative = [
             value
             for key, value in result["controls"].items()

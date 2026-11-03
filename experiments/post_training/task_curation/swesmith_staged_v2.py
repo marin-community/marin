@@ -146,12 +146,9 @@ for task in TASKS:
             if key not in reports:
                 report_name = "fixed-" + key[:12]
                 check = pytest_result(runner, container, verifier, report_name)
-                report = json.loads(
-                    runner.command(["docker", "exec", container, "cat", f"/tmp/{report_name}.json"]).stdout
-                )
                 reports[key] = {
                     "check": check,
-                    "outcomes": {x["nodeid"]: x["outcome"] for x in report.get("tests", [])},
+                    "outcomes": check["outcomes"],
                     "fixed_commit": fixed,
                     "dependency_image": seed["mutated_image"],
                     "paths": verifier["paths"],
@@ -161,12 +158,18 @@ for task in TASKS:
             report = reports[key]
             required = verifier["must_pass"] + verifier.get("must_not_break", [])
             passed = (
-                report["check"]["returncode"] == 0
+                not report["check"].get("infrastructure")
+                and report["check"]["returncode"] == 0
                 and bool(required)
                 and all(report["outcomes"].get(node) == "passed" for node in required)
             )
             if not passed:
-                row.update(status="fixed_reference_not_passing", report_key=key)
+                failure = (
+                    "fixed_reference_infrastructure_failed"
+                    if report["check"].get("infrastructure")
+                    else "fixed_reference_not_passing"
+                )
+                row.update(status=failure, report_key=key)
                 continue
             parent = output / "parents" / row["parent_id"].rsplit("/", 1)[1]
             gold = runner.files(container, row["changed_source_paths"])
@@ -218,7 +221,8 @@ shutil.rmtree(root/'.pytest_cache',ignore_errors=True)
         )
         with runner.container(verifier_image) as actor:
             runner.python(actor, cleanup)
-            actor_image = runner.snapshot(actor, "v2-" + name + "-actor")
+            # One flattened layer so the deleted tests and fixed history leave no tarball trace.
+            actor_image = runner.flatten(actor, "v2-" + name + "-actor")
     result = {
         "repository": name,
         "actor_image": actor_image,

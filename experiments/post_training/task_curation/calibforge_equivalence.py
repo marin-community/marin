@@ -10,11 +10,10 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_SCRIPT
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
 
 CONTAINER_PLATFORM = "linux/amd64"
 KEEPALIVE = ("sleep", "infinity")
-SETUP_ROOT = "/setup_files"
 
 
 def filesystem_manifest(container: str) -> dict:

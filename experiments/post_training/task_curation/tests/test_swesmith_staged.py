@@ -10,11 +10,100 @@ import pytest
 
 from experiments.post_training.task_curation.swesmith_handoff import repair_grade
 from experiments.post_training.task_curation.swesmith_staged import (
+    DockerPilot,
     SourceTask,
+    Stage1Contract,
     candidate_integrity_violations,
     partial_hunks,
     pilot_task,
+    pytest_result,
 )
+from experiments.post_training.task_curation.swesmith_staged_cohort import cohort_contract
+
+
+@pytest.mark.parametrize(
+    ("pytest_code", "report_code", "report_stdout", "error"),
+    [
+        (137, 0, b'{"tests": []}', "pytest_process_killed"),
+        (126, 0, b'{"tests": []}', "pytest_process_killed"),
+        (0, 1, b"", "missing_pytest_report"),
+        (0, 0, b'{"tests": [', "unreadable_pytest_report"),
+    ],
+)
+def test_pytest_result_marks_inconclusive_runs_as_infrastructure(
+    tmp_path, monkeypatch, pytest_code, report_code, report_stdout, error
+):
+    def run(command, **_kwargs):
+        code = report_code if "cat" in command else pytest_code
+        return subprocess.CompletedProcess(command, code, stdout=report_stdout, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    result = pytest_result(
+        DockerPilot(tmp_path), "container", {"paths": ["tests/test_x.py"], "must_pass": ["t"]}, "gold"
+    )
+    assert result["infrastructure"] is True
+    assert result["error"] == error
+    assert result["passed"] is False
+
+
+def test_cohort_contract_matches_pilot_schema():
+    # A cohort record must load with Stage1Contract(**record), the pilot contract's schema.
+    program_row = {
+        "origin": "https://github.com/swesmith/textdistance",
+        "branch": "task-1",
+        "commit": "deadbeef",
+        "workspace": "/testbed",
+        "import_name": "textdistance",
+        "symlink_targets": {},
+        "tracked_sha256": {"textdistance/__init__.py": "abc"},
+    }
+    seed = {**program_row, "distribution_name": "textdistance", "branch": "seed-branch"}
+    record = cohort_contract(program_row, seed)
+    assert set(record) == set(Stage1Contract.__dataclass_fields__)
+    assert record["distribution_name"] == "textdistance"
+    assert record["branch"] == "task-1"
+    with pytest.raises(TypeError):
+        Stage1Contract(**program_row)
+
+
+def test_snapshot_lowercases_repository_labels(tmp_path, monkeypatch):
+    committed = []
+
+    def run(command, **_kwargs):
+        committed.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=b"sha256:image\n", stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    pilot = DockerPilot(tmp_path)
+    assert pilot.snapshot("container", "PyCQA__TextDistance-mutated") == "sha256:image"
+    assert committed[0][3] == "swesmith-staged-v1-pycqa__textdistance-mutated"
+
+
+def test_flatten_imports_one_layer_without_deleted_file_history(tmp_path, monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs.get("input", b"")))
+        if "--format" in command:
+            if "{{json .Config}}" in command:
+                stdout = json.dumps({"Env": ["PATH=/usr/local/bin:/usr/bin"], "WorkingDir": "/testbed"}).encode()
+            else:
+                stdout = b"sha256:flat\n"
+        else:
+            stdout = b"container-filesystem-tar"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    pilot = DockerPilot(tmp_path)
+    assert pilot.flatten("container", "Repo__Glom-Actor") == "sha256:flat"
+    export = next(command for command, _ in calls if command[:2] == ["docker", "export"])
+    imported = next(command for command, _ in calls if command[:2] == ["docker", "import"])
+    bundle = next(stdin for command, stdin in calls if command[:2] == ["docker", "import"])
+    assert export[2] == "container"
+    assert bundle == b"container-filesystem-tar"
+    assert imported[:4] == ["docker", "import", "-c", "ENV PATH=/usr/local/bin:/usr/bin"]
+    assert "WORKDIR /testbed" in imported
+    assert imported[-1] == "swesmith-staged-v1-repo__glom-actor"
 
 
 @pytest.mark.parametrize("failure", ["timeout", "docker_error"])
