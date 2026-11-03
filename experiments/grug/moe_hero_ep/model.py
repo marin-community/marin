@@ -70,6 +70,7 @@ from levanter.grug.sharding import unshard
 from levanter.kernels.triton.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
+from levanter.utils.jax_utils import leaf_key_paths
 from transformers import PretrainedConfig as HfConfig
 
 _GATED_NORM_RANK = 128
@@ -1552,82 +1553,102 @@ def apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
-def _with_state_dict_prefix(prefix: str | None, name: str) -> str:
-    return name if prefix is None else f"{prefix}.{name}"
+class InferenceWeightLayout(StrEnum):
+    DIRECT = "direct"
+    LINEAR = "linear"
 
 
-def _linear_inference_tensor(value: jax.Array) -> jax.Array:
-    return jnp.swapaxes(value, -1, -2)
+@dataclass(frozen=True)
+class InferenceWeightSpec:
+    """An inference tensor's native checkpoint leaf, layer, and matrix layout."""
+
+    name: str
+    path: str
+    layout: InferenceWeightLayout = InferenceWeightLayout.DIRECT
+    layer_index: int | None = None
+
+    def output_shape(self, native_shape: tuple[int, ...]) -> tuple[int, ...]:
+        shape = native_shape if self.layer_index is None else native_shape[1:]
+        if self.layout == InferenceWeightLayout.LINEAR:
+            return (*shape[:-2], shape[-1], shape[-2])
+        return shape
 
 
-def _unstacked_blocks(model: Transformer) -> tuple[Block, ...]:
-    return tuple(model.stacked_blocks.unstacked())
+def grugmoe_inference_weight_specs(config: GrugModelConfig) -> tuple[InferenceWeightSpec, ...]:
+    """The shared native-to-inference mapping for device and streaming exports."""
+    direct = InferenceWeightLayout.DIRECT
+    linear = InferenceWeightLayout.LINEAR
+    specs = [
+        InferenceWeightSpec("model.embed_tokens.weight", "token_embed"),
+        InferenceWeightSpec("model.embed_norm.weight", "embed_norm/weight"),
+        InferenceWeightSpec("model.embed_gated_norm.down_proj.weight", "embed_gated_norm/w_down", linear),
+        InferenceWeightSpec("model.embed_gated_norm.up_proj.weight", "embed_gated_norm/w_up", linear),
+        InferenceWeightSpec("model.norm.weight", "final_norm/weight"),
+        InferenceWeightSpec("model.final_gated_norm.down_proj.weight", "final_gated_norm/w_down", linear),
+        InferenceWeightSpec("model.final_gated_norm.up_proj.weight", "final_gated_norm/w_up", linear),
+        InferenceWeightSpec("lm_head.weight", "output_proj", linear),
+    ]
+    block_weights = [
+        ("input_layernorm.weight", "rms_attn/weight", direct),
+        ("attn_gated_norm.down_proj.weight", "attn_gated_norm/w_down", linear),
+        ("attn_gated_norm.up_proj.weight", "attn_gated_norm/w_up", linear),
+        ("self_attn.q_proj.weight", "attn/w_q", linear),
+        ("self_attn.k_proj.weight", "attn/w_k", linear),
+        ("self_attn.v_proj.weight", "attn/w_v", linear),
+        ("self_attn.o_proj.weight", "attn/w_o", linear),
+        ("self_attn.attn_gate.weight", "attn/attn_gate", linear),
+        ("post_attention_layernorm.weight", "rms_mlp/weight", direct),
+        ("mlp_gated_norm.down_proj.weight", "mlp_gated_norm/w_down", linear),
+        ("mlp_gated_norm.up_proj.weight", "mlp_gated_norm/w_up", linear),
+        ("mlp.router.weight", "mlp/router", linear),
+        ("mlp.router.bias", "mlp/router_bias", direct),
+        ("mlp.experts.gate_proj.weight", "mlp/expert_mlp/w_gate", linear),
+        ("mlp.experts.up_proj.weight", "mlp/expert_mlp/w_up", linear),
+        ("mlp.experts.down_proj.weight", "mlp/expert_mlp/w_down", linear),
+    ]
+    if config.latent_dim is not None:
+        block_weights.extend(
+            [
+                ("mlp.latent_down_proj.weight", "mlp/w_latent_down", linear),
+                ("mlp.latent_norm.weight", "mlp/latent_norm/weight", direct),
+                ("mlp.latent_up_proj.weight", "mlp/w_latent_up", linear),
+            ]
+        )
+    if config.sconv:
+        for site, name, path in (
+            ("k", "self_attn.sconv_k", "attn/sconv_k"),
+            ("attn", "sconv_attn", "sconv_attn"),
+            ("mlp", "sconv_mlp", "sconv_mlp"),
+        ):
+            if site in config.sconv_sites:
+                block_weights.append((f"{name}.weight", f"{path}/weight", direct))
+    if config.shared_expert_intermediate_dim > 0:
+        for expert in range(config.num_shared_experts):
+            for projection in ("gate", "up", "down"):
+                block_weights.append(
+                    (f"shared_experts.{expert}.{projection}_proj.weight", f"shared/{expert}/w_{projection}", linear)
+                )
+    for layer in range(config.num_layers):
+        specs.extend(
+            InferenceWeightSpec(f"model.layers.{layer}.{name}", f"stacked_blocks/stacked/{path}", layout, layer)
+            for name, path, layout in block_weights
+        )
+    return tuple(specs)
 
 
 def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
-    tensors: dict[str, jax.Array] = {
-        "model.embed_tokens.weight": model.token_embed,
-        "model.embed_norm.weight": model.embed_norm.weight,
-        "model.embed_gated_norm.down_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_down),
-        "model.embed_gated_norm.up_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_up),
-        "model.norm.weight": model.final_norm.weight,
-        "model.final_gated_norm.down_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_down),
-        "model.final_gated_norm.up_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_up),
-        "lm_head.weight": _linear_inference_tensor(model.output_proj),
-    }
-
-    for layer_index, block in enumerate(_unstacked_blocks(model)):
-        layer_prefix = f"model.layers.{layer_index}"
-        tensors.update(
-            {
-                f"{layer_prefix}.input_layernorm.weight": block.rms_attn.weight,
-                f"{layer_prefix}.attn_gated_norm.down_proj.weight": _linear_inference_tensor(
-                    block.attn_gated_norm.w_down
-                ),
-                f"{layer_prefix}.attn_gated_norm.up_proj.weight": _linear_inference_tensor(block.attn_gated_norm.w_up),
-                f"{layer_prefix}.self_attn.q_proj.weight": _linear_inference_tensor(block.attn.w_q),
-                f"{layer_prefix}.self_attn.k_proj.weight": _linear_inference_tensor(block.attn.w_k),
-                f"{layer_prefix}.self_attn.v_proj.weight": _linear_inference_tensor(block.attn.w_v),
-                f"{layer_prefix}.self_attn.o_proj.weight": _linear_inference_tensor(block.attn.w_o),
-                f"{layer_prefix}.self_attn.attn_gate.weight": _linear_inference_tensor(block.attn.attn_gate),
-                f"{layer_prefix}.post_attention_layernorm.weight": block.rms_mlp.weight,
-                f"{layer_prefix}.mlp_gated_norm.down_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_down),
-                f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
-                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
-                f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
-                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_gate),
-                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_up),
-                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
-            }
-        )
-        if block.mlp.w_latent_down is not None:
-            assert block.mlp.latent_norm is not None
-            assert block.mlp.w_latent_up is not None
-            tensors.update(
-                {
-                    f"{layer_prefix}.mlp.latent_down_proj.weight": _linear_inference_tensor(block.mlp.w_latent_down),
-                    f"{layer_prefix}.mlp.latent_norm.weight": block.mlp.latent_norm.weight,
-                    f"{layer_prefix}.mlp.latent_up_proj.weight": _linear_inference_tensor(block.mlp.w_latent_up),
-                }
-            )
-        # SConv weights are learned; export them per site so the checkpoint reconstructs an sconv model.
-        for site_name, conv in (
-            ("self_attn.sconv_k", block.attn.sconv_k),
-            ("sconv_attn", block.sconv_attn),
-            ("sconv_mlp", block.sconv_mlp),
-        ):
-            if conv is not None:
-                tensors[f"{layer_prefix}.{site_name}.weight"] = conv.weight
-        # One tensor per shared expert (num_shared_experts x shared_expert_intermediate_dim), matching
-        # the config, rather than concatenating them into a single joined width.
-        if block.shared is not None:
-            for shared_index, expert in enumerate(block.shared):
-                shared_prefix = f"{layer_prefix}.shared_experts.{shared_index}"
-                tensors[f"{shared_prefix}.gate_proj.weight"] = _linear_inference_tensor(expert.w_gate)
-                tensors[f"{shared_prefix}.up_proj.weight"] = _linear_inference_tensor(expert.w_up)
-                tensors[f"{shared_prefix}.down_proj.weight"] = _linear_inference_tensor(expert.w_down)
-
-    return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
+    paths = jax.tree.leaves(leaf_key_paths(model))
+    native = {path.replace(".", "/"): value for path, value in zip(paths, jax.tree.leaves(model), strict=True)}
+    tensors = {}
+    for spec in grugmoe_inference_weight_specs(model.config):
+        value = native[spec.path]
+        if spec.layer_index is not None:
+            value = value[spec.layer_index]
+        if spec.layout == InferenceWeightLayout.LINEAR:
+            value = jnp.swapaxes(value, -1, -2)
+        name = spec.name if prefix is None else f"{prefix}.{spec.name}"
+        tensors[name] = value
+    return tensors
 
 
 __all__ = [

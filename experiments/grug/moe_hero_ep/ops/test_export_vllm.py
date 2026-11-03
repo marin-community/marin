@@ -17,6 +17,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
 
+import experiments.grug.moe_hero_ep.ops.export_cpu as cpu_export
 import experiments.grug.moe_hero_ep.ops.export_vllm as hero_export
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
@@ -152,3 +153,39 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
     with pytest.raises(FileExistsError):
         export(request)
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+@pytest.mark.parametrize("master,manifest", [(False, True), (True, True), (True, False)])
+@pytest.mark.parametrize("shard_size", [256, 1024**2])
+def test_cpu_export_matches_device_bytes_and_reads_expert_chunks_once(
+    tmp_path, monkeypatch, master, manifest, shard_size
+):
+    # Cover both standalone banks (as in Hero) and multiple banks in one file.
+    monkeypatch.setattr(hero_export, "DEFAULT_MAX_SHARD_SIZE", shard_size)
+    monkeypatch.setattr(cpu_export, "DEFAULT_MAX_SHARD_SIZE", shard_size)
+    request, model = native_fixture(str(tmp_path / "checkpoint"), master=master)
+    if not manifest:
+        (Path(request.checkpoint) / "manifest.json").unlink()
+    export(request)
+    cpu_request = cpu_export.CpuExportConfig(
+        checkpoint=request.checkpoint,
+        metadata_digest=request.metadata_digest,
+        model=request.model,
+        destination=str(tmp_path / "cpu-export"),
+        source_revision=request.source_revision,
+        read_host_budget_bytes=1024**2,
+        export_host_budget_bytes=1024**2,
+    )
+    cpu_export.export(cpu_request)
+    device_root = Path(request.destination)
+    cpu_root = Path(cpu_request.destination)
+    device_files = {path.name: path.read_bytes() for path in device_root.glob("*.safetensors")}
+    cpu_files = {path.name: path.read_bytes() for path in cpu_root.glob("*.safetensors")}
+    assert cpu_files == device_files
+    for filename in ("config.json", "model.safetensors.index.json"):
+        assert (cpu_root / filename).read_bytes() == (device_root / filename).read_bytes()
+    completed = json.loads((cpu_root / "export-manifest.json").read_text())
+    assert completed["expert_blocks_read"] == 3
+    expected_native_bytes = sum(x.size * x.dtype.itemsize for x in jax.tree.leaves(model))
+    pending_bytes = request.model.num_layers * request.model.num_experts * np.dtype(np.float32).itemsize
+    assert completed["read_bytes"] == expected_native_bytes + pending_bytes

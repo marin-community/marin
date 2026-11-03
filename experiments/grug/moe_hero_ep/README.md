@@ -59,6 +59,8 @@ destination: s3://marin-us-east-02a/marin/<new-export-root>
 source_revision: <40-character lowercase hexadecimal Marin exporter commit>
 expert_axis_size: 32
 replica_axis_size: 1
+export_host_budget_bytes: 34359738368
+max_concurrent_shards: 2
 ```
 
 Compute `metadata_digest`; replace `<checkpoint>` with the YAML's checkpoint URL:
@@ -90,7 +92,42 @@ Keep the checkpoint immutable. Run one exporting gang per destination. The
 global device count must be divisible by `expert_axis_size * replica_axis_size`;
 both axes default to one. Every device must fit the largest expert bank in full.
 Files use Levanter's 5 GB shard target; a larger expert bank stays in one file.
-Process zero needs host RAM for one shard plus serialization buffers.
+Two writers overlap shard serialization and upload with the next device gather.
+Process zero reserves twice each in-flight shard's payload against a 32 GiB
+host-memory budget; allow additional RAM for the restored model and runtime.
+An oversized shard runs alone. Set `max_concurrent_shards: 1` to serialize writes.
+
+### CPU export
+
+OCDBT checkpoints can also be exported on one CPU host, without restoring the
+model onto accelerators. Use the same checkpoint, model, destination and source
+revision fields above; remove `expert_axis_size` and `replica_axis_size` and add:
+
+```yaml
+read_host_budget_bytes: 103079215104  # 96 GiB
+request_concurrency: 16
+```
+
+```bash
+TMPDIR=/cache uv run --package marin-levanter python -m \
+  experiments.grug.moe_hero_ep.ops.export_cpu --config_path export.yaml
+```
+
+The CPU reader prefers FP32 master weights when present and applies pending
+router bias before writing BF16 tensors. It caches ordinary weights and one
+block of routed experts, aligned to the checkpoint's stored layer chunks.
+Expert shards are processed by projection and layer chunk to avoid repeatedly
+decoding the same source chunks. Filenames and tensor layouts match the device
+exporter.
+
+`read_host_budget_bytes` bounds the BF16 source cache and is checked before
+reading arrays. The writer's separate `export_host_budget_bytes` bounds detached
+shard copies and serialization buffers. TensorStore's decode buffers and the
+runtime need additional RAM; these budgets are not a process memory limit.
+For the 535B Hero checkpoint with six-layer expert chunks, use a 256 GiB CPU
+worker with disk-backed scratch. `request_concurrency` limits concurrent storage
+requests and decoding. CPU export supports OCDBT Zarr3 checkpoints, including
+legacy `train_state` wrappers and checkpoints without `manifest.json`.
 
 Load the BF16 output with [Marin vLLM's split-expert loader](https://github.com/marin-community/vllm/pull/77).
 Tokenizer files are not copied. Set vLLM's `--tokenizer` and
