@@ -1,7 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run Snowball RL experiments through versioned artifact presets."""
+"""Run a Snowball RL experiment from a preset.
+
+Choose the preset by what the change can affect:
+
+\b
+  speed-short      vLLM engine only; 8 H100, about 10 min. Engine options, kernels, wheels.
+  speed-medium     10 sync updates, every reply 4,096 tokens; 40 H100, about 40 min. Trainer
+                   speed, weight sync, startup and trainer-vs-engine log-prob mismatch.
+  learning-medium  25 sync updates, then the 910-task panel; 40 H100, about 2 h. Loss,
+                   estimator, optimizer, schedule, reward shaping, batch shape, --init.
+  data-short       256 tasks of a new --tasks selection, 4 answers each; 8 H100, about 15 min.
+  data-medium      learning-medium trained on --tasks; 40 H100, about 2 h.
+  train-long       the async production loop with checkpoints, HF export and a final
+                   910-task evaluation; 112 H100, or 40 with --layout p40.
+
+An engine change runs speed-short, then speed-medium. A trainer kernel, parallelism or numerics
+change runs speed-medium, then learning-medium. A new task selection runs data-short, then
+data-medium. Without --run the command prints the plan and the status block; --run submits
+it. --version dev satisfies the launcher; Snowball steps use PRESET_REVISION. Guide:
+docs/recipes/snowball-rl.md.
+
+\b
+Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
+  --preset speed-medium --version dev --run
+  --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo --version dev --run
+  --preset data-short --tasks my-selection@2026.11.02 --version dev --run
+  --preset train-long --layout p40 --set trainer.max_steps=100 --version dev --run
+"""
 
 from __future__ import annotations
 
@@ -502,15 +529,73 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
 
 
 @click.command(help=__doc__)
-@click.option("--preset", "preset_name", required=True, type=click.Choice(sorted(presets.PRESETS)))
-@click.option("--set", "settings", multiple=True)
-@click.option("--tasks", "tasks_name")
-@click.option("--init", "init_name")
-@click.option("--resume-from", "resume_name")
-@click.option("--layout", "layout_name", type=click.Choice(sorted(presets.TRAIN_LONG_RECIPES)))
-@click.option("--eval", "evaluations", multiple=True, type=click.Choice(sorted(presets.EVALUATIONS)))
-@click.option("--replicates", type=click.IntRange(1, 5), default=1)
-@click.option("--control", is_flag=True)
+@click.option(
+    "--preset",
+    "preset_name",
+    required=True,
+    type=click.Choice(sorted(presets.PRESETS)),
+    help="Experiment to run; the table above says which preset fits a change.",
+)
+@click.option(
+    "--set",
+    "settings",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Change one key of the composed SkyRL config: a dotted key and a YAML value, for example "
+    "trainer.algorithm.advantage_estimator=grpo. Use +KEY=VALUE for a key the base config lacks. "
+    "Repeatable. Keys the preset owns (placement, data, evaluation, measurement) are refused with the "
+    "reason; data presets accept none. Code changes need no flag: the run name includes the source tree hash.",
+)
+@click.option(
+    "--tasks",
+    "tasks_name",
+    metavar="NAME@VERSION",
+    help="Curated task selection to train on, at an immutable version. Required by data-short and "
+    "data-medium, whose selection must hold out the same panel as the default; train-long defaults to "
+    "the pinned snowball-100k.",
+)
+@click.option(
+    "--init",
+    "init_name",
+    metavar="NAME@VERSION",
+    help="Initial weights: a published model artifact, or a finished train-long run (its HF export). "
+    "learning-medium and train-long only. The initial weights are evaluated too, so the report shows the gain.",
+)
+@click.option(
+    "--resume-from",
+    "resume_name",
+    metavar="NAME[@VERSION]",
+    help="Continue an earlier train-long run's checkpoints and optimizer state under a new run name. "
+    "train-long only.",
+)
+@click.option(
+    "--layout",
+    "layout_name",
+    type=click.Choice(sorted(presets.TRAIN_LONG_RECIPES)),
+    help="train-long GPU layout: l112 (default; 64 trainer + 48 engine H100 on cw-rno2a, the production "
+    "recipe) or p40 (32 + 8 H100 on cw-us-east-02a, learning-medium's batch shape).",
+)
+@click.option(
+    "--eval",
+    "evaluations",
+    multiple=True,
+    type=click.Choice(sorted(presets.EVALUATIONS)),
+    help="Add an evaluation to train-long, beside its in-run panel and final 910-task evaluation. Repeatable.",
+)
+@click.option(
+    "--replicates",
+    type=click.IntRange(1, 5),
+    default=1,
+    show_default=True,
+    help="Identical copies of a short or medium preset, sharing one seed. Not for train-long.",
+)
+@click.option(
+    "--control",
+    is_flag=True,
+    help="Run the preset's control replicates from a clean checkout with only its pinned default inputs. "
+    "Only for pinning new controls; refuses --set, --tasks, --init, --eval and data-medium, which uses "
+    "learning-medium's controls.",
+)
 @rl_build_options
 def main(
     preset_name: str,
