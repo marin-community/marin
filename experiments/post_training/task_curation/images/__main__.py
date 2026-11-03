@@ -21,6 +21,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
     INSTRUCTION_ENVIRONMENTS,
     MATH_GRADER,
     MATH_JUDGE_GRADER,
+    PYTHON_GRADER,
 )
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
@@ -40,6 +41,7 @@ def declared_environments() -> dict[str, Environment]:
             ALIAS_GRADER,
             MATH_GRADER,
             MATH_JUDGE_GRADER,
+            PYTHON_GRADER,
             *INSTRUCTION_ENVIRONMENTS,
         )
     }

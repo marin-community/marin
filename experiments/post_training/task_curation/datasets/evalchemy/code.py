@@ -20,12 +20,10 @@ from taskcompendium.importers.evalchemy.code import CODE_REVISION, convert_pytho
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.datasets.evalchemy.environments import PYTHON_GRADER
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
-
-PYTHON_GRADER = Environment(requirements=("numpy==2.3.5",))
 
 
 def python_source(

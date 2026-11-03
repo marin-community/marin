@@ -7,6 +7,7 @@ from experiments.post_training.task_curation.datasets.environments import PUNKT_
 from experiments.post_training.task_curation.environment import Archive, Environment
 
 BASIC_GRADER = Environment(requirements=("tomli-w==1.2.0",))
+PYTHON_GRADER = Environment(requirements=("numpy==2.3.5",))
 # Harness Unicode normalization uses NumPy's fixed-width string operations.
 ALIAS_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "numpy==2.3.5"))
 MATH_GRADER = Environment(

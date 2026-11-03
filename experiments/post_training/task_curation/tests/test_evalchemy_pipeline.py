@@ -8,13 +8,25 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, chat_item, evaluation_cases, evaluation_protocol
-from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, MetricKind, Sampling, SummaryKind, TrialPolicy
+from taskcompendium.evaluation.spec import (
+    ChatGeneration,
+    EvaluationProtocol,
+    Metric,
+    MetricKind,
+    Sampling,
+    SummaryKind,
+    TextGeneration,
+    TrialPolicy,
+)
+from taskcompendium.importers.evalchemy.code import python_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, RawRow
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -23,7 +35,9 @@ from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.datasets.evalchemy.code import sources as python_sources
 from experiments.post_training.task_curation.driver import _conversion_steps
+from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -114,6 +128,53 @@ def test_evaluation_artifact_cache_distinguishes_source_preparation(local_graph)
         artifact = run(curate(configured, options), max_concurrent=1)[0]
         outputs.append(next(evaluation_cases(artifact.path)).task.context.events[0].content)
     assert outputs == ["First: Name a color", "Second: Name a color"]
+
+
+def test_python_evaluation_artifact_cache_separates_operation_models_and_options(local_graph):
+    root, options = local_graph
+    source = next(source for source in python_sources() if source.name == "evalchemy-humaneval")
+    dataset = source.config
+    assert dataset is not None
+    file = root / dataset.files[0]
+    file.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "task_id": "HumanEval/0",
+                    "prompt": "def two():\n",
+                    "canonical_solution": "    return 2\n",
+                    "test": "def check(candidate):\n    assert candidate() == 2\n",
+                    "entry_point": "two",
+                }
+            ]
+        ),
+        file,
+    )
+    # Publication packages the grader without running it, so no image or lock build is needed.
+    recipe = replace(dataset.recipe, grader=Environment(image="fixture@sha256:" + "0" * 64))
+    content_first = ChatGeneration(response_selection="final_or_complete_reasoning")
+    operations = (
+        TextGeneration(),
+        ChatGeneration(),
+        content_first,
+        ChatGeneration.model_validate_json(content_first.model_dump_json()),
+    )
+    published = []
+    for operation in operations:
+        configured = replace(
+            source,
+            config=replace(
+                dataset,
+                recipe=recipe,
+                protocol=dataset.protocol.model_copy(update={"expected_population": 1, "operation": operation.kind}),
+                item_builder=partial(python_item, generation=operation),
+            ),
+        )
+        artifact = run(curate(configured, options), max_concurrent=1)[0]
+        published.append((artifact.path, next(evaluation_cases(artifact.path)).item.operation))
+    assert len({path for path, _ in published}) == 3
+    assert published[-1] == published[-2]
 
 
 def test_evaluation_input_change_during_conversion_withdraws_the_release_marker(local_graph):

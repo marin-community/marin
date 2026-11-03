@@ -78,6 +78,12 @@ The command reports the corpus root and records it in `campaign.json`. Local
 source overrides use the curation CLI's `--input-file` and `--input` options;
 their byte hashes enter artifact identity.
 
+If a grader environment has not been built, run the build command printed by
+the missing-artifact error, then retry curation. The command preserves the
+selected artifact root. For remote evaluation, use a shared `--artifact-root`
+for curation and the same `MARIN_PREFIX` for environment builds. Locks stored
+under a local `--cache-dir` belong to local runs.
+
 Create `run-config.json` using `EvaluationRunConfig` from
 `marin.rollouts.evaluation`. Replace model, tokenizer, and serving fields
 with the identities of the actual endpoint:
@@ -237,6 +243,8 @@ population and supplies group labels. FinanceBench uses means. SimpleQA and
 SimpleQAMini use classification summaries.
 
 See [task curation](task-curation.md) for acquisition and publication and
-[task rollouts](task-rollouts.md) for single-task execution. Legacy Harbor
-execution migration and Evaldash's raw-archive importer remain separate from
-this evaluation path.
+[task rollouts](task-rollouts.md) for single-task execution. Legacy evaluation
+launchers and checkpoint menus still use Evalchemy. Their cutover requires the
+remaining protocol variants, consumer summaries and retry-aware sample reads;
+`vendor/evalchemy` remains until those callers migrate. Harbor execution and
+Evaldash's raw-archive importer remain separate migrations.

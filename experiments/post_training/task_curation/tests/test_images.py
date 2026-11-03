@@ -18,7 +18,7 @@ from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.runtime.local import local_runtime
 
-from experiments.post_training.task_curation.datasets.evalchemy.environments import MATH_GRADER
+from experiments.post_training.task_curation.datasets.evalchemy.environments import MATH_GRADER, PYTHON_GRADER
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images import __main__ as images
 from experiments.post_training.task_curation.images import build
@@ -271,10 +271,11 @@ def test_an_image_build_requires_repository_credentials(docker_log, tmp_path):
         build_environment(environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out")))
 
 
-def test_registered_environment_build_command_resolves_new_grader(tmp_path, monkeypatch):
+@pytest.mark.parametrize("environment", [MATH_GRADER, PYTHON_GRADER])
+def test_registered_environment_build_command_resolves_new_grader(tmp_path, monkeypatch, environment):
     install_fake_build_tools(tmp_path, monkeypatch)
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    identity = identity_digest(MATH_GRADER)[:IDENTITY_CHARS]
+    identity = identity_digest(environment)[:IDENTITY_CHARS]
     result = CliRunner().invoke(images.main, ["--identity", identity, "--repository", REPOSITORY])
     assert result.exit_code == 0, result.output
-    assert StoragePath(built_environment(MATH_GRADER).lock_url).read_text()
+    assert StoragePath(built_environment(environment).lock_url).read_text()
