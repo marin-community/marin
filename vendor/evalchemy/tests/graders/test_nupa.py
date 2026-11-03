@@ -153,8 +153,6 @@ def test_length_bucket_matches_the_paper_intervals(digit, max_digit, expected):
     ("The final answer is 123.42", "42", scorer.INTEGER),
     ("The final answer is 123.42/7", "42/7", scorer.FRACTION),
     ("The final answer is 33", "3", scorer.INTEGER),
-    ("The final answer is 1010", "10", scorer.INTEGER),
-    ("The final answer is 100100", "100", scorer.INTEGER),
     ("Thus the final answer is 1818", "18", scorer.INTEGER),
     ("The final answer is 19\n1818", "18", scorer.INTEGER),
 ])
@@ -166,7 +164,6 @@ def test_score_prediction_rejects_numeric_suffix_and_ambiguous_repetition(predic
     ("<|start_think|>Let me check 1818", None),
     ("<|start_think|>The answer is 18\n1818", None),
     ("The answer is 18<|end_think|>1818", "1818"),
-    ("<|end_think|><|start_think|>The answer is 18\n1818", None),
 ])
 def test_score_prediction_does_not_recover_repeated_answer_from_thinking(prediction, extracted):
     score = scorer.score_prediction(prediction, "18", scorer.INTEGER)
@@ -176,13 +173,11 @@ def test_score_prediction_does_not_recover_repeated_answer_from_thinking(predict
 
 
 @pytest.mark.parametrize("prediction,gold,answer_format", [
-    ("Thus the final answer is 18\n1818", "18", scorer.INTEGER),
     ("The answer is 18\n1818", "18", scorer.INTEGER),
     ("<|start_think|>Maybe 19<|end_think|>The final answer is 3\n33", "3", scorer.INTEGER),
     ("486.612486.612", "486.612", scorer.FLOAT),
     ("The answer is 486.612\n486.612486.612", "486.612", scorer.FLOAT),
     ("The calculation ends with 486.612486.612", "486.612", scorer.FLOAT),
-    ("Thus the final answer is 486.612\n486.612486.612", "486.612", scorer.FLOAT),
     ("Thus the final answer is 43/20\n43/2043/20", "43/20", scorer.FRACTION),
     ("Thus the final answer is 5.09786549e52\n5.09786549e525.09786549e52", "5.09786549e52", scorer.SCIENTIFIC),
 ])

@@ -19,8 +19,7 @@ last line, and a type-valid numeric suffix after a sentence-ending period.
 A period immediately after a digit qualifies only when it separates two copies
 of the same number, such as `1046.1046`. Concatenated repeats such as `1818`
 for target `18` and `486.612486.612` for target `486.612` receive no repetition
-recovery. The extracted answer stored with each sample is the one used for
-scoring. The grader discards content before the last `<|end_think|>` marker
+recovery. The grader discards content before the last `<|end_think|>` marker
 and rejects an unfinished `<|start_think|>` block.
 These rules can credit a correct number after a reasoning response even when the
 model did not follow the direct-answer instruction. They measure numeracy with
