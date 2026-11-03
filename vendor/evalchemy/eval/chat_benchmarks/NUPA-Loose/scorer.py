@@ -19,11 +19,15 @@ SCIENTIFIC = "ScientificNotation"
 _ANSWER_MARKER_RE = re.compile(r"(?i)^(?:the\s+answer\s+is|so\s+the\s+answer\s+is)\s+")
 _BOXED_RE = re.compile(r"\\boxed\{([^{}]+)\}")
 _INLINE_MATH_RE = re.compile(r"\\\(([^()]*)\\\)")
+_DOLLAR_MATH_RE = re.compile(r"\$([^$\n]+)\$")
+_BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 _EQUATION_TAIL_RE = re.compile(r"=\s*([^\s=]+)\s*$")
 _ANSWER_TAIL_RE = re.compile(
     r"(?i)(?:^|\n)\s*(?:(?:so|therefore|thus)[, ]+)?(?:the\s+)?(?:final\s+)?"
     r"(?:answer|result|output)\s*(?:is\s*)?[:=]?\s*([^\s]+)\s*\Z"
 )
+_NUMERIC_TOKEN_RE = re.compile(r"[\d.,/eE+-]+\Z")
+_NUMBER_CONTINUATION_RE = re.compile(r"(?:[\d+-]|\d[.,/eE])\Z")
 _ANSWER_PATTERNS = {
     INTEGER: re.compile(r"^\d+"),
     FLOAT: re.compile(r"^\d+\.\d+"),
@@ -40,6 +44,7 @@ _READ_FROM_RIGHT = {
 
 @dataclass(frozen=True)
 class ExampleScore:
+    extracted_answer: str | None
     exact_match: float
     digit_match: float
     dlength: float
@@ -58,9 +63,9 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
     if "<|start_think|>" in text:
         return None
     stripped = text.strip()
-    tail = stripped.rstrip(" \t\r\n.,;:!?$")
+    tail = stripped.rstrip(" \t\r\n.,;:!?")
 
-    for pattern in (_BOXED_RE, _INLINE_MATH_RE):
+    for pattern in (_BOXED_RE, _INLINE_MATH_RE, _DOLLAR_MATH_RE, _BOLD_RE):
         match = list(pattern.finditer(tail))
         if match and not tail[match[-1].end() :].strip(" \t\r\n.,;:!?$\\)"):
             answer = _full_answer(match[-1].group(1).strip(), answer_format)
@@ -74,11 +79,36 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
             if answer is not None:
                 return answer
 
+    final_line = tail.splitlines()[-1].strip() if tail else ""
+    if len(stripped.splitlines()) > 1 and _NUMERIC_TOKEN_RE.fullmatch(final_line):
+        return _full_answer(final_line, answer_format) or _answer_after_terminal_period(tail, answer_format)
+
     direct = _ANSWER_MARKER_RE.sub("", stripped, count=1)
     match = _ANSWER_PATTERNS[answer_format].match(direct)
     if match is None:
-        return _full_answer(tail.splitlines()[-1].strip() if tail else "", answer_format)
+        return _answer_after_terminal_period(tail, answer_format)
     return _normalize_answer(match.group())
+
+
+def _answer_after_terminal_period(text: str, answer_format: str) -> str | None:
+    """Extract a typed answer appended after sentence-ending punctuation."""
+    for boundary in range(len(text) - 1, -1, -1):
+        if text[boundary] != ".":
+            continue
+        candidate = text[boundary + 1 :].strip()
+        # A sentence ending in N followed by final answer N can arrive as N.N without think markers.
+        if boundary > 0 and text[boundary - 1].isdigit() and not _ends_with_number(text[:boundary], candidate):
+            continue
+        answer = _full_answer(candidate, answer_format)
+        if answer is not None:
+            return answer
+    return None
+
+
+def _ends_with_number(text: str, number: str) -> bool:
+    if not number or not text.endswith(number):
+        return False
+    return _NUMBER_CONTINUATION_RE.search(text[: -len(number)]) is None
 
 
 def _full_answer(candidate: str, answer_format: str) -> str | None:
@@ -98,6 +128,7 @@ def score_prediction(prediction: str | None, gold: str, answer_format: str) -> E
     prediction_parts = _digit_parts(extracted or "", answer_format)
     format_valid = extracted is not None
     return ExampleScore(
+        extracted_answer=extracted,
         exact_match=1.0 if format_valid and prediction_parts == gold_parts else 0.0,
         digit_match=_digit_match(prediction_parts, gold_parts, answer_format),
         dlength=float(abs(_total_part_length(prediction_parts) - _total_part_length(gold_parts))),
