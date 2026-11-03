@@ -271,6 +271,9 @@ def inference_config_for_model(
     serve = resolved_serve_config(model)
     resolved_instances = serve.instances if instances is None else instances
     geometry = serving_geometry(serve, accelerator)
+    # Multi-host TPU and multi-node GPU servers are one Iris job with one task per host,
+    # while a broker worker runs one single-task server. Serve those directly; a failed
+    # host stops the whole server, and the evaluator's retries are the recovery.
     multihost_tpu = accelerator.tpu_type is not None and get_tpu_topology(accelerator.tpu_type).vm_count > 1
     if broker is None and not multihost_tpu and (geometry is None or geometry.task_count == 1):
         # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
