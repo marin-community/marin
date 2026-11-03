@@ -575,7 +575,7 @@ def snowball_loss_with_dispatch_stats(
     model: "SnowballLMHeadModel", example: LmExample, *, key=None
 ) -> tuple[NamedArray | Array, dict[str, Array]]:
     """Compute next-token loss and dispatch counts in one validity-masked forward."""
-    hidden, stats = model.activations_with_stats(example.tokens, dispatch_token_validity(example))
+    hidden, stats = model.activations_with_stats(example.tokens, dispatch_token_validity(example), example.attn_mask)
     loss = maybe_fused_next_token_loss(
         model.Pos,
         model.Embed,
@@ -816,9 +816,11 @@ class SnowballTransformer(eqx.Module):
         assert routes is not None
         return hidden, routes
 
-    def with_stats(self, token_ids: Array, token_valid: Array) -> tuple[Array, MoeForwardStats]:
-        """Run the ordinary causal forward with explicit dispatch validity and counts."""
-        hidden, routes, counts = self._forward(token_ids, None, True, token_valid)
+    def with_stats(
+        self, token_ids: Array, token_valid: Array, mask: AttentionMask | None = None
+    ) -> tuple[Array, MoeForwardStats]:
+        """Run causal attention with document segments, dispatch validity and counts."""
+        hidden, routes, counts = self._forward(token_ids, mask, True, token_valid)
         assert routes is not None and counts is not None
         return hidden, MoeForwardStats(routes, counts.sender_dropped, counts.receiver_dropped)
 
@@ -912,14 +914,20 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return hidden, routes
 
     def activations_with_stats(
-        self, input_ids: NamedArray, token_valid: NamedArray
+        self,
+        input_ids: NamedArray,
+        token_valid: NamedArray,
+        *,
+        attn_mask: LmHeadAttentionMask | NamedArray | None = None,
     ) -> tuple[NamedArray, MoeForwardStats]:
         """Return hidden states, routes and valid-assignment drops from the same forward."""
         if token_valid.axes != input_ids.axes or token_valid.dtype != jnp.bool_:
             raise ValueError("token_valid must be boolean with the token axes")
         sequence = input_ids.array.shape[-1]
         hidden, stats = self.transformer.with_stats(
-            input_ids.array.reshape(-1, sequence), token_valid.array.reshape(-1, sequence)
+            input_ids.array.reshape(-1, sequence),
+            token_valid.array.reshape(-1, sequence),
+            mask=self._attention_mask(input_ids, attn_mask),
         )
         hidden = hidden.reshape(*input_ids.array.shape, self.Embed.size)
         return hax.named(hidden, (*input_ids.axes, self.Embed)), stats
