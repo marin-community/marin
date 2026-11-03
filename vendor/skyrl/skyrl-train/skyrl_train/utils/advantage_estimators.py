@@ -173,6 +173,8 @@ def compute_rloo_n_outcome_advantage(
         - response_mask: Float[torch.Tensor, "batch_size seqlen"]
         - index: np.ndarray (batch_size) - group IDs for each sample
         - exclude_from_baseline: Optional[np.ndarray] (batch_size) - bool array, True = exclude
+        - metrics: receives reward/rloo_n_filtered_groups and reward/rloo_n_total_groups
+        - pad_size: trailing padding rows, excluded from those group counts
 
     Returns:
         - advantages: Float[torch.Tensor, "batch_size seqlen"]
