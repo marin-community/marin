@@ -66,7 +66,7 @@ def main() -> tuple[ArtifactStep, ...]:
     summary = apply(
         scoring.PASS_RATES_NAME, _write_pass_rates, version=scoring.PASS_RATE_REVISION, run_output=run, output=OUT
     )
-    click.echo(f"Pass rates: {summary.name}@{summary.version}/pass_rates.parquet")
+    click.echo(f"Pass rates: {summary.name}@{summary.version}/{scoring.PASS_RATES_FILENAME}")
     return (summary,)
 
 
