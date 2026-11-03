@@ -250,7 +250,8 @@ def test_security_flags_gvisor_profiles_use_runsc_runtime_and_default_caps(profi
     assert "no-new-privileges" not in flags
 
 
-def test_docker_discovery_restores_submitted_termination_grace(monkeypatch, runtime, tmp_path):
+@pytest.mark.parametrize("legacy_container", [False, True])
+def test_docker_discovery_restores_submitted_termination_grace(monkeypatch, runtime, tmp_path, legacy_container):
     labels = {}
 
     def docker(cmd, **kwargs):
@@ -292,9 +293,13 @@ def test_docker_discovery_restores_submitted_termination_grace(monkeypatch, runt
         )
     ).run()
 
+    if legacy_container:
+        labels.pop("iris.termination_grace_ms")
+
     discovered = runtime.discover_containers()
 
     assert len(discovered) == 1
     assert discovered[0].task_id == "/user/checkpoint/0"
     assert discovered[0].attempt_id == 2
-    assert discovered[0].termination_grace == Duration.from_ms(60123)
+    expected = Duration.from_seconds(10) if legacy_container else Duration.from_ms(60123)
+    assert discovered[0].termination_grace == expected

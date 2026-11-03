@@ -371,6 +371,34 @@ def test_context_sharded_segment_ids_preserve_global_bounds():
 
 
 @pytest.mark.multidevice
+def test_packed_bounds_with_singleton_batch_mesh_axes():
+    # A length-1 batch axis named in the sharding cannot be physically partitioned;
+    # bounds must still build and match the unsharded result.
+    with use_test_devices(2) as devices:
+        segment_ids = jnp.asarray([[0, 0, 0, 1, 1, 1, -1, -1]], dtype=jnp.int32)
+
+        def bounds(ids):
+            return fa4_cute_segment_bounds(
+                AttentionMask.causal().with_segment_ids(ids),
+                batch_size=1,
+                seq_len=8,
+                sliding_window=None,
+            )
+
+        expected = bounds(segment_ids)
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 1, 2, 1, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        with jax.set_mesh(mesh):
+            ids = jax.device_put(segment_ids, NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None)))
+            actual = jax.jit(bounds)(ids)
+        for actual_array, expected_array in zip(actual, expected, strict=True):
+            np.testing.assert_array_equal(np.asarray(actual_array), np.asarray(expected_array))
+
+
+@pytest.mark.multidevice
 def test_context_sharded_query_blocks_keep_their_sequence_positions(monkeypatch):
     # Zigzag moves half of each shard's queries to balance causal work and contiguous keeps them in place;
     # under both, every query and its bounds must reach the kernel with its own position and come back to its row.

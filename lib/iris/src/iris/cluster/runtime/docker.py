@@ -58,6 +58,7 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import resolve_container_profile
 
@@ -1096,7 +1097,7 @@ class DockerRuntime:
             task_id = labels.get("iris.task_id", "")
             attempt_id_str = labels.get("iris.attempt_id")
             termination_grace_ms = labels.get("iris.termination_grace_ms")
-            if not task_id or attempt_id_str is None or termination_grace_ms is None:
+            if not task_id or attempt_id_str is None:
                 # Missing required labels — cannot adopt
                 continue
 
@@ -1120,7 +1121,11 @@ class DockerRuntime:
                     exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
                     started_at=state.get("StartedAt", ""),
                     workdir_host_path=workdir_host_path,
-                    termination_grace=Duration.from_ms(int(termination_grace_ms)),
+                    termination_grace=(
+                        Duration.from_ms(int(termination_grace_ms))
+                        if termination_grace_ms is not None
+                        else DEFAULT_TERMINATION_GRACE
+                    ),
                     ports=json.loads(labels.get("iris.ports", "{}")),
                 )
             )

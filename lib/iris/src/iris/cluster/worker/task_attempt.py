@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from finelog.client import LogClient, Table
@@ -96,6 +97,12 @@ _KILLABLE_STATES = (
     job_pb2.TASK_STATE_BUILDING,
     job_pb2.TASK_STATE_PENDING,
 )
+
+
+class _StopState(StrEnum):
+    RUNNING = "running"
+    GRACEFUL = "graceful"
+    FORCE = "force"
 
 
 def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
@@ -361,8 +368,7 @@ class TaskAttempt:
         self._container_handle: ContainerHandle | None = container_handle
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
-        self.should_stop: bool = False
-        self._graceful_stop = False
+        self._stop_state = _StopState.RUNNING
         self._output_stop = threading.Event()
 
     @classmethod
@@ -487,10 +493,17 @@ class TaskAttempt:
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
-        self.should_stop = True
+        if force:
+            self._stop_state = _StopState.FORCE
+        elif self._stop_state == _StopState.RUNNING:
+            self._stop_state = _StopState.GRACEFUL
         self._output_stop.set()
         if self._container_handle:
             self._container_handle.stop(force=force)
+
+    @property
+    def should_stop(self) -> bool:
+        return self._stop_state != _StopState.RUNNING
 
     def kill(self, term_timeout_ms: int | None = None) -> bool:
         """Stop this attempt, escalating to a force-kill on timeout.
@@ -506,12 +519,11 @@ class TaskAttempt:
         # Signal the execution thread immediately, even with no container yet:
         # this bails an in-progress BUILDING-phase bundle download.
         if not self.has_container:
-            self.should_stop = True
+            self._stop_state = _StopState.FORCE
             self._output_stop.set()
             return True
         try:
             assert self._container_handle is not None
-            self._graceful_stop = True
             self.stop(force=False)
             running = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
             stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
@@ -519,7 +531,6 @@ class TaskAttempt:
                 timeout=Duration.from_ms(term_timeout_ms),
             )
             if not stopped:
-                self._graceful_stop = False
                 with contextlib.suppress(RuntimeError):
                     self.stop(force=True)
         except RuntimeError:
@@ -988,7 +999,7 @@ class TaskAttempt:
                 return _TaskOutcome(job_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
 
             # Check if we should stop
-            if self.should_stop and not self._graceful_stop:
+            if self._stop_state == _StopState.FORCE:
                 handle.stop(force=True)
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
                 # Wait for the runtime to confirm the container has actually

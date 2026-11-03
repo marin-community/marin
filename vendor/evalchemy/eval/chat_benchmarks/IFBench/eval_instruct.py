@@ -26,6 +26,7 @@ class IFBenchBenchmark(BaseBenchmark):
     SOURCE = SourceRef("allenai/IFBench_test", "train")
     METRICS = ("strict_prompt_accuracy", "strict_instruction_accuracy", "loose_prompt_accuracy", "loose_instruction_accuracy")
     PRIMARY_METRIC = "strict_prompt_accuracy"
+    METRIC_KIND_OVERRIDES = {"strict_prompt_accuracy": "binary", "loose_prompt_accuracy": "binary"}
     """Instruction-following benchmark over ``allenai/IFBench_test``."""
 
     def __init__(
