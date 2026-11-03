@@ -505,12 +505,10 @@ def build_train_loader(
 
 
 def expert_collapsed_eval_mesh(train_mesh: Mesh) -> Mesh:
-    """Fold ``train_mesh``'s ``expert`` axis into ``data`` for the dropless eval.
+    """Return ``train_mesh`` with its ``expert`` axis folded into ``data``, for the dropless eval.
 
-    ``data`` and ``expert`` are adjacent, so a reshape keeps every device's ``context`` group and
-    makes its eval ``data`` group its training ``(data, expert)`` group. A collective over a device
-    group training never used makes XLA create an NCCL communicator that stays resident outside the
-    allocator pool.
+    Every device keeps its training ``context`` group, and its eval ``data`` group is its training
+    ``(data, expert)`` group, so eval collectives need no NCCL communicator that training lacks.
     """
     names = train_mesh.axis_names
     if names[names.index("data") + 1] != "expert":
