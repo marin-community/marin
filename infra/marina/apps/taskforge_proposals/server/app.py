@@ -12,14 +12,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from marina.applets import AppletServices
 from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
 from .proposal import body_sections
-from .schema import SCHEMA_STATEMENTS
+from .schema import SCHEMA_STATEMENTS, TS_CONFIG
 
 MAX_PAGE_SIZE = 200
 HISTOGRAM_BINS = 30
@@ -38,7 +38,7 @@ PROPOSAL_SORTS = {
     "completion_tokens": "completion_tokens {dir} NULLS LAST, capability_id, slot",
     "reasoning_tokens": "reasoning_tokens {dir} NULLS LAST, capability_id, slot",
     "prompt_tokens": "prompt_tokens {dir} NULLS LAST, capability_id, slot",
-    "rank": "ts_rank(search, websearch_to_tsquery('english', :q)) {dir}, capability_id, slot",
+    "rank": f"ts_rank(search, websearch_to_tsquery('{TS_CONFIG}', :q)) {{dir}}, capability_id, slot",
 }
 CAPABILITY_SORTS = {
     "id": "id {dir}",
@@ -97,28 +97,39 @@ class Where:
 
 
 def proposal_filter(
-    q: str | None,
-    capability: str | None,
-    domain: list[str],
-    kind: list[str],
-    environment: list[str],
-    verdict: list[str],
-    status: list[str],
-    cut_off: bool | None,
-    tokens: dict[str, tuple[int | None, int | None]],
+    q: str | None = None,
+    capability: str | None = None,
+    domain: list[str] = Query(default=[]),
+    kind: list[str] = Query(default=[]),
+    environment: list[str] = Query(default=[]),
+    verdict: list[str] = Query(default=[]),
+    status: list[str] = Query(default=[]),
+    cut_off: bool | None = None,
+    completion_tokens_min: int | None = None,
+    completion_tokens_max: int | None = None,
+    reasoning_tokens_min: int | None = None,
+    reasoning_tokens_max: int | None = None,
+    prompt_tokens_min: int | None = None,
+    prompt_tokens_max: int | None = None,
 ) -> Where:
+    """The proposal filters of the query string, shared by the table and the statistics."""
+    tokens = {
+        "completion_tokens": (completion_tokens_min, completion_tokens_max),
+        "reasoning_tokens": (reasoning_tokens_min, reasoning_tokens_max),
+        "prompt_tokens": (prompt_tokens_min, prompt_tokens_max),
+    }
     where = Where()
     if q and q.strip():
         q = q.strip()
         if CAPABILITY_LIKE.fullmatch(q):
             # Something shaped like a capability id also matches ids containing it; plain text uses the index.
             where.add(
-                "(search @@ websearch_to_tsquery('english', :q) OR capability_id ILIKE :q_like ESCAPE '\\')",
+                f"(search @@ websearch_to_tsquery('{TS_CONFIG}', :q) OR capability_id ILIKE :q_like ESCAPE '\\')",
                 q=q,
                 q_like="%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",
             )
         else:
-            where.add("search @@ websearch_to_tsquery('english', :q)", q=q)
+            where.add(f"search @@ websearch_to_tsquery('{TS_CONFIG}', :q)", q=q)
     if capability:
         where.add("capability_id = :capability", capability=capability)
     where.any_of("subject_id", "domain", domain)
@@ -149,22 +160,6 @@ def json_file(value: Any, filename: str, download: bool) -> Response:
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
-
-    def filters(
-        q: str | None = None,
-        capability: str | None = None,
-        domain: list[str] | None = None,
-        kind: list[str] | None = None,
-        environment: list[str] | None = None,
-        verdict: list[str] | None = None,
-        status: list[str] | None = None,
-        cut_off: bool | None = None,
-        **ranges: int | None,
-    ) -> Where:
-        tokens = {name: (ranges.get(f"{name}_min"), ranges.get(f"{name}_max")) for name in TOKEN_FIELDS}
-        return proposal_filter(
-            q, capability, domain or [], kind or [], environment or [], verdict or [], status or [], cut_off, tokens
-        )
 
     @api.get("/meta")
     def meta() -> dict[str, Any]:
@@ -202,41 +197,12 @@ def create_api(services: AppletServices) -> FastAPI:
 
     @api.get("/proposals")
     def proposals(
-        q: str | None = None,
-        capability: str | None = None,
-        domain: list[str] = Query(default=[]),
-        kind: list[str] = Query(default=[]),
-        environment: list[str] = Query(default=[]),
-        verdict: list[str] = Query(default=[]),
-        status: list[str] = Query(default=[]),
-        cut_off: bool | None = None,
-        completion_tokens_min: int | None = None,
-        completion_tokens_max: int | None = None,
-        reasoning_tokens_min: int | None = None,
-        reasoning_tokens_max: int | None = None,
-        prompt_tokens_min: int | None = None,
-        prompt_tokens_max: int | None = None,
+        where: Where = Depends(proposal_filter),
         sort: str = "capability",
         direction: str = Query(default="asc", alias="dir"),
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE),
     ) -> dict[str, Any]:
-        where = filters(
-            q,
-            capability,
-            domain,
-            kind,
-            environment,
-            verdict,
-            status,
-            cut_off,
-            completion_tokens_min=completion_tokens_min,
-            completion_tokens_max=completion_tokens_max,
-            reasoning_tokens_min=reasoning_tokens_min,
-            reasoning_tokens_max=reasoning_tokens_max,
-            prompt_tokens_min=prompt_tokens_min,
-            prompt_tokens_max=prompt_tokens_max,
-        )
         if sort == "rank" and "q" not in where.params:
             sort = "capability"
         order = PROPOSAL_SORTS.get(sort)
@@ -260,37 +226,8 @@ def create_api(services: AppletServices) -> FastAPI:
 
     @api.get("/stats")
     def stats(
-        q: str | None = None,
-        capability: str | None = None,
-        domain: list[str] = Query(default=[]),
-        kind: list[str] = Query(default=[]),
-        environment: list[str] = Query(default=[]),
-        verdict: list[str] = Query(default=[]),
-        status: list[str] = Query(default=[]),
-        cut_off: bool | None = None,
-        completion_tokens_min: int | None = None,
-        completion_tokens_max: int | None = None,
-        reasoning_tokens_min: int | None = None,
-        reasoning_tokens_max: int | None = None,
-        prompt_tokens_min: int | None = None,
-        prompt_tokens_max: int | None = None,
+        where: Where = Depends(proposal_filter),
     ) -> dict[str, Any]:
-        where = filters(
-            q,
-            capability,
-            domain,
-            kind,
-            environment,
-            verdict,
-            status,
-            cut_off,
-            completion_tokens_min=completion_tokens_min,
-            completion_tokens_max=completion_tokens_max,
-            reasoning_tokens_min=reasoning_tokens_min,
-            reasoning_tokens_max=reasoning_tokens_max,
-            prompt_tokens_min=prompt_tokens_min,
-            prompt_tokens_max=prompt_tokens_max,
-        )
         clause, params = where.sql(), where.params
 
         def grouped(key: str) -> list[dict[str, Any]]:

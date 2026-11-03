@@ -183,7 +183,6 @@ main { max-width: 1320px; margin: 0 auto; padding: 24px 24px 80px; }
 .spacer { flex: 1; }
 .stack > * + * { margin-top: 10px; }
 
-/* run picker */
 /* item table */
 .items { width: 100%; border-collapse: collapse; }
 .items th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); }

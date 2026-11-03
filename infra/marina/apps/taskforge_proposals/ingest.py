@@ -30,43 +30,31 @@ import requests
 from marina.client import DEFAULT_MARINA_URL, applet_query, marina_token_provider
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-# The serving package's section splitter, loaded by path: this script runs outside Marina's package layout.
-_spec = importlib.util.spec_from_file_location(
-    "taskforge_proposal_sections", Path(__file__).parent / "server" / "proposal.py"
+
+def _sibling(name: str, relative: str):
+    """Load a module of this app by path: this script runs outside Marina's package layout."""
+    spec = importlib.util.spec_from_file_location(f"taskforge_proposals_{name}", Path(__file__).parent / relative)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_sections, _schema, _usage = (
+    _sibling("sections", "server/proposal.py"),
+    _sibling("schema", "server/schema.py"),
+    _sibling("usage", "slot_usage.py"),
 )
-_sections = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_sections)
 body_sections, first_sentence = _sections.body_sections, _sections.first_sentence
+CAPABILITY_COLUMNS, PROPOSAL_COLUMNS = _schema.CAPABILITY_COLUMNS, _schema.PROPOSAL_COLUMNS
+USAGE_FIELDS, DEFAULT_RUN_ROOT, DEFAULT_USAGE = _usage.USAGE_FIELDS, _usage.DEFAULT_RUN_ROOT, _usage.DEFAULT_OUTPUT
 
 INGEST_VERSION = "1"
-DEFAULT_RUN_ROOT = "s3://marin-us-east-02a/marin/taskforge/proposals/curriculum-v3-n25-20261102/run"
-DEFAULT_USAGE = "s3://marin-us-east-02a/marin/taskforge/proposals/curriculum-v3-n25-20261102/derived/slot-usage"
 DEFAULT_CATALOG = (
     "s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/curriculum.json"
 )
 MAX_BATCH_BYTES = 1_000_000
 KEY_PAGE = 10_000
-USAGE_FIELDS = ("prompt_tokens", "completion_tokens", "reasoning_tokens", "cached_tokens")
 CUT_OFF_TEXT = "cut off"
-
-CAPABILITY_COLUMNS = (
-    "id TEXT, name TEXT, outcome TEXT, subject_id TEXT, domain TEXT, area TEXT, section_path TEXT, status TEXT, "
-    "slots_planned INTEGER, proposed INTEGER, accepted INTEGER, rejected INTEGER, cut_off INTEGER, "
-    "requests INTEGER, prompt_tokens BIGINT, completion_tokens BIGINT, reasoning_tokens BIGINT, "
-    "cached_tokens BIGINT, wall_time DOUBLE PRECISION, plan_prompt_tokens INTEGER, plan_completion_tokens INTEGER, "
-    "plan_reasoning_tokens INTEGER, coverage_rationale TEXT, git_sha TEXT, plan JSONB, result JSONB, "
-    "failure JSONB, catalog_entry JSONB, plan_request_path TEXT, plan_completions_path TEXT, source_key TEXT"
-)
-PROPOSAL_COLUMNS = (
-    "capability_id TEXT, slot INTEGER, subject_id TEXT, domain TEXT, area TEXT, status TEXT, title TEXT, "
-    "workflow TEXT, challenge TEXT, summary TEXT, plan_status TEXT, planned_verification TEXT, "
-    "planned_environment TEXT, verification TEXT, environment TEXT, solver_machine TEXT, grounding TEXT, "
-    "research_need TEXT, verdict TEXT, reason TEXT, cut_off BOOLEAN, failure TEXT, completions INTEGER, "
-    "prompt_tokens INTEGER, completion_tokens INTEGER, reasoning_tokens INTEGER, cached_tokens INTEGER, "
-    "finish_reasons JSONB, wall_time DOUBLE PRECISION, body_chars INTEGER, request_path TEXT, "
-    "completions_path TEXT, completions_bytes BIGINT, proposal JSONB, verdict_record JSONB, superseded BOOLEAN, "
-    "source_key TEXT"
-)
 
 
 def names(columns: str) -> list[str]:
@@ -102,7 +90,10 @@ def batches(rows: list[dict[str, Any]]) -> list[str]:
 
 
 def without_nul(value: Any) -> tuple[Any, int]:
-    """``value`` with each NUL character replaced by U+FFFD, which Postgres text and JSONB cannot hold."""
+    """``value`` with each NUL character replaced by U+FFFD, which Postgres text and JSONB cannot hold.
+
+    Returns the cleaned value and how many characters were replaced.
+    """
     if isinstance(value, str):
         count = value.count("\x00")
         return (value.replace("\x00", "\ufffd"), count) if count else (value, 0)
@@ -123,7 +114,8 @@ def digest(*parts: Any) -> str:
 
 
 def file_key(info: dict[str, Any] | None) -> str | None:
-    return None if info is None else f"{info['name']}|{info['size']}|{info.get('ETag', '')}"
+    """``slot_usage.file_key``, the key usage summaries are recorded under; ``None`` for a missing file."""
+    return None if info is None else _usage.file_key(info)
 
 
 def catalog_capabilities(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
