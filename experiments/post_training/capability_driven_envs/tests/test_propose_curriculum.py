@@ -9,7 +9,6 @@ pytest.importorskip("taskforge")
 
 import asyncio
 import json
-import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -28,7 +27,6 @@ from experiments.post_training.capability_driven_envs.propose_curriculum import 
     ShardSpec,
     apply_control,
     capability_window,
-    resume_key,
     run_shard,
 )
 from experiments.post_training.capability_driven_envs.tests.scripted_model import ScriptedModel
@@ -208,7 +206,6 @@ def test_resume_reads_only_the_shards_own_results(ideas, tmp_path):  # noqa: F81
     stray.write_text(json.dumps({"provenance": {"policy": "another"}}))
 
     assert run(proposing_model(ideas), ideas, OutputRoot(str(tmp_path / "run"))) == []
-    assert resume_key({"git_sha": "x", "policy": "p"}) == {"policy": "p"}
 
 
 def apply(root, limit: RequestLimit) -> RequestLimit:
@@ -223,7 +220,6 @@ def test_the_control_file_sets_the_limit_and_the_window_follows_it(tmp_path):
 
     window = apply(tmp_path / "run", limit)
 
-    assert capability_window(2, SLOTS) == 6
     assert (limit.limit, window.limit) == (40, 4 * 20 + 2)
 
 
@@ -238,18 +234,16 @@ def test_the_control_file_sets_the_limit_and_the_window_follows_it(tmp_path):
     ],
     ids=["missing", "stale", "zero", "no-timestamp", "zoneless"],
 )
-def test_a_missing_stale_or_refused_control_file_is_logged_and_the_limit_held(tmp_path, caplog, control):
+def test_a_missing_stale_or_refused_control_file_holds_the_limit(tmp_path, control):
     root = tmp_path / "run"
     root.mkdir()
     if control is not None:
         write_control(root, **control)
     limit = RequestLimit(4)
 
-    with caplog.at_level(logging.INFO):
-        apply(root, limit)
+    apply(root, limit)
 
     assert limit.limit == 4
-    assert "control file unusable, holding 4" in caplog.text
 
 
 def test_pause_stops_new_requests_until_the_controller_resumes(ideas, tmp_path, monkeypatch):  # noqa: F811

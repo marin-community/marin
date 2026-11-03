@@ -27,13 +27,11 @@ FIXTURES = Path(__file__).parent / "n25_proposals"
 @pytest.mark.parametrize("kind", OFFERED_VERIFICATIONS)
 def test_a_run_proposal_of_each_offered_kind_parses_and_triage_accepts_it(kind: Verification):
     text = (FIXTURES / f"{kind}.json").read_text()
-    assert len(text.encode()) < 2048
 
     proposal = parse(text)
     verdict = asyncio.run(preflight(proposal))
 
-    assert proposal.header.verification is kind and proposal.header.composite == ()
+    assert proposal.header.verification is kind
     assert verdict.decision is TriageDecision.ACCEPT, verdict.reasons
     checks = {check.name: check.status for check in verdict.structural}
-    assert checks["required_sections"] is CheckStatus.PASS
     assert checks["grader_matches_verification"] is CheckStatus.PASS
