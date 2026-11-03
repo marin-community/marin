@@ -118,6 +118,18 @@ def test_a_shard_writes_each_slot_and_a_provenanced_result_and_a_rerun_skips_it(
     assert run(rerun, ideas, root) == [] and rerun.requests == []
 
 
+def test_a_successful_rerun_deletes_the_failed_attempts_files(ideas, tmp_path):  # noqa: F811
+    capability = tmp_path / "run" / CAPABILITY_ID
+    capability.mkdir(parents=True)
+    (capability / FAILURE_FILE).write_text("{}")
+    (capability / "slot-02.failure.txt").write_text("cut off")
+
+    assert run(proposing_model(ideas), ideas, OutputRoot(str(tmp_path / "run"))) == []
+
+    assert not (capability / FAILURE_FILE).exists() and not (capability / "slot-02.failure.txt").exists()
+    assert (capability / "slot-02.proposal.json").exists() and (capability / RESULT_FILE).exists()
+
+
 def test_a_failed_plan_writes_a_failure_and_no_result(ideas, tmp_path):  # noqa: F811
     model = ScriptedModel()
     model.reply("not json")

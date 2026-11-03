@@ -154,6 +154,14 @@ class OutputRoot:
             await self._bounded(lambda path=path: self.fs.makedirs(path.rsplit("/", 1)[0], exist_ok=True))
             await self._bounded(lambda path=path, text=text: self.fs.pipe_file(path, text.encode()))
 
+    async def replace(self, directory: str, files: Mapping[str, str]) -> None:
+        """Delete an earlier attempt's files under ``directory`` that ``files`` does not name, then write ``files``."""
+        found = await self._bounded(lambda: self.fs.find(f"{self.root}/{directory}/"))
+        stale = [path for path in found if path[len(self.root) + 1 :] not in files]
+        if stale:
+            await self._bounded(lambda: self.fs.rm(stale))
+        await self.write(files)
+
 
 async def apply_control(root: OutputRoot, limit: RequestLimit, window: RequestLimit, slots: int) -> None:
     """Set ``limit`` and ``window`` from ``control.json``, ``{"concurrency_per_shard": N, "written_at": ...}`` or
@@ -297,7 +305,7 @@ async def run_shard(
     async def one(cid: str) -> None:
         async with window:
             try:
-                await root.write(await propose_capability(source, ideas[cid], spec))
+                await root.replace(cid, await propose_capability(source, ideas[cid], spec))
             except* CAPABILITY_ERRORS as group:
                 failed.append(cid)
                 error = "; ".join(map(repr, group.exceptions))[:4000]
