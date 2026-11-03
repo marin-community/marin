@@ -73,18 +73,30 @@ def test_lmh_passage_doc_drops_passage_keeps_qa():
     assert "C" in text  # answer kept
 
 
-def test_lmh_multiple_choice_doc_indexes_prompt_raw_fields_and_question_as_separate_records():
+def test_lmh_non_passage_doc_indexes_the_prompt_and_the_raw_fields_as_separate_records():
     doc = {"question": "Which planet is largest", "choices": ["Mars", "Jupiter"], "answer": "1"}
 
     views = _lmh_doc_views(doc, lambda d: f"{d['question']}\nA. Mars\nB. Jupiter\nAnswer:", _target)
 
+    # A short question gets no record of its own: it recurs in unrelated quizzes.
     assert views == [
         ("", "Which planet is largest\nA. Mars\nB. Jupiter\nAnswer:\n\n1"),
         # Choices follow the question on single lines, as dataset copies print them.
         ("-fields", "Which planet is largest\nMars\nJupiter"),
-        # Copies often drop the choices; the question alone is its own record.
-        ("-question", "Which planet is largest"),
     ]
+
+
+def test_lmh_multiple_choice_doc_indexes_a_long_question_alone():
+    question = (
+        "A box contains 4 white balls and 4 black balls. I draw them out of the box, one at a time. "
+        "What is the probability that all of my draws alternate colors?"
+    )
+    doc = {"question": question, "subject": "high_school_mathematics", "choices": ["1/35", "1/70"], "answer": 0}
+
+    views = dict(_lmh_doc_views(doc, lambda d: d["question"], _target))
+
+    # Copies in quiz pages and SFT prompts often drop the choices.
+    assert views["-question"] == question
 
 
 def test_lmh_raw_field_view_keeps_dataset_order_and_drops_labels():
