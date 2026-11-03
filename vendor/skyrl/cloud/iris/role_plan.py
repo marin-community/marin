@@ -406,7 +406,7 @@ def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
 
 
 def derive_generation_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
-    """Derive the local inference footprint for evaluation-only launches."""
+    """Derive an evaluation-only launch's footprint: its local engines, or the full plan when engines are remote."""
     values = _role_plan_values(config)
     if not values.run_engines_locally:
         return derive_role_plan(config)
