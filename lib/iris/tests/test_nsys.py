@@ -84,12 +84,12 @@ def test_selection_index_requires_a_task_context(monkeypatch: pytest.MonkeyPatch
 
 
 def test_default_output_uri_keys_on_the_job_and_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Resolved from the task's own MARIN_PREFIX (right cluster even under federation) and
+    """Resolved from the task's own storage backend (including under federation) and
     keyed on the job so a run's reports are findable and self-expiring."""
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     monkeypatch.setenv("IRIS_TASK_ID", "/rav/train-42/0")
     monkeypatch.setenv("IRIS_NUM_TASKS", "1")
-    assert default_output_uri() == "s3://marin-us-east-02a/tmp/ttl=30d/iris-profiles/rav/train-42"
+    assert default_output_uri() == "s3://marin-us-east-08a/tmp/ttl=30d/iris-profiles/rav/train-42"
 
 
 def test_build_nsys_argv_matches_what_the_container_allows() -> None:

@@ -22,8 +22,6 @@ from marin.rl.skyrl import (
     IrisSkyRLExecution,
     SkyRLRetentionPolicy,
     SkyRLRun,
-    SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -120,7 +118,6 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
             "eval_before_train": False,
             "eval_interval": -1,
             "ckpt_interval": steps,
-            "hf_save_interval": steps,
             "resume_mode": "none",
             "logger": "console",
             "project_name": "marin-task-session-validation",
@@ -129,7 +126,6 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     # Keep checkpoint and token evidence. Omit evaluation and database registration.
     trainer["callbacks"] = [
         {"type": "checkpoint", "save_steps": steps},
-        {"type": "hf_model_save", "save_steps": steps},
         {"type": "inference_stats", "log_every_steps": 1, "log_to_console": True, "log_to_tracker": True},
     ]
     config["generator"]["trajectory_retention"] = {
@@ -164,7 +160,6 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
             name=user_owned_name(f"{RUN_NAME}/{mode}/{recipe_fingerprint}"),
             version=version,
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=adopted_model,
                 relative_path="",
@@ -198,7 +193,6 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
             wandb_entity=None,
             job_timeout_seconds=3600,
         ),
-        export_hf=True,
     )
     return replace(run, run=run_canary)
 

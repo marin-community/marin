@@ -103,9 +103,14 @@ class K8sResource(Enum):
     # RBAC v1
     CLUSTER_ROLES = ("rbac.authorization.k8s.io", "v1", False, "clusterroles", "ClusterRole")
     CLUSTER_ROLE_BINDINGS = ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings", "ClusterRoleBinding")
+    ROLES = ("rbac.authorization.k8s.io", "v1", True, "roles", "Role")
+    ROLE_BINDINGS = ("rbac.authorization.k8s.io", "v1", True, "rolebindings", "RoleBinding")
 
     # Scheduling v1
     PRIORITY_CLASSES = ("scheduling.k8s.io", "v1", False, "priorityclasses", "PriorityClass")
+
+    # Cilium: egress allowlist policies for EGRESS_POLICY_ALLOWLIST pods.
+    CILIUM_NETWORK_POLICIES = ("cilium.io", "v2", True, "ciliumnetworkpolicies", "CiliumNetworkPolicy")
 
     # CoreWeave custom resources
     NODE_POOLS = ("compute.coreweave.com", "v1alpha1", False, "nodepools", "NodePool")

@@ -62,12 +62,11 @@ from iris.cluster.controller.rollout import (
     write_rollout_record,
 )
 from iris.cluster.dashboard_common import VUE_DIST_DIR
-from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.factory import ProviderBundle
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
-from iris.cluster.platforms.k8s.controller import PRINCIPAL_DIRECTORY_ENV_VAR, resolve_controller_env
+from iris.cluster.platforms.k8s.controller import PRINCIPAL_DIRECTORY_ENV_VAR, resolve_controller_secrets
 from iris.cluster.platforms.types import Labels
 from iris.cluster.provenance import is_same_image_provenance, provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
@@ -128,7 +127,7 @@ def _preflight_principal_references(config: IrisClusterConfig) -> IrisClusterCon
             assert_no_inlined_secrets(config)
         if config.auth and config.auth.principal_directory:
             if config.controller.controller_kind() == "coreweave":
-                directory = resolve_controller_env(config)[PRINCIPAL_DIRECTORY_ENV_VAR]
+                directory = resolve_controller_secrets(config)[PRINCIPAL_DIRECTORY_ENV_VAR]
             else:
                 directory = resolve_secret_spec(as_secret_spec(config.auth.principal_directory)).value
             auth = config.auth.model_copy(update={"principal_directory": directory})
@@ -921,10 +920,8 @@ def cluster_create_slice(ctx, scale_group_name: str):
 
     # Build the worker config through the same helper the controller uses, so a
     # manually created slice matches its autoscaler-provisioned peers.
-    # ``with_injected_task_env`` folds operator-injected env (defaults.inject_env)
-    # into task_env.
     base_worker_config = build_base_worker_config(
-        with_injected_task_env(config),
+        config,
         controller_address=worker_controller_address,
         storage_prefix=config.storage.remote_state_dir,
         auth_token=worker_token,
@@ -1657,7 +1654,7 @@ def worker_restart(
     with rpc_client_for_ctx(ctx, url=controller_url) as client:
         worker_token = client.renew_worker_token(controller_pb2.Controller.RenewWorkerTokenRequest()).token
         base_worker_config = build_base_worker_config(
-            with_injected_task_env(config),
+            config,
             controller_address=worker_controller_address,
             storage_prefix=config.storage.remote_state_dir,
             auth_token=worker_token,

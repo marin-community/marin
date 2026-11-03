@@ -1,10 +1,17 @@
 # Forking Policy
 
 When Marin needs a modified version of an upstream package, we maintain a fork
-under the `marin-community` GitHub organization rather than vendoring code into
-the Marin monorepo. Each fork carries Marin's patches on top of an upstream base,
-and an automated weekly process keeps it close to upstream. This page describes
-how Marin pins a fork and how the refresh runs.
+under the `marin-community` GitHub organization. Each fork carries Marin's
+patches on top of an upstream base, and an automated weekly process keeps it
+close to upstream. SkyRL is maintained under `vendor/skyrl` with an independent
+lock and executable boundary; see the [SkyRL runtime guide](skyrl.md).
+This page describes
+how Marin pins the remaining forks and how the refresh runs.
+
+Evalchemy and Harbor are maintained in `vendor/evalchemy` and `vendor/harbor`,
+each with an independent uv lock and local FineStore and Rigging sources. Both
+are excluded from the workspace and this fork-refresh process; evaluator changes
+land in the same Marin pull request as their callers.
 
 ## How Marin pins a fork
 
@@ -12,11 +19,8 @@ Forks except XLA are pinned under `config/external/`. Those pins feed
 `config/update-external.py`, which regenerates
 `lib/marin/src/marin/external_dependencies.py`; nothing else imports a fork
 revision directly. XLA uses the workspace wheel pin described below. There
-are four pin kinds:
+are three pin kinds:
 
-- Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`): the fork is a git
-  dependency in `config/external/<fork>/uv.lock`. `uv run
-  config/update-external.py <fork>` advances the lock and regenerates the pins.
 - Descriptor SHA (`vllm` TPU source, `tpu-inference`): the exact pair lives in
   `config/external/vllm/tpu.toml`. Its vLLM commit comes from the same maintained
   `main` lineage as GPU releases. The stack runs from an isolated `uvx`
@@ -39,14 +43,13 @@ gates. Never delay one lane solely to keep the source SHAs equal.
 ## The weekly refresh
 
 `.github/workflows/ops-fork-ferry.yaml` runs every Monday at 08:00 UTC. It has one
-matrix leg per fork unit (`tpu-vllm`, `vllm-gpu`, `evalchemy`, `harbor`). Each leg
+matrix leg per fork unit (`tpu-vllm`, `vllm-gpu`). Each leg
 mints a GitHub OIDC token, exchanges it for a short-lived Loom token, and launches
-one Weaver session for that unit. The `fork-ferry` Loom profile admits all four
+one Weaver session for that unit. The `fork-ferry` Loom profile admits both
 scheduled units; a test keeps its concurrency limit at or above the matrix size.
 There is no stored PAT.
 
-`MarinSkyRL` is pinned and refreshable through the skill on demand, but is not yet
-in the weekly rotation. A human runs the skill for a single fork the same way.
+A human can run the skill for a single fork on demand.
 
 The session follows `.agents/skills/refresh-fork/SKILL.md` and the fork's guide.
 It selects a source, replays Marin's patches when needed, and runs the declared
@@ -69,9 +72,6 @@ Each descriptor names one required e2e that runs before the PR opens:
 |------|------------|
 | `vllm` TPU source, `tpu-inference` | `marin-community/vllm:.github/workflows/marin-gpu-release.yaml#tpu` (Qwen3-0.6B TP8 on `v6e-8`) |
 | `vllm` (GPU) | `tests/cluster/vllm/test_snowball_backend_parity.py` |
-| `evalchemy` | `experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml` |
-| `harbor` | `experiments/evaluation/configs/harbor/aime-smoke.yaml` |
-| `MarinSkyRL` | `experiments/post_training/iceball_micro.py` |
 
 When an e2e fails, the refresh reruns the same workload against Marin's current
 pins on the old fork stack. It fixes only failures that pass on the old stack and
@@ -114,9 +114,6 @@ promotion. Its paired tpu-inference refresh still follows the normal
 | vLLM TPU source | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | exact `main`-line SHA (`tpu.toml`) |
 | vllm (GPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | release wheel from `main` (`gpu.toml`) |
 | tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | descriptor SHA (`tpu.toml`) |
-| evalchemy | [`marin-community/evalchemy`](https://github.com/marin-community/evalchemy) | [`mlfoundations/evalchemy`](https://github.com/mlfoundations/evalchemy) | isolated uv lock |
-| harbor | [`marin-community/harbor`](https://github.com/marin-community/harbor) | [`harbor-framework/harbor`](https://github.com/harbor-framework/harbor) | isolated uv lock |
-| MarinSkyRL | [`marin-community/MarinSkyRL`](https://github.com/marin-community/MarinSkyRL) | [`NovaSky-AI/SkyRL`](https://github.com/NovaSky-AI/SkyRL) | isolated uv lock |
 | xla | [`marin-community/xla`](https://github.com/marin-community/xla) | [`openxla/xla`](https://github.com/openxla/xla) | wheel URL in `lib/marin/pyproject.toml` (gpu extra) |
 
 ## The XLA fork

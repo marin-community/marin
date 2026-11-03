@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
+from urllib.parse import urlsplit
 
 from marin.evaluation.eval_policy import source_config_digest
-from marin.evaluation.evalchemy.config import EvalchemyConfig
+from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_NUM_CONCURRENT,
     EvalchemyRunConfig,
@@ -21,12 +22,11 @@ from marin.evaluation.evalchemy.runner import (
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
-from marin.evaluation.harbor.driver_config import ValidatedHarborConfig
+from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
+from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef, ModelConfigRef
 from marin.evaluation.runner import EvalExecutor
-from marin.external_dependencies import ExternalDependency
 from rigging.secrets import SecretSpec
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,14 @@ _TOGETHER_API_KEY_SECRET: SecretSpec = (
     "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
 )
 _VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API_KEY": _TOGETHER_API_KEY_SECRET})
+# Destinations beyond Iris's base egress allowlist (iris.cluster.egress). The
+# orchestrator job declares them; they take effect on clusters that enforce the
+# allowlist.
+_DAYTONA_EGRESS: tuple[str, ...] = ("app.daytona.io", "*.app.daytona.io")
+# Harbor's dataset registry, a Supabase project (Harbor's HARBOR_SUPABASE_URL).
+_HARBOR_REGISTRY_EGRESS: tuple[str, ...] = ("hlqxxzsirfrgeqasvaps.supabase.co",)
+# MRCR loads tiktoken's o200k_base encoding, which tiktoken downloads at import.
+_EVALCHEMY_EGRESS: Mapping[str, tuple[str, ...]] = MappingProxyType({"mrcr": ("openaipublic.blob.core.windows.net",)})
 
 # Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
 _EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
@@ -58,6 +66,15 @@ class EvalchemyDefinition:
     config_path: Path
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
     family: str | None = None
+    egress_allow: tuple[str, ...] = ()
+
+    def egress_allow_for(self, config: EvalchemyRunConfig) -> tuple[str, ...]:
+        """Egress rules for the evaluation's own downloads and its external judge."""
+        if config.judge is None:
+            return self.egress_allow
+        judge_host = urlsplit(config.judge.base_url).hostname
+        assert judge_host is not None, "EvalchemyJudgeConfig requires a URL with a host"
+        return (*self.egress_allow, judge_host)
 
     def secret_env_for(self, config: EvalchemyRunConfig) -> Mapping[str, SecretSpec]:
         secret_env = dict(self.secret_env)
@@ -87,15 +104,17 @@ class EvalchemyDefinition:
             ),
             evalchemy=EvalchemyRef(
                 apply_chat_template=config.apply_chat_template,
+                chat_tokenizer_backend=config.chat_tokenizer_backend,
                 debug=config.debug,
+                prompt_budget_preflight=config.prompt_budget_preflight,
                 max_gen_toks=config.max_gen_toks,
                 max_eval_instances=config.max_eval_instances,
                 num_concurrent=config.num_concurrent,
                 batch_size=config.batch_size,
                 seed=config.seed,
                 extra_gen_kwargs=dict(config.extra_gen_kwargs),
-                chat_template_kwargs=dict(config.chat_template_kwargs),
                 extra_model_args=dict(config.extra_model_args),
+                chat_template_kwargs=dict(config.chat_template_kwargs),
                 max_length=config.max_length,
                 judge=(
                     EvalchemyJudgeRef(base_url=config.judge.base_url, model=config.judge.model)
@@ -105,10 +124,8 @@ class EvalchemyDefinition:
             ),
         )
 
-    def config_for(
-        self, source: EvalchemyConfig, model: ModelConfig, limit: int | None, dependency: ExternalDependency
-    ) -> EvalchemyRunConfig:
-        config = evalchemy_run_config(self.name, source, dependency)
+    def config_for(self, source: EvalchemyConfig, model: ModelConfig, limit: int | None) -> EvalchemyRunConfig:
+        config = evalchemy_run_config(self.name, source)
         effective_limit = config.max_eval_instances if limit is None else limit
         model_max_gen_toks = model.generation.max_gen_toks
         max_gen_toks = config.max_gen_toks
@@ -123,20 +140,38 @@ class EvalchemyDefinition:
                     self.name,
                     max_gen_toks,
                 )
+        chat_template_kwargs = {
+            **model.generation.chat_template_kwargs,
+            **config.chat_template_kwargs,
+        }
+        if config.chat_template_kwargs.get("enable_thinking") is False and model.generation.thinking_off_template_kwargs:
+            chat_template_kwargs.pop("enable_thinking")
+            chat_template_kwargs.update(model.generation.thinking_off_template_kwargs)
         return replace(
             config,
             apply_chat_template=(
                 model.apply_chat_template if source.apply_chat_template is None else source.apply_chat_template
             ),
             max_gen_toks=max_gen_toks,
+            num_concurrent=(
+                min(config.num_concurrent, model.evalchemy_num_concurrent)
+                if model.evalchemy_num_concurrent is not None
+                else config.num_concurrent
+            ),
             max_eval_instances=effective_limit,
             extra_gen_kwargs={
                 **config.extra_gen_kwargs,
                 **model.generation.extra_gen_kwargs,
             },
-            chat_template_kwargs={
-                **model.generation.chat_template_kwargs,
-                **config.chat_template_kwargs,
+            chat_template_kwargs=chat_template_kwargs,
+            extra_model_args={
+                **config.extra_model_args,
+                **(
+                    {"revision": model.effective_tokenizer_revision}
+                    if config.chat_tokenizer_backend == ChatTokenizerBackend.HUGGING_FACE
+                    and model.effective_tokenizer_revision is not None
+                    else {}
+                ),
             },
         )
 
@@ -149,6 +184,13 @@ class HarborDefinition:
     config_path: Path
     max_eval_instances: int | None = None
     family: str | None = None
+
+    def egress_allow_for(self, config: ValidatedHarborConfig) -> tuple[str, ...]:
+        """Egress rules for the Harbor driver's sandbox service and dataset registry."""
+        rules = _DAYTONA_EGRESS if config.environment == _DAYTONA_ENVIRONMENT_TYPE else ()
+        if config.dataset_kind == HarborDatasetKind.HARBOR_REGISTRY:
+            rules = (*rules, *_HARBOR_REGISTRY_EGRESS)
+        return rules
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
@@ -188,13 +230,18 @@ class HarborDefinition:
         config: ValidatedHarborConfig,
         model: ModelConfig,
         runtime_task_limit: int | None,
+        retry_unscored_trials: bool,
+        judge_model: ModelConfig | None,
     ) -> EvalExecutor:
         secret_env = self.secret_env_for(config)
         return HarborExecutor(
             config=config,
             task_limit=runtime_task_limit,
             model_agent_kwargs=harbor_model_agent_kwargs(model),
+            model_config=ModelConfigRef.model_validate(asdict(model)),
+            judge_config=ModelConfigRef.model_validate(asdict(judge_model)) if judge_model is not None else None,
             secret_env_keys=tuple(secret_env),
+            retry_unscored_trials=retry_unscored_trials,
         )
 
 
@@ -219,7 +266,7 @@ def harbor_definition(
     )
 
 
-def evalchemy_run_config(name: str, config: EvalchemyConfig, dependency: ExternalDependency) -> EvalchemyRunConfig:
+def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConfig:
     """Lower one launch file into Marin's served Evalchemy runner."""
     tasks: list[EvalTaskConfig] = []
     for task_name in config.tasks:
@@ -256,18 +303,21 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig, dependency: Externa
         name=name,
         tasks=tuple(tasks),
         apply_chat_template=config.apply_chat_template or False,
+        chat_tokenizer_backend=config.chat_tokenizer_backend,
         debug=config.debug,
+        prompt_budget_preflight=config.prompt_budget_preflight,
         max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,
         batch_size=config.batch_size,
         seed=config.seed,
         extra_gen_kwargs=extra_gen_kwargs,
-        chat_template_kwargs=dict(config.chat_template_kwargs),
         extra_model_args=extra_model_args,
+        chat_template_kwargs=dict(config.chat_template_kwargs),
         max_length=config.max_length,
         runtime=EvalchemyRuntimeConfig(
-            requirement=dependency.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
+            extras=(*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras),
+            memory=config.runtime_memory if config.runtime_memory is not None else EvalchemyRuntimeConfig.memory,
         ),
         judge=config.judge,
     )
@@ -309,6 +359,7 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "ifeval",
     "ifbench",
     "mrcr",
+    "graphwalks",
 )
 
 EVALS: dict[str, EvaluationDefinition] = {
@@ -316,6 +367,7 @@ EVALS: dict[str, EvaluationDefinition] = {
         name=name,
         config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml",
         family=_EVAL_FAMILIES.get(name),
+        egress_allow=_EVALCHEMY_EGRESS.get(name, ()),
     )
     for name in _STANDARD_EVALCHEMY_EVALS
 }

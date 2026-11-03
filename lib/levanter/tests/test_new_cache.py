@@ -560,13 +560,16 @@ def _make_levanter_records(n: int) -> list[dict[str, list[int]]]:
     return [{"input_ids": [i, i + 100], "attention_mask": [1, 1]} for i in range(n)]
 
 
-def test_write_levanter_cache_end_to_end():
+@pytest.mark.parametrize("max_pending_batches", [1, 128])
+def test_write_levanter_cache_end_to_end(max_pending_batches):
     """Write records and verify they can be read back."""
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = str(Path(tmpdir) / "cache")
         records = _make_levanter_records(8)
 
-        result = write_levanter_cache(iter(records), output_path, metadata={})
+        result = write_levanter_cache(
+            iter(records), output_path, metadata={}, batch_size=2, max_pending_batches=max_pending_batches
+        )
 
         assert result["path"] == output_path
         assert result["count"] == len(records)

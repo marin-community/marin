@@ -297,7 +297,8 @@ def split_automatic_stages(
     return tuple(trainable_stages), tuple(static_stages)
 
 
-def _process_has_sharding(sharding: NamedSharding) -> bool:
+def process_has_sharding(sharding: NamedSharding) -> bool:
+    """Return whether this process owns devices in the stage sharding."""
     process_index = jax.process_index()
     return any(device.process_index == process_index for device in sharding.mesh.devices.flat)
 
@@ -307,7 +308,7 @@ def _empty_sharded_array(shape: tuple[int, ...], dtype, sharding: NamedSharding)
 
 
 def _stage_local_scalar(value: jax.Array, sharding: NamedSharding) -> jax.Array:
-    if not _process_has_sharding(sharding):
+    if not process_has_sharding(sharding):
         return _empty_sharded_array((), value.dtype, sharding)
     return jax.device_put(np.asarray(value), sharding)
 
@@ -316,7 +317,7 @@ def _localize_optimizer_scalars(mpmd_mesh, stage_index: int, opt_state):
     stage_mesh = mpmd_mesh.unstack[stage_index]
 
     def localize(value):
-        if _is_array(value) and value.shape == ():
+        if is_pipeline_array(value) and value.shape == ():
             return _stage_local_scalar(value, NamedSharding(stage_mesh, P()))
         return value
 
@@ -449,15 +450,18 @@ def _automatic_schedule(config: GrugMoePipelineConfig, schedule_name: AutomaticP
     raise ValueError(f"unknown automatic pipeline schedule: {schedule_name}")
 
 
-def _is_array(value: object) -> TypeGuard[_ArrayValue]:
+def is_pipeline_array(value: object) -> TypeGuard[_ArrayValue]:
+    """Recognize concrete, abstract, and MPMD pipeline arrays."""
     if isinstance(value, (jax.Array, jax.ShapeDtypeStruct)):
         return True
     return jaxpp is not None and isinstance(value, jaxpp.MpmdArray)
 
 
-def _partition_spec_tree(tree):
+def partition_spec_tree(tree):
+    """Map array leaves to their stage partition specs."""
+
     def partition_spec(value):
-        if not _is_array(value):
+        if not is_pipeline_array(value):
             return None
         if isinstance(value.sharding, NamedSharding):
             return value.sharding.spec
@@ -472,7 +476,7 @@ def _mpmd_sharding_tree(mpmd_mesh, stage_index: int, tree):
     pp, _ = _jaxpp_modules()
 
     def sharding(value):
-        if not _is_array(value):
+        if not is_pipeline_array(value):
             return None
         spec = value.sharding.spec if isinstance(value.sharding, NamedSharding) else P(*([None] * value.ndim))
         return pp.MpmdSharding(mpmd_mesh, mesh_ids={stage_index}, spec=spec)
@@ -568,8 +572,8 @@ def make_automatic_pipeline_step(
     return pp.mpmd_jit_with_loop(
         pipeline_step,
         mpmd_mesh=mpmd_mesh,
-        in_specs=(_partition_spec_tree(sample_state), _partition_spec_tree(sample_batches), P()),
-        out_specs=(_partition_spec_tree(sample_state), {TRAIN_LOSS_KEY: P()}),
+        in_specs=(partition_spec_tree(sample_state), partition_spec_tree(sample_batches), P()),
+        out_specs=(partition_spec_tree(sample_state), {TRAIN_LOSS_KEY: P()}),
     )
 
 
@@ -590,7 +594,7 @@ def prepare_automatic_mpmd_step(
         raise ValueError("automatic pipeline step does not accept keyword arguments")
 
     def place_initial_scalar(value, target):
-        if not _is_array(value) or isinstance(value, pp.MpmdArray):
+        if not is_pipeline_array(value) or isinstance(value, pp.MpmdArray):
             return value
         if value.shape != ():
             return value
@@ -598,7 +602,7 @@ def prepare_automatic_mpmd_step(
         local_arrays = []
         for stage_index in sorted(mesh_ids):
             sharding = NamedSharding(mpmd_mesh.unstack[stage_index], target.spec)
-            if _process_has_sharding(sharding):
+            if process_has_sharding(sharding):
                 local_arrays.append(jax.device_put(np.zeros((), dtype=value.dtype), sharding))
         return pp.MpmdArray(
             local_arrays,

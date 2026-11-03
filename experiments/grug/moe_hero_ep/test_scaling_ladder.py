@@ -9,6 +9,7 @@ import jax.tree_util as jtu
 import optax
 import pytest
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import launch_scaling_ladder
@@ -171,21 +172,31 @@ def test_d6144_rejects_a_schedule_that_would_rebuild_its_history_differently():
         build_ladder_run(run_id="test-d6144-steps", size="d6144", num_steps=300_000, version="dev")
 
 
-def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
+@pytest.mark.parametrize(("size", "bucket"), [("d6144", "hero-checkpoints"), ("d768", "marin-us-east-08a")])
+def test_scaling_ladder_keeps_hero_checkpoints_separate_from_shared_scratch(monkeypatch, size, bucket):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
-    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
-    step = build_ladder_run(run_id="test-d6144", size="d6144", version="2026.08.18")
-    output_path = "s3://marin-us-east-02a/marin/grug/test-d6144/v"
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://marin-us-east-08a")
+    run_id = f"test-{size}"
+    step = build_ladder_run(run_id=run_id, size=size, version="2026.08.18")
+    output_path = f"s3://marin-us-east-02a/marin/grug/{run_id}/v"
     ctx = dataclasses.replace(
         StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps),
         output_path=output_path,
     )
 
     trainer = step.build_config(ctx).trainer.trainer
-    assert trainer.checkpoint_search_paths("test-d6144") == [
+    temporary_path = f"s3://{bucket}/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/{run_id}/v/checkpoints"
+    search_paths = [
         f"{output_path}/checkpoints",
-        "s3://hero-checkpoints/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
+        temporary_path,
     ]
+    if size != "d6144":
+        search_paths.extend(
+            f"s3://{previous}/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/{run_id}/v/checkpoints"
+            for previous in ("marin-us-east-02a", "hero-checkpoints")
+        )
+    assert trainer.checkpoint_search_paths(run_id) == search_paths
+    assert trainer.checkpointer.temporary_base_path == temporary_path
 
 
 def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
@@ -262,3 +273,64 @@ def test_hero_context_history_rebuilds_the_prior_phases_it_trained_with(monkeypa
         ),
     ]
     assert config.flops_baseline == FlopsBaseline(completed_steps=350_400, total_flops=2e24)
+
+
+def test_hero_without_context_parallelism_keeps_its_16k_layout(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 16384)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 1)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_BALANCE_ATTENTION_ROWS", False)
+    step = build_ladder_run(
+        run_id="test-d6144-cp1",
+        size="d6144",
+        version="dev",
+        context_phases=(HarrierContextPhase(end_step=257_553, seq_len=4096),),
+        flops_baseline_total=1.8e24,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.expert_axis_size == 64
+    assert config.trainer.trainer.mesh == MeshConfig()
+    assert config.eval.eval_batch_size == 704
+
+
+def test_hero_context_parallelism_splits_each_rack_into_expert_and_sequence_shards(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 65536)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_BALANCE_ATTENTION_ROWS", True)
+    step = build_ladder_run(
+        run_id="test-d6144-cp4",
+        size="d6144",
+        qk_mult=1.66,
+        version="dev",
+        context_phases=(
+            HarrierContextPhase(end_step=257_553, seq_len=4096),
+            HarrierContextPhase(end_step=376_900, seq_len=16384),
+        ),
+        flops_baseline_total=2e24,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.expert_axis_size == 16
+    mesh_axes, _ = config.trainer.trainer.mesh.axis_shapes(num_devices=704, num_slices=1)
+    assert (mesh_axes["data"], mesh_axes["context"]) == (176, 4)
+    # One 65,536-token sequence per batch shard: 16,384 tokens per device per eval batch, as at 16K.
+    assert config.eval.eval_batch_size == 16 * 11
+
+
+def test_hero_context_axis_must_divide_the_sequence(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 16386)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+    with pytest.raises(ValueError, match="context_axis_size=4 must divide max_seq_len=16386"):
+        build_ladder_run(run_id="test-d6144-seq", size="d6144", version="dev")
+
+
+def test_hero_context_axis_must_split_the_expert_bank(monkeypatch):
+    # EP16 x CP4 stores the bank over 64 shards; 32 experts pass a 16-way expert check but fail parameter init.
+    monkeypatch.setattr(
+        launch_scaling_ladder,
+        "HERO_MODEL_CONFIG",
+        dataclasses.replace(launch_scaling_ladder.HERO_MODEL_CONFIG, num_experts=32),
+    )
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+    with pytest.raises(ValueError, match=r"must be divisible by expert \(16\) \* context \(4\) = 64"):
+        build_ladder_run(run_id="test-d6144-bank", size="d6144", version="dev")

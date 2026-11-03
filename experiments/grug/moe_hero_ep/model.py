@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
@@ -18,10 +19,10 @@ import jax.numpy as jnp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call, tree_checkpoint_name
-from haliax.nn import ArrayStacked
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
+from levanter.layers.stacked import ArrayStacked
 
 try:
     from jax.shard_map import shard_map
@@ -29,10 +30,16 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.common import (
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
+    _zero_dropped_assignments,
+    padding_skipped_assignments,
+)
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
+    DEFAULT_CONTEXT_ATTENTION_LAYOUT,
     AttentionMask,
+    ContextAttentionLayout,
     GrugAttentionImplementation,
     RotaryConfig,
     align_kv_heads,
@@ -104,7 +111,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     if mesh is None or mesh.empty:
         raise ValueError("grug/moe_hero_ep requires a non-empty abstract mesh")
     if axis_name not in mesh.shape:
-        # compact_grug_mesh standardizes on (replica_dcn, data, context, expert, model) with length-1
+        # compact_grug_mesh standardizes on (replica_dcn, data, expert, context, model) with length-1
         # axes kept, so any missing axis is a caller bug rather than a "size 1" shortcut.
         raise ValueError(f"grug/moe_hero_ep requires an abstract mesh with axis '{axis_name}'")
     return int(mesh.shape[axis_name])
@@ -155,6 +162,40 @@ def _token_spec() -> P:
 def _activation_spec(x: Float[Array, "B S D"]) -> P:
     """Preserve the input residual layout after an MLP flattens and restores tokens."""
     return _partition_spec_of(x) or _batch_spec()
+
+
+def _flatten_tokens(x: jax.Array) -> jax.Array:
+    """Merge ``[B, S, ...]`` into the token axis without moving data between devices.
+
+    Each device flattens its own block of rows and sequence shard. With a context-sharded sequence the
+    token order is therefore shard-major rather than the global ``(b s)`` order; with an unsharded
+    sequence the two orders agree. Per-token computations do not depend on the order, and
+    `_unflatten_tokens` inverts it.
+    """
+    mesh = get_abstract_mesh()
+    trailing = (None,) * (x.ndim - 2)
+    residual_spec = P(_BATCH_AXES, _seq_axis(mesh), *trailing)
+    return shard_map(
+        lambda local: rearrange(local, "b s ... -> (b s) ..."),
+        mesh=mesh,
+        in_specs=residual_spec,
+        out_specs=P(_token_axes(mesh), *trailing),
+    )(reshard(x, residual_spec))
+
+
+def _unflatten_tokens(x_flat: jax.Array, like: Float[Array, "B S D"]) -> jax.Array:
+    """Invert `_flatten_tokens` and restore ``like``'s residual layout."""
+    mesh = get_abstract_mesh()
+    trailing = (None,) * (x_flat.ndim - 1)
+    token_spec = P(_token_axes(mesh), *trailing)
+    local_rows = like.shape[0] // math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
+    restored = shard_map(
+        lambda local: rearrange(local, "(b s) ... -> b s ...", b=local_rows),
+        mesh=mesh,
+        in_specs=token_spec,
+        out_specs=P(_BATCH_AXES, _seq_axis(mesh), *trailing),
+    )(reshard(x_flat, token_spec))
+    return reshard(restored, _activation_spec(like))
 
 
 def _router_top_k(logits: Float[Array, "T E"], k: int) -> Int[Array, "T K"]:
@@ -269,6 +310,10 @@ class GrugModelConfig:
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
+    attention_context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT
+    """Query-row layout for FA4 under context parallelism. "zigzag" balances causal work across
+    context shards at the cost of a query swap and a second kernel launch per call; it pays off at 262K
+    but costs 0.7% at 65K, where the hero should use "contiguous". See README "Context-length switches"."""
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
     pooled_transport_capacity_factor: float | None = None
@@ -282,6 +327,10 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    ce_grad_in_forward_token_block_size: int | None = None
+    """Rows per scan step of a reduced training loss whose forward also computes its gradients:
+    3 GEMMs instead of the "xla_fast_bwd" kernel's 4, holding the [B, D] and [D, V] gradients
+    from the forward to the backward. None keeps "xla_fast_bwd"."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -323,9 +372,11 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.pooled_transport_capacity_factor is not None and self.pooled_transport_capacity_factor <= 0:
             raise ValueError("pooled_transport_capacity_factor must be positive")
-        if self.moe_implementation == "fixed_pooled_wave_all_to_all":
-            if self.pooled_transport_capacity_factor is None:
-                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
+        if (
+            self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
+            and self.pooled_transport_capacity_factor is None
+        ):
+            raise ValueError(f"{self.moe_implementation} requires pooled_transport_capacity_factor")
         if self.num_expert_waves <= 0:
             raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:
@@ -677,7 +728,14 @@ class CausalSelfAttention(eqx.Module):
             q = _reshard_sequence_axis(q, seq_axis)
             k = _reshard_sequence_axis(k, None)
             v = _reshard_sequence_axis(v, None)
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        attn_out = attention(
+            q,
+            k,
+            v,
+            mask,
+            implementation=self.cfg.attention_implementation,
+            context_layout=self.cfg.attention_context_layout,
+        )
         if seq_axis is not None:
             attn_out = _reshard_sequence_axis(attn_out, residual_seq_axis)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
@@ -776,17 +834,11 @@ class DenseMLP(eqx.Module):
         else:
             activation_fn = activation
 
-        b, s, _ = x.shape
-        # Flattening sequence shards requires an all-to-all when a device owns multiple
-        # batch rows; restoring the residual layout exchanges them back.
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
+        x_flat = _flatten_tokens(x)
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
-        # Reshard after the reshape so the shared-expert output carries the same sharding as the
-        # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
-        # for why the unflattened tensor cannot keep the fused token tuple.
-        return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
+        return _unflatten_tokens(out_flat, x)
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -1022,9 +1074,8 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
         token_valid: Bool[Array, "B S"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        b, s, _ = x.shape
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
-        token_valid_flat = reshard(rearrange(token_valid, "b s -> (b s)"), _token_spec())
+        x_flat = _flatten_tokens(x)
+        token_valid_flat = _flatten_tokens(token_valid)
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
@@ -1148,9 +1199,7 @@ class MoEMLP(eqx.Module):
                 out_sharding=_token_spec(),
             )
 
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _activation_spec(x))
-        return routed, router_stats
+        return _unflatten_tokens(routed_flat, x), router_stats
 
 
 class Block(eqx.Module):
@@ -1429,6 +1478,11 @@ class Transformer(eqx.Module):
         # against an older run, this is why. Set LEVANTER_CE_XLA_FAST_BWD=0 to
         # force the old backward back on without editing code, or swap this to
         # implementation="xla" for a code-level A/B.
+        # A per-token loss has no fixed row cotangents, so it keeps "xla_fast_bwd".
+        grad_in_forward_token_block_size = (
+            self.config.ce_grad_in_forward_token_block_size if reduction != "none" else None
+        )
+        grad_in_forward = grad_in_forward_token_block_size is not None
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
@@ -1437,8 +1491,9 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
-            implementation="xla_fast_bwd",
-            block_sizes=_CE_BLOCK_SIZES,
+            implementation=None if grad_in_forward else "xla_fast_bwd",
+            block_sizes=None if grad_in_forward else _CE_BLOCK_SIZES,
+            grad_in_forward_token_block_size=grad_in_forward_token_block_size,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
@@ -1481,9 +1536,9 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
         raise ValueError(f"num_devices must be positive, got {num_devices}")
     expert = 2 if num_devices % 2 == 0 else 1
     data = max(1, num_devices // expert)
-    axis_names = ("replica_dcn", "data", "context", "expert", "model")
+    axis_names = ("replica_dcn", "data", "expert", "context", "model")
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, data, 1, expert, 1),
+        axis_sizes=(1, data, expert, 1, 1),
         axis_names=axis_names,
         axis_types=(jax.sharding.AxisType.Explicit,) * len(axis_names),
     )

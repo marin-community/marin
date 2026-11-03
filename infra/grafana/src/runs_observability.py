@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Two bounded sources shared by the multi-run training dashboard."""
+"""Bounded metric and power source groups for the multi-run training dashboard."""
 
 from dashboard_dataset import DashboardDataset, SourceQuery, bounded_bucket_ms, validate_values
 from vllm_observability import sql_values
@@ -38,8 +38,9 @@ def runs_overview_dataset(
     start_ms: int,
     end_ms: int,
     requested_bucket_ms: int,
+    view: str | None = None,
 ) -> DashboardDataset:
-    """Build bounded multi-run metric and GPU-attribution sources."""
+    """Build the requested metric or power source group, or both groups when view is None."""
     validate_values("clusters", clusters, max_values=RUNS_MAX_CLUSTERS, max_length=RUNS_IDENTITY_MAX_LENGTH)
     validate_values("runs", runs, max_values=RUNS_MAX_RUNS, max_length=RUNS_IDENTITY_MAX_LENGTH)
     bucket_ms = bounded_bucket_ms(
@@ -202,13 +203,22 @@ GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
     }
+    sources = {
+        "metrics": SourceQuery("metrics", metrics_sql, RUNS_MAX_METRIC_ROWS),
+        "power": SourceQuery("power", power_sql, RUNS_MAX_POWER_ROWS),
+    }
+    source_group = "all"
+    if view is not None:
+        if view not in views:
+            raise ValueError(f"unknown Runs overview view {view!r}")
+        source_group = "power" if view == "power" else "metrics"
+        sources = {source_group: sources[source_group]}
+        views = {name: sql for name, sql in views.items() if (name == "power") == (source_group == "power")}
+
     return DashboardDataset(
         name="Runs overview",
-        cache_key=(clusters, runs, start_ms, end_ms, bucket_ms),
-        sources=(
-            SourceQuery("metrics", metrics_sql, RUNS_MAX_METRIC_ROWS),
-            SourceQuery("power", power_sql, RUNS_MAX_POWER_ROWS),
-        ),
+        cache_key=(clusters, runs, start_ms, end_ms, bucket_ms, source_group),
+        sources=tuple(sources.values()),
         setup_sql=(),
         views=views,
         max_result_rows=RUNS_MAX_RESULT_ROWS,

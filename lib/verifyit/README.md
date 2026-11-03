@@ -22,11 +22,13 @@ process exit after a verdict has been written.
 
 | mode | contract |
 |---|---|
+| `unsolvable` | private classification: normal answers score zero; a validated terminal ejection scores one |
 | `predicted_action` | unordered function calls with exact JSON types and optional float tolerance |
 | `mcq` | expected option letter |
 | `math` | expression equality through math-verify |
 | `numeric` | numeric equality with explicit tolerances |
 | `exact` | normalized string equality |
+| `structure_closure` | continuation of a pinned prefix matching the first completed outer reference region |
 | `json-schema` | JSON, YAML, or TOML checked against JSON Schema |
 | `xml-elements` | required XML elements and attributes |
 | `csv-columns` | required CSV header columns |
@@ -38,6 +40,9 @@ process exit after a verdict has been written.
 | `gotest` | `go test -json` events |
 | `judge` | reference-answer or checklist rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
+
+`structure_closure` preserves trailing-output diagnostics separately from its first-region reward.
+Callers with generation stop metadata remove configured terminal markers before candidate grading.
 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
 `PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
@@ -119,7 +124,7 @@ attempt can be scored.
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
 already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
-accepts: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
+accepts: `unsolvable`, `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
 `structured_exact` and `predicted_action`. Text modes take a string, `structured_exact` takes a
 decoded JSON value, and `predicted_action` takes a tuple of `FunctionCall`. A file the specification
 names, such as the `json-schema` schema, comes from `resources`, keyed by its path relative to the
@@ -128,6 +133,12 @@ the wrong type raises `TypeError`. Judge, Reasoning Gym, execution and script mo
 through the file grader. Predicted-action matching preserves duplicate calls and requires all calls
 to match one to one. Argument objects stay decoded in JSON tables; `render_spec` encodes each
 argument object as a JSON string in TOML so nested JSON null values survive `parse_spec`.
+
+`grade_ejection_candidate(spec)` scores a validated terminal ejection using the private
+classification: `unsolvable` earns one and every other mode earns zero. Callers validate the
+terminal action and its provenance before invoking this function. Refusal text and answer strings
+never count as ejections. In-process task validation retains invalid-task and infrastructure-error
+verdicts. File grading of `unsolvable` always scores zero because a file cannot establish an ejection.
 
 ## Install and use
 

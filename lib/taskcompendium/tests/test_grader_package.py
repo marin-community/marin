@@ -94,18 +94,56 @@ jq --argjson expected "$expected" '{
 """
 
 
-@pytest.mark.parametrize("value,reward,passed", [(3, 1.0, True), (4, 0.0, False)])
-def test_script_grader_reads_private_configuration_and_captured_state(value, reward, passed):
+def _state_task(environment=GRADING_ENVIRONMENT):
+    """A state-graded task whose script grader reads a private config and the captured state."""
     grader = ScriptGrader(
         argv=("sh", "/tests/grade.sh"),
-        environment=GRADING_ENVIRONMENT,
+        environment=environment,
         answer_path=None,
         reward=FileReward(
             files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),), pass_above=0.5
         ),
     )
     config = inline_resource("config.json", b'{"expected": 3}').model_copy(update={"mode": "0600"})
-    task = _task(GraderPackage(grader, (inline_resource("grade.sh", STATE_GRADER), config)), AnswerType.STATE)
+    return _task(GraderPackage(grader, (inline_resource("grade.sh", STATE_GRADER), config)), AnswerType.STATE)
+
+
+class RecordingImageFactory(FixtureImageFactory):
+    """The fixture factory, keeping every spec it was asked to create."""
+
+    def __init__(self):
+        self.specs: list[MachineSpec] = []
+
+    async def create(self, spec):
+        self.specs.append(spec)
+        return await super().create(spec)
+
+
+@pytest.mark.parametrize(
+    "environment,workdir",
+    [
+        (GRADING_ENVIRONMENT, "/app"),
+        (GRADING_ENVIRONMENT.model_copy(update={"working_directory": "/grading"}), "/grading"),
+    ],
+    ids=["grader-workspace", "named-by-the-environment"],
+)
+def test_grading_machine_starts_in_the_grader_workspace(environment, workdir):
+    """The grading machine starts in the grader's workspace unless its environment names a directory."""
+    task = _state_task(environment)
+    factory = RecordingImageFactory()
+    result = grade_task(
+        task,
+        _attempt(task, TextMessage(role="assistant", content="Done"), StateSubmission({"value": 3})),
+        machine_factory=factory,
+        machine_spec=replace(GRADING_MACHINE, workdir=""),
+    )
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert [spec.workdir for spec in factory.specs] == [workdir]
+
+
+@pytest.mark.parametrize("value,reward,passed", [(3, 1.0, True), (4, 0.0, False)])
+def test_script_grader_reads_private_configuration_and_captured_state(value, reward, passed):
+    task = _state_task()
     result = grade_task(
         task,
         _attempt(task, TextMessage(role="assistant", content="Done"), StateSubmission({"value": value})),

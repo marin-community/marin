@@ -12,7 +12,8 @@
 //! generic [`WriteRows`] path, one Arrow batch per round trip.
 //!
 //! After waiting [`FORWARD_INTERVAL`], it lists the live namespaces and gives each one
-//! batch-sized forwarding turn. It immediately repeats while any namespace has more
+//! batch-sized forwarding turn, with bounded concurrency across namespaces. It
+//! immediately repeats while any namespace has more
 //! settled rows, so a busy stats table cannot delay the next `log` turn while the
 //! forwarder still drains at full speed. A per-`(target, namespace)` cursor records
 //! progress, and a namespace the hub lacks is created there first with [`RegisterTable`].
@@ -34,7 +35,8 @@
 //! - A new legacy cursor seeds at its current tip, preserving the historical behavior
 //!   used when a node-local version-0 store is rebuilt from its archive. A new
 //!   object-native cursor starts at the beginning of the live object state.
-//! - It materializes at most [`FORWARD_BATCH_ROWS`] rows per read, and packs them into
+//! - It materializes at most [`FORWARD_LOG_BATCH_ROWS`] log rows or
+//!   [`FORWARD_BATCH_ROWS`] other rows per read, and packs them into
 //!   requests of at most [`FORWARD_BATCH_BYTES`] unless one row alone exceeds the limit.
 //! - It advances a namespace's cursor after the hub acks the batch or permanently
 //!   rejects malformed content. A crash or retryable rejection re-forwards it
@@ -111,14 +113,21 @@ const FORWARD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 /// million-row write limit.
 const FORWARD_BATCH_ROWS: i64 = 200_000;
 
+/// Dense log backlogs amortize each sweep's scan and durable acknowledgement over
+/// more rows. Requests retain the byte cap and log chunks still ship serially.
+const FORWARD_LOG_BATCH_ROWS: i64 = 1_000_000;
+
+/// Independent tables can share the hub's flush window instead of waiting for
+/// every other table's durable acknowledgement before starting their next turn.
+const FORWARD_NAMESPACE_CONCURRENCY: usize = 4;
+
 /// Maximum number of ordered segment ranges one forwarding scan intentionally spans.
 /// Sparse relay tables can seal thousands of tiny L0s while the hub is unavailable;
 /// bounding by rows alone still makes recovery localize all of them before LIMIT runs.
 const FORWARD_BATCH_SEGMENTS: usize = 128;
 
 /// Encoded bytes per outbound request. Keep ten MiB below the receiving store's hard
-/// Arrow IPC limit. [`chunk_by_bytes`] verifies the resulting size and adjusts each
-/// chunk toward this budget.
+/// Arrow IPC limit. [`chunk_by_bytes`] halves oversized batches until they fit.
 const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (10 << 20);
 
 const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
@@ -481,13 +490,34 @@ where
                 return ForwardTurn::Wait;
             }
         };
+        let turns = namespaces
+            .into_iter()
+            .map(|(name, schema, _stats, _policy)| {
+                let mut namespace_stop = stop.clone();
+                async move {
+                    let mut namespace_progress = Progress::new();
+                    if *namespace_stop.borrow() {
+                        return (ForwardTurn::Wait, namespace_progress);
+                    }
+                    let turn = self
+                        .forward_namespace(
+                            &name,
+                            &schema,
+                            &mut namespace_progress,
+                            &mut namespace_stop,
+                        )
+                        .await;
+                    (turn, namespace_progress)
+                }
+            });
+        let mut turns =
+            futures::stream::iter(turns).buffer_unordered(FORWARD_NAMESPACE_CONCURRENCY);
         let mut turn = ForwardTurn::Wait;
-        for (name, schema, _stats, _policy) in namespaces {
-            if *stop.borrow() {
-                break;
-            }
-            if self.forward_namespace(&name, &schema, progress, stop).await == ForwardTurn::MoreRows
-            {
+        while let Some((namespace_turn, namespace_progress)) = turns.next().await {
+            progress.batches += namespace_progress.batches;
+            progress.skipped_seqs += namespace_progress.skipped_seqs;
+            progress.pending.merge(namespace_progress.pending);
+            if namespace_turn == ForwardTurn::MoreRows {
                 turn = ForwardTurn::MoreRows;
             }
         }
@@ -545,6 +575,7 @@ where
         if cursor >= persisted || *stop.borrow() {
             return ForwardTurn::Wait;
         }
+        let read_started = Instant::now();
         let batch = match self.read_batch(name, cursor, persisted, has_origin).await {
             Ok(batch) => batch,
             Err(e) => {
@@ -552,6 +583,7 @@ where
                 return ForwardTurn::Wait;
             }
         };
+        let read_elapsed = read_started.elapsed();
         // The scan reported its oldest locally-readable row. Legacy retention
         // may require a cursor jump; object-native relays fail closed because
         // their live spool must retain every unsettled row.
@@ -611,6 +643,8 @@ where
             return ForwardTurn::Wait;
         }
 
+        let row_count = ship.num_rows();
+        let encoding_started = Instant::now();
         let chunks = match chunk_by_bytes(&ship, &seqs, FORWARD_BATCH_BYTES) {
             Ok(chunks) => chunks,
             Err(e) => {
@@ -618,11 +652,17 @@ where
                 return ForwardTurn::Wait;
             }
         };
+        let encoding_elapsed = encoding_started.elapsed();
+        let chunk_count = chunks.len();
+        let encoded_bytes: usize = chunks.iter().map(|(ipc, _)| ipc.len()).sum();
+        drop(ship);
+        drop(seqs);
         let concurrency = if name == LOG_NAMESPACE_NAME {
             1
         } else {
             FORWARD_CHUNK_CONCURRENCY
         };
+        let push_started = Instant::now();
         let pushes = chunks.into_iter().map(|(ipc, last_seq)| {
             let chunk_stop = (*stop).clone();
             async move { (last_seq, self.push(name, ipc, chunk_stop).await) }
@@ -683,6 +723,20 @@ where
                 }
             }
             cursor = last_seq;
+        }
+        if turn_started.elapsed() >= SLOW_FORWARD_TURN {
+            tracing::info!(
+                namespace = name,
+                previous_cursor = starting_cursor,
+                cursor,
+                rows = row_count,
+                chunks = chunk_count,
+                encoded_bytes,
+                read_ms = read_elapsed.as_millis() as u64,
+                chunk_encode_ms = encoding_elapsed.as_millis() as u64,
+                push_ms = push_started.elapsed().as_millis() as u64,
+                "finelog forwarder: slow batch stage breakdown"
+            );
         }
         // Fewer than LIMIT matching rows means the scan examined the complete bounded
         // sequence window. Advance over any trailing foreign-origin rows after every
@@ -888,7 +942,7 @@ where
         }
     }
 
-    /// Up to [`FORWARD_BATCH_ROWS`] locally-written rows of `name` in `(cursor, persisted]`
+    /// One bounded batch of locally-written rows of `name` in `(cursor, persisted]`
     /// as a batch ready to ship (its `seq` column dropped, its origin column stamped),
     /// alongside the seqs those rows carry. When eviction has already archived the rows
     /// just above `cursor`, `resume_at` names the seq to resume from instead.
@@ -942,7 +996,12 @@ where
             // Segments predating the column store NULL, which is a local row.
             sql.push_str(" AND (cluster IS NULL OR cluster = '')");
         }
-        sql.push_str(&format!(" ORDER BY seq LIMIT {FORWARD_BATCH_ROWS}"));
+        let batch_rows = if name == LOG_NAMESPACE_NAME {
+            FORWARD_LOG_BATCH_ROWS
+        } else {
+            FORWARD_BATCH_ROWS
+        };
+        sql.push_str(&format!(" ORDER BY seq LIMIT {batch_rows}"));
 
         let providers = vec![RegisteredProvider {
             name: name.to_string(),
@@ -979,7 +1038,7 @@ where
         let row_count = rows.as_ref().map_or(0, |(batch, _)| batch.num_rows());
         let complete_window = rows
             .as_ref()
-            .is_none_or(|(batch, _)| batch.num_rows() < FORWARD_BATCH_ROWS as usize);
+            .is_none_or(|(batch, _)| batch.num_rows() < batch_rows as usize);
         let total = read_started.elapsed();
         let log_read = || {
             tracing::info!(
@@ -1317,62 +1376,45 @@ fn chunk_by_bytes(
     seqs: &Int64Array,
     max_bytes: usize,
 ) -> Result<Vec<(Vec<u8>, i64)>, StatsError> {
-    let num_rows = ship.num_rows();
-    let mem = ship.get_array_memory_size().max(1);
-    let per_row = (mem / num_rows.max(1)).max(1);
-    let rows_per_chunk = (max_bytes / per_row).max(1);
+    if ship.num_rows() == 0 {
+        return Ok(Vec::new());
+    }
     let schema = ship.schema();
-
-    let mut out = Vec::new();
-    let mut start = 0;
-    while start < num_rows {
-        let remaining = num_rows - start;
-        let mut len = rows_per_chunk.min(num_rows - start);
-        let mut largest_fit: Option<(usize, Vec<u8>)> = None;
-        let mut smallest_oversized: Option<usize> = None;
-
-        let (len, ipc) = loop {
-            let ipc = encode_ipc(&schema, &[ship.slice(start, len)])
+    // Nested slices can retain child buffers outside the slice. Estimate only
+    // flat batches; the encoded length remains authoritative for every batch.
+    let flat = schema
+        .fields()
+        .iter()
+        .all(|field| !field.data_type().is_nested());
+    let mut chunks = Vec::new();
+    let mut pending = vec![(0, ship.num_rows())];
+    while let Some((start, len)) = pending.pop() {
+        let slice = ship.slice(start, len);
+        let raw_bytes = if flat {
+            slice
+                .columns()
+                .iter()
+                .map(|column| column.to_data().get_slice_memory_size())
+                .sum::<Result<usize, _>>()
+                .map_err(|e| StatsError::Internal(format!("size ship chunk: {e}")))?
+        } else {
+            0
+        };
+        // Avoid serializing a parent whose buffers alone already exceed the limit.
+        if raw_bytes <= max_bytes || len == 1 {
+            let ipc = encode_ipc(&schema, &[slice])
                 .map_err(|e| StatsError::Internal(format!("encode ship chunk: {e}")))?;
-
-            if ipc.len() <= max_bytes {
-                largest_fit = Some((len, ipc));
-                let lower = len + 1;
-                let upper = smallest_oversized.unwrap_or(remaining + 1);
-                if lower >= upper {
-                    break largest_fit.unwrap();
-                }
-
-                let proportional = len
-                    .saturating_mul(max_bytes)
-                    .checked_div(largest_fit.as_ref().unwrap().1.len().max(1))
-                    .unwrap_or(len)
-                    .max(lower);
-                len = if smallest_oversized.is_some() {
-                    lower + (upper - lower) / 2
-                } else {
-                    proportional.min(remaining)
-                };
+            if ipc.len() <= max_bytes || len == 1 {
+                chunks.push((ipc, seqs.value(start + len - 1)));
                 continue;
             }
-
-            if len == 1 {
-                break (len, ipc);
-            }
-
-            smallest_oversized = Some(len);
-            let lower = largest_fit.as_ref().map_or(1, |(fit, _)| fit + 1);
-            let upper = len;
-            if lower >= upper {
-                break largest_fit.expect("an oversized one-row chunk returns above");
-            }
-            let proportional = len.saturating_mul(max_bytes) / ipc.len();
-            len = proportional.clamp(lower, upper - 1);
-        };
-        out.push((ipc, seqs.value(start + len - 1)));
-        start += len;
+        }
+        let half = len / 2;
+        // Visit the left half first to preserve source sequence order.
+        pending.push((start + half, len - half));
+        pending.push((start, half));
     }
-    Ok(out)
+    Ok(chunks)
 }
 
 /// Cumulative forwarding counters, reported on a slow timer.

@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 
-from infra.marina.applets.filer.server import app as filer
+from infra.marina.apps.filer.server import app as filer
 
 
 @pytest.fixture

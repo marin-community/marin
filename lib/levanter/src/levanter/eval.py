@@ -36,6 +36,7 @@ from levanter.data.text.examples import (
     named_lm_example_from_labeled,
 )
 from levanter.models.lm_model import LmExample, LmHeadModel
+from levanter.models.loss import next_token_ids
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
@@ -235,7 +236,7 @@ def _default_lm_eval_loss_fn(
         model = mp.cast_to_compute(model)
     per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
     per_pos_weight = named_batch.loss_weight.array
-    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+    per_pos_token_id = next_token_ids(model.Pos.name, named_batch.tokens).array
     return per_pos_loss, per_pos_weight, per_pos_token_id
 
 
@@ -274,7 +275,7 @@ def _default_labeled_lm_eval_loss_fn(
     if mp is not None:
         model = mp.cast_to_compute(model)
     per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+    per_pos_token_id = next_token_ids(model.Pos.name, named_batch.tokens).array
     return per_pos_loss, loss_labels.array, per_pos_token_id
 
 

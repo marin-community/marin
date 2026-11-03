@@ -11,7 +11,8 @@
 #        export CW_KEY_ID=<coreweave-access-key-id>
 #        export CW_KEY_SECRET=<coreweave-access-key-secret>
 #      These are created in the CoreWeave console under Object Storage > Access Keys.
-#      `iris cluster start` creates a K8s Secret from these env vars automatically.
+#      `iris cluster start` stores them in the infrastructure-only iris-storage-env Secret.
+#      Job submitters export their own pair; task Pods do not mount the service keys.
 #
 #   2. Start the cluster (creates RBAC, shared NodePools, ConfigMap, Deployment, Service):
 #        iris --config=lib/iris/config/examples/coreweave.yaml cluster start
@@ -37,10 +38,11 @@ platform:
     region: US-WEST-04A
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris
-    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    object_storage_endpoint: http://cwlota.com
+    external_object_storage_endpoint: https://cwobject.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/coreweave/state
+  remote_state_dir: s3://marin-us-east-02a/iris/coreweave/state
 
 kubernetes_provider:
   namespace: iris
@@ -70,17 +72,8 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    MARIN_PREFIX: s3://marin-na/marin
-  # inject_env captures named environment variables from the operator's shell at
-  # `iris cluster start` and injects them into every task (and the controller).
-  # A missing variable aborts the launch. On Kubernetes the values are written to
-  # the `iris-task-env` Secret and projected via envFrom (never the ConfigMap);
-  # on GCP/VM clusters they ride in the bootstrap config. Per-job `-e` overrides
-  # win over injected values. Example (export these before `cluster start`):
-  #
-  # inject_env:
-  #   - WANDB_API_KEY
-  #   - HF_TOKEN
+    MARIN_PREFIX: s3://marin-us-east-02a/marin
+  # Application credentials travel through EnvironmentSpec.secrets.
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Announce Grafana alerts in Slack, and for critical ones open Loom triage there.
+"""Announce Grafana alerts in Slack and open Loom triage there.
 
 Every alert group arrives as a Grafana webhook and is announced with
 `chat.postMessage`, which returns the `channel`/`ts` naming a thread. One alert
@@ -10,13 +10,10 @@ replacement alert instances are posted under the original announcement. Thus,
 a webhook retry adds nothing and a still-firing note appears only after the
 thread has been quiet.
 
-Two receivers share that behavior through `SlackAnnouncer` and differ in what
-follows. `LoomAlertClient` opens a Loom triage run naming the thread it just
-announced, which is what lets the operator read status and steer in the same
-place the alert appeared; Slack is posted first, so the alert lands even when
-Loom is unreachable, and that failure is reported into the thread.
-`SlackAlertClient` announces and stops, and raises when Slack refuses, because it
-has no second delivery path.
+`LoomAlertClient` opens a Loom triage run naming the thread it just announced,
+which lets the operator read status and steer where the alert appeared. Slack
+is posted first, so the alert lands even when Loom is unreachable, and that
+failure is reported into the thread.
 """
 
 import dataclasses
@@ -55,10 +52,6 @@ class LoomAlertPayloadError(ValueError):
 
 class LoomAlertDeliveryError(RuntimeError):
     """Google identity federation or Loom run creation failed."""
-
-
-class SlackAnnouncementError(RuntimeError):
-    """Slack did not accept an announcement that had no other delivery path."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -154,8 +147,6 @@ class SlackAnnouncer:
     """Announce Grafana alert groups in one Slack channel, one thread per group.
 
     Owns the channel, the bot credential, and which thread announced which alert.
-    One instance serves one receiver; two receivers keep separate thread logs
-    because they see disjoint alert groups.
     """
 
     def __init__(self, slack: SlackAlertConfig) -> None:
@@ -272,42 +263,6 @@ class SlackAnnouncer:
             return None
         # A threaded reply keeps the root as the thread; only a new post opens one.
         return thread or SlackThread(channel=self._slack.channel, thread_ts=ts)
-
-
-class SlackAlertClient:
-    """Announce a Grafana webhook in Slack, with no Loom leg.
-
-    The receiver for malformed or unlabeled alerts: they carry no severity to
-    route on and no incident to triage, so they are announced and left alone.
-    """
-
-    def __init__(
-        self,
-        config: LoomAlertConfig,
-        *,
-        transport: httpx.AsyncBaseTransport | None = None,
-    ) -> None:
-        self._http_timeout = config.http_timeout
-        self._transport = transport
-        self._announcer = SlackAnnouncer(config.slack)
-
-    async def announce(self, payload: object) -> SlackThread | None:
-        """Announce the group's firing alerts, returning None for a resolution.
-
-        Raises `SlackAnnouncementError` when Slack did not accept the post. This
-        receiver has no second leg, so a swallowed failure would drop the whole
-        notification; failing lets Grafana retry it.
-        """
-        firing = _firing_alerts(payload)
-        thread_key = _thread_key(payload)
-        async with httpx.AsyncClient(timeout=self._http_timeout, transport=self._transport) as client:
-            if not firing:
-                await self._announcer.announce_resolution(client, payload, thread_key)
-                return None
-            thread = await self._announcer.announce(client, payload, firing, thread_key)
-            if thread is None:
-                raise SlackAnnouncementError("Slack did not accept the alert announcement")
-            return thread
 
 
 class LoomAlertClient:

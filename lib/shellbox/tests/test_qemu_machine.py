@@ -18,7 +18,8 @@ from shellbox.machine import MachineSpec, QemuBundle
 )
 def test_file_upload_preserves_bytes_through_serial_guest_protocol(tmp_path, payload):
     uploaded, wire_bytes = asyncio.run(upload_serial(tmp_path, payload))
-    assert uploaded == payload
+    assert uploaded.read_bytes() == payload
+    assert uploaded.stat().st_mode & 0o777 == 0o751
     if len(payload) > 1_000_000:
         assert wire_bytes < len(payload) // 20
 
@@ -26,7 +27,10 @@ def test_file_upload_preserves_bytes_through_serial_guest_protocol(tmp_path, pay
 def test_directory_upload_preserves_nested_binary_files(tmp_path):
     payload = random.Random(7).randbytes(131072)
     uploaded, _ = asyncio.run(upload_serial(tmp_path, payload, "nested/data.bin"))
-    assert uploaded == payload
+    assert (uploaded / "nested/data.bin").read_bytes() == payload
+    assert uploaded.stat().st_mode & 0o777 == 0o700
+    assert (uploaded / "nested").stat().st_mode & 0o777 == 0o710
+    assert (uploaded / "nested/data.bin").stat().st_mode & 0o777 == 0o751
 
 
 async def upload_serial(tmp_path, payload, source_relative=""):
@@ -55,6 +59,10 @@ async def upload_serial(tmp_path, payload, source_relative=""):
     source_file = source / source_relative if source_relative else source
     source_file.parent.mkdir(parents=True, exist_ok=True)
     source_file.write_bytes(payload)
+    source_file.chmod(0o751)
+    if source_relative:
+        source.chmod(0o700)
+        source_file.parent.chmod(0o710)
     machine = QemuMachine(
         MachineSpec(QemuBundle(tmp_path), workdir=str(tmp_path)), Acceleration.TCG, bundle=QemuBundle(tmp_path)
     )
@@ -70,8 +78,7 @@ async def upload_serial(tmp_path, payload, source_relative=""):
     )
     try:
         await machine.upload(source, str(target.relative_to(tmp_path)))
-        uploaded = target / source_relative if source_relative else target
-        return uploaded.read_bytes(), int((tmp_path / "wire-bytes").read_text())
+        return target, int((tmp_path / "wire-bytes").read_text())
     finally:
         await machine.close()
 

@@ -760,7 +760,7 @@ groups:
       # Token drops, router collapse, a throughput or MFU floor, a worse
       # evaluation, a stale Iris state row, and controller retries. These take
       # the explicit notification=slack exception: an operator reads them beside
-      # the run dashboard, so they announce without opening a triage session.
+      # the run dashboard, and open a default operator triage session.
       - uid: training-run-health-degraded
         title: TrainingRunHealthDegraded
         condition: C

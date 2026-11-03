@@ -7,7 +7,9 @@ import asyncio
 import json
 import os
 import subprocess
+import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
@@ -16,12 +18,13 @@ import pytest
 import requests
 import shellsim
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
-from marin.inference import dashboard_server, python_tool_routes, shell_workspace
+from marin.inference import python_tool_routes, shell_workspace, shellsim_runtime
 from marin.inference.chat_template_protocol import ChatTemplateProtocol, ToolCallFormat, protocol_for_chat_template
 from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, build_dashboard_app, serve_app_background
 from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
 from marin.inference.repository_snapshot import RepositorySnapshotTooLarge, clone_repository_snapshot
+from starlette.testclient import TestClient
 
 from experiments.llama import llama3_instruct_trainable_chat_template
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
@@ -165,7 +168,7 @@ def test_chat_template_protocol_matches_generated_output_format(template, expect
 
 @pytest.fixture
 def dashboard_tool_base_url(monkeypatch) -> Iterator[str]:
-    monkeypatch.setattr(dashboard_server, "prepare_tool_runtime", lambda catalog: None)
+    monkeypatch.setattr(shellsim_runtime, "prepare_tool_runtime", lambda catalog: None)
     monkeypatch.setattr(
         shell_workspace,
         "tool_environment",
@@ -198,6 +201,65 @@ def dashboard_tool_base_url(monkeypatch) -> Iterator[str]:
 
     with serve_app_background(app, dashboard_sock):
         yield f"http://127.0.0.1:{dashboard_port}"
+
+
+@pytest.mark.parametrize(
+    "path,payload",
+    [
+        ("/tools/multiply", {"source": MULTIPLY_TOOL_SOURCE, "arguments": {"value": 3}}),
+        ("/shell", {"files": {}, "commits": [], "history": [], "command": "echo hello"}),
+    ],
+)
+def test_dashboard_prepares_runtime_on_demand_without_blocking_other_requests(monkeypatch, tmp_path, path, payload):
+    preparing = threading.Event()
+    finish = threading.Event()
+    prepared = tmp_path / "prepared"
+    available = tmp_path / "catalog-available"
+
+    class Context:
+        def __init__(self, *, pypi_catalog, trusted_precompiled):
+            self.catalog = pypi_catalog
+
+        def Environment(self, *, pypi_packages):
+            assert not prepared.exists(), "successful preparation must be reused"
+            if not available.exists():
+                raise OSError("catalog unavailable")
+            preparing.set()
+            assert finish.wait(timeout=10)
+            prepared.write_text(self.catalog)
+
+    monkeypatch.setattr(shellsim, "Context", Context)
+    # The worker process is the execution boundary; this test covers host preparation.
+    monkeypatch.setattr(
+        python_tool_routes,
+        "_run_tool_worker",
+        lambda module, arguments, payload: subprocess.CompletedProcess(arguments, 0, b"6", b""),
+    )
+    info = ServingInfo("fake-model", "vllm", 1, 4096, "bfloat16", True, "/serve/fake")
+    catalog = str(tmp_path / "catalog.json")
+    app = build_dashboard_app(
+        upstream_base_url="http://127.0.0.1:1", model_id="fake-model", info=info, shellsim_catalog=catalog
+    )
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as executor:
+        assert client.get("/").status_code == 200
+        assert client.post("/tools", json={"source": MULTIPLY_TOOL_SOURCE}).status_code == 200
+        assert client.post(path, json={}).status_code == 400
+        assert not preparing.is_set()
+        assert client.post(path, json=payload).status_code == 503
+        assert client.get("/info").status_code == 200
+        available.touch()
+        first = executor.submit(client.post, path, json=payload)
+        try:
+            assert preparing.wait(timeout=10)
+            second = executor.submit(client.post, path, json=payload)
+            assert client.get("/info").json()["model"] == "fake-model"
+            assert not prepared.exists()
+        finally:
+            finish.set()
+        assert first.result(timeout=10).json() == 6
+        assert second.result(timeout=10).json() == 6
+        assert client.post(path, json=payload).json() == 6
+        assert prepared.read_text() == catalog
 
 
 def test_dashboard_shared_chat_round_trips_through_short_id(dashboard_tool_base_url):

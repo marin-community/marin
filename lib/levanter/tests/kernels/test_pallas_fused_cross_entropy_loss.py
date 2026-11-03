@@ -19,6 +19,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss import xla as fused_xla
 from levanter.kernels.pallas.fused_cross_entropy_loss.config import BlockSizes
+from levanter.kernels.pallas.fused_cross_entropy_loss.grad_in_forward import linear_softmax_cross_entropy_weighted_sum
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
@@ -153,6 +154,53 @@ def test_fused_cross_entropy_grad_matches_reference():
     assert jnp.allclose(gw_api, gw_ref, atol=grad_tol, rtol=grad_tol)
 
 
+# 6 rows: three full blocks of 2, or two blocks of 4 with two zero-weight padding rows.
+@pytest.mark.parametrize("token_block_size", [2, 4])
+def test_weighted_sum_grad_in_forward_matches_reference(token_block_size):
+    x, w, y = _make_toy_inputs()
+    x, y = x.reshape(6, 4), y.reshape(6)
+    weight = jnp.array([1.0, 0.0, 0.5, 2.0, 1.0, 0.0], dtype=jnp.float32)
+    logsumexp_weight = 0.2
+
+    def weighted_sum(x, w, weight):
+        return linear_softmax_cross_entropy_weighted_sum(
+            x, y, w, weight, logsumexp_weight=logsumexp_weight, token_block_size=token_block_size
+        )
+
+    def reference(x, w, weight):
+        loss, lse = linear_softmax_cross_entropy_loss_reference(x, y, w)
+        return jnp.sum(weight * (loss + logsumexp_weight * lse**2))
+
+    value, grads = jax.value_and_grad(weighted_sum, argnums=(0, 1, 2))(x, w, weight)
+    ref_value, ref_grads = jax.value_and_grad(reference, argnums=(0, 1, 2))(x, w, weight)
+
+    tol = 3e-5 if jax.default_backend() == "tpu" else 1e-5
+    # The undifferentiated call takes the loss-only primal; value_and_grad takes the gradient forward.
+    np.testing.assert_allclose(weighted_sum(x, w, weight), ref_value, atol=tol, rtol=tol)
+    np.testing.assert_allclose(value, ref_value, atol=tol, rtol=tol)
+    for actual, expected in zip(grads, ref_grads, strict=True):
+        np.testing.assert_allclose(actual, expected, atol=tol, rtol=tol)
+
+
+def test_weighted_sum_grad_in_forward_without_z_loss_stays_finite_for_huge_logits():
+    # lse**2 overflows float32 at these logits; a disabled z-loss must not turn 0 * inf into NaN.
+    x = jnp.ones((1, 1), dtype=jnp.float32)
+    w = jnp.array([[2e19, 0.0]], dtype=jnp.float32)
+    y = jnp.array([1], dtype=jnp.int32)
+    weight = jnp.ones((1,), dtype=jnp.float32)
+
+    def weighted_sum(x, w):
+        return linear_softmax_cross_entropy_weighted_sum(x, y, w, weight, logsumexp_weight=None, token_block_size=1)
+
+    value, grads = jax.value_and_grad(weighted_sum, argnums=(0, 1))(x, w)
+    ref_loss, _ = linear_softmax_cross_entropy_loss_reference(x, y, w)
+
+    np.testing.assert_allclose(weighted_sum(x, w), ref_loss[0], rtol=1e-6)
+    np.testing.assert_allclose(value, ref_loss[0], rtol=1e-6)
+    for grad in grads:
+        assert np.all(np.isfinite(np.asarray(grad)))
+
+
 def test_bwd_delta_supertile_soft_cap_scales_label_term():
     x = jnp.array([[4.0, -3.0], [2.5, 3.5]], dtype=jnp.float32)
     w_supertile = jnp.array(
@@ -244,6 +292,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("activation_scale", [1.0, 30.0, 1000.0])
 def test_xla_streaming_custom_vjp_grad_matches_reference_in_bfloat16(activation_scale):
     """Gradient parity for bfloat16 activations and a bfloat16 head, across logit magnitudes.
@@ -782,6 +831,7 @@ def test_default_implementation_on_cpu_skips_expected_tpu_warning():
     assert not any("requires TPU backend" in str(warning.message) for warning in caught)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_default_matches_reference():
     backend = jax.default_backend()
     if backend == "tpu":
@@ -828,6 +878,7 @@ def test_fused_cross_entropy_default_matches_reference():
     assert jnp.allclose(loss, loss_ref, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_default_grad_matches_reference():
     backend = jax.default_backend()
     if backend == "tpu":
@@ -881,6 +932,7 @@ def test_fused_cross_entropy_default_grad_matches_reference():
     assert jnp.allclose(gw_default, gw_ref, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize(
     ("implementation", "required_backend", "vocab_size", "block_sizes"),
     [
@@ -1942,6 +1994,7 @@ def test_shared_autotune_helper_change_invalidates_fused_ce_revision(tmp_path, m
     assert changed != original
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_pallas_bwd_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -2118,6 +2171,7 @@ def test_infer_block_sizes_tpu_v4_updated_tuning(
     assert block_sizes == expected
 
 
+@pytest.mark.tpu
 def test_infer_block_sizes_tpu_v4_huge_batch_small_h_jits_with_pallas():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -2306,6 +2360,7 @@ def test_infer_block_sizes_skips_invalid_tuned_entry(monkeypatch: pytest.MonkeyP
     assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -2348,6 +2403,7 @@ def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
     assert jnp.allclose(gw_default, gw_ref, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_pallas_non_divisible_vocab_dx_matches_xla():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -2390,6 +2446,7 @@ def test_fused_cross_entropy_pallas_non_divisible_vocab_dx_matches_xla():
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_pallas_backward_matches_xla():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -2432,6 +2489,7 @@ def test_fused_cross_entropy_pallas_backward_matches_xla():
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("implementation", ["pallas_tpu"])
 def test_fused_cross_entropy_pallas_backward_matches_xla_infer_blocks(implementation: str):
     if jax.default_backend() != "tpu":
@@ -2513,6 +2571,7 @@ def test_xla_fast_backward_leaves_forward_bitwise_identical(logit_soft_cap):
     assert np.array_equal(np.asarray(value_slow), np.asarray(value_fast))
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 def test_xla_fast_backward_matches_default_backward(dtype):
     x, w, make = _fast_bwd_case(dtype)
@@ -2534,6 +2593,7 @@ def test_xla_fast_backward_batch_tiling_is_equivalent():
     assert jnp.allclose(gw_untiled, gw_tiled, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 def test_xla_fast_backward_is_no_worse_than_default_against_float32_reference():
     """At the hero loop ratio (many batch blocks per vocab block) the default backward
     accumulates grad_w in the activation dtype; the fast backward must not be worse."""
@@ -2677,6 +2737,7 @@ def test_xla_fast_backward_emits_no_scatter():
     assert "tensor<256x128xf32>, tensor<64x128xf32>" not in text
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize(
     "rows,fast_backward,soft_cap",
     [(17, False, None), (35, False, 1.3), (17, True, None), (35, True, 1.3), (32, False, None)],

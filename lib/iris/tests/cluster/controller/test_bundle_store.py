@@ -3,13 +3,16 @@
 
 """Tests for controller-side BundleStore behavior."""
 
+import asyncio
 import concurrent.futures
 import hashlib
 import threading
 
 import pytest
+from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
-from iris.cluster.bundle import BundleStore
+from iris.cluster.bundle import BundleStore, BundleUploadError
+from rigging.timing import Duration
 
 _THREAD_TIMEOUT = 5
 
@@ -170,3 +173,46 @@ def test_concurrent_writes_of_same_content_persist_once(tmp_path, monkeypatch):
         assert second.result(timeout=_THREAD_TIMEOUT) == content_hash
 
     assert write_count == 1
+
+
+class StalledUploadFileSystem(AsyncFileSystem):
+    """Object storage that accepts metadata reads but can stall an upload."""
+
+    def __init__(self):
+        super().__init__()
+        self.block_uploads = True
+        self.cancelled = threading.Event()
+        self.files: dict[str, bytes] = {}
+
+    async def _makedirs(self, path, exist_ok=False):
+        pass
+
+    async def _info(self, path, **kwargs):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return {"name": path, "type": "file", "size": len(self.files[path])}
+
+    async def _pipe_file(self, path, value, **kwargs):
+        if self.block_uploads:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.cancelled.set()
+        self.files[path] = value
+
+
+def test_stalled_upload_is_cancelled_and_same_content_can_be_retried(monkeypatch):
+    filesystem = StalledUploadFileSystem()
+    monkeypatch.setattr("fsspec.core.url_to_fs", lambda *args, **kwargs: (filesystem, "bundles"))
+    store = BundleStore("s3://bundles", upload_timeout=Duration.from_ms(50))
+    data = b"retry after an upload stalls"
+
+    with pytest.raises(BundleUploadError):
+        store.write(data)
+
+    assert filesystem.cancelled.wait(timeout=_THREAD_TIMEOUT)
+    assert not filesystem.files
+    filesystem.block_uploads = False
+    bundle_id = store.write(data)
+    assert filesystem.files[f"bundles/{bundle_id}"] == data
+    assert store.get(bundle_id) == data

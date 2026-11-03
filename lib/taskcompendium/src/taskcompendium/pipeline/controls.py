@@ -12,7 +12,7 @@ from typing import Any, Protocol
 from shellbox.machine import Command, MachineFactory, MachineSpec
 from verifyit.grade import positive_candidate
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import ExactSpec, JudgeSpec, MathSpec, McqSpec, NumericSpec
+from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec, StructureClosureSpec
 
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -22,11 +22,11 @@ from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
     ScriptGrader,
-    SessionGrader,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
     grades_in_process,
+    grades_with_judge,
     require_resolved_environment,
     verifyit_spec,
 )
@@ -48,7 +48,7 @@ from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "17"
+CONTROLS_REVISION = "18"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -86,6 +86,8 @@ def reference_reply(task: TaskSpec) -> Reply | None:
         return answer_reply(task, rf"\boxed{{{spec.expected}}}")
     if isinstance(spec, NumericSpec | McqSpec):
         return answer_reply(task, spec.expected)
+    if isinstance(spec, StructureClosureSpec):
+        return answer_reply(task, spec.expected[len(spec.prefix) :])
     if isinstance(spec, ExactSpec):
         candidate = positive_candidate(spec)
         return answer_reply(task, candidate) if candidate is not None else None
@@ -138,10 +140,6 @@ def _empty_submission(task: TaskSpec) -> ControlSubmission:
     return WorkspaceFiles({})
 
 
-def _is_judge_task(task: TaskSpec) -> bool:
-    return isinstance(task.grader, VerifyitGrader) and isinstance(verifyit_spec(task.grader), JudgeSpec)
-
-
 async def _control_checks(
     task: TaskSpec,
     controls: Controls,
@@ -150,7 +148,7 @@ async def _control_checks(
 ) -> VerificationReport:
     require_resolved_environment(task.environment_requirements)
     grader = task.grader
-    if isinstance(grader, NoGrader | SessionGrader):
+    if isinstance(grader, NoGrader):
         return VerificationReport(
             [
                 CheckResult(
@@ -158,7 +156,7 @@ async def _control_checks(
                 )
             ]
         )
-    judge_task = _is_judge_task(task)
+    judge_task = grades_with_judge(task.grader)
     if judge_task and judge_connection is None:
         raise ValueError("Judge controls require an explicit remote connection")
     sandbox = None
@@ -246,7 +244,7 @@ async def _control(
         else await sandbox_grade(task, attempt, *sandbox.grader)
     )
     if (
-        _is_judge_task(task)
+        grades_with_judge(task.grader)
         and grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
         and "model" not in (grade.detail or {})
     ):

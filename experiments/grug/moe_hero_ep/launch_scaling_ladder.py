@@ -14,11 +14,12 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d1024    2     2048    15276  every 5%    final only    128B    162M    4.0B    2.7e20
     d1536    6     6144    15128  every 5%    final only    381B    481M   11.5B    1.8e21
     d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
-    d6144   11     2816   390251  every 3000  every 6k       18T     23B     535B    2.7e24
+    d6144   11      704   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
 At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step (the d6144
-hero trained at 4K with batch 11264 until step 257553). Eval batch is 64 x racks (one sequence per
-device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
+hero trained at 4K with batch 11264 until step 257553 and at 16K with batch 2816 until step 372000).
+Eval batch is one sequence per batch shard: 64 x racks, or (64 / CP) x racks with CP-way context
+parallelism. Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
 analytic estimate (forward+backward, including attention and the latent-MoE correction), with the
 d6144 run counted at 4K throughout.
 
@@ -34,6 +35,11 @@ Changelog:
         hero-ragged_a2a-nccl2307-ep-step81k restarts that fork on the NCCL 2.30.7 PJRT wheel (#9062).
     2026-10-14 (#9615): the hero trains at 16K context with qk_mult 1.48 from step 257553.
         hero-ctx16k-step257k forks hero-mfu30-step231k at permanent step 257553 (see ``trigger_hero.sh``).
+    2026-10-30 (#10677, PR #10783): the hero clips the global gradient norm at 1.0 in the train step.
+        hero-gradclip-step356k forks hero-ctx16k-step257k at permanent step 356531 (see ``trigger_hero.sh``).
+    2026-11-02 (#8435): the hero trains at 65K context with qk_mult 1.66 and receiver capacity factor 1.5
+        from step 372000. hero-ctx65k-step372k forks hero-gradclip-step356k at permanent step 372000
+        (see ``trigger_hero.sh``).
 """
 
 import dataclasses
@@ -53,7 +59,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import temporary_checkpoint_base_path
+from marin.training.training import checkpoint_resume_paths, temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -61,28 +67,35 @@ from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
+    SIMULATED_EPOCHING_MAX_FLOPS,
     HarrierContextPhase,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
-    HERO_EP_EXPERT_AXIS_SIZE,
+    HERO_BALANCE_ATTENTION_ROWS,
+    HERO_CONTEXT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_INITIAL_SEQ_LEN,
+    HERO_MAX_GRAD_NORM,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
     HERO_NODE_RAM,
     HERO_PROCESSES_PER_TASK,
     HERO_QB_HIST_BINS,
+    HERO_RACK_GPUS,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_TOKENS_PER_RACK,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
+    hero_expert_axis_size,
     hero_grug_trainer_config,
     hero_rack_batch_size,
     hero_trainer_config,
+    validate_model_split,
+    validated_batch_axis_size,
     validation_datasets,
     with_transport_remat_mode,
 )
@@ -115,9 +128,12 @@ HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 
 # The context lengths the d6144 hero trained at before its current one, oldest first, each with the
 # step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
-HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (HarrierContextPhase(end_step=257_553, seq_len=4096),)
+HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (
+    HarrierContextPhase(end_step=257_553, seq_len=4096),
+    HarrierContextPhase(end_step=372_000, seq_len=16384),
+)
 # The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
-HERO_FLOPS_BASELINE_TOTAL: float | None = 1.7792877262736668e24
+HERO_FLOPS_BASELINE_TOTAL: float | None = 2.6276788418873884e24
 
 
 def _hero_flops_baseline(
@@ -152,6 +168,7 @@ RESUME_SAVE_INTERVAL = timedelta(hours=1)
 # (#8506, 2026-09-23). A run stalled this long without saving resumes from its newest permanent
 # checkpoint instead.
 RESUME_CHECKPOINT_TTL_DAYS = 3
+HERO_RESUME_CHECKPOINT_PREFIX = "s3://hero-checkpoints"
 # A rung runs up to 176 tasks for hundreds of GPU-days, where a hardware fault or a host
 # out-of-memory on one task is routine. A rung resumes from its newest checkpoint, thus a retry
 # continues the run instead of repeating it. Retry deeply so one bad task does not end a rung.
@@ -221,18 +238,25 @@ def build_ladder_run(
     ``LmDataConfig.prior_context_phases``). ``None`` selects the checked-in history: ``HERO_CONTEXT_PHASES``
     and ``HERO_FLOPS_BASELINE_TOTAL`` for d6144, and none for the narrow rungs, which train at their context
     length from their start. Pass both to build another history.
+
+    d6144 splits each sequence over the checked-in ``HERO_CONTEXT_AXIS_SIZE`` devices, with each rack's expert
+    axis shrunk to ``HERO_RACK_GPUS // HERO_CONTEXT_AXIS_SIZE``, and balances rows when
+    ``HERO_BALANCE_ATTENTION_ROWS`` is set. The narrow rungs use neither.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in LADDER_RACKS:
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
+    hero = size == "d6144"
     if context_phases is None:
         if flops_baseline_total is not None:
             raise ValueError("flops_baseline_total requires an explicit context_phases")
-        hero = size == "d6144"
         context_phases = HERO_CONTEXT_PHASES if hero else ()
         flops_baseline_total = HERO_FLOPS_BASELINE_TOTAL if hero else None
+    context_axis_size = HERO_CONTEXT_AXIS_SIZE if hero else 1
+    balance_attention_rows = HERO_BALANCE_ATTENTION_ROWS if hero else False
+    expert_axis_size = hero_expert_axis_size(context_axis_size)
 
     model = _ladder_model(size)
     if qk_mult is not None:
@@ -241,12 +265,22 @@ def build_ladder_run(
         model = dataclasses.replace(model, qk_mult_long_scale=qk_mult_long_scale)
     seq_len = model.max_seq_len
     flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len)
+    validate_model_split(model, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size)
 
     dp_racks = LADDER_RACKS[size]
-    # Weak scaling holds per-rack token load constant; eval is one sequence per device.
+    # Weak scaling holds per-rack token load constant.
     global_tokens_per_step = HERO_TOKENS_PER_RACK * dp_racks
     batch_size = hero_rack_batch_size(seq_len) * dp_racks
-    eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
+    batch_axes = validated_batch_axis_size(
+        device_count=HERO_RACK_GPUS * dp_racks,
+        dp_racks=dp_racks,
+        batch_size=batch_size,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+    )
+    # Eval is one sequence per batch shard, so each device scores max_seq_len / context_axis_size tokens per
+    # eval batch at every context length. The README's "Scaling ladder" section explains the choice.
+    eval_batch_size = batch_axes
 
     if context_phases and num_steps is not None:
         # The prior phases' data stages are rebuilt from the schedule length, so it must stay the run's own.
@@ -288,13 +322,17 @@ def build_ladder_run(
     )
     optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
 
-    # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
-    # offloaded to FP32 pinned host.
+    # Uniform hero trainer: expert- and context-parallel within each rack, replicated across racks, MuonH
+    # state offloaded to FP32 pinned host.
     grug_trainer = hero_grug_trainer_config(
         replica_axis_size=dp_racks,
         training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+        balance_attention_rows=balance_attention_rows,
+        max_grad_norm=HERO_MAX_GRAD_NORM if hero else None,
         gc_interval=100,
     )
     train_resources = ResourceConfig.with_gpu(
@@ -312,8 +350,16 @@ def build_ladder_run(
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
-        temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS)
-        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path]
+        temporary_checkpoint_path = temporary_checkpoint_base_path(
+            ctx.output_path,
+            ttl_days=RESUME_CHECKPOINT_TTL_DAYS,
+            temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX if size == "d6144" else None,
+        )
+        load_checkpoint_path = checkpoint_resume_paths(
+            ctx.output_path,
+            ttl_days=RESUME_CHECKPOINT_TTL_DAYS,
+            temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX if size == "d6144" else None,
+        )
         if initialize_from_checkpoint is not None:
             load_checkpoint_path.append(initialize_from_checkpoint)
         trainer = hero_trainer_config(
@@ -363,6 +409,7 @@ def build_ladder_run(
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
             ),
+            context_axis_size=context_axis_size,
         )
         return GrugRunConfig(
             model=model,
@@ -372,7 +419,7 @@ def build_ladder_run(
                 total_steps=num_steps,
                 batch_size=batch_size,
                 max_seq_len=model.max_seq_len,
-                experiment_flops=run_flops,
+                enable_simulated_epoching=run_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
                 validation=validation,
                 prior_context_phases=context_phases,
             ),

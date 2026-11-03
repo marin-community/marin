@@ -39,6 +39,7 @@ from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -193,10 +194,10 @@ def main() -> None:
         model = dataclasses.replace(model, capacity_factor=args.capacity_factor)
     if args.layers is not None:
         model = dataclasses.replace(model, num_layers=args.layers)
+    # The backend checks these only on the first step, after the full model state is built.
+    if args.moe_impl in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS and args.pooled_transport_capacity_factor is None:
+        raise ValueError(f"--moe-impl {args.moe_impl} requires --pooled-transport-capacity-factor")
     if args.moe_impl == POOLED_WAVE_MOE_IMPL:
-        # The backend checks these only on the first step, after the full model state is built.
-        if args.pooled_transport_capacity_factor is None:
-            raise ValueError(f"--moe-impl {POOLED_WAVE_MOE_IMPL} requires --pooled-transport-capacity-factor")
         local_experts = model.num_experts // args.expert_axis
         if local_experts % args.num_expert_waves != 0:
             raise ValueError(

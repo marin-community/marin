@@ -9,6 +9,7 @@ import { computed } from 'vue'
 import * as Plot from '@observablehq/plot'
 import type { PanelCell } from '@/types/api'
 import PlotFigure from '@/components/charts/PlotFigure.vue'
+import ModelName from '@/components/shared/ModelName.vue'
 
 // Only what the chart reads: the benchmark order and each model's cells. Both the panel view and the
 // compare view can supply that without reshaping their own payload.
@@ -18,6 +19,8 @@ interface ChartSeries {
 }
 
 const props = defineProps<{ benchmarks: string[]; series: ChartSeries[]; models: string[] }>()
+
+const colors = ['#2a78d6', '#1baf7a', '#eda100', '#008300']
 
 interface Bar {
   task: string
@@ -50,7 +53,7 @@ const options = computed<Record<string, unknown>>(() => ({
   fx: { label: null, tickRotate: -30 },
   y: { label: 'primary metric', grid: true },
   // Fixed categorical order (dataviz-validated slots 1–4); a legend keeps identity off colour alone.
-  color: { legend: true, range: ['#2a78d6', '#1baf7a', '#eda100', '#008300'] },
+  color: { legend: false, domain: props.models, range: colors },
   marks: [
     Plot.barY(bars.value, { fx: 'task', x: 'model', y: 'value', fill: 'model' }),
     Plot.ruleX(bars.value, {
@@ -68,7 +71,15 @@ const options = computed<Record<string, unknown>>(() => ({
 
 <template>
   <div class="rounded-lg border border-surface-border bg-surface p-4">
-    <PlotFigure v-if="bars.length" :options="options" />
+    <template v-if="bars.length">
+      <ul aria-label="Chart models" class="flex flex-wrap gap-x-6 gap-y-2 mb-3 text-xs">
+        <li v-for="(model, index) in models" :key="model" class="flex items-start gap-2 min-w-0 max-w-full">
+          <span aria-hidden="true" class="mt-1 w-2.5 h-2.5 rounded-sm shrink-0" :style="{ backgroundColor: colors[index] }" />
+          <ModelName :model="model" />
+        </li>
+      </ul>
+      <PlotFigure :options="options" />
+    </template>
     <p v-else class="text-sm text-text-muted py-8 text-center">No scored benchmarks for the selected models.</p>
   </div>
 </template>

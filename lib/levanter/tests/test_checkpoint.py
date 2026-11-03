@@ -1192,6 +1192,7 @@ def test_backward_compatibility_with_ocdbt():
         assert restored_state.step == initial_state.step
 
 
+@pytest.mark.tpu
 def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_path):
     devices = np.array(jax.devices())
     mesh = jax.sharding.Mesh(devices, ("data",))

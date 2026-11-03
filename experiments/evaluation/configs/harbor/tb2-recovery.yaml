@@ -20,6 +20,10 @@ environment:
   type: daytona
 agents:
   - name: terminus-2
+    kwargs:
+      model_info:
+        max_input_tokens: 65536
+        max_output_tokens: 16384
 datasets:
-  - name: hf://DCAgent2/terminal_bench_2
-    ref: main
+  - name: terminal-bench/terminal-bench-2-1
+    ref: "6"

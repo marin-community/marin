@@ -53,7 +53,7 @@ revision.
   refresh re-pins every group section at its staged tip in that single PR. State the
   exact `main-next` to `main` admin promotion still required, request the
   descriptor's `blocker_assignee` as reviewer, and monitor the PR per
-  `.agents/skills/commit/SKILL.md`.
+  `.agents/skills/manage-pr/SKILL.md`.
 - For `vllm-gpu`, use `docs/vllm.md` for the source-review handoff and the
   later Marin adoption PR.
 - On an unresolved blocker, do not open a PR. Create or update one
@@ -85,7 +85,7 @@ git -C <fork> remote set-head upstream -a                # so upstream/HEAD reso
 
 ## Select the base
 
-- `base_select = upstream_main` (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm-gpu`): the base is the
+- `base_select = upstream_main` (`vllm-gpu`): the base is the
   tip of the `upstream` default branch. These pins rebase onto upstream `main`; there is no
   release to gate on. `vllm-gpu` is the only unit that rebases the shared vLLM `main` source.
 - `base_select = latest_release` (`tpu-inference`): use GitHub Releases of the
@@ -187,7 +187,7 @@ need the follow-up described below.
   record the exact existing main-line source and its upstream base without
   creating or promoting another branch. The section-by-section mechanics are
   in `docs/vllm.md`.
-- `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
+- `pin = isolated_project`: no current fork uses this pin kind. The uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
   the uv source at `main-next`, then run
@@ -236,32 +236,6 @@ Run the descriptor's `e2e` before opening the PR:
   `tpu-inference`) and `tests/cluster/vllm/test_snowball_backend_parity.py`
   (`vllm-gpu`) — are documented with their exact commands in `docs/vllm.md`.
 
-- **`experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml`** (`evalchemy`) and
-  **`experiments/evaluation/configs/harbor/aime-smoke.yaml`** (`harbor`) — one eval
-  runner drives both; only the config source differs. Submit a bounded run and
-  confirm it completes with metrics and no fork import/build/runtime traceback:
-
-```sh
-uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 \
-  --evalchemy-config experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml   # evalchemy
-uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml          # harbor
-```
-
-  `--dry-run` resolves the model, backend, and task plan — a wiring pre-check, not
-  fork validation. Depending on the eval it may not import the fork at all, or import
-  it without exercising it, so a green dry-run says nothing about whether the new pin
-  runs. Only the live run above validates the refreshed fork.
-
-- **`experiments/post_training/iceball_micro.py`** (`MarinSkyRL`) — the micro
-  post-training e2e. `--version` is required and `--run` builds the handles
-  (without it the command only prints the plan); confirm the terminal stage
-  completes:
-
-```sh
-uv run python -m experiments.post_training.iceball_micro --stage evaluation --version dev --run
-```
-
 When an e2e fails, rerun the same workload against Marin's current pins on the old
 fork stack, same target and priority. Fix only failures that pass on the old stack
 and fail on the refreshed one. If the old stack is already broken, the fork's e2e
@@ -286,14 +260,15 @@ and confirm the resolved SHA did not change before marking the PR ready.
 ## Review and Open the PR
 
 Do a PR-review pass over the fork commits and Marin diff using
-`.agents/skills/review-pr/SKILL.md`, then run `./infra/pre-commit.py --review` and
-fix or answer every finding. Check that each retained patch has a reason and a drop
+`.agents/skills/review-pr/SKILL.md`, then run the advisory review through
+`manage-pr` with `--calling-agent` set to `claude` or `codex` to match the caller.
+Fix or answer every finding. Check that each retained patch has a reason and a drop
 condition, each dropped patch is truly obsolete, Marin edits are scoped to the
 refresh, and no text overclaims validation evidence.
 
-Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md`,
-request the descriptor's `blocker_assignee` as reviewer, and follow the commit
-skill's monitoring loop to an exit condition. The GPU guide names the adoption
+Open one draft `marin-community/marin` PR via `.agents/skills/manage-pr/SKILL.md`,
+request the descriptor's `blocker_assignee` as reviewer, and follow the
+`manage-pr` monitoring loop to an exit condition. The GPU guide names the adoption
 PR evidence. For the other forks, include the selected base, staged tip SHA,
 rollback and date tags, pending admin promotion, e2e outcome, and unresolved
 risks; in `<details>`, include the base-selection evidence and carry/drop/fix table with

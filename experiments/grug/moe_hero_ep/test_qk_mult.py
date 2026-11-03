@@ -17,7 +17,7 @@ from experiments.grug.moe_hero_ep import model
 def _explicit_mesh(*axis_sizes):
     return Mesh(
         np.asarray(jax.devices()).reshape(*axis_sizes),
-        ("replica_dcn", "data", "context", "expert", "model"),
+        ("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
 

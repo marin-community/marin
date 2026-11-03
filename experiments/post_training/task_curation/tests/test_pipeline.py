@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import tarfile
 import threading
 from dataclasses import replace
 from functools import partial
@@ -27,12 +28,12 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.pipeline.controls import reference_reply
-from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
-from taskcompendium.pipeline.sources import prepared_component_path
+from taskcompendium.pipeline.sources import prepared_component_path, source_shards, staged_file_rows
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 from verifyit.spec import EmptyOutputPolicy, ExactSpec, JudgeSpec
 from zephyr.context import ZephyrContext
@@ -53,6 +54,7 @@ from experiments.post_training.task_curation.pipeline import (
     CampaignMachines,
     CurationRecipe,
     DownloadRequest,
+    HarborHubSource,
     HfSource,
     UrlSource,
     download_source,
@@ -568,3 +570,74 @@ def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
         assert review_server.requests[0]["model"] == "fixture-judge"
     finally:
         client.shutdown()
+
+
+def archive_rows(path, context):
+    with path.open("rb") as stream, tarfile.open(fileobj=stream, mode="r|gz") as archive:
+        for member in archive:
+            if member.name == "instruction.md":
+                content = archive.extractfile(member)
+                assert content is not None
+                yield {"prompt": content.read().decode(), "answer": "1"}
+
+
+def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    original_run = pipeline_module.subprocess.run
+    acquired = []
+
+    def exporter(command, **kwargs):
+        if str(pipeline_module.HARBOR_EXPORTER) not in command:
+            return original_run(command, **kwargs)
+        release = command[command.index("--release") + 1]
+        output = StoragePath(command[command.index("--output") + 1])
+        acquired.append(release)
+        (output / "tasks/task.tar.gz").write_bytes(release.encode(), auto_mkdir=True)
+        (output / "release.json").write_text(json.dumps({"release": release}))
+        return None
+
+    monkeypatch.setattr(pipeline_module.subprocess, "run", exporter)
+    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, read=archive_rows)
+    runtime = CampaignRuntime()
+    client = LocalClient()
+    try:
+        with set_current_client(client):
+            first = run(download_step(source, runtime), max_concurrent=1)[0]
+            repeated = run(download_step(source, runtime), max_concurrent=1)[0]
+            changed = replace(source, revision="sha256:" + "c" * 64)
+            other = run(download_step(changed, runtime), max_concurrent=1)[0]
+        assert first.path == repeated.path != other.path
+        assert acquired == [f"{source.name}@{source.revision}", f"{changed.name}@{changed.revision}"]
+        for artifact, expected in zip((first, other), acquired, strict=True):
+            assert (StoragePath(artifact.path) / "tasks/task.tar.gz").read_text() == expected
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.QUICK, SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_path, config, mode):
+    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, read=archive_rows)
+    recipe = replace(math500(), source=source, convert=convert_fixture, rubric=None, controls=None, grader=None)
+    options = PipelineOptions(mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=replace(config, mode=mode)))
+    automatic = source_step(recipe, options)
+    assert len(automatic.deps) == 1
+    root = tmp_path / "input"
+    (root / "tasks").mkdir(parents=True)
+    payload = root / "tasks/task.tar.gz"
+    instruction = root / "instruction.md"
+    instruction.write_text("one")
+    with tarfile.open(payload, "w:gz") as archive:
+        archive.add(instruction, arcname="instruction.md")
+    spec = pipeline_module.source_files(source)
+    shard = source_shards(str(root), spec)[0]
+    rows = list(staged_file_rows(str(root), shard, spec, ConversionContext({}, None)))
+    assert rows[0]["data"] == {"prompt": "one", "answer": "1"}
+    local_options = replace(options, inputs=InputOverrides(root=str(root)))
+    first = source_step(recipe, local_options)
+    assert first.deps == ()
+    instruction.write_text("two")
+    with tarfile.open(payload, "w:gz") as archive:
+        archive.add(instruction, arcname="instruction.md")
+    second = source_step(recipe, local_options)
+    if mode != SourceProcessingMode.QUICK:
+        assert first.name != second.name

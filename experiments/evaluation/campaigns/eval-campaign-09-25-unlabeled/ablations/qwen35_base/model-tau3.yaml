@@ -1,0 +1,24 @@
+# tau3-pi-only serving override: 131,072 context and 32,768 per-turn output.
+name: Qwen-Qwen3.5-35B-A3B-Base
+location: Qwen/Qwen3.5-35B-A3B-Base
+revision: 0f0813072d2358973511097385626f21fcb6d422
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+  memory: 320g
+serve:
+  tensor_parallel_size: 2
+  data_parallel_size: 2
+  max_model_len: 131072
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  reasoning_parser: qwen3
+  tool_call_parser: qwen3_coder
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: qwen-chat-template
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
+generation:
+  max_gen_toks: 32768

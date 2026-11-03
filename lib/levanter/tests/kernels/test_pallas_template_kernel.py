@@ -5,8 +5,12 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import pytest
 
 from levanter.kernels.pallas.template_kernel import reference_impl_batched, template_op
+
+
+pytestmark = pytest.mark.tpu
 
 
 def test_template_kernel_matches_reference():

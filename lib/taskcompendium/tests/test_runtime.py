@@ -29,11 +29,14 @@ from shellbox.machine import (
 )
 from verifyit.spec import RUBRIC_LABELS, JudgeSpec, ScriptSpec, render_spec, spec_from_table
 
+from taskcompendium.ejection import mark_unsolvable
+from taskcompendium.examples.ejection import ejection_examples
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
+    AnswerCall,
     AnswerType,
     AssistantToolCalls,
     CommandSemantics,
@@ -706,3 +709,36 @@ def test_nemo_import_accepts_untyped_source_messages_and_checks_actions():
     task = import_row(data, expected_sha256=canonical_sha256(data))
     assert all(check.status == CheckStatus.PASS for check in verify_task(task))
     assert task.context.events[-1].content == data["responses_create_params"]["input"][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_episode_stops_at_ejection_without_executing_or_continuing():
+    task = mark_unsolvable(ejection_examples(1, AnswerCall())[0])
+    task = task.model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem")
+            ),
+            "output_paths": ("/workspace/continued",),
+        }
+    )
+    ejection = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="eject", name="eject_button", arguments={"reason": "No solution"}),)
+    )
+    actor = ScriptedActor(
+        (
+            ejection,
+            AssistantToolCalls(
+                calls=(
+                    ConversationToolCall(call_id="write", name="shell", arguments={"command": "printf bad > continued"}),
+                )
+            ),
+        )
+    )
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024)
+    rollout = await run_episode(task, actor, factory, max_steps=2, control="ejection")
+    assert rollout.termination == Termination.FINAL_MESSAGE
+    assert rollout.events == (*task.context.events, ejection)
+    assert rollout.evidence().files == {}
+    result = grade_task(task, grading_attempt(ConversationTrace(events=rollout.events), rollout.evidence()))
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)

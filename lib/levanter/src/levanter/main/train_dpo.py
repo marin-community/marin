@@ -51,6 +51,7 @@ from levanter.dpo import (
     reference_eval_cache_path,
 )
 from levanter.main.model_init import load_model_from_source, prepare_model_init_context
+from levanter.models.loss import next_token_ids
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -544,8 +545,11 @@ def _install_separate_reference_export_hooks(
         except TypeError:
             logger.warning(f"Invalid hf_save_dtype: {export.hf_save_dtype}. Defaulting to None.")
 
+    last_saved_update = None
+
     def save_policy_hf_checkpoint(step):
-        if step.step == 0:
+        nonlocal last_saved_update
+        if step.next_step == 0 or step.next_step == last_saved_update:
             return
 
         upload_to_hf = export.hf_upload or False
@@ -561,6 +565,7 @@ def _install_separate_reference_export_hooks(
             generation_config=export.generation_config,
             **hf_upload_kwargs,
         )
+        last_saved_update = step.next_step
 
     trainer.add_hook(save_policy_hf_checkpoint, every=export.hf_save_steps)
 
@@ -794,7 +799,7 @@ def main(config: TrainDpoConfig):
                     policy_model = trainer.mp.cast_to_compute(policy_model)
                     per_pos_loss = policy_model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
                     per_pos_weight = batch.loss_weight.array
-                    per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+                    per_pos_token_id = next_token_ids(policy_model.Pos.name, batch.tokens).array
                     return per_pos_loss, per_pos_weight, per_pos_token_id
 
                 lm_eval_callback = levanter.eval.cb_tagged_lm_evaluate(

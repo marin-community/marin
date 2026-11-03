@@ -110,8 +110,12 @@ entrypoint = sys.argv.pop(1)
 runpy.run_path(entrypoint, run_name="__main__")
 """
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
-# libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
-_RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
+# The AWS error is terminal in RunAI Streamer 0.16.1: a failed ranged GET fails the whole read.
+# Detect it directly instead of waiting for the Python worker to emit the later libstreamer wrapper error.
+_RUNAI_STREAMER_READ_MARKERS = (
+    "could not receive runai_response",
+    "aws_error_http_channel_throughput_failure",
+)
 _LINUX_PROC_ROOT = "/proc"
 # Captured at import so tests can drive the /proc parser on non-Linux hosts, as they already do for
 # _LINUX_PROC_ROOT.
@@ -213,6 +217,8 @@ class IsolatedCudaVllm:
     source: VllmType = VllmType.UPSTREAM
     version: str | None = None
     """Exact PyPI pin; required for ``UPSTREAM`` and ignored for ``MARIN_FORK``."""
+    extra_requirements: tuple[str, ...] = ()
+    """Pinned vLLM plugins installed into the same isolated CUDA environment."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
 
@@ -269,6 +275,8 @@ class IsolatedCudaVllm:
         for package in _CUDA_TOOLCHAIN_PACKAGES:
             requirement = f"{package}=={install.toolchain_version}"
             command.extend(("--with", requirement))
+        for requirement in self.extra_requirements:
+            command.extend(("--with", requirement))
         command.extend(("--python", self.python_version))
         command.extend(install.torch_install_args)
         command.extend(
@@ -294,7 +302,10 @@ class IsolatedCudaVllm:
         install = self._install()
         toolchain_version = install.toolchain_version
         torch_identity = VLLM_GPU_RELEASE.torch_version if self.source is VllmType.MARIN_FORK else install.torch_backend
-        return f"cuda:{install.requirement}:{self.python_version}:{torch_identity}:{toolchain_version}"
+        identity = f"cuda:{install.requirement}:{self.python_version}:{torch_identity}:{toolchain_version}"
+        if self.extra_requirements:
+            return f"{identity}:{self.extra_requirements}"
+        return identity
 
 
 def _write_virtual_hosted_s3_config() -> str:
@@ -1058,7 +1069,8 @@ def _wait_for_vllm_server(
         # A distributed loader worker can report this fault while the API parent stays alive and
         # waits forever for the other ranks. Fail the task from the complete local logs so Iris
         # can retry it without waiting for the parent to exit or the readiness timeout to expire.
-        has_streamer_fault = _RUNAI_STREAMER_READ_MARKER in _native_logs(handle.log_dir).lower()
+        logs = _native_logs(handle.log_dir).lower()
+        has_streamer_fault = any(marker in logs for marker in _RUNAI_STREAMER_READ_MARKERS)
         if process.poll() is None:
             if not has_streamer_fault:
                 return

@@ -47,6 +47,7 @@ def test_reference_attention_matches_manual_segment_mask():
     np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
 
 
+@pytest.mark.tpu
 def test_reference_attention_supports_model_sharded_head_dimension():
     q, k, v = _make_qkv(batch=1, q_len=5, k_len=5, q_heads=2, kv_heads=1)
     mask = AttentionMask.causal()
@@ -91,6 +92,7 @@ def test_reference_attention_eval_shape_supports_model_sharded_grouped_query_hea
     assert output.sharding == q_sharding
 
 
+@pytest.mark.tpu
 def test_real_tpu_splash_attention_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("Splash attention requires a TPU backend.")

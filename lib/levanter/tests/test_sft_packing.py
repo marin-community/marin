@@ -112,7 +112,7 @@ def _hot_key_qkv(length: int, head_size: int):
     return query, key, value
 
 
-@pytest.mark.parametrize("impl", ["vanilla", "jax_flash", "default", "splash"])
+@pytest.mark.parametrize("impl", ["vanilla", "jax_flash", "default", pytest.param("splash", marks=pytest.mark.tpu)])
 def test_packed_segments_block_cross_segment_attention(tokenizer, tmp_path, impl):
     if impl == "splash" and jax.default_backend() != "tpu":
         pytest.skip("splash kernel requires TPU")

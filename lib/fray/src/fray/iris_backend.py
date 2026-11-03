@@ -50,6 +50,7 @@ from iris.resources.state import JobState as IrisJobState
 from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
 from iris.rpc.errors import is_retryable_error
+from rigging.secrets import SecretBehavior
 from rigging.timing import ExponentialBackoff
 
 from fray.actor import (
@@ -238,6 +239,8 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
     return EnvironmentSpec(
         pip_packages=list(env.pip_packages) if env is not None else [],
         env_vars=env_vars,
+        secrets=dict(env.secrets) if env is not None else {},
+        secret_behavior=env.secret_behavior if env is not None else SecretBehavior.INHERIT,
         extras=list(env.extras) if env is not None else [],
         setup_scripts=list(env.setup_scripts) if env is not None and env.setup_scripts is not None else None,
         sync_packages=list(env.sync_packages) if env is not None else [],
@@ -293,7 +296,7 @@ class IrisJobHandle:
         self._job.cancel()
 
 
-def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
+def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str, max_concurrency: int) -> None:
     """Entrypoint for actor-hosting Iris jobs.
 
     Instantiates the actor class, creates an ActorServer, registers the
@@ -328,7 +331,9 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     finally:
         _reset_current_actor(token)
 
-    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"))
+    # Size the method executor from ActorConfig.max_concurrency, as the Fray
+    # contract says. An actor that serves calls during a long method must set it.
+    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"), max_concurrency=max_concurrency)
     server.register(actor_name, instance)
     actual_port = server.serve_background()
 
@@ -735,7 +740,9 @@ class FrayIrisClient:
         finally:
             _reset_current_actor(token)
 
-        server = ActorServer(host="0.0.0.0", port=0)
+        # host_actor runs in the submitting process, so it must apply the same
+        # ActorConfig contract as actors submitted through create_actor_group.
+        server = ActorServer(host="0.0.0.0", port=0, max_concurrency=actor_config.max_concurrency)
         server.register(actor_name, instance)
         actual_port = server.serve_background()
 
@@ -752,6 +759,7 @@ class FrayIrisClient:
         name: str,
         resources: ResourceConfig = ResourceConfig(),
         actor_config: ActorConfig = ActorConfig(),
+        environment: EnvironmentConfig | None = None,
         **kwargs: Any,
     ) -> ActorHandle:
         group = self.create_actor_group(
@@ -761,6 +769,7 @@ class FrayIrisClient:
             count=1,
             resources=resources,
             actor_config=actor_config,
+            environment=environment,
             **kwargs,
         )
         return group.wait_ready()[0]
@@ -773,6 +782,7 @@ class FrayIrisClient:
         count: int,
         resources: ResourceConfig = ResourceConfig(),
         actor_config: ActorConfig = ActorConfig(),
+        environment: EnvironmentConfig | None = None,
         **kwargs: Any,
     ) -> IrisActorGroup:
         """Submit a single Iris job with N replicas, each hosting an instance of actor_class.
@@ -782,7 +792,7 @@ class FrayIrisClient:
         """
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
-        iris_environment = convert_environment(None, device=resources.device)
+        iris_environment = convert_environment(environment, device=resources.device)
 
         # Actor group replicas are independent workers, not an NVLink collective.
         if count > 1 and isinstance(resources.device, GpuConfig):
@@ -792,7 +802,14 @@ class FrayIrisClient:
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
-        entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
+        entrypoint = IrisEntrypoint.from_callable(
+            _host_actor,
+            actor_class,
+            args,
+            kwargs,
+            name,
+            actor_config.max_concurrency,
+        )
 
         retry_kwargs: dict[str, Any] = {}
         if actor_config.max_task_retries is not None:

@@ -21,7 +21,6 @@ from taskcompendium.models import (
     GradingAttempt,
     JsonAnswer,
     NoGrader,
-    SessionGrader,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
@@ -89,12 +88,6 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
     grader = task.grader
     if isinstance(grader, NoGrader):
         return [CheckResult(check="source_evaluator", status=CheckStatus.UNSUPPORTED, detail=grader.reason)]
-    if isinstance(grader, SessionGrader):
-        return [
-            CheckResult(
-                check="runtime", status=CheckStatus.UNSUPPORTED, detail="A session grader runs in its rollout session"
-            )
-        ]
     if not isinstance(grader, VerifyitGrader) or grader.environment is not None:
         return [CheckResult(check="runtime", status=CheckStatus.UNSUPPORTED, detail="A grading environment is required")]
     try:

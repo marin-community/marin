@@ -5,6 +5,19 @@ Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
 reviewed SAMPLE/FULL campaigns and artifact outputs.
 
+## Final task selection
+
+Pass `--selection RECIPE.json` to a FULL campaign to append a
+`rl-data/task-selection/<name>/<version>` artifact after source admission.
+The recipe names the source IDs, assigns them to selection families, sets
+family quotas and pins the complete heldout source in retained storage.
+The step filters heldout overlap and cross-source duplicates before sampling,
+then writes canonical `task_spec` Parquet for training and evaluation.
+See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
+selection recipe and the training/evaluation handoff.
+See [task selection](../../../docs/references/task-curation.md#final-task-selection)
+for the recipe and resume commands.
+
 ## Local conversion loop
 
 From the repository root:
@@ -186,10 +199,10 @@ recipes, files and execution settings; image tags and build-time downloads
 retain the source's reproducibility limits.
 The exporter does not install Harbor or validate every generated `task.toml`
 against Harbor's schema. The manifest records this limit. After extracting a
-`task.toml` from `task_binary`, check it with the pinned external Harbor runtime:
+`task.toml` from `task_binary`, check it with the vendored Harbor runtime:
 
 ```bash
-uv run --project config/external/harbor --frozen python -c \
+uv run --project vendor/harbor --extra runtime --frozen python -c \
   'from pathlib import Path; from harbor_config.models.task.config import TaskConfig; TaskConfig.model_validate_toml(Path("task.toml").read_text())'
 ```
 

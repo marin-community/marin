@@ -45,6 +45,37 @@ def _panel(store, **kwargs):
     return store.panel(metrics.panel_request(**kwargs), None, False)
 
 
+def test_metadata_tracks_replaced_snapshots_and_keeps_returned_root_request_owned(tmp_path):
+    store = evaldash_app.MemoryRecordStore()
+    assert store.meta()["models"] == []
+    fixtures.build_fixtures(str(tmp_path))
+    records = list_records(str(tmp_path))
+    store.refresh(records)
+    metadata = store.meta()
+    assert "snowball" in metadata["models"]
+    metadata["current_user"] = "previous-viewer"
+    metadata["store"] = "previous-response"
+    fresh = store.meta()
+    assert "current_user" not in fresh
+    assert "store" not in fresh
+
+    record = records[0].model_copy(
+        update={
+            "model": records[0].model.model_copy(update={"name": "replacement-model"}),
+            "user": "replacement-user",
+            "version": "replacement-cohort",
+            "hardware": records[0].hardware.model_copy(update={"accelerator": "replacement-accelerator"}),
+        }
+    )
+    store.refresh([record])
+    replaced = store.meta()
+    assert replaced["models"] == ["replacement-model"]
+    assert replaced["run_facets"]["version"] == ["replacement-cohort"]
+    assert replaced["facets"]["user"] == ["replacement-user"]
+    assert replaced["facets"]["accelerator"] == ["replacement-accelerator"]
+    assert metadata["models"] == fresh["models"]
+
+
 def test_api_defaults_to_the_current_verified_cohort(client):
     expected = "eval-policy-2026-09-24-verified"
     assert client.get("/panel").json()["request"]["cohort_version"] == expected
@@ -353,3 +384,45 @@ def test_api_jobs_degrade_without_a_cluster(client):
     jobs = client.get("/runs/snowball-2026.07.20-mmlu/jobs").json()
     assert jobs["roles"]
     assert all(role["reachable"] is False for role in jobs["roles"])
+
+
+@pytest.mark.parametrize("endpoint", ["/runs", "/groups"])
+def test_run_filters_find_older_models_before_limiting(client, endpoint):
+    newest = client.get(endpoint, params={"limit": 1}).json()
+    assert newest[0]["model_name"] != "snowball"
+    rows = client.get(
+        endpoint,
+        params={
+            "model": "snowball",
+            "eval": "mmlu",
+            "version": "2026.07.20",
+            "status": "succeeded",
+            "accelerator": "v6e-8",
+            "limit": 1,
+        },
+    ).json()
+    assert len(rows) == 1
+    assert rows[0]["model_name"] == "snowball"
+    assert rows[0]["version"] == "2026.07.20"
+    assert client.get(endpoint, params={"accelerator": "not-present"}).json() == []
+    assert client.get(endpoint, params={"version": "not-present"}).json() == []
+    assert client.get(endpoint, params={"eval": "not-present"}).json() == []
+
+
+def test_launch_eval_filter_preserves_siblings_and_rollup(client):
+    rows = client.get("/groups", params={"model": "tootsie-8b", "eval": "mmlu", "status": "mixed"}).json()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "mixed"
+    assert rows[0]["n_evals"] == 7
+    assert {member["status"] for member in rows[0]["evals"]} == {"succeeded", "failed", "infra_failed"}
+    assert client.get("/groups", params={"model": "tootsie-8b", "eval": "mmlu", "status": "succeeded"}).json() == []
+
+
+def test_run_filter_options_include_catalog_outside_recent_window(client):
+    recent = client.get("/runs", params={"limit": 1}).json()
+    facets = client.get("/meta").json()["run_facets"]
+    assert "snowball" in facets["model"]
+    assert "snowball" != recent[0]["model_name"]
+    all_runs = client.get("/runs", params={"limit": 1000}).json()
+    assert set(facets["eval"]) == {row["eval_name"] for row in all_runs}
+    assert set(facets["version"]) == {row["version"] for row in all_runs if row["version"]}

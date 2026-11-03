@@ -821,8 +821,10 @@ def _build_native_package(build: NativeBuild, version: str, operation: str, repo
     if operation == BuildOperation.LINUX:
         zig_dir = str(Path(_ensure_zig(repo_root)).parent)
         environment = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    maturin_config = tomllib.loads((repo_root / build.native_path / "pyproject.toml").read_text())["tool"]["maturin"]
+    profile = maturin_config.get("profile", "release")
     for target, manylinux in targets:
-        arguments = ["build", "--release", "--out", str(dist_dir), "--target", target]
+        arguments = ["build", "--profile", profile, "--out", str(dist_dir), "--target", target]
         if manylinux:
             arguments.extend(("--manylinux", manylinux))
         if operation == BuildOperation.LINUX:

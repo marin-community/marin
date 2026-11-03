@@ -1,0 +1,27 @@
+# Campaign 4 retains the Grug merge cohort's serving settings with the tau3 context policy.
+name: open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14
+location: open-athena/Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14
+revision: 2fb31748eed37435c7472e80f81f34e306b2fa7a
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 131072
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+generation:
+  max_gen_toks: 32768

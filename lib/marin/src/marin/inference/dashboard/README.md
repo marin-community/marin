@@ -144,10 +144,8 @@ messages. The same template then renders the result in its trained format.
 The server derives schemas from the function syntax without executing the
 source. Pydantic validates arguments before each call and the return value
 afterward. Calls run in isolated ShellSim environments with CPython and NumPy,
-prepared from the server-configured ports catalog before startup. Python tools
-have 10 billion fuel units, 1 GiB memory, 512 MiB disk, 1 MiB output and a
-10-second worker timeout; source is limited to 64 KiB. Guest code has no ambient
-host filesystem, process, network, environment or clock access.
+prepared on the first Python-tool invocation or shell command. Guest code has no
+ambient host filesystem, process, network, environment or clock access.
 
 Within one user turn, each model response that contains one or more calls counts
 as one tool round. **Max tool rounds** in **More settings** controls the number
