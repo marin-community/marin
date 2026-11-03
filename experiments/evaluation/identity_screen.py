@@ -39,7 +39,9 @@ from transformers import AutoTokenizer
 @click.option("--base-url", required=True, help="Endpoint root, without /v1.")
 @click.option("--model", required=True)
 @click.option("--tokenizer", required=True)
-@click.option("--tokenizer-revision", default=None, help="Immutable 40-character commit, required for a remote HF tokenizer.")
+@click.option(
+    "--tokenizer-revision", default=None, help="Immutable 40-character commit, required for a remote HF tokenizer."
+)
 @click.option("--requests", "requests_path", required=True)
 @click.option("--rules", "rules_path", required=True)
 @click.option("--start-id", required=True, type=int)
