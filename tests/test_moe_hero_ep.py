@@ -4,9 +4,6 @@
 import dataclasses
 import math
 import os
-import subprocess
-import sys
-import textwrap
 import tomllib
 from datetime import timedelta
 from pathlib import Path
@@ -28,6 +25,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import save_checkpoint
+from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
@@ -36,7 +34,7 @@ from levanter.grug.grug_moe import (
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
 )
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.devices import use_test_devices
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
@@ -45,6 +43,12 @@ from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_m
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
+from experiments.grug.moe_hero_ep.grugmuon_hero import (
+    _newtonschulz_4d_distributed,
+    _newtonschulz_padded_stack_sharded,
+    _zeropower_via_newtonschulz_local,
+    _zeropower_via_newtonschulz_replicated,
+)
 from experiments.grug.moe_hero_ep.optimizer import ExpertNormalization, GrugMoeMuonHConfig
 
 GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
@@ -93,24 +97,10 @@ def test_muon_expert_normalization_matches_stacked_and_pipeline_layouts(normaliz
             assert np.max(np.abs(final_norms - initial_norms)) > 1e-3
 
 
+@pytest.mark.multidevice
 def test_muon_expert_stack_preserves_sharding_and_updates():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
-    env.pop("JAX_NUM_CPU_DEVICES", None)
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding
-        from jax.sharding import PartitionSpec as P
-
-        from experiments.grug.moe_hero_ep.grugmuon_hero import (
-            _newtonschulz_padded_stack_sharded,
-            _zeropower_via_newtonschulz_local,
-        )
-
-        devices = np.asarray(jax.devices())
+    with use_test_devices(2) as devices:
+        devices = np.asarray(devices)
         mesh = Mesh(
             devices.reshape(1, 1, -1, 1), ("replica_dcn", "data", "expert", "model"), axis_types=(AxisType.Explicit,) * 4
         )
@@ -122,15 +112,6 @@ def test_muon_expert_stack_preserves_sharding_and_updates():
             actual = jax.jit(lambda x: _newtonschulz_padded_stack_sharded(x, target_sharding=sharding))(matrices)
         assert actual.sharding == sharding
         np.testing.assert_array_equal(np.asarray(actual), np.asarray(reference))
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
 
 
 def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
@@ -165,14 +146,14 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         3072,
         8,
         3072,
-        1.15,
+        1.5,
         1.15,
         3,
         "ragged_all_to_all",
         model.QbEstimator.HIST,
         10_000,
-        256,
-        16384,
+        64,
+        65536,
         4,
         10,
         1_000_000_000,
@@ -245,7 +226,7 @@ def test_hero_batch_validation_matches_default_mesh():
         default_mesh_trainer._validate_and_set_defaults()
 
     assert data_axis_size == default_mesh_trainer.data_axis_size == 64
-    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 4
+    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 1
     assert trainer.per_device_eval_parallelism == default_mesh_trainer.per_device_eval_parallelism
 
 
@@ -316,8 +297,9 @@ def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_st
 
 
 def test_data_parallel_racks_keep_the_global_batch_explicit():
-    one_rack = launch.build_diagnostic_run(run_id="one-rack", dp_racks=1, num_steps=1, version="dev")
-    step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
+    # At 16K the one-rack batch spans two racks; at 65K it holds one sequence per device and cannot.
+    one_rack = launch.build_diagnostic_run(run_id="one-rack", dp_racks=1, num_steps=1, max_seq_len=16384, version="dev")
+    step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, max_seq_len=16384, version="dev")
     one_rack_config = one_rack.build_config(StepContext.for_fingerprint(one_rack.runtime_args, one_rack.deps))
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
@@ -362,24 +344,16 @@ def test_synthetic_training_data_builds_a_reusable_global_batch():
 
 
 @pytest.mark.parametrize("context_size", [1, 2])
+@pytest.mark.multidevice
 def test_balance_attention_rows_spreads_long_documents_across_shards(context_size):
     # Two whole-row documents land on the last shard as loaded; balancing gives them separate shards,
     # moves every row's tokens, loss weights, and segment ids together, and keeps loaded order within a shard.
     # Context ranks share rows, so a context axis must not change the placement. With one row per shard,
     # placement cannot change any shard's work, so the rows stay where they were loaded.
-    script = f"""
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-        from levanter.data.text.examples import GrugLmExample
-        from levanter.grug.attention import AttentionMask
-
-        from experiments.grug.moe_hero_ep import train
-
-        rows, seq_len, shards, context = 8, 16, 4, {context_size}
+    with use_test_devices(4 * context_size) as devices:
+        rows, seq_len, shards, context = 8, 16, 4, context_size
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, context, shards, 1),
+            np.asarray(devices).reshape(1, 1, context, shards, 1),
             ("replica_dcn", "data", "context", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
@@ -396,9 +370,7 @@ def test_balance_attention_rows_spreads_long_documents_across_shards(context_siz
                 GrugLmExample(
                     tokens=jnp.asarray(tokens[select], dtype=jnp.int32),
                     loss_weight=jnp.asarray(loss_weight[select]),
-                    attn_mask=AttentionMask.causal().with_segment_ids(
-                        jnp.asarray(segment_ids[select], dtype=jnp.int32)
-                    ),
+                    attn_mask=AttentionMask.causal().with_segment_ids(jnp.asarray(segment_ids[select], dtype=jnp.int32)),
                 ),
                 sharding,
             )
@@ -430,16 +402,15 @@ def test_balance_attention_rows_spreads_long_documents_across_shards(context_siz
         # The last rows hold both long documents, so a deal would move them.
         one_per_shard = balance(slice(rows - shards, None))
         np.testing.assert_array_equal(np.asarray(one_per_shard.tokens), tokens[rows - shards :])
-    """
-
-    run_on_cpu_devices(script, device_count=4 * context_size)
 
 
 def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
     with pytest.raises(ValueError, match=r"must be divisible by expert \(64\) \* context \(1\) = 64"):
-        launch.build_diagnostic_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
+        launch.build_diagnostic_run(
+            run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, context_axis_size=1, version="dev"
+        )
 
 
 def test_expert_bank_requires_context_divisibility():
@@ -459,9 +430,24 @@ def test_expert_bank_requires_context_divisibility():
         )
 
 
-def test_expert_bank_override_must_support_three_waves():
+def test_pooled_wave_expert_bank_must_support_three_waves():
     with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
-        launch.build_diagnostic_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
+        launch.build_diagnostic_run(
+            run_id="bad-waves",
+            dp_racks=1,
+            num_steps=1,
+            num_experts=256,
+            context_axis_size=1,
+            moe_implementation="fixed_pooled_wave_all_to_all",
+            version="dev",
+        )
+
+
+def test_ragged_expert_bank_ignores_the_pooled_wave_count():
+    # Only the pooled-wave transport splits local experts into waves; 4 local experts are fine for ragged.
+    launch.build_diagnostic_run(
+        run_id="ragged-waves", dp_racks=1, num_steps=1, num_experts=256, context_axis_size=1, version="dev"
+    )
 
 
 def _runtime_env_config(
@@ -795,23 +781,11 @@ def test_ep_newton_schulz_preserves_context_bank_sharding():
     assert output.sharding == NamedSharding(mesh, param_spec)
 
 
+@pytest.mark.multidevice
 def test_ep_newton_schulz_matches_replicated_path():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from experiments.grug.moe_hero_ep.grugmuon_hero import (
-            _newtonschulz_4d_distributed,
-            _zeropower_via_newtonschulz_replicated,
-        )
-
+    with use_test_devices(2) as devices:
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 1, 2, 1),
+            np.asarray(devices).reshape(1, 1, 1, 2, 1),
             ("replica_dcn", "data", "context", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
@@ -840,31 +814,14 @@ def test_ep_newton_schulz_matches_replicated_path():
             actual = apply_ns(x_sharded)
 
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-5, rtol=1e-5)
-    """
-
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.multidevice
 def test_ep_newton_schulz_context_bank_avoids_gather():
     # Output placement alone cannot detect an intermediate gather of the full bank.
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from experiments.grug.moe_hero_ep.grugmuon_hero import _newtonschulz_4d_distributed
-
+    with use_test_devices(4) as devices:
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 4, 1, 1),
+            np.asarray(devices).reshape(1, 1, 4, 1, 1),
             ("replica_dcn", "data", "context", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
@@ -888,9 +845,6 @@ def test_ep_newton_schulz_context_bank_avoids_gather():
             out = apply_ns(x)
         assert out.sharding.spec == spec, out.sharding.spec
         assert "all-gather" not in hlo, "the context-split expert bank was gathered whole"
-    """
-
-    run_on_cpu_devices(script, device_count=4)
 
 
 def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
@@ -967,7 +921,9 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
 def test_eval_every_adds_the_held_out_suites_as_dependencies():
     # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
     off = launch.build_diagnostic_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
-    on = launch.build_diagnostic_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
+    on = launch.build_diagnostic_run(
+        run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, context_axis_size=1, version="dev"
+    )
     off_config = off.build_config(StepContext.for_fingerprint(off.runtime_args, off.deps))
     on_config = on.build_config(StepContext.for_fingerprint(on.runtime_args, on.deps))
 
@@ -976,7 +932,7 @@ def test_eval_every_adds_the_held_out_suites_as_dependencies():
     assert off_config.eval is None
     assert on_config.eval is not None
     assert on_config.eval.steps_per_eval == 50
-    assert on_config.eval.eval_batch_size == launch.HERO_EP_EXPERT_AXIS_SIZE
+    assert on_config.eval.eval_batch_size == launch.HERO_RACK_GPUS
     assert on_config.eval.dropless_eval is True
 
 
@@ -1028,22 +984,11 @@ def test_odd_depth_config_is_not_silently_rounded():
     assert cfg.num_layers == 3
 
 
+@pytest.mark.multidevice
 def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import math
-
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, set_mesh
-
-        from experiments.grug.moe_hero_ep import model
-
+    with use_test_devices(4) as devices:
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 1, 2, 2),
+            np.asarray(devices).reshape(1, 1, 1, 2, 2),
             ("replica_dcn", "data", "context", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
@@ -1078,17 +1023,6 @@ def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
                 tokens,
             )
         assert output.shape == (2, 8, 32)
-    """
-
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 def _explicit_mesh(*axis_sizes):

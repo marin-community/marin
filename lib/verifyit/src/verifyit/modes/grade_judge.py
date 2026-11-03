@@ -47,6 +47,7 @@ from verifyit.modes.extract import extract_boxed
 from verifyit.modes.grade_exact import grade_exact_candidate
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.modes.ifeval import Check
+from verifyit.reasoning_markup import REASONING_DELIMITERS
 from verifyit.spec import (
     RUBRIC_CHECKLIST,
     RUBRIC_LABELS,
@@ -313,12 +314,11 @@ def _answer_text(
 ) -> str:
     if not strip_reasoning:
         return text.strip() if strip_outer else text
-    pairs = (("<think>", "</think>"), ("<thinking>", "</thinking>"), ("<|start_think|>", "<|end_think|>"))
-    for opening, closing in pairs:
+    for opening, closing in REASONING_DELIMITERS:
         text = re.sub(re.escape(opening) + ".*?" + re.escape(closing), "", text, flags=re.DOTALL)
-    closing = max((text.rfind(end) + len(end) for _, end in pairs if end in text), default=0)
+    closing = max((text.rfind(end) + len(end) for _, end in REASONING_DELIMITERS if end in text), default=0)
     text = text[closing:]
-    if any(opening in text for opening, _ in pairs):
+    if any(opening in text for opening, _ in REASONING_DELIMITERS):
         if unfinished_error is not None:
             raise RuntimeError(unfinished_error)
         return ""

@@ -117,7 +117,7 @@ def _reshard_for_shard_map(
 _GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "context", "expert", "model")
 
 
-def _compact_grug_mesh_shape(
+def compact_grug_mesh_shape(
     *,
     process_count: int,
     local_device_count: int,
@@ -126,6 +126,10 @@ def _compact_grug_mesh_shape(
     model_axis_size: int,
     context_axis_size: int = 1,
 ) -> tuple[int, ...]:
+    """Return the ``(replica_dcn, data, context, expert, model)`` sizes `compact_grug_mesh` would build.
+
+    Takes the device counts as arguments, so launchers can check a layout before the devices exist.
+    """
     if process_count <= 0:
         raise ValueError(f"process_count must be positive, got {process_count}")
     if local_device_count <= 0:
@@ -171,7 +175,7 @@ def compact_grug_mesh(
     if replica_axis_size is None:
         replica_axis_size = jax.process_count()
 
-    shape = _compact_grug_mesh_shape(
+    shape = compact_grug_mesh_shape(
         process_count=jax.process_count(),
         local_device_count=jax.local_device_count(),
         expert_axis_size=expert_axis_size,

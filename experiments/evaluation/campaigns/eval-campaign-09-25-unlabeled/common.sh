@@ -492,7 +492,7 @@ for index, argument in enumerate(arguments[:-1]):
         if argument == "--policy-finalization-config":
             path = Path(arguments[index + 1]).resolve()
             config = yaml.safe_load(path.read_text())
-            files.extend((kind, path.parent / config[kind]) for kind in ("judge_model_config", "sotopia_baselines"))
+            files.extend((kind, path.parent / config[kind]) for kind in ("judge_model_config",))
 
 payload = {
     "argv": arguments,

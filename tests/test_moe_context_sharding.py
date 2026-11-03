@@ -3,38 +3,30 @@
 
 """Check hero routing, gradients, and parameter placement across context layouts.
 
-Each case uses a subprocess to configure four CPU devices before JAX initializes.
 Under context parallelism, each device flattens its own block of rows and sequence
 shard. The references give each device the same tokens in the same order, so the
 routing and the capacity drops agree.
 """
 
-import textwrap
-
-import pytest
-from levanter.testing.cpu_devices import run_on_cpu_devices
-
-# The cases import the hero model only in the subprocess. This import lets the CI test selector see that dependency.
-import experiments.grug.moe_hero_ep.model  # noqa: F401
-
-_PRELUDE = """
 import math
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from einops import rearrange
 from jax import P
 from jax.sharding import AxisType, Mesh, NamedSharding, reshard, set_mesh
+from levanter.testing.devices import use_test_devices
 
 from experiments.grug.moe_hero_ep import model as hero
 
 _MESH_AXES = ("replica_dcn", "data", "context", "expert", "model")
 
 
-def mesh_of(shape):
-    devices = np.asarray(jax.devices()[: math.prod(shape)]).reshape(shape)
-    return Mesh(devices, _MESH_AXES, axis_types=(AxisType.Explicit,) * len(_MESH_AXES))
+def mesh_of(devices, shape):
+    mesh_devices = np.asarray(devices[: math.prod(shape)]).reshape(shape)
+    return Mesh(mesh_devices, _MESH_AXES, axis_types=(AxisType.Explicit,) * len(_MESH_AXES))
 
 
 def moe_config(**overrides):
@@ -76,31 +68,27 @@ def context_blocks_as_rows(x):
     # four batch shards and no context sharding.
     return rearrange(x, "(e b) (c s) ... -> (e c) (b s) ...", e=2, c=2)
 
-"""
-
-
-def _run(body: str) -> None:
-    run_on_cpu_devices(_PRELUDE + textwrap.dedent(body), device_count=4)
-
 
 @pytest.mark.timeout(300)
+@pytest.mark.multidevice
 def test_routed_moe_matches_independent_routing_per_context_shard():
     # Each context group routes independently; total drops must sum across groups.
-    _run(
-        """
+    with use_test_devices(4) as devices:
         config = moe_config(capacity_factor=0.5)
         x = jax.random.normal(jax.random.key(3), (4, 4, config.hidden_dim), dtype=jnp.float32)
 
         def routed(mesh, tokens, seq_sharded):
-            call = lambda l, t: l(reshard(t, activation_spec(seq_sharded)), jnp.ones(t.shape[:2], dtype=jnp.bool_))
+            def call(layer, tensor):
+                return layer(reshard(tensor, activation_spec(seq_sharded)), jnp.ones(tensor.shape[:2], dtype=jnp.bool_))
+
             with set_mesh(mesh):
                 layer = hero.MoEMLP.init(config, key=jax.random.key(0))
                 out, stats = jax.jit(call)(layer, tokens)
             drops = {k: int(v) for k, v in stats.items() if k.endswith("capacity_overflow")}
             return np.asarray(out), drops
 
-        context_mesh = mesh_of((1, 1, 2, 2, 1))
-        reference_mesh = mesh_of((1, 1, 1, 2, 1))
+        context_mesh = mesh_of(devices, (1, 1, 2, 2, 1))
+        reference_mesh = mesh_of(devices, (1, 1, 1, 2, 1))
         # Expert-parallel group `c` on the context mesh holds sequence shard `c` of all rows. The
         # reference mesh runs each of those shards on its own.
         out, drops = routed(context_mesh, x, seq_sharded=True)
@@ -113,15 +101,12 @@ def test_routed_moe_matches_independent_routing_per_context_shard():
         assert drops_first != drops_second, "the halves must differ, or summing them proves nothing"
         assert drops == {k: drops_first[k] + drops_second[k] for k in drops}, (drops, drops_first, drops_second)
 
-        """
-    )
-
 
 @pytest.mark.timeout(300)
+@pytest.mark.multidevice
 def test_qb_threshold_matches_across_token_layouts():
     # Keep four token shards while moving partitioning from data to context.
-    _run(
-        """
+    with use_test_devices(4) as devices:
         x = jax.random.normal(jax.random.key(3), (4, 4, 16), dtype=jnp.float32)
 
         def thresholds(mesh, config, tokens, seq_sharded):
@@ -133,8 +118,8 @@ def test_qb_threshold_matches_across_token_layouts():
                 stats = call(layer, tokens)
             return {k: np.asarray(v) for k, v in stats.items() if k.startswith("qb_beta")}
 
-        context_mesh = mesh_of((1, 1, 2, 2, 1))
-        reference_mesh = mesh_of((1, 2, 1, 2, 1))
+        context_mesh = mesh_of(devices, (1, 1, 2, 2, 1))
+        reference_mesh = mesh_of(devices, (1, 2, 1, 2, 1))
         for estimator in (hero.QbEstimator.TOPK, hero.QbEstimator.HIST):
             config = moe_config(qb_estimator=estimator, qb_hist_bins=64)
             reference = thresholds(reference_mesh, config, context_blocks_as_rows(x), seq_sharded=False)
@@ -142,40 +127,38 @@ def test_qb_threshold_matches_across_token_layouts():
             assert reference.keys() == context.keys() and reference
             for name, expected in reference.items():
                 np.testing.assert_allclose(context[name], expected, rtol=1e-6, atol=1e-6)
-        """
-    )
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.multidevice
 def test_moe_preserves_sequence_sharding():
     # Both MLP branches must restore the residual layout after flattening tokens.
-    _run(
-        """
+    with use_test_devices(4) as devices:
         config = moe_config()
-        with set_mesh(mesh_of((1, 1, 2, 2, 1))):
+        with set_mesh(mesh_of(devices, (1, 1, 2, 2, 1))):
             routed = hero.MoEMLP.init(config, key=jax.random.key(0))
             shared = hero.DenseMLP.init(
-                config.hidden_dim, config.shared_expert_intermediate_dim,
-                config.initializer_std, key=jax.random.key(1),
+                config.hidden_dim,
+                config.shared_expert_intermediate_dim,
+                config.initializer_std,
+                key=jax.random.key(1),
             )
             for seq_sharded in (True, False):
                 spec = activation_spec(seq_sharded)
                 x = jnp.zeros((4, 4, config.hidden_dim), dtype=jnp.float32)
                 routed_out = jax.eval_shape(
-                    lambda t: routed(reshard(t, spec), jnp.ones(t.shape[:2], dtype=jnp.bool_))[0], x
+                    lambda t, spec=spec: routed(reshard(t, spec), jnp.ones(t.shape[:2], dtype=jnp.bool_))[0], x
                 )
-                shared_out = jax.eval_shape(lambda t: shared(reshard(t, spec)), x)
+                shared_out = jax.eval_shape(lambda t, spec=spec: shared(reshard(t, spec)), x)
                 assert routed_out.sharding.spec == spec, (seq_sharded, routed_out.sharding.spec)
                 assert shared_out.sharding.spec == spec, (seq_sharded, shared_out.sharding.spec)
-        """
-    )
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.multidevice
 def test_shared_and_routed_gradients_match_across_context_degree():
     # Force capacity drops so the gradients exercise shard-local routing decisions.
-    _run(
-        """
+    with use_test_devices(4) as devices:
         config = moe_config(capacity_factor=0.5)
         x = jax.random.normal(jax.random.key(3), (4, 4, config.hidden_dim), dtype=jnp.float32)
         cotangent = jax.random.normal(jax.random.key(4), (4, 4, config.hidden_dim), dtype=jnp.float32)
@@ -184,8 +167,10 @@ def test_shared_and_routed_gradients_match_across_context_degree():
             with set_mesh(mesh):
                 routed = hero.MoEMLP.init(config, key=jax.random.key(0))
                 shared = hero.DenseMLP.init(
-                    config.hidden_dim, config.shared_expert_intermediate_dim,
-                    config.initializer_std, key=jax.random.key(1),
+                    config.hidden_dim,
+                    config.shared_expert_intermediate_dim,
+                    config.initializer_std,
+                    key=jax.random.key(1),
                 )
 
                 def objective(routed, shared, tokens):
@@ -198,24 +183,25 @@ def test_shared_and_routed_gradients_match_across_context_degree():
             return param_grads, token_grad
 
         reference, reference_token_grad = gradients(
-            mesh_of((1, 2, 1, 2, 1)), context_blocks_as_rows(x), context_blocks_as_rows(cotangent), seq_sharded=False
+            mesh_of(devices, (1, 2, 1, 2, 1)),
+            context_blocks_as_rows(x),
+            context_blocks_as_rows(cotangent),
+            seq_sharded=False,
         )
-        context, context_token_grad = gradients(mesh_of((1, 1, 2, 2, 1)), x, cotangent, seq_sharded=True)
+        context, context_token_grad = gradients(mesh_of(devices, (1, 1, 2, 2, 1)), x, cotangent, seq_sharded=True)
         assert reference and len(reference) == len(context)
         for actual, expected in zip(context, reference, strict=True):
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
         np.testing.assert_allclose(
             context_blocks_as_rows(context_token_grad), reference_token_grad, rtol=1e-5, atol=1e-5
         )
-        """
-    )
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.multidevice
 def test_parameter_context_sharding_preserves_placement_and_numerics():
     # Context storage sharding reduces resident parameters without changing layer numerics.
-    _run(
-        """
+    with use_test_devices(4) as devices:
         config = moe_config()
         x = jax.random.normal(jax.random.key(3), (4, 4, config.hidden_dim), dtype=jnp.float32)
         cotangent = jax.random.normal(jax.random.key(4), (4, 4, config.hidden_dim), dtype=jnp.float32)
@@ -224,8 +210,10 @@ def test_parameter_context_sharding_preserves_placement_and_numerics():
             with set_mesh(mesh):
                 routed = hero.MoEMLP.init(config, key=jax.random.key(0))
                 shared = hero.DenseMLP.init(
-                    config.hidden_dim, config.shared_expert_intermediate_dim,
-                    config.initializer_std, key=jax.random.key(1),
+                    config.hidden_dim,
+                    config.shared_expert_intermediate_dim,
+                    config.initializer_std,
+                    key=jax.random.key(1),
                 )
 
                 def forward(routed, shared, tokens):
@@ -254,15 +242,14 @@ def test_parameter_context_sharding_preserves_placement_and_numerics():
                 "grads": [np.asarray(leaf) for leaf in jax.tree.leaves(grads)],
             }
 
-        reference = run(mesh_of((1, 2, 1, 2, 1)), seq_sharded=False)
-        context = run(mesh_of((1, 1, 2, 2, 1)), seq_sharded=True)
+        reference = run(mesh_of(devices, (1, 2, 1, 2, 1)), seq_sharded=False)
+        context = run(mesh_of(devices, (1, 1, 2, 2, 1)), seq_sharded=True)
 
         # Four experts over expert=2 alone, then over expert=2 x context=2.
         assert (reference["experts_per_shard"], context["experts_per_shard"]) == (2, 1), (
-            reference["experts_per_shard"], context["experts_per_shard"]
+            reference["experts_per_shard"],
+            context["experts_per_shard"],
         )
         np.testing.assert_allclose(context["out"], reference["out"], rtol=1e-5, atol=1e-5)
         for actual, expected in zip(context["grads"], reference["grads"], strict=True):
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
-        """
-    )
