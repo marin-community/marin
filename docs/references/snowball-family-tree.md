@@ -55,12 +55,15 @@ W&B links and the complete recorded `.32` W&B archive support these nodes.
 The source package is `infra/marina/apps/snowball_family_tree/`.
 Follow the [contributor README](https://github.com/marin-community/marin/blob/main/infra/marina/apps/snowball_family_tree/README.md)
 to add a checkpoint to `graph-data.json`, verify its parent and timeline, and
-submit a focused PR. The extracts
+submit a reviewed Marin PR. `graph-data.json` on `main` is the source of truth;
+every graph change goes through a PR. The extracts
 `evidence/evidence-glm53async48-telemetry.json` and
 `evidence/evidence-antidoom12-telemetry.json` support scoped RL compute estimates
 for their respective runs. Update or add an extract when new token accounting
 changes an estimate, and link it from the node's evidence. Run records link to the
 public campaign archive.
+
+### Validate and release
 
 Build and validate from the repository root:
 
@@ -72,8 +75,8 @@ uv run marina release infra/marina/apps/snowball_family_tree --local --json
 
 The local command starts a disposable Marina/Postgres instance and prints its
 revision URL. Ctrl-C removes it. The manifest declares the existing app UUID.
-For production updates, use a clean checkout at current remote main and inspect
-the release status and live revision:
+For production updates, release only from a clean checkout at current remote main.
+Inspect the release status and live revision before publishing:
 
 ```bash
 uv run marina release-status infra/marina/apps/snowball_family_tree --json
@@ -89,3 +92,62 @@ CSS, graph and token-count extracts. Release packages that output and restores
 previous local build output afterward. Generated files are ignored by Git. Asset
 URLs are relative, and executable scripts use packaged files to satisfy Marina's
 content security policy.
+
+Do not use `--allow-dirty` for a public tree release. Merging source or
+deploying Marina does not publish the app. If the live package differs from
+main, record the difference in the tree PR or tracking issue before publishing.
+After a manual release, record the published version, revision URL and main
+commit there.
+
+### Nightly publication
+
+[Marin - Release Snowball Tree](https://github.com/marin-community/marin/actions/workflows/marin-release-snowball-tree.yaml)
+runs daily at 04:17 UTC when the repository variable `SNOWBALL_TREE_RELEASE` is
+`enabled`. Manual dispatch from `main` works without the variable. The job skips
+the release when the live revision already matches main. Otherwise it runs the
+layout check, releases against the observed live version and checks that the
+new revision is live. It does not retry a version conflict; inspect the new
+state, then rerun. The run summary and the `snowball-release-<run>-<attempt>`
+artifact hold the release record, also when verification fails.
+
+To activate it:
+
+1. An IAM operator applies the `marin` stack, which grants
+   `serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com`
+   `roles/iap.httpsResourceAccessor` on Marina. CI only previews this stack.
+   Follow the [IAM review procedure](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants)
+   and the [Cloud Run IAP access check](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#cloud-run-iap-access):
+
+   ```bash
+   pulumi -C infra/pulumi preview --stack marin
+   pulumi -C infra/pulumi up --stack marin
+   ```
+
+2. Dispatch a dry run and inspect it:
+
+   ```bash
+   gh workflow run marin-release-snowball-tree.yaml --ref main -f dry_run=true
+   ```
+
+3. If the dry run stops on an unrecorded live package (a release without source
+   provenance), compare it with main and record the differences in the tree PR
+   or tracking issue. Then preview and run a one-time bootstrap:
+
+   ```bash
+   gh workflow run marin-release-snowball-tree.yaml --ref main \
+     -f dry_run=true -f bootstrap_unrecorded=true
+   gh workflow run marin-release-snowball-tree.yaml --ref main \
+     -f dry_run=false -f bootstrap_unrecorded=true
+   ```
+
+4. Enable the schedule. Delete the variable to pause it.
+
+   ```bash
+   gh variable set SNOWBALL_TREE_RELEASE --repo marin-community/marin --body enabled
+   ```
+
+Local dry run, with a synced Marina environment and an authenticated account:
+
+```bash
+uv run --no-sync python scripts/ci/snowball_release.py --dry-run --record /tmp/snowball-release.json
+```
