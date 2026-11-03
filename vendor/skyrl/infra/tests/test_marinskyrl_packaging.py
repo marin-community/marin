@@ -121,7 +121,7 @@ def test_gpu_profiles_use_one_cuda132_runtime(extras: tuple[str, ...]) -> None:
         and (requirement.marker is None or requirement.marker.evaluate(platform))
     }
 
-    assert runtimes == {("nvidia-cuda-runtime", "==13.2.75")}
+    assert runtimes == {("nvidia-cuda-runtime", "==13.2.86")}
 
 
 @pytest.mark.parametrize(
