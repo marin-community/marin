@@ -153,13 +153,13 @@ class TestPiAgent:
         [("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY")],
     )
     async def test_provider_receives_only_explicit_inert_capabilities(
-        self, temp_dir, monkeypatch, provider, key
+        self, temp_dir, monkeypatch, provider, key, mock_environment
     ):
         monkeypatch.setenv(key, "host-provider-private-canary")
         agent = Pi(
             logs_dir=temp_dir, model_name=f"{provider}/model", extra_env={key: "EMPTY"}
         )
-        environment = AsyncMock()
+        environment = mock_environment
         environment.exec.return_value = SimpleNamespace(
             return_code=0, stdout="", stderr=""
         )
@@ -176,13 +176,13 @@ class TestPiAgent:
             ("openai/gpt-4", "OPENAI_BASE_URL"),
         ],
     )
-    async def test_provider_base_url_forwarding(self, temp_dir, model_name, variable):
+    async def test_provider_base_url_forwarding(self, temp_dir, model_name, variable, mock_environment):
         agent = Pi(
             logs_dir=temp_dir,
             model_name=model_name,
             extra_env={variable: "https://provider.example.test/v1"},
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         endpoint = "https://provider.example.test/v1"
 
@@ -814,13 +814,13 @@ fetch(`${provider.baseUrl}/chat/completions`, {
 
 
 @pytest.mark.asyncio
-async def test_builtin_provider_does_not_replace_models_document(temp_dir):
+async def test_builtin_provider_does_not_replace_models_document(temp_dir, mock_environment):
     agent = Pi(
         logs_dir=temp_dir,
         model_name="anthropic/claude-sonnet-4-5",
         extra_env={"ANTHROPIC_API_KEY": "EMPTY"},
     )
-    mock_env = AsyncMock()
+    mock_env = mock_environment
     mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=False):

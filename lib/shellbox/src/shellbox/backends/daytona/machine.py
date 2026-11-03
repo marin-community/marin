@@ -51,8 +51,8 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import finish_owned, own_cleanup
 from shellbox.process import CLEANUP_TIMEOUT, ProcessScope
+from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
 logger = logging.getLogger(__name__)
@@ -271,14 +271,12 @@ class DaytonaMachine:
         try:
             if started:
                 await finish_owned(own_cleanup(self._stop_command(scope)))
-                await finish_owned(own_cleanup(self._remove_command_files(prefix)))
-            elif not self._closed:
-                await finish_owned(own_cleanup(self.close()))
+            await finish_owned(own_cleanup(self._remove_command_files(prefix)))
         except BaseException as cleanup_error:
             cancellation.add_note(f"Daytona command cancellation cleanup failed ({type(cleanup_error).__name__})")
             try:
                 if not self._closed:
-                    await finish_owned(own_cleanup(self.close()))
+                    await self.close()
             except BaseException as close_error:
                 cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
 
@@ -393,12 +391,7 @@ class DaytonaMachine:
                     primary_error.add_note(f"Daytona command cleanup failed: {error}")
 
     async def _stop_command(self, scope: ProcessScope) -> None:
-        try:
-            await finish_cleanup(self._cancel_remote(scope))
-        except Exception as error:
-            if not self._closed:
-                await self.close()
-            raise RuntimeError("Cannot confirm Daytona command teardown") from error
+        await finish_cleanup(self._cancel_remote(scope))
 
     async def _cancel_remote(self, scope: ProcessScope) -> None:
         async with asyncio.timeout(CLEANUP_TIMEOUT):
@@ -462,7 +455,7 @@ class DaytonaMachine:
     async def close(self) -> None:
         if self._closing is None:
             self._closed = True
-            self._closing = own_cleanup(self._close())
+            self._closing = own_cleanup(self._close(asyncio.current_task()))
         try:
             await asyncio.shield(self._closing)
         except asyncio.CancelledError as error:
@@ -472,9 +465,9 @@ class DaytonaMachine:
                 error.add_note(f"Daytona cleanup failed ({type(cleanup_error).__name__})")
             raise
 
-    async def _close(self) -> None:
+    async def _close(self, caller: asyncio.Task | None) -> None:
         try:
-            await self._commands.close()
+            await self._commands.close(caller)
             await asyncio.gather(*tuple(self._acquisitions), return_exceptions=True)
             results = await asyncio.gather(
                 *(session.close() for session in tuple(self._sessions)), return_exceptions=True

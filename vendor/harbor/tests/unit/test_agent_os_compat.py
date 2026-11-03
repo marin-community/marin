@@ -40,13 +40,13 @@ class TestLinuxOnlyAgentsDoNotSupportWindows:
         # These are the only agents that should support Windows.
         windows_agents = {"oracle", "nop"}
         for name, cls in installed_agents.items():
-            if name.value in windows_agents:
+            if name in windows_agents:
                 assert cls.SUPPORTS_WINDOWS is True, (
-                    f"{name.value} should have SUPPORTS_WINDOWS = True"
+                    f"{name} should have SUPPORTS_WINDOWS = True"
                 )
             else:
                 assert cls.SUPPORTS_WINDOWS is False, (
-                    f"{name.value} should not have SUPPORTS_WINDOWS = True"
+                    f"{name} should not have SUPPORTS_WINDOWS = True"
                 )
 
 

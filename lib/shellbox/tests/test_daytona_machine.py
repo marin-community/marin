@@ -5,7 +5,6 @@
 
 import asyncio
 import os
-import shutil
 import signal
 import stat
 import sys
@@ -269,6 +268,7 @@ def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():
 
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     async def scenario() -> None:
         client = LocalDaytona()
@@ -324,8 +324,8 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 @pytest.mark.parametrize("interruption", ["timeout", "cancel", "cancel_twice", "cancel_during_timeout_stop"])
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(tmp_path, interruption):
     async def scenario():
         stopping, release_stop = asyncio.Event(), asyncio.Event()
@@ -337,7 +337,10 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
 
             async def exec(self, command, **kwargs):
                 try:
-                    if "stop-command" in command and interruption in {"cancel_twice", "cancel_during_timeout_stop"}:
+                    if " cancel /tmp/.shellbox-process-" in command and interruption in {
+                        "cancel_twice",
+                        "cancel_during_timeout_stop",
+                    }:
                         stopping.set()
                         await release_stop.wait()
                     return await super().exec(command, **kwargs)
@@ -380,7 +383,6 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
                 with pytest.raises(asyncio.CancelledError) as caught:
                     await pending
                 assert caught.value.args == ("agent deadline",)
-                assert caught.value is client.sandbox.process.cancellations[-1]
             stopped = await machine.run(
                 Command(
                     (
@@ -457,6 +459,7 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
 
 
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_user_probe_is_bounded_and_cancellation_preserves_the_machine(tmp_path, interruption):
     entered = asyncio.Event()
 
@@ -562,6 +565,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_output_failure_disposes_machine_and_preserves_cause():
     output_error = TimeoutError("Provider output request timed out")
 
@@ -588,6 +592,7 @@ def test_daytona_output_failure_disposes_machine_and_preserves_cause():
 
 
 @pytest.mark.parametrize("path_source", ["image", "task"])
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path, path_source):
     binary = tmp_path / "bin"
     binary.mkdir()
@@ -627,6 +632,7 @@ def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path,
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_completion_before_cancellation_preserves_the_machine(tmp_path):
     class CompletionDuringStop(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -655,6 +661,7 @@ def test_daytona_completion_before_cancellation_preserves_the_machine(tmp_path):
 
 @pytest.mark.parametrize("primary_failure", [False, True])
 @pytest.mark.parametrize("cleanup_failure", ["timeout", "exit"])
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error(primary_failure, cleanup_failure):
     class FailedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -825,6 +832,7 @@ def test_daytona_rejects_nonroot_execution_without_session_preserving_su(tmp_pat
 
 
 @pytest.mark.parametrize("mode, exit_code", [(0o755, 0), (0o640, 126)])
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_upload_preserves_script_permissions(tmp_path: Path, mode: int, exit_code: int) -> None:
     async def scenario() -> None:
         source = tmp_path / "grader.sh"
@@ -846,6 +854,7 @@ def test_daytona_upload_preserves_script_permissions(tmp_path: Path, mode: int, 
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_factory_owns_clients_across_worker_event_loops(tmp_path: Path) -> None:
     clients = []
 

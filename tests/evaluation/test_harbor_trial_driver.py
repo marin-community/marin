@@ -245,8 +245,6 @@ def test_preflight_rejects_a_policy_agent_context_above_the_served_window(tmp_pa
     assert "32768" in completed.stderr
 
 
-
-
 def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_policies):
     policies = {
         name: payload["stable_policy_json"]

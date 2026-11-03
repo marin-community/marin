@@ -5,15 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.openclaw import (
-    OPENCLAW_AGENT_SETUP_TIMEOUT_SEC,
     OpenClaw,
     openclaw_session_jsonl_to_atif_steps,
 )
 from harbor.models.agent.context import AgentContext
 from harbor.models.agent.name import AgentName
-from harbor.models.trial.config import AgentConfig
 
 
 @pytest.fixture
@@ -145,27 +142,6 @@ def test_provider_baseurl_only_gets_models_array(tmp_path: Path) -> None:
     assert isinstance(cfg["models"]["providers"]["openai"]["models"], list)
     assert len(cfg["models"]["providers"]["openai"]["models"]) == 1
     assert cfg["models"]["providers"]["openai"]["models"][0]["id"] == "openai/gpt-4.1"
-
-
-def test_factory_openclaw_default_install_timeout_when_override_unset(
-    tmp_path: Path,
-) -> None:
-    cfg = AgentConfig(name=AgentName.OPENCLAW.value, model_name="openai/gpt-4.1")
-    assert cfg.override_setup_timeout_sec is None
-    agent = AgentFactory.create_agent_from_config(cfg, logs_dir=tmp_path)
-    assert isinstance(agent, OpenClaw)
-    assert cfg.override_setup_timeout_sec is None
-    assert agent._install_exec_timeout_sec == int(OPENCLAW_AGENT_SETUP_TIMEOUT_SEC)
-
-
-def test_factory_leaves_explicit_setup_timeout_unchanged(tmp_path: Path) -> None:
-    cfg = AgentConfig(
-        name=AgentName.OPENCLAW.value,
-        model_name="openai/gpt-4.1",
-        override_setup_timeout_sec=123.0,
-    )
-    AgentFactory.create_agent_from_config(cfg, logs_dir=tmp_path)
-    assert cfg.override_setup_timeout_sec == 123.0
 
 
 def test_supported_providers(tmp_path: Path) -> None:

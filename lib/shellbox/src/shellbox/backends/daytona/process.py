@@ -15,8 +15,8 @@ from daytona._async.process import AsyncProcess
 
 from shellbox import process_framing
 from shellbox.backends.daytona import bridge
-from shellbox.process import CLEANUP_TIMEOUT
 from shellbox.machine import MachineTerminated
+from shellbox.process import CLEANUP_TIMEOUT
 from shellbox.process_framing import CHUNK_BYTES, EXIT, STDERR, STDIN, STDOUT, FrameDecoder, decode_frame, encode_frame
 from shellbox.process_session import BoundedByteBuffer, StreamProcessSession, own_cleanup
 

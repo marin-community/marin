@@ -47,7 +47,7 @@ def test_native_agent_captured_tokens_survive_missing_cli_session(tmp_path, agen
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agent_type", [ClaudeCode, Codex])
 async def test_native_agent_cli_wire_config_matches_capture_identity(
-    tmp_path, monkeypatch, agent_type
+    tmp_path, monkeypatch, agent_type, mock_environment
 ):
     monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
@@ -58,7 +58,7 @@ async def test_native_agent_cli_wire_config_matches_capture_identity(
         model_info={"max_input_tokens": 32768, "max_output_tokens": 8192},
         collect_rollout_details=True,
     )
-    environment = AsyncMock()
+    environment = mock_environment
     environment.default_user = "agent"
     environment.agent_timeout_sec = None
     environment.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")

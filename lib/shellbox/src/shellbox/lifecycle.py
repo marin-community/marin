@@ -45,9 +45,9 @@ class CommandLifetime:
         finally:
             self._tasks.remove(task)
 
-    async def close(self) -> None:
+    async def close(self, caller: asyncio.Task | None = None) -> None:
         self._closed = True
-        tasks = self._tasks - {asyncio.current_task()}
+        tasks = self._tasks - {caller or asyncio.current_task()}
         for task in tasks:
             task.cancel()
         if tasks:

@@ -77,7 +77,7 @@ class TestAcpAgentBasics:
         assert info.version == "0.10.0"
 
     async def test_setup_resolves_registry_spec_before_install(
-        self, temp_dir, monkeypatch
+        self, temp_dir, monkeypatch, mock_environment
     ):
         resolved_entry = {
             **REGISTRY_ENTRY,
@@ -92,7 +92,7 @@ class TestAcpAgentBasics:
 
         agent = AcpAgent(logs_dir=temp_dir, registry_spec="opencode@1.3.9")
         agent.install = AsyncMock()
-        environment = AsyncMock()
+        environment = mock_environment
 
         await agent.setup(environment)
 

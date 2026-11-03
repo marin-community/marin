@@ -2,6 +2,8 @@ import logging
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
+import pytest
+
 import harbor.environments.factory as environment_factory
 from harbor.agents.factory import AgentFactory
 from harbor.models.agent.name import AgentName

@@ -26,8 +26,8 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import SubprocessSession, acquire_owned
 from shellbox.process import CLEANUP_TIMEOUT, ProcessScope
+from shellbox.process_session import SubprocessSession, acquire_owned
 
 logger = logging.getLogger(__name__)
 IMAGE_PLATFORM = "linux/amd64"
@@ -119,8 +119,9 @@ class DockerMachine:
             raise ValueError("Process sessions require argv and own stdin and their lifetime")
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
-        scope = ProcessScope()
-        supervised = replace(command, argv=scope.command(command.argv, None))
+        scope = ProcessScope(python=self._python)
+        argv = ("/bin/sh", "-c", 'exec "$@"', "shellbox-command", *command.argv)
+        supervised = replace(command, argv=scope.command(argv, None))
         args = ["docker", *_exec_arguments(self.name, self.spec.workdir, supervised)]
 
         async def acquire() -> SubprocessSession:

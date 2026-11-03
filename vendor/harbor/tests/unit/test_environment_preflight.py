@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from harbor.job import Job
 from harbor.models.job.config import JobConfig
-from harbor.models.trial.config import EnvironmentConfig, TaskConfig, TrialConfig, VerifierConfig
+from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig, VerifierConfig
 from harbor.trial.trial import Trial
 from harbor_config import load_config_document
 
@@ -57,6 +57,7 @@ async def test_direct_trial_rejects_retention_before_backend_construction(tmp_pa
         trials_dir=tmp_path / "trials",
         environment=EnvironmentConfig(delete=False),
         verifier=VerifierConfig(disable=True),
+        agent=AgentConfig(name="pi"),
     )
 
     with pytest.raises(ValueError, match="Shellbox environments cannot be retained"):

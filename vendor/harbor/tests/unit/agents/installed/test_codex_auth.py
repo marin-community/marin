@@ -15,7 +15,7 @@ from harbor.models.agent.context import AgentContext
 
 @pytest.mark.asyncio
 async def test_codex_keeps_host_authentication_out_of_guest_state(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, mock_environment
 ):
     auth_file = tmp_path / ".codex" / "auth.json"
     auth_file.parent.mkdir()
@@ -28,7 +28,7 @@ async def test_codex_keeps_host_authentication_out_of_guest_state(
     monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
     monkeypatch.setenv("GITHUB_TOKEN", "host-github-private-canary")
     agent = Codex(logs_dir=tmp_path, model_name="openai/model")
-    environment = AsyncMock()
+    environment = mock_environment
     environment.agent_timeout_sec = None
     environment.default_user = "agent"
     environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")

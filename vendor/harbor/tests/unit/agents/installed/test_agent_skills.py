@@ -139,13 +139,13 @@ class TestOpenCodeSkills:
         assert "'/workspace/my skills'" in cmd
 
     @pytest.mark.asyncio
-    async def test_skills_dir_in_run_commands(self, temp_dir):
+    async def test_skills_dir_in_run_commands(self, temp_dir, mock_environment):
         agent = OpenCode(
             logs_dir=temp_dir,
             skills_dir="/workspace/skills",
             model_name="anthropic/claude-sonnet-4-5",
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             await agent.run("do something", mock_env, AsyncMock())
@@ -214,7 +214,7 @@ class TestQwenCodeSkills:
         assert "'/workspace/my skills'" in cmd
 
     @pytest.mark.asyncio
-    async def test_skills_dir_in_run_commands(self, temp_dir):
+    async def test_skills_dir_in_run_commands(self, temp_dir, mock_environment):
         agent = QwenCode(
             logs_dir=temp_dir,
             skills_dir="/workspace/skills",

@@ -27,14 +27,14 @@ from harbor.utils.artifact_writer import get_artifact_writer
     ],
 )
 async def test_opencode_rejects_provider_auth_in_config_before_guest_execution(
-    tmp_path, options
+    tmp_path, options, mock_environment
 ):
     agent = OpenCode(
         logs_dir=tmp_path,
         model_name="hosted_vllm/model",
         opencode_config={"provider": {"hosted_vllm": {"options": options}}},
     )
-    environment = AsyncMock()
+    environment = mock_environment
     with pytest.raises(ValueError, match="Provider credentials"):
         await agent.run("do something", environment, AgentContext())
     assert environment.exec.call_args_list == []
@@ -633,12 +633,12 @@ class TestOpenCodeRunCommands:
             ("google/gemini-2.5-pro", "GOOGLE_BASE_URL"),
         ],
     )
-    async def test_run_forwards_provider_base_url(self, temp_dir, model_name, variable):
+    async def test_run_forwards_provider_base_url(self, temp_dir, model_name, variable, mock_environment):
         endpoint = "https://provider.example.test/v1"
         agent = OpenCode(
             logs_dir=temp_dir, model_name=model_name, extra_env={variable: endpoint}
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
 
         await agent.run("do something", mock_env, AsyncMock())
