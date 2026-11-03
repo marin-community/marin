@@ -13,6 +13,7 @@ from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase
 HARRIER_REPO = "microsoft/harrier-oss-v1-0.6b"
 HARRIER_REVISION = "f9b9dc8d367d443f2479d27aa5d8d2850c0774ee"
 HARRIER_DIM = 1024
+HARRIER_MAX_TOKENS = 8_192
 
 
 @dataclass(frozen=True)

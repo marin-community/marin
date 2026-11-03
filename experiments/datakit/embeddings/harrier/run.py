@@ -13,12 +13,10 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
+from marin.processing.embeddings.harrier import HARRIER_MAX_TOKENS, HARRIER_REPO, HARRIER_REVISION
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.embeddings.harrier.pipeline import (
-    HARRIER_MAX_TOKENS,
-    HARRIER_REPO,
-    HARRIER_REVISION,
     EmbeddingAttrData,
     embed_source,
     harrier_hash_attrs,
