@@ -104,19 +104,33 @@ def test_stats_forward_preserves_observer_and_loss():
 def test_dropless_bos_routes_ignore_companions_and_padding():
     with use_test_devices(8) as devices:
 
-        mesh = Mesh(np.array(devices).reshape(1, 2, 4, 1, 1, 1),
-            ('replica_dcn', 'data', 'expert', 'context', 'replica', 'model'),
-            axis_types=(AxisType.Explicit,) * 6)
-        config = SnowballConfig(vocab_size=32, hidden_dim=16, intermediate_dim=16,
-            shared_expert_intermediate_dim=16, num_experts=8, num_experts_per_token=2,
-            num_layers=3, num_heads=2, num_kv_heads=1, head_dim=8,
-            max_seq_len=32, sliding_window=4, attention_implementation='reference',
-            moe_implementation='ring_gather_combine')
+        mesh = Mesh(
+            np.array(devices).reshape(1, 2, 4, 1, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "replica", "model"),
+            axis_types=(AxisType.Explicit,) * 6,
+        )
+        config = SnowballConfig(
+            vocab_size=32,
+            hidden_dim=16,
+            intermediate_dim=16,
+            shared_expert_intermediate_dim=16,
+            num_experts=8,
+            num_experts_per_token=2,
+            num_layers=3,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=8,
+            max_seq_len=32,
+            sliding_window=4,
+            attention_implementation="reference",
+            moe_implementation="ring_gather_combine",
+        )
         with jax.set_mesh(mesh):
-            model = SnowballLMHeadModel.init(hax.Axis('vocab', 32), config, key=jax.random.PRNGKey(310))
-            blocks = tuple(replace(block, mlp=replace(block.mlp,
-                expert_mlp=replace(block.mlp.expert_mlp, capacity_factor=4.0)))
-                for block in model.transformer.blocks)
+            model = SnowballLMHeadModel.init(hax.Axis("vocab", 32), config, key=jax.random.PRNGKey(310))
+            blocks = tuple(
+                replace(block, mlp=replace(block.mlp, expert_mlp=replace(block.mlp.expert_mlp, capacity_factor=4.0)))
+                for block in model.transformer.blocks
+            )
             model = replace(model, transformer=replace(model.transformer, blocks=blocks))
             forward = eqx.filter_jit(model.activations_with_stats)
             baseline = None
@@ -125,7 +139,7 @@ def test_dropless_bos_routes_ignore_companions_and_padding():
                 tokens[:, 0] = 1
                 valid = np.arange(sequence)[None, :] < np.array([5, 4, 3, 6, 2, 7, 4, 5])[:, None]
                 tokens[~valid] = 2
-                axes = (hax.Axis('batch', 8), hax.Axis('position', sequence))
+                axes = (hax.Axis("batch", 8), hax.Axis("position", sequence))
                 _, stats = forward(hax.named(jnp.asarray(tokens), axes), hax.named(jnp.asarray(valid), axes))
                 np.testing.assert_array_equal(stats.dropped, np.zeros(3))
                 bos = np.asarray(stats.routes)[:, :, 0, :]
@@ -133,13 +147,20 @@ def test_dropless_bos_routes_ignore_companions_and_padding():
                 if baseline is not None:
                     np.testing.assert_array_equal(bos, baseline)
                 baseline = bos
-            capped_blocks = tuple(replace(block, mlp=replace(block.mlp,
-                router=jnp.zeros_like(block.mlp.router),
-                router_bias=jnp.arange(8, 0, -1, dtype=jnp.float32),
-                expert_mlp=replace(block.mlp.expert_mlp, capacity_factor=1.0)))
-                for block in model.transformer.blocks)
+            capped_blocks = tuple(
+                replace(
+                    block,
+                    mlp=replace(
+                        block.mlp,
+                        router=jnp.zeros_like(block.mlp.router),
+                        router_bias=jnp.arange(8, 0, -1, dtype=jnp.float32),
+                        expert_mlp=replace(block.mlp.expert_mlp, capacity_factor=1.0),
+                    ),
+                )
+                for block in model.transformer.blocks
+            )
             capped = replace(model, transformer=replace(model.transformer, blocks=capped_blocks))
-            axes = (hax.Axis('batch', 8), hax.Axis('position', 8))
+            axes = (hax.Axis("batch", 8), hax.Axis("position", 8))
             tokens = hax.named(jnp.ones((8, 8), jnp.int32), axes)
             valid = hax.named(jnp.broadcast_to(jnp.arange(8) < 4, (8, 8)), axes)
             _, counts = eqx.filter_jit(capped.activations_with_stats)(tokens, valid)
