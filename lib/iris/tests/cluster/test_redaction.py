@@ -6,10 +6,18 @@
 The shared regex/entropy/key-name behavior is covered in
 ``lib/rigging/tests/test_redaction.py``. These tests focus on iris-specific
 adaptation: argv parsing for ``iris job run -e KEY VALUE`` in every Click
-syntax variant.
+syntax variant, and capability-token scrubbing of free text.
 """
 
-from iris.cluster.redaction import REDACTED_VALUE, redact_submit_argv
+import base64
+import json
+
+from iris.cluster.redaction import (
+    REDACTED_VALUE,
+    count_capability_tokens,
+    redact_submit_argv,
+    scrub_capability_tokens,
+)
 
 
 def test_redact_submit_argv_redacts_short_flag():
@@ -148,3 +156,40 @@ def test_redact_submit_argv_mixed_forms():
 def test_redact_submit_argv_attached_long_form_missing_value():
     argv = ["iris", "--env-vars=HF_TOKEN"]
     assert redact_submit_argv(argv) == argv
+
+
+def _jwt(claims: dict) -> str:
+    def part(value: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
+
+    return f"{part({'alg': 'HS256', 'typ': 'JWT'})}.{part(claims)}.c2lnbmF0dXJlLXNpZ25hdHVyZQ"
+
+
+_CAPABILITY = _jwt({"aud": "iris-proxy", "sub": "endpoint:/job/serve", "exp": 1})
+_FIXTURE = _jwt({"aud": "oauthlib-tests", "sub": "user"})
+
+
+def _wrapped(token: str, separator: str, width: int = 40) -> str:
+    return separator.join(token[i : i + width] for i in range(0, len(token), width))
+
+
+def test_scrub_capability_tokens_handles_every_break_shape_and_keeps_other_jwts():
+    shapes = [
+        _CAPABILITY,
+        _wrapped(_CAPABILITY, "\n"),
+        _wrapped(_CAPABILITY, "\\n"),
+        _wrapped(_CAPABILITY, "\\\\n"),  # a log line in a tool output, JSON inside JSON
+        _wrapped(_CAPABILITY, "\\\\\\\\n  "),
+        "e\\\\ny" + _CAPABILITY[2:],  # a break inside the eyJ prefix
+    ]
+    for shape in shapes:
+        text = f"model.api_base=https://iris.example/proxy/t/{shape}/serve/v1' and {_FIXTURE}"
+        assert count_capability_tokens(text) == 1, shape
+        scrubbed, replaced = scrub_capability_tokens(text)
+        assert replaced == 1 and count_capability_tokens(scrubbed) == 0, shape
+        assert REDACTED_VALUE in scrubbed and _FIXTURE in scrubbed
+
+
+def test_count_capability_tokens_accepts_a_list_audience():
+    assert count_capability_tokens(_jwt({"aud": ["other", "iris-proxy"]})) == 1
+    assert count_capability_tokens(_FIXTURE) == 0
