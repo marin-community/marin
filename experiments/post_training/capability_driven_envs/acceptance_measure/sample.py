@@ -125,10 +125,15 @@ def population_digest(eligible: Sequence[Eligible]) -> str:
     return sha256_hex(json.dumps(sorted((e.capability, e.slot, e.sha256) for e in eligible)))
 
 
+DRIVER_ENTRIES = frozenset({"shards"})
+
+
 def scan(root: str, read: Callable[[list[str]], dict[str, bytes]], listing: Callable[[str], list[str]]) -> dict:
     """The eligible slots under ``root`` and the counts that say how complete the run was."""
     entries = listing(root)
-    capability_dirs = sorted(p.rstrip("/").rsplit("/", 1)[-1] for p in entries)
+    # The driver also writes ``shards/`` and ``control.json`` under the root; neither is a capability.
+    names = (p.rstrip("/").rsplit("/", 1)[-1] for p in entries)
+    capability_dirs = sorted(n for n in names if n not in DRIVER_ENTRIES and not n.endswith(".json"))
     with_result, eligible, failures = [], [], 0
     for capability in capability_dirs:
         files = {p.rsplit("/", 1)[-1] for p in listing(f"{root}/{capability}")}
