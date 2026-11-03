@@ -587,28 +587,33 @@ def _run_tpu_service(service: IrisServiceConfig) -> None:
     with tpu_ray_gang(
         launcher, chips_per_host=device.chip_count(), timeout_seconds=service.engine.startup_timeout_seconds
     ) as gang:
-        if not gang.leader:
-            return
-        model, num_chips = _resolved_model(service.model, service.iris)
-        backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
-        with _staged_model(model) as model:
-            spec = _vllm_model_spec(model, num_chips, model.tensor_parallel_size)
-            with backend.start(
-                spec, extra_args=("--distributed-executor-backend", "ray"), subprocess_env=gang.subprocess_env
-            ) as environment:
-                with _ready_vllm_dashboard(
-                    service,
-                    model,
-                    environment,
-                    tensor_parallel_size=cast(int, model.tensor_parallel_size),
-                    backend_name=backend.name,
-                ):
+        if gang.leader:
+            with iris_vllm_followers(gang.identity):
+                model, num_chips = _resolved_model(service.model, service.iris)
+                backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
+                with _staged_model(model) as model:
+                    spec = _vllm_model_spec(model, num_chips, model.tensor_parallel_size)
+                    with backend.start(
+                        spec, extra_args=("--distributed-executor-backend", "ray"), subprocess_env=gang.subprocess_env
+                    ) as environment:
+                        with _ready_vllm_dashboard(
+                            service,
+                            model,
+                            environment,
+                            tensor_parallel_size=cast(int, model.tensor_parallel_size),
+                            backend_name=backend.name,
+                        ):
 
-                    def check_alive() -> None:
-                        gang.check_alive()
-                        environment.check_alive()
+                            def check_alive() -> None:
+                                gang.check_alive()
+                                environment.check_alive()
 
-                    _block_until_timeout(check_alive, service.timeout_hours)
+                            _block_until_timeout(check_alive, service.timeout_hours)
+
+        else:
+            wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
+    if not gang.leader:
+        notify_iris_vllm_stopped(gang.identity)
 
 
 def _run_pipeline_service(service: IrisServiceConfig) -> None:

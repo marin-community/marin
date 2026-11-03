@@ -40,7 +40,7 @@ def test_failed_ray_supervisor_reports_its_log(tmp_path):
     log.write_text("Ray Client port is occupied")
     process = MagicMock(returncode=1)
     process.poll.return_value = 1
-    gang = iris_tpu_vllm.TpuRayGang(True, "10.0.0.1:12000", process, log)
+    gang = iris_tpu_vllm.TpuRayGang(iris_vllm.IrisGangCoordinator("test", 0, 4), "10.0.0.1:12000", process, log)
     with pytest.raises(RuntimeError, match="Ray Client port is occupied"):
         gang.check_alive()
 

@@ -21,9 +21,6 @@ from marin.inference import tpu_ray_runtime
 from marin.inference.iris_vllm import (
     IrisGangCoordinator,
     iris_gang_coordinator,
-    iris_vllm_followers,
-    notify_iris_vllm_stopped,
-    wait_for_iris_vllm_shutdown,
 )
 from marin.inference.vllm_server import IsolatedTpuVllm
 
@@ -33,10 +30,14 @@ RAY_PORTS = ("ray-gcs", "ray-client", "ray-dashboard", "ray-dashboard-agent")
 
 @dataclass(frozen=True)
 class TpuRayGang:
-    leader: bool
+    identity: IrisGangCoordinator
     address: str
     process: subprocess.Popen
     log_path: Path
+
+    @property
+    def leader(self) -> bool:
+        return self.identity.task_index == 0
 
     @property
     def subprocess_env(self) -> dict[str, str]:
@@ -59,10 +60,10 @@ def _stop_owned_process(process: subprocess.Popen) -> None:
 
 @contextlib.contextmanager
 def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seconds: float) -> Iterator[TpuRayGang]:
-    """Start Ray on every allocated host and coordinate their shutdown.
+    """Own Ray processes on every allocated host until the caller exits.
 
-    Followers wait for the leader to finish, then stop their own Ray node. Iris handles gang
-    cancellation on failures; this context never stops a Ray process owned by another job.
+    Wait for all hosts to join before yielding. Serving coordination belongs to the
+    caller; this context stops only its own Ray process on exit.
     """
     info = get_job_info()
     if info is None or info.num_tasks < 2:
@@ -113,7 +114,7 @@ def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seco
                 command, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
             )
         stack.callback(_stop_owned_process, process)
-        gang = TpuRayGang(leader, address, process, supervisor_log)
+        gang = TpuRayGang(identity, address, process, supervisor_log)
         deadline = time.monotonic() + timeout_seconds
         try:
             while not ready_path.exists():
@@ -123,14 +124,7 @@ def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seco
                 time.sleep(1)
             gang.check_alive()
             logger.info("TPU Ray gang ready: %d hosts, %d chips/host", info.num_tasks, chips_per_host)
-            if leader:
-                with iris_vllm_followers(identity):
-                    yield gang
-            else:
-                wait_for_iris_vllm_shutdown(identity, gang.check_alive, maximum_poll_seconds=1.0)
-                _stop_owned_process(process)
-                notify_iris_vllm_stopped(identity)
-                yield gang
+            yield gang
         except BaseException:
             for path in (supervisor_log, ray_log):
                 if path.exists():
