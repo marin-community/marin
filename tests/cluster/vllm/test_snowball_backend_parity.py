@@ -63,7 +63,12 @@ def _vllm_job(
             args=[goldens, attention_backend, pipeline_parallel_size],
         ),
         resources=ResourceConfig.with_gpu(
-            "H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g", target_cluster=MARIN_GPU_CLUSTER
+            "H100",
+            count=GPU_COUNT,
+            cpu=64,
+            ram="512g",
+            disk="256g" if pipeline_parallel_size > 1 else "128g",
+            target_cluster=MARIN_GPU_CLUSTER,
         ),
         environment=create_environment(
             setup_scripts=[default_setup_script(packages=["marin-core"])],

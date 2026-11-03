@@ -11,6 +11,7 @@ pinned to each data-parallel rank. The PP=2 vLLM case is a two-task Iris gang:
 task 0 owns pipeline stage 0 and task 1 owns pipeline stage 1.
 """
 
+import contextlib
 import dataclasses
 import logging
 import re
@@ -37,7 +38,7 @@ from marin.inference.iris_vllm import (
     wait_for_iris_vllm_shutdown,
 )
 from marin.inference.levanter_backend import LevanterBackend
-from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size
+from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size, staged_model_path
 from marin.inference.vllm_backend import VllmBackend
 from marin.testing.inference.backend_parity import (
     NextTokenObservation,
@@ -347,6 +348,8 @@ def score_vllm_against_goldens(
             max_num_seqs=1,
             extra_args=(
                 "--enable-expert-parallel",
+                # Local staging must retain the same loader and distributed-read settings.
+                *(("--load-format", "runai_streamer") if pipeline_parallel_size > 1 else ()),
                 "--model-loader-extra-config",
                 '{"distributed":true,"concurrency":4}',
                 "--max-logprobs",
@@ -360,11 +363,18 @@ def score_vllm_against_goldens(
         ),
     )
     parities: list[NextTokenParity] = []
-    with iris_vllm_launch(
-        pipeline_parallel_size=pipeline_parallel_size,
-        tensor_parallel_size=1,
-        data_parallel_size=GPU_COUNT,
-    ) as launch:
+    with (
+        iris_vllm_launch(
+            pipeline_parallel_size=pipeline_parallel_size,
+            tensor_parallel_size=1,
+            data_parallel_size=GPU_COUNT,
+        ) as launch,
+        contextlib.ExitStack() as stack,
+    ):
+        if pipeline_parallel_size > 1:
+            # One copy per Iris task is shared by its local GPU ranks, including the follower.
+            local_weights = stack.enter_context(staged_model_path(spec.weights))
+            spec = dataclasses.replace(spec, weights=local_weights)
         logger.info(
             "vLLM requested topology: tasks=%d GPUs/task=%d DP=%d EP=%d PP=%d TP=%d task=%d",
             pipeline_parallel_size,

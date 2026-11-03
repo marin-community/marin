@@ -11,8 +11,6 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import cast
 
 import requests
@@ -26,7 +24,6 @@ from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobNa
 from iris.resources.state import TaskState, is_job_finished
 from rigging import telemetry
 from rigging.connect import capability_path, proxy_path
-from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline, Duration
 
@@ -57,6 +54,7 @@ from marin.inference.iris_vllm import (
     notify_iris_vllm_stopped,
     wait_for_iris_vllm_shutdown,
 )
+from marin.inference.model_preparation import staged_model_path
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -303,20 +301,12 @@ def _prepared_local_inference(
 @contextlib.contextmanager
 def _staged_model(model: ServedModelConfig) -> Iterator[ServedModelConfig]:
     """Stage remote weights on worker-local disk when the serving config requires it."""
-    source = StoragePath(model.weights)
-    if model.object_store_load_mode is ObjectStoreLoadMode.STREAM or not source.is_remote:
+    if model.object_store_load_mode is ObjectStoreLoadMode.STREAM:
         yield model
         return
 
-    with TemporaryDirectory(prefix="marin-model-") as temporary_directory:
-        local_weights = Path(temporary_directory) / "model"
-        started = time.monotonic()
-        logger.info("Staging model weights from %s to worker-local disk", source)
-        source.download_to(str(local_weights), recursive=True, batch_size=16)
-        if not local_weights.is_dir():
-            raise FileNotFoundError(f"staged model directory was not created: {local_weights}")
-        logger.info("Staged model weights from %s in %.1f seconds", source, time.monotonic() - started)
-        yield replace(model, weights=str(local_weights))
+    with staged_model_path(model.weights) as local_weights:
+        yield replace(model, weights=local_weights)
 
 
 def _server_root(model: RunningModel) -> str:
