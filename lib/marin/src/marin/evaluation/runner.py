@@ -20,8 +20,7 @@ from levanter.model_cache import DEFAULT_COMPLETE_MARKER, cache_hf_model
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec
-from rigging.timing import retry_with_backoff
-from rigging.timing import Duration
+from rigging.timing import Duration, retry_with_backoff
 
 from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
