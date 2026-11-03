@@ -21,7 +21,7 @@ from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nvidia/Open-SWE-Traces"
 HF_REVISION = "f967cba3312573981a47fd7a7b80029b53909b5f"
-TRANSFORM_VERSION = "2026.09.17.chat-v1"
+TRANSFORM_VERSION = "2026.11.03.chat-v2"
 SOURCE_CHAT_SCHEMA = pa.schema([*CHAT_SCHEMA, pa.field("resolved", pa.int32())])
 
 # Rough token weights use each release's uncompressed/compressed size ratio
@@ -77,6 +77,54 @@ OPEN_SWE_TRACES_PARTITIONS = MappingProxyType(
     }
 )
 
+# The Qwen3.8-27B mini-swe-agent teacher was prompted with the NeMo-Skills template
+# nemo_skills/prompt/config/eval/swe-bench/mini-swe-agent/swebench.yaml at commit
+# 592ebaec5a80e17a3535623d0f5704d29e13a64f (Apache-2.0), which ends the task message with this
+# section between </CRITICAL> and </instructions>. The export drops the section, although 32% of
+# the successful traces quote it. Every row of both pinned partitions ends with the anchor below.
+SOLUTION_ORIGINALITY_SOURCES = frozenset(
+    {
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe",
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2",
+    }
+)
+TASK_END_TAG = "</instructions>"
+SOLUTION_ORIGINALITY_ANCHOR = "</CRITICAL>\n" + TASK_END_TAG
+SOLUTION_ORIGINALITY_SECTION = "\n".join(
+    (
+        "## Solution Originality",
+        "",
+        "Implement your own original solution to the task.",
+        "As an expert software engineer, your task is to create a novel independent solution based only on the "
+        "current repository state.",
+        "Your approach must be ENTIRELY UNBIASED, making no attempt to access external solutions, hints or "
+        "information in any way.",
+        "Remember that your own implementation is strongly preferred over a copy or modification of an existing "
+        "solution.",
+        "Because you are working independently, you **MUST NOT** attempt to:",
+        "- clone, download files from, install as a package, read pull requests or otherwise access the upstream "
+        "repository,",
+        "- use git commands to access any commits, tags or references outside of the current branch,",
+        "- read previous trajectories, golden patches, test patches or any other hidden information from the "
+        "filesystem,",
+        "- search locally installed packages or caches for upstream code,",
+        "- find loopholes to access external solutions or hidden tests in any other way,",
+        'for ANY reason at all, even if it\'s just "for reference" or to verify your own solution.',
+        "WARNING: If you seek any form of external solutions, hints or information while solving the task,",
+        "your solution will be DISCARDED regardless of its correctness!",
+    )
+)
+
+
+def restore_solution_originality(row: dict) -> dict:
+    """Return the row with the dropped Solution Originality section back in its task message."""
+    messages = row["messages"]
+    task = messages[1]["content"]
+    if task.count(SOLUTION_ORIGINALITY_ANCHOR) != 1 or not task.endswith(SOLUTION_ORIGINALITY_ANCHOR):
+        raise ValueError(f"Task message of {row['trajectory_id']} does not end with the template anchor")
+    restored_task = task.removesuffix(TASK_END_TAG) + "\n" + SOLUTION_ORIGINALITY_SECTION + "\n" + TASK_END_TAG
+    return {**row, "messages": [messages[0], {**messages[1], "content": restored_task}, *messages[2:]]}
+
 
 def row_to_chat_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
@@ -110,16 +158,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     )
 
 
-def transform_chat(input_path: str, output_path: str) -> None:
-    pipeline = (
-        Dataset.from_files(prefix_join(input_path, "**/*.parquet"))
-        .flat_map(load_parquet_batched)
-        .flat_map(row_to_chat_doc)
-        .write_parquet(
-            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
-            schema=SOURCE_CHAT_SCHEMA,
-            skip_existing=True,
-        )
+def transform_chat(input_path: str, output_path: str, source_name: str) -> None:
+    rows = Dataset.from_files(prefix_join(input_path, "**/*.parquet")).flat_map(load_parquet_batched)
+    if source_name in SOLUTION_ORIGINALITY_SOURCES:
+        rows = rows.map(restore_solution_originality)
+    pipeline = rows.flat_map(row_to_chat_doc).write_parquet(
+        prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+        schema=SOURCE_CHAT_SCHEMA,
+        skip_existing=True,
     )
     ZephyrContext(name="open-swe-traces-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
@@ -131,7 +177,7 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
     processed = StepSpec(
         name=f"processed-chat/{source_name}",
         deps=[raw],
-        fn=lambda output_path: transform_chat(raw.output_path, output_path),
+        fn=lambda output_path: transform_chat(raw.output_path, output_path, source_name),
         hash_attrs={"version": TRANSFORM_VERSION},
     )
     return processed, normalize_chat_step(
