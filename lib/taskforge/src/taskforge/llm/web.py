@@ -44,7 +44,7 @@ def web_tools(web: Web) -> tuple[AgentTool, AgentTool]:
 
     async def answered(request: Awaitable[dict[str, Any]]) -> str:
         try:
-            return json.dumps(await request)
+            return json.dumps(await request, ensure_ascii=False)
         except WebRequestRejected as error:
             return f"error: {error}"
 

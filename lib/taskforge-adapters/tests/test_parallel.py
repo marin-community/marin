@@ -66,11 +66,12 @@ def call(fake: FakeParallel, *calls: tuple[int, dict]) -> list[str]:
 
 
 def test_search_and_fetch_post_to_parallel_and_return_its_body(fake_parallel):
-    fake_parallel.replies.extend([(200, '{"search_id": "s1", "results": []}'), (200, '{"extract_id": "e1"}')])
+    fake_parallel.replies.extend([(200, '{"search_id": "s1", "results": []}'), (200, '{"excerpt": "café — 東京"}')])
 
     searched, fetched = call(fake_parallel, (0, SEARCH), (1, FETCH))
 
-    assert (searched, fetched) == ('{"search_id": "s1", "results": []}', '{"extract_id": "e1"}')
+    # Non-ASCII text reaches the model as written, not as \u escapes.
+    assert (searched, fetched) == ('{"search_id": "s1", "results": []}', '{"excerpt": "café — 東京"}')
     (search_path, search_headers, search_body), (fetch_path, _, fetch_body) = fake_parallel.requests
     assert (search_path, search_headers["x-api-key"]) == ("/v1/search", "test-key")
     assert search_body == SEARCH
