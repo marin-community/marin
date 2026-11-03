@@ -380,10 +380,10 @@ returns an `AuthoredProgram` holding the program and its source, which
 `stage30_author.loader.load_program_source` loads. The build stage comes after the loader's, so the
 loader imports none of the SDK's modules: its callers here pass `program_sdk.sdk_exports()`, the
 names the SDK modules define, which the loader's refusals suggest from. The loader refuses a module whose top level
-holds anything but imports, classes, steps, the sink and a final
-`PROGRAM = rl_env_build_program(..., sink=...)`, because a step's key covers its own source and its
-output type alone, so an edit to a helper beside the steps would leave every key unchanged. It also
-refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `Grader`, and a
+holds anything but imports and classes, then steps and the sink, and a final
+`PROGRAM = rl_env_build_program(..., sink=...)`. A step's key covers its own source and the module's
+classes and values it reads, but only those bound when the step is decorated, so a class below a step
+could change without changing that step's key. It also refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `Grader`, and a
 program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
 the author receives.
 
