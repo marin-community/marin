@@ -31,7 +31,6 @@ from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
-from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import assemble, requirements
 from taskforge.stage10_proposal.model import (
     Environment,
@@ -149,7 +148,6 @@ REPAIRING = replace(BUDGET, max_triage_repairs=1)
 """``BUDGET`` for a consumer using the REPAIR surface: one rewrite, then a REPAIR verdict rejects."""
 SAMPLING = LLMPolicy()
 SERVICES = RLEnvBuildServices(
-    host=MachineHost.LAPTOP,
     factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
     images=None,
     web_tools=(),

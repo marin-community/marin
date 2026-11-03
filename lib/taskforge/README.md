@@ -22,7 +22,7 @@ src/taskforge/
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
                                output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
-  sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
+  sandbox/                     explicit MachineFactory selection, the container backend, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/            model.py: the TaskProposal JSON document and generation schema;

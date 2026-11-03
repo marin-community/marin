@@ -9,14 +9,14 @@ import time
 from dataclasses import asdict, replace
 
 import pytest
+from rigging.secrets import SECRETS_DIR_ENV
 from shellbox.machine import Backend
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.glm_client import Pool
-from taskforge.sandbox.factories import MachineHost
-from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
+from taskforge.sandbox.image_builder import REGISTRY_CREDENTIAL_ENV, IrisImageBuilder, RegistryCredential
 from taskforge.stage40_build_with_program.build_process import (
     LOG_FILE,
     REQUEST,
@@ -50,7 +50,6 @@ from tests.stage40_build_with_program.conftest import LIMITS, SAMPLING, WORKPIEC
 TOKEN_ENV = "TASKFORGE_TEST_GLM_TOKEN"
 CONTROLLER_URL = "http://controller.example:10000"
 TOKEN = "child-token"
-REGISTRY_ENV = "TASKFORGE_TEST_REGISTRY_CREDENTIAL"
 CREDENTIAL = RegistryCredential(registry="registry.example", user="publisher", password="registry-password")
 WALL_TIMEOUT = 50.0
 """Long enough for the child to start and build; the tests expecting a kill set their own."""
@@ -96,7 +95,6 @@ def make_request(tmp_path, proposal, fake_glm, fast_provider):
             invalidate=frozenset(),
             model_digest=None,
             services=BuildServiceConfig(
-                host=MachineHost.LAPTOP,
                 backends=(Backend.SHELLSIM,),
                 controller_url=None,
                 parallel_key_env=None,
@@ -104,7 +102,6 @@ def make_request(tmp_path, proposal, fake_glm, fast_provider):
                 reasoning_replay=ReasoningReplay.KEEP,
                 agent_limits=LIMITS,
                 image_cluster=None,
-                registry_credential_env=None,
             ),
         )
 
@@ -115,11 +112,9 @@ def on_iris(request: BuildRequest, image_cluster: str | None) -> BuildRequest:
     """``request`` for a child in an Iris task, publishing images on ``image_cluster`` when it is set."""
     services = replace(
         request.services,
-        host=MachineHost.IRIS,
         backends=(Backend.SHELLSIM, Backend.GVISOR),
         controller_url=CONTROLLER_URL,
         image_cluster=image_cluster,
-        registry_credential_env=None if image_cluster is None else REGISTRY_ENV,
     )
     return replace(request, services=services)
 
@@ -248,8 +243,20 @@ def test_requests_and_results_round_trip_through_json(make_request, image_cluste
     assert [RESULT.validate_json(RESULT.dump_json(result)) for result in results] == list(results)
 
 
-def test_the_child_builds_images_with_the_credential_its_environment_holds_and_no_gcloud(make_request, monkeypatch):
-    monkeypatch.setenv(REGISTRY_ENV, json.dumps(asdict(CREDENTIAL)))
+@pytest.fixture
+def secrets_dir(tmp_path, monkeypatch):
+    """An empty Iris secrets directory, and no registry credential in the environment."""
+    directory = tmp_path / "secrets"
+    directory.mkdir()
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(directory))
+    monkeypatch.delenv(REGISTRY_CREDENTIAL_ENV, raising=False)
+    return directory
+
+
+def test_the_child_builds_images_with_the_credential_its_iris_secret_holds_and_no_gcloud(
+    make_request, monkeypatch, secrets_dir
+):
+    (secrets_dir / REGISTRY_CREDENTIAL_ENV).write_text(json.dumps(asdict(CREDENTIAL)))
     monkeypatch.setenv("PATH", "")
 
     builder = image_builder(on_iris(make_request(PROGRAM), "cw-us-east-02a").services)
@@ -262,19 +269,14 @@ def test_the_child_builds_images_with_the_credential_its_environment_holds_and_n
     )
     assert image_builder(make_request(PROGRAM).services) is None
     with pytest.raises(ValueError, match="controller URL"):
-        image_builder(
-            replace(make_request(PROGRAM).services, image_cluster="cw-us-east-02a", registry_credential_env=REGISTRY_ENV)
-        )
+        image_builder(replace(make_request(PROGRAM).services, image_cluster="cw-us-east-02a"))
 
 
-def test_an_image_cluster_without_a_readable_credential_fails_before_any_build(make_request, monkeypatch):
+def test_an_image_cluster_without_a_readable_credential_fails_before_any_build(make_request, secrets_dir):
     config = on_iris(make_request(PROGRAM), "cw-us-east-02a").services
-    monkeypatch.delenv(REGISTRY_ENV, raising=False)
 
-    with pytest.raises(ValueError, match=f"the build reads a secret from {REGISTRY_ENV}, which is not set"):
+    with pytest.raises(ValueError, match=f"the secret {REGISTRY_CREDENTIAL_ENV}, which is not set"):
         image_builder(config)
-    with pytest.raises(ValueError, match="registry_credential_env"):
-        image_builder(replace(config, registry_credential_env=None))
-    monkeypatch.setenv(REGISTRY_ENV, json.dumps({"registry": "registry.example", "user": "publisher"}))
+    (secrets_dir / REGISTRY_CREDENTIAL_ENV).write_text(json.dumps({"registry": "registry.example", "user": "publisher"}))
     with pytest.raises(ValueError, match="not a JSON object of strings"):
         image_builder(config)

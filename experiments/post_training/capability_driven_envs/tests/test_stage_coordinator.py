@@ -18,7 +18,6 @@ from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.sandbox.factories import MachineHost
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, parse
 from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage20_triage.verdict import Verdict
@@ -123,7 +122,6 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
     model = UnusedModel()
     sampling = LLMPolicy()
     services = RLEnvBuildServices(
-        host=MachineHost.LAPTOP,
         factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
         images=None,
         web_tools=(),
