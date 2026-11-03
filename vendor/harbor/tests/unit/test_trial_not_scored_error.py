@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from harbor.models.job.result import JobStats
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
 from harbor.trial.errors import (
@@ -29,7 +29,6 @@ from harbor.trial.errors import (
     VerificationNotCompletedError,
 )
 from harbor.trial.trial import Trial
-
 
 # --------------------------------------------------------------------------- #
 # Gate 1: the four-case truth table for _enforce_verifier_result_invariant
@@ -54,9 +53,7 @@ def _fake_trial(
             exception_info=exception_info,
         ),
         _reached_verifier=reached_verifier,
-        paths=SimpleNamespace(
-            exception_message_path=(tmp_path / "exception_message.txt")
-        ),
+        paths=SimpleNamespace(exception_message_path=(tmp_path / "exception_message.txt")),
     )
 
 
@@ -166,12 +163,10 @@ def test_disabled_and_multistep_are_untouched(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 
 
-def _unscored_trial_result(
-    *, exception_type_exc: BaseException, name: str
-) -> TrialResult:
+def _unscored_trial_result(*, exception_type_exc: BaseException, name: str) -> TrialResult:
     """An UNSCORED trial (verifier_result is None) labelled by the given error."""
     tc = TaskConfig(path="/tmp/x")
-    cfg = TrialConfig(task=tc, trials_dir="/tmp/trials")
+    cfg = TrialConfig(agent=AgentConfig(name="pi"), task=tc, trials_dir="/tmp/trials")
     return TrialResult(
         task_name="t",
         trial_name=name,
@@ -194,7 +189,7 @@ def _unscored_trial_result(
 def _scored_trial_result(*, reward, name: str) -> TrialResult:
     """A normally-scored trial that DOES contribute to n_trials / reward_stats."""
     tc = TaskConfig(path="/tmp/x")
-    cfg = TrialConfig(task=tc, trials_dir="/tmp/trials")
+    cfg = TrialConfig(agent=AgentConfig(name="pi"), task=tc, trials_dir="/tmp/trials")
     return TrialResult(
         task_name="t",
         trial_name=name,
@@ -229,10 +224,7 @@ def test_score_is_invariant_to_unscored_label(tmp_path: Path):
         stats = JobStats.from_trial_results(results)
         eval_stats = stats.evals["agent__dataset"]
         # Normalise reward_stats (defaultdicts -> plain dict of dicts) for compare.
-        reward_norm = {
-            k: {rv: sorted(ids) for rv, ids in v.items()}
-            for k, v in eval_stats.reward_stats.items()
-        }
+        reward_norm = {k: {rv: sorted(ids) for rv, ids in v.items()} for k, v in eval_stats.reward_stats.items()}
         exc_norm = {k: sorted(v) for k, v in eval_stats.exception_stats.items()}
         aggregates.append(
             {

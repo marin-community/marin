@@ -1,14 +1,12 @@
+from tests.unit.fake_agent import FakeAgent
+
 """Tests for config-aware task validation."""
 
 from pathlib import Path
 
-from harbor.agents.nop import NopAgent
-
 import pytest
-
 from harbor.agents.factory import AgentFactory
 from harbor.models.agent.name import AgentName
-
 from harbor.models.job.config import DatasetConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.config import (
@@ -29,9 +27,7 @@ def _scaffold(task_dir: Path, toml: str = "") -> None:
 
 
 @pytest.mark.parametrize("multi_step", [False, True])
-async def test_trial_with_custom_verifier_loads_task_without_test_script(
-    tmp_path: Path, multi_step: bool
-) -> None:
+async def test_trial_with_custom_verifier_loads_task_without_test_script(tmp_path: Path, multi_step: bool) -> None:
     task_dir = tmp_path / "task"
     _scaffold(task_dir, '[[steps]]\nname = "answer"\n' if multi_step else "")
     if multi_step:
@@ -46,9 +42,7 @@ async def test_trial_with_custom_verifier_loads_task_without_test_script(
         trial_name="custom-verifier",
         trials_dir=tmp_path / "trials",
         agent=AgentConfig(name="pi"),
-        environment=EnvironmentConfig(
-            type="shellsim", kwargs={"network_policy": "deny"}
-        ),
+        environment=EnvironmentConfig(type="shellsim", kwargs={"network_policy": "deny"}),
         verifier=VerifierConfig(import_path="harbor.verifier.verifier:Verifier"),
     )
 
@@ -106,9 +100,7 @@ class TestSingleStepSeparate:
 
         Task(task_dir)
 
-    def test_separate_verifier_with_explicit_environment_passes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_separate_verifier_with_explicit_environment_passes(self, tmp_path: Path) -> None:
         task_dir = tmp_path / "task"
         _scaffold(
             task_dir,
@@ -174,9 +166,7 @@ class TestMultiStep:
 
 
 class TestTaskIsValidDir:
-    def test_single_step_shared_missing_test_returns_false(
-        self, tmp_path: Path
-    ) -> None:
+    def test_single_step_shared_missing_test_returns_false(self, tmp_path: Path) -> None:
         task_dir = tmp_path / "task"
         _scaffold(task_dir)
         (task_dir / "instruction.md").write_text("Do it.\n")
@@ -184,9 +174,7 @@ class TestTaskIsValidDir:
 
         assert Task.is_valid_dir(task_dir) is False
 
-    def test_single_step_separate_no_host_test_returns_true(
-        self, tmp_path: Path
-    ) -> None:
+    def test_single_step_separate_no_host_test_returns_true(self, tmp_path: Path) -> None:
         task_dir = tmp_path / "task"
         _scaffold(task_dir, '[verifier]\nenvironment_mode = "separate"\n')
         (task_dir / "instruction.md").write_text("Do it.\n")
@@ -201,9 +189,7 @@ class TestTaskIsValidDir:
 
         assert Task.is_valid_dir(task_dir, disable_verification=True) is True
 
-    def test_multi_step_missing_step_directory_returns_false(
-        self, tmp_path: Path
-    ) -> None:
+    def test_multi_step_missing_step_directory_returns_false(self, tmp_path: Path) -> None:
         task_dir = tmp_path / "task"
         _scaffold(task_dir, '[[steps]]\nname = "grade"\n')
 
@@ -215,14 +201,10 @@ class TestTaskIsValidDir:
 
         assert Task.is_valid_dir(task_dir) is False
 
-    def test_docker_image_only_without_dockerfile_returns_true(
-        self, tmp_path: Path
-    ) -> None:
+    def test_docker_image_only_without_dockerfile_returns_true(self, tmp_path: Path) -> None:
         task_dir = tmp_path / "task"
         task_dir.mkdir()
-        (task_dir / "task.toml").write_text(
-            '[environment]\ndocker_image = "ubuntu:22.04"\n'
-        )
+        (task_dir / "task.toml").write_text('[environment]\ndocker_image = "ubuntu:22.04"\n')
         (task_dir / "environment").mkdir()
         (task_dir / "instruction.md").write_text("Do it.\n")
         (task_dir / "tests").mkdir()
@@ -232,9 +214,7 @@ class TestTaskIsValidDir:
         Task(task_dir)
 
     @pytest.mark.asyncio
-    async def test_local_dataset_scanning_uses_config_aware_validation(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_local_dataset_scanning_uses_config_aware_validation(self, tmp_path: Path) -> None:
         valid_task = tmp_path / "valid-task"
         _scaffold(valid_task, '[verifier]\nenvironment_mode = "separate"\n')
         (valid_task / "instruction.md").write_text("Do it.\n")
@@ -251,4 +231,4 @@ class TestTaskIsValidDir:
 
 @pytest.fixture(autouse=True)
 def register_test_agents(monkeypatch):
-    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, NopAgent)
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, FakeAgent)

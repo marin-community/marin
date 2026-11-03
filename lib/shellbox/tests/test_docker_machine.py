@@ -37,7 +37,7 @@ def test_image_build_and_registry_cache_work_with_only_docker_on_path(tmp_path, 
     context = tmp_path / "build context"
     context.mkdir()
     dockerfile = context / "Dockerfile"
-    dockerfile.write_text("FROM python:3.12-alpine\nCOPY payload /payload\n")
+    dockerfile.write_text("FROM busybox:1.36\nCOPY payload /payload\n")
     payload = b"native image payload\x00\xff"
     (context / "payload").write_bytes(payload)
     reference = f"registry.invalid/shellbox-cache:{uuid.uuid4().hex}"
@@ -72,18 +72,16 @@ def test_image_build_and_registry_cache_work_with_only_docker_on_path(tmp_path, 
 def test_docker_candidate_output_is_drained_with_bounded_memory(monkeypatch, output_limit):
     create_process = asyncio.create_subprocess_exec
     script = (
-        "import os, sys\nassert len(sys.stdin.buffer.read()) == 196608\n"
+        "import os, sys\nos.write(1, b'SHELLBOX_PGID:42\\n')\nassert len(sys.stdin.buffer.read()) == 196608\n"
         "for _ in range(512):\n os.write(1, b'x' * 65536)\n os.write(2, b'y' * 65536)\n"
     )
 
     async def local_process(*args, **kwargs):
         assert args[0] == "docker"
-        if args[1:3] != ("exec", "-i"):
-            return await create_process("true", **kwargs)
         return await create_process(sys.executable, "-c", script, **kwargs)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
-    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")), sys.executable)
+    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")))
     tracemalloc.start()
     try:
         result = asyncio.run(
@@ -98,7 +96,7 @@ def test_docker_candidate_output_is_drained_with_bounded_memory(monkeypatch, out
     assert peak < 8 * 1024**2
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="The command supervisor requires Linux")
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_leader(monkeypatch):
     create_process = asyncio.create_subprocess_exec
 
@@ -110,25 +108,21 @@ def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_lea
         )
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
-    machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture")), sys.executable)
+    machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture")))
     payload = b"SHELLBOX_PGID:7\nanswer\x00\xff"
-
-    async def scenario():
-        missing = await machine.run(Command(("shellbox-no-such-program",)))
-        assert (missing.exit_code, missing.reason) == (127, ExitReason.EXITED)
-        return await machine.run(
+    result = asyncio.run(
+        machine.run(
             Command(
                 (sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read()); sys.exit(23)"),
                 stdin=payload,
                 timeout=5,
             )
         )
-
-    result = asyncio.run(scenario())
+    )
     assert (result.exit_code, result.stdout, result.reason) == (23, payload, ExitReason.EXITED)
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="The command supervisor requires Linux")
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 @pytest.mark.parametrize("candidate_state", ["running", "completed"])
 def test_docker_deadline_stops_running_work_and_preserves_completed_work(tmp_path, monkeypatch, candidate_state):
     create_process = asyncio.create_subprocess_exec
@@ -159,9 +153,7 @@ def test_docker_deadline_stops_running_work_and_preserves_completed_work(tmp_pat
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", remote_exec)
 
     async def scenario():
-        machine = DockerMachine(
-            "shellbox-test-container", MachineSpec(DockerImage("fixture"), workdir=str(tmp_path)), sys.executable
-        )
+        machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture"), workdir=str(tmp_path)))
         try:
             argv = ("printf", "completed-at-deadline")
             if candidate_state != "completed":
@@ -234,7 +226,7 @@ def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_pa
     (source / "nested").chmod(0o710)
     (source / "nested/answer").write_bytes(b"\x00\xff")
     (source / "nested/answer").chmod(0o755)
-    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")), sys.executable)
+    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")))
     downloaded = tmp_path / "downloaded"
     downloaded.mkdir()
 
@@ -275,11 +267,10 @@ def test_docker_wire_preserves_resource_limits_and_per_command_users(monkeypatch
     launch = requests[0]
     limits = {flag: launch[launch.index(flag) + 1] for flag in ("--cpus", "--memory", "--storage-opt", "--gpus")}
     assert limits == {"--cpus": "2", "--memory": "1536m", "--storage-opt": "size=1024M", "--gpus": "1"}
-    commands = [request for request in requests if request[:2] == ("exec", "-i")]
-    assert commands[0][commands[0].index("--user") + 1] == "1001"
-    assert commands[1][commands[1].index("--user") + 1] == "1002"
-    assert "--user" not in commands[2]
-    assert "-w" not in commands[2]
+    assert requests[2][requests[2].index("--user") + 1] == "1001"
+    assert requests[3][requests[3].index("--user") + 1] == "1002"
+    assert "--user" not in requests[4]
+    assert "-w" not in requests[4]
     assert requests[-1][0:2] == ("rm", "-f")
 
 
@@ -314,12 +305,10 @@ def test_cancelled_docker_start_removes_a_container_before_returning(monkeypatch
 @pytest.mark.parametrize("user", [None, "12345"])
 def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interruption, user):
     async def scenario():
-        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("python:3.12-alpine"), workdir="/tmp"))
+        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("busybox:1.36"), workdir="/tmp"))
         try:
             await machine.run(Command(("sh", "-c", "echo 12 > answer")))
-            await docker(
-                "exec", "-w", "/tmp", machine.name, "sh", "-c", "sleep 7200 >/dev/null 2>&1 & echo $! > service.pid"
-            )
+            await machine.run(Command(("sh", "-c", "sleep 7200 >/dev/null 2>&1 & echo $! > service.pid")))
             async with asyncio.TaskGroup() as commands:
                 pending = commands.create_task(
                     machine.run(
@@ -372,9 +361,7 @@ def test_interrupted_docker_commands_preserve_files_and_stop_descendants(interru
 @pytest.mark.docker
 def test_docker_commands_run_in_a_working_directory_the_image_lacks():
     async def scenario():
-        machine = await DockerMachineFactory().create(
-            MachineSpec(DockerImage("python:3.12-alpine"), workdir="/work/nested")
-        )
+        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("busybox:1.36"), workdir="/work/nested"))
         try:
             return await machine.run(Command(("pwd",)))
         finally:
@@ -384,10 +371,8 @@ def test_docker_commands_run_in_a_working_directory_the_image_lacks():
     assert (result.exit_code, result.stdout) == (0, b"/work/nested\n")
 
 
-@pytest.mark.parametrize(
-    "interruption, phase", [("timeout", "submission"), ("cancel", "submission"), ("cancel", "status")]
-)
-def test_interrupted_docker_command_preserves_the_machine(monkeypatch, interruption, phase):
+@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+def test_interrupted_docker_start_without_a_process_group_disposes_the_container(monkeypatch, interruption):
     containers = set()
 
     async def scenario():
@@ -396,10 +381,7 @@ def test_interrupted_docker_command_preserves_the_machine(monkeypatch, interrupt
         async def docker(*args, **_kwargs):
             if args[0] == "run":
                 containers.add(args[args.index("--name") + 1])
-            elif not started.is_set() and (
-                (phase == "submission" and args[:2] == ("exec", "-i"))
-                or (phase == "status" and " status /tmp/.shellbox-process-" in args[-1])
-            ):
+            elif args[:2] == ("exec", "-i"):
                 started.set()
                 if interruption == "timeout":
                     raise TimeoutError("Docker exec startup timed out")
@@ -414,40 +396,42 @@ def test_interrupted_docker_command_preserves_the_machine(monkeypatch, interrupt
         await asyncio.wait_for(started.wait(), timeout=5)
         if interruption == "cancel":
             pending.cancel()
-        if interruption == "cancel":
-            with pytest.raises(asyncio.CancelledError):
-                await pending
-        else:
-            assert (await pending).reason is ExitReason.TIMED_OUT
-        assert (await machine.run(Command(("true",)))).exit_code == 0
-        await machine.close()
-        assert not containers
+        with pytest.raises(asyncio.CancelledError if interruption == "cancel" else TimeoutError):
+            await pending
+        assert containers == set()
+        with pytest.raises(RuntimeError, match="closed"):
+            await machine.run(Command(("true",)))
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("failure", ["exit", "timeout"])
-def test_docker_unconfirmed_teardown_disposes_container(monkeypatch, failure):
+@pytest.mark.parametrize("probe", ["live", "provider_error", "timeout"])
+@pytest.mark.parametrize("stop_exit", [0, 1])
+def test_docker_stop_disposes_a_live_or_unverified_process_group(monkeypatch, probe, stop_exit):
     containers = set()
 
     async def provider(*args, **kwargs):
         if args[0] == "run":
             containers.add(args[args.index("--name") + 1])
         elif args[:2] == ("exec", "-i"):
-            raise TimeoutError("Command deadline expired")
-        elif " cancel /tmp/.shellbox-process-" in args[-1]:
-            if failure == "timeout":
-                raise TimeoutError("Cleanup request timed out")
-            return DockerCommandResult(125, b"", b"Cleanup failed")
+            kwargs["process_group"].set_result(42)
+            raise TimeoutError("Docker exec command deadline expired")
+        elif "stop-command" in args:
+            return DockerCommandResult(stop_exit, b"", b"Cannot stop the command group")
+        elif "probe-command" in args:
+            if probe == "timeout":
+                raise TimeoutError("Provider probe timed out")
+            return DockerCommandResult(0 if probe == "live" else 125, b"", b"Provider probe failed")
         elif args[:2] == ("rm", "-f"):
             containers.remove(args[2])
         return DockerCommandResult(0, b"", b"")
 
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", provider)
+    monkeypatch.setattr("shellbox.backends.docker.machine.INTERRUPT_TIMEOUT", 0.05)
 
     async def scenario():
         machine = await DockerMachineFactory().create(MachineSpec(DockerImage("fixture")))
-        with pytest.raises(RuntimeError, match="Cannot confirm"):
+        with pytest.raises(TimeoutError):
             await machine.run(Command(("candidate",), user="12345"))
         assert not containers
         with pytest.raises(RuntimeError, match="closed"):
@@ -458,7 +442,6 @@ def test_docker_unconfirmed_teardown_disposes_container(monkeypatch, failure):
 
 @pytest.mark.parametrize("exit_code,prefix", [(126, b"\x00\xffstart error\r\n"), (127, b"\x00\xffstart error")])
 @pytest.mark.parametrize("output_limit", [0, 1024])
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_docker_exec_start_failure_preserves_output_and_the_next_command(monkeypatch, exit_code, prefix, output_limit):
     create_process = asyncio.create_subprocess_exec
     script = (
@@ -477,7 +460,7 @@ def test_docker_exec_start_failure_preserves_output_and_the_next_command(monkeyp
     monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
 
     async def scenario():
-        machine = DockerMachine("exec-fixture", MachineSpec(DockerImage("fixture")), sys.executable)
+        machine = DockerMachine("exec-fixture", MachineSpec(DockerImage("fixture")))
         try:
             tracemalloc.start()
             try:
@@ -502,7 +485,7 @@ def test_docker_exec_start_failure_preserves_output_and_the_next_command(monkeyp
 def test_docker_removed_workdir_is_an_exited_result_and_the_machine_stays_reusable():
     async def scenario():
         workdir = "/tmp/command-workdir"
-        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("python:3.12-alpine"), workdir=workdir))
+        machine = await DockerMachineFactory().create(MachineSpec(DockerImage("busybox:1.36"), workdir=workdir))
         try:
             prepared = await machine.run(Command(("mkdir", "-p", workdir), cwd="/tmp"))
             assert prepared.exit_code == 0

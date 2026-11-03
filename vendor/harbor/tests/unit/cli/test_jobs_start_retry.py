@@ -7,6 +7,7 @@ from harbor.environments.factory import EnvironmentFactory
 from harbor.environments.runtime import daytona_connection
 from harbor.models.job.config import JobConfig
 from harbor.models.task.config import EnvironmentConfig as TaskEnvironmentConfig
+from harbor.models.trial.config import AgentConfig
 from harbor.models.trial.paths import TrialPaths
 from typer.testing import CliRunner
 
@@ -36,21 +37,18 @@ def _capture_job_config(monkeypatch, tmp_path: Path) -> list[JobConfig]:
         "harbor.environments.factory.EnvironmentFactory.run_preflight",
         lambda **_: None,
     )
-    monkeypatch.setattr(
-        "harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None
-    )
+    monkeypatch.setattr("harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None)
     monkeypatch.setattr("harbor.cli.jobs.print_job_results_tables", lambda _: None)
 
     return captured
 
 
-def test_jobs_start_preserves_yaml_retry_exclude_without_cli_flag(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_jobs_start_preserves_yaml_retry_exclude_without_cli_flag(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "job.yaml"
     config_path.write_text(
         "\n".join(
             [
+                "agents: [{name: pi}]",
                 "retry:",
                 "  max_retries: 3",
                 "  exclude_exceptions:",
@@ -63,7 +61,7 @@ def test_jobs_start_preserves_yaml_retry_exclude_without_cli_flag(
 
     result = runner.invoke(
         app,
-        ["jobs", "start", "--config", str(config_path)],
+        ["jobs", "start", "--agent", "pi", "--config", str(config_path)],
     )
 
     assert result.exit_code == 0, result.output
@@ -74,37 +72,32 @@ def test_jobs_start_preserves_yaml_retry_exclude_without_cli_flag(
     }
 
 
-def test_jobs_start_uses_model_retry_exclude_default_without_config(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_jobs_start_uses_model_retry_exclude_default_without_config(tmp_path: Path, monkeypatch) -> None:
     captured = _capture_job_config(monkeypatch, tmp_path)
 
-    result = runner.invoke(app, ["jobs", "start"])
+    result = runner.invoke(app, ["jobs", "start", "--agent", "pi"])
 
     assert result.exit_code == 0, result.output
     assert len(captured) == 1
-    assert captured[0].retry.exclude_exceptions == JobConfig().retry.exclude_exceptions
+    assert captured[0].retry.exclude_exceptions == JobConfig(agents=[AgentConfig(name="pi")]).retry.exclude_exceptions
 
 
-def test_jobs_start_hugging_face_dataset_without_revision(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_jobs_start_hugging_face_dataset_without_revision(tmp_path: Path, monkeypatch) -> None:
     captured = _capture_job_config(monkeypatch, tmp_path)
 
-    result = runner.invoke(app, ["jobs", "start", "--dataset", "hf://example/tasks"])
+    result = runner.invoke(app, ["jobs", "start", "--agent", "pi", "--dataset", "hf://example/tasks"])
 
     assert result.exit_code == 0, result.output
     assert captured[0].datasets[0].name == "hf://example/tasks"
     assert captured[0].datasets[0].ref is None
 
 
-def test_jobs_start_retry_exclude_cli_flag_overrides_yaml(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_jobs_start_retry_exclude_cli_flag_overrides_yaml(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "job.yaml"
     config_path.write_text(
         "\n".join(
             [
+                "agents: [{name: pi}]",
                 "retry:",
                 "  exclude_exceptions:",
                 "    - AgentTimeoutError",
@@ -119,6 +112,8 @@ def test_jobs_start_retry_exclude_cli_flag_overrides_yaml(
         [
             "jobs",
             "start",
+            "--agent",
+            "pi",
             "--config",
             str(config_path),
             "--retry-exclude",
@@ -131,9 +126,7 @@ def test_jobs_start_retry_exclude_cli_flag_overrides_yaml(
     assert captured[0].retry.exclude_exceptions == {"VerifierTimeoutError"}
 
 
-def test_jobs_start_sets_trial_attempt_deadline_and_cleanup_grace(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_jobs_start_sets_trial_attempt_deadline_and_cleanup_grace(tmp_path: Path, monkeypatch) -> None:
     captured = _capture_job_config(monkeypatch, tmp_path)
 
     result = runner.invoke(
@@ -141,6 +134,8 @@ def test_jobs_start_sets_trial_attempt_deadline_and_cleanup_grace(
         [
             "jobs",
             "start",
+            "--agent",
+            "pi",
             "--trial-attempt-timeout",
             "120",
             "--trial-cleanup-grace",
@@ -162,15 +157,13 @@ def test_jobs_start_sets_trial_attempt_deadline_and_cleanup_grace(
     ],
 )
 def test_jobs_start_rejects_removed_execution_paths(arguments):
-    result = runner.invoke(app, ["jobs", "start", *arguments])
+    result = runner.invoke(app, ["jobs", "start", "--agent", "pi", *arguments])
     assert result.exit_code == 2
 
 
 @pytest.mark.parametrize("fail", [False, True])
 @pytest.mark.parametrize("use_env_file", [False, True])
-def test_cli_binds_private_backend_connection_until_command_closes(
-    tmp_path: Path, monkeypatch, fail, use_env_file
-):
+def test_cli_binds_private_backend_connection_until_command_closes(tmp_path: Path, monkeypatch, fail, use_env_file):
     monkeypatch.setenv("DAYTONA_API_KEY", "private-backend-canary")
     monkeypatch.setenv("DAYTONA_API_URL", "https://daytona.invalid/api")
     monkeypatch.setenv("DAYTONA_TARGET", "test-target")
@@ -196,16 +189,14 @@ def test_cli_binds_private_backend_connection_until_command_closes(
             environment_name="test",
             session_id="test",
             trial_paths=TrialPaths(tmp_path / "trial"),
-            task_env_config=TaskEnvironmentConfig(
-                docker_image="registry.invalid/task@sha256:" + "a" * 64
-            ),
+            task_env_config=TaskEnvironmentConfig(docker_image="registry.invalid/task@sha256:" + "a" * 64),
         )
         if fail:
             raise RuntimeError("command failed after backend construction")
         return _FakeJob(config, tmp_path)
 
     monkeypatch.setattr("harbor.job.Job.create", create)
-    arguments = ["jobs", "start", "--env", "daytona"]
+    arguments = ["jobs", "start", "--agent", "pi", "--env", "daytona"]
     if use_env_file:
         monkeypatch.setenv("DAYTONA_API_KEY", "ambient-backend-canary")
         env_file = tmp_path / "backend.env"

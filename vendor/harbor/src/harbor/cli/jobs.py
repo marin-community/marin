@@ -43,9 +43,7 @@ from rich.table import Table
 from typer import Argument, Context, Option, Typer
 from upath import UPath
 
-jobs_app = Typer(
-    no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
-)
+jobs_app = Typer(no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]})
 console = Console()
 logger = logging.getLogger(__name__)
 
@@ -57,9 +55,7 @@ def _validate_bridge_target_agents(agents: list[AgentConfig], kind: BridgeKind) 
             continue
         agent_cls = AgentFactory.get_agent_class(AgentName(agent.name))
         if kind not in agent_cls.SUPPORTED_BRIDGES:
-            raise ValueError(
-                f"Agent '{agent.name}' does not support the '{kind}' bridge."
-            )
+            raise ValueError(f"Agent '{agent.name}' does not support the '{kind}' bridge.")
 
 
 def _format_duration(started_at: datetime | None, finished_at: datetime | None) -> str:
@@ -126,11 +122,7 @@ def print_job_results_tables(job_result) -> None:
         if dataset_stats.metrics:
             for i, metric in enumerate(dataset_stats.metrics):
                 for key, value in metric.items():
-                    metric_label = (
-                        f"Metric {i + 1}: {key}"
-                        if len(dataset_stats.metrics) > 1
-                        else key
-                    )
+                    metric_label = f"Metric {i + 1}: {key}" if len(dataset_stats.metrics) > 1 else key
                     summary_table.add_column(metric_label.title(), justify="right")
                     if isinstance(value, float):
                         summary_row.append(f"{value:.3f}")
@@ -358,10 +350,7 @@ def start(
         Option(
             "-a",
             "--agent",
-            help=(
-                "Agent name or ACP registry shorthand "
-                "(for example: acp:opencode@1.3.9)."
-            ),
+            help=("Supported agent: pi, mini-swe-agent, codex, opencode, terminus-2, or terminus-kira."),
             rich_help_panel="Agent",
             show_default=False,
         ),
@@ -370,7 +359,7 @@ def start(
         str | None,
         Option(
             "--agent-import-path",
-            help="Import path for custom agent",
+            help="Import path of a supported agent",
             rich_help_panel="Agent",
             show_default=False,
         ),
@@ -423,8 +412,7 @@ def start(
         Option(
             "--skill",
             "--skills",
-            help="Path to a skill directory, or a root containing skill directories. "
-            "Can be used multiple times.",
+            help="Path to a skill directory, or a root containing skill directories. " "Can be used multiple times.",
             rich_help_panel="Agent",
             show_default=False,
         ),
@@ -674,8 +662,7 @@ def start(
         list[Path] | None,
         Option(
             "--extra-instruction-path",
-            help="Path to an extra instruction file to append to the task "
-            "instruction. Can be used multiple times.",
+            help="Path to an extra instruction file to append to the task " "instruction. Can be used multiple times.",
             rich_help_panel="Dataset",
             show_default=False,
         ),
@@ -825,8 +812,7 @@ def start(
         list[str] | None,
         Option(
             "--artifact",
-            help="Environment path to download as an artifact after the trial "
-            "(can be used multiple times)",
+            help="Environment path to download as an artifact after the trial " "(can be used multiple times)",
             rich_help_panel="Job Settings",
             show_default=False,
         ),
@@ -882,15 +868,18 @@ def start(
     base_config = None
     if config_path is not None:
         if config_path.suffix == ".yaml":
-            base_config = JobConfig.model_validate(
-                yaml.safe_load(config_path.read_text())
-            )
+            base_config = JobConfig.model_validate(yaml.safe_load(config_path.read_text()))
         elif config_path.suffix == ".json":
             base_config = JobConfig.model_validate_json(config_path.read_text())
         else:
             raise ValueError(f"Unsupported config file format: {config_path.suffix}")
 
-    config = base_config if base_config is not None else JobConfig()
+    if base_config is None:
+        if agent_name is None and agent_import_path is None:
+            raise ValueError("Specify --agent or a config with an explicit supported agent")
+        config = JobConfig(agents=[AgentConfig(name=agent_name, import_path=agent_import_path)])
+    else:
+        config = base_config
 
     if job_name is not None:
         config.job_name = job_name
@@ -911,9 +900,7 @@ def start(
     if agent_setup_timeout_multiplier is not None:
         config.agent_setup_timeout_multiplier = agent_setup_timeout_multiplier
     if environment_build_timeout_multiplier is not None:
-        config.environment_build_timeout_multiplier = (
-            environment_build_timeout_multiplier
-        )
+        config.environment_build_timeout_multiplier = environment_build_timeout_multiplier
     if trial_attempt_timeout_sec is not None:
         config.trial_attempt_timeout_sec = trial_attempt_timeout_sec
     if trial_cleanup_grace_sec is not None:
@@ -937,9 +924,7 @@ def start(
         parsed_kwargs = parse_kwargs(agent_kwargs)
         parsed_env = parse_env_vars(agent_env)
         parsed_mcp_servers = [
-            server
-            for mcp_config_path in mcp_config or []
-            for server in load_mcp_servers(mcp_config_path)
+            server for mcp_config_path in mcp_config or [] for server in load_mcp_servers(mcp_config_path)
         ]
 
         if model_names is not None:
@@ -970,9 +955,7 @@ def start(
         parsed_kwargs = parse_kwargs(agent_kwargs)
         parsed_env = parse_env_vars(agent_env)
         parsed_mcp_servers = [
-            server
-            for mcp_config_path in mcp_config or []
-            for server in load_mcp_servers(mcp_config_path)
+            server for mcp_config_path in mcp_config or [] for server in load_mcp_servers(mcp_config_path)
         ]
         if parsed_kwargs or parsed_env or parsed_mcp_servers or skills:
             for agent in config.agents:
@@ -986,24 +969,13 @@ def start(
                     agent.skills.extend(skills)
 
     if user_agent_name is not None and user_agent_import_path is not None:
-        console.print(
-            "[red]Error:[/red] Use either --user-agent or "
-            "--user-agent-import-path, not both."
-        )
+        console.print("[red]Error:[/red] Use either --user-agent or " "--user-agent-import-path, not both.")
         raise SystemExit(1)
 
-    user_agent_requested = (
-        user_agent_name is not None or user_agent_import_path is not None
-    )
+    user_agent_requested = user_agent_name is not None or user_agent_import_path is not None
     if user_agent_requested:
-        existing_bridge = (
-            config.user_agent.bridge.model_copy(deep=True)
-            if config.user_agent is not None
-            else None
-        )
-        resolved_bridge_kind = bridge_kind or (
-            existing_bridge.kind if existing_bridge is not None else None
-        )
+        existing_bridge = config.user_agent.bridge.model_copy(deep=True) if config.user_agent is not None else None
+        resolved_bridge_kind = bridge_kind or (existing_bridge.kind if existing_bridge is not None else None)
         if resolved_bridge_kind is None:
             console.print("[red]Error:[/red] --user-agent requires --bridge.")
             raise SystemExit(1)
@@ -1013,11 +985,7 @@ def start(
             bridge.prompt_path = bridge_prompt_path
         if bridge_kwargs is not None:
             bridge.kwargs.update(parse_kwargs(bridge_kwargs))
-        user_mcp_servers = [
-            server
-            for config_path in user_mcp_config or []
-            for server in load_mcp_servers(config_path)
-        ]
+        user_mcp_servers = [server for config_path in user_mcp_config or [] for server in load_mcp_servers(config_path)]
         config.user_agent = UserAgentConfig(
             name=user_agent_name,
             import_path=user_agent_import_path,
@@ -1038,9 +1006,7 @@ def start(
             config.user_agent.env.update(parse_env_vars(user_agent_env))
         if user_mcp_config is not None:
             config.user_agent.mcp_servers.extend(
-                server
-                for config_path in user_mcp_config
-                for server in load_mcp_servers(config_path)
+                server for config_path in user_mcp_config for server in load_mcp_servers(config_path)
             )
         if user_persona_path is not None:
             config.user_agent.user_persona_path = user_persona_path
@@ -1141,8 +1107,7 @@ def start(
     if path is not None:
         is_task = Task.is_valid_dir(
             path,
-            disable_verification=config.verifier.disable
-            or config.verifier.import_path is not None,
+            disable_verification=config.verifier.disable or config.verifier.import_path is not None,
         )
 
         if is_task:
@@ -1225,9 +1190,7 @@ def start(
         console.print()
         print_job_results_tables(job_result)
         console.print("[bold]Job Info[/bold]")
-        console.print(
-            f"Total runtime: {_format_duration(job_result.started_at, job_result.finished_at)}"
-        )
+        console.print(f"Total runtime: {_format_duration(job_result.started_at, job_result.finished_at)}")
         console.print(f"Results written to {job._job_result_path}")
         console.print()
         return job, job_result
@@ -1304,26 +1267,20 @@ def _prune_unscored_trials(job_dir: Path) -> None:
             continue
 
         try:
-            trial_result = TrialResult.model_validate_json(
-                trial_paths.result_path.read_text()
-            )
+            trial_result = TrialResult.model_validate_json(trial_paths.result_path.read_text())
         except Exception as e:
             # A truncated/empty/corrupt result.json (e.g. a 0-byte file left by a
             # wall-clock kill mid-write) is an INCOMPLETE trial, not a completed one.
             # Remove its dir so resume re-runs it, instead of aborting the ENTIRE resume
             # on this one parse error (observed on wall-terminated re-resumes).
             console.print(
-                f"Removing trial with unreadable result ({type(e).__name__}); "
-                f"will re-run: {trial_dir.name}"
+                f"Removing trial with unreadable result ({type(e).__name__}); " f"will re-run: {trial_dir.name}"
             )
             safe_rmtree(trial_dir)
             continue
 
         if trial_result.verifier_result is None:
-            console.print(
-                f"Removing unscored trial (verifier_result=None); "
-                f"will re-run: {trial_dir.name}"
-            )
+            console.print(f"Removing unscored trial (verifier_result=None); " f"will re-run: {trial_dir.name}")
             safe_rmtree(trial_dir)
 
 
@@ -1342,8 +1299,7 @@ def resume(
         Option(
             "-f",
             "--filter-error-type",
-            help="Remove trials with these error types before resuming (can be used "
-            "multiple times)",
+            help="Remove trials with these error types before resuming (can be used " "multiple times)",
             show_default=False,
         ),
     ] = ["CancelledError"],
@@ -1398,8 +1354,7 @@ def summarize(
 ):
     """Summarize trial failures in a job using Claude Agent SDK."""
     console.print(
-        "[red]Error: 'harbor jobs summarize' has been removed. "
-        "Use 'harbor analyze <job-dir>' instead.[/red]"
+        "[red]Error: 'harbor jobs summarize' has been removed. " "Use 'harbor analyze <job-dir>' instead.[/red]"
     )
     raise SystemExit(1)
 

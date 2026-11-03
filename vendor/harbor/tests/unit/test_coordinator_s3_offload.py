@@ -29,15 +29,14 @@ from unittest import mock
 from unittest.mock import AsyncMock
 
 import pytest
-from upath import UPath
-
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.trial import artifact_handler as artifact_handler_module
 from harbor.trial import trial as trial_module
 from harbor.trial.artifact_handler import ArtifactHandler
 from harbor.trial.single_step import SingleStepTrial
 from harbor.utils.artifact_writer import ArtifactWriter
 from harbor.verifier.verifier import Verifier
+from upath import UPath
 
 
 class _ThreadRecordingWriter:
@@ -60,6 +59,7 @@ class _ThreadRecordingWriter:
 
 def _configure_trial_for_init_result(trial: SingleStepTrial, tmp_path: Path) -> None:
     trial.config = TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path),
         trial_name="t0",
     )
@@ -73,9 +73,7 @@ def _configure_trial_for_init_result(trial: SingleStepTrial, tmp_path: Path) -> 
 
 
 @pytest.mark.unit
-async def test_finalize_writes_result_json_off_event_loop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_finalize_writes_result_json_off_event_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     loop_thread = threading.get_ident()
     artifact_writer = ArtifactWriter()
     monkeypatch.setattr(trial_module, "get_artifact_writer", lambda: artifact_writer)
@@ -142,9 +140,7 @@ async def test_init_result_skips_remote_mkdir_and_offloads_config_write(
 
 
 @pytest.mark.unit
-async def test_init_result_mkdirs_on_local_trials_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_init_result_mkdirs_on_local_trials_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(trial_module, "get_artifact_writer", lambda: ArtifactWriter())
     writer = _ThreadRecordingWriter(tmp_path / "config.json")
     trial_dir = mock.MagicMock()
@@ -198,9 +194,7 @@ async def test_download_artifacts_writes_manifest_off_event_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     artifact_writer = ArtifactWriter()
-    monkeypatch.setattr(
-        artifact_handler_module, "get_artifact_writer", lambda: artifact_writer
-    )
+    monkeypatch.setattr(artifact_handler_module, "get_artifact_writer", lambda: artifact_writer)
 
     handler = ArtifactHandler(artifacts=[], logger=mock.MagicMock())
 

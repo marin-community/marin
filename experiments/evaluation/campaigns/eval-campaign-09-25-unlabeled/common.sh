@@ -265,7 +265,6 @@ for name in native_32k_models:
     assert harbor_model_info[name] == {"max_input_tokens": 32768}
 assert harbor_eval_harness_profiles == {
     "bixbench-pi": "pi-65k-16k",
-    "tau3-pi": "tau3-pi-131k-32k",
     "swebench-verified": "mini-swe-k2-tool-history",
 }
 expected_model_kwargs = {
@@ -282,7 +281,6 @@ assert harbor_harness_profiles["mini-swe-k2-tool-history"] == {
     "agent": "mini-swe-agent",
     "model_kwargs": {"IFM-K2-Horizon-MoVA-36B-A4B": {"model_format": "k2_horizon"}},
 }
-assert harbor_harness_profiles["tau3-pi-131k-32k"]["agent"] == "acp"
 assert {path.stem for path in chat_templates.glob("*.jinja")} <= {path.stem for path in models.glob("*.yaml")}
 for path in models.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
@@ -302,14 +300,7 @@ for path in models.glob("*.yaml"):
 mrcr_variants = {"mrcr-32k": 32704, "mrcr-65k": 65472}
 evalchemy_names = {path.stem for path in evalchemy.glob("*.yaml")}
 assert len(evalchemy_names) == 20
-assert len(list(harbor.glob("*.yaml"))) == 8
-sotopia = yaml.safe_load((harbor / "sotopia-hard.yaml").read_text())
-assert sotopia["datasets"] == [
-    {
-        "name": "hf://open-athena/sotopia-hard-harbor",
-        "ref": "b388b6634d82b25811afa431997b3dbfee9c17cf",
-    }
-]
+assert len(list(harbor.glob("*.yaml"))) == 6
 
 thinking_on = {"aime24", "math500", "olympiadbench", "mmlu-pro", "gpqa-diamond"}
 thinking_off = {
@@ -435,14 +426,9 @@ for name in (
     "ot-tblite-recovery",
     "ds-1000-local",
     "bfclparity-pi",
-    "sotopia-hard",
 ):
     document = yaml.safe_load((harbor / f"{name}.yaml").read_text())
     assert document["agents"][0]["kwargs"]["model_info"]["max_input_tokens"] == 32768
-assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwargs"]["model_info"] == {
-    "max_input_tokens": 131072,
-    "max_output_tokens": 32768,
-}
 
 registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_DATASET_REGISTRY_REVISION']}/"
 for path in harbor.glob("*.yaml"):

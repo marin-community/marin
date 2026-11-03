@@ -5,9 +5,10 @@
 
 import asyncio
 import os
+import shlex
+import shutil
 import signal
 import stat
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import replace
@@ -268,7 +269,6 @@ def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():
 
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     async def scenario() -> None:
         client = LocalDaytona()
@@ -324,21 +324,26 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 @pytest.mark.parametrize("interruption", ["timeout", "cancel", "cancel_twice", "cancel_during_timeout_stop"])
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(tmp_path, interruption):
     async def scenario():
         stopping, release_stop = asyncio.Event(), asyncio.Event()
 
         class HeldStop(LocalProcess):
+            def __init__(self):
+                super().__init__()
+                self.cancellations = []
+
             async def exec(self, command, **kwargs):
-                if " cancel /tmp/.shellbox-process-" in command and interruption in {
-                    "cancel_twice",
-                    "cancel_during_timeout_stop",
-                }:
-                    stopping.set()
-                    await release_stop.wait()
-                return await super().exec(command, **kwargs)
+                try:
+                    if "stop-command" in command and interruption in {"cancel_twice", "cancel_during_timeout_stop"}:
+                        stopping.set()
+                        await release_stop.wait()
+                    return await super().exec(command, **kwargs)
+                except asyncio.CancelledError as cancellation:
+                    self.cancellations.append(cancellation)
+                    raise
 
         client = LocalDaytona()
         client.sandbox.process = HeldStop()
@@ -375,6 +380,7 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
                 with pytest.raises(asyncio.CancelledError) as caught:
                     await pending
                 assert caught.value.args == ("agent deadline",)
+                assert caught.value is client.sandbox.process.cancellations[-1]
             stopped = await machine.run(
                 Command(
                     (
@@ -406,7 +412,6 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
 
 @pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files"])
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_failure, interruption):
     entered = asyncio.Event()
 
@@ -415,7 +420,7 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
             if "candidate-block" in command:
                 entered.set()
                 await asyncio.Future()
-            if " cancel /tmp/.shellbox-process-" in command:
+            if "stop-command" in command:
                 if interrupt_failure == "timeout":
                     raise TimeoutError("Provider interruption timed out")
                 if interrupt_failure == "files":
@@ -452,8 +457,7 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
 
 
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
-def test_daytona_user_probe_is_bounded_and_cancellation_preserves_the_machine(tmp_path, interruption):
+def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_path, interruption):
     entered = asyncio.Event()
 
     class BlockedProbe(LocalProcess):
@@ -484,7 +488,7 @@ def test_daytona_user_probe_is_bounded_and_cancellation_preserves_the_machine(tm
                 pending.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await pending
-                assert not client.closed and not client.deleted
+                assert client.closed and client.deleted
             else:
                 result = await asyncio.wait_for(pending, timeout=0.5)
                 assert result.reason is ExitReason.TIMED_OUT
@@ -498,7 +502,6 @@ def test_daytona_user_probe_is_bounded_and_cancellation_preserves_the_machine(tm
 
 
 @pytest.mark.parametrize("command_timeout", [None, 30])
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, command_timeout):
     provider_error = TimeoutError("Provider request timed out")
 
@@ -528,30 +531,24 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
 def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation():
     entered = asyncio.Event()
 
-    release = asyncio.Event()
-
-    class FailedCommand(LocalProcess):
+    class BlockedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
             if "candidate-fail" in command:
                 raise OSError("Provider command failed")
+            if "rm -rf /tmp/.shellbox-" in command:
+                entered.set()
+                await asyncio.Future()
             return await super().exec(command, **kwargs)
 
-    class BlockedCleanup(LocalDaytona):
-        async def delete(self, sandbox):
-            entered.set()
-            await release.wait()
-            await super().delete(sandbox)
-
     async def scenario():
-        client = BlockedCleanup()
-        client.sandbox.process = FailedCommand()
+        client = LocalDaytona()
+        client.sandbox.process = BlockedCleanup()
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
         )
         pending = asyncio.create_task(machine.run(Command(("candidate-fail",))))
         await asyncio.wait_for(entered.wait(), timeout=5)
         pending.cancel()
-        release.set()
         with pytest.raises(asyncio.CancelledError):
             await pending
         assert client.closed and client.deleted
@@ -559,8 +556,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
-def test_daytona_output_failure_disposes_machine_and_preserves_cause():
+def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
     output_error = TimeoutError("Provider output request timed out")
 
     class FailedOutputAndCleanup(LocalProcess):
@@ -580,13 +576,13 @@ def test_daytona_output_failure_disposes_machine_and_preserves_cause():
         with pytest.raises(RuntimeError) as caught:
             await machine.run(Command(("printf", "ready")))
         assert caught.value.__cause__ is output_error
+        assert len(caught.value.__notes__) == 1
         assert client.closed and client.deleted
 
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("path_source", ["image", "task"])
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path, path_source):
     binary = tmp_path / "bin"
     binary.mkdir()
@@ -626,14 +622,29 @@ def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path,
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
-def test_daytona_completion_before_cancellation_preserves_the_machine(tmp_path):
+def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_path):
+    paths = []
+
     class CompletionDuringStop(LocalProcess):
         async def exec(self, command, **kwargs):
-            result = await super().exec(command, **kwargs)
             if "candidate-finished" in command:
+                argv = shlex.split(shlex.split(command)[2].partition("export PATH; ")[2])
+                index = argv.index("shellbox-command")
+                paths.extend(Path(path) for path in argv[index + 1 : index + 3])
+                await super().exec(command, **kwargs)
+                paths[1].unlink()
+                paths[0].write_text("99999999\n")
                 await asyncio.Future()
-            return result
+            if "stop-command" in command:
+                # Complete after the first marker check and before PID consumption.
+                interleave = f'read() {{ : > "{paths[1]}"; /bin/rm -f "{paths[0]}"; return 1; }}; '
+                outer = shlex.split(command)
+                control, separator, script = outer[2].partition("export PATH; ")
+                argv = shlex.split(script)
+                argv[2] = interleave + argv[2]
+                outer[2] = control + separator + shlex.join(argv)
+                command = shlex.join(outer)
+            return await super().exec(command, **kwargs)
 
     async def scenario():
         client = LocalDaytona()
@@ -655,7 +666,6 @@ def test_daytona_completion_before_cancellation_preserves_the_machine(tmp_path):
 
 @pytest.mark.parametrize("primary_failure", [False, True])
 @pytest.mark.parametrize("cleanup_failure", ["timeout", "exit"])
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error(primary_failure, cleanup_failure):
     class FailedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -678,6 +688,7 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
             await machine.run(Command(("printf", "candidate-fail")))
         if primary_failure:
             assert str(caught.value) == "Provider command failed"
+            assert "Daytona command cleanup failed" in caught.value.__notes__[0]
         assert client.closed and client.deleted
 
     asyncio.run(scenario())
@@ -686,11 +697,11 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
 @pytest.mark.docker
 @pytest.mark.parametrize("backend", ["docker", "daytona"])
 @pytest.mark.parametrize("tampering", ["delete", "forge", "path"])
-def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering, monkeypatch):
+def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
     # The Daytona SDK boundary uses Docker only to test real guest UIDs and processes.
     # This is not a live Daytona service test.
     async def scenario():
-        guest = await DockerMachineFactory().create(MachineSpec(DockerImage("python:3.12-bookworm"), workdir="/tmp"))
+        guest = await DockerMachineFactory().create(MachineSpec(DockerImage("ubuntu:24.04"), workdir="/tmp"))
 
         class GuestProcess:
             async def exec(self, command, cwd=None, env=None, timeout=None):
@@ -708,16 +719,6 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering, mo
                 assert result.exit_code == 0
                 return result.stdout
 
-        victim_alive_at_disposal = []
-        close_guest = guest.close
-
-        async def observe_disposal():
-            if not guest._closed:
-                probe = await docker("exec", guest.name, "sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')
-                victim_alive_at_disposal.append(probe.exit_code == 0)
-            await close_guest()
-
-        monkeypatch.setattr(guest, "close", observe_disposal)
         resources = AsyncExitStack()
         resources.push_async_callback(guest.close)
         machine = (
@@ -726,7 +727,7 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering, mo
             else DaytonaMachine(SimpleNamespace(process=GuestProcess(), fs=GuestFiles()), guest.spec, resources)
         )
         try:
-            await docker("exec", guest.name, "sh", "-c", "setsid sleep 7200 >/dev/null 2>&1 & echo $! > /tmp/victim.pid")
+            await guest.run(Command(("sh", "-c", "setsid sleep 7200 >/dev/null 2>&1 & echo $! > /tmp/victim.pid")))
             if tampering == "path":
                 prepared = await guest.run(Command(("sh", "-c", "mkdir -m 777 /tmp/candidate-bin")))
                 assert prepared.exit_code == 0
@@ -763,16 +764,7 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering, mo
                 timeout=5,
                 env=environment,
             )
-            try:
-                result = await machine.run(candidate)
-            except RuntimeError:
-                # Corrupted same-UID control state may require disposal, but
-                # cancellation must never signal a root-owned process first.
-                assert backend == "docker" and tampering in ("delete", "forge")
-                assert victim_alive_at_disposal == [True]
-                with pytest.raises(RuntimeError, match="closed"):
-                    await machine.run(Command(("true",)))
-                return
+            result = await machine.run(candidate)
             assert result.reason is ExitReason.TIMED_OUT
             result = await guest.run(Command(("sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')))
             assert result.exit_code == 0
@@ -800,7 +792,6 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering, mo
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_rejects_nonroot_execution_without_session_preserving_su(tmp_path):
     class MissingSessionOption(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -827,7 +818,6 @@ def test_daytona_rejects_nonroot_execution_without_session_preserving_su(tmp_pat
 
 
 @pytest.mark.parametrize("mode, exit_code", [(0o755, 0), (0o640, 126)])
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_upload_preserves_script_permissions(tmp_path: Path, mode: int, exit_code: int) -> None:
     async def scenario() -> None:
         source = tmp_path / "grader.sh"
@@ -849,7 +839,6 @@ def test_daytona_upload_preserves_script_permissions(tmp_path: Path, mode: int, 
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_factory_owns_clients_across_worker_event_loops(tmp_path: Path) -> None:
     clients = []
 
@@ -892,7 +881,6 @@ def test_daytona_factory_owns_clients_across_worker_event_loops(tmp_path: Path) 
     assert sum(client.deleted for client in clients) == 2
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path: Path, monkeypatch) -> None:
     snapshots = LocalSnapshots()
     clients = []
@@ -992,61 +980,3 @@ def test_daytona_failed_snapshot_closes_client_without_starting_sandbox() -> Non
         asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
     assert client.params is None
     assert client.closed
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper and procfs contract")
-@pytest.mark.parametrize("ending", ["complete", "cancel", "close", "timeout"])
-def test_daytona_reaps_orphans_before_reuse_or_disposal(tmp_path, ending):
-    script = """
-import os, signal, sys
-from pathlib import Path
-root = Path(sys.argv[1])
-r, w = os.pipe()
-if os.fork() == 0:
-    os.close(r)
-    os.setsid()
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    (root / 'child').write_text(str(os.getpid()))
-    os.write(w, b'1')
-    os.close(w)
-    signal.pause()
-    os._exit(0)
-os.close(w)
-os.read(r, 1)
-(root / 'ready').touch()
-if sys.argv[2] != 'complete':
-    signal.pause()
-"""
-
-    async def scenario():
-        client = LocalDaytona()
-        machine = await DaytonaMachineFactory(lambda: client).create(
-            MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path))
-        )
-        task = asyncio.create_task(
-            machine.run(
-                Command(("python3", "-c", script, str(tmp_path), ending), timeout=1 if ending == "timeout" else None)
-            )
-        )
-        try:
-            async with asyncio.timeout(10):
-                while not (tmp_path / "ready").exists():
-                    await asyncio.sleep(0)
-            if ending == "close":
-                await machine.close()
-            elif ending == "cancel":
-                task.cancel()
-            if ending in ("cancel", "close"):
-                with pytest.raises(asyncio.CancelledError):
-                    await task
-            else:
-                result = await task
-                assert result.reason is (ExitReason.TIMED_OUT if ending == "timeout" else ExitReason.EXITED)
-            assert not Path(f"/proc/{(tmp_path / 'child').read_text()}").exists()
-            if ending != "close":
-                result = await machine.run(Command(("printf", "verifier-ready")))
-                assert result.stdout == b"verifier-ready"
-        finally:
-            await machine.close()
-
-    asyncio.run(scenario())

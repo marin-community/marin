@@ -9,19 +9,19 @@ from uuid import uuid4
 import pytest
 from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from finestore.reader import ReadView
-from upath import UPath
-from harbor_config.models.job.config import SotopiaCohort
+from harbor.job import Job
 from harbor.metrics.sotopia import (
     EpisodeScore,
     correct_sotopia,
     length_controlled_scores,
 )
-from harbor.job import Job
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult
-from harbor.models.trial.config import AgentConfig, TrialConfig, TaskConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
+from harbor_config.models.job.config import SotopiaCohort
+from upath import UPath
 
 RANGES = {
     "believability": (0, 10),
@@ -39,12 +39,7 @@ def sotopia_archive(root: Path, length_offset: int) -> float:
     with EvaluationStore.open(str(root), writer_id="harbor") as store:
         for index in range(100):
             length = 100 + length_offset + index * (2 if length_offset else 1)
-            score = 1 / (
-                1
-                + math.exp(
-                    -(0.5 + index % 5 * 0.03 + 0.8 * math.tanh((length - 200) / 150))
-                )
-            )
+            score = 1 / (1 + math.exp(-(0.5 + index % 5 * 0.03 + 0.8 * math.tanh((length - 200) / 150))))
             scores.append(score)
             task = f"task-{index}"
             trial = f"trial-{index}"
@@ -61,12 +56,7 @@ def sotopia_archive(root: Path, length_offset: int) -> float:
             )
             summary = {
                 "evaluated_agent_index": 0,
-                "scores": [
-                    {
-                        name: minimum + score * (maximum - minimum)
-                        for name, (minimum, maximum) in RANGES.items()
-                    }
-                ],
+                "scores": [{name: minimum + score * (maximum - minimum) for name, (minimum, maximum) in RANGES.items()}],
                 "transcript": [
                     [
                         {"sender": "Environment", "receiver": "Alice"},
@@ -75,16 +65,7 @@ def sotopia_archive(root: Path, length_offset: int) -> float:
                     [{"sender": "Alice", "receiver": "Bob", "message": "x" * length}],
                 ],
             }
-            path = (
-                root
-                / "harbor_jobs"
-                / "job"
-                / trial
-                / "attempts"
-                / "0"
-                / "agent"
-                / "sotopia-summary.json"
-            )
+            path = root / "harbor_jobs" / "job" / trial / "attempts" / "0" / "agent" / "sotopia-summary.json"
             path.parent.mkdir(parents=True)
             path.write_text(json.dumps(summary))
         store.seal()
@@ -96,6 +77,7 @@ def candidate_trials(root):
     for row in ReadView(str(root)).iter_rows("samples"):
         directory = root / "harbor_jobs" / "job" / row["trial_id"]
         config = TrialConfig(
+            agent=AgentConfig(name="pi"),
             task=TaskConfig(path=Path("/tasks") / row["doc_id"]),
             trial_name=row["trial_id"],
             job_id=uuid4(),
@@ -132,21 +114,16 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     result = correct_sotopia(
         trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
     )
-    adjusted = [
-        row.length_controlled_overall
-        for row in result.adjusted_episodes
-        if row.model == "candidate"
-    ]
-    assert result.canonical_metrics["length_controlled_overall"] == pytest.approx(
-        sum(adjusted) / 100
-    )
+    adjusted = [row.length_controlled_overall for row in result.adjusted_episodes if row.model == "candidate"]
+    assert result.canonical_metrics["length_controlled_overall"] == pytest.approx(sum(adjusted) / 100)
     assert sum(adjusted) / 100 != pytest.approx(raw, abs=0.01)
     assert [trial.model_dump() for trial in trials] == before
     assert result.cohort == cohort
     assert len(result.source_episodes) == 200
-    assert correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
-    ) == result
+    assert (
+        correct_sotopia(trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort))
+        == result
+    )
     replacement = {
         **cohort,
         "models": [
@@ -168,9 +145,7 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     assert resumed == result
     next((baseline / "harbor_jobs").rglob("sotopia-summary.json")).unlink()
     with pytest.raises(ValueError, match="missing SOTOPIA summary"):
-        correct_sotopia(
-            trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
-        )
+        correct_sotopia(trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort))
 
 
 def test_length_control_removes_synthetic_verbosity_bonus() -> None:
@@ -224,19 +199,27 @@ async def test_resumed_job_matches_original_model_to_cohort_with_new_serving_ali
         (directory / "config.json").write_text(trial.config.model_dump_json())
         (directory / "result.json").write_text(trial.model_dump_json())
     config = JobConfig(
-        job_name="job", jobs_dir=candidate / "harbor_jobs", tasks=tasks, agents=[agent],
-        sotopia_cohort=SotopiaCohort.model_validate({
-            "version": "test-v1", "models": [
-                {"model": "baseline", "results_path": str(baseline)},
-                {"model": "org/candidate", "results_path": str(tmp_path / "superseded")},
-            ],
-        }),
+        job_name="job",
+        jobs_dir=candidate / "harbor_jobs",
+        tasks=tasks,
+        agents=[agent],
+        sotopia_cohort=SotopiaCohort.model_validate(
+            {
+                "version": "test-v1",
+                "models": [
+                    {"model": "baseline", "results_path": str(baseline)},
+                    {"model": "org/candidate", "results_path": str(tmp_path / "superseded")},
+                ],
+            }
+        ),
     )
     job_dir = candidate / "harbor_jobs" / "job"
     (job_dir / "config.json").write_text(config.model_dump_json())
-    resumed_config = config.model_copy(update={
-        "agents": [agent.model_copy(update={"model_alias": "hosted_vllm/new-endpoint"})],
-    })
+    resumed_config = config.model_copy(
+        update={
+            "agents": [agent.model_copy(update={"model_alias": "hosted_vllm/new-endpoint"})],
+        }
+    )
     job = await Job.create(resumed_config)
     try:
         result = await job.run()

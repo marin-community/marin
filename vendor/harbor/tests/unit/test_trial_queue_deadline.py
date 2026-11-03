@@ -5,13 +5,12 @@ import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
-from harbor_config import ErrorCategory, error_category
 from harbor.models.job.config import RetryConfig
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.trial.errors import (
@@ -23,7 +22,7 @@ from harbor.trial.hooks import TrialEvent, TrialHookEvent, emit_trial_hooks
 from harbor.trial.queue import TrialQueue
 from harbor.trial.trial import Trial
 from harbor.utils.artifact_writer import ArtifactUploadTimeoutError
-
+from harbor_config import ErrorCategory, error_category
 
 Behavior = Callable[["FakeTrial"], Awaitable[None]]
 
@@ -76,6 +75,7 @@ def _config(
     cleanup_grace: float = 0.01,
 ) -> TrialConfig:
     return TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path / "task"),
         trial_name=name,
         trials_dir=tmp_path / "trials",
@@ -85,9 +85,7 @@ def _config(
 
 
 def _result(config: TrialConfig, attempt: int) -> TrialResult:
-    paths = TrialPaths(
-        config.trials_dir / config.trial_name / "attempts" / f"{attempt:03d}"
-    )
+    paths = TrialPaths(config.trials_dir / config.trial_name / "attempts" / f"{attempt:03d}")
     return TrialResult(
         task_name="task",
         trial_name=config.trial_name,
@@ -109,9 +107,7 @@ class FakeTrial:
         phase_timeout: asyncio.TimeoutError | None = None,
     ) -> None:
         self.config = config
-        self.paths = TrialPaths(
-            config.trials_dir / config.trial_name / "attempts" / f"{attempt:03d}"
-        )
+        self.paths = TrialPaths(config.trials_dir / config.trial_name / "attempts" / f"{attempt:03d}")
         self._result = _result(config, attempt)
         self._behavior = behavior
         self.first_phase_timeout = phase_timeout
@@ -155,9 +151,7 @@ class FakeTrial:
         return self.result
 
 
-async def _resist_cancellation(
-    cancellation_seen: asyncio.Event, provider_terminated: asyncio.Event
-) -> None:
+async def _resist_cancellation(cancellation_seen: asyncio.Event, provider_terminated: asyncio.Event) -> None:
     try:
         await asyncio.Event().wait()
     except asyncio.CancelledError:
@@ -192,6 +186,7 @@ async def test_agent_disk_exhaustion_is_a_model_failure(tmp_path: Path) -> None:
     trial.agent_environment = SimpleNamespace(
         with_default_user=lambda user: contextlib.nullcontext(),
         with_agent_timeout=lambda timeout: contextlib.nullcontext(),
+        kill_processes=AsyncMock(),
     )
 
     with pytest.raises(AgentDiskFullError) as raised:
@@ -308,9 +303,7 @@ def _install_factory(monkeypatch, behaviors: dict[tuple[str, int], FakeTrial]) -
 
 
 @pytest.mark.unit
-async def test_queue_wait_does_not_consume_attempt_deadline(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_queue_wait_does_not_consume_attempt_deadline(tmp_path: Path, monkeypatch) -> None:
     release_first = asyncio.Event()
     first_started = asyncio.Event()
     second_started = asyncio.Event()
@@ -346,9 +339,7 @@ async def test_queue_wait_does_not_consume_attempt_deadline(
 
 
 @pytest.mark.unit
-async def test_attempt_failure_returns_terminal_result_and_does_not_cancel_batch(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_attempt_failure_returns_terminal_result_and_does_not_cancel_batch(tmp_path: Path, monkeypatch) -> None:
     async def fail_after_admission(trial: FakeTrial) -> None:
         raise OSError("output collection failed")
 
@@ -379,14 +370,10 @@ async def test_attempt_failure_returns_terminal_result_and_does_not_cancel_batch
 
 
 @pytest.mark.unit
-async def test_trial_creation_failure_returns_terminal_result(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_trial_creation_failure_returns_terminal_result(tmp_path: Path, monkeypatch) -> None:
     config = _config(tmp_path, "creation-failed", attempt_timeout=None)
 
-    async def fail_create(
-        cls, trial_config: TrialConfig, *, attempt_index: int | None = None
-    ) -> Trial:
+    async def fail_create(cls, trial_config: TrialConfig, *, attempt_index: int | None = None) -> Trial:
         raise RuntimeError("trial creation failed")
 
     monkeypatch.setattr(Trial, "create", classmethod(fail_create))
@@ -401,9 +388,7 @@ async def test_trial_creation_failure_returns_terminal_result(
 
 
 @pytest.mark.unit
-async def test_cancelling_queued_trial_does_not_start_or_retry_it(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_cancelling_queued_trial_does_not_start_or_retry_it(tmp_path: Path, monkeypatch) -> None:
     release_first = asyncio.Event()
     first_started = asyncio.Event()
     created: list[str] = []
@@ -443,9 +428,7 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
 
 
 @pytest.mark.unit
-async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(tmp_path: Path, monkeypatch) -> None:
     never = asyncio.Event()
 
     async def hang(trial: FakeTrial) -> None:
@@ -459,16 +442,12 @@ async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
 
     assert result.exception_info is not None
     assert result.exception_info.exception_type == "TrialTimeoutError"
-    selected = TrialResult.model_validate_json(
-        (tmp_path / "trials" / "hung" / "result.json").read_text()
-    )
+    selected = TrialResult.model_validate_json((tmp_path / "trials" / "hung" / "result.json").read_text())
     assert selected.exception_info == result.exception_info
 
 
 @pytest.mark.unit
-async def test_attempt_deadline_covers_trial_creation(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_attempt_deadline_covers_trial_creation(tmp_path: Path, monkeypatch) -> None:
     creation_started = asyncio.Event()
 
     async def create(cls, config: TrialConfig, *, attempt_index: int | None = None):
@@ -489,9 +468,7 @@ async def test_attempt_deadline_covers_trial_creation(
 
 
 @pytest.mark.unit
-async def test_result_persistence_failure_is_primary_and_retryable(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_result_persistence_failure_is_primary_and_retryable(tmp_path: Path, monkeypatch) -> None:
     attempts: list[int] = []
 
     class FailingWriter:
@@ -517,20 +494,14 @@ async def test_result_persistence_failure_is_primary_and_retryable(
 
     async def finish_with_prior_model_error(trial: FakeTrial) -> None:
         attempts.append(len(attempts))
-        trial.result.exception_info = ExceptionInfo.from_exception(
-            RuntimeError("model failed before persistence")
-        )
+        trial.result.exception_info = ExceptionInfo.from_exception(RuntimeError("model failed before persistence"))
 
     config = _config(tmp_path, "persistence-retry", attempt_timeout=None)
     _install_factory(
         monkeypatch,
         {
-            ("persistence-retry", 0): FakeTrial(
-                config, 0, finish_with_prior_model_error
-            ),
-            ("persistence-retry", 1): FakeTrial(
-                config, 1, finish_with_prior_model_error
-            ),
+            ("persistence-retry", 0): FakeTrial(config, 0, finish_with_prior_model_error),
+            ("persistence-retry", 1): FakeTrial(config, 1, finish_with_prior_model_error),
         },
     )
     monkeypatch.setattr("harbor.trial.attempt.get_artifact_writer", FailingWriter)
@@ -549,16 +520,11 @@ async def test_result_persistence_failure_is_primary_and_retryable(
     assert attempts == [0, 1]
     assert result.exception_info is not None
     assert result.exception_info.exception_type == "ArtifactUploadTimeoutError"
-    assert any(
-        error.exception_type == "RuntimeError"
-        for error in result.secondary_exception_info
-    )
+    assert any(error.exception_type == "RuntimeError" for error in result.secondary_exception_info)
 
 
 @pytest.mark.unit
-async def test_phase_deadline_observed_first_preserves_phase_classification(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_phase_deadline_observed_first_preserves_phase_classification(tmp_path: Path, monkeypatch) -> None:
     never = asyncio.Event()
 
     async def hang(trial: FakeTrial) -> None:
@@ -571,9 +537,7 @@ async def test_phase_deadline_observed_first_preserves_phase_classification(
         hang,
         phase_timeout=AgentTimeoutError("agent phase expired first"),
     )
-    trial.result.exception_info = ExceptionInfo.from_exception(
-        RuntimeError("output recovery failed")
-    )
+    trial.result.exception_info = ExceptionInfo.from_exception(RuntimeError("output recovery failed"))
     _install_factory(monkeypatch, {("agent-hung", 0): trial})
 
     async with asyncio.timeout(1):
@@ -581,9 +545,7 @@ async def test_phase_deadline_observed_first_preserves_phase_classification(
 
     assert result.exception_info is not None
     assert result.exception_info.exception_type == "AgentTimeoutError"
-    assert [error.exception_type for error in result.secondary_exception_info] == [
-        "RuntimeError"
-    ]
+    assert [error.exception_type for error in result.secondary_exception_info] == ["RuntimeError"]
 
 
 @pytest.mark.unit
@@ -663,9 +625,7 @@ async def test_cancellation_resistant_attempt_quarantines_capacity_until_termina
 
 
 @pytest.mark.unit
-async def test_late_attempt_cannot_overwrite_retry_selection_or_terminal_hook(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_late_attempt_cannot_overwrite_retry_selection_or_terminal_hook(tmp_path: Path, monkeypatch) -> None:
     cancellation_seen = asyncio.Event()
     release_timed_out_attempt = asyncio.Event()
     retry_finished = asyncio.Event()
@@ -716,9 +676,7 @@ async def test_late_attempt_cannot_overwrite_retry_selection_or_terminal_hook(
         release_timed_out_attempt.set()
         await first_attempt.completed.wait()
 
-    selected = TrialResult.model_validate_json(
-        (tmp_path / "trials" / "late" / "result.json").read_text()
-    )
+    selected = TrialResult.model_validate_json((tmp_path / "trials" / "late" / "result.json").read_text())
     assert result.exception_info is None
     assert selected.exception_info is None
     assert selected.trial_uri.endswith("/attempts/001")
@@ -727,9 +685,7 @@ async def test_late_attempt_cannot_overwrite_retry_selection_or_terminal_hook(
 
 
 @pytest.mark.unit
-async def test_terminal_result_is_selected_before_end_hook_stalls(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_terminal_result_is_selected_before_end_hook_stalls(tmp_path: Path, monkeypatch) -> None:
     hook_started = asyncio.Event()
     release_hook = asyncio.Event()
     result_seen_by_hook: list[TrialResult | None] = []
@@ -747,9 +703,7 @@ async def test_terminal_result_is_selected_before_end_hook_stalls(
 
     async def block_end_hook(event: TrialHookEvent) -> None:
         result_seen_by_hook.append(
-            TrialResult.model_validate_json(selected_path.read_text())
-            if selected_path.exists()
-            else None
+            TrialResult.model_validate_json(selected_path.read_text()) if selected_path.exists() else None
         )
         hook_started.set()
         await release_hook.wait()
@@ -767,9 +721,7 @@ async def test_terminal_result_is_selected_before_end_hook_stalls(
 
 
 @pytest.mark.unit
-async def test_hung_terminal_hook_is_bounded_and_quarantines_capacity(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_hung_terminal_hook_is_bounded_and_quarantines_capacity(tmp_path: Path, monkeypatch) -> None:
     hook_started = asyncio.Event()
     release_hook = asyncio.Event()
     next_started = asyncio.Event()

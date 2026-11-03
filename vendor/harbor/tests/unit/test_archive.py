@@ -19,10 +19,9 @@ from finestore.eval import (
     sample_from_archive_row,
 )
 from finestore.reader import ReadView
-
 from harbor.archive import ProcessTrialArchive, TrialArchive, open_archive
 from harbor.models.agent.context import AgentContext
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
@@ -64,7 +63,7 @@ def _end_event(
     else:
         trial_dir.mkdir(parents=True)
     config = TrialConfig(
-        task=TaskConfig(path=Path("/test/task")), trial_name=trial_id, job_id=uuid4()
+        agent=AgentConfig(name="pi"), task=TaskConfig(path=Path("/test/task")), trial_name=trial_id, job_id=uuid4()
     )
     result = TrialResult(
         task_name=task_name,
@@ -75,9 +74,7 @@ def _end_event(
         task_checksum="abc123",
         config=config,
         agent_info=AgentInfo(name="a", version="1.0"),
-        verifier_result=(
-            VerifierResult(rewards={"reward": reward}) if reward is not None else None
-        ),
+        verifier_result=(VerifierResult(rewards={"reward": reward}) if reward is not None else None),
         exception_info=(
             ExceptionInfo(
                 exception_type=exception_type,
@@ -100,9 +97,7 @@ def _end_event(
 
 
 def _open_archive(root: str, *, trials_dir: Path | None = None) -> ProcessTrialArchive:
-    archive = open_archive(
-        ArchiveConfig(root=root, dataset="mybench"), trials_dir=trials_dir
-    )
+    archive = open_archive(ArchiveConfig(root=root, dataset="mybench"), trials_dir=trials_dir)
     assert archive is not None
     return archive
 
@@ -120,9 +115,7 @@ def test_finalize_archives_sample_native_result_trajectory_and_steps(tmp_path: P
     event = _end_event(tmp_path, reward=1.0)
     assert event.result is not None
     trial_dir = event.result.resolve_trial_path(None)
-    (trial_dir / "result.json").write_text(
-        json.dumps({"trial_name": "stale-resume-result"})
-    )
+    (trial_dir / "result.json").write_text(json.dumps({"trial_name": "stale-resume-result"}))
     asyncio.run(archive.on_trial_end(event))
     asyncio.run(archive.finalize([event.result]))
     archive.seal()
@@ -166,9 +159,7 @@ def test_failed_trial_below_threshold_is_incorrect_without_trajectory(tmp_path: 
 def test_archive_preserves_surrogate_trace_and_verifier_reward(tmp_path: Path, reward):
     root = str(tmp_path / "archive")
     archive = _open_archive(root)
-    event = _end_event(
-        tmp_path, reward=reward, exception_type="MalformedModelResponseError"
-    )
+    event = _end_event(tmp_path, reward=reward, exception_type="MalformedModelResponseError")
     path = event.result.resolve_trial_path(None) / "agent" / "trajectory.json"
     trajectory = json.loads(path.read_bytes())
     trajectory["steps"][0]["message"] = "Analysis: \ud83c café 🦖"
@@ -245,18 +236,11 @@ def test_finalize_archives_only_the_surviving_ungraded_attempt(tmp_path: Path):
     assert sample.correct is None
     view = ReadView(root)
     assert view.read_blob("sources/harbor/abandoned/result.json") is None
-    assert (
-        view.read_blob(
-            f"sources/harbor/abandoned/attempts/{abandoned.result.id}/result.json"
-        )
-        is not None
-    )
+    assert view.read_blob(f"sources/harbor/abandoned/attempts/{abandoned.result.id}/result.json") is not None
     assert view.read_blob("sources/harbor/survivor/result.json") is not None
 
 
-@pytest.mark.parametrize(
-    "final_reward,final_error", [(1.0, None), (None, "TrialTimeoutError")]
-)
+@pytest.mark.parametrize("final_reward,final_error", [(1.0, None), (None, "TrialTimeoutError")])
 def test_retry_preserves_native_attempts_and_normalizes_only_selected_result(
     tmp_path: Path, final_reward: float | None, final_error: str | None
 ):
@@ -268,9 +252,7 @@ def test_retry_preserves_native_attempts_and_normalizes_only_selected_result(
         exception_type="NonZeroAgentExitCodeError",
         attempt=0,
     )
-    selected = _end_event(
-        tmp_path, reward=final_reward, exception_type=final_error, attempt=1
-    )
+    selected = _end_event(tmp_path, reward=final_reward, exception_type=final_error, attempt=1)
     expected_sources = {}
     for event, count in ((abandoned, 35), (selected, 3)):
         result = event.result
@@ -323,8 +305,7 @@ def test_retry_preserves_native_attempts_and_normalizes_only_selected_result(
         assert json.loads(sample.grading.detail)["error"]["message"] == "trial failed"
     steps = view.scan(ARCHIVE_STEPS_TABLE).to_pylist()
     assert [(step["trial_id"], step["step_id"], step["message"]) for step in steps] == [
-        ("t0", step_id, f"{selected.result.id}: step {step_id}")
-        for step_id in range(1, 4)
+        ("t0", step_id, f"{selected.result.id}: step {step_id}") for step_id in range(1, 4)
     ]
     for attempt_id, (native, raw) in expected_sources.items():
         prefix = f"sources/harbor/t0/attempts/{attempt_id}"
@@ -336,13 +317,9 @@ def test_retry_preserves_native_attempts_and_normalizes_only_selected_result(
 
 
 @pytest.mark.parametrize("reopened", [False, True])
-def test_finalize_restores_full_native_resumed_result_before_normalizing(
-    tmp_path: Path, reopened: bool
-):
+def test_finalize_restores_full_native_resumed_result_before_normalizing(tmp_path: Path, reopened: bool):
     root = str(tmp_path / "archive")
-    event = _end_event(
-        tmp_path, reward=0.0, exception_type="NonZeroAgentExitCodeError", attempt=1
-    )
+    event = _end_event(tmp_path, reward=0.0, exception_type="NonZeroAgentExitCodeError", attempt=1)
     result = event.result
     assert result is not None
     result.agent_result = AgentContext(metadata={"native_payload": "resumed"})
@@ -374,21 +351,16 @@ def test_finalize_restores_full_native_resumed_result_before_normalizing(
 
 
 @pytest.mark.parametrize("replacement_trial", ["t0", "replacement"])
-def test_reopened_archive_rebuilds_selected_rows_and_preserves_native_attempts(
-    tmp_path: Path, replacement_trial: str
-):
+def test_reopened_archive_rebuilds_selected_rows_and_preserves_native_attempts(tmp_path: Path, replacement_trial: str):
     root = str(tmp_path / "archive")
     original = _end_event(tmp_path, reward=0.0, attempt=0)
-    removed = _end_event(
-        tmp_path, reward=0.0, task_name="old-doc", trial_id="removed", attempt=0
-    )
+    removed = _end_event(tmp_path, reward=0.0, task_name="old-doc", trial_id="removed", attempt=0)
     assert original.result is not None
     assert removed.result is not None
     path = original.result.resolve_trial_path(None) / "agent" / "trajectory.json"
     trajectory = json.loads(path.read_bytes())
     trajectory["steps"] = [
-        {"step_id": index, "source": "agent", "message": f"old step {index}"}
-        for index in range(1, 36)
+        {"step_id": index, "source": "agent", "message": f"old step {index}"} for index in range(1, 36)
     ]
     original_trace = json.dumps(trajectory).encode()
     path.write_bytes(original_trace)
@@ -418,9 +390,7 @@ def test_reopened_archive_rebuilds_selected_rows_and_preserves_native_attempts(
         )
         store.seal()
 
-    replacement = _end_event(
-        tmp_path, reward=1.0, trial_id=replacement_trial, attempt=1
-    )
+    replacement = _end_event(tmp_path, reward=1.0, trial_id=replacement_trial, attempt=1)
     assert replacement.result is not None
     archive = _open_archive(root, trials_dir=tmp_path)
     reopened = ReadView(root)
@@ -446,15 +416,14 @@ def test_reopened_archive_rebuilds_selected_rows_and_preserves_native_attempts(
     prefix = f"sources/harbor/t0/attempts/{original.result.id}"
     assert view.read_blob(f"{prefix}/result.json") == original_native
     assert view.read_blob(f"{prefix}/trajectory.json") == original_trace
-    assert view.read_blob(
-        f"sources/harbor/removed/attempts/{removed.result.id}/result.json"
-    ) == removed.result.model_dump_json(indent=4).encode()
+    assert (
+        view.read_blob(f"sources/harbor/removed/attempts/{removed.result.id}/result.json")
+        == removed.result.model_dump_json(indent=4).encode()
+    )
 
 
 @pytest.mark.parametrize("changed", [False, True])
-def test_repeated_end_preserves_immutable_attempt_and_reports_changed_content(
-    tmp_path: Path, changed: bool
-):
+def test_repeated_end_preserves_immutable_attempt_and_reports_changed_content(tmp_path: Path, changed: bool):
     root = str(tmp_path / "archive")
     archive = _open_archive(root)
     event = _end_event(tmp_path, reward=1.0)
@@ -483,9 +452,7 @@ def test_repeated_end_preserves_immutable_attempt_and_reports_changed_content(
 
 
 @pytest.mark.parametrize("failure", ["missing", "different_id"])
-def test_finalize_rejects_missing_or_mismatched_resumed_attempt(
-    tmp_path: Path, failure: str
-):
+def test_finalize_rejects_missing_or_mismatched_resumed_attempt(tmp_path: Path, failure: str):
     root = str(tmp_path / "archive")
     event = _end_event(tmp_path, reward=1.0)
     result = event.result
@@ -558,9 +525,7 @@ def test_archive_failure_is_reported_during_finalization(
     monkeypatch.setattr(EvaluationStore, operation, fail_archive_write)
     asyncio.run(archive.on_trial_end(event))
 
-    with pytest.raises(
-        ExceptionGroup, match="FineStore evaluation archive writes failed"
-    ) as exc_info:
+    with pytest.raises(ExceptionGroup, match="FineStore evaluation archive writes failed") as exc_info:
         asyncio.run(archive.finalize([event.result]))
     assert any(isinstance(error, OSError) for error in exc_info.value.exceptions)
 
@@ -576,9 +541,7 @@ def test_invalid_trajectory_is_reported_during_finalization(tmp_path: Path):
 
     asyncio.run(archive.on_trial_end(event))
 
-    with pytest.raises(
-        ExceptionGroup, match="FineStore evaluation archive writes failed"
-    ):
+    with pytest.raises(ExceptionGroup, match="FineStore evaluation archive writes failed"):
         asyncio.run(archive.finalize([event.result]))
 
     archive.close()
@@ -586,6 +549,7 @@ def test_invalid_trajectory_is_reported_during_finalization(tmp_path: Path):
 
 def test_archive_config_survives_job_config_round_trip():
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         tasks=[],
         archive=ArchiveConfig(
             root="s3://eval-archives/run-1",

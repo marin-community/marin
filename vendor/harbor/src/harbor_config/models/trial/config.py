@@ -21,7 +21,6 @@ from upath import UPath
 
 from harbor_config.env import redact_capability_urls, templatize_sensitive_env
 from harbor_config.model_name import split_provider_model_name
-from harbor_config.models.agent.name import AgentName
 from harbor_config.models.bridge import BridgeConfig
 from harbor_config.models.environment_type import EnvironmentType
 from harbor_config.models.task.config import ArtifactConfig, MCPServerConfig, TpuSpec
@@ -113,10 +112,7 @@ class AgentConfig(BaseModel):
     override_setup_timeout_sec: float | None = None
     max_timeout_sec: float | None = Field(
         default=None,
-        description=(
-            "Hard ceiling on the final agent timeout after applying the effective "
-            "timeout multiplier."
-        ),
+        description=("Hard ceiling on the final agent timeout after applying the effective " "timeout multiplier."),
     )
     kwargs: dict[str, Any] = Field(default_factory=dict)
     env: EnvironmentVariables = Field(default_factory=dict)
@@ -162,6 +158,7 @@ class AgentConfig(BaseModel):
         ``model_dump()`` and JSON dumps succeed. Original values remain on the
         live in-memory instance for the agent factory.
         """
+
         def _safe(v: Any) -> Any:
             try:
                 json.dumps(v)
@@ -173,9 +170,9 @@ class AgentConfig(BaseModel):
         return redact_capability_urls(serialized) if info.mode == "json" else serialized
 
     @model_validator(mode="after")
-    def set_default_name(self):
+    def require_explicit_agent(self):
         if self.name is None and self.import_path is None:
-            self.name = AgentName.ORACLE.value
+            raise ValueError("Specify a supported agent name or import_path explicitly")
         return self
 
 
@@ -215,8 +212,7 @@ class EnvironmentConfig(BaseModel):
             legacy = data.pop("mounts_json")
             if "mounts" not in data:
                 warnings.warn(
-                    "EnvironmentConfig.mounts_json is deprecated; "
-                    "use 'mounts' instead.",
+                    "EnvironmentConfig.mounts_json is deprecated; " "use 'mounts' instead.",
                     DeprecationWarning,
                     stacklevel=2,
                 )
@@ -290,17 +286,14 @@ class EnvironmentConfig(BaseModel):
             return v
         if isinstance(v, list):
             warnings.warn(
-                "List-style 'environment.env' is deprecated. "
-                "Use a mapping of env var names to values instead.",
+                "List-style 'environment.env' is deprecated. " "Use a mapping of env var names to values instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )
             out: dict[str, str] = {}
             for item in v:
                 if "=" not in item:
-                    raise ValueError(
-                        f"Invalid env var format: {item!r}. Expected KEY=VALUE"
-                    )
+                    raise ValueError(f"Invalid env var format: {item!r}. Expected KEY=VALUE")
                 key, value = item.split("=", 1)
                 out[key.strip()] = value.strip()
             return out
@@ -311,10 +304,7 @@ class VerifierConfig(BaseModel):
     override_timeout_sec: float | None = None
     max_timeout_sec: float | None = Field(
         default=None,
-        description=(
-            "Hard ceiling on the final verifier timeout after applying the "
-            "effective timeout multiplier."
-        ),
+        description=("Hard ceiling on the final verifier timeout after applying the " "effective timeout multiplier."),
     )
     env: EnvironmentVariables = Field(default_factory=dict)
     import_path: str | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -337,9 +327,7 @@ class TaskConfig(BaseModel):
     git_url: str | None = None
     git_commit_id: str | None = None
     name: str | None = None  # org/name format (e.g. "harbor/hello-world")
-    ref: str | None = (
-        None  # tag, revision, or digest (e.g. "latest", "3", "sha256:...")
-    )
+    ref: str | None = None  # tag, revision, or digest (e.g. "latest", "3", "sha256:...")
     overwrite: bool = False
     download_dir: Path | None = None
     source: str | None = None
@@ -381,9 +369,7 @@ class TaskConfig(BaseModel):
             if self.git_url is None or self.path is None:
                 raise ValueError("git_url and path must be set for a git task.")
 
-            return GitTaskId(
-                git_url=self.git_url, git_commit_id=self.git_commit_id, path=self.path
-            )
+            return GitTaskId(git_url=self.git_url, git_commit_id=self.git_commit_id, path=self.path)
         if self.path is None:
             raise ValueError("path must be set for a local task.")
         return LocalTaskId(path=self.path)
@@ -415,17 +401,15 @@ class TrialConfig(BaseModel):
         default=DEFAULT_TRIAL_CLEANUP_GRACE_SEC,
         gt=0,
         description=(
-            "Seconds to wait for timed-out phase or attempt cancellation before "
-            "quarantining unfinished work."
+            "Seconds to wait for timed-out phase or attempt cancellation before " "quarantining unfinished work."
         ),
     )
     resolved_timeouts: ResolvedTimeouts | None = None
-    agent: AgentConfig = Field(default_factory=AgentConfig)
+    agent: AgentConfig
     user_agent: UserAgentConfig | None = Field(
         default=None,
         description=(
-            "Optional simulated-user agent that communicates with the primary "
-            "agent through its configured bridge."
+            "Optional simulated-user agent that communicates with the primary " "agent through its configured bridge."
         ),
     )
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)

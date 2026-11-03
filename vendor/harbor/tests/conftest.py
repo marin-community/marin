@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from shellbox.process import ProcessScope
 
 
 @pytest.fixture(scope="session")
@@ -36,6 +37,7 @@ def mock_environment():
     """Create a mock environment for testing."""
     env = AsyncMock()
     env.agent_timeout_sec = None
+    env.process_scope.return_value = ProcessScope()
     env.scoped_command = MagicMock(side_effect=contextlib.nullcontext)
     env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
     env.upload_file.return_value = None

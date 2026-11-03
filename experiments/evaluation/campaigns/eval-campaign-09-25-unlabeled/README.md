@@ -22,19 +22,9 @@ The model limits and dataset pins are recorded in the launch snapshot;
 results from the previous adapter have a different policy digest and cannot be resumed under
 this configuration.
 
-Harbor's native SOTOPIA agent enforces the declared `model_info.max_input_tokens` budget for
-the evaluated model at each request. It counts the rendered prompt with the serving endpoint's
-tokenizer and caps the reply to the remaining context. Counterpart and evaluator calls use
-their independently configured models and are not subject to this evaluated-model budget.
-The verifier's default reward is the arithmetic mean of all seven normalized SOTOPIA
-dimensions. It also records the evaluated agent's emitted character count. Harbor applies
-length correction at job completion using the campaign's `sotopia_cohort` in
-`harbor-configs/sotopia-hard.yaml`: the versioned `policy-10197-v1` cohort of 13 baseline
-archives plus the evaluated model’s current run. SOTOPIA jobs require an explicit cohort
-with a `version` and a `models` list containing `model` and `results_path` for each baseline. A rerun of a baseline model
-replaces its previous source in the fit. Harbor preserves raw rewards and saves the cohort sources, input digest, fit parameters,
-and adjusted episodes in the job result. Marin reads the corrected metric from that result. Goal achievement remains an explicit
-non-default dataset generation mode.
+SOTOPIA and Tau3 ACP policies are removed because the runtime no longer supports
+their agent implementations. Their source, policies and prior launch instructions
+remain in Git history. Existing result archives and metric readers are unchanged.
 
 `finalization.yaml` selects MiniMax for native FinanceBench and OlympiadBench grading.
 Each judged benchmark starts the pinned 262,144-token TP8 MiniMax service on eight H100s

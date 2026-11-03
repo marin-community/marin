@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from shellbox.lifecycle import CommandLifetime, finish_cleanup
 from shellbox.process import ProcessScope
 
 
@@ -67,41 +66,5 @@ if sys.argv[2] != "complete":
             if command.returncode is None:
                 command.terminate()
                 await command.communicate()
-
-    asyncio.run(scenario())
-
-
-def test_machine_close_drains_command_through_repeated_cancellation():
-    async def scenario():
-        lifetime = CommandLifetime()
-        running, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        effects = []
-
-        async def cleanup():
-            cleaning.set()
-            await release.wait()
-            effects.append("stopped")
-
-        async def command():
-            with lifetime.admit():
-                running.set()
-                try:
-                    await asyncio.Future()
-                finally:
-                    await finish_cleanup(cleanup())
-
-        task = asyncio.create_task(command())
-        await running.wait()
-        closing = asyncio.create_task(lifetime.close())
-        await cleaning.wait()
-        task.cancel()
-        assert not closing.done()
-        release.set()
-        await closing
-        assert effects == ["stopped"]
-        assert task.cancelled()
-        with pytest.raises(RuntimeError, match="closed"):
-            with lifetime.admit():
-                raise AssertionError("Closed machine admitted a command")
 
     asyncio.run(scenario())

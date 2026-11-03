@@ -15,9 +15,7 @@ runner = CliRunner()
 
 def _mcp_json(tmp_path):
     path = tmp_path / ".mcp.json"
-    path.write_text(
-        json.dumps({"mcpServers": {"api": {"type": "http", "url": "https://x/mcp"}}})
-    )
+    path.write_text(json.dumps({"mcpServers": {"api": {"type": "http", "url": "https://x/mcp"}}}))
     return path
 
 
@@ -38,17 +36,11 @@ def test_job_start_mcp_config_populates_agents(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr("harbor.job.Job.create", create)
-    monkeypatch.setattr(
-        "harbor.environments.factory.EnvironmentFactory.run_preflight", lambda **_: None
-    )
-    monkeypatch.setattr(
-        "harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None
-    )
+    monkeypatch.setattr("harbor.environments.factory.EnvironmentFactory.run_preflight", lambda **_: None)
+    monkeypatch.setattr("harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None)
     monkeypatch.setattr("harbor.cli.jobs.print_job_results_tables", lambda _: None)
 
-    result = runner.invoke(
-        app, ["jobs", "start", "--mcp-config", str(_mcp_json(tmp_path))]
-    )
+    result = runner.invoke(app, ["jobs", "start", "--agent", "pi", "--mcp-config", str(_mcp_json(tmp_path))])
 
     assert result.exit_code == 0, result.output
     assert captured[0].agents[0].mcp_servers[0].name == "api"
@@ -82,6 +74,8 @@ def test_trial_start_mcp_config_populates_agent(tmp_path, monkeypatch):
         [
             "trial",
             "start",
+            "--agent",
+            "pi",
             "--path",
             str(task_dir),
             "--mcp-config",
@@ -96,20 +90,12 @@ def test_trial_start_mcp_config_populates_agent(tmp_path, monkeypatch):
 
 
 def test_trial_init_agent_merges_mcp_servers_by_name(tmp_path):
-    task_server = MCPServerConfig(
-        name="api", transport="streamable-http", url="https://task/mcp"
-    )
-    runtime_server = MCPServerConfig(
-        name="api", transport="streamable-http", url="https://runtime-old/mcp"
-    )
-    runtime_override_server = MCPServerConfig(
-        name="api", transport="streamable-http", url="https://runtime-new/mcp"
-    )
+    task_server = MCPServerConfig(name="api", transport="streamable-http", url="https://task/mcp")
+    runtime_server = MCPServerConfig(name="api", transport="streamable-http", url="https://runtime-old/mcp")
+    runtime_override_server = MCPServerConfig(name="api", transport="streamable-http", url="https://runtime-new/mcp")
     trial = object.__new__(SingleStepTrial)
     trial.config = SimpleNamespace(
-        agent=AgentConfig(
-            name="codex", mcp_servers=[runtime_server, runtime_override_server]
-        )
+        agent=AgentConfig(name="codex", mcp_servers=[runtime_server, runtime_override_server])
     )
     trial.task = SimpleNamespace(
         config=SimpleNamespace(

@@ -7,8 +7,6 @@ from pathlib import Path
 from time import monotonic
 from typing import Any, ClassVar, Literal
 
-from shellbox.process import FAILURE_MARKER, TIMEOUT_MARKER, ProcessScope
-
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.trial.errors import AgentTimeoutError, PhaseCancellationError
@@ -18,10 +16,9 @@ from harbor.utils.env import (
     validate_task_environment,
 )
 from harbor.utils.templating import render_prompt_template
+from shellbox.process import FAILURE_MARKER, TIMEOUT_MARKER
 
-REQUIRED_MODEL_PRICE_FIELDS = frozenset(
-    {"input_cost_per_token", "output_cost_per_token"}
-)
+REQUIRED_MODEL_PRICE_FIELDS = frozenset({"input_cost_per_token", "output_cost_per_token"})
 
 SERVER_TIMEOUT_GRACE = 15.0
 
@@ -79,9 +76,7 @@ def with_prompt_template(fn: _F) -> _F:
     """
 
     @functools.wraps(fn)
-    async def wrapper(
-        self: BaseInstalledAgent, instruction: str, *args: Any, **kwargs: Any
-    ) -> None:
+    async def wrapper(self: BaseInstalledAgent, instruction: str, *args: Any, **kwargs: Any) -> None:
         instruction = self.render_instruction(instruction)
         return await fn(self, instruction, *args, **kwargs)
 
@@ -125,40 +120,28 @@ def _coerce_value(
     match type:
         case "str":
             if isinstance(value, bool):
-                raise ValueError(
-                    f"Invalid value for '{kwarg_name}': expected str, got bool"
-                )
+                raise ValueError(f"Invalid value for '{kwarg_name}': expected str, got bool")
             if isinstance(value, (int, float)):
                 return str(value)
             if not isinstance(value, str):
-                raise ValueError(
-                    f"Invalid value for '{kwarg_name}': expected str, got {value.__class__.__name__}"
-                )
+                raise ValueError(f"Invalid value for '{kwarg_name}': expected str, got {value.__class__.__name__}")
             return value
 
         case "int":
             if isinstance(value, bool):
-                raise ValueError(
-                    f"Invalid value for '{kwarg_name}': expected int, got bool"
-                )
+                raise ValueError(f"Invalid value for '{kwarg_name}': expected int, got bool")
             if isinstance(value, int):
                 return value
             if isinstance(value, float):
                 if value != int(value):
-                    raise ValueError(
-                        f"Invalid value for '{kwarg_name}': float {value} is not an integer"
-                    )
+                    raise ValueError(f"Invalid value for '{kwarg_name}': float {value} is not an integer")
                 return int(value)
             if isinstance(value, str):
                 try:
                     return int(value)
                 except ValueError:
-                    raise ValueError(
-                        f"Invalid value for '{kwarg_name}': cannot parse '{value}' as int"
-                    )
-            raise ValueError(
-                f"Invalid value for '{kwarg_name}': expected int, got {value.__class__.__name__}"
-            )
+                    raise ValueError(f"Invalid value for '{kwarg_name}': cannot parse '{value}' as int")
+            raise ValueError(f"Invalid value for '{kwarg_name}': expected int, got {value.__class__.__name__}")
 
         case "bool":
             return parse_bool_env_value(value, name=kwarg_name)
@@ -171,8 +154,7 @@ def _coerce_value(
             normalized = value.strip().lower()
             if choices and normalized not in choices:
                 raise ValueError(
-                    f"Invalid value for '{kwarg_name}': '{value}'. "
-                    f"Valid values: {', '.join(sorted(choices))}"
+                    f"Invalid value for '{kwarg_name}': '{value}'. " f"Valid values: {', '.join(sorted(choices))}"
                 )
             return normalized
 
@@ -214,9 +196,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         self._resolved_flags = self._resolve_flag_values()
         self._resolved_env_vars = self._resolve_env_values()
 
-        self._prompt_template_path = (
-            Path(prompt_template_path) if prompt_template_path else None
-        )
+        self._prompt_template_path = Path(prompt_template_path) if prompt_template_path else None
         self._version = version
 
     def _resolve_raw_value(
@@ -243,9 +223,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
             raw = self._resolve_raw_value(flag)
             if raw is None:
                 continue
-            resolved[flag.kwarg] = _coerce_value(
-                raw, flag.type, flag.choices, flag.kwarg
-            )
+            resolved[flag.kwarg] = _coerce_value(raw, flag.type, flag.choices, flag.kwarg)
         return resolved
 
     def build_cli_flags(self) -> str:
@@ -276,9 +254,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
                 continue
             coerced = _coerce_value(raw, env_var.type, env_var.choices, env_var.kwarg)
             if env_var.type == "bool":
-                resolved[env_var.env] = (
-                    env_var.bool_true if coerced else env_var.bool_false
-                )
+                resolved[env_var.env] = env_var.bool_true if coerced else env_var.bool_false
             else:
                 resolved[env_var.env] = str(coerced)
         return resolved
@@ -409,9 +385,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         timeout_sec: int | None = None,
     ) -> ExecResult:
         """Execute a command as root (for system packages, symlinks, etc.)."""
-        return await self._exec(
-            environment, command, user="root", env=env, cwd=cwd, timeout_sec=timeout_sec
-        )
+        return await self._exec(environment, command, user="root", env=env, cwd=cwd, timeout_sec=timeout_sec)
 
     async def exec_as_agent(
         self,
@@ -422,9 +396,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         timeout_sec: int | None = None,
     ) -> ExecResult:
         """Execute a command as the default agent user."""
-        return await self._exec(
-            environment, command, env=env, cwd=cwd, timeout_sec=timeout_sec
-        )
+        return await self._exec(environment, command, env=env, cwd=cwd, timeout_sec=timeout_sec)
 
     async def run_agent_command(
         self,
@@ -438,28 +410,20 @@ class BaseInstalledAgent(BaseAgent, ABC):
         remaining = deadline - monotonic() if deadline is not None else None
         if remaining is not None and remaining <= 0:
             raise AgentTimeoutError("Agent setup exhausted its deadline")
-        budget = (
-            remaining - min(SERVER_TIMEOUT_GRACE, remaining / 2)
-            if remaining is not None
-            else None
-        )
-        scope = ProcessScope()
+        budget = remaining - min(SERVER_TIMEOUT_GRACE, remaining / 2) if remaining is not None else None
+        scope = await environment.process_scope()
         async with environment.scoped_command(scope.cancel_command()):
             try:
                 return await self.exec_as_agent(
                     environment,
-                    command=shlex.join(
-                        scope.command(("bash", "-o", "pipefail", "-c", command), budget)
-                    ),
+                    command=shlex.join(scope.command(("bash", "-o", "pipefail", "-c", command), budget)),
                     env=env,
                 )
             except NonZeroAgentExitCodeError as error:
                 if error.result is not None:
                     markers = (error.result.stderr or "").splitlines()
                     if FAILURE_MARKER in markers:
-                        raise PhaseCancellationError(
-                            "Agent process teardown could not be confirmed"
-                        ) from error
+                        raise PhaseCancellationError("Agent process teardown could not be confirmed") from error
                     if error.result.return_code == 124 and TIMEOUT_MARKER in markers:
                         raise AgentTimeoutError("Agent exceeded its deadline") from error
                 raise
@@ -480,17 +444,12 @@ class BaseInstalledAgent(BaseAgent, ABC):
         pass
 
     async def setup(self, environment: BaseEnvironment) -> None:
+        await environment.prepare_process_supervisor()
         await environment.exec(command="mkdir -p /installed-agent", user="root")
 
         setup_dir = self.logs_dir / "setup"
         setup_dir.mkdir(parents=True, exist_ok=True)
 
-        await self.exec_as_root(
-            environment,
-            command="command -v python3 >/dev/null || "
-            "{ if command -v apt-get >/dev/null; then apt-get update && apt-get install -y python3; "
-            "else apk add --no-cache python3; fi; }",
-        )
         try:
             await self.install(environment)
         except RuntimeError:

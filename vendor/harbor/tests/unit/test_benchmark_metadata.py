@@ -1,14 +1,13 @@
 from pathlib import Path
 
-import pytest
-from pydantic import ValidationError
-
 import harbor.hugging_face_dataset
+import pytest
 from harbor.job import Job
 from harbor.models.benchmark import BenchmarkMetadata, MetricKind, MetricMetadata
 from harbor.models.job.config import DatasetConfig, JobConfig
 from harbor.models.trial.config import AgentConfig
 from harbor_config.models.job.config import SotopiaCohort
+from pydantic import ValidationError
 
 
 def _write_task(root: Path, name: str) -> None:
@@ -33,6 +32,7 @@ async def test_job_describes_dataset_before_and_after_task_cap(tmp_path: Path) -
         _write_task(dataset, name)
 
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name="metadata-test",
         jobs_dir=tmp_path / "jobs",
         datasets=[DatasetConfig(path=dataset, task_names=["task-*"], n_tasks=1)],
@@ -40,9 +40,7 @@ async def test_job_describes_dataset_before_and_after_task_cap(tmp_path: Path) -
     job = await Job.create(config)
 
     try:
-        assert [
-            metadata.model_dump(mode="json") for metadata in job.benchmark_metadata
-        ] == [
+        assert [metadata.model_dump(mode="json") for metadata in job.benchmark_metadata] == [
             {
                 "schema_version": 1,
                 "task": "benchmark",
@@ -68,9 +66,7 @@ async def test_job_describes_dataset_before_and_after_task_cap(tmp_path: Path) -
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_job_resolves_hugging_face_task_dataset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_job_resolves_hugging_face_task_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     commit = "a" * 40
     snapshot = tmp_path / "snapshots" / commit
     snapshot.mkdir(parents=True)
@@ -86,6 +82,7 @@ async def test_job_resolves_hugging_face_task_dataset(
 
     monkeypatch.setattr(harbor.hugging_face_dataset, "snapshot_download", download)
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name="hf-metadata-test",
         jobs_dir=tmp_path / "jobs",
         datasets=[DatasetConfig(name="hf://example/tasks", ref="main", n_tasks=1)],
@@ -110,9 +107,7 @@ async def test_hugging_face_task_source_preserves_repository_name(
     snapshot = tmp_path / ("b" * 40)
     snapshot.mkdir()
     _write_task(snapshot, "task-a")
-    monkeypatch.setattr(
-        harbor.hugging_face_dataset, "snapshot_download", lambda **_: str(snapshot)
-    )
+    monkeypatch.setattr(harbor.hugging_face_dataset, "snapshot_download", lambda **_: str(snapshot))
 
     tasks = await DatasetConfig(name="hf://example/tasks").get_task_configs()
 
@@ -136,9 +131,7 @@ async def test_hugging_face_task_dataset_materializes_snapshot_symlinks(
     blob.write_text('{"model": "test-model"}\n')
     task_config.symlink_to(blob)
 
-    monkeypatch.setattr(
-        harbor.hugging_face_dataset, "snapshot_download", lambda **_: str(snapshot)
-    )
+    monkeypatch.setattr(harbor.hugging_face_dataset, "snapshot_download", lambda **_: str(snapshot))
 
     config = DatasetConfig(name="hf://example/tasks", ref=commit)
     tasks = await config.get_task_configs()
@@ -165,9 +158,7 @@ def test_hugging_face_dataset_requires_ref_for_revision() -> None:
 
 
 def test_benchmark_metadata_rejects_inconsistent_primary_metric() -> None:
-    with pytest.raises(
-        ValidationError, match="primary_metric must name one of metrics"
-    ):
+    with pytest.raises(ValidationError, match="primary_metric must name one of metrics"):
         BenchmarkMetadata(
             task="benchmark",
             primary_metric="accuracy",

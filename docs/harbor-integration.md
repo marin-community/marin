@@ -42,18 +42,27 @@ Marin's vendored Harbor supports only `pi`, `mini-swe-agent`, `codex`, `opencode
 `terminus-2`, and `terminus-kira`. Other named agents, ACP registry aliases,
 local-mode adapters, and custom agent import paths raise an unsupported-agent
 error before construction. Import paths for the six supported classes remain valid.
-This restriction also applies to historical tau3 ACP/relay policies, oracle defaults,
-and the former shellbox `BashAgent` smoke path; those configurations require an
-explicit supported agent before running with this runtime.
+Job and trial configs must name an agent explicitly. The rejected `oracle` default,
+ACP and local agents, and their launch profiles have been removed. Earlier source
+and policies remain available in Git history.
 
-The four installed CLI agents share shellbox's Linux process supervisor. Python 3
-is installed during agent setup. Each invocation owns and reaps its tool processes,
-including detached and orphaned descendants, before returning. A remote deadline
-bounds execution; cancellation waits for confirmed cleanup. Daytona runs that
-cleanup through Shellbox's independent control transport. Daytona supports one
-machine; local Compose tasks retain their private container group. Failed cleanup raises `PhaseCancellationError` and prevents
-verification. The sandbox's files remain available for verification after successful
-cleanup.
+All six agents use phase-level cleanup. Installed CLI harnesses run beneath
+Shellbox's Linux child subreaper. Terminus-2 and Terminus-Kira keep a foreground
+`tmux` server beneath the same supervisor, so terminal sessions and background
+tools survive between model turns. At agent completion, timeout, or cancellation,
+Harbor's `kill_processes()` boundary waits for confirmed teardown before verification.
+Detached and orphaned descendants are included. Files, task sidecars and host model
+relays remain available. An agent-created server is stopped too; verifiers that
+need a server must start it themselves or use a task sidecar. Failed cleanup raises
+`PhaseCancellationError` and blocks verification.
+
+Cleanup does not install system Python or change the task's `PATH`. It uses an
+existing interpreter when available. Otherwise the host fetches pinned CPython
+3.12.12 into `~/.cache/shellbox/python`, then uploads it under a private
+`/tmp/.shellbox-python-*` prefix. This fallback needs host download access, not
+package downloads from the sandbox. Provision it before measuring agent execution.
+The provider transport owns command cancellation; Harbor does not depend on
+Daytona-specific sessions for the phase boundary.
 
 ## Run a benchmark
 
@@ -107,14 +116,14 @@ Launch a Harbor `JobConfig` without adding it to the catalog:
 # Validate policy, model overlay, and placement without opening Iris.
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --limit 2 \
   --dry-run
 
 # Serve the model and run the checked-in policy with a two-task cap.
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --limit 2
 ```
 
@@ -284,33 +293,28 @@ driver's ambient environment, including through differently named aliases.
 Image contents and explicit task inputs must themselves be free of production credentials.
 
 The runtime has no independent Docker or other provider execution backend. The prepared local path
-supports image-provided Pi and Pi/ACP agents and the benchmark-owned Tau3 user relay. Other installed
-agents, arbitrary agent imports and custom host mounts are rejected. Its Compose importer supports `main` plus prepared
-sidecars, commands, environment values, exposed TCP ports, readiness checks and `main` dependencies
-on started or healthy services. MCP URLs must name an exposed endpoint inside the container group.
-A task may contain one Compose file. Unknown fields, published host ports, host
-networking and dependencies between sidecars fail explicitly.
+supports the six maintained agents in reviewed images. Its Compose importer supports `main` plus
+prepared sidecars, commands, environment values, exposed TCP ports, readiness checks and `main`
+dependencies on started or healthy services. MCP URLs must name an exposed endpoint inside the
+container group. Unknown fields, published host ports, host networking and dependencies between
+sidecars fail explicitly.
 
-Containers share only the group's loopback network. External egress remains denied. Tau3's user model
-and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. The relay fixes the upstream
-model name and keeps provider authentication in the host process. Its supported routes are listed below.
-Tau3 requires an explicit `--judge-model` in the shared launch command. That hosted model serves
-both the simulated user and verifier assertions; the candidate agent keeps its own model endpoint.
-Without a hosted model, the adapter rejects the task before allocating its container group. A direct
-Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint authentication with
-`harbor.environments.model_relay.host_model_authentication`; the adapter never reads an ambient model key.
+The verifier model relay fixes the upstream model name and keeps provider authentication in the
+host process. A direct Harbor caller supplies `model_endpoint` and `model_name` and may grant
+endpoint authentication with `harbor.environments.model_relay.host_model_authentication`.
+The adapter never reads an ambient model key.
 
 The relay starts one Python HTTP helper and exchanges bounded request/response
 frames over a persistent process session. The session uses owned local process
 pipes or Daytona's SDK transport; provider credentials remain on the host.
 
 Installed candidate agents use a separate loopback relay on port 8788 on both local
-and Daytona backends; the simulated-user and verifier relay uses port 8787. Marin resolves installed
-agents through Harbor's agent classes, including Pi, OpenCode, Mini-SWE, and ACP Pi.
+and Daytona backends; the verifier relay uses port 8787. Marin resolves installed
+agents through Harbor's agent classes, including Pi, OpenCode, Mini-SWE, and Codex.
 Their provider configuration and environment contain a loopback URL and an `EMPTY`
 key. The candidate endpoint and its authentication remain in the trusted driver;
 the executor supplies the served endpoint's API key only through the driver environment.
-Host-side agents such as Terminus and the AIME agent call their candidate endpoint directly.
+Host-side Terminus agents call their candidate endpoint directly.
 Persisted job and trial JSON redacts Iris bearer URLs; live configurations retain their routes.
 Marin supplies a fresh model capability when a run resumes.
 
@@ -398,27 +402,6 @@ the same platform manifest digest in `shellbox-images.json`. Shellbox verifies
 the manifest, configuration and every layer before using that cache offline.
 An explicit signature policy still requires registry verification.
 
-To exercise the complete local Tau3 path with a real candidate, simulated user
-and assertion judge, use a prepared task whose canonical reward includes an
-NL assertion, such as `tau3-retail-2` from Tau3 1.0.1. Keep its runtime
-`task_config.json`, instructions and verifier unchanged. Select Terminus 2,
-configure a local tokenizer encoding for a hosted endpoint without `/tokenize`,
-and put the upstream `model_endpoint` and `model_name` in the local environment
-kwargs. The candidate's OpenAI client uses the host endpoint; the runtime and
-verifier receive the loopback relay and an inert key. Supply CPU/memory policies
-as above and omit the unsupported storage declaration from the prepared task.
-
-```bash
-uv run --isolated --project vendor/harbor --frozen --extra runtime \
-  python vendor/harbor/tests/local_tau3_smoke.py local-tau3.json \
-  --api-key-env GLM_BULK_TOKEN
-```
-
-The command retains normal Harbor trial artifacts and checks that Tau2 evaluated
-a real runtime trajectory and returned NL assertion results. A model reward of
-zero is a scored outcome; an infrastructure error or skipped evaluator fails
-the smoke run. Task images contain the same MCP client and terminal dependencies
-used by the candidate. No oracle solution is uploaded.
 
 ## Sandbox environment isolation
 
@@ -519,26 +502,17 @@ through an isolated subprocess CLI for two calls:
 
 Runtime values do not change the source-policy digest. Policy kwargs override model-catalog kwargs;
 the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
-For a Harbor target or simulated user agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
+For a Harbor agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
 versions supplied by the policy or model configuration. Preflight includes this pin in the saved
 policy and the saved policy's digest; execution applies the same pin. The task image must
 provide Pi `0.87.0` on `PATH`; setup verifies the installed version. Pi setup does not install
 Node or npm packages. Historical task images that relied on runtime installation need a
 prepared harness image before they can run again.
 
-ACP Pi uses its own companion pin, `@earendil-works/pi-coding-agent@0.80.5`, with
-`pi-acp@0.0.33`. Its image must expose `node`, `pi`, and `pi-acp` on `PATH` and provide
-`/opt/harbor-acp-venv/bin/python` with `agent-client-protocol`. Every ACP bridge target,
-including Claude Code and Gemini, also requires image-provided `acpx@0.12.0` on `PATH`.
-The Tau3 simulated-user relay requires `python3` with `mcp==1.25.0`. Setup stages launchers,
-endpoint credentials, provider configuration, and ACP session configuration; it does not
-install these dependencies. The Tau3 ACP Pi image does not satisfy the standalone Pi
-`0.87.0` pin.
-
 For Qwen3, set the model's `agent.agent_kwargs.thinking_format` to
 `qwen-chat-template` and `serve.reasoning_parser` to `qwen3`. The latter keeps reasoning
 out of simulated-user messages and structured judge answers. Serve the context window
-declared by the policy; Tau3's ACP policy uses 131,072 tokens.
+declared by the policy.
 
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
@@ -581,10 +555,6 @@ and caps the reply to the remaining context and the configured output limit.
 Context exhaustion uses Mini-SWE's native limit handler so Harbor can verify the
 existing patch. No Marin agent subclass is required.
 
-Sotopia uses `harbor.agents.installed.sotopia:SotopiaAgent`, packaged with its
-episode runner in Harbor. Judge API failures and exhausted missing-grade retries
-become `VerifierRuntimeError`. Sotopia's native generation still does not enforce
-`model_info` context limits.
 
 ## Results
 

@@ -8,12 +8,11 @@ from pathlib import Path
 import harbor.environments.factory as environment_factory
 import harbor.utils.artifact_writer as artifact_writer
 import pytest
-from harbor.agents.nop import NopAgent
 from harbor.agents.factory import AgentFactory
-from harbor.models.agent.name import AgentName
 from harbor.environments.base import ExecResult
 from harbor.job import Job
 from harbor.metrics.mean import Mean
+from harbor.models.agent.name import AgentName
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
 from harbor.models.metric.config import MetricConfig
@@ -29,6 +28,7 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.utils.artifact_writer import ArtifactWriter, get_artifact_writer
 
+from tests.unit.fake_agent import FakeAgent
 from tests.unit.test_trial_cleanup import MountedEnvironment
 
 
@@ -77,6 +77,7 @@ def _make_job(
     release_trial_payloads_in_memory: bool = False,
 ) -> Job:
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name="job-progress-test",
         jobs_dir=tmp_path,
         release_trial_payloads_in_memory=release_trial_payloads_in_memory,
@@ -145,9 +146,7 @@ def _persist_completed_trial(job: Job, trial_result: TrialResult) -> Path:
     )
     trial_dir = job.job_dir / trial_result.trial_name
     trial_dir.mkdir()
-    (trial_dir / "config.json").write_text(
-        trial_result.config.model_dump_json(indent=4)
-    )
+    (trial_dir / "config.json").write_text(trial_result.config.model_dump_json(indent=4))
     result_path = trial_dir / "result.json"
     result_path.write_text(trial_result.model_dump_json(indent=4))
     job._close_logger_handlers()
@@ -167,9 +166,7 @@ async def _flush_job_snapshots(job: Job) -> None:
 async def test_explicit_task_source_preserves_completed_metrics(
     tmp_path: Path, metric_type: MetricType | None, expected: float, monkeypatch
 ) -> None:
-    monkeypatch.setattr(
-        environment_factory, "_load_environment_class", lambda _: ScoredEnvironment
-    )
+    monkeypatch.setattr(environment_factory, "_load_environment_class", lambda _: ScoredEnvironment)
     task_dir = tmp_path / "task"
     task_dir.mkdir()
     (task_dir / "task.toml").write_text('[task]\nname = "test/test-task"\n')
@@ -192,13 +189,8 @@ async def test_explicit_task_source_preserves_completed_metrics(
         result = await job.run()
         assert len(result.trial_results) == 2
         assert all(trial.exception_info is None for trial in result.trial_results)
-        assert all(
-            trial.verifier_result.rewards == {"reward": 1}
-            for trial in result.trial_results
-        )
-        persisted = JobResult.model_validate_json(
-            (job.job_dir / "result.json").read_text()
-        )
+        assert all(trial.verifier_result.rewards == {"reward": 1} for trial in result.trial_results)
+        persisted = JobResult.model_validate_json((job.job_dir / "result.json").read_text())
         assert persisted.stats.n_completed_trials == 2
         assert persisted.stats.n_errored_trials == 0
         assert len(persisted.stats.evals) == 1
@@ -209,9 +201,7 @@ async def test_explicit_task_source_preserves_completed_metrics(
 
 
 @pytest.mark.unit
-async def test_job_writes_initial_result_before_trials_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_job_writes_initial_result_before_trials_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     job = _make_job(tmp_path)
     trial_config = job._trial_configs[0]
     trial_result = _trial_result(trial_config)
@@ -257,23 +247,17 @@ async def test_job_progress_hooks_update_running_and_completed_counts(
     try:
         await job._on_trial_started(_hook_event(TrialEvent.START, trial_config))
         await _flush_job_snapshots(job)
-        running_result = JobResult.model_validate_json(
-            (job.job_dir / "result.json").read_text()
-        )
+        running_result = JobResult.model_validate_json((job.job_dir / "result.json").read_text())
         assert running_result.stats.n_running_trials == 1
         assert running_result.stats.n_pending_trials == 0
 
         trial_result = _trial_result(trial_config, exception_type="RuntimeError")
-        await job._on_trial_completed(
-            _hook_event(TrialEvent.END, trial_config, result=trial_result)
-        )
+        await job._on_trial_completed(_hook_event(TrialEvent.END, trial_config, result=trial_result))
         await _flush_job_snapshots(job)
     finally:
         job._close_logger_handlers()
 
-    completed_result = JobResult.model_validate_json(
-        (job.job_dir / "result.json").read_text()
-    )
+    completed_result = JobResult.model_validate_json((job.job_dir / "result.json").read_text())
     assert completed_result.stats.n_running_trials == 0
     assert completed_result.stats.n_completed_trials == 1
     assert completed_result.stats.n_errored_trials == 1
@@ -323,9 +307,7 @@ async def test_stalled_remote_progress_snapshot_allows_required_final_write(
         destination.write_spooled(spool_path)
         return artifact_writer._CloudUploadOutcome.COMPLETE
 
-    monkeypatch.setattr(
-        writer._uploaders[0], "upload", first_upload_stalls_then_recovers
-    )
+    monkeypatch.setattr(writer._uploaders[0], "upload", first_upload_stalls_then_recovers)
     monkeypatch.setattr(Job, "_job_result_path", property(lambda _: destination))
     monkeypatch.setattr("harbor.job.get_artifact_writer", lambda: writer, raising=False)
 
@@ -390,48 +372,34 @@ async def test_job_progress_retry_replaces_previous_attempt_counts(
     try:
         await job._on_trial_started(_hook_event(TrialEvent.START, trial_config))
         failed_attempt = _trial_result(trial_config, exception_type="RuntimeError")
-        await job._on_trial_completed(
-            _hook_event(TrialEvent.END, trial_config, result=failed_attempt)
-        )
+        await job._on_trial_completed(_hook_event(TrialEvent.END, trial_config, result=failed_attempt))
 
         await job._on_trial_started(_hook_event(TrialEvent.START, trial_config))
         await _flush_job_snapshots(job)
-        retrying_result = JobResult.model_validate_json(
-            (job.job_dir / "result.json").read_text()
-        )
+        retrying_result = JobResult.model_validate_json((job.job_dir / "result.json").read_text())
         assert retrying_result.stats.n_completed_trials == 0
         assert retrying_result.stats.n_running_trials == 1
         assert retrying_result.stats.n_errored_trials == 0
         assert retrying_result.stats.n_retries == 1
 
-        second_failed_attempt = _trial_result(
-            trial_config, exception_type="RuntimeError"
-        )
-        await job._on_trial_completed(
-            _hook_event(TrialEvent.END, trial_config, result=second_failed_attempt)
-        )
+        second_failed_attempt = _trial_result(trial_config, exception_type="RuntimeError")
+        await job._on_trial_completed(_hook_event(TrialEvent.END, trial_config, result=second_failed_attempt))
 
         await job._on_trial_started(_hook_event(TrialEvent.START, trial_config))
         await _flush_job_snapshots(job)
-        second_retrying_result = JobResult.model_validate_json(
-            (job.job_dir / "result.json").read_text()
-        )
+        second_retrying_result = JobResult.model_validate_json((job.job_dir / "result.json").read_text())
         assert second_retrying_result.stats.n_completed_trials == 0
         assert second_retrying_result.stats.n_running_trials == 1
         assert second_retrying_result.stats.n_errored_trials == 0
         assert second_retrying_result.stats.n_retries == 2
 
         successful_attempt = _trial_result(trial_config)
-        await job._on_trial_completed(
-            _hook_event(TrialEvent.END, trial_config, result=successful_attempt)
-        )
+        await job._on_trial_completed(_hook_event(TrialEvent.END, trial_config, result=successful_attempt))
         await _flush_job_snapshots(job)
     finally:
         job._close_logger_handlers()
 
-    completed_result = JobResult.model_validate_json(
-        (job.job_dir / "result.json").read_text()
-    )
+    completed_result = JobResult.model_validate_json((job.job_dir / "result.json").read_text())
     assert completed_result.stats.n_completed_trials == 1
     assert completed_result.stats.n_running_trials == 0
     assert completed_result.stats.n_errored_trials == 0
@@ -456,23 +424,17 @@ async def test_job_progress_hooks_count_cancelled_trials(tmp_path: Path) -> None
         await job._on_trial_cancelled(_hook_event(TrialEvent.CANCEL, trial_config))
         await _flush_job_snapshots(job)
 
-        cancelled_result = JobResult.model_validate_json(
-            (job.job_dir / "result.json").read_text()
-        )
+        cancelled_result = JobResult.model_validate_json((job.job_dir / "result.json").read_text())
         assert cancelled_result.stats.n_running_trials == 1
         assert cancelled_result.stats.n_cancelled_trials == 1
 
         trial_result = _trial_result(trial_config, exception_type="CancelledError")
-        await job._on_trial_completed(
-            _hook_event(TrialEvent.END, trial_config, result=trial_result)
-        )
+        await job._on_trial_completed(_hook_event(TrialEvent.END, trial_config, result=trial_result))
         await _flush_job_snapshots(job)
     finally:
         job._close_logger_handlers()
 
-    completed_result = JobResult.model_validate_json(
-        (job.job_dir / "result.json").read_text()
-    )
+    completed_result = JobResult.model_validate_json((job.job_dir / "result.json").read_text())
     assert completed_result.stats.n_running_trials == 0
     assert completed_result.stats.n_completed_trials == 1
     assert completed_result.stats.n_errored_trials == 1
@@ -541,9 +503,7 @@ async def test_job_resume_releases_persisted_trial_payloads_from_memory(
     assert retained.verifier_result.rewards == {"reward": 1}
     assert retained.verifier_result.stdout is None
     assert retained.verifier_result.stderr is None
-    assert JobStats.from_trial_results(
-        result.trial_results, n_total_trials=1
-    ) == JobStats.from_trial_results(
+    assert JobStats.from_trial_results(result.trial_results, n_total_trials=1) == JobStats.from_trial_results(
         [trial_result],
         n_total_trials=1,
     )
@@ -556,4 +516,4 @@ async def test_job_resume_releases_persisted_trial_payloads_from_memory(
 
 @pytest.fixture(autouse=True)
 def register_test_agents(monkeypatch):
-    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, NopAgent)
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, FakeAgent)

@@ -18,10 +18,6 @@ from typing import Any
 import fsspec.config
 import yaml
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
-from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-import]
-    is_acp_registry_shorthand,
-    parse_registry_spec,
-)
 from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
 from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
     COMPOSE_FILENAMES,
@@ -53,7 +49,7 @@ from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyre
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.s3_compat import s3_credential_options
-from rigging.filesystem.storage_path import StoragePath
+from upath import UPath
 
 from marin.evaluation.harbor.agent_context import (
     MAX_INPUT_TOKENS_KEY,
@@ -67,8 +63,6 @@ _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
 _OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
-_PI_ACP_REGISTRY_ID = "pi-acp"
-_TAU3_USER_AGENT = "harbor.agents.tau3_acp_relay.harbor_agent:Tau3HarborACPRelay"
 _PI_VERSION = "0.87.0"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
@@ -176,49 +170,11 @@ def _validate_prepared_policy(config: JobConfig) -> None:
     unknown_kwargs = environment.kwargs.keys() - _LOCAL_ENVIRONMENT_KWARGS
     if unknown_kwargs:
         raise ValueError(f"Unsupported {label} environment kwargs: {sorted(unknown_kwargs)}")
-    if (user_agent := config.user_agent) is not None:
-        if (
-            user_agent.name is not None
-            or user_agent.import_path != _TAU3_USER_AGENT
-            or user_agent.mode != "container"
-            or user_agent.env
-            or user_agent.skills
-            or user_agent.user_persona_path is not None
-            or user_agent.user_prompt_template_path is not None
-            or user_agent.bridge.prompt_path is not None
-            or user_agent.bridge.kwargs
-            or len(user_agent.mcp_servers) != 1
-        ):
-            raise ValueError(f"{label} supports only the sandboxed Tau3 ACP simulated user")
-        server = user_agent.mcp_servers[0]
-        if (
-            server.name != "tau3-runtime"
-            or server.transport != "streamable-http"
-            or server.url != "http://tau3-runtime:8000/mcp"
-            or server.command is not None
-            or server.args
-        ):
-            raise ValueError(f"{label} requires the prepared tau3-runtime MCP service")
-        if {"extra_env", "mcp_servers", "skills_dir", "turn_callback"} & user_agent.kwargs.keys():
-            raise ValueError(f"{label} does not accept alternate simulated-user inputs")
+    if config.user_agent is not None:
+        raise ValueError(f"{label} does not support simulated-user agents")
     for agent in config.agents:
-        pi_acp = (
-            agent.name is not None
-            and is_acp_registry_shorthand(agent.name)
-            and parse_registry_spec(agent.name)[0] == _PI_ACP_REGISTRY_ID
-        ) or (
-            agent.name == "acp"
-            and isinstance(agent.kwargs.get("registry_entry"), dict)
-            and agent.kwargs["registry_entry"].get("id") == _PI_ACP_REGISTRY_ID
-            and not {"registry_entry_path", "registry_spec"} & agent.kwargs.keys()
-        )
-        installed = agent.name == "pi" or pi_acp
-        if (
-            (agent.name not in {"terminus-2", "oracle"} and not installed)
-            or agent.import_path is not None
-            or agent.mode != "container"
-        ):
-            raise ValueError(f"{label} requires terminus-2, oracle, Pi, or pi-acp")
+        _validate_agent(agent)
+        installed = _installed_agent(agent)
         relay_env = {
             "OPENAI_BASE_URL": f"http://127.0.0.1:{CANDIDATE_MODEL_RELAY_PORT}/v1",
             "OPENAI_API_BASE": f"http://127.0.0.1:{CANDIDATE_MODEL_RELAY_PORT}/v1",
@@ -510,23 +466,11 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             }
         )
         verifier_env = _guest_model_environment(verifier_env, model_name)
-        if agent.name == "sotopia":
-            agent = agent.model_copy(
-                update={
-                    "kwargs": {
-                        **agent.kwargs,
-                        "partner_model": "openai/" + model_name,
-                        "evaluator_model": "openai/" + model_name,
-                        "partner_api_base": _TASK_MODEL_ENVIRONMENT["OPENAI_BASE_URL"],
-                        "evaluator_api_base": _TASK_MODEL_ENVIRONMENT["OPENAI_BASE_URL"],
-                    }
-                }
-            )
     agent = agent.model_copy(update={"env": _dummy_model_keys(agent.env)})
     effective = config.model_copy(
         update={
             "job_name": overlay.job_name,
-            "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
+            "jobs_dir": UPath(overlay.jobs_dir),
             "agents": [agent],
             "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
             "datasets": [dataset],

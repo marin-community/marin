@@ -3,6 +3,7 @@
 
 """Transport-independent Linux command scopes for persistent machines."""
 
+import asyncio
 import shlex
 import uuid
 from dataclasses import dataclass, field
@@ -48,3 +49,39 @@ class ProcessScope:
     def status_command(self) -> str:
         """Read the supervisor outcome independently of command output truncation."""
         return shlex.join((self.python, "-I", "-S", "-c", SUPERVISOR_SOURCE, "status", self.directory))
+
+
+SUPERVISOR_PYTHON_VERSION = "3.12.12"
+
+
+async def private_supervisor_runtime(platform: str) -> Path:
+    """Fetch a host-cached Linux interpreter for images without Python.
+
+    The caller uploads this directory under a private guest prefix. Nothing is
+    installed in the task's package database or added to its PATH.
+    """
+    if platform not in {"linux-x86_64-gnu", "linux-aarch64-gnu", "linux-x86_64-musl", "linux-aarch64-musl"}:
+        raise ValueError(f"Unsupported supervisor platform: {platform}")
+    target = f"cpython-{SUPERVISOR_PYTHON_VERSION}-{platform}"
+    cache = Path.home() / ".cache" / "shellbox" / "python"
+    process = await asyncio.create_subprocess_exec(
+        "uv",
+        "python",
+        "install",
+        "--no-bin",
+        "--install-dir",
+        str(cache),
+        target,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr = await process.communicate()
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        raise
+    if process.returncode:
+        raise RuntimeError(f"Cannot prepare private supervisor Python: {stderr.decode()}")
+    return cache / target

@@ -12,13 +12,10 @@ Covers three layers:
 
 import asyncio
 import json
-
-import httpx
-from starlette.testclient import TestClient
 from pathlib import Path
 
+import httpx
 from harbor.agents.base import BaseAgent
-from harbor.agents.installed.claude_code import ClaudeCode
 from harbor.agents.terminus_2.terminus_2 import Terminus2
 from harbor.literal import (
     extract_literal_from_response,
@@ -29,7 +26,7 @@ from harbor.utils.traces_utils import (
     _extract_literal_turns,
     collect_conversations_from_trial,
 )
-
+from starlette.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # 1. Capability flag
@@ -42,13 +39,6 @@ def test_supports_literal_traces_default_false():
 
 def test_terminus_2_supports_literal_traces():
     assert Terminus2.SUPPORTS_LITERAL_TRACES is True
-
-
-def test_installed_text_only_agents_do_not_support_literal():
-    # Installed agents that only parse CLI logs must NOT claim literal support.
-    # ClaudeCode reconstructs trajectories from CLI event files and never sees
-    # token IDs, so it correctly leaves the flag at its default.
-    assert ClaudeCode.SUPPORTS_LITERAL_TRACES is False
 
 
 # ---------------------------------------------------------------------------
@@ -159,9 +149,7 @@ def test_collect_with_literal_emits_token_columns(tmp_path):
             _LITERAL_AGENT_STEP,
         ],
     )
-    convs = collect_conversations_from_trial(
-        trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True
-    )
+    convs = collect_conversations_from_trial(trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True)
     assert len(convs) == 1
     row = convs[0]
     assert row["prompt_token_ids"] == [[1, 2, 3]]
@@ -197,9 +185,7 @@ def test_collect_with_literal_noops_on_text_only_trajectory(tmp_path):
             {"source": "agent", "message": "All done."},
         ],
     )
-    convs = collect_conversations_from_trial(
-        trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True
-    )
+    convs = collect_conversations_from_trial(trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True)
     assert len(convs) == 1
     # Literal flag requested but trajectory has no token data → columns absent.
     row = convs[0]
@@ -235,9 +221,7 @@ def test_collect_with_literal_multi_turn(tmp_path):
             },
         ],
     )
-    convs = collect_conversations_from_trial(
-        trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True
-    )
+    convs = collect_conversations_from_trial(trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True)
     # Two agent steps → two episodes; the first episode has 1 turn, the second 2.
     assert len(convs) == 2
     first, second = convs
@@ -430,9 +414,7 @@ def test_proxy_forward_records_non_json_upstream(tmp_path, monkeypatch):
 
     monkeypatch.setattr(proxy, "_get_client", _fake_get_client)
 
-    status, resp_json, _ = asyncio.run(
-        proxy.forward("/v1/chat/completions", {"model": "m", "messages": []})
-    )
+    status, resp_json, _ = asyncio.run(proxy.forward("/v1/chat/completions", {"model": "m", "messages": []}))
     assert status == 500
     assert resp_json is None
     entry = json.loads(log_path.read_text().strip())
@@ -609,10 +591,10 @@ def test_open_upstream_stream_injects_literal_params_and_keeps_stream(tmp_path):
 
 def test_proxy_app_streaming_request_tees_sse(tmp_path):
     """End-to-end via app(): a stream=true request gets an SSE relay + literal record."""
+    import httpx
     from fastapi import FastAPI, Request
     from fastapi.responses import StreamingResponse
     from starlette.testclient import TestClient
-    import httpx
 
     stub = FastAPI()
 
@@ -626,9 +608,7 @@ def test_proxy_app_streaming_request_tees_sse(tmp_path):
 
     log_path = tmp_path / "literal.jsonl"
     proxy = RecordProxy("http://vllm.local", log_path, timeout=10.0)
-    stub_client = httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=stub), base_url="http://vllm.local"
-    )
+    stub_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=stub), base_url="http://vllm.local")
 
     async def _fake_get_client():
         return stub_client
@@ -656,10 +636,10 @@ def test_proxy_app_streaming_request_tees_sse(tmp_path):
 def test_proxy_app_stamps_correlation_id_header_on_entry(tmp_path):
     """S2b: the x-ot-trial-id request header is captured onto the JSONL entry so a
     shared controller log can be split back per trial."""
+    import httpx
     from fastapi import FastAPI, Request
     from fastapi.responses import StreamingResponse
     from starlette.testclient import TestClient
-    import httpx
 
     stub = FastAPI()
 
@@ -675,9 +655,7 @@ def test_proxy_app_stamps_correlation_id_header_on_entry(tmp_path):
 
     log_path = tmp_path / "literal.jsonl"
     proxy = RecordProxy("http://vllm.local", log_path, timeout=10.0)
-    stub_client = httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=stub), base_url="http://vllm.local"
-    )
+    stub_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=stub), base_url="http://vllm.local")
 
     async def _fake_get_client():
         return stub_client
@@ -785,9 +763,7 @@ def test_export_traces_accepts_include_literal_tokens(tmp_path, monkeypatch):
     assert "prompt_token_ids" not in ds.column_names
 
 
-def test_mini_swe_proxy_preserves_agent_identity_and_context_budget(
-    tmp_path, monkeypatch
-):
+def test_mini_swe_proxy_preserves_agent_identity_and_context_budget(tmp_path, monkeypatch):
     headers = {CORRELATION_ID_HEADER: "mini-trial", TASK_AGENT_HEADER: "mini-swe-agent"}
     messages = [{"role": "user", "content": "run bash"}]
 
@@ -801,18 +777,14 @@ def test_mini_swe_proxy_preserves_agent_identity_and_context_budget(
                 "messages": messages,
                 "add_generation_prompt": True,
             }
-            return httpx.Response(
-                200, json={"tokens": [1, 2], "count": 2, "max_model_len": 128}
-            )
+            return httpx.Response(200, json={"tokens": [1, 2], "count": 2, "max_model_len": 128})
         assert request.url.path == "/v1/chat/completions"
         assert body["return_token_ids"] is True
         return httpx.Response(
             200,
             json={
                 "prompt_token_ids": [1, 2],
-                "choices": [
-                    {"token_ids": [99], "logprobs": {"token_logprobs": [-0.1]}}
-                ],
+                "choices": [{"token_ids": [99], "logprobs": {"token_logprobs": [-0.1]}}],
             },
         )
 

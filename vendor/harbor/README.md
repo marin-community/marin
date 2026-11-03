@@ -6,6 +6,10 @@ revision recorded in [UPSTREAM.toml](UPSTREAM.toml). The source is licensed unde
 
 This package contains the evaluation runtime, agents, Shellbox environment adapters,
 verification, trajectories, registry downloads, FineStore archives, and telemetry.
+It supports Pi, Mini-SWE-Agent, Codex, OpenCode, Terminus-2 and Terminus-Kira.
+Job and trial configs must select an agent explicitly. Unsupported agent source
+and launch configurations are removed; Git history retains them.
+
 It evaluates prebuilt Harbor tasks from local paths, Hugging Face repositories,
 or the Harbor registry. The `harbor` distribution provides both the `harbor` and
 `harbor_config` Python modules.

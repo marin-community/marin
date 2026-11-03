@@ -13,10 +13,6 @@ from collections.abc import AsyncIterator, Generator, Sequence
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel
-from shellbox.lifecycle import finish_cleanup
-from shellbox.process import CLEANUP_TIMEOUT
-
 from harbor.environments.capabilities import (
     EnvironmentCapabilities,
     EnvironmentResourceCapabilities,
@@ -38,6 +34,9 @@ from harbor.trial.errors import PhaseCancellationError
 from harbor.utils.env import resolve_env_vars, validate_task_environment
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
+from pydantic import BaseModel
+from shellbox.lifecycle import finish_cleanup
+from shellbox.process import CLEANUP_TIMEOUT, ProcessScope, private_supervisor_runtime
 
 EnvironmentPath = str | PurePath
 EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
@@ -94,12 +93,72 @@ class ExecResult(BaseModel):
 
 
 class BaseEnvironment(ABC):
-    """
-    The containerized environment the agent interacts with.
-    Consists of 1+ container(s).
+    """Task environment executed through a maintained Shellbox backend."""
 
-    Execution is supplied by a maintained Shellbox backend adapter.
-    """
+    _supervisor_python: str | None = None
+    _process_scopes: tuple[tuple[ProcessScope, str | int | None], ...] = ()
+
+    async def prepare_process_supervisor(self) -> str:
+        """Resolve the supervisor interpreter without changing the task environment."""
+        if self._supervisor_python is None:
+            probe = await self.exec(
+                "command -v python3 || { "
+                "arch=$(uname -m); libc=gnu; "
+                'for loader in /lib/ld-musl-*.so.1; do [ ! -e "$loader" ] || libc=musl; done; '
+                'printf \'linux-%s-%s\' "$arch" "$libc"; }',
+                user="root",
+            )
+            if probe.return_code:
+                raise RuntimeError("Cannot identify the supervisor runtime")
+            runtime = probe.stdout.strip()
+            if not runtime.startswith("/"):
+                local = await private_supervisor_runtime(runtime)
+                prefix = f"/tmp/.shellbox-python-{uuid.uuid4().hex}"
+                await self.upload_dir(local, prefix)
+                runtime = f"{prefix}/bin/python3"
+            self._supervisor_python = runtime
+        return self._supervisor_python
+
+    async def process_scope(self, user: str | int | None = None) -> ProcessScope:
+        """Register an agent-owned process tree for phase-end cleanup."""
+        python = await self.prepare_process_supervisor()
+        scope = ProcessScope(python=python)
+        self._process_scopes = (*self._process_scopes, (scope, self._resolve_user(user)))
+        return scope
+
+    async def start_process_scope(self, command: str, *, env: dict[str, str], user: str | int | None = None) -> None:
+        """Keep a foreground service and all descendants owned until phase end."""
+        scope = await self.process_scope(user)
+        launch = shlex.join(scope.command(("/bin/sh", "-c", command), None))
+        directory = shlex.quote(scope.directory)
+        result = await self.exec(
+            f"{launch} </dev/null >{directory}.log 2>&1 & "
+            f"for attempt in $(seq 1 1000); do "
+            f"[ ! -f {directory}/failed ] || exit 1; "
+            f"[ ! -f {directory}/done ] || exit 1; "
+            f"[ ! -f {directory}/pid ] || exit 0; sleep 0.01; done; exit 1",
+            env=env,
+            user=user,
+        )
+        if result.return_code:
+            raise PhaseCancellationError("Cannot start the agent process scope")
+
+    async def kill_processes(self) -> None:
+        """Stop agent-owned trees while retaining files, sidecars and model relays."""
+        try:
+            for scope, user in self._process_scopes:
+                result = await finish_cleanup(
+                    self.exec(
+                        scope.cancel_command(),
+                        user=user,
+                        timeout_sec=CLEANUP_TIMEOUT,
+                    )
+                )
+                if result.return_code:
+                    raise RuntimeError("Agent process cleanup could not be confirmed")
+        except Exception as error:
+            raise PhaseCancellationError("Agent process cleanup could not be confirmed") from error
+        self._process_scopes = ()
 
     environment_dir: Path
     environment_name: str
@@ -183,8 +242,8 @@ class BaseEnvironment(ABC):
         self._memory_resource_mode = ResourceMode(memory_enforcement_policy)
         self._persistent_env: dict[str, str] = persistent_env or {}
         validate_task_environment(self._persistent_env)
-        self._exec_env_overlays: contextvars.ContextVar[tuple[dict[str, str], ...]] = (
-            contextvars.ContextVar(f"harbor_exec_env_overlays_{id(self)}", default=())
+        self._exec_env_overlays: contextvars.ContextVar[tuple[dict[str, str], ...]] = contextvars.ContextVar(
+            f"harbor_exec_env_overlays_{id(self)}", default=()
         )
         self._mounts: list[ServiceVolumeConfig] = list(mounts) if mounts else []
 
@@ -225,9 +284,7 @@ class BaseEnvironment(ABC):
             self.task_env_config.tpu = self._override_tpu
 
     def _resource_mode(self, resource: Literal["cpu", "memory"]) -> ResourceMode:
-        return (
-            self._cpu_resource_mode if resource == "cpu" else self._memory_resource_mode
-        )
+        return self._cpu_resource_mode if resource == "cpu" else self._memory_resource_mode
 
     def _resource_value(self, resource: Literal["cpu", "memory"]) -> int | None:
         if self._resource_mode(resource) == ResourceMode.IGNORE:
@@ -368,13 +425,9 @@ class BaseEnvironment(ABC):
             yield
         finally:
             try:
-                await finish_cleanup(
-                    asyncio.wait_for(self.reap_command(command), CLEANUP_TIMEOUT)
-                )
+                await finish_cleanup(asyncio.wait_for(self.reap_command(command), CLEANUP_TIMEOUT))
             except Exception as error:
-                raise PhaseCancellationError(
-                    "Remote command teardown could not be confirmed"
-                ) from error
+                raise PhaseCancellationError("Remote command teardown could not be confirmed") from error
 
     async def reap_command(self, command: str) -> None:
         """Run cleanup independently of the cancelled execution transport."""
@@ -404,9 +457,7 @@ class BaseEnvironment(ABC):
             return
         overlay_var = getattr(self, "_exec_env_overlays", None)
         if overlay_var is None:
-            overlay_var = contextvars.ContextVar(
-                f"harbor_exec_env_overlays_{id(self)}", default=()
-            )
+            overlay_var = contextvars.ContextVar(f"harbor_exec_env_overlays_{id(self)}", default=())
             self._exec_env_overlays = overlay_var
         token = overlay_var.set((*overlay_var.get(), dict(env)))
         try:
@@ -425,9 +476,7 @@ class BaseEnvironment(ABC):
         q = lambda p: quote_shell_arg(p, self.os)  # noqa: E731
 
         if self.os == TaskOS.WINDOWS:
-            commands = [
-                f"if exist {q(path)} rmdir /S /Q {q(path)}" for path in remove_dirs
-            ]
+            commands = [f"if exist {q(path)} rmdir /S /Q {q(path)}" for path in remove_dirs]
             commands.extend(f"mkdir {q(path)}" for path in create_dirs)
             return " & ".join(commands)
 
@@ -689,13 +738,8 @@ class BaseEnvironment(ABC):
         Raises:
             ValueError: If internet isolation is requested but not supported.
         """
-        if (
-            not self.task_env_config.allow_internet
-            and not self.capabilities.disable_internet
-        ):
-            raise ValueError(
-                f"allow_internet=False is not supported by {self.type()} environment."
-            )
+        if not self.task_env_config.allow_internet and not self.capabilities.disable_internet:
+            raise ValueError(f"allow_internet=False is not supported by {self.type()} environment.")
 
     def _validate_windows_support(self):
         """
@@ -807,9 +851,7 @@ class BaseEnvironment(ABC):
         target = Path(target_dir)
         target.mkdir(parents=True, exist_ok=True)
 
-        exclude_flags = " ".join(
-            f"--exclude={shlex.quote(pattern)}" for pattern in exclude
-        )
+        exclude_flags = " ".join(f"--exclude={shlex.quote(pattern)}" for pattern in exclude)
         env_tar_filename = _TRANSFER_TAR_TEMPLATE.format(uuid=uuid.uuid4())
         env_tar_path = str(_ENV_TRANSFER_TAR_DIR / env_tar_filename)
         source_path = shlex.quote(source_dir)
@@ -822,8 +864,7 @@ class BaseEnvironment(ABC):
         if result.return_code != 0:
             output = result.stderr or result.stdout or "no output"
             raise RuntimeError(
-                "Failed to create transfer archive for "
-                f"{source_dir!r} with code {result.return_code}: {output}"
+                "Failed to create transfer archive for " f"{source_dir!r} with code {result.return_code}: {output}"
             )
 
         with tempfile.TemporaryDirectory() as host_tmp_dir:
@@ -844,8 +885,7 @@ class BaseEnvironment(ABC):
         if cleanup_result.return_code != 0:
             output = cleanup_result.stderr or cleanup_result.stdout or "no output"
             self.logger.warning(
-                "Failed to remove transfer archive "
-                f"{env_tar_path!r} with code {cleanup_result.return_code}: {output}"
+                "Failed to remove transfer archive " f"{env_tar_path!r} with code {cleanup_result.return_code}: {output}"
             )
 
     @abstractmethod
@@ -910,17 +950,11 @@ class BaseEnvironment(ABC):
             quoted_as_dir = quote_shell_arg(str(path) + "\\", self.os)
             if require_dir:
                 return f"if exist {quoted_as_dir} (exit 0) else (exit 1)"
-            return (
-                f"if not exist {quoted_path} exit 1 & "
-                f"if exist {quoted_as_dir} exit 1 & "
-                f"exit 0"
-            )
+            return f"if not exist {quoted_path} exit 1 & " f"if exist {quoted_as_dir} exit 1 & " f"exit 0"
         flag = "d" if require_dir else "f"
         return f"test -{flag} {shlex.quote(path)}"
 
-    async def run_healthcheck(
-        self, healthcheck: HealthcheckConfig | None = None
-    ) -> None:
+    async def run_healthcheck(self, healthcheck: HealthcheckConfig | None = None) -> None:
         """Run a healthcheck, defaulting to the environment-level config.
 
         Mirrors Docker HEALTHCHECK semantics: during the start period,
@@ -934,9 +968,7 @@ class BaseEnvironment(ABC):
                 Callers pass a per-step config here to run a step-scoped
                 healthcheck.
         """
-        hc = (
-            healthcheck if healthcheck is not None else self.task_env_config.healthcheck
-        )
+        hc = healthcheck if healthcheck is not None else self.task_env_config.healthcheck
         if hc is None:
             return
 
@@ -956,10 +988,7 @@ class BaseEnvironment(ABC):
                 self.logger.debug("Healthcheck passed")
                 return
 
-            self.logger.debug(
-                f"Healthcheck failed (rc={result.return_code}, "
-                f"in_start_period={in_start_period})"
-            )
+            self.logger.debug(f"Healthcheck failed (rc={result.return_code}, " f"in_start_period={in_start_period})")
 
             if in_start_period:
                 await asyncio.sleep(hc.start_interval_sec)
@@ -967,8 +996,7 @@ class BaseEnvironment(ABC):
                 consecutive_failures += 1
                 if consecutive_failures >= hc.retries:
                     raise HealthcheckError(
-                        f"Healthcheck failed after {hc.retries} consecutive "
-                        f"retries: {hc.command}"
+                        f"Healthcheck failed after {hc.retries} consecutive " f"retries: {hc.command}"
                     )
                 await asyncio.sleep(hc.interval_sec)
 
