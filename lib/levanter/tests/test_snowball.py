@@ -24,6 +24,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as random
+import jmp
 import numpy as np
 import pytest
 from haliax import Axis, named_jit
@@ -35,6 +36,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+from levanter.compute_dtype import cast_model_for_compute
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
@@ -348,6 +350,24 @@ def test_snowball_route_observer_is_output_identical():
     assert routes.shape == (cfg.num_layers, tokens.shape[0], tokens.shape[1], cfg.num_experts_per_token)
     assert ((routes >= 0) & (routes < cfg.num_experts)).all()
     np.testing.assert_array_equal(routes[0], expected)
+
+
+def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
+    cfg = _tiny_config(router_dot_fp32=True, num_experts=4, num_experts_per_token=1)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballMoEMLP.init(cfg, key=jax.random.key(23))
+        # BF16 rounds 1 + 1/256 to 1 before bias is added. Native FP32
+        # router bias then makes expert 1 win; the FP32 dot must retain expert 0.
+        router = jnp.zeros((cfg.hidden_dim, cfg.num_experts), jnp.float32)
+        router = router.at[0, :2].set(1).at[1, 0].set(1 / 256)
+        model = replace(model, router=router, router_bias=jnp.array([0, 0.001, -10, -10], jnp.float32))
+        compute = cast_model_for_compute(model, jmp.get_policy("p=f32,c=bf16"), {"router_bias": "float32"})
+        inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, :2].set(1)
+        routes = eqx.filter_jit(lambda value: value.with_routes(inputs)[1])
+        high = routes(compute)
+        low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
+    np.testing.assert_array_equal(high, [[[0]]])
+    np.testing.assert_array_equal(low, [[[1]]])
 
 
 def test_hf_reload_keeps_requested_runtime_settings():
@@ -693,6 +713,9 @@ def test_snowball_packed_conversations_are_isolated(separate_key_axis):
         forward = eqx.filter_jit(lambda m, tokens: m.activations(tokens, mask).array)
         before = np.array(forward(model, ids))
         after = np.array(forward(model, changed))
+        observe = eqx.filter_jit(lambda m, tokens: m.activations_with_routes(tokens, mask)[0].array)
+        np.testing.assert_array_equal(observe(model, ids), before)
+        np.testing.assert_array_equal(observe(model, changed), after)
     assert not np.allclose(before[:, :4], after[:, :4])
     np.testing.assert_allclose(before[:, 4:], after[:, 4:], atol=1e-5, rtol=1e-5)
 
