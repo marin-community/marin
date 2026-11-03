@@ -1839,13 +1839,7 @@ class RayPPOTrainer:
             num_policy_gpus = cfg.trainer.placement.policy_num_gpus_per_node * cfg.trainer.placement.policy_num_nodes
             num_critic_gpus = cfg.trainer.placement.critic_num_gpus_per_node * cfg.trainer.placement.critic_num_nodes
             num_ref_gpus = cfg.trainer.placement.ref_num_gpus_per_node * cfg.trainer.placement.ref_num_nodes
-            num_rollout_gpus = (
-                cfg.generator.num_inference_engines
-                * cfg.generator.inference_engine_tensor_parallel_size
-                * cfg.generator.inference_engine_pipeline_parallel_size
-                * cfg.generator.inference_engine_data_parallel_size
-            )
-            assert num_policy_gpus == num_rollout_gpus, (
+            assert num_policy_gpus == num_rollout_gpus(cfg), (
                 "num_policy_gpus and num_rollout_gpus must be the same when colocating all models"
             )
             pg = self.colocate_pg
@@ -2693,14 +2687,14 @@ class RayPPOTrainer:
         num_samples = len(token_level_rewards)
 
         return_sums = token_level_rewards.sum(dim=-1)[: num_samples - pad_size]
-        reward_groups = np.asarray(data.metadata["uids"][: num_samples - pad_size])
-        group_rewards = return_sums
+        row_uids = np.asarray(data.metadata["uids"][: num_samples - pad_size])
+        row_rewards = return_sums
         if self.cfg.trainer.step_wise_training:
             final_steps = data["is_last_step"][: num_samples - pad_size].bool()
-            reward_groups = reward_groups[final_steps.cpu().numpy()]
-            group_rewards = group_rewards[final_steps]
-        self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(reward_groups, group_rewards)
-        avg_rewards = group_rewards.mean().item()
+            row_uids = row_uids[final_steps.cpu().numpy()]
+            row_rewards = row_rewards[final_steps]
+        self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(row_uids, row_rewards)
+        avg_rewards = row_rewards.mean().item()
 
         avg_response_length = data.metadata["avg_response_length"]
         data = data.to("cpu")

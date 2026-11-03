@@ -444,16 +444,12 @@ class BasePPOExp:
         Returns:
             PlacementGroup: The placement group for colocated training.
         """
-        from skyrl_train.utils.utils import get_ray_pg_ready_with_timeout  # noqa: PLC0415
+        from skyrl_train.utils.utils import get_ray_pg_ready_with_timeout, num_rollout_gpus  # noqa: PLC0415
 
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
         if self.cfg.trainer.placement.colocate_all and inference_engines_required(self.cfg):
             pg = placement_group(
-                [{"GPU": 1, "CPU": 1}]
-                * self.cfg.generator.num_inference_engines
-                * self.cfg.generator.inference_engine_tensor_parallel_size
-                * self.cfg.generator.inference_engine_pipeline_parallel_size
-                * self.cfg.generator.inference_engine_data_parallel_size,
+                [{"GPU": 1, "CPU": 1}] * num_rollout_gpus(self.cfg),
                 strategy="PACK",
             )
             get_ray_pg_ready_with_timeout(pg, timeout=timeout)
