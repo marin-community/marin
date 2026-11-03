@@ -35,6 +35,7 @@ from textwrap import indent
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
