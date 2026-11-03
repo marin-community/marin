@@ -71,7 +71,7 @@ def test_changed_source_releases_observed_version_and_records_provenance(marina_
         "6",
         "--json",
     ]
-    assert commands[1][0] == "node"
+    assert commands[1] == ["node", f"{snowball_release.APP_DIR}/verify_layout.js"]
 
 
 def test_unrecorded_source_needs_explicit_bootstrap(marina_process, tmp_path):
