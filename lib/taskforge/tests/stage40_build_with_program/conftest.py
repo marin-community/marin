@@ -19,7 +19,6 @@ from shellbox.machine import Backend
 
 from taskforge.llm.agent import AgentTool, ReasoningReplay
 from taskforge.llm.policy import LLMPolicy
-from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import DockerBuild
 from taskforge.stage10_proposal.model import Environment, SolverMachine, TaskProposal, parse
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
@@ -89,7 +88,6 @@ class RecordingImageBuilder:
 @pytest.fixture
 def services(ledger) -> RLEnvBuildServices:
     return RLEnvBuildServices(
-        host=MachineHost.LAPTOP,
         factories=FACTORIES,
         images=None,
         web_tools=(),

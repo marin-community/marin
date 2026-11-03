@@ -34,7 +34,6 @@ from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, Str
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.policy import load_policy
-from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import ControlKind
 from taskforge.spec.draft import assemble, requirements
 from taskforge.stage10_proposal.model import (
@@ -169,7 +168,6 @@ REPAIRING = replace(BUDGET, max_triage_repairs=1)
 SAMPLING = LLMPolicy()
 BAND = BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND}))
 SERVICES = RLEnvBuildServices(
-    host=MachineHost.LAPTOP,
     factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
     images=None,
     web_tools=(),
