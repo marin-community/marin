@@ -84,6 +84,7 @@ from taskforge.stage40_build_with_program.failure_text import BuildCrash, failur
 from taskforge.stage40_build_with_program.infrastructure import (
     InfrastructureCause,
     authored_failure,
+    failure_chain_text,
     infrastructure_failure,
 )
 from taskforge.stage40_build_with_program.program_sdk import load_program
@@ -136,11 +137,14 @@ class BuildServiceConfig:
         ledger_root: The ``JsonlLedger`` root, or ``None`` to record nothing.
         reasoning_replay: Whether every agent loop replays its assistant turns' reasoning.
         agent_limits: The bounds of every agent loop.
-        image_cluster: The Iris cluster the image builder's build and push jobs run on, submitted
-            through ``controller_url``, or ``None`` for a build without an image builder. The
-            registry is the credential's; ``sandbox_effects.image_repository`` names the repository.
+        image_cluster: The federation peer the image builder's build and push jobs are pinned
+            to when submitted through ``controller_url``, or ``None`` to let that controller place
+            them (a child inside a cluster submits to its own controller, which refuses a pin
+            naming itself). The registry is the credential's; ``sandbox_effects.image_repository``
+            names the repository.
         registry_credential_env: The environment variable holding the registry credential's JSON
-            (``registry``, ``user``, ``password``), required with ``image_cluster``. The host's
+            (``registry``, ``user``, ``password``), or ``None`` for a build without an image
+            builder. The host's
             launcher reads it from Secret Manager with ``image_builder.registry_credential_json``
             at submit time and sets it, conventionally as ``image_builder.REGISTRY_CREDENTIAL_ENV``;
             the host itself never reads Secret Manager.
@@ -302,16 +306,20 @@ def _secret(name: str) -> str:
 
 
 def image_builder(config: BuildServiceConfig) -> IrisImageBuilder | None:
-    """The child's image builder, or ``None`` when ``config`` names no image cluster.
+    """The child's image builder, or ``None`` when ``config`` names no registry credential.
 
     Raises:
-        ValueError: ``config`` names an image cluster but no controller URL or no credential
-            variable, or the variable is unset or does not hold a registry credential.
+        ValueError: ``config`` names a credential variable but no controller URL, or the variable
+            is unset or does not hold a registry credential.
     """
-    if config.image_cluster is None:
-        return None
     if config.registry_credential_env is None:
-        raise ValueError("an image cluster needs registry_credential_env, the variable holding the registry credential")
+        if config.image_cluster is not None:
+            raise ValueError(
+                "an image cluster pin needs registry_credential_env, the variable holding the registry credential"
+            )
+        return None
+    if config.controller_url is None:
+        raise ValueError("an image builder needs a controller URL, the Iris controller its jobs are submitted through")
     credential = RegistryCredential.from_json(_secret(config.registry_credential_env))
     return IrisImageBuilder(
         controller_url=config.controller_url, target_cluster=config.image_cluster, credential=credential
@@ -332,14 +340,17 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
         GlmClient(endpoint, model.provider) as client,
         httpx.AsyncClient() as http,
     ):
-        yield client, RLEnvBuildServices(
-            host=config.host,
-            factories=machine_factories(config.backends, config.controller_url),
-            images=image_builder(config),
-            web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),
-            ledger=DiscardingLedger() if config.ledger_root is None else JsonlLedger(config.ledger_root),
-            reasoning_replay=config.reasoning_replay,
-            agent_limits=config.agent_limits,
+        yield (
+            client,
+            RLEnvBuildServices(
+                host=config.host,
+                factories=machine_factories(config.backends, config.controller_url),
+                images=image_builder(config),
+                web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),
+                ledger=DiscardingLedger() if config.ledger_root is None else JsonlLedger(config.ledger_root),
+                reasoning_replay=config.reasoning_replay,
+                agent_limits=config.agent_limits,
+            ),
         )
 
 
@@ -383,7 +394,7 @@ async def build_result(request: BuildRequest) -> BuildResult:
             if infrastructure is not None:
                 return HostFailed(infrastructure.cause, infrastructure.message)
             if not authored_failure(error, {program_file(request.program_source)}):
-                return HostFailed("unclassified_build_failure", str(error))
+                return HostFailed("unclassified_build_failure", failure_chain_text(error))
             head = failure_head(error, {program_file(request.program_source)}, steps)
             return _crashed(Raised.OTHER, head, error)
     return Built()
