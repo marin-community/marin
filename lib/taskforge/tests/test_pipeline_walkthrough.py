@@ -135,7 +135,7 @@ PROPOSAL = parse(
         proposal_id="toy/0",
         source={"kind": "capability", "ref": "toy", "hash": "0"},
         environment="shellsim",
-        verification="simple",
+        verification="answer_in_box",
         research_reason="the numbers are in the task's own file",
         build=[
             {"name": "numbers", "description": "the file holding the two numbers"},

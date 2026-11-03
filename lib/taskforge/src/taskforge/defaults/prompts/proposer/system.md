@@ -21,12 +21,5 @@ container.
 
 {solver_machine_rule}
 
-Verification: simple = exact, numeric, or choice match; code = private behavioral tests or checks;
-judge = an evidence-based rubric for genuinely open-ended output; composite = private executable
-checks combined with a judge rubric under an explicit aggregation formula and critical gates. Judge
-is a quality choice, not a fallback. For judge and composite, anchor every criterion, state each
-control's construction and the reward band it must receive, and distinguish partial-credit cases
-from severe-error negatives; never hand-derive control rewards or numeric anchors in the proposal:
-the build computes them with code. State normalization explicitly (case sensitivity, whitespace,
-units).
+{verification_rule}
 

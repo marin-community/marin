@@ -8,7 +8,9 @@ import, in any form and at any depth. A stage package ``stageNN_<name>`` may imp
 lower number and the shared modules in ``SHARED``. A shared module may import other shared modules
 but no stage. A package in ``TOP``
 runs the whole pipeline: ``stage_coordinator`` runs the stages, and ``agentic`` replaces them with
-one agent. It may import every stage and shared module, and no package may import it.
+one agent. It may import every stage and shared module, and no package may import it. A default
+implementation in ``defaults`` of a stage's interface, listed in ``STAGE_DEFAULTS``, belongs to that stage, both
+as an importer and as an import.
 
 No module imports a provider or cluster client (``ADAPTER_ROOTS``): those live in
 ``taskforge_adapters``, which implements the Protocols the library declares.
@@ -28,11 +30,14 @@ SHARED = ("capability", "child_process", "content_hash", "defaults", "ledger", "
 TOP = ("agentic", "stage_coordinator")
 ADAPTER_ROOTS = frozenset({"taskforge_adapters", "openai", "iris", "finelog"})
 STAGE = re.compile(r"stage(\d+)_[a-z0-9_]+")
+STAGE_DEFAULTS = {Path("defaults/proposer.py"): "stage10_proposal"}
+DEFAULT_MODULES = {f"taskforge.{'.'.join(path.with_suffix('').parts)}": stage for path, stage in STAGE_DEFAULTS.items()}
 ROOT = Path(taskforge.__file__).parent
 
 
 def package_of(module: Path) -> str:
-    return module.relative_to(ROOT).parts[0].removesuffix(".py")
+    relative = module.relative_to(ROOT)
+    return STAGE_DEFAULTS.get(relative) or relative.parts[0].removesuffix(".py")
 
 
 def imported_roots(module: Path) -> Iterator[tuple[int, str]]:
@@ -51,16 +56,15 @@ def imported_packages(module: Path) -> Iterator[tuple[int, str]]:
             raise AssertionError(f"{module}:{node.lineno} uses a relative import; import taskforge.<package> by name")
         if isinstance(node, ast.Import):
             names = [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom) and node.module == "taskforge":
-            names = [f"taskforge.{alias.name}" for alias in node.names]
         elif isinstance(node, ast.ImportFrom) and node.module:
-            names = [node.module]
+            names = [f"{node.module}.{alias.name}" for alias in node.names]
         else:
             continue
         for name in names:
             parts = name.split(".")
             if parts[0] == "taskforge" and len(parts) > 1:
-                yield node.lineno, parts[1]
+                stages = (stage for module, stage in DEFAULT_MODULES.items() if f"{name}.".startswith(f"{module}."))
+                yield node.lineno, next(stages, parts[1])
 
 
 def stage_number(package: str) -> int | None:
@@ -105,6 +109,8 @@ def test_every_import_form_counts_and_an_upward_import_is_refused(tmp_path):
         "from taskforge import stage40_build_with_program, llm\n"
         "import taskforge.content_hash\n"
         "from taskforge.stage20_triage.preflight import preflight\n"
+        "from taskforge.defaults import proposer, DEFAULT_POLICY\n"
+        "import taskforge.defaults.proposer\n"
     )
 
     assert sorted(imported_packages(module)) == [
@@ -112,10 +118,14 @@ def test_every_import_form_counts_and_an_upward_import_is_refused(tmp_path):
         (1, "stage40_build_with_program"),
         (2, "content_hash"),
         (3, "stage20_triage"),
+        (4, "defaults"),
+        (4, "stage10_proposal"),
+        (5, "stage10_proposal"),
     ]
     assert not import_allowed("stage30_author", "stage40_build_with_program")
     assert import_allowed("stage40_build_with_program", "stage30_author")
     assert not import_allowed("llm", "stage30_author")
+    assert not import_allowed("policy", "stage10_proposal")
     assert import_allowed("stage_coordinator", "stage60_review")
     assert not import_allowed("stage60_review", "stage_coordinator")
 

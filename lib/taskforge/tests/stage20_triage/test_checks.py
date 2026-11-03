@@ -10,7 +10,13 @@ from dataclasses import replace
 
 import pytest
 
-from taskforge.stage10_proposal.model import ResearchItem, ResearchKind, parse
+from taskforge.stage10_proposal.model import (
+    CompositePart,
+    ResearchItem,
+    ResearchKind,
+    Verification,
+    parse,
+)
 from taskforge.stage20_triage.checks import (
     CHECKS,
     CheckStatus,
@@ -34,8 +40,10 @@ def null_version(p, reason="the capability has no gradable artifact in this envi
         ("code", "prompt.md", "A judge scores the essay against anchored criteria. ", CheckStatus.FAIL),
         ("composite", "prompt.md", "The checker parses the output and recomputes every total. ", CheckStatus.FAIL),
         ("composite", "prompt.md", "The checker parses the output; a judge rubric scores the memo. ", CheckStatus.PASS),
-        ("judge", "prompt.md", "The checker parses the output and recomputes every total. ", CheckStatus.FAIL),
-        ("simple", "prompt.md", "The answer key is compared after whitespace normalization. ", CheckStatus.PASS),
+        ("llm_as_judge", "prompt.md", "The checker parses the output and recomputes every total. ", CheckStatus.FAIL),
+        ("decision_model", "prompt.md", "The checker parses the output and recomputes every total. ", CheckStatus.FAIL),
+        ("decision_model", "prompt.md", "Each rubric item compares the answer with the reference. ", CheckStatus.PASS),
+        ("answer_in_box", "prompt.md", "The answer key is compared after whitespace normalization. ", CheckStatus.PASS),
         # A code file among the resources counts as the executable check.
         ("code", "grader/score.py", "Every item is worth one point toward the total. ", CheckStatus.PASS),
     ],
@@ -46,6 +54,18 @@ def test_grader_section_must_match_verification(
     p = parse(make_document(verification=verification, resources=f'["{resource}"]'))
     p = section_replaced(p, "Grader design and controls", grader_sentence * 10)
     assert grader_matches_verification(p)[0] is expected
+
+
+def test_a_composite_needs_the_evidence_of_each_of_its_parts(make_document, section_replaced):
+    p = parse(make_document(verification="composite", resources='["prompt.md"]'))
+    rubric_only = "Each rubric item compares the answer with the reference. " * 10
+    p = section_replaced(p, "Grader design and controls", rubric_only)
+    status_, reason = grader_matches_verification(p)
+    assert status_ is CheckStatus.FAIL and "an executable check" in reason
+
+    decisions = (CompositePart(Verification.DECISION_MODEL, 0.5), CompositePart(Verification.DECISION_MODEL, 0.5))
+    two_rubrics = replace(p, header=replace(p.header, composite=decisions))
+    assert grader_matches_verification(two_rubrics)[0] is CheckStatus.PASS
 
 
 def test_required_sections_flags_thin_and_placeholder_sections(proposal, section_replaced):
