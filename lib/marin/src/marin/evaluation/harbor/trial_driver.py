@@ -5,7 +5,6 @@
 
 import asyncio
 import hashlib
-import importlib
 import json
 import os
 import sys
@@ -150,17 +149,6 @@ def _single_entry(config: JobConfig, field_name: str) -> object:
     if len(values) != 1:
         raise ValueError(f"Harbor config must declare exactly one {field_name.removesuffix('s')}")
     return values[0]
-
-
-def _resolve_import_path(import_path: str, label: str) -> object:
-    if ":" not in import_path:
-        raise ValueError(f"Harbor {label} import path must use module.path:ClassName")
-    module_path, class_name = import_path.split(":", 1)
-    try:
-        module = importlib.import_module(module_path)
-        return getattr(module, class_name)
-    except (ImportError, AttributeError) as exc:
-        raise ValueError(f"Harbor {label} import path could not be resolved") from exc
 
 
 def _validate_agent(agent: AgentConfig) -> str:
@@ -411,16 +399,8 @@ def _agent_config(
 
 
 def _installed_agent(agent: AgentConfig) -> bool:
-    if agent.mode != "container":
-        return False
-    if agent.name is not None and is_acp_registry_shorthand(agent.name):
-        agent_class = AgentFactory.get_agent_class(AgentName.ACP)
-    elif agent.name is not None and agent.name in AgentName.values():
-        agent_class = AgentFactory.get_agent_class(AgentName(agent.name))
-    else:
-        assert agent.import_path is not None
-        agent_class = _resolve_import_path(agent.import_path, "agent")
-    return isinstance(agent_class, type) and issubclass(agent_class, BaseInstalledAgent)
+    agent_class = AgentFactory.get_agent_class_from_config(agent)
+    return issubclass(agent_class, BaseInstalledAgent)
 
 
 def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:

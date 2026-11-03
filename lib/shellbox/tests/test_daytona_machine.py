@@ -331,22 +331,14 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
         stopping, release_stop = asyncio.Event(), asyncio.Event()
 
         class HeldStop(LocalProcess):
-            def __init__(self):
-                super().__init__()
-                self.cancellations = []
-
             async def exec(self, command, **kwargs):
-                try:
-                    if " cancel /tmp/.shellbox-process-" in command and interruption in {
-                        "cancel_twice",
-                        "cancel_during_timeout_stop",
-                    }:
-                        stopping.set()
-                        await release_stop.wait()
-                    return await super().exec(command, **kwargs)
-                except asyncio.CancelledError as cancellation:
-                    self.cancellations.append(cancellation)
-                    raise
+                if " cancel /tmp/.shellbox-process-" in command and interruption in {
+                    "cancel_twice",
+                    "cancel_during_timeout_stop",
+                }:
+                    stopping.set()
+                    await release_stop.wait()
+                return await super().exec(command, **kwargs)
 
         client = LocalDaytona()
         client.sandbox.process = HeldStop()
@@ -414,6 +406,7 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
 
 @pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files"])
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_failure, interruption):
     entered = asyncio.Event()
 
@@ -505,6 +498,7 @@ def test_daytona_user_probe_is_bounded_and_cancellation_preserves_the_machine(tm
 
 
 @pytest.mark.parametrize("command_timeout", [None, 30])
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, command_timeout):
     provider_error = TimeoutError("Provider request timed out")
 
@@ -806,6 +800,7 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering, mo
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_rejects_nonroot_execution_without_session_preserving_su(tmp_path):
     class MissingSessionOption(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -897,6 +892,7 @@ def test_daytona_factory_owns_clients_across_worker_event_loops(tmp_path: Path) 
     assert sum(client.deleted for client in clients) == 2
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Local fake executes the Linux guest supervisor")
 def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path: Path, monkeypatch) -> None:
     snapshots = LocalSnapshots()
     clients = []
