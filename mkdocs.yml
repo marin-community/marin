@@ -89,6 +89,7 @@ nav:
   - Reproducibility:
       - Pretraining source pool: reproducibility/pretraining-source-pool.md
       - Hero metadata release proposal: reproducibility/hero-metadata-release-proposal.md
+      - Hero cluster 22 handoff: reproducibility/hero-cluster22-handoff.md
       - Delphi seed repeats: reproducibility/delphi-seed-repeats.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md

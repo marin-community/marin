@@ -4,13 +4,32 @@
 """Metadata selection agrees with the production token-store join."""
 
 import json
+from dataclasses import replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
 from experiments.datakit.store.datakit_store import _FilterStats, _iter_surviving_docs
-from experiments.datakit.store.metadata import ShardManifest, export_metadata_shard
+from experiments.datakit.store.metadata import (
+    METADATA_SCHEMA,
+    ShardManifest,
+    duplicate_source_from_catalogs,
+    export_cluster_metadata_shard,
+    export_metadata_shard,
+)
+
+
+@pytest.fixture
+def duplicate_source(tmp_path):
+    source_key = tmp_path.name
+    return duplicate_source_from_catalogs(
+        artifact_prefix=str(tmp_path.parent),
+        source_key=source_key,
+        shard_basenames=("normalized.parquet",),
+        exact_sources={source_key: {"attr_dir": f"{source_key}/exact_dedup"}},
+        fuzzy_sources={source_key: {"attr_dir": f"{source_key}/dedup"}},
+    )
 
 
 @pytest.mark.parametrize(
@@ -22,7 +41,9 @@ from experiments.datakit.store.metadata import ShardManifest, export_metadata_sh
         (True, [{"page": i} for i in range(6)]),
     ],
 )
-def test_metadata_export_matches_token_store_and_preserves_occurrences(tmp_path, fuzzy_exempt, provider_ids):
+def test_metadata_export_matches_token_store_and_preserves_occurrences(
+    tmp_path, fuzzy_exempt, provider_ids, duplicate_source
+):
     ids = ["repeat", "repeat", "contaminated", "exact", "fuzzy", "keep"]
     normalized = {"id": ids, "text": ["private text"] * len(ids)}
     if provider_ids is not None:
@@ -43,7 +64,12 @@ def test_metadata_export_matches_token_store_and_preserves_occurrences(tmp_path,
     }
     paths = {}
     for name, data in tables.items():
-        path = str(tmp_path / f"{name}.parquet")
+        if name in {"exact_dedup", "dedup"}:
+            directory = tmp_path / name
+            directory.mkdir()
+            path = str(directory / "normalized.parquet")
+        else:
+            path = str(tmp_path / f"{name}.parquet")
         pq.write_table(pa.table(data), path)
         paths[name] = path
     if fuzzy_exempt:
@@ -81,16 +107,55 @@ def test_metadata_export_matches_token_store_and_preserves_occurrences(tmp_path,
     prefix = export_metadata_shard(manifest, str(tmp_path / "prefix"), cluster_view=2, max_rows=1, batch_size=1)
     assert prefix["examined_rows"] == 1 and prefix["truncated"]
     assert sum(output["rows"] for output in prefix["outputs"]) == 1
+    cluster = export_cluster_metadata_shard(
+        manifest,
+        str(tmp_path / "cluster"),
+        cluster_view=2,
+        target_cluster=0,
+        fuzzy_exempt=fuzzy_exempt,
+        duplicate_source=duplicate_source,
+        batch_size=1,
+    )
+    cluster_rows = pq.ParquetFile(cluster["output"]).read().to_pylist()
+    assert cluster_rows == [{key: row[key] for key in METADATA_SCHEMA.names} for row in rows if row["cluster_id"] == 0]
+    assert cluster["selected_occurrences"] == len(cluster_rows)
+    assert cluster["quality_counts"] == {0: 2}
+    assert (tmp_path / "cluster" / "_complete.json").is_file()
+    if not fuzzy_exempt:
+        # Missing decisions cannot turn a non-exempt source into an exempt one.
+        with pytest.raises(ValueError, match="Verified fuzzy duplicate partition"):
+            export_cluster_metadata_shard(
+                replace(manifest, dedup=""),
+                str(tmp_path / "missing-decisions"),
+                cluster_view=2,
+                target_cluster=0,
+                fuzzy_exempt=False,
+                duplicate_source=duplicate_source,
+            )
+        assert not (tmp_path / "missing-decisions").exists()
     # Equal lengths with a different dense row order must never silently select wrong documents.
     tables["quality"]["id"] = ["wrong", *ids[1:]]
     pq.write_table(pa.table(tables["quality"]), paths["quality"])
     with pytest.raises(RuntimeError, match="dense id/order mismatch"):
         export_metadata_shard(manifest, str(tmp_path / "bad"), cluster_view=2, max_rows=10)
     assert not (tmp_path / "bad").exists()
+    with pytest.raises(RuntimeError, match="dense id/order mismatch"):
+        export_cluster_metadata_shard(
+            manifest,
+            str(tmp_path / "bad-cluster"),
+            cluster_view=2,
+            target_cluster=1,
+            fuzzy_exempt=fuzzy_exempt,
+            duplicate_source=duplicate_source,
+            batch_size=1,
+        )
+    assert not (tmp_path / "bad-cluster").exists()
 
 
 @pytest.mark.parametrize("with_content_types", [True, False])
-def test_metadata_export_uses_frozen_store_calibration_and_default_fallback(tmp_path, with_content_types):
+def test_metadata_export_uses_frozen_store_calibration_and_default_fallback(
+    tmp_path, with_content_types, duplicate_source
+):
     """Boundary scores use the higher bucket; unknown types use the default fit."""
     ids = ["code-boundary", "prose", "unknown", "below", "upper", "middle"]
     scores = [0.4, 0.4, 0.4, -0.1, 1.1, 0.3]
@@ -113,7 +178,7 @@ def test_metadata_export_uses_frozen_store_calibration_and_default_fallback(tmp_
     manifest = ShardManifest(
         **paths,
         marin_source="source",
-        exact_dedup=str(tmp_path / "absent-exact.parquet"),
+        exact_dedup=str(tmp_path / "exact_dedup" / "normalized.parquet"),
         dedup="",
         bucket_edges={
             "default": [0.2, 0.4, 0.6, 0.8],
@@ -128,6 +193,18 @@ def test_metadata_export_uses_frozen_store_calibration_and_default_fallback(tmp_
     assert [row["content_type"] for row in rows] == (types if with_content_types else [None] * len(ids))
     assert [row["quality_score"] for row in rows] == scores
     assert report["content_type_without_calibration"] == (1 if with_content_types else 0)
+    cluster = export_cluster_metadata_shard(
+        manifest,
+        str(tmp_path / "cluster"),
+        cluster_view=2,
+        target_cluster=0,
+        fuzzy_exempt=True,
+        duplicate_source=duplicate_source,
+        batch_size=2,
+    )
+    assert pq.ParquetFile(cluster["output"]).read().to_pylist() == [
+        {key: row[key] for key in METADATA_SCHEMA.names} for row in rows
+    ]
     if with_content_types:
         pq.write_table(pa.table({"id": list(reversed(ids)), "content_type": types}), paths["content_type"])
         with pytest.raises(RuntimeError, match="dense id/order mismatch"):
@@ -181,6 +258,38 @@ def embedding_inputs(tmp_path):
         harrier_embedding_provenance=provenance,
     )
     return manifest, vectors
+
+
+def test_cluster_scan_accepts_omitted_empty_partitions_only_under_pinned_catalog(
+    tmp_path, embedding_inputs, duplicate_source
+):
+    manifest, _ = embedding_inputs
+    manifest = replace(
+        manifest,
+        exact_dedup=str(tmp_path / "exact_dedup" / "normalized.parquet"),
+        dedup=str(tmp_path / "dedup" / "normalized.parquet"),
+    )
+    result = export_cluster_metadata_shard(
+        manifest,
+        str(tmp_path / "cluster"),
+        cluster_view=2,
+        target_cluster=0,
+        fuzzy_exempt=False,
+        duplicate_source=duplicate_source,
+        batch_size=1,
+    )
+    rows = pq.ParquetFile(result["output"]).read().to_pylist()
+    assert [(row["id"], row["normalized_row"]) for row in rows] == [("a", 0), ("c", 3)]
+    with pytest.raises(ValueError, match="pinned source catalog"):
+        export_cluster_metadata_shard(
+            replace(manifest, dedup=str(tmp_path / "deleted-entire-artifact" / "normalized.parquet")),
+            str(tmp_path / "wrong"),
+            cluster_view=2,
+            target_cluster=0,
+            fuzzy_exempt=False,
+            duplicate_source=duplicate_source,
+        )
+    assert not (tmp_path / "wrong").exists()
 
 
 def test_sparse_embedding_export_joins_by_id_and_preserves_quantized_coordinates(tmp_path, embedding_inputs):

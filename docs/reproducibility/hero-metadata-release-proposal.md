@@ -253,6 +253,18 @@ counts or final token order.
 
 ## Work before release
 
+Cluster 22 completed this first milestone on October 31, 2026. The
+[reconstruction handoff](hero-cluster22-handoff.md) records the private outputs,
+verification scope and remaining provenance limits.
+
+The first execution milestone required one complete selected topic cluster
+reconstructed from original provider inputs. Its acceptance gate covered every
+contributing source shard and quality bucket, with normalized hashes and
+occurrence counts compared against the frozen selection. A prefix sample or replay from already-transformed staged inputs
+does not establish this milestone. Record unresolved text separately from
+ambiguous historical provenance: identical provider rows may reproduce the
+selected text without identifying its original occurrence.
+
 The next step is to backfill upstream row locators and add a reconstruction
 tool with a worked example for each source family, including the assembly
 rules above. The release gate requires complete locators on every exported
