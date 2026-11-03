@@ -81,8 +81,21 @@ def test_lmh_non_passage_doc_indexes_the_prompt_and_the_raw_fields_as_separate_r
     assert views == [
         ("", "Which planet is largest\nA. Mars\nB. Jupiter\nAnswer:\n\n1"),
         # Choices follow the question on single lines, as dataset copies print them.
-        ("-fields", "1\nWhich planet is largest\nMars\nJupiter"),
+        ("-fields", "Which planet is largest\nMars\nJupiter"),
     ]
+
+
+def test_lmh_raw_field_view_keeps_dataset_order_and_drops_labels():
+    doc = {
+        "task_id": "HumanEval/0",
+        "prompt": "def add(a, b):\n    '''Add two numbers.'''",
+        "canonical_solution": "    return a + b",
+        "entry_point": "add",
+    }
+
+    views = dict(_lmh_doc_views(doc, lambda d: d["prompt"], lambda d: d["canonical_solution"]))
+
+    assert views["-fields"] == "def add(a, b):\n    '''Add two numbers.'''\n    return a + b"
 
 
 @pytest.mark.parametrize("field", sorted(_PASSAGE_FIELDS))
