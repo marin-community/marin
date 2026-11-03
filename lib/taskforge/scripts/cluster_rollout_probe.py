@@ -77,7 +77,7 @@ from taskforge.llm.glm_client import GLM_MODEL, GlmClient, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.sandbox.factories import MachineHost, machine_factories
+from taskforge.sandbox.factories import machine_factories
 from taskforge.spec.draft import (
     answer_grader,
     assemble,
@@ -198,7 +198,7 @@ def math_task(factories: dict[str, MachineFactory]) -> TaskRolloutSpec:
         source("math"),
         environment=None,
     )
-    return lower(task, MachineHost.IRIS, factories, LIMITS)
+    return lower(task, factories, LIMITS)
 
 
 def docker_task(factories: dict[str, MachineFactory]) -> TaskRolloutSpec:
@@ -226,7 +226,7 @@ def docker_task(factories: dict[str, MachineFactory]) -> TaskRolloutSpec:
         environment=requirements(image=IMAGE),
         files=(file("workspace/numbers.txt", NUMBERS),),
     )
-    return lower(task, MachineHost.IRIS, factories, LIMITS)
+    return lower(task, factories, LIMITS)
 
 
 def assistant_messages(outcome: Outcome) -> list[dict[str, Any]]:
