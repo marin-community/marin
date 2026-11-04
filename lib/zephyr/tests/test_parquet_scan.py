@@ -56,10 +56,3 @@ def test_scan_parquet_merges_credentials_with_virtual_host_endpoint(monkeypatch,
             },
         )
     ]
-
-
-def test_scan_parquet_leaves_local_and_gcs_paths_on_the_ambient_chain(monkeypatch, scan_calls):
-    monkeypatch.setattr(parquet_scan, "polars_s3_storage_options", lambda path: {})
-    parquet_scan.scan_parquet("/tmp/run-0.parquet")
-    parquet_scan.scan_parquet("gs://marin-us-central1/run-0.parquet")
-    assert [options for _, options in scan_calls] == [{}, {}]

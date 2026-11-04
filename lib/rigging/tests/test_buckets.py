@@ -142,9 +142,8 @@ def test_polars_options_carry_each_declared_stores_keys(config):
 
 
 def test_polars_options_resolve_file_delivered_pod_credentials(config, tmp_path, monkeypatch):
-    """The Iris task-pod shape (#10474): submitted keys arrive as named files under
-    ``RIGGING_SECRETS_DIR`` with no storage environment variables, and Polars still
-    authenticates — the regression that failed the campaign workers.
+    """Iris task pods deliver submitted storage keys as named files under
+    ``RIGGING_SECRETS_DIR`` with no storage environment variables.
     """
     secrets_dir = tmp_path / "application-secrets"
     secrets_dir.mkdir()

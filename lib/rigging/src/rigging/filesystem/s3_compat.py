@@ -231,16 +231,13 @@ def s3_credentials(store: StoreType) -> tuple[str, str] | None:
 
 
 def polars_s3_storage_options(url: str) -> dict[str, str]:
-    """Resolve *url*'s declared-store credentials as Polars object-store options.
+    """Return the declared store's credentials as Polars scan storage options.
 
-    Polars' Rust client is the one S3 reader that consults neither the fsspec
-    configuration nor the ``AWS_SHARED_CREDENTIALS_FILE`` profile, and Iris task pods
-    deliver submitted storage keys as files only (#10474); left to its environment
-    chain the client falls through to instance metadata, which CoreWeave answers 404.
-    Route the bucket like :func:`rigging.filesystem.buckets.filesystem_for` does and
-    return its :func:`s3_credentials` pair under Polars' option names. Undeclared
-    buckets, non-S3 URLs, and stores without available credentials yield ``{}``,
-    leaving the ambient chain in charge.
+    Polars' Rust object-store client authenticates only from its environment
+    and the options passed to the scan, while Iris task pods deliver submitted
+    storage keys as files, so scans must supply the pair explicitly here.
+    Undeclared buckets, non-S3 URLs, and stores without available credentials
+    yield ``{}``, leaving the ambient chain in charge.
     """
     if not url.startswith("s3://"):
         return {}
