@@ -44,12 +44,12 @@ use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
 use crate::store::object_store::{
-    CacheMode, ObjectId, ObjectReference, ObjectStore, QueryCacheAdmission, ScanSource,
+    ObjectId, ObjectReference, ObjectStore, QueryCacheAdmission, ScanSource,
 };
 use crate::store::table::query_view::SegmentObjectMap;
 
-/// Concurrent exact existence probes for selected uncached source objects.
-const MAX_PARALLEL_SOURCE_PROBES: usize = 32;
+/// Concurrent index reads or exact probes for selected source objects.
+const MAX_PARALLEL_OBJECT_REQUESTS: usize = 32;
 
 /// A live namespace as one DataFusion table.
 ///
@@ -101,43 +101,41 @@ struct ObjectSources {
 }
 
 impl ObjectSources {
-    async fn prepare_indexes(
+    fn reader_factory(
         &self,
         paths: &[String],
-        admission: &QueryCacheAdmission,
-    ) -> DFResult<()> {
-        for path in paths {
-            let Some(objects) = self.segments.get(path) else {
-                continue;
-            };
-            self.store
-                .pin_cached_path(&objects.source, admission)
-                .await
-                .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
-            if let Some(bundle) = &objects.artifacts.bundle {
-                let reference = ObjectReference::try_from(bundle)
-                    .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
-                self.store
-                    .query_index_path(&reference, admission)
-                    .await
-                    .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+    ) -> DFResult<Arc<super::object_reader::ObjectReaders>> {
+        let mut references = BTreeMap::new();
+        for objects in paths.iter().filter_map(|path| self.segments.get(path)) {
+            let artifacts = objects
+                .artifacts
+                .projections
+                .values()
+                .map(ObjectReference::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))?;
+            for reference in std::iter::once(objects.source.clone()).chain(artifacts) {
+                let local = self
+                    .store
+                    .planned_local_path(&reference.id)
+                    .map_err(|error| {
+                        datafusion::error::DataFusionError::External(Box::new(error))
+                    })?;
+                let mut locations = vec![local.to_string_lossy().into_owned()];
+                locations.extend(self.store.remote_scan_url(&reference.id));
+                for location in locations {
+                    let url = ListingTableUrl::parse(location)?;
+                    references.insert(url.prefix().to_string(), reference.clone());
+                }
             }
         }
-        Ok(())
+        Ok(Arc::new(super::object_reader::ObjectReaders {
+            store: Arc::clone(&self.store),
+            references,
+        }))
     }
-    /// Fetch exactly the objects `paths` names, plus the artifacts those
-    /// segments advertise.
-    ///
-    /// Resolve the segments `paths` names into what this scan reads: the
-    /// cache file when one exists, otherwise the object's remote URL —
-    /// the query proceeds against the remote while admitted background fills
-    /// materialize the cache for later scans. Reuse and the shared query budget
-    /// gate those fills before the store's fetch semaphore. A source that exists
-    /// nowhere fails the scan: its rows are part of the answer.
-    ///
-    /// Artifacts never block a query. A cached bundle or projection is used; an
-    /// uncached one may be warmed in the background and this scan reads the source
-    /// Parquet — matching the fail-open behavior of a corrupt bundle.
+    /// Resolve selected sources and projections through the cache-aware store.
+    /// Index sections are read on demand through `ObjectStore::read_range`.
     async fn resolve(
         &self,
         paths: &[String],
@@ -152,7 +150,7 @@ impl ObjectSources {
             };
             match self
                 .store
-                .scan_source(&objects.source, CacheMode::Query(admission))
+                .scan_source(&objects.source, admission)
                 .await
                 .map_err(external)?
             {
@@ -164,18 +162,13 @@ impl ObjectSources {
                     remote_sources.push(objects.source.id.clone());
                 }
             }
-            for reference in objects
-                .artifacts
-                .bundle
-                .iter()
-                .chain(objects.artifacts.projections.values())
-            {
+            for reference in objects.artifacts.projections.values() {
                 let Ok(artifact) = crate::store::object_store::ObjectReference::try_from(reference)
                 else {
                     continue;
                 };
                 self.store
-                    .scan_source(&artifact, CacheMode::Query(admission))
+                    .scan_source(&artifact, admission)
                     .await
                     .map_err(external)?;
             }
@@ -208,7 +201,7 @@ impl ObjectSources {
                     Ok::<_, StatsError>((id, exists))
                 }
             })
-            .buffer_unordered(MAX_PARALLEL_SOURCE_PROBES)
+            .buffer_unordered(MAX_PARALLEL_OBJECT_REQUESTS)
             .try_collect::<Vec<_>>()
             .await?;
         let missing: Vec<String> = checked
@@ -491,6 +484,10 @@ impl NamespaceProvider {
         segments: SegmentObjectMap,
     ) -> Self {
         if !segments.is_empty() {
+            self.indices = Arc::new(
+                self.indices
+                    .with_object_sources(Arc::clone(&store), &segments),
+            );
             self.object_sources = Some(ObjectSources { store, segments });
         }
         self
@@ -646,42 +643,47 @@ impl TableProvider for NamespaceProvider {
                         ))
                     })?;
                 }
-                if self.segment_indexes_enabled
-                    && (!needles.is_empty()
-                        || !crate::query::exact_prune::values_by_column(filters).is_empty())
-                {
-                    if let Some(sources) = &self.object_sources {
-                        let admission = admission.as_ref().ok_or_else(|| {
-                            datafusion::error::DataFusionError::Internal(
-                                "query cache admission is missing from SessionConfig".into(),
-                            )
-                        })?;
-                        sources.prepare_indexes(&segment_paths, admission).await?;
-                    }
-                }
                 let mut trigram_pruning = None;
                 if self.segment_indexes_enabled && !needles.is_empty() {
                     let indices = Arc::clone(&self.indices);
                     let artifacts = Arc::clone(&self.segment_artifacts);
-                    let early_needles = needles.clone();
-                    let early_key_ranges = key_ranges.clone();
-                    let pruning_admission = admission.clone();
-                    let pruning = tokio::task::spawn_blocking(move || {
-                        let _pins = pruning_admission;
-                        crate::query::trigram_prune::plan_segments(
-                            &segment_paths,
-                            &early_needles,
-                            &early_key_ranges,
-                            &indices,
-                            &artifacts,
-                        )
-                    })
-                    .await
-                    .map_err(|error| {
-                        datafusion::error::DataFusionError::Execution(format!(
-                            "trigram segment prune task join: {error}"
-                        ))
-                    })?;
+                    // Cold bundle ranges run concurrently, but all share the
+                    // registry's short I/O deadline and parsed-section cache.
+                    let groups = if self.object_sources.is_some() {
+                        segment_paths.into_iter().map(|path| vec![path]).collect()
+                    } else {
+                        vec![segment_paths]
+                    };
+                    let parts = stream::iter(groups)
+                        .map(|paths| {
+                            let indices = Arc::clone(&indices);
+                            let artifacts = Arc::clone(&artifacts);
+                            let needles = needles.clone();
+                            let key_ranges = key_ranges.clone();
+                            let pins = admission.clone();
+                            async move {
+                                tokio::task::spawn_blocking(move || {
+                                    let _pins = pins;
+                                    crate::query::trigram_prune::plan_segments(
+                                        &paths,
+                                        &needles,
+                                        &key_ranges,
+                                        &indices,
+                                        &artifacts,
+                                    )
+                                })
+                                .await
+                                .map_err(|error| {
+                                    datafusion::error::DataFusionError::Execution(format!(
+                                        "trigram segment prune task join: {error}"
+                                    ))
+                                })
+                            }
+                        })
+                        .buffered(MAX_PARALLEL_OBJECT_REQUESTS)
+                        .try_collect::<Vec<_>>()
+                        .await?;
+                    let pruning = crate::query::trigram_prune::SegmentPruning::combine(parts);
                     segment_paths = pruning.paths.clone();
                     trigram_pruning = Some(pruning);
                 }
@@ -705,9 +707,12 @@ impl TableProvider for NamespaceProvider {
                     let mut plans: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
                     if !resolved.local.is_empty() {
                         plans.push(
-                            Self::listing_table(Arc::clone(&self.schema), &resolved.local)?
-                                .scan(state, projection, filters, limit)
-                                .await?,
+                            Self::listing_table_for_urls(
+                                Arc::clone(&self.schema),
+                                resolved.local.iter().cloned(),
+                            )?
+                            .scan(state, projection, filters, limit)
+                            .await?,
                         );
                     }
                     if !resolved.remote.is_empty() {
@@ -735,6 +740,13 @@ impl TableProvider for NamespaceProvider {
                     Self::listing_table(Arc::clone(&self.schema), &segment_paths)?
                         .scan(state, projection, filters, limit)
                         .await?
+                };
+                let plan = match &self.object_sources {
+                    Some(sources) => super::file_scan::with_object_readers(
+                        plan,
+                        sources.reader_factory(&segment_paths)?,
+                    ),
+                    None => plan,
                 };
                 if !self.segment_indexes_enabled {
                     return Ok(plan);
@@ -782,7 +794,9 @@ impl TableProvider for NamespaceProvider {
                 tokio::task::spawn_blocking(move || {
                     let _pins = admission;
                     let plan = match trigram_pruning {
-                        Some(pruning) => crate::query::trigram_prune::apply_pruning(plan, &pruning),
+                        Some(pruning) => {
+                            crate::query::trigram_prune::apply_pruning(plan, &pruning, &indices)
+                        }
                         None => plan,
                     };
                     crate::query::exact_prune::apply(
@@ -2031,7 +2045,7 @@ mod tests {
             .with_segment_indexes_enabled(false);
         let ctx = crate::query::make_ctx();
         let source_plan = provider.scan(&ctx.state(), None, &[], None).await.unwrap();
-        let plan = crate::query::trigram_prune::apply_pruning(source_plan, &pruning);
+        let plan = crate::query::trigram_prune::apply_pruning(source_plan, &pruning, &indices);
         assert_prunes_to_span1(&plan, 1);
         let batches = datafusion::physical_plan::collect(plan, ctx.task_ctx())
             .await
@@ -2158,8 +2172,33 @@ mod tests {
             write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["ordinary shutdown"]);
         let artifacts = crate::indices::sidecar_artifacts(std::slice::from_ref(&path));
         let binding = artifacts[&path].binding.clone();
-        let bundle_bytes =
-            bytes::Bytes::from(std::fs::read(artifacts[&path].bundle.as_ref().unwrap()).unwrap());
+        let bundle_path = artifacts[&path].bundle.as_ref().unwrap();
+        let header = crate::indices::format::read_header(bundle_path).unwrap();
+        let mut sections: Vec<_> = header
+            .sections
+            .iter()
+            .map(|section| crate::indices::format::SectionInput {
+                id: section.id.clone(),
+                kind: section.kind,
+                method_version: section.method_version,
+                exactness: section.exactness,
+                coverage: section.coverage.clone(),
+                payload: crate::indices::format::read_section(bundle_path, &header, &section.id)
+                    .unwrap(),
+            })
+            .collect();
+        // A large unrelated section must never be transferred for this query.
+        sections.push(crate::indices::format::SectionInput {
+            id: "trigram:unused".into(),
+            kind: crate::indices::format::SectionKind::TrigramBloom,
+            method_version: 1,
+            exactness: crate::indices::format::Exactness::Lossy,
+            coverage: header.sections[0].coverage.clone(),
+            payload: vec![0; 1024 * 1024],
+        });
+        let bundle_bytes = bytes::Bytes::from(
+            crate::indices::format::serialize(&header.binding, &sections).unwrap(),
+        );
         let remote = Arc::new(
             crate::store::object_store::build_remote_object_store(
                 dir.join("remote").to_str().unwrap(),
@@ -2231,16 +2270,59 @@ mod tests {
         );
         let config = crate::query::make_ctx()
             .copied_config()
-            .with_extension(Arc::new(QueryCacheAdmission::new(
-                bundle_bytes.len() as u64,
-                1,
-            )));
+            .with_extension(Arc::new(QueryCacheAdmission::new(0, 0)));
         let ctx = datafusion::prelude::SessionContext::new_with_config(config);
         crate::query::udf::register_scalar_udfs(&ctx);
         let provider = Arc::new(provider);
         ctx.register_table("logs", provider.clone()).unwrap();
         let rows = ctx.sql("SELECT * FROM logs WHERE contains(data, 'model cache') OR contains(data, 'download complete')").await.unwrap().collect().await.unwrap();
         assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        assert!(remote
+            .keys_for(crate::test_support::ObjectOp::Read)
+            .is_empty());
+        let transferred: u64 = remote
+            .ranges_for(&bundle_id)
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum();
+        assert!(transferred > 0 && transferred < bundle_bytes.len() as u64 / 2);
+        provider.indices.invalidate(&planned_bundle);
+        remote.clear_calls();
+        let rows = ctx.sql("SELECT * FROM logs WHERE key LIKE '%/inference-%' AND contains(data, 'ordinary shutdown')").await.unwrap().collect().await.unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        let header = crate::indices::format::parse_header(&bundle_bytes).unwrap();
+        let data = header.section("trigram:data").unwrap();
+        assert!(
+            remote
+                .ranges_for(&bundle_id)
+                .iter()
+                .all(|range| { range.end <= data.offset || range.start >= data.offset + data.len }),
+            "a rejecting key section must avoid reading the data section"
+        );
+        remote
+            .write(
+                &source.id,
+                bytes::Bytes::from(std::fs::read(&path).unwrap()),
+            )
+            .await
+            .unwrap();
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            ctx.udf("contains").unwrap(),
+            vec![col("data"), lit("ordinary shutdown")],
+        ));
+        let plan = provider
+            .scan(&ctx.state(), None, &[filter], None)
+            .await
+            .unwrap();
+        assert_prunes_to_span1(&plan, 1);
+        let rows = datafusion::physical_plan::collect(plan, ctx.task_ctx())
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        assert!(
+            !store.planned_local_path(&source.id).unwrap().exists(),
+            "zero allowance must keep source scans remote"
+        );
         drop(ctx);
         store
             .write(
@@ -2249,7 +2331,10 @@ mod tests {
             )
             .await
             .unwrap();
-        std::fs::remove_file(planned_bundle).unwrap();
+        assert!(
+            !planned_bundle.exists(),
+            "index range reads must not fill a whole bundle"
+        );
         remote.clear_calls();
         let ctx = crate::query::make_ctx();
         ctx.register_table("logs", provider).unwrap();
@@ -2267,6 +2352,9 @@ mod tests {
                 .is_empty(),
             "cached source bounds must exclude the segment before downloading its index"
         );
+        assert!(remote
+            .keys_for(crate::test_support::ObjectOp::ReadRange)
+            .is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

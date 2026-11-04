@@ -90,14 +90,24 @@ is at most 256 MiB and 64 objects
 per query, shared across tables and repeated scans. An object larger than the
 remaining allowance is skipped; smaller later objects may still fit.
 `query_byte_limit` counts these skipped objects. This allowance covers optional
-full-object cache fills, including index bundles, rather than all remote query
+full-object cache fills rather than all remote query
 I/O. Uncached Parquet is scanned directly through GCS/S3 range reads.
 
-Index bundles that fit the allowance are fetched before index pruning, ahead of
-source warming. Same-column substring alternatives such as
+Index headers and requested sections use the unified object's `read_range`
+interface: resident ranges are read under cache-file pins, and misses go
+directly to GCS/S3 without filling a whole bundle. Segment pruning reads up to
+32 bundles concurrently under a shared 500 ms index-I/O budget. It reads key
+sections first and skips other sections when a segment is already excluded.
+Parsed sections share the memory-bounded index cache. Source footers needed to
+map spans or exact postings to row groups also use this range interface.
+Object-backed Parquet scans, covering projections, and maintenance reads use
+the same interface, including coalesced range requests. DataFusion retains its
+parsed-footer cache and scan-byte counters. Legacy files still use their
+recorded filesystem paths.
+Same-column substring alternatives such as
 `contains(data, 'model cache') OR contains(data, 'download complete')` combine
 their trigram masks with OR. An alternative without a supported constraint
-keeps the source scan. An unavailable or oversized bundle also keeps that scan;
+keeps the source scan. An unavailable, corrupt, or slow index also keeps that scan;
 indexes remain optional derived state.
 
 Maintenance reads pin cached files or read directly from object storage without

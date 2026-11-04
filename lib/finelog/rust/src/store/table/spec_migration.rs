@@ -618,7 +618,7 @@ async fn rewrite_batch(
                 runtime.block_on(async {
                     let input = match source {
                         MigrationInput::Object(reference) => {
-                            open_cached_parquet(objects.as_ref(), reference).await?
+                            open_cached_parquet(Arc::clone(&objects), reference).await?
                         }
                         MigrationInput::Legacy(ScanSource::Local(path)) => {
                             open_parquet(&path.to_string_lossy(), *size).await?

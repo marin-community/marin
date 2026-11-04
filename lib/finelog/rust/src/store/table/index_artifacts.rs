@@ -186,7 +186,7 @@ async fn rebuild_candidate(
                 .controller
                 .object_store()
                 .expect("object segment has a backing store");
-            open_cached_parquet(store.as_ref(), &ObjectReference::try_from(source)?).await?
+            open_cached_parquet(Arc::clone(store), &ObjectReference::try_from(source)?).await?
         }
         None => {
             let size = tokio::fs::metadata(&path)

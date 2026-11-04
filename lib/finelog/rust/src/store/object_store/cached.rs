@@ -13,6 +13,7 @@
 //! queuing a writer on the store-wide visibility lock.
 
 use std::collections::{HashMap, HashSet};
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -32,7 +33,7 @@ use super::diagnostics::{CacheDiagnostics, FillReason};
 use super::local_file::atomic_write;
 
 /// Concurrent cache-miss downloads across every caller of this store.
-const MAX_PARALLEL_FETCHES: usize = 8;
+pub(crate) const MAX_PARALLEL_FETCHES: usize = 8;
 
 const MAX_PARALLEL_UPLOADS: usize = 8;
 
@@ -356,10 +357,10 @@ impl CachedObjectStore {
         let task = tokio::spawn(async move {
             let _permit = permit;
             let fill = async {
-                if let Err(error) = store
+                let result = store
                     .materialize_reserved(&reference, FillReason::Query)
-                    .await
-                {
+                    .await;
+                if let Err(error) = &result {
                     store
                         .diagnostics
                         .warm_errors
@@ -388,6 +389,64 @@ struct RemovalStats {
 
 #[async_trait]
 impl ObjectStore for CachedObjectStore {
+    async fn read_range(
+        &self,
+        reference: &ObjectReference,
+        range: std::ops::Range<u64>,
+    ) -> Result<Option<bytes::Bytes>, StatsError> {
+        Ok(self
+            .read_ranges(reference, &[range])
+            .await?
+            .and_then(|mut bytes| bytes.pop()))
+    }
+
+    async fn read_ranges(
+        &self,
+        reference: &ObjectReference,
+        ranges: &[std::ops::Range<u64>],
+    ) -> Result<Option<Vec<bytes::Bytes>>, StatsError> {
+        let cache = self.cache.clone();
+        let reference_for_cache = reference.clone();
+        let local_ranges = ranges.to_vec();
+        let local = tokio::task::spawn_blocking(move || {
+            let Some(pin) = cache.pin(&reference_for_cache)? else {
+                return Ok(None);
+            };
+            let read = || -> std::io::Result<Vec<bytes::Bytes>> {
+                let file = std::fs::File::open(&pin.path)?;
+                local_ranges
+                    .into_iter()
+                    .map(|range| {
+                        let len = usize::try_from(range.end.checked_sub(range.start).ok_or_else(
+                            || {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::InvalidInput,
+                                    "reversed object range",
+                                )
+                            },
+                        )?)
+                        .map_err(std::io::Error::other)?;
+                        let mut bytes = vec![0; len];
+                        file.read_exact_at(&mut bytes, range.start)?;
+                        Ok(bytes::Bytes::from(bytes))
+                    })
+                    .collect()
+            };
+            read().map(Some).map_err(|error| {
+                StatsError::Internal(format!(
+                    "read cached ranges {}: {error}",
+                    pin.path.display()
+                ))
+            })
+        })
+        .await
+        .map_err(|error| StatsError::Internal(format!("read cached ranges task: {error}")))??;
+        if local.is_some() {
+            return Ok(local);
+        }
+        self.source.read_ranges(reference, ranges).await
+    }
+
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         let version = self.source.write(id, bytes.clone()).await?;
         let cache = self.cache.clone();
@@ -502,33 +561,6 @@ impl ObjectStore for CachedObjectStore {
         let path = pin.path.clone();
         query.pin_file(path.clone(), pin);
         Ok(Some(path))
-    }
-
-    async fn query_index_path(
-        &self,
-        reference: &ObjectReference,
-        query: &QueryCacheAdmission,
-    ) -> Result<Option<PathBuf>, StatsError> {
-        if let Some(path) = self.pin_cached_path(reference, query).await? {
-            return Ok(Some(path));
-        }
-        if !matches!(
-            query.admit(reference, &self.request_history),
-            AdmissionDecision::Admitted
-        ) {
-            return Ok(None);
-        }
-        let Ok(_permit) = self.fetches.try_acquire() else {
-            return Ok(None);
-        };
-        if let Err(error) = self
-            .materialize_reserved(reference, FillReason::Query)
-            .await
-        {
-            tracing::debug!(%error, object = reference.id.as_str(), "index cache fill unavailable; scanning source Parquet");
-            return Ok(None);
-        }
-        self.pin_cached_path(reference, query).await
     }
 
     fn warm_query(&self, reference: &ObjectReference, query: &QueryCacheAdmission) {
@@ -705,7 +737,7 @@ mod tests {
     use crate::query::{make_ctx, run_query_over, RegisteredProvider};
     use crate::store::object_store::build_remote_object_store;
     use crate::store::object_store::ObjectVersion;
-    use crate::store::object_store::{CacheMode, ScanSource};
+    use crate::store::object_store::ScanSource;
     use crate::store::table::query_view::SegmentObjects;
     use crate::store::table_state::ArtifactReferences;
     use crate::test_support::{
@@ -799,6 +831,10 @@ mod tests {
         // Localization must not need the remote copy: the upload already
         // seeded the cache.
         std::fs::remove_file(remote_copy(&roots[0], &reference)).unwrap();
+        assert_eq!(
+            store.read_range(&reference, 5..11).await.unwrap().unwrap(),
+            &b"ported"[..]
+        );
         let path = store.local_path(&reference).await.unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"dual-ported");
         roots.iter().for_each(|root| {
@@ -851,11 +887,7 @@ mod tests {
                 .unwrap();
         }
         let query = QueryCacheAdmission::default();
-        let ScanSource::Local(path) = store
-            .scan_source(&pinned, CacheMode::Query(&query))
-            .await
-            .unwrap()
-        else {
+        let ScanSource::Local(path) = store.scan_source(&pinned, &query).await.unwrap() else {
             panic!("cached source expected");
         };
         store
@@ -866,10 +898,7 @@ mod tests {
         assert!(store.cached_path(&unpinned).await.unwrap().is_none());
         let other_query = QueryCacheAdmission::default();
         assert!(matches!(
-            store
-                .scan_source(&unpinned, CacheMode::Disabled(&other_query))
-                .await
-                .unwrap(),
+            store.scan_source(&unpinned, &other_query).await.unwrap(),
             ScanSource::Remote(_)
         ));
         drop(query);

@@ -73,9 +73,7 @@ impl QueryCacheAdmission {
             .lock()
             .unwrap()
             .observe(&reference.id, Instant::now());
-        // Indexes can exclude a cold source on the first scan. Source objects
-        // still need demonstrated reuse before an optional full-object fill.
-        if !repeated && !reference.id.relative_key().starts_with("indices/") {
+        if !repeated {
             return AdmissionDecision::Cold;
         }
         if budget.remaining_objects == 0 {

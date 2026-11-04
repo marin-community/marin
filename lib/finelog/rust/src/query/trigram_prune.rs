@@ -80,9 +80,16 @@ pub fn plan_segments(
             let Some(segment) = indices.open_summary(segment_artifacts) else {
                 return true;
             };
+            let key_column = segment.header.sections.iter().find_map(|section| {
+                crate::indices::parse_trigram_coverage(&section.coverage)
+                    .filter(|coverage| !coverage.key_column.is_empty())
+                    .map(|coverage| coverage.key_column)
+            });
+            let mut segment_columns = columns.clone();
+            segment_columns.sort_by_key(|(column, _)| key_column.as_deref() != Some(*column));
             let mut combined: Option<Vec<bool>> = None;
             let mut span_rows = None;
-            for (column, needle_sets) in &columns {
+            for (column, needle_sets) in &segment_columns {
                 let Some((coverage, index)) = indices.summary_trigram(&segment, column) else {
                     continue;
                 };
@@ -145,6 +152,20 @@ pub struct SegmentPruning {
     masks: HashMap<String, SpanMask>,
 }
 
+impl SegmentPruning {
+    pub(crate) fn combine(parts: Vec<Self>) -> Self {
+        let mut combined = Self {
+            paths: Vec::new(),
+            masks: HashMap::new(),
+        };
+        for part in parts {
+            combined.paths.extend(part.paths);
+            combined.masks.extend(part.masks);
+        }
+        combined
+    }
+}
+
 struct SpanMask {
     keep: Vec<bool>,
     span_rows: usize,
@@ -154,16 +175,20 @@ struct SpanMask {
 pub fn apply_pruning(
     plan: Arc<dyn ExecutionPlan>,
     pruning: &SegmentPruning,
+    indices: &IndexRegistry,
 ) -> Arc<dyn ExecutionPlan> {
-    rewrite_file_groups(plan, &access_plans(pruning))
+    rewrite_file_groups(plan, &access_plans(pruning, indices))
 }
 
-fn access_plans(pruning: &SegmentPruning) -> HashMap<String, ParquetAccessPlan> {
+fn access_plans(
+    pruning: &SegmentPruning,
+    indices: &IndexRegistry,
+) -> HashMap<String, ParquetAccessPlan> {
     pruning
         .masks
         .iter()
         .filter_map(|(path, mask)| {
-            let rows = crate::store::segment::segment_row_group_rows(Path::new(path))?;
+            let (_, rows) = indices.source_layout(Path::new(path))?;
             let access = span_access_plan(&mask.keep, mask.span_rows, &rows)?;
             let basename = Path::new(path).file_name()?.to_str()?.to_string();
             Some((basename, access))
@@ -546,13 +571,10 @@ fn build_access_plans(
     indices: &IndexRegistry,
     artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ParquetAccessPlan> {
-    access_plans(&plan_segments(
-        segment_paths,
-        needles,
-        key_ranges,
+    access_plans(
+        &plan_segments(segment_paths, needles, key_ranges, indices, artifacts),
         indices,
-        artifacts,
-    ))
+    )
 }
 
 /// Turn a per-span keep mask into a row-group access plan.

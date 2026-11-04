@@ -3,20 +3,23 @@
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_datasource_parquet::source::ParquetSource;
+use datafusion_datasource_parquet::ParquetFileReaderFactory;
 use futures::TryStreamExt;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::async_reader::{
+    AsyncFileReader, ParquetObjectReader, ParquetRecordBatchStreamBuilder,
+};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 
 use crate::errors::StatsError;
-use crate::store::object_store::{
-    CacheMode, ObjectReference, ObjectStore, QueryCacheAdmission, ScanSource,
-};
+use crate::store::object_store::{ObjectReference, ObjectStore, QueryCacheAdmission};
 
 /// Fetch the usual object footer in one ranged read, with a second request
 /// when the metadata exceeds this hint.
@@ -34,9 +37,12 @@ pub async fn open_parquet(source: &str, byte_size: u64) -> Result<ParquetInput, 
     let reader = ParquetObjectReader::new(backend, url.prefix().clone())
         .with_file_size(byte_size)
         .with_footer_size_hint(REMOTE_FOOTER_SIZE_HINT);
-    let builder = ParquetRecordBatchStreamBuilder::new(reader)
-        .await
-        .map_err(|error| StatsError::Internal(format!("open Parquet input {source}: {error}")))?;
+    let builder =
+        ParquetRecordBatchStreamBuilder::new(Box::new(reader) as Box<dyn AsyncFileReader>)
+            .await
+            .map_err(|error| {
+                StatsError::Internal(format!("open Parquet input {source}: {error}"))
+            })?;
     Ok(ParquetInput {
         builder,
         cache_guard: None,
@@ -46,29 +52,24 @@ pub async fn open_parquet(source: &str, byte_size: u64) -> Result<ParquetInput, 
 /// Open an immutable input without filling cache misses. Cached files stay
 /// pinned against eviction until their metadata or batches have been consumed.
 pub async fn open_cached_parquet(
-    store: &dyn ObjectStore,
+    store: Arc<dyn ObjectStore>,
     reference: &ObjectReference,
 ) -> Result<ParquetInput, StatsError> {
     let guard = Arc::new(QueryCacheAdmission::new(0, 0));
-    match store
-        .scan_source(reference, CacheMode::Disabled(&guard))
-        .await?
-    {
-        ScanSource::Local(path) => {
-            let mut input =
-                open_parquet(&path.to_string_lossy(), reference.version.byte_size).await?;
-            input.cache_guard = Some(guard);
-            Ok(input)
-        }
-        ScanSource::Remote(url) => {
-            drop(guard);
-            open_parquet(&url, reference.version.byte_size).await
-        }
-    }
+    let cached = store.pin_cached_path(reference, &guard).await?.is_some();
+    let reader = super::object_reader::ObjectRangeReader::new(store, reference.clone());
+    let builder =
+        ParquetRecordBatchStreamBuilder::new(Box::new(reader) as Box<dyn AsyncFileReader>)
+            .await
+            .map_err(|error| StatsError::Internal(format!("open immutable Parquet: {error}")))?;
+    Ok(ParquetInput {
+        builder,
+        cache_guard: cached.then_some(guard),
+    })
 }
 
 pub struct ParquetInput {
-    builder: ParquetRecordBatchStreamBuilder<ParquetObjectReader>,
+    builder: ParquetRecordBatchStreamBuilder<Box<dyn AsyncFileReader>>,
     cache_guard: Option<Arc<QueryCacheAdmission>>,
 }
 
@@ -116,21 +117,53 @@ pub fn rewrite_parquet_files(
     plan: Arc<dyn ExecutionPlan>,
     rewrite: impl Fn(&PartitionedFile) -> PartitionedFile,
 ) -> Arc<dyn ExecutionPlan> {
-    let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
-        return plan;
-    };
-    let Some(config) = exec.data_source().as_any().downcast_ref::<FileScanConfig>() else {
-        return plan;
-    };
-    let groups = config
-        .file_groups
-        .iter()
-        .map(|group| FileGroup::new(group.files().iter().map(&rewrite).collect()))
-        .collect();
-    let config = FileScanConfigBuilder::from(config.clone())
-        .with_file_groups(groups)
-        .build();
-    DataSourceExec::from_data_source(config)
+    rewrite_parquet_scans(plan, |config| {
+        let groups = config
+            .file_groups
+            .iter()
+            .map(|group| FileGroup::new(group.files().iter().map(&rewrite).collect()))
+            .collect();
+        FileScanConfigBuilder::from(config.clone())
+            .with_file_groups(groups)
+            .build()
+    })
+}
+
+pub(crate) fn with_object_readers(
+    plan: Arc<dyn ExecutionPlan>,
+    readers: Arc<dyn ParquetFileReaderFactory>,
+) -> Arc<dyn ExecutionPlan> {
+    rewrite_parquet_scans(plan, |config| {
+        let source = config
+            .file_source()
+            .as_any()
+            .downcast_ref::<ParquetSource>()
+            .expect("namespace scans use Parquet")
+            .clone()
+            .with_parquet_file_reader_factory(Arc::clone(&readers));
+        FileScanConfigBuilder::from(config.clone())
+            .with_source(Arc::new(source))
+            .build()
+    })
+}
+
+fn rewrite_parquet_scans(
+    plan: Arc<dyn ExecutionPlan>,
+    rewrite: impl Fn(&FileScanConfig) -> FileScanConfig,
+) -> Arc<dyn ExecutionPlan> {
+    plan.transform_up(|plan| {
+        let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+        let Some(config) = exec.data_source().as_any().downcast_ref::<FileScanConfig>() else {
+            return Ok(Transformed::no(plan));
+        };
+        Ok(Transformed::yes(DataSourceExec::from_data_source(rewrite(
+            config,
+        ))))
+    })
+    .expect("rewriting scan inputs preserves schemas and child arity")
+    .data
 }
 
 #[cfg(test)]

@@ -232,7 +232,7 @@ async fn run(
                     StatsError::Internal(format!("compaction reader lost input {path}"))
                 })?;
                 runtime.block_on(async {
-                    let input = open_cached_parquet(objects.as_ref(), reference).await?;
+                    let input = open_cached_parquet(Arc::clone(&objects), reference).await?;
                     if input.is_cached() {
                         cached_inputs += 1;
                     } else {
