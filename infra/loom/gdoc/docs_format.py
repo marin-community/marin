@@ -38,6 +38,7 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
+from typing import NamedTuple
 
 from infra.loom.gdoc.google_api import DOCS_API, GoogleApi, gcloud
 
@@ -618,9 +619,17 @@ def prepend_markdown(
     batch_update(api, document, requests + write_requests(doc_id, found.id, blocks, at, diagrams))
 
 
-def section_bounds(body: list[dict], heading: str) -> tuple[int, int, bool]:
-    """(start, end, last) of the content under a heading: from the heading's end to the next heading of the
-    same or a higher level, or to the tab's last newline when the section is last in the tab."""
+class SectionBounds(NamedTuple):
+    """The content under a heading, from start to end, and whether the section is the tab's last."""
+
+    start: int
+    end: int
+    last: bool
+
+
+def section_bounds(body: list[dict], heading: str) -> SectionBounds:
+    """The content under a heading: from the heading's end to the next heading of the same or a higher level,
+    or to the tab's last newline when the section is last in the tab."""
     for i, element in enumerate(body):
         if not _is_heading(element, heading):
             continue
@@ -628,8 +637,8 @@ def section_bounds(body: list[dict], heading: str) -> tuple[int, int, bool]:
         for later in body[i + 1 :]:
             later_level = heading_level(later)
             if later_level is not None and later_level <= level:
-                return element["endIndex"], later["startIndex"], False
-        return element["endIndex"], body[-1]["endIndex"] - 1, True
+                return SectionBounds(element["endIndex"], later["startIndex"], False)
+        return SectionBounds(element["endIndex"], body[-1]["endIndex"] - 1, True)
     headings = [paragraph_text(e).strip() for e in body if heading_level(e) is not None]
     raise MissingHeading(f"no heading {heading!r}; the headings are {headings}")
 
@@ -690,27 +699,42 @@ def _runs(pieces: list[tuple[str, tuple]]) -> tuple:
     return tuple(runs)
 
 
+class RunStyle(NamedTuple):
+    """The text styles that replace_section compares: bold, italic, the code font, and a link's URL."""
+
+    bold: bool = False
+    italic: bool = False
+    code: bool = False
+    link: str | None = None
+
+
+# The RunStyle field that each style a Span sets (other than a link) turns on.
+SPAN_STYLE_FIELDS = {"bold": "bold", "italic": "italic", "weightedFontFamily": "code"}
+
+
 def _span_runs(text: str, spans: tuple[Span, ...]) -> tuple:
     """The runs that text gets when it is written with spans."""
-    styles = [[False, False, False, None] for _ in text]
+    pieces = []
     offset = 0
-    for char, style in zip(text, styles, strict=True):
+    for char in text:
+        style = RunStyle()
         for span in spans:
             if span.start <= offset < span.end:
                 if span.fields == "link":
-                    style[3] = span.style["link"]["url"]
+                    style = style._replace(link=span.style["link"]["url"])
                 else:
-                    style[("bold", "italic", "weightedFontFamily").index(span.fields)] = True
+                    style = style._replace(**{SPAN_STYLE_FIELDS[span.fields]: True})
+        pieces.append((char, style))
         offset += utf16_length(char)
-    return _runs([(char, tuple(style)) for char, style in zip(text, styles, strict=True)])
+    return _runs(pieces)
 
 
-def _text_run_style(text_style: dict) -> tuple:
-    return (
-        text_style.get("bold", False),
-        text_style.get("italic", False),
-        text_style.get("weightedFontFamily", {}).get("fontFamily") == CODE_FONT,
-        text_style.get("link", {}).get("url"),
+def _text_run_style(text_style: dict) -> RunStyle:
+    return RunStyle(
+        bold=text_style.get("bold", False),
+        italic=text_style.get("italic", False),
+        code=text_style.get("weightedFontFamily", {}).get("fontFamily") == CODE_FONT,
+        link=text_style.get("link", {}).get("url"),
     )
 
 
@@ -730,7 +754,6 @@ def _old_paragraph(element: dict, lists: dict) -> OldUnit:
         (part["textRun"]["content"], _text_run_style(part["textRun"].get("textStyle", {})))
         for part in paragraph["elements"]
     ]
-    # Leave out the paragraph's newline.
     pieces[-1] = (pieces[-1][0].removesuffix("\n"), pieces[-1][1])
     level, bullet = heading_level(element), paragraph.get("bullet")
     if level is not None:
@@ -960,8 +983,13 @@ def replace_section(
 
 
 def tab_text(tab: Tab) -> str:
-    """The tab as plain markdown-like text, for an agent to read: headings, bullets and table rows."""
+    """The tab as plain markdown-like text, for an agent to read: headings, list items and table rows.
+
+    A numbered list item gets its number, so text read here and written back with replace_section keeps the list
+    numbered. Docs continues a list's numbering past other paragraphs, and an item restarts the deeper levels.
+    """
     lines = []
+    numbers: dict[tuple[str, int], int] = {}
     for element in tab.body:
         if "table" in element:
             for row in element["table"]["tableRows"]:
@@ -979,12 +1007,25 @@ def tab_text(tab: Tab) -> str:
         if level:
             text = "#" * level + " " + text
         elif bullet is not None:
-            text = "  " * bullet.get("nestingLevel", 0) + "- " + text
+            nesting = bullet.get("nestingLevel", 0)
+            marker = "- "
+            if _numbered(tab.lists, bullet):
+                key = (bullet["listId"], nesting)
+                numbers = {k: n for k, n in numbers.items() if k[0] != key[0] or k[1] <= nesting}
+                numbers[key] = numbers.get(key, 0) + 1
+                marker = f"{numbers[key]}. "
+            text = "  " * nesting + marker + text
         lines.append(text)
     return "\n".join(lines)
 
 
-def tab_length(tab: Tab, exclude_section: str | None) -> tuple[int, int, float]:
+class TabLength(NamedTuple):
+    words: int
+    images: int
+    pages: float
+
+
+def tab_length(tab: Tab, exclude_section: str | None) -> TabLength:
     """(words, images, estimated pages) of a tab, without one section (its heading and content) when given
     and the tab has it. Docs has no page count, so pages are an estimate."""
     if exclude_section and any(_is_heading(element, exclude_section) for element in tab.body):
@@ -1007,4 +1048,4 @@ def tab_length(tab: Tab, exclude_section: str | None) -> tuple[int, int, float]:
     text = " ".join(texts)
     images = text.count(IMAGE_PLACEHOLDER)
     words = len(text.replace(IMAGE_PLACEHOLDER, "").split())
-    return words, images, words / WORDS_PER_PAGE + images * PAGES_PER_DIAGRAM
+    return TabLength(words, images, words / WORDS_PER_PAGE + images * PAGES_PER_DIAGRAM)

@@ -398,3 +398,12 @@ def test_a_write_is_one_batch_that_docs_transforms_over_edits_made_since_its_rea
     assert (api.reads, len(api.batches)) == (1, 1)
     assert api.batches[0]["writeControl"] == {"targetRevisionId": "rev-7"}
     assert any("insertTable" in request for request in api.batches[0]["requests"])
+
+
+def test_a_numbered_list_reads_with_its_numbers_and_parses_back_as_numbered():
+    # Regression: tab_text wrote every list item with `-`, so text read back through replace-section lost numbering.
+    elements, _ = section(*GATES)
+    text = tab_text(Tab("t.0", "Main", elements, lists=LISTS))
+
+    assert text.splitlines() == ["1. ⬜ Gate A", "2. ⬜ Gate B", "A note."]
+    assert [block.kind for block in parse(text)] == [BlockKind.NUMBERED, BlockKind.NUMBERED, BlockKind.PARAGRAPH]
