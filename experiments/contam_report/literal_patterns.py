@@ -8,7 +8,10 @@ forms a 13-gram) or text that differs from the indexed item in case or line
 breaks. This writes, for a few AAII v5 evals, literal phrases that a copy of an
 item would contain:
 
-* ``canary``: the canary GUIDs in the Terminal-Bench task files;
+* ``canary``: the canary GUIDs in the Terminal-Bench task files, and the
+  prefixed canary names (``CANARY_NAMES``). The Terminal-Bench GUID is BIG-bench's,
+  which many benchmarks reuse, so only a prefixed name ties a match to Harbor
+  or Terminal-Bench;
 * ``task_name``: each Terminal-Bench task's directory name, when distinctive
   (at least ``MIN_NAME_HYPHENS`` hyphens);
 * ``instruction``: up to ``PHRASES_PER_ITEM`` non-overlapping
@@ -37,6 +40,7 @@ TASK_EVALS = ("terminal_bench_4", "terminal_bench_science")
 QUESTION_EVAL = "aa_omniscience_v1_1"
 CANARY = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 CANARY_LINE = re.compile(r"canary GUID ([0-9a-f-]{36})")
+CANARY_NAMES = ("terminal-bench-canary GUID", "harbor-canary GUID", "task-canary GUID")
 WORD_GAP = r"(?:\s|\\[nt])+"
 
 
@@ -73,6 +77,8 @@ def task_patterns(targets_dir: Path) -> list[dict]:
     for guid in sorted(canaries):
         assert CANARY.fullmatch(guid), guid
         out.append({"eval": "terminal_bench", "item": "", "kind": "canary", "text": guid, "regex": re.escape(guid)})
+    for name in CANARY_NAMES:
+        out.append({"eval": "terminal_bench", "item": "", "kind": "canary", "text": name, "regex": re.escape(name)})
     return out
 
 
