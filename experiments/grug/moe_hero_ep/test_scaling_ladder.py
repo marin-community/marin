@@ -17,7 +17,7 @@ from marin.execution.lazy import StepContext
 from experiments.grug.moe_hero_ep import launch_scaling_ladder
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HarrierContextPhase
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
-from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
+from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run, hero_permanent_keeps
 from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
 from experiments.grug.moe_hero_ep.train import FlopsBaseline
 
@@ -218,6 +218,23 @@ def test_d6144_permanent_checkpoints_pin_55000_and_densify_over_the_final_5000_s
     assert num_steps == 390_251
     assert _permanent_steps(keep, range(48_000, 62_001)) == [48_000, 54_000, 55_000, 60_000]
     assert _permanent_steps(keep, range(378_000, num_steps + 1)) == [378_000, 384_000, *range(385_500, 390_001, 500)]
+
+
+@pytest.mark.parametrize("num_steps", [3_000, 5_000, 30_000, 59_000, 60_000, 61_000])
+def test_short_d6144_schedules_keep_valid_increasing_ranges_and_the_dense_tail(monkeypatch, num_steps):
+    keep = hero_permanent_keeps(num_steps)
+    untils = [k["until"] for k in keep[:-1]]
+    assert untils == sorted(set(untils))
+    assert keep[-1] == {"until": None, "every": 500}
+    tail = range(max(1, num_steps - 5000 + 1), num_steps + 1)
+    assert _permanent_steps(keep, tail) == [s for s in tail if s % 500 == 0]
+    _set_hero_seq_len(monkeypatch, 4096)  # a fresh run starts at 4K
+    step = build_ladder_run(
+        run_id="test-short-d6144", size="d6144", num_steps=num_steps, context_phases=(), version="2026.08.18"
+    )
+    # Building the config runs CheckpointerConfig's strictly increasing `until` validation.
+    config = step.build_config(StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps))
+    assert config.trainer.trainer.checkpointer.keep == keep
 
 
 def _set_hero_seq_len(monkeypatch, seq_len):

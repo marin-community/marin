@@ -205,6 +205,22 @@ def _ladder_model(size: str):
     )
 
 
+def hero_permanent_keeps(num_steps: int) -> list[dict[str, int | None]]:
+    """Permanent-checkpoint ranges for a d6144 run of ``num_steps``: every 6000 steps, a pinned 55000, and
+    every FINAL_DENSE_CHECKPOINT_EVERY steps over the final FINAL_DENSE_CHECKPOINT_STEPS. Ranges that would
+    end at or after the dense tail starts are dropped, so short custom schedules keep increasing `until`s."""
+    dense_from = num_steps - FINAL_DENSE_CHECKPOINT_STEPS
+    early = [{"until": 54000, "every": 6000}, {"until": 55000, "every": 55000}, {"until": dense_from, "every": 6000}]
+    keeps: list[dict[str, int | None]] = []
+    for keep in early:
+        until = keep["until"]
+        assert until is not None
+        if 0 < until <= dense_from and (not keeps or until > keeps[-1]["until"]):
+            keeps.append(keep)
+    keeps.append({"until": None, "every": FINAL_DENSE_CHECKPOINT_EVERY})
+    return keeps
+
+
 def build_ladder_run(
     *,
     run_id: str,
@@ -308,12 +324,7 @@ def build_ladder_run(
         # weight-decay comparison (#8818), and every 500 steps over the final 5000 steps for the
         # end-of-run analysis. Interval keeps are modular within each `until` range, so the 6000
         # cadence brackets the pinned 55000 range on both sides.
-        keep_permanent: list[dict[str, int | None]] | None = [
-            {"until": 54000, "every": 6000},
-            {"until": 55000, "every": 55000},
-            {"until": num_steps - FINAL_DENSE_CHECKPOINT_STEPS, "every": 6000},
-            {"until": None, "every": FINAL_DENSE_CHECKPOINT_EVERY},
-        ]
+        keep_permanent: list[dict[str, int | None]] | None = hero_permanent_keeps(num_steps)
     else:
         steps_per_eval = max(1, round(num_steps / 20))
         keep_permanent = None
