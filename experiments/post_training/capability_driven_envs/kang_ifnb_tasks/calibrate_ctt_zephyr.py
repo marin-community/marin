@@ -36,7 +36,7 @@ from taskforge.stage50_validate.trials import (
     task_digest,
 )
 from taskforge_adapters.backends import machine_factories
-from taskforge_adapters.glm_client import GlmClient, Pool, RelayEndpoint
+from taskforge_adapters.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
@@ -82,6 +82,7 @@ COMMAND_TIMEOUT = 120.0
 class CTTConfig:
     relay_job: str = DEFAULT_RELAY_JOB
     relay_service: str = DEFAULT_RELAY_SERVICE
+    relay_base_url: str | None = None
     token_env: str = GLM_BULK_TOKEN_ENV
     model: str = GLM_MODEL
     k: int = 3
@@ -150,7 +151,11 @@ async def _calibrate(task: TaskSpec, config: CTTConfig, root: Path) -> dict[str,
         ledger=ledger,
         first_attempt=0,
     )
-    endpoint = RelayEndpoint(config.relay_job, token, Pool.BULK, config.relay_service)
+    endpoint = (
+        FixedEndpoint(GlmEndpoint(config.relay_base_url, token, Pool.BULK))
+        if config.relay_base_url is not None
+        else RelayEndpoint(config.relay_job, token, Pool.BULK, config.relay_service)
+    )
     started = time.monotonic()
     async with GlmClient(endpoint, PROVIDER) as client:
         model = GlmRolloutModel(client, POLICY, CallLedger(ledger, task.id, 0, str(TrialKind.SOLVER)))
@@ -173,6 +178,7 @@ async def _calibrate(task: TaskSpec, config: CTTConfig, root: Path) -> dict[str,
         "model": config.model,
         "relay_job": config.relay_job,
         "relay_service": config.relay_service,
+        "relay_base_url": config.relay_base_url,
         "policy": asdict(POLICY),
         "policy_digest": digest(POLICY),
         "limits": LIMITS.model_dump(mode="json"),
@@ -220,12 +226,21 @@ def main() -> None:
     parser.add_argument("--max-workers", type=int, default=8)
     parser.add_argument("--relay-job", default=DEFAULT_RELAY_JOB)
     parser.add_argument("--relay-service", default=DEFAULT_RELAY_SERVICE)
+    parser.add_argument(
+        "--relay-base-url",
+        help="Optional OpenAI-compatible /v1 URL, for example an Iris capability bridge to a cross-cluster relay",
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if min(args.count, args.k, args.max_workers) < 1:
         parser.error("--count, --k, and --max-workers must be positive")
     tasks = generate(args.counts.read_bytes(), source_revision=args.source_revision, count=args.count)
-    config = CTTConfig(relay_job=args.relay_job, relay_service=args.relay_service, k=args.k)
+    config = CTTConfig(
+        relay_job=args.relay_job,
+        relay_service=args.relay_service,
+        relay_base_url=args.relay_base_url,
+        k=args.k,
+    )
     result = run_zephyr(tasks, config, args.output, args.max_workers)
     print(f"output={args.output}")
     print(result)
