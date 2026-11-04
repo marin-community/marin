@@ -801,8 +801,8 @@ def run_command(*, help_text: str | None = None):
                 "evaluations",
                 multiple=True,
                 type=click.Choice(sorted(EVALUATIONS)),
-                help="Add an evaluation to train-long, which already runs panel-100 during training and panel-910 "
-                "on its final export. Repeatable.",
+                help="Add an evaluation to train-long, which already runs panel-100 before training and every 10 "
+                "updates. Repeatable.",
             ),
             click.option(
                 "--replicates",
