@@ -26,7 +26,7 @@ import re
 import unicodedata
 from collections import Counter
 from collections.abc import Callable
-from itertools import chain
+from itertools import chain, pairwise
 
 Check = Callable[[str, dict], tuple[bool, str]]
 
@@ -46,6 +46,7 @@ SCRIPT_SENTENCE_MARKS = "\u3002\uff0e\uff01\uff1f\uff61\u0964\u0965\u06d4\u061f\
 FINAL_MARK_RUN = rf"(?<![{re.escape(SENTENCE_FINAL)}])([{re.escape(SENTENCE_FINAL)}]++)[{re.escape(CLOSERS)}]*+"
 SCRIPT_MARK_RUN = rf"(?<![{SCRIPT_SENTENCE_MARKS}])[{SCRIPT_SENTENCE_MARKS}]++[{re.escape(CLOSERS)}]*+"
 SENTENCE_END = re.compile(rf"{FINAL_MARK_RUN}(?=\s)|{SCRIPT_MARK_RUN}")
+SENTENCE_ENDING_MARKS = tuple(SENTENCE_FINAL + SCRIPT_SENTENCE_MARKS)
 APOSTROPHES = "'\u2019"
 # Inside a word these join word characters: "don't", and Persian or Indic words written with a
 # zero-width non-joiner or joiner. A hyphen separates words, so "high-risk" is two.
@@ -84,16 +85,34 @@ COMPARED_WORD = re.compile(
     rf"[{UNSPACED_RANGES}]|(?![{UNSPACED_RANGES}])[^\W_]"
     rf"(?:{SPACED_WORD_CHARACTER}|[{re.escape(WORD_JOINERS)}](?={SPACED_WORD_CHARACTER}))*"
 )
-BULLET = re.compile(r"^\s*[\*\-]\s+")
+BULLET = re.compile(r"^\s*[\*\-]\s+\S")
+BULLET_ONLY_LINE = re.compile(r"^[\s*\-+]*$")
 SQUARE_BRACKETS = re.compile(r"\[[^\[\]\n]+\]")
 TITLE_MARKER = re.compile(r"<<[^<>\n]+>>")
 JSON_FENCE = re.compile(r"^```(?:json)?\s*\n(.*)\n```\s*$", re.DOTALL)
 MARKDOWN_HIGHLIGHT = re.compile(r"\*{1,2}[^*\n]+\*{1,2}")
 BOLD_BIGRAM = re.compile(r"\*\*\s*\w+\s+\w+\s*\*\*")
+# Exactly three asterisks; a longer run is not the divider.
+DIVIDER = r"(?<!\*)\*\*\*(?!\*)"
+DIVIDER_SPLIT = re.compile(rf"\s?{DIVIDER}\s?")
+# The counting_composition prompt writes the divider as "* * *", the same Markdown divider as "***".
+COMPOSITION_DIVIDER_SPLIT = re.compile(rf"\s?(?:{DIVIDER}|\* \* \*)\s?")
+# Bold italics, as in "a ***big*** one", divide nothing. They follow whitespace, an opening bracket or quote or a Han or
+# kana letter, or start the text; after a full stop, three asterisks are a divider, as in "One.***Two.".
+BOLD_ITALIC = re.compile(
+    rf"(?<![^\s(\[{{\"'\u201c\u2018\u00ab\u300c\u300e\uff08{UNSPACED_RANGES}])"
+    r"\*\*\*([^\s*](?:[^*\n]*[^\s*])?)\*\*\*(?!\*)"
+)
+COMPOSITION_PARAGRAPHS = 3
+# Whitespace and Markdown markup that may open a marker line, as in "**P.S.**".
+MARKDOWN_LEAD = " \t#*_>+-"
+MARKDOWN_LINE_START = rf"^[{MARKDOWN_LEAD}]*"
+# Markdown markup and opening quotes or brackets that may stand before a section marker.
+SECTION_MARKER_LEAD = MARKDOWN_LEAD + "\"'\u201c\u2018([{\u00ab\u300c\u300e\uff08"
 
 CONSTRAINED_RESPONSES = ("My answer is yes.", "My answer is no.", "My answer is maybe.")
-TWO_RESPONSE_SEPARATOR = "******"
-PARAGRAPH_DIVIDER = "***"
+# Exactly six asterisks; a longer run is not the separator.
+TWO_RESPONSE_SEPARATOR = re.compile(r"(?<!\*)\*{6}(?!\*)")
 
 # Closed-class words that are cheap evidence a response is in the requested language. Scripts with
 # no entry (zh, ja, ko, ar, th) are checked by their share of non-ASCII characters instead.
@@ -128,8 +147,14 @@ def constraint(name: str) -> Callable[[Check], Check]:
     return register
 
 
-def paragraphs(text: str) -> list[str]:
-    return [p for p in PARAGRAPH_SEPARATOR.split(text.strip()) if p.strip()]
+def paragraphs(text: str, separator: re.Pattern[str]) -> list[str]:
+    """The parts between separators that hold a word; a divider line or a run of emoji is no paragraph."""
+    return [part for part in separator.split(text) if WORD.search(part)]
+
+
+def between_dividers(text: str, divider: re.Pattern[str]) -> list[str]:
+    """The paragraphs between Markdown dividers; bold italics divide nothing."""
+    return paragraphs(BOLD_ITALIC.sub(r"\1", text), divider)
 
 
 def sentences(text: str) -> list[str]:
@@ -163,6 +188,19 @@ def ends_with_word(found: list[str], word: str) -> bool:
     """Whether the words end with the required word, which may split into several."""
     keys = [part.lower() for part in compared_words(word)]
     return bool(keys) and [part.lower() for part in found[-len(keys) :]] == keys
+
+
+def starts_line_or_sentence(text: str, start: int) -> bool:
+    """Whether only markup and opening quotes stand between ``start`` and a line start, or between ``start``
+    and a sentence end with its closing quotes or brackets."""
+    index = start
+    while index > 0 and text[index - 1] in SECTION_MARKER_LEAD:
+        index -= 1
+    if index == 0 or text[index - 1] == "\n":
+        return True
+    while index > 0 and text[index - 1] in CLOSERS:
+        index -= 1
+    return index > 0 and text[index - 1] in SENTENCE_ENDING_MARKS
 
 
 def word_key(word: str) -> str:
@@ -224,11 +262,12 @@ def _with_relation(actual: int, relation: str, expected: int, prefix: str) -> tu
 
 @constraint("length_constraints:number_paragraphs")
 def number_paragraphs(text: str, params: dict) -> tuple[bool, str]:
+    """The prompt says that the markdown divider ``***`` separates paragraphs."""
     expected = params.get("num_paragraphs")
     if not isinstance(expected, int):
         return False, "missing num_paragraphs"
-    actual = len(paragraphs(text))
-    return actual == expected, f"paragraphs={actual} expected={expected}"
+    parts = between_dividers(text, DIVIDER_SPLIT)
+    return len(parts) == expected, f"paragraphs={len(parts)} expected={expected}"
 
 
 @constraint("length_constraints:number_words")
@@ -254,7 +293,7 @@ def nth_paragraph_first_word(text: str, params: dict) -> tuple[bool, str]:
     first_word = params.get("first_word")
     if not isinstance(expected_paragraphs, int) or not isinstance(nth, int) or not isinstance(first_word, str):
         return False, "missing kwargs"
-    found = paragraphs(text)
+    found = paragraphs(text, PARAGRAPH_SEPARATOR)
     if len(found) != expected_paragraphs or nth < 1 or nth > len(found):
         return False, f"paragraphs={len(found)} need={expected_paragraphs} nth={nth}"
     actual = compared_words(found[nth - 1])
@@ -463,7 +502,8 @@ def number_bullet_lists(text: str, params: dict) -> tuple[bool, str]:
     expected = params.get("num_bullets")
     if not isinstance(expected, int):
         return False, "missing num_bullets"
-    actual = sum(1 for line in text.splitlines() if BULLET.match(line))
+    # A line of only markers, such as the divider "* * *" or "---", is not a bullet point.
+    actual = sum(1 for line in text.splitlines() if BULLET.match(line) and not BULLET_ONLY_LINE.match(line))
     return actual == expected, f"bullets={actual} expected={expected}"
 
 
@@ -488,12 +528,21 @@ def json_format(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("detectable_format:multiple_sections")
 def multiple_sections(text: str, params: dict) -> tuple[bool, str]:
+    """A section begins with the splitter and its number at the start of a line or a sentence, after
+    optional Markdown markup or an opening quote; a mention inside a sentence is no marker."""
     expected = params.get("num_sections")
     splitter = params.get("section_spliter") or params.get("section_splitter") or "Section"
     if not isinstance(expected, int) or not isinstance(splitter, str):
         return False, "bad kwargs"
-    actual = len(re.findall(re.escape(splitter) + r"\s*\d+", text, flags=re.IGNORECASE))
-    return actual == expected, f"sections={actual} expected={expected} splitter={splitter!r}"
+    marker = re.compile(r"(?<![^\W_])" + re.escape(splitter) + r"\s*\d+", flags=re.IGNORECASE)
+    markers = [found for found in marker.finditer(text) if starts_line_or_sentence(text, found.start())]
+    bodies = [
+        text[found.end() : following.start() if following else len(text)]
+        for found, following in pairwise([*markers, None])
+    ]
+    if any(not WORD.search(body) for body in bodies):
+        return False, "a section has no text after its marker"
+    return len(markers) == expected, f"sections={len(markers)} expected={expected} splitter={splitter!r}"
 
 
 @constraint("detectable_format:number_highlighted_sections")
@@ -548,7 +597,8 @@ def postscript(text: str, params: dict) -> tuple[bool, str]:
     marker = params.get("postscript_marker")
     if not isinstance(marker, str):
         return False, "missing postscript_marker"
-    found = bool(re.search(r"^\s*" + re.escape(marker), text, flags=re.MULTILINE | re.IGNORECASE))
+    match = re.search(MARKDOWN_LINE_START + re.escape(marker), text, flags=re.MULTILINE | re.IGNORECASE)
+    found = match is not None and WORD.search(text, match.end()) is not None
     return found, f"has_postscript={marker!r}: {found}"
 
 
@@ -566,19 +616,15 @@ def number_placeholders(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("paragraphs:paragraphs")
 def divided_paragraphs(text: str, params: dict) -> tuple[bool, str]:
-    """IFEval writes ``***`` between paragraphs; blank-line separation is accepted too."""
-    by_divider = [p for p in text.split(PARAGRAPH_DIVIDER) if p.strip()]
-    by_blank_line = paragraphs(text)
-    if len(by_divider) >= 2:
-        return True, f"*** divided paragraphs={len(by_divider)}"
-    if len(by_blank_line) >= 2:
-        return True, f"blank-line paragraphs={len(by_blank_line)}"
-    return False, f"need >=2 paragraphs (divider={len(by_divider)} blank={len(by_blank_line)})"
+    """Exactly two paragraphs, separated by the markdown divider ``***``."""
+    return number_paragraphs(text, {"num_paragraphs": 2})
 
 
 @constraint("paragraphs:paragraphs2")
 def divided_paragraphs2(text: str, params: dict) -> tuple[bool, str]:
-    return divided_paragraphs(text, params)
+    """Exactly two paragraphs, separated by blank lines."""
+    found = paragraphs(text, PARAGRAPH_SEPARATOR)
+    return len(found) == 2, f"blank-line paragraphs={len(found)}"
 
 
 # === first_word / last_word =================================================
@@ -673,18 +719,22 @@ def lowercase_counting(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("count:counting_composition")
 def counting_composition(text: str, params: dict) -> tuple[bool, str]:
+    """Three paragraphs between ``* * *`` dividers, each of n_sent sentences of n_words words."""
     expected_sentences = params.get("n_sent")
     expected_words = params.get("n_words")
     if not isinstance(expected_sentences, int) or not isinstance(expected_words, int):
         return False, "bad kwargs"
-    found = sentences(text)
-    if len(found) < expected_sentences:
-        return False, f"sentences={len(found)} need>={expected_sentences}"
-    for index, sentence in enumerate(found[:expected_sentences]):
-        count = len(words(sentence))
-        if count < expected_words:
-            return False, f"sent[{index}] has {count} words, need>={expected_words}"
-    return True, f"first {expected_sentences} sentences each have >={expected_words} words"
+    parts = between_dividers(text, COMPOSITION_DIVIDER_SPLIT)
+    if len(parts) != COMPOSITION_PARAGRAPHS:
+        return False, f"paragraphs={len(parts)} need={COMPOSITION_PARAGRAPHS}"
+    for number, part in enumerate(parts):
+        found = sentences(part)
+        if len(found) != expected_sentences:
+            return False, f"paragraph {number} has {len(found)} sentences, need={expected_sentences}"
+        counts = [len(words(sentence)) for sentence in found]
+        if any(count != expected_words for count in counts):
+            return False, f"paragraph {number} sentence word counts {counts}, need={expected_words}"
+    return True, f"{COMPOSITION_PARAGRAPHS} paragraphs of {expected_sentences} sentences of {expected_words} words"
 
 
 # === letters ================================================================
@@ -756,9 +806,10 @@ def repeat_phrase(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("combination:two_responses")
 def two_responses(text: str, params: dict) -> tuple[bool, str]:
-    sections = text.split(TWO_RESPONSE_SEPARATOR)
-    if any(not section.strip() for section in sections[1:-1]):
+    sections = TWO_RESPONSE_SEPARATOR.split(text)
+    if any(not WORD.search(section) for section in sections[1:-1]):
         return False, "empty section between responses"
-    parts = [section.strip() for section in sections if section.strip()]
+    # A part with no words, such as the "." after a closing separator, is not a response.
+    parts = [section.strip() for section in sections if WORD.search(section)]
     passed = len(parts) == 2 and parts[0] != parts[1]
     return passed, f"sections_by_******={len(parts)}"

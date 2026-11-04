@@ -18,8 +18,8 @@ CASES = [
     (
         "length_constraints:number_paragraphs",
         {"num_paragraphs": 2},
+        "The first thing to know.\n***\nThe second thing to know.",
         "The first thing to know.\n\nThe second thing to know.",
-        "Only one paragraph here.",
     ),
     (
         "length_constraints:number_words",
@@ -148,10 +148,47 @@ CASES = [
         "An apple boat.",
     ),
     (
+        "detectable_format:multiple_sections",
+        {"num_sections": 2, "section_spliter": "Section"},
+        "Section 1\nSetup steps.\nSection 2\nTest steps.",
+        "Section 1 covers setup, and Section 2 covers tests.",
+    ),
+    (
+        "detectable_format:multiple_sections",
+        {"num_sections": 2, "section_spliter": "Section"},
+        "Here is the plan. Section 1 Setup steps. Section 2 Test steps.",
+        "Here is the plan for Section 1 setup. Section 2 Test steps.",
+    ),
+    (
+        "detectable_format:multiple_sections",
+        {"num_sections": 2, "section_spliter": "Section"},
+        '"Section 1\nSetup steps.\nSection 2\nTest steps."',
+        "Section 1\nSetup steps, which Section 2 repeats.",
+    ),
+    (
+        "paragraphs:paragraphs",
+        {},
+        "First paragraph.\n***\nSecond paragraph.",
+        "First.\n***\nSecond.\n***\nThird.",
+    ),
+    (
+        "paragraphs:paragraphs2",
+        {},
+        "First paragraph.\n\nSecond paragraph.",
+        "First.\n\nSecond.\n\nThird.",
+    ),
+    (
         "count:count_unique",
         {},
         "Every word here differs.",
         "Each word differs, except this word.",
+    ),
+    (
+        "count:counting_composition",
+        {"n_sent": 3, "n_words": 2},
+        "Go now. Be fast. Run far.\n* * *\nEat well. Sleep early. Stay calm.\n* * *\n"
+        "Read books. Write notes. Think deeply.",
+        "Go now. Be fast. Run far.",
     ),
     (
         "letters:letter_counting",
@@ -164,6 +201,12 @@ CASES = [
         {"phrase": "The pen is mightier than sword", "small_n": 2},
         "The pen is stronger than sword. The pen is sharper than sword.",
         "The pen is mightier than sword. The pen is mightier than sword.",
+    ),
+    (
+        "detectable_content:postscript",
+        {"postscript_marker": "P.S."},
+        "Main text.\n**P.S.** Bring water.",
+        "Main text.\nP.S.",
     ),
     (
         "change_case:capital_word_frequency",
@@ -182,6 +225,27 @@ CASES = [
         {"relation": "less than", "num_words": 2},
         "ಪ್ರಪಂಚ",
         "ಮತ್ತು ಪ್ರಪಂಚ",
+    ),
+    (
+        "paragraphs:paragraphs2",
+        {},
+        "First paragraph.\n\n***\n\nSecond paragraph.",
+        "First.\n\n---\n\nSecond.\n\nThird.",
+    ),
+    (
+        "count:counting_composition",
+        {"n_sent": 3, "n_words": 2},
+        "Go now. Be fast. Run far.\n* * *\nEat well. Sleep early. Stay calm.\n* * *\n"
+        "Read books. Write notes. Think deeply.",
+        "Go now. Be fast. Run far.\n* * *\nEat well. Sleep early.\n* * *\nRead books. Write notes. Think deeply.",
+    ),
+    (
+        "count:counting_composition",
+        {"n_sent": 3, "n_words": 2},
+        "Go now. Be fast. Run far.\n* * *\nEat well. Sleep early. Stay calm.\n* * *\n"
+        "Read books. Write notes. Think deeply.",
+        "Go now. Be fast. Run very far.\n* * *\nEat well. Sleep early. Stay calm.\n* * *\n"
+        "Read books. Write notes. Think deeply.",
     ),
     (
         "copy:repeat_phrase",
@@ -224,6 +288,24 @@ CASES = [
         {},
         "Big dogs run.",
         "Big apples run.",
+    ),
+    (
+        "detectable_format:multiple_sections",
+        {"num_sections": 2, "section_spliter": "Section"},
+        "Section 1\nA.\nSection 2\nB.",
+        "Section 1\nSection 2",
+    ),
+    (
+        "detectable_format:multiple_sections",
+        {"num_sections": 2, "section_spliter": "Section"},
+        "He said “Go.” Section 1 Setup. Section 2 Tests.",
+        "He said “Go” Section 1 Setup. Section 2 Tests.",
+    ),
+    (
+        "detectable_format:number_bullet_lists",
+        {"num_bullets": 2},
+        "* One\n* * *\n* Two",
+        "* One\n* * *",
     ),
     (
         "count:count_unique",
@@ -356,6 +438,18 @@ CASES = [
         {"N": 1},
         "the世界",
         "the世界the",
+    ),
+    (
+        "detectable_format:multiple_sections",
+        {"num_sections": 2, "section_spliter": "Section"},
+        "- Section 1\nSetup steps.\n- Section 2\nTest steps.",
+        "- Section 1\nSetup steps.",
+    ),
+    (
+        "detectable_content:postscript",
+        {"postscript_marker": "P.S."},
+        "Main text.\n- P.S. Bring water.",
+        "Main text.\n- Bring water.",
     ),
     (
         "length_constraints:number_words",
@@ -501,6 +595,42 @@ CASES = [
         "\u0432 \u0434\u043e\u043c\u0435",
         "\u0432 \u0433\u043e\u0440\u043e\u0434\u0435",
     ),
+    (
+        "length_constraints:number_paragraphs",
+        {"num_paragraphs": 1},
+        "This is ***very*** important.",
+        "This is.\n***\nImportant.",
+    ),
+    (
+        "paragraphs:paragraphs",
+        {},
+        "A ***big*** one.\n***\nThe other one.",
+        "The first one.\n****\nThe other one.",
+    ),
+    (
+        "length_constraints:number_paragraphs",
+        {"num_paragraphs": 2},
+        "The first one.***The other one.",
+        "The first one. The other one.",
+    ),
+    (
+        "length_constraints:number_paragraphs",
+        {"num_paragraphs": 1},
+        "这是***很***重要的。",
+        "这很重要。\n***\n那也重要。",
+    ),
+    (
+        "length_constraints:number_paragraphs",
+        {"num_paragraphs": 1},
+        "This is (***very***) important.",
+        "This is.\n***\n(Important.)",
+    ),
+    (
+        "length_constraints:number_paragraphs",
+        {"num_paragraphs": 2},
+        "第一段。***第二段。",
+        "第一段。第二段。",
+    ),
 ]
 
 
@@ -630,6 +760,8 @@ def test_constraint_missing_its_parameters_fails_the_candidate(tmp_path, workspa
         ("Same answer.****** Same answer. ", 0.0),
         ("First.******Second.******Third.", 0.0),
         ("First.************Second.", 0.0),
+        ("First.*******Second.", 0.0),
+        ("Responses should be separated by 6 asterisk symbols: ******.", 0.0),
     ],
 )
 def test_two_responses_requires_exactly_two_distinct_answers(tmp_path, workspace, text, expected):
