@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -39,8 +40,13 @@ def wheel_environment(tmp_path, monkeypatch):
         )
     (cache / "_C.abi3.so").write_bytes(b"Immutable compiled CUDA extension")
     (cache / "untouched.py").write_text("# Unmodified Python module\n")
-    wheel = {"version": "1.0", "url": "https://example.invalid/vllm.whl", "hash": "sha256:" + "a" * 64}
-    direct = {"url": wheel["url"], "archive_info": {"hashes": {"sha256": "a" * 64}}}
+    archive_path = tmp_path / "vllm-1.0-py3-none-any.whl"
+    with ZipFile(archive_path, "w") as archive:
+        for path in cache.rglob("*"):
+            if path.is_file():
+                archive.write(path, "vllm/" + str(path.relative_to(cache)))
+    wheel = {"version": "1.0", "url": archive_path.as_uri(), "hash": "sha256:" + runtime.digest(archive_path)}
+    direct = {"url": wheel["url"], "archive_info": {}}
     for name, version in {"vllm": wheel["version"], "torch": "2.13.0+cu132"}.items():
         info = site / f"{name}-{version}.dist-info"
         info.mkdir()
@@ -101,7 +107,9 @@ def test_overlay_preserves_shared_wheel_and_native_extensions(wheel_environment,
         ).read_bytes()
     receipt = json.loads(receipt_path.read_text())
     assert receipt["extensions_before"] == receipt["extensions_after"]
-    assert receipt["wheel_direct_url"]["archive_info"]["hashes"]["sha256"] == "a" * 64
+    assert receipt["wheel_direct_url"]["archive_info"] == {}
+    assert receipt["wheel_archive_sha256"] == manifest["wheel"]["hash"].removeprefix("sha256:")
+    assert receipt["wheel_extensions"] == receipt["extensions_before"]
     assert receipt["manifest_sha256"] == runtime.MANIFEST_SHA256
     assert receipt["core_dependencies"] == {"torch": "2.13.0+cu132"}
 
@@ -118,7 +126,7 @@ def test_rejected_overlay_keeps_original_package_and_cache(wheel_environment, tm
     else:
         direct = site / "vllm-1.0.dist-info/direct_url.json"
         record = json.loads(direct.read_text())
-        record["archive_info"]["hashes"]["sha256"] = "c" * 64
+        record["archive_info"]["hashes"] = {"sha256": "c" * 64}
         direct.write_text(json.dumps(record))
     before = tree_bytes(cache)
     receipt = tmp_path / "receipt.json"
@@ -130,6 +138,32 @@ def test_rejected_overlay_keeps_original_package_and_cache(wheel_environment, tm
     assert tree_bytes(cache) == before
     assert not receipt.exists()
     assert not entry.with_name("vllm.before-hero-piecewise").exists()
+
+
+@pytest.mark.parametrize(
+    "corruption", ["wheel-bytes", "installed-native-library", "installed-python-library", "extra-native-library"]
+)
+def test_missing_receipt_hash_still_requires_wheel_and_binary_identity(wheel_environment, tmp_path, corruption):
+    workspace, cache, site, _ = wheel_environment
+    entry = site / "vllm"
+    link_package(cache, entry, "directory")
+    if corruption == "wheel-bytes":
+        (tmp_path / "vllm-1.0-py3-none-any.whl").write_bytes(b"Different wheel at the same URL")
+    elif corruption == "installed-native-library":
+        (cache / "_C.abi3.so").write_bytes(b"Different installed native library")
+    elif corruption == "installed-python-library":
+        (cache / "untouched.py").write_text("Different installed Python module")
+    else:
+        (cache / "untracked.so").write_bytes(b"Extra installed native library")
+    before = tree_bytes(cache)
+    receipt = tmp_path / "receipt.json"
+
+    with pytest.raises(ValueError, match="wheel"):
+        runtime.stage_runtime(workspace, site.parent.parent, receipt)
+
+    assert entry.is_symlink() and entry.resolve() == cache
+    assert tree_bytes(cache) == before
+    assert not receipt.exists()
 
 
 def test_failed_package_publish_restores_original_entry(wheel_environment, monkeypatch, tmp_path):

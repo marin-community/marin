@@ -13,7 +13,13 @@ The canonical runtime and its production dependency pins remain separate.
 Frozen dependency installation is followed immediately by
 `experiments/post_training/hero_rl/piecewise_runtime.py`, before runtime import
 checks. The stager verifies the exact 39e ARM wheel receipt, dependency versions,
-three source preimages and fixed payload hashes. It copies the entire package
+three source preimages and fixed payload hashes. uv 0.13.5 may record an empty
+`archive_info` in `direct_url.json`; the stager independently downloads the exact
+locked wheel, requires its SHA256, and compares every installed vLLM payload
+file with that verified ZIP, including the complete native-library content set.
+The streaming download has a 4 GiB archive limit, a 15-minute deadline and a
+120-second socket timeout. The archive remains in disposable task storage only
+during staging. The stager copies the entire package
 with symlinks dereferenced, verifies unchanged native extensions, then publishes
 the three Python changes together by replacing the environment's package entry.
 The shared uv package cache remains unchanged.
@@ -36,7 +42,7 @@ Prepare the fixed-weight stage locally with the completed SFT64 export:
 
 ```bash
 uv run python -m experiments.post_training.hero_rl.launch \
-  --version 2026.11.04.30 --hardware gb200-48 --priority interactive \
+  --version 2026.11.04.31 --hardware gb200-48 --priority interactive \
   --stage numerics --probe-prompts 128 \
   --model-uri s3://marin-us-east-02a/marin/users/dlwh/hero-rl/sft64-bf16-fp32-router/2026.11.03.49 \
   --model-version 2026.10.22.64 \
@@ -47,8 +53,9 @@ This command does not submit work. Use the reviewed immutable runtime source
 commit and a fresh artifact version for any later authorized submission.
 Each of the twelve task output directories must contain
 `hero-piecewise-runtime.json`; bootstrap also logs that receipt. Require twelve
-receipts with this manifest digest, identical source preimages, exact wheel and
-core dependency identities, and equal before/after extension hashes. Archive
+receipts with this manifest digest, identical source preimages, the verified
+wheel archive SHA256, matching installed payload hashes, exact core dependency
+identities, and equal before/after extension hashes. Archive
 them with the resolved launch and numerical report.
 
 ## Inputs and placement
