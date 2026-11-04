@@ -785,7 +785,7 @@ def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:
         dataclasses.replace(_spec(), config_yaml=_config_yaml(strategy="fsdp2"))
 
 
-def test_finished_policy_resolves_terminal_export_for_post_evaluation(tmp_path):
+def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path):
     root = tmp_path / "finished"
     root.mkdir()
     result = SkyRLRun(

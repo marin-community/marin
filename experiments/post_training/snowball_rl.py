@@ -3,18 +3,28 @@
 
 """Run a Snowball RL experiment from a preset.
 
-Choose the preset by what the change can affect:
+Choose the preset by what the change can affect. Each entry gives what the preset runs, its
+cost, what it measures and the changes it is for:
 
 \b
-  speed-short      vLLM engine only; 8 H100, about 10 min. Engine options, kernels, wheels.
-  speed-medium     10 sync updates, every reply 4,096 tokens; 40 H100, about 40 min. Trainer
-                   speed, weight sync, startup and trainer-vs-engine log-prob mismatch.
-  learning-medium  25 sync updates, then the 910-task panel; 40 H100, about 2 h. Loss,
-                   estimator, optimizer, schedule, reward shaping, batch shape, --init.
-  data-short       256 tasks of a new --tasks selection, 4 answers each; 8 H100, about 15 min.
-  data-medium      learning-medium trained on --tasks; 40 H100, about 2 h.
-  train-long       the async production loop with checkpoints, HF export and a final
-                   910-task evaluation; 112 H100, or 40 with --layout p40.
+  speed-short      vLLM engine only: one pass of 512 prompts x 4 replies of 4,096 tokens;
+                   8 H100, about 10 min. Measures engine tokens/s per GPU. For engine
+                   options, kernels and vLLM wheels.
+  speed-medium     10 sync updates, every reply 4,096 tokens; 40 H100, about 40 min. Measures
+                   median update time and trainer-vs-engine log-prob mismatch. For trainer
+                   speed, weight sync and startup.
+  learning-medium  25 sync updates, then the 910-task panel; 40 H100, about 2 h. Measures the
+                   panel score. For loss, estimator, optimizer, schedule, reward shaping,
+                   batch shape and --init.
+  data-short       4 replies to each of 256 tasks of a new --tasks selection; 8 H100, about
+                   15 min. Measures the fraction of tasks with both right and wrong replies,
+                   the only tasks that give RLOO-N a learning signal. For a new task selection.
+  data-medium      learning-medium trained on --tasks instead of the default selection;
+                   40 H100, about 2 h. Measures the panel score after training on the new
+                   selection. For a new task selection that passed data-short.
+  train-long       the async production loop with checkpoints, panel-100 every 10 updates and
+                   an HF export; 112 H100, or 40 with --layout p40. For release training and
+                   for models that later runs load with --init.
 
 An engine change runs speed-short, then speed-medium. A trainer kernel, parallelism or numerics
 change runs speed-medium, then learning-medium. A new task selection runs data-short, then
@@ -178,7 +188,6 @@ def training_config(
 @dataclass(frozen=True)
 class SnowballRun:
     runs: tuple[ArtifactStep[SkyRLRun], ...]
-    post_run_evaluations: tuple[ArtifactStep[SkyRLRun], ...] = ()
 
 
 def _model_input(init: ArtifactStep | None) -> SkyRLModelSource:
@@ -321,45 +330,6 @@ def _run_step(
     )
 
 
-def _post_evaluation(
-    run: ArtifactStep[SkyRLRun],
-    evaluation: presets.Evaluation,
-    selection: ArtifactStep,
-    parent: presets.Preset,
-    parent_config: dict,
-) -> ArtifactStep[SkyRLRun]:
-    parent_layout = parent.recipe.layout
-    engine = presets.E8.role_plan
-    plan = replace(
-        parent_layout.role_plan,
-        generate_only=True,
-        num_inference_engines=engine.num_inference_engines,
-        inference_engine_tensor_parallel_size=engine.inference_engine_tensor_parallel_size,
-        inference_engine_pipeline_parallel_size=engine.inference_engine_pipeline_parallel_size,
-        inference_engine_data_parallel_size=engine.inference_engine_data_parallel_size,
-        inference_engine_expert_parallel_size=engine.inference_engine_expert_parallel_size,
-    )
-    layout = replace(parent_layout, name=presets.E8.name, role_plan=plan)
-    config = deepcopy(parent_config)
-    config["trainer"].update(
-        callbacks=[], eval_interval=1, eval_before_train=False, resume_mode="none", ckpt_interval=0, hf_save_interval=-1
-    )
-    evaluator = presets.EVALUATORS[evaluation.harness]
-    validation = evaluator.configure(evaluation, config, selection)
-    config["trajectory_runner"]["max_concurrent_tasks"] = presets.evaluation_answer_count(evaluation, selection)
-    return _run_step(
-        f"{run.name}/eval/{evaluation.name}",
-        config,
-        SkyRLPolicyModel(run),
-        selection,
-        set(evaluator.required_env),
-        layout=layout,
-        export_hf=False,
-        retention=2,
-        validation_data=validation,
-    )
-
-
 def build_run(
     preset: presets.Preset,
     *,
@@ -372,7 +342,7 @@ def build_run(
     replicates: int = 1,
     control: bool = False,
 ) -> SnowballRun:
-    """Construct the complete Snowball experiment and its terminal evaluation dependencies."""
+    """Construct the run steps of a Snowball experiment, one per replicate."""
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
@@ -412,10 +382,9 @@ def build_run(
         selected.setdefault(name, presets.EVALUATIONS[name])
     if init is not None:
         selected = {name: replace(evaluation, at_start=True) for name, evaluation in selected.items()}
-    post = tuple(evaluation for evaluation in selected.values() if evaluation.post_run)
-    in_run = tuple(evaluation for evaluation in selected.values() if evaluation not in post)
-    if sum(evaluation.harness == presets.EvalHarness.PANEL for evaluation in in_run) > 1:
-        raise click.BadParameter("one in-run TaskSpec panel is supported; panel-910 runs on the final export")
+    chosen = tuple(selected.values())
+    if sum(evaluation.harness == presets.EvalHarness.PANEL for evaluation in chosen) > 1:
+        raise click.BadParameter("a run evaluates at most one TaskSpec panel")
     required = {key for evaluation in selected.values() for key in presets.EVALUATORS[evaluation.harness].required_env}
     counts = summary["grader_kind_counts"]["train"]
     if counts.get(GraderKind.REMOTE_JUDGE, 0) and preset.name != "speed-short":
@@ -423,12 +392,12 @@ def build_run(
     missing = sorted(key for key in required if not os.environ.get(key))
     if missing:
         raise click.BadParameter(f"missing required credentials: {', '.join(missing)}")
-    config = training_config(preset, settings, in_run)
+    config = training_config(preset, settings, chosen)
     preset = replace(preset, updates=config["trainer"]["max_steps"])
     model = _model_input(init)
     checkpoint_root = _resume_checkpoint_root(resume_from, model) if resume_from is not None else None
     validation_data = ()
-    for evaluation in in_run:
+    for evaluation in chosen:
         evaluation_tasks = evaluation.tasks(selection, default)
         validation_data = presets.EVALUATORS[evaluation.harness].configure(evaluation, config, evaluation_tasks)
         if preset.recipe.layout.role_plan.generate_only:
@@ -437,7 +406,7 @@ def build_run(
             )
     if not preset.recipe.layout.role_plan.generate_only:
         expected_tasks = presets.selection_summary(default)["validation_rows"]
-        config["trainer"]["callbacks"] = _callbacks(preset, in_run, expected_tasks)
+        config["trainer"]["callbacks"] = _callbacks(preset, chosen, expected_tasks)
     changes = {
         "tasks": (selection.name, selection.version),
         "init": None if init is None else (init.name, init.version),
@@ -448,7 +417,6 @@ def build_run(
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
     runs = []
-    post_runs = []
     for replicate in range(replicates):
         name = presets.run_name(preset, provenance, inputs_hash, replicate, control=control)
         run = _run_step(
@@ -464,15 +432,13 @@ def build_run(
             checkpoint_root=checkpoint_root,
         )
         runs.append(run)
-        for evaluation in post:
-            post_runs.append(_post_evaluation(run, evaluation, default, preset, config))
-    return SnowballRun(tuple(runs), tuple(post_runs))
+    return SnowballRun(tuple(runs))
 
 
 def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
     rows = []
     planned = []
-    for step in (*run.runs, *run.post_run_evaluations):
+    for step in run.runs:
         execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
         path = step.path(presets.artifact_prefix(execution.cluster))
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
@@ -587,8 +553,8 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
     "evaluations",
     multiple=True,
     type=click.Choice(sorted(presets.EVALUATIONS)),
-    help="Add an evaluation to train-long, which already runs panel-100 during training and panel-910 on its "
-    "final export. Repeatable.",
+    help="Add an evaluation to train-long, which already runs panel-100 before training and every 10 updates. "
+    "Repeatable.",
 )
 @click.option(
     "--replicates",
@@ -650,7 +616,7 @@ def main(
                 "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
             )
     _print_status(run, preset)
-    return (*run.runs, *run.post_run_evaluations)
+    return run.runs
 
 
 if __name__ == "__main__":

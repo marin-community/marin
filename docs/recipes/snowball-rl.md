@@ -21,7 +21,7 @@ launcher interface; Snowball steps use the fixed `PRESET_REVISION` instead.
 | speed-medium | 40 H100, east | ten synchronous updates, exactly 4,096 tokens per answer | median update time over updates 2–10 and staleness-0 k3 mismatch |
 | learning-medium | 40 H100, east | 25 synchronous RLOO-N updates | final panel equal-family mean; training metrics over updates 21–25 |
 | data-medium | 40 H100, east | learning-medium on candidate tasks | same fixed panel and recipe as learning-medium |
-| train-long | 112 H100, Reno; optional 40 H100, east | asynchronous training, default 100 updates | checkpoints, in-run panel and final 910-task evaluation; no verdict |
+| train-long | 112 H100, Reno; optional 40 H100, east | asynchronous training, default 100 updates | checkpoints, 100-task panel every 10 updates, HF export; no verdict |
 
 East means `cw-us-east-02a`; Reno means `cw-rno2a`. The 40-H100 layout has 32
 policy GPUs and 8 engine GPUs, 128 prompts×4 answers, a 24,576-token window and 8,192
@@ -74,8 +74,7 @@ task IDs, family, AAII category, agentic flag and grader kind.
 `PanelEvaluator` supplies native evaluation callbacks, sampling settings and versioned validation data sources.
 
 Learning/data medium evaluates all 910 tasks at the end; `--init` adds
-update 0. Train-long evaluates the fixed 100-task panel before training and every 10 updates,
-then evaluates all 910 tasks on the final HF export in a separate engine-only step.
+update 0. Train-long evaluates the fixed 100-task panel before training and every 10 updates.
 Metrics are in `exports/metrics/step-*.json`; per-answer JSONL is under
 `exports/dumped_evals/`. The canonical `terminal.json` records the result and Iris
 job ID. Inspect both the artifacts and job before treating a run as successful.
