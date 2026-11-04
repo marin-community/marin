@@ -438,7 +438,18 @@ async def test_an_untyped_machine_failure_holds_without_blaming_the_program(prop
     image_failure = FailingFactory(RuntimeError("docker build failed: COPY failed"))
 
     with pytest.raises(BuildInfrastructureFailure, match="unclassified_build_failure"):
+        await build_on(image_failure, False, proposal, services, glm_client, tmp_path)
+
+
+async def test_a_build_failure_the_program_raises_from_an_untyped_machine_failure_is_the_programs(
+    proposal, services, glm_client, tmp_path
+):
+    image_failure = FailingFactory(RuntimeError("docker build failed: COPY failed"))
+
+    with pytest.raises(BuildFailure) as failure:
         await build_on(image_failure, True, proposal, services, glm_client, tmp_path)
+
+    assert failure.value.step == "task"
 
 
 async def test_a_custom_grader_gets_its_own_timeout_before_the_host_deadline(context, monkeypatch):
