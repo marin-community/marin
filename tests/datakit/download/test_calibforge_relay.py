@@ -21,8 +21,15 @@ def _reply(analysis: str, keystrokes: str, task_complete: bool = False) -> dict:
     }
 
 
-def _row(messages: list[dict]) -> dict:
-    return {"sid": "episode-1", "teacher": "Qwen3.8-27B", "source": "horizon_0929", "passed": True, "messages": messages}
+def _row(messages: list[dict], task: str = "calibforge__contrastive_solver__clean-task") -> dict:
+    return {
+        "sid": "episode-1",
+        "teacher": "Qwen3.8-27B",
+        "source": "horizon_0929",
+        "task": task,
+        "passed": True,
+        "messages": messages,
+    }
 
 
 def test_relay_episode_keeps_teacher_reasoning_and_marks_trained_turns():
@@ -48,7 +55,7 @@ def test_relay_episode_keeps_teacher_reasoning_and_marks_trained_turns():
         ]
     )
 
-    [doc] = row_to_chat_doc(row)
+    [doc] = row_to_chat_doc(row, frozenset())
     validate_chat_messages([Message.from_dict(message) for message in doc["messages"]])
     rendered = render_chat_record(doc)["text"]
 
@@ -76,7 +83,7 @@ def test_assistant_reply_without_command_drops_the_episode(trained):
         ]
     )
 
-    assert row_to_chat_doc(row) == []
+    assert row_to_chat_doc(row, frozenset()) == []
 
 
 @pytest.mark.parametrize("missing_closers", [0, 1, 2, 3])
@@ -96,7 +103,8 @@ def test_reasoning_example_keeps_the_actual_command(missing_closers):
                 {"role": "user", "content": PROMPT, "trained": False},
                 {"role": "assistant", "content": content, "trained": True},
             ]
-        )
+        ),
+        frozenset(),
     )
     final = doc["messages"][-1]
     assert json.loads(final["content"][0]["text"]) == action
@@ -115,7 +123,8 @@ def test_command_payload_wrapped_in_reasoning_is_retained():
                     "trained": True,
                 },
             ]
-        )
+        ),
+        frozenset(),
     )
     assert json.loads(doc["messages"][-1]["content"][0]["text"]) == action
 
@@ -134,4 +143,24 @@ def test_unclosed_reasoning_does_not_turn_an_example_into_an_action(trained):
             },
         ]
     )
-    assert row_to_chat_doc(row) == []
+    assert row_to_chat_doc(row, frozenset()) == []
+
+
+@pytest.mark.parametrize(
+    ("task", "expected_count"),
+    [
+        ("calibforge__multi_solver__data-processing_20260419_023954_003", 0),
+        ("calibforge__contrastive_solver__clean-task", 1),
+        ("swe-smith__data-processing_20260419_023954_003", 1),
+    ],
+)
+def test_excluded_calibforge_task_drops_episode(task: str, expected_count: int):
+    row = _row(
+        [
+            {"role": "user", "content": PROMPT, "trained": False},
+            {"role": "assistant", "content": json.dumps(_reply("Finish.", "echo done\n")), "trained": True},
+        ],
+        task=task,
+    )
+
+    assert len(row_to_chat_doc(row, frozenset({"data-processing_20260419_023954_003"}))) == expected_count

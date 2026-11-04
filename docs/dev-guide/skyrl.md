@@ -49,6 +49,22 @@ to check runtime behavior after dependency changes.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
+## Grug activation storage
+
+With full/uniform recomputation and pipeline parallelism, Grug can store saved
+activation inputs in pinned CPU memory:
+
+```bash
++trainer.policy.megatron_config.transformer_config_kwargs.grug_checkpoint_cpu_offload=true
+```
+
+This opt-in uses PyTorch's `save_on_cpu` on non-final model stages, including
+the embedding stage. Backward restores each input to its original device before
+recomputation. Scoring and the final pipeline stage keep their normal storage
+policy. It trades host memory and device-to-host/host-to-device copies for GPU
+headroom; update time can increase. It cannot be combined with Megatron's other
+activation-offload modes.
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
