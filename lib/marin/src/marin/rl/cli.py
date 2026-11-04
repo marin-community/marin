@@ -125,6 +125,7 @@ def _coordinator_request(
             ),
         ),
         environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
+        max_retries_preemption=0,
         priority=priority_band_value(route.priority),
         timeout=Duration.from_hours(route.timeout_hours),
     )

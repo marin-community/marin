@@ -32,6 +32,10 @@ against vLLM `39e62869693c46402b1a95fde4fc55ca1aab9ae1`.
 GB200 artifact names include `piecewise-266cb34f775746ac`, and engine settings
 request `PIECEWISE` with capture sizes `[1, 2, 4, 8, 16]`. Batch invariance and
 routed-expert capture remain enabled. Full CUDA graphs remain unsupported.
+Native `cudagraph_metrics` records execution tables. Require capture logs and
+positive completed PIECEWISE executions for all twelve serving DP ranks before
+accepting the full-model gate. Coordinator and GPU tasks have zero failure and
+preemption retries.
 
 The CPU tests establish staging and launch composition only. Keep the
 qualification hold until the seven kernel/config cases, a matched route-enabled
@@ -42,7 +46,7 @@ Prepare the fixed-weight stage locally with the completed SFT64 export:
 
 ```bash
 uv run python -m experiments.post_training.hero_rl.launch \
-  --version 2026.11.04.32 --hardware gb200-48 --priority interactive \
+  --version 2026.11.04.33 --hardware gb200-48 --priority interactive \
   --stage numerics --probe-prompts 128 \
   --model-uri s3://marin-us-east-02a/marin/users/dlwh/hero-rl/sft64-bf16-fp32-router/2026.11.03.49 \
   --model-version 2026.10.22.64 \

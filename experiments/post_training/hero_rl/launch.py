@@ -333,6 +333,7 @@ def training_config(hardware: Hardware = Hardware.H100) -> dict:
     }
     _materialize_role_plan_config(config, plan)
     if hardware is Hardware.GB200_48:
+        config["generator"]["engine_init_kwargs"]["cudagraph_metrics"] = True
         config["generator"]["engine_init_kwargs"]["compilation_config"] = {
             "mode": 3,  # Exact-39e CompilationMode.VLLM_COMPILE.
             "cudagraph_mode": "PIECEWISE",

@@ -63,6 +63,7 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
     assert request.environment is not None
     assert request.environment.env_vars["DAYTONA_API_KEY"] == "secret"
     assert request.timeout == Duration.from_hours(18)
+    assert request.max_retries_failure == request.max_retries_preemption == request.max_task_failures == 0
     assert request.entrypoint.binary_entrypoint is not None
     assert request.entrypoint.binary_entrypoint.command == "python"
     assert request.entrypoint.binary_entrypoint.args == [

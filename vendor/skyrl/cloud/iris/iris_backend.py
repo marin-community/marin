@@ -1080,6 +1080,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             replicas=replicas,
             ports=[port.value for port in RayPort],
             max_retries_failure=args.max_retries,
+            max_retries_preemption=0,
             max_task_failures=args.max_retries,
             priority_band=priority_band,
             timeout=None if args.timeout == 0 else _seconds_to_duration(args.timeout),

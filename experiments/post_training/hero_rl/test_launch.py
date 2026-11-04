@@ -20,14 +20,32 @@ from experiments.post_training.hero_rl.launch import main as launch_main
 COMPOSE = """
 import json
 import sys
+import io
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+from cloud.iris import iris_backend
 from cloud.iris.launch_config import load_launch_config
 from omegaconf import OmegaConf
 from skyrl_train.callbacks.builtin import create_default_callbacks
 
 result = []
+
+class RecordingClient:
+    def submit(self, **kwargs):
+        self.request = kwargs
+        return SimpleNamespace(job_id="/test/qualification")
+
 for path in sys.argv[1:]:
     launch = load_launch_config(Path(path))
+    args = iris_backend._iris_submission_state(Path(path), launch)
+    args.no_wait = True
+    client = RecordingClient()
+    with redirect_stdout(io.StringIO()), patch(
+        "iris.cli.connect.open_iris_client", return_value=nullcontext(client)
+    ), patch("cloud.iris.iris_backend.wandb_launch_environment", return_value={}):
+        iris_backend.launch(args, Path.cwd())
     result.append({
         "training_type": launch.runtime.training_type,
         "policy_gpus": (
@@ -46,6 +64,9 @@ for path in sys.argv[1:]:
         "cluster": launch.iris.cluster,
         "target_cluster": launch.iris.target_cluster,
         "priority": launch.iris.priority,
+        "submission_retries": {name: client.request.get(name) for name in (
+            "max_retries_failure", "max_retries_preemption", "max_task_failures",
+        )},
         "memory": launch.iris.allocation.memory,
         "geometry": {key: launch.skyrl.trainer.policy.megatron_config[key] for key in (
             "tensor_model_parallel_size", "pipeline_model_parallel_size", "context_parallel_size",
@@ -61,6 +82,7 @@ for path in sys.argv[1:]:
         ),
         "batch_invariance": launch.skyrl.trainer.algorithm.batch_invariant,
         "routed_experts": launch.skyrl.generator.engine_init_kwargs.enable_return_routed_experts,
+        "cudagraph_metrics": launch.skyrl.generator.engine_init_kwargs.get("cudagraph_metrics", False),
         "callbacks": [type(callback).__name__ for callback in create_default_callbacks(launch.skyrl)],
     })
 print(json.dumps(result))
@@ -93,7 +115,14 @@ def test_hero_qualification_composes_multinode_probe_and_updates(tmp_path: Path)
     workflow = build_qualification("2026.11.03.1")
     paths = []
     for name, step in (("numerics", workflow.numerics), ("updates", workflow.updates)):
-        config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+        config = step.build_config(
+            StepContext.for_run(
+                output_path=f"s3://marin-us-east-02a/marin/users/test/hero-qualification/{name}",
+                prefix="s3://marin-us-east-02a/marin",
+                runtime_args=step.runtime_args,
+                deps=step.deps,
+            )
+        )
         path = tmp_path / f"{name}.yaml"
         path.write_text(config.launch_config_yaml)
         paths.append(str(path))
@@ -163,9 +192,15 @@ def test_experimental_gb200_profile_composes_36_learners_and_12_servers(tmp_path
         }
         assert stage["batch_invariance"] is True
         assert stage["routed_experts"] is True
+        assert stage["cudagraph_metrics"] is True
         assert stage["cluster"] == stage["target_cluster"] == "cw-us-east-08a"
         assert stage["priority"] == "interactive"
         assert stage["memory"] == "940GiB"
+        assert stage["submission_retries"] == {
+            "max_retries_failure": 0,
+            "max_retries_preemption": 0,
+            "max_task_failures": 0,
+        }
         assert stage["request_window"] == 4096
         assert stage["export_hf"] is False
         assert "CheckpointCallback" not in stage["callbacks"]
