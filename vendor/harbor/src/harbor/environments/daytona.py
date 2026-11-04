@@ -5,7 +5,7 @@
 
 import asyncio
 from collections.abc import Callable
-from contextlib import AsyncExitStack
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from functools import partial
 from pathlib import Path
 
@@ -24,7 +24,12 @@ from harbor.environments.docker_translate import COMPOSE_FILENAMES
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.runtime import HostCapabilities
-from harbor.environments.model_relay import ModelRelay, start_model_relays
+from harbor.environments.model_relay import (
+    JudgeAccess,
+    ModelRelay,
+    start_model_relays,
+    verifier_model_access,
+)
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
@@ -56,6 +61,7 @@ class DaytonaEnvironment(BaseEnvironment):
         create_timeout: float = 600,
         model_endpoint: str | None = None,
         model_name: str | None = None,
+        judge_access: JudgeAccess = JudgeAccess.VERIFIER,
         candidate_model_endpoint: str | None = None,
         candidate_model_name: str | None = None,
         **kwargs,
@@ -99,6 +105,8 @@ class DaytonaEnvironment(BaseEnvironment):
             network_policy=policy,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
+        self.judge_access = JudgeAccess(judge_access)
+        self._judge: ModelRelay | None = None
         self.candidate_model_endpoint, self.candidate_model_name = (
             candidate_model_endpoint,
             candidate_model_name,
@@ -180,6 +188,12 @@ class DaytonaEnvironment(BaseEnvironment):
             self.candidate_model_name,
             authentication=self.host_capabilities.model_authentication,
         )
+        if (
+            "OPENAI_BASE_URL" in self.task_env_config.env
+            and self.judge_access is not JudgeAccess.RUNTIME
+        ):
+            raise ValueError("Task model calls require explicit judge_access='runtime'")
+        self._judge = judge
         self._stopping = None
         self.machine = await acquire_owned(
             asyncio.create_task(self.factory.create(spec))
@@ -189,7 +203,7 @@ class DaytonaEnvironment(BaseEnvironment):
                 self.machine,
                 self._relay,
                 service_tasks,
-                judge=judge,
+                judge=judge if self.judge_access is JudgeAccess.RUNTIME else None,
                 candidate=candidate,
             )
             targets = self._mount_targets(writable_only=True)
@@ -208,6 +222,15 @@ class DaytonaEnvironment(BaseEnvironment):
                     f"Daytona sandbox cleanup failed ({type(cleanup_error).__name__})"
                 )
             raise
+
+    def verifier_model_access(
+        self, service_tasks: asyncio.TaskGroup
+    ) -> AbstractAsyncContextManager[None]:
+        if self.machine is None:
+            raise RuntimeError("Daytona environment is not running")
+        return verifier_model_access(
+            self.machine, self._judge, self.judge_access, service_tasks
+        )
 
     async def stop(self, delete: bool) -> None:
         if self._stopping is None:

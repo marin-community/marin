@@ -8,9 +8,11 @@ import json
 from pathlib import Path
 
 import pytest
+import httpx
 
 from harbor.agents.base import BaseAgent
 from harbor.environments import local, model_relay
+from harbor.environments.runtime import HostCapabilities
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
@@ -47,6 +49,26 @@ class WaitingAgent(PartialAnswerAgent):
     async def run(self, instruction, environment, context) -> None:
         self.running.set()
         await asyncio.Event().wait()
+
+
+class JudgeProbeAgent(PartialAnswerAgent):
+    async def run(self, instruction, environment, context) -> None:
+        script = f"""
+import os, urllib.error, urllib.request
+assert 'OPENAI_BASE_URL' not in os.environ
+assert 'OPENAI_API_KEY' not in os.environ
+request = urllib.request.Request('http://127.0.0.1:{model_relay.MODEL_RELAY_PORT}/v1/chat/completions', data=b'{{}}')
+try:
+    urllib.request.urlopen(request, timeout=1)
+except urllib.error.URLError:
+    open('judge-blocked', 'w').write('blocked')
+else:
+    raise AssertionError('The candidate reached the verifier model')
+"""
+        with environment.scoped_exec_env(self.extra_env):
+            result = await environment.exec("python3 - <<'PY'\n" + script + "\nPY")
+        if result.return_code:
+            raise RuntimeError(result.stderr)
 
 
 class ProcessTaskFactory:
@@ -128,6 +150,65 @@ async def test_agent_deadline_preserves_partial_answer_for_actual_grading_script
     native = TrialResult.model_validate_json(trial.paths.result_path.read_text())
     assert native.completion is not None
     assert native.finished_at is not None
+
+
+async def test_verifier_judge_is_unavailable_to_candidate_but_available_to_actual_grader(
+    tmp_path, monkeypatch
+):
+    port = available_port()
+    monkeypatch.setattr(model_relay, "MODEL_RELAY_PORT", port)
+    factory = ProcessTaskFactory(tmp_path / "guest")
+    monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
+    original_client = httpx.AsyncClient
+
+    def provider(request):
+        assert request.headers["authorization"] == "Bearer verifier-private"
+        assert json.loads(request.content)["model"] == "judge"
+        return httpx.Response(200, json={"answer": "accepted"})
+
+    monkeypatch.setattr(
+        model_relay.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(provider), **kwargs
+        ),
+    )
+    config = trial_config(tmp_path, "verifier-only", guest_root=tmp_path / "guest")
+    config.agent = AgentConfig(
+        import_path="tests.unit.test_trial_service_lifetime:JudgeProbeAgent",
+        override_timeout_sec=10,
+    )
+    config.environment.kwargs = {
+        "model_endpoint": "https://judge.test/v1",
+        "model_name": "judge",
+    }
+    config.verifier.env.update(
+        {"OPENAI_BASE_URL": "${OPENAI_BASE_URL}", "OPENAI_API_KEY": "${OPENAI_API_KEY}"}
+    )
+    (config.task.path / "tests/test.sh").write_text(
+        "#!/bin/sh\nset -eu\npython3 - <<'PY'\n"
+        "import json, os, urllib.request\n"
+        "assert open('judge-blocked').read() == 'blocked'\n"
+        "request=urllib.request.Request(os.environ['OPENAI_BASE_URL']+'/chat/completions',data=b'{}')\n"
+        "assert json.load(urllib.request.urlopen(request))['answer'] == 'accepted'\n"
+        "open(os.environ['TEST_REWARD_PATH'],'w').write('1')\nPY\n"
+    )
+    trial = await Trial.create(
+        config,
+        guest_environment={
+            "OPENAI_BASE_URL": f"http://127.0.0.1:{port}/v1",
+            "OPENAI_API_KEY": "EMPTY",
+        },
+        host_capabilities=HostCapabilities(
+            model_authentication={"https://judge.test/v1": "verifier-private"}
+        ),
+    )
+
+    result = await trial.run()
+
+    assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert factory.machine.closed
 
 
 async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor(

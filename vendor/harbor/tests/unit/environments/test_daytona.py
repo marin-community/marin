@@ -235,6 +235,11 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
             adapter.factory = factory
             await adapter.start(False, service_tasks=service_tasks)
             try:
+                unavailable = (
+                    'python3 -c "import socket; s=socket.socket(); '
+                    f"assert s.connect_ex(('127.0.0.1', {port})) != 0\""
+                )
+                assert (await adapter.exec(unavailable)).return_code == 0
                 verifier = Verifier(
                     Task(task_dir),
                     trial_paths,
@@ -244,7 +249,9 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
                         "OPENAI_BASE_URL": f"http://127.0.0.1:{port}/v1",
                     },
                 )
-                assert (await verifier.verify()).rewards == {"reward": 1.0}
+                async with adapter.verifier_model_access(service_tasks):
+                    assert (await verifier.verify()).rewards == {"reward": 1.0}
+                assert (await adapter.exec(unavailable)).return_code == 0
             finally:
                 await adapter.stop(True)
             assert factory.machine.closed
@@ -370,6 +377,7 @@ async def test_installed_candidate_relay_buffers_sdk_events_and_keeps_judge_sepa
             candidate_model_name="candidate-model",
             model_endpoint="https://judge.example/v1",
             model_name="judge-model",
+            judge_access="runtime",
         )
         adapter.factory = factory
         await adapter.start(False, service_tasks=service_tasks)

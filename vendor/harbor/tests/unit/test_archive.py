@@ -737,3 +737,97 @@ def test_resume_incomplete_attempt_without_required_native_evidence_stays_unseal
     assert not reader.is_sealed()
     assert _sample_rows(root) == []
     assert reader.scan(ARCHIVE_STEPS_TABLE) is None
+
+
+@pytest.mark.parametrize(
+    "exception_type,trajectory",
+    [
+        ("RuntimeError", True),
+        ("TrialTimeoutError", False),
+        ("AgentTimeoutError", True),
+        ("SandboxBuildFailedError", False),
+    ],
+)
+def test_incomplete_attempt_evidence_does_not_prevent_successful_retry_sealing(
+    tmp_path, exception_type, trajectory
+):
+    root = str(tmp_path / "archive")
+    abandoned = _end_event(
+        tmp_path,
+        reward=0.0,
+        exception_type=exception_type,
+        trajectory=trajectory,
+        attempt=0,
+    )
+    assert abandoned.result is not None
+    abandoned.result.completion = None
+    if trajectory:
+        (
+            abandoned.result.resolve_trial_path(tmp_path) / "agent" / "trajectory.json"
+        ).write_bytes(b'{"partial":')
+    native = abandoned.result.model_dump_json(indent=4).encode()
+    (abandoned.result.resolve_trial_path(tmp_path) / "result.json").write_bytes(native)
+    selected = _end_event(tmp_path, reward=1.0, attempt=1)
+    assert selected.result is not None
+    archive = _open_archive(root, trials_dir=tmp_path)
+    asyncio.run(archive.on_trial_end(abandoned))
+    asyncio.run(archive.on_trial_end(selected))
+    asyncio.run(archive.finalize([selected.result.slimmed()]))
+    archive.seal()
+    archive.close()
+
+    reader = ReadView(root)
+    assert reader.is_sealed()
+    prefix = f"sources/harbor/t0/attempts/{abandoned.result.id}"
+    assert reader.read_blob(f"{prefix}/result.json") == native
+    assert reader.blob_metadata(f"{prefix}/result.json")["trajectory_present"] is None
+    raw = reader.read_blob(f"{prefix}/trajectory.json")
+    assert raw == (b'{"partial":' if trajectory else None)
+    [row] = _sample_rows(root)
+    assert sample_from_archive_row(row).grading.score == 1.0
+    assert (
+        reader.read_blob("sources/harbor/t0/result.json")
+        == selected.result.model_dump_json(indent=4).encode()
+    )
+
+
+def test_missing_declared_terminal_trajectory_still_prevents_retry_archive_sealing(
+    tmp_path,
+):
+    root = str(tmp_path / "archive")
+    corrupt = _end_event(tmp_path, reward=0.0, attempt=0)
+    assert corrupt.result is not None
+    (corrupt.result.resolve_trial_path(tmp_path) / "agent" / "trajectory.json").unlink()
+    selected = _end_event(tmp_path, reward=1.0, attempt=1)
+    assert selected.result is not None
+    archive = _open_archive(root, trials_dir=tmp_path)
+    asyncio.run(archive.on_trial_end(corrupt))
+    asyncio.run(archive.on_trial_end(selected))
+    with pytest.raises(ExceptionGroup, match="archive writes failed"):
+        asyncio.run(archive.finalize([selected.result]))
+    archive.close()
+
+    assert not ReadView(root).is_sealed()
+
+
+def test_incomplete_scored_end_result_remains_evidence_without_normalized_sample(
+    tmp_path,
+):
+    root = str(tmp_path / "archive")
+    event = _end_event(tmp_path, reward=1.0)
+    assert event.result is not None
+    event.result.completion = None
+    archive = _open_archive(root, trials_dir=tmp_path)
+    asyncio.run(archive.on_trial_end(event))
+    with pytest.raises(ExceptionGroup, match="archive writes failed"):
+        asyncio.run(archive.finalize([event.result.slimmed()]))
+    archive.close()
+
+    reader = ReadView(root)
+    assert not reader.is_sealed()
+    assert _sample_rows(root) == []
+    prefix = f"sources/harbor/t0/attempts/{event.result.id}"
+    native = reader.read_blob(f"{prefix}/result.json")
+    assert native is not None
+    assert TrialResult.model_validate_json(native).completion is None
+    assert reader.blob_metadata(f"{prefix}/result.json")["trajectory_present"] is None

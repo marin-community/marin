@@ -171,6 +171,7 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
                 trial_paths=TrialPaths(tmp_path / "trial"),
                 model_endpoint="https://judge.test/v1",
                 model_name="judge-model",
+                judge_access="runtime",
                 task_env_config=EnvironmentConfig(
                     allow_internet=False,
                     mcp_servers=[

@@ -51,6 +51,7 @@ def _task_with_configured_artifacts(
 
 def _make_env(mounted: bool) -> AsyncMock:
     env = AsyncMock()
+    env.verifier_model_access = lambda _: contextlib.nullcontext()
     env.default_user = None
     env.capabilities.mounted = mounted
     env.os.value = "linux"

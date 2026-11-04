@@ -14,7 +14,7 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
 from harbor.models.task.config import EnvironmentConfig
-from harbor.environments.runtime import DaytonaConnection, host_backend_credentials
+from harbor.environments.runtime import DaytonaConnection, HostCapabilities
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
@@ -84,6 +84,9 @@ class InstalledAgentRuntime:
         self.backend = backend
         self.daytona_connection = daytona_connection
         self.eval_daytona_connection = eval_daytona_connection
+        self.protected_values = frozenset(
+            value for value in (daytona_connection.api_key, eval_daytona_connection.api_key) if value
+        )
         self.limits = NativeAPILimits(backend.model_name, backend.max_model_len, max_output_tokens)
         self.resources = AsyncExitStack()
         self.port: int | None = None
@@ -150,6 +153,10 @@ class InstalledAgentRuntime:
         kwargs.pop("api_key_env", None)
         kwargs.pop("eval_api_key_env", None)
         connection = self.eval_daytona_connection if phase == "eval" else self.daytona_connection
+        host_capabilities = HostCapabilities(
+            daytona=connection,
+            protected_values=self.protected_values,
+        )
         environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
         agent = self.settings.agent.model_copy(
             update={
@@ -166,12 +173,13 @@ class InstalledAgentRuntime:
         )
 
         async def run(complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> TrialResult:
-            with host_backend_credentials(
-                daytona_api_key=connection.api_key,
-                daytona_api_url=connection.api_url,
-                daytona_target=connection.target,
-            ):
-                return await self.run_original_trial(complete, lowered=lowered, session_id=session_id, config=config)
+            return await self.run_original_trial(
+                complete,
+                lowered=lowered,
+                session_id=session_id,
+                config=config,
+                host_capabilities=host_capabilities,
+            )
 
         return HarborTrialHarness(run, self.settings.trial_reward_key)
 
@@ -182,6 +190,7 @@ class InstalledAgentRuntime:
         lowered: TaskRolloutSpec,
         session_id: str,
         config: TrialConfig,
+        host_capabilities: HostCapabilities,
     ) -> TrialResult:
         """Execute the original package with Harbor-owned environments and verification."""
         if self.port is None:
@@ -214,7 +223,7 @@ class InstalledAgentRuntime:
                         "environment": environment,
                     }
                 )
-                trial = await Trial.create(trial_config)
+                trial = await Trial.create(trial_config, host_capabilities=host_capabilities, guest_environment={})
                 result = await run_harbor_trial(trial, self.backend, complete, evidence / "engine")
                 return result.model_copy(update={"trial_uri": join_resource_path(destination, "trials", attempt_id)})
         finally:
@@ -271,7 +280,10 @@ class InstalledAgentRuntime:
             run_timeout,
             capability_lifetime=self.settings.setup_timeout + run_timeout + self.settings.cleanup_timeout,
         ) as config:
-            agent = AgentFactory.create_agent_from_config(config, logs_dir=trial_dir / "agent")
+            host_capabilities = HostCapabilities(protected_values=self.protected_values)
+            agent = AgentFactory.create_agent_from_config(
+                config, logs_dir=trial_dir / "agent", host_capabilities=host_capabilities, guest_environment={}
+            )
             if not isinstance(agent, BaseInstalledAgent):
                 raise ValueError("The selected agent must be an installed Harbor agent")
             environment = BorrowedMachineEnvironment(
@@ -279,6 +291,7 @@ class InstalledAgentRuntime:
                 trial_dir,
                 attempt_id,
                 EnvironmentConfig(allow_internet=lowered.task_machine.network == NetworkPolicy.ALLOW),
+                host_capabilities=host_capabilities,
             )
             with environment.with_default_user(lowered.task_machine.user):
                 await run_installed_agent(

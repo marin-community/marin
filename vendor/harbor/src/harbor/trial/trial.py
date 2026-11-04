@@ -68,6 +68,7 @@ from harbor.utils.artifact_authority import validate_artifact_authority
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
 from harbor.verifier.factory import VerifierFactory
+from harbor.verifier.base import BaseVerifier
 
 TrialHookCallback = Callable[[TrialHookEvent], Awaitable[None]]
 
@@ -848,13 +849,27 @@ class Trial(ABC):
                 step_name=step_name,
                 timeout_sec=timeout_sec,
             )
-            return await self._await_phase(
-                verifier.verify(),
-                timeout_sec=timeout_sec,
-                timeout_error=VerifierTimeoutError(
-                    f"Verifier execution timed out after {timeout_sec} seconds"
-                ),
-            )
+            return await self._verify(verifier, self.agent_environment, timeout_sec)
+
+    async def _verify(
+        self,
+        verifier: BaseVerifier,
+        environment: BaseEnvironment,
+        timeout_sec: float | None,
+    ) -> VerifierResult:
+        assert self._service_tasks is not None
+
+        async def verify() -> VerifierResult:
+            async with environment.verifier_model_access(self._service_tasks):
+                return await verifier.verify()
+
+        return await self._await_phase(
+            verify(),
+            timeout_sec=timeout_sec,
+            timeout_error=VerifierTimeoutError(
+                f"Verifier execution timed out after {timeout_sec} seconds"
+            ),
+        )
 
     async def _run_separate_verifier(
         self,
@@ -920,13 +935,7 @@ class Trial(ABC):
                     timeout_sec=timeout_sec,
                 )
 
-                return await self._await_phase(
-                    verifier.verify(),
-                    timeout_sec=timeout_sec,
-                    timeout_error=VerifierTimeoutError(
-                        f"Verifier execution timed out after {timeout_sec} seconds"
-                    ),
-                )
+                return await self._verify(verifier, target_env, timeout_sec)
 
     @contextlib.asynccontextmanager
     async def _separate_verifier_env(

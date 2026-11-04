@@ -120,48 +120,52 @@ async def qemu_check(
         guest_memory_mb=guest_memory_mb,
     )
     started = time.monotonic()
-    try:
-        await env.start(False)
-        start_sec = time.monotonic() - started
-        await env.upload_dir(task / "tests", "/tests")
-        if (task / "setup_files").is_dir():
-            await env.upload_dir(task / "setup_files", "/setup_files")
-        if check == "oracle":
-            await env.upload_dir(task / "solution", "/solution")
-        action_start = time.monotonic()
-        action = await env.exec(
-            "bash /solution/solve.sh" if check == "oracle" else "true", timeout_sec=600
-        )
-        action_sec = time.monotonic() - action_start
-        verify_start = time.monotonic()
-        verify = await env.exec(VERIFIER_COMMAND, timeout_sec=600)
-        verify_sec = time.monotonic() - verify_start
-        verdict_path = output / "qemu-verdicts" / task.name / f"{check}.json"
-        verdict_path.parent.mkdir(parents=True, exist_ok=True)
-        result = await env.exec("test -f /logs/verifier/verdict.json")
-        if result.return_code == 0:
-            await env.download_file("/logs/verifier/verdict.json", verdict_path)
-        return {
-            "start_sec": start_sec,
-            "action_sec": action_sec,
-            "verify_sec": verify_sec,
-            "action_exit": action.return_code,
-            "verify_exit": verify.return_code,
-            "action_stderr": (action.stderr or "")[-500:],
-            "verify_stderr": (verify.stderr or "")[-500:],
-            "verdict": (
-                json.loads(verdict_path.read_text()) if verdict_path.exists() else None
-            ),
-            "pss_memory_bytes": (
-                qemu_pss_bytes(env.machine.process.pid)
-                if env.machine and env.machine.process
-                else None
-            ),
-        }
-    except Exception as error:
-        return {"error": repr(error), "elapsed_sec": time.monotonic() - started}
-    finally:
-        await env.stop(True)
+    async with asyncio.TaskGroup() as service_tasks:
+        try:
+            await env.start(False, service_tasks=service_tasks)
+            start_sec = time.monotonic() - started
+            await env.upload_dir(task / "tests", "/tests")
+            if (task / "setup_files").is_dir():
+                await env.upload_dir(task / "setup_files", "/setup_files")
+            if check == "oracle":
+                await env.upload_dir(task / "solution", "/solution")
+            action_start = time.monotonic()
+            action = await env.exec(
+                "bash /solution/solve.sh" if check == "oracle" else "true",
+                timeout_sec=600,
+            )
+            action_sec = time.monotonic() - action_start
+            verify_start = time.monotonic()
+            verify = await env.exec(VERIFIER_COMMAND, timeout_sec=600)
+            verify_sec = time.monotonic() - verify_start
+            verdict_path = output / "qemu-verdicts" / task.name / f"{check}.json"
+            verdict_path.parent.mkdir(parents=True, exist_ok=True)
+            result = await env.exec("test -f /logs/verifier/verdict.json")
+            if result.return_code == 0:
+                await env.download_file("/logs/verifier/verdict.json", verdict_path)
+            return {
+                "start_sec": start_sec,
+                "action_sec": action_sec,
+                "verify_sec": verify_sec,
+                "action_exit": action.return_code,
+                "verify_exit": verify.return_code,
+                "action_stderr": (action.stderr or "")[-500:],
+                "verify_stderr": (verify.stderr or "")[-500:],
+                "verdict": (
+                    json.loads(verdict_path.read_text())
+                    if verdict_path.exists()
+                    else None
+                ),
+                "pss_memory_bytes": (
+                    qemu_pss_bytes(env.machine.process.pid)
+                    if env.machine and env.machine.process
+                    else None
+                ),
+            }
+        except Exception as error:
+            return {"error": repr(error), "elapsed_sec": time.monotonic() - started}
+        finally:
+            await env.stop(True)
 
 
 async def compare(root: Path, limit: int | None, concurrency: int) -> None:

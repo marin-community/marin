@@ -5,7 +5,7 @@
 
 import asyncio
 import tempfile
-from contextlib import AsyncExitStack
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
@@ -21,7 +21,12 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.execution import execute_shellbox_command
-from harbor.environments.model_relay import ModelRelay, start_model_relays
+from harbor.environments.model_relay import (
+    JudgeAccess,
+    ModelRelay,
+    start_model_relays,
+    verifier_model_access,
+)
 from harbor.environments.docker_translate import import_prepared_task
 from harbor.environments.resource_policies import validate_local_resources
 from harbor.models.environment_type import EnvironmentType
@@ -63,6 +68,7 @@ class LocalEnvironment(BaseEnvironment):
         ttl: float = 3600,
         model_endpoint: str | None = None,
         model_name: str | None = None,
+        judge_access: JudgeAccess = JudgeAccess.VERIFIER,
         candidate_model_endpoint: str | None = None,
         candidate_model_name: str | None = None,
         **kwargs,
@@ -84,6 +90,8 @@ class LocalEnvironment(BaseEnvironment):
         self._service_log_paths: tuple[tuple[str, str], ...] = ()
         self.model_endpoint = model_endpoint
         self.model_name = model_name
+        self.judge_access = JudgeAccess(judge_access)
+        self._judge: ModelRelay | None = None
         self.candidate_model_endpoint = candidate_model_endpoint
         self.candidate_model_name = candidate_model_name
         super().__init__(*args, **kwargs)
@@ -190,6 +198,9 @@ class LocalEnvironment(BaseEnvironment):
             raise ValueError(
                 "Task model calls require an explicit hosted judge (--judge-model) or standalone host model endpoint"
             )
+        if needs_model and self.judge_access is not JudgeAccess.RUNTIME:
+            raise ValueError("Task model calls require explicit judge_access='runtime'")
+        self._judge = judge
         self._stopping = None
         self.factory.check_environment(
             _TRIAL_EXECUTION_REQUIREMENTS, task_spec.primary_container.machine
@@ -204,7 +215,7 @@ class LocalEnvironment(BaseEnvironment):
                 self.machine,
                 self._relay,
                 service_tasks,
-                judge=judge,
+                judge=judge if self.judge_access is JudgeAccess.RUNTIME else None,
                 candidate=candidate,
             )
             await execution.wait_ready()
@@ -270,6 +281,15 @@ class LocalEnvironment(BaseEnvironment):
     async def quiesce_agent_commands(self) -> None:
         if self.machine is not None:
             await self.machine.quiesce_commands()
+
+    def verifier_model_access(
+        self, service_tasks: asyncio.TaskGroup
+    ) -> AbstractAsyncContextManager[None]:
+        if self.machine is None:
+            raise RuntimeError("Prepared sandbox is not running")
+        return verifier_model_access(
+            self.machine, self._judge, self.judge_access, service_tasks
+        )
 
     async def exec(
         self,

@@ -339,17 +339,26 @@ class TrialArchive:
                 )
 
     def _write_attempt(self, result: TrialResult) -> None:
-        _validate_native_result(result, result)
-        assert result.completion is not None
         prefix = f"harbor/{result.trial_name}/attempts/{result.id}"
         native = result.model_dump_json(indent=4).encode()
         trial_dir = result.resolve_trial_path(self._trials_dir)
         trajectory_path = trial_dir / "agent" / "trajectory.json"
-        raw = (
-            trajectory_path.read_bytes()
-            if result.completion.trajectory_present
+        trajectory_present = (
+            result.completion.trajectory_present
+            if result.completion is not None
             else None
         )
+        # Unconfirmed teardown still leaves useful native evidence. Its trajectory
+        # state stays unknown until a finalized result selects a complete pair.
+        if trajectory_present is True:
+            raw = trajectory_path.read_bytes()
+        elif trajectory_present is False:
+            raw = None
+        else:
+            try:
+                raw = trajectory_path.read_bytes()
+            except FileNotFoundError:
+                raw = None
         digest = hashlib.sha256(native)
         digest.update(b"\0no-trajectory" if raw is None else b"\0trajectory\0")
         if raw is not None:
@@ -368,9 +377,7 @@ class TrialArchive:
                     name=f"{prefix}/result.json",
                     raw=native,
                     content_type=_JSON_CONTENT_TYPE,
-                    metadata={
-                        "trajectory_present": result.completion.trajectory_present
-                    },
+                    metadata={"trajectory_present": trajectory_present},
                 )
             ]
             if raw is not None:

@@ -180,6 +180,8 @@ For prepared tasks and private container groups, select Harbor's local bubblewra
 n_concurrent_trials: 4
 environment:
   type: local
+  kwargs:
+    cgroup_parent: /sys/fs/cgroup/path/to/delegated-worker
 agents:
   - name: terminus-2
 datasets:
@@ -193,6 +195,8 @@ uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b --harbor-config path/to/policy.yaml --limit 1 --dry-run
 ```
 
+Set `cgroup_parent` to the execution worker's delegated directory before submitting; see the
+local factory settings below. Launcher preflight does not validate a distant worker's delegation.
 Remove `--dry-run` to submit. Each task must set `allow_internet = false`. A single-container task
 names a prebuilt `docker_image` with an immutable `@sha256:` digest and an absolute `workdir`.
 Compose tasks instead provide `environment/shellbox-images.json`, mapping each service to its prepared
@@ -311,8 +315,8 @@ and response bodies. Upstream authentication and context-limit errors retain san
 error codes; provider error messages are never forwarded. The Responses route supports non-streaming text input with
 an output-token limit and reasoning options; tools, stored responses, and stateful
 continuations are unsupported.
-Codex and Claude Code require protocols beyond this relay's supported contract and are rejected
-at admission. A text-only Responses route does not provide their full tool protocol.
+Codex and Claude Code require protocols beyond this relay's supported contract. Marin's launch
+preflight rejects them. A text-only Responses route does not provide their full tool protocol.
 The tokenization route uses the configured upstream's server root. For installed
 SDKs requesting streaming chat, the host obtains one non-streaming completion and
 returns bounded SSE frames containing its text, reasoning, tool calls, finish reason,
@@ -361,19 +365,10 @@ environment:
     ttl: 3600
 ```
 
-Without delegation, explicitly select `ignore` for declared CPU or memory values;
-`auto` does not silently discard them. Storage quotas, GPU and TPU allocations
-remain unsupported. For a worker without delegation:
-
-```yaml
-environment:
-  type: local
-  cpu_enforcement_policy: ignore
-  memory_enforcement_policy: ignore
-  kwargs:
-    cgroup_parent: /sys/fs/cgroup/path/to/delegated-worker
-    ttl: 3600
-```
+Delegation remains required for command containment when CPU or memory enforcement is set to
+`ignore`; a worker without delegation cannot run this adapter. Select `ignore` to omit a declared
+resource limit. `auto` does not silently discard it. Storage quotas, GPU and TPU allocations
+remain unsupported.
 
 Run the policy through the isolated Harbor binary on that worker:
 
@@ -431,6 +426,22 @@ mapping whose default is empty. They cannot resolve arbitrary host variables. St
 control-plane and model-provider credential keys and known credential values are rejected before
 sandbox commands run. Model clients receive inert keys for a declared relay. Host authentication
 files, GitHub tokens and AWS/Bedrock credentials cannot be forwarded to installed agents.
+
+The template mapping is a resolution source, not an environment forwarded to every agent.
+Candidates receive only their declared agent variables; installed candidates use the separate
+candidate relay on port 8788. Judge access defaults to `judge_access: verifier`: the relay on port
+8787 opens at verification and closes when verification ends. This restricts when the service
+exists; it does not create a separate verifier network. Local execution stops candidate command
+cgroups before grading. Daytona has no equivalent confirmation for every detached descendant,
+so an independently surviving candidate process could reach the relay during grading.
+
+Tau3's simulated user/runtime and Sotopia's partner/evaluator need their model during execution.
+The Marin driver declares `judge_access: runtime` for those consumers and explicitly configures
+the Tau3 user environment. Standalone task runtimes must request that mode themselves. Runtime
+model access shares the task group's loopback network: the candidate can also reach that relay
+while the runtime uses it. These tasks do not provide isolation between model consumers inside
+one task group.
+
 Below, persistent variables are explicit `persistent_env` / `--ae` settings;
 Harbor infrastructure values name images, resource limits and log mount paths.
 
@@ -614,6 +625,9 @@ Each attempt commits its native result, trajectory, and trajectory-presence meta
 FineStore transaction. A result is terminal only after the trial's service task group and
 environment cleanup finish. Resume can repair a partial archive from terminal native files;
 missing required evidence fails the run and leaves the archive unsealed.
+An attempt with unconfirmed completion retains native evidence with unknown trajectory presence,
+but contributes no normalized rows. It remains retryable on resume and does not prevent a later
+complete selected attempt from sealing the archive.
 
 Tau3's ACP bridge retains `agent/bridge-trajectory.json` as a raw ACPX export in the trial
 directory. It does not currently convert that export to Harbor's ATIF `agent/trajectory.json`.

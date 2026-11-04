@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-from harbor.environments.model_relay import MODEL_RELAY_PORT
+from harbor.environments.model_relay import MODEL_RELAY_PORT, JudgeAccess
 from harbor.environments.runtime import host_capabilities_from_environment
 from harbor.job import Job
 from harbor.models.environment_type import EnvironmentType
@@ -28,6 +28,23 @@ async def run(config: JobConfig, api_key: str) -> None:
         "TAU2_NL_ASSERTIONS_MODEL": f"openai/{model}",
         "TAU2_USER_REASONING_EFFORT": "",
     }
+    config = config.model_copy(
+        update={
+            "environment": config.environment.model_copy(
+                update={
+                    "kwargs": {
+                        **config.environment.kwargs,
+                        "judge_access": JudgeAccess.RUNTIME,
+                    }
+                }
+            ),
+            "user_agent": (
+                config.user_agent.model_copy(update={"env": capabilities})
+                if config.user_agent is not None
+                else None
+            ),
+        }
+    )
     job = await Job.create(
         config,
         guest_environment=capabilities,

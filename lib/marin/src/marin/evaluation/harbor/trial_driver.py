@@ -34,6 +34,7 @@ from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
     CANDIDATE_MODEL_RELAY_PORT,
     MODEL_RELAY_PORT,
     SUPPORTED_MODEL_APIS,
+    JudgeAccess,
 )
 from harbor.environments.resource_policies import validate_local_resources  # pyrefly: ignore[missing-import]
 from harbor.environments.runtime import (  # pyrefly: ignore[missing-import]
@@ -88,6 +89,7 @@ _MODEL_RELAY_ENVIRONMENT_KWARGS = frozenset(
         "model_name",
         "candidate_model_endpoint",
         "candidate_model_name",
+        "judge_access",
     }
 )
 _LOCAL_ENVIRONMENT_KWARGS = _MODEL_RELAY_ENVIRONMENT_KWARGS | {
@@ -222,17 +224,17 @@ def _validate_agent(agent: AgentConfig) -> str:
     return agent_name.value
 
 
-def _validate_environment(config: JobConfig) -> str:
+def _validate_environment(config: JobConfig, *, permitted_user_environment: Mapping[str, str] | None = None) -> str:
     environment = config.environment
     _load_environment_class(environment.type)
     if environment.type == EnvironmentType.LOCAL:
-        _validate_prepared_policy(config)
+        _validate_prepared_policy(config, permitted_user_environment=permitted_user_environment)
     elif environment.type in {EnvironmentType.QEMU, EnvironmentType.SHELLSIM}:
         resolve_env_vars(config.verifier.env, source=_model_environment(config))
     return environment.type.value
 
 
-def _validate_prepared_policy(config: JobConfig) -> None:
+def _validate_prepared_policy(config: JobConfig, *, permitted_user_environment: Mapping[str, str] | None = None) -> None:
     """Keep model transport and credentials in the trusted harness for offline tasks."""
     environment = config.environment
     label = f"Shellbox {environment.type.value}"
@@ -246,7 +248,7 @@ def _validate_prepared_policy(config: JobConfig) -> None:
             user_agent.name is not None
             or user_agent.import_path != _TAU3_USER_AGENT
             or user_agent.mode != "container"
-            or user_agent.env
+            or (user_agent.env and user_agent.env != permitted_user_environment)
             or user_agent.skills
             or user_agent.user_persona_path is not None
             or user_agent.user_prompt_template_path is not None
@@ -318,6 +320,13 @@ def _validate_job_tasks(job: Job) -> None:
             for values in task_environments
         ):
             raise ValueError("Task model inputs require an explicit host judge capability before allocation")
+        if {
+            "OPENAI_BASE_URL",
+            "OPENAI_API_KEY",
+        } & task.config.environment.env.keys() and job.config.environment.kwargs.get(
+            "judge_access", JudgeAccess.VERIFIER
+        ) != JudgeAccess.RUNTIME:
+            raise ValueError("Task model inputs require explicit runtime judge access")
         if task.config.environment.os != TaskOS.LINUX:
             raise ValueError("Shellbox Harbor adapters currently require Linux tasks")
         if job.config.environment.type == EnvironmentType.LOCAL:
@@ -561,6 +570,8 @@ def _dataset_with_runtime(
 
 
 def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
+    if config.environment.type == EnvironmentType.LOCAL:
+        _validate_prepared_policy(config)
     validate_task_environment(
         {
             name: "EMPTY"
@@ -575,6 +586,8 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
         task_limit=overlay.task_limit,
     )
     environment = config.environment
+    user_agent = _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None
+    permitted_user_environment = None
     if _installed_agent(config.agents[0]):
         if environment.type not in _MODEL_RELAY_ENVIRONMENTS:
             raise ValueError("Installed candidate model relays require the local or Daytona Shellbox backend")
@@ -599,11 +612,27 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
                     **environment.kwargs,
                     "model_endpoint": endpoint,
                     "model_name": model_name,
+                    "judge_access": JudgeAccess(
+                        environment.kwargs.get(
+                            "judge_access",
+                            (
+                                JudgeAccess.RUNTIME
+                                if (
+                                    agent.name == "sotopia"
+                                    or (user_agent is not None and user_agent.import_path == _TAU3_USER_AGENT)
+                                )
+                                else JudgeAccess.VERIFIER
+                            ),
+                        )
+                    ),
                 }
             }
         )
         guest_model_name = overlay.judge_model_identity or config.verifier.model_name or model_name
         verifier_env = _guest_model_environment(verifier_env, guest_model_name)
+        if user_agent is not None and user_agent.import_path == _TAU3_USER_AGENT:
+            permitted_user_environment = _model_role_environment(guest_model_name)
+            user_agent = user_agent.model_copy(update={"env": permitted_user_environment})
         if agent.name == "sotopia":
             agent = agent.model_copy(
                 update={
@@ -622,7 +651,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "job_name": overlay.job_name,
             "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
             "agents": [agent],
-            "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
+            "user_agent": user_agent,
             "datasets": [dataset],
             "environment": environment,
             "verifier": config.verifier.model_copy(
@@ -634,7 +663,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             ),
         }
     )
-    _validate_environment(effective)
+    _validate_environment(effective, permitted_user_environment=permitted_user_environment)
     return effective
 
 
@@ -735,6 +764,10 @@ def _model_environment(config: JobConfig) -> dict[str, str]:
     if config.environment.type not in _MODEL_RELAY_ENVIRONMENTS or not config.environment.kwargs.get("model_endpoint"):
         return {}
     model_name = config.verifier.model_name or str(config.environment.kwargs.get("model_name", _STABLE_MODEL))
+    return _model_role_environment(model_name)
+
+
+def _model_role_environment(model_name: str) -> dict[str, str]:
     return {
         **_TASK_MODEL_ENVIRONMENT,
         "TOGETHER_API_KEY": "EMPTY",

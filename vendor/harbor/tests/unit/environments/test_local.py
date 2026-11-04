@@ -339,6 +339,7 @@ async def test_local_candidate_and_judge_relays_route_independently_without_gues
             candidate_model_name="candidate",
             model_endpoint="https://judge.test/v1",
             model_name="judge",
+            judge_access="runtime",
             host_capabilities=HostCapabilities(
                 model_authentication={
                     "https://candidate.test/proxy/t/private-capability/v1": "candidate-private",

@@ -102,6 +102,13 @@ def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_ca
             original = JobConfig.model_validate_json(policy.read_text())
             overlay = RuntimeOverlay.model_validate_json(overlay_path.read_text())
             config = effective_job_config(original, overlay)
+            untrusted_user = original.user_agent.model_copy(update={{'env': {{'OPENAI_BASE_URL': 'http://outside.test/v1'}}}})
+            try:
+                effective_job_config(original.model_copy(update={{'user_agent': untrusted_user}}), overlay)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('source policy forwarded simulated-user environment')
             host_environment = {{'OPENAI_API_KEY': 'candidate-private'}}
             os.environ['OPENAI_API_KEY'] = 'later-ambient-key'
             authentication = _model_authentication(original, overlay, host_environment=host_environment)
@@ -135,6 +142,7 @@ def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_ca
             changed_generation = relocated.model_copy(update={{'model_agent_kwargs': {{'temperature': 0.8}}}})
             print(json.dumps({{
                 'agent': config.agents[0].model_dump(mode='python'),
+                'user_environment': config.user_agent.env,
                 'verifier': config.verifier.env,
                 'capabilities': config.environment.kwargs,
                 'resume_relocated': saved_trial.matches_identity(trial(effective_job_config(original, relocated))),
@@ -150,6 +158,9 @@ def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_ca
     assert result["agent"]["kwargs"]["api_base"] == "http://127.0.0.1:8788/v1"
     assert result["agent"]["kwargs"]["api_key"] == "EMPTY"
     assert result["verifier"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
+    assert result["user_environment"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
+    assert result["user_environment"]["OPENAI_API_KEY"] == "EMPTY"
+    assert result["capabilities"]["judge_access"] == "runtime"
     assert result["capabilities"]["candidate_model_endpoint"].endswith("private-capability/v1")
     assert result["resume_relocated"] is True
     assert result["resume_changed_judge"] is False
@@ -297,12 +308,19 @@ def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment
                 JobConfig.model_validate_json(policy.read_text()),
                 RuntimeOverlay.model_validate_json(overlay.read_text()),
             )
-            print(json.dumps(config.verifier.env))
+            print(json.dumps({{
+                'verifier': config.verifier.env,
+                'candidate': config.agents[0].env,
+                'judge_access': config.environment.kwargs['judge_access'],
+            }}))
             """
         ),
     )
 
-    assert json.loads(completed.stdout) == {
+    result = json.loads(completed.stdout)
+    assert result["candidate"] == {}
+    assert result["judge_access"] == "verifier"
+    assert result["verifier"] == {
         "OPENAI_API_KEY": "EMPTY",
         "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
         "MODEL_NAME": "org/judge@revision",

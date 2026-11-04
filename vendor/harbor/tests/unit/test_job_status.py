@@ -21,7 +21,12 @@ from harbor.models.trial.config import (
     TaskConfig,
     TrialConfig,
 )
-from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
+from harbor.models.trial.result import (
+    AgentInfo,
+    ExceptionInfo,
+    TrialCompletion,
+    TrialResult,
+)
 from harbor.models.verifier.result import VerifierResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.utils.artifact_writer import ArtifactWriter, get_artifact_writer
@@ -110,6 +115,8 @@ def _trial_result(
         agent_info=AgentInfo(name="test-agent", version="1.0"),
         verifier_result=VerifierResult(rewards={"reward": 1}),
         exception_info=exception_info,
+        finished_at=datetime(2026, 4, 28, tzinfo=timezone.utc),
+        completion=TrialCompletion(trajectory_present=False),
     )
 
 

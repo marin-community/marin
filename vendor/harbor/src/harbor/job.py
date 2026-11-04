@@ -406,12 +406,9 @@ class Job:
     ) -> tuple[TrialConfig, TrialResult] | None:
         """Load one on-disk trial's ``(config, result)`` for a resume.
 
-        Returns ``None`` for entries that are not trial dirs, whose
-        ``result.json`` is missing (an interrupted trial), or whose on-disk
-        result is *resume-retryable* (a CancelledError / SandboxBuildFailedError
-        result — see :func:`harbor_config.errors.is_resume_retryable`); the dir is removed
-        so the trial is re-planned and RE-RUN on this resume instead of kept as a
-        terminal result. Runs under a thread pool during the resume scan, so it
+        Returns ``None`` for non-trial directories, missing results, unconfirmed
+        teardown, and retryable failures. Incomplete trial directories are removed
+        before replanning their attempts. Runs under a thread pool during the resume scan, so it
         must not mutate shared ``Job`` state (rmtree is disk I/O, not shared
         state).
         """
@@ -728,7 +725,8 @@ class Job:
     def _is_resume_retryable_result(trial_result: TrialResult) -> bool:
         """True if this on-disk trial result should be RE-RUN on a fresh resume.
 
-        The canonical retryable set lives in the shared
+        Results without confirmed teardown and final timestamps are incomplete
+        regardless of their score or exception type. Confirmed results use the shared
         :func:`harbor_config.errors.is_resume_retryable` taxonomy. Kept separate
         from :meth:`_is_cancelled_result`, which drives cancelled-specific
         progress bookkeeping (``n_cancelled_trials``); this predicate is only
@@ -740,6 +738,8 @@ class Job:
         :data:`_BAD_REQUEST_MAX_TOKENS_ZERO_SIGNAL`) — those predate
         :class:`ContextManagementInfrastructureError` but are the same failure.
         """
+        if trial_result.completion is None or trial_result.finished_at is None:
+            return True
         info = trial_result.exception_info
         if info is None:
             return False

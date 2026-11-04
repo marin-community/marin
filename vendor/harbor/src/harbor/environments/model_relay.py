@@ -5,8 +5,9 @@
 
 import asyncio
 import json
-from collections.abc import Mapping
-from contextlib import AsyncExitStack
+from collections.abc import AsyncIterator, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager
+from enum import StrEnum
 
 import httpx
 
@@ -18,6 +19,27 @@ from shellbox.machine import Machine
 MODEL_RELAY_PORT = 8787
 CANDIDATE_MODEL_RELAY_PORT = 8788
 SUPPORTED_MODEL_APIS = frozenset({ModelAPI.OPENAI_CHAT})
+
+
+class JudgeAccess(StrEnum):
+    VERIFIER = "verifier"
+    RUNTIME = "runtime"
+
+
+@asynccontextmanager
+async def verifier_model_access(
+    machine: Machine,
+    judge: "ModelRelay | None",
+    access: JudgeAccess,
+    service_tasks: asyncio.TaskGroup,
+) -> AsyncIterator[None]:
+    """Grant verifier-only model access for the grading phase."""
+    async with AsyncExitStack() as stack:
+        if access is JudgeAccess.VERIFIER:
+            await start_model_relays(
+                machine, stack, service_tasks, judge=judge, candidate=None
+            )
+        yield
 
 
 async def start_model_relays(

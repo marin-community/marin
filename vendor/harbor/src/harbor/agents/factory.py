@@ -194,14 +194,11 @@ class AgentFactory:
         Raises:
             ValueError: If the configuration is invalid.
         """
-        extra_env = {
-            **guest_environment,
-            **resolve_env_vars(
-                config.env,
-                source=guest_environment,
-                protected_values=host_capabilities.protected_values,
-            ),
-        }
+        extra_env = resolve_env_vars(
+            config.env,
+            source=guest_environment,
+            protected_values=host_capabilities.protected_values,
+        )
         kwargs["protected_values"] = host_capabilities.protected_values
         kwargs["model_authentication"] = host_capabilities.model_authentication
         # Local mode: route to local agent adapter

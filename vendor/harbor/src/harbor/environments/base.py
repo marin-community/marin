@@ -9,7 +9,7 @@ import time
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal
 
@@ -754,6 +754,13 @@ class BaseEnvironment(ABC):
 
     async def quiesce_agent_commands(self) -> None:
         """Confirm agent commands have stopped before collecting their output."""
+
+    @contextlib.asynccontextmanager
+    async def verifier_model_access(
+        self, service_tasks: asyncio.TaskGroup
+    ) -> AsyncIterator[None]:
+        """Grant model services required only while the verifier is running."""
+        yield
 
     async def prepare_logs_for_host(self) -> None:
         """Fix log file permissions so the host process can read them.

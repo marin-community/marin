@@ -105,6 +105,7 @@ def _make_factory_recorder(
 def _stock_mock_env() -> AsyncMock:
     """A mock env that won't fight the trial flow."""
     env = AsyncMock()
+    env.verifier_model_access = lambda _: contextlib.nullcontext()
     env.default_user = None
     env.capabilities.mounted = True
     env.os.value = "linux"
