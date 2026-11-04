@@ -17,11 +17,11 @@ GLOBAL_DF_SAMPLE_DOCS = 1_000_000
 GLOBAL_DF_COMMON_MIN_ABS = 50
 GLOBAL_DF_COMMON_MIN_SOURCES = 3
 
-# Item rule: also mark a document holding at least this share of one
-# core or Uncheatable item's indexed 13-grams, not counting drop-set n-grams. GSM8K
-# copies often lack the worked answer, and HumanEval copies keep the prompt but
-# rewrite the solution, so their bars are lower. Other evals are left to the paragraph rule; the rule has not been tuned
-# on them. ``mmlu_`` covers MMLU subjects and the MMLU-Pro categories.
+# Item rule: also mark a document holding at least this share of one core or
+# Uncheatable item's indexed 13-grams, not counting drop-set n-grams. GSM8K copies
+# often lack the worked answer, and HumanEval copies keep the prompt but rewrite
+# the solution, so their bars are lower. Other evals are left to the paragraph
+# rule. ``mmlu_`` covers MMLU subjects and the MMLU-Pro categories.
 ITEM_MATCH = ItemMatchConfig(
     thresholds=(
         ("gsm8k", 0.3),
