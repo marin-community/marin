@@ -40,6 +40,7 @@ from marin.inference.serve import local_inference
 from openai import OpenAI
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.pi_trajectory import PrefixRow
 from verifyit.modes.grade_reasoning_markup import grade_reasoning_markup_candidate
 from verifyit.reasoning_markup import reasoning_span_violation
 from verifyit.spec import ReasoningMarkupSpec
@@ -77,24 +78,24 @@ class GradedSample:
     length_exempt_violation: str | None
 
 
-def prefix_rows(repository: str, revision: str) -> list[dict[str, Any]]:
+def prefix_rows(repository: str, revision: str) -> list[PrefixRow]:
     path = hf_hub_download(repository, ROWS_FILE, repo_type="dataset", revision=revision)
-    return pq.read_table(path).to_pylist()
+    return [PrefixRow(**row) for row in pq.read_table(path).to_pylist()]
 
 
-def chat_request(row: dict[str, Any], model: str, samples: int, max_tokens: int) -> dict[str, Any]:
+def chat_request(row: PrefixRow, model: str, samples: int, max_tokens: int) -> dict[str, Any]:
     """The chat completion request pi would send for the row's prompt."""
     return {
         "model": model,
-        "messages": json.loads(row["messages"]),
-        "tools": [{"type": "function", "function": tool} for tool in json.loads(row["tools"])],
+        "messages": json.loads(row.messages),
+        "tools": [{"type": "function", "function": tool} for tool in json.loads(row.tools)],
         "n": samples,
         "max_tokens": max_tokens,
         "extra_body": REQUEST_EXTRA_BODY,
     }
 
 
-def graded_samples(row: dict[str, Any], choices: Sequence[dict[str, Any]]) -> list[GradedSample]:
+def graded_samples(row: PrefixRow, choices: Sequence[dict[str, Any]]) -> list[GradedSample]:
     """Grade each sampled reply's text, which holds its reasoning markers."""
     graded = []
     for index, choice in enumerate(choices):
@@ -104,11 +105,11 @@ def graded_samples(row: dict[str, Any], choices: Sequence[dict[str, Any]]) -> li
         length_exempt = reasoning_span_violation(content, choice["finish_reason"])
         graded.append(
             GradedSample(
-                digest=row["digest"],
-                benchmark=row["benchmark"],
-                task=row["task"],
-                source_model=row["model"],
-                recorded_violation=row["recorded_violation"],
+                digest=row.digest,
+                benchmark=row.benchmark,
+                task=row.task,
+                source_model=row.model,
+                recorded_violation=row.recorded_violation,
                 sample=index,
                 finish_reason=choice["finish_reason"],
                 content=content,
@@ -168,9 +169,9 @@ def regional_weights(inference: RemoteInferenceConfig) -> ServedModelConfig:
 
 
 def sample_rows(
-    client: OpenAI, model: str, rows: Sequence[dict[str, Any]], samples: int, max_tokens: int
+    client: OpenAI, model: str, rows: Sequence[PrefixRow], samples: int, max_tokens: int
 ) -> list[GradedSample]:
-    def one(row: dict[str, Any]) -> list[GradedSample]:
+    def one(row: PrefixRow) -> list[GradedSample]:
         response = client.chat.completions.create(**chat_request(row, model, samples, max_tokens))
         return graded_samples(row, [choice.model_dump() for choice in response.choices])
 

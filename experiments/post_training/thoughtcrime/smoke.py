@@ -49,9 +49,9 @@ from experiments.post_training.cat_count_canary.launcher import QWEN_SOURCE, rol
 from experiments.post_training.task_curation.datasets.thoughtcrime import ROWS_FILE, sources
 from experiments.post_training.task_curation.inventory import (
     TASK_SCHEMA,
-    TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
+    task_records,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ def write_prefix_tasks(config: PrefixTaskDataConfig) -> None:
     destination.mkdirs()
     for filename in (TRAIN_FILENAME, VALIDATION_FILENAME):
         write_parquet_file(
-            ({TASK_SPEC_COLUMN: task.model_dump_json()} for task in tasks),
+            task_records(iter(tasks)),
             str(destination / filename),
             schema=TASK_SCHEMA,
         )

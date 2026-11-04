@@ -80,6 +80,7 @@ ROW_SCHEMA = pa.schema(
 )
 EVALS_ROOT = "s3://marin-us-east-02a/marin/evals"
 TRANSCRIPT_PATH = "agent/pi.txt"
+TRIAL_CONFIG = "config.json"
 DOUBLE_THINK = frozenset({ReasoningViolation.STRAY_END, ReasoningViolation.SECOND_SPAN})
 # Evaluation run directories are named <YYYYMMDD-HHMMSS>-<model>-<benchmark>-<suffix>.
 PI_BENCHMARK_RUN = re.compile(r"-(bixbench|bfclparity|tau3)-pi-")
@@ -156,7 +157,7 @@ def fits_prompt_budget(reply: PiReply, max_prompt_tokens: int) -> bool:
 
 
 def _trial_source(fs, trial_dir: str) -> tuple[str, str]:
-    with fs.open(f"{trial_dir}/config.json", "rt") as handle:
+    with fs.open(prefix_join(trial_dir, TRIAL_CONFIG), "rt") as handle:
         config = json.load(handle)
     agent = config["agent"]
     # Campaign runs before the alias field name the model by its served path.
@@ -166,11 +167,11 @@ def _trial_source(fs, trial_dir: str) -> tuple[str, str]:
 
 def _read_trajectory(evals_root: str, run: str, trial_dir: str) -> Trajectory | None:
     fs, _ = filesystem_for(evals_root)
-    transcript_paths = sorted(fs.glob(f"{trial_dir}/attempts/*/{TRANSCRIPT_PATH}"))
+    transcript_paths = sorted(fs.glob(prefix_join(trial_dir, f"attempts/*/{TRANSCRIPT_PATH}")))
     trial = trial_dir.rsplit("/", 1)[-1]
     if not transcript_paths:
         return None
-    if not fs.exists(f"{trial_dir}/config.json"):
+    if not fs.exists(prefix_join(trial_dir, TRIAL_CONFIG)):
         # An interrupted upload can leave a transcript without the config that names its benchmark and model.
         logger.info("Skipping %s/%s: no trial config", run, trial)
         return None
