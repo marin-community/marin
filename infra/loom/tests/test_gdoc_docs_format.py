@@ -22,7 +22,7 @@ from infra.loom.gdoc.docs_format import (
     tab_length,
     table_fill_requests,
     top_insert_point,
-    u16,
+    utf16_length,
 )
 
 MARKDOWN = """# Review
@@ -245,7 +245,7 @@ def text_element(start: int, text: str, *, numbered: bool = False, bold: bool = 
         "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
         **({"bullet": {"listId": "L1"}} if numbered else {}),
     }
-    return {"startIndex": start, "endIndex": start + u16(text) + 1, "paragraph": paragraph}
+    return {"startIndex": start, "endIndex": start + utf16_length(text) + 1, "paragraph": paragraph}
 
 
 def section(*paragraphs: tuple[str, bool]) -> tuple[list[dict], int]:

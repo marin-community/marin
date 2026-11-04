@@ -62,6 +62,8 @@ DIAGRAM_PREFIX = "gs://marin-us-central1/tmp/ttl=1d/loom-gdoc/diagrams"
 # For a rough page estimate of a tab.
 WORDS_PER_PAGE = 500
 PAGES_PER_DIAGRAM = 1 / 3
+# tab_text writes this for an inline image, and tab_length counts it as one.
+IMAGE_PLACEHOLDER = "[image]"
 
 HEADING = re.compile(r"(#{1,6})\s+(.*)")
 BULLET = re.compile(r"(\s*)[-*+]\s+(.*)")
@@ -79,7 +81,7 @@ INLINE = re.compile(
 )
 
 
-def u16(text: str) -> int:
+def utf16_length(text: str) -> int:
     """Length in UTF-16 code units, the unit of Docs API indices."""
     return len(text.encode("utf-16-le")) // 2
 
@@ -124,7 +126,7 @@ def inline(markdown: str) -> tuple[str, tuple[Span, ...]]:
     for match in INLINE.finditer(markdown):
         before = markdown[last : match.start()]
         plain.append(before)
-        at += u16(before)
+        at += utf16_length(before)
         groups = match.groupdict()
         if groups["code"] is not None:
             text, style, fields = (
@@ -139,8 +141,8 @@ def inline(markdown: str) -> tuple[str, tuple[Span, ...]]:
         else:
             text, style, fields = groups["link_text"], {"link": {"url": groups["url"]}}, "link"
         plain.append(text)
-        spans.append(Span(at, at + u16(text), style, fields))
-        at += u16(text)
+        spans.append(Span(at, at + utf16_length(text), style, fields))
+        at += utf16_length(text)
         last = match.end()
     plain.append(markdown[last:])
     return "".join(plain), tuple(spans)
@@ -276,7 +278,7 @@ def paragraph_text(element: dict) -> str:
         elif "dropdown" in part:
             parts.append(part["dropdown"]["dropdownProperties"].get("displayValue", ""))
         elif "inlineObjectElement" in part:
-            parts.append("[image]")
+            parts.append(IMAGE_PLACEHOLDER)
     return "".join(parts)
 
 
@@ -309,7 +311,7 @@ def _paragraph_style(start: int, end: int, style: dict, tab_id: str) -> dict:
 def group_requests(blocks: list[Block], at: int, tab_id: str) -> list[dict]:
     """Requests that insert text blocks (no tables or diagrams) as new paragraphs at `at`, a paragraph start."""
     text = "".join(block.text + "\n" for block in blocks)
-    end = at + u16(text)
+    end = at + utf16_length(text)
     requests: list[dict] = [
         {"insertText": {"location": {"index": at, "tabId": tab_id}, "text": text}},
         {"deleteParagraphBullets": {"range": _range(at, end, tab_id)}},
@@ -318,7 +320,7 @@ def group_requests(blocks: list[Block], at: int, tab_id: str) -> list[dict]:
     bullets: list[tuple[int, int, BlockKind]] = []
     block_at = at
     for block in blocks:
-        block_end = block_at + u16(block.text)
+        block_end = block_at + utf16_length(block.text)
         named = f"HEADING_{block.level}" if block.kind is BlockKind.HEADING else "NORMAL_TEXT"
         indent = QUOTE_INDENT_PT if block.kind is BlockKind.QUOTE else 0
         style = {"namedStyleType": named, "indentStart": {"magnitude": indent, "unit": "PT"}, "alignment": "START"}
@@ -357,9 +359,9 @@ def table_fill_requests(table: dict, rows: tuple[tuple[str, ...], ...], tab_id: 
             continue
         requests.append({"insertText": {"location": {"index": cell_at, "tabId": tab_id}, "text": text}})
         # A new table's cells take the text style of the paragraph before it, e.g. a code block's font.
-        requests.append(_text_style(cell_at, cell_at + u16(text), {}, RESET_TEXT_FIELDS, tab_id))
+        requests.append(_text_style(cell_at, cell_at + utf16_length(text), {}, RESET_TEXT_FIELDS, tab_id))
         if r == 0:
-            requests.append(_text_style(cell_at, cell_at + u16(text), {"bold": True}, "bold", tab_id))
+            requests.append(_text_style(cell_at, cell_at + utf16_length(text), {"bold": True}, "bold", tab_id))
         requests += [_text_style(cell_at + s.start, cell_at + s.end, s.style, s.fields, tab_id) for s in spans]
     return requests
 
@@ -662,7 +664,7 @@ def _span_runs(text: str, spans: tuple[Span, ...]) -> tuple:
                     style[3] = span.style["link"]["url"]
                 else:
                     style[("bold", "italic", "weightedFontFamily").index(span.fields)] = True
-        offset += u16(char)
+        offset += utf16_length(char)
     return _runs([(char, tuple(style)) for char, style in zip(text, styles, strict=True)])
 
 
@@ -743,9 +745,12 @@ def _new_paragraph(block: Block) -> NewUnit:
     text = block.text[tabs:]
     spans = tuple(Span(s.start - tabs, s.end - tabs, s.style, s.fields) for s in block.spans)
     if text and block.kind is BlockKind.CODE:
-        spans = (Span(0, u16(text), {"weightedFontFamily": {"fontFamily": CODE_FONT}}, "weightedFontFamily"), *spans)
+        spans = (
+            Span(0, utf16_length(text), {"weightedFontFamily": {"fontFamily": CODE_FONT}}, "weightedFontFamily"),
+            *spans,
+        )
     elif text and block.kind is BlockKind.QUOTE:
-        spans = (Span(0, u16(text), {"italic": True}, "italic"), *spans)
+        spans = (Span(0, utf16_length(text), {"italic": True}, "italic"), *spans)
     shape = {
         BlockKind.HEADING: ("H", block.level, False),
         BlockKind.BULLET: ("L", block.level, False),
@@ -763,7 +768,7 @@ def _new_table_cells(rows: tuple[tuple[str, ...], ...]) -> tuple:
         for cell in row:
             text, spans = inline(cell)
             if r == 0 and text:
-                spans = (Span(0, u16(text), {"bold": True}, "bold"), *spans)
+                spans = (Span(0, utf16_length(text), {"bold": True}, "bold"), *spans)
             row_cells.append(_span_runs(text, spans))
         cells.append(tuple(row_cells))
     return tuple(cells)
@@ -792,12 +797,12 @@ def _styled(units: list[NewUnit], at: int, separator_first: bool, tab_id: str) -
     With separator_first, each paragraph starts with its newline (inserted before an existing newline), else ends
     with it (inserted at a paragraph start)."""
     text = "".join("\n" + u.text if separator_first else u.text + "\n" for u in units)
-    requests = [_text_style(at, at + u16(text), {}, RESET_TEXT_FIELDS, tab_id)]
+    requests = [_text_style(at, at + utf16_length(text), {}, RESET_TEXT_FIELDS, tab_id)]
     offset = at
     for unit in units:
         offset += 1 if separator_first else 0
         requests += [_text_style(offset + s.start, offset + s.end, s.style, s.fields, tab_id) for s in unit.spans]
-        offset += u16(unit.text) + (0 if separator_first else 1)
+        offset += utf16_length(unit.text) + (0 if separator_first else 1)
     return text, requests
 
 
@@ -831,13 +836,15 @@ def _edit_paragraph(old: OldUnit, new: NewUnit, tab_id: str) -> list[dict]:
     for tag, i1, i2, j1, j2 in reversed(matcher.get_opcodes()):
         if tag == "equal":
             continue
-        at = old.start + u16(old.text[:i1])
+        at = old.start + utf16_length(old.text[:i1])
         if i2 > i1:
-            requests.append({"deleteContentRange": {"range": _range(at, old.start + u16(old.text[:i2]), tab_id)}})
+            requests.append(
+                {"deleteContentRange": {"range": _range(at, old.start + utf16_length(old.text[:i2]), tab_id)}}
+            )
         if j2 > j1:
             requests.append({"insertText": {"location": {"index": at, "tabId": tab_id}, "text": new.text[j1:j2]}})
     if new.text:
-        end = old.start + u16(new.text)
+        end = old.start + utf16_length(new.text)
         requests.append(_text_style(old.start, end, {}, RESET_TEXT_FIELDS, tab_id))
         requests += [_text_style(old.start + s.start, old.start + s.end, s.style, s.fields, tab_id) for s in new.spans]
     return requests
@@ -949,6 +956,6 @@ def tab_length(tab: Tab, exclude_section: str | None) -> tuple[int, int, float]:
                 if "paragraph" in c
             ]
     text = " ".join(texts)
-    images = text.count("[image]")
-    words = len(text.replace("[image]", "").split())
+    images = text.count(IMAGE_PLACEHOLDER)
+    words = len(text.replace(IMAGE_PLACEHOLDER, "").split())
     return words, images, words / WORDS_PER_PAGE + images * PAGES_PER_DIAGRAM

@@ -138,28 +138,32 @@ def _parser() -> argparse.ArgumentParser:
         prog="python3 -m infra.loom.gdoc", description="Read, write and comment on a Google Doc."
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    for name, help_text in [
-        ("read", "Print the doc as markdown, or one tab with --tab."),
-        ("length", "Print a tab's words, images and estimated pages."),
-        ("comments", "Print every comment with its id, status, the text it is on, and its replies."),
-    ]:
-        command = commands.add_parser(name, help=help_text)
-        command.add_argument("doc_id")
-        command.add_argument("--tab", help="Tab title; the first tab when not given.")
+    read = commands.add_parser("read", help="Print the doc as markdown, or one tab with --tab.")
+    read.add_argument("doc_id")
+    read.add_argument("--tab", help="Tab title; the whole doc when not given.")
+    length = commands.add_parser("length", help="Print a tab's words, images and estimated pages.")
+    length.add_argument("doc_id")
+    length.add_argument("--tab", help="Tab title; the first tab when not given.")
+    length.add_argument("--exclude-section", help="Heading of a section not to count.")
+    comments = commands.add_parser(
+        "comments", help="Print every comment with its id, status, the text it is on, and its replies."
+    )
+    comments.add_argument("doc_id")
     for name, help_text in [
         ("append", "Add markdown at the end of a tab, as Docs formatting. `-` reads it from stdin."),
         (
             "prepend",
             "Add markdown at the top of a section (--section) or of a tab, below the heading. `-` reads stdin.",
         ),
-        ("comment", "Add a comment."),
     ]:
         command = commands.add_parser(name, help=help_text)
         command.add_argument("doc_id")
         command.add_argument("text")
         command.add_argument("--tab", help="Tab title; the first tab when not given.")
     commands.choices["prepend"].add_argument("--section", help="Heading of the section to add to.")
-    commands.choices["length"].add_argument("--exclude-section", help="Heading of a section not to count.")
+    comment = commands.add_parser("comment", help="Add a comment on the whole doc.")
+    comment.add_argument("doc_id")
+    comment.add_argument("text")
     replace = commands.add_parser(
         "replace-section",
         help="Make the content under a heading equal to markdown, changing only what differs. `-` reads stdin.",
