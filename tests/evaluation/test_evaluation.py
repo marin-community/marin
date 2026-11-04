@@ -38,7 +38,7 @@ from marin.evaluation.evalchemy.runner import (
     _coverage_with_aggregate_counts,
     run_evalchemy,
 )
-from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor, evalchemy_runtime_source_hash
+from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
     HarborDatasetKind,
@@ -87,6 +87,7 @@ from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupE
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.storage_path import StoragePath
+from rigging.provenance import launch_provenance
 
 from experiments.evaluation.cli import cli, resolve_model_config
 from experiments.evaluation.evals import (
@@ -174,21 +175,7 @@ def _write_harbor_config(path: Path) -> Path:
     return path
 
 
-@pytest.mark.parametrize(
-    "filename",
-    [
-        "vendor/harbor/src/source.py",
-        "vendor/harbor/uv.lock",
-        "lib/finestore/src/source.py",
-        "lib/rigging/src/source.py",
-        "lib/shellbox/src/source.py",
-        "lib/marin/src/marin/evaluation/harbor/source.py",
-        "lib/marin/src/marin/evaluation/rollouts.py",
-    ],
-)
-def test_harbor_cache_reuses_unchanged_sources_and_invalidates_changed_runtime(
-    tmp_path, monkeypatch, harbor_runtime_sources, filename
-):
+def test_harbor_cache_reuses_launch_tree_and_invalidates_changed_provenance(tmp_path, monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
     spec = LaunchSpec(
         model=models()["qwen3-8b"],
@@ -206,11 +193,12 @@ def test_harbor_cache_reuses_unchanged_sources_and_invalidates_changed_runtime(
     )
     provenance = LaunchProvenance(git_sha="abc", launch_host="host")
     before = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
-    (harbor_runtime_sources / "vendor/harbor/src/ignored.py").write_text("scratch = True\n")
     unchanged = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
     assert unchanged == before
-    source = harbor_runtime_sources / filename
-    source.write_text(source.read_text() + "changed runtime\n")
+    captured = launch_provenance()
+    monkeypatch.setattr(
+        "marin.evaluation.harbor.driver_config.launch_provenance", lambda: replace(captured, tree_hash="changed-tree")
+    )
     changed = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
     assert changed != before
 
@@ -1888,9 +1876,7 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
         "tester",
     )
 
-    assert batch.evaluations[0].identity.eval_runtime == evalchemy_runtime_descriptor(
-        ("serve-eval", "math500"), evalchemy_runtime_source_hash()
-    )
+    assert batch.evaluations[0].identity.eval_runtime == evalchemy_runtime_descriptor(("serve-eval", "math500"))
 
 
 def test_build_evaluation_batch_routes_and_records_financebench_judge(monkeypatch):
@@ -2255,9 +2241,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         "aime-policy",
     ]
     ifeval = batch.evaluations[1].identity.eval_ref
-    assert batch.evaluations[1].identity.eval_runtime == evalchemy_runtime_descriptor(
-        ("serve-eval", "ifeval"), evalchemy_runtime_source_hash()
-    )
+    assert batch.evaluations[1].identity.eval_runtime == evalchemy_runtime_descriptor(("serve-eval", "ifeval"))
     assert ifeval.model_dump(mode="json", exclude_none=True) == {
         "name": "ifeval",
         "mechanism": "evalchemy",

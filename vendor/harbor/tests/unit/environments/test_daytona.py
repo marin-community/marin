@@ -19,7 +19,7 @@ from openai import (
     PermissionDeniedError,
 )
 
-from harbor.environments.runtime import (
+from harbor.host_capabilities import (
     HostCapabilities,
     DaytonaConnection,
     DAYTONA_API_URL,

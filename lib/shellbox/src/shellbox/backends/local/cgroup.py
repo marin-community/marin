@@ -4,6 +4,7 @@
 """Machine resource limits and command containment in a delegated cgroup v2 tree."""
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,26 +16,70 @@ from shellbox.process_session import await_cleanup, own_cleanup
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 CPU_PERIOD = 100000
 CLOSE_TIMEOUT = 10
+logger = logging.getLogger(__name__)
 
 
-def check_cgroup_parent(parent: Path, *, resource_limits: bool = False) -> None:
+def _current_cgroup() -> Path:
+    membership = next(line for line in Path("/proc/self/cgroup").read_text().splitlines() if line.startswith("0::"))
+    return (CGROUP_ROOT / membership.removeprefix("0::").lstrip("/")).resolve()
+
+
+def check_cgroup_parent(parent: Path) -> None:
     """Require a writable delegated hierarchy with recursive process cleanup."""
     if not (CGROUP_ROOT / "cgroup.controllers").is_file() or not parent.is_dir():
         raise UnsupportedMachineSpec("Local process containment requires a delegated cgroup v2 directory")
     if parent.stat().st_dev != CGROUP_ROOT.stat().st_dev:
         raise UnsupportedMachineSpec("The delegated parent must be on the cgroup v2 filesystem")
-    controllers = set((parent / "cgroup.controllers").read_text().split())
-    if resource_limits and not {"cpu", "memory"} <= controllers:
-        raise UnsupportedMachineSpec("The delegated cgroup must provide CPU and memory controllers")
     if not os.access(parent / "cgroup.kill", os.W_OK):
         raise UnsupportedMachineSpec("Local cgroup cleanup requires writable kernel cgroup.kill support")
-    membership = next(line for line in Path("/proc/self/cgroup").read_text().splitlines() if line.startswith("0::"))
-    current = CGROUP_ROOT / membership.removeprefix("0::").lstrip("/")
+    current = _current_cgroup()
+    if not current.is_relative_to(CGROUP_ROOT):
+        raise UnsupportedMachineSpec("The worker's cgroup is outside its mounted cgroup hierarchy")
     common = Path(os.path.commonpath((parent, current)))
-    if not all(
-        os.access(path, os.W_OK) for path in (parent, parent / "cgroup.subtree_control", common / "cgroup.procs")
-    ):
+    if not all(os.access(path, os.W_OK) for path in (parent, common / "cgroup.procs")):
         raise UnsupportedMachineSpec("Run the local worker inside a writable delegated cgroup hierarchy")
+
+
+def delegated_cgroup_parent() -> Path | None:
+    """Find the worker's writable delegation, preferring an empty parent for controllers."""
+    if not (CGROUP_ROOT / "cgroup.controllers").is_file():
+        return None
+    current = _current_cgroup()
+    if not current.is_relative_to(CGROUP_ROOT):
+        return None
+    fallback = None
+    for parent in (current, *current.parents):
+        if not parent.is_relative_to(CGROUP_ROOT):
+            break
+        try:
+            check_cgroup_parent(parent)
+        except UnsupportedMachineSpec:
+            continue
+        if fallback is None:
+            fallback = parent
+        # systemd's DelegateSubgroup keeps the service parent empty; controllers
+        # cannot be enabled in a non-root cgroup that contains worker processes.
+        if not (parent / "cgroup.procs").read_text().strip():
+            return parent
+    return fallback
+
+
+def _apply_resource_limits(parent: Path, path: Path, *, cpus: int | None, memory_mb: int | None) -> None:
+    for controller, value in (("cpu", cpus), ("memory", memory_mb)):
+        if value is None:
+            continue
+        try:
+            enabled = (parent / "cgroup.subtree_control").read_text().split()
+            if controller not in enabled:
+                (parent / "cgroup.subtree_control").write_text(f"+{controller}")
+            if controller == "cpu":
+                (path / "cpu.max").write_text(f"{value * CPU_PERIOD} {CPU_PERIOD}")
+            else:
+                (path / "memory.max").write_text(str(value * 1024 * 1024))
+                (path / "memory.swap.max").write_text("0")
+                (path / "memory.oom.group").write_text("1")
+        except OSError as error:
+            logger.warning("Cannot apply local %s limit %s in %s: %s", controller, value, path, error)
 
 
 @dataclass(eq=False)
@@ -44,26 +89,13 @@ class MachineCgroup:
 
     @classmethod
     def create(cls, parent: Path, *, cpus: int | None, memory_mb: int | None) -> "MachineCgroup":
-        resource_limits = cpus is not None or memory_mb is not None
-        check_cgroup_parent(parent, resource_limits=resource_limits)
-        if resource_limits:
-            try:
-                (parent / "cgroup.subtree_control").write_text("+cpu +memory")
-            except OSError as error:
-                raise UnsupportedMachineSpec(
-                    "The delegated cgroup must be empty; place the worker in a supervisor subgroup"
-                ) from error
+        check_cgroup_parent(parent)
         path = parent / f"shellbox-{uuid4().hex}"
         path.mkdir()
         try:
             if not (path / "cgroup.kill").is_file():
                 raise UnsupportedMachineSpec("Local cgroup cleanup requires kernel cgroup.kill support")
-            if cpus is not None:
-                (path / "cpu.max").write_text(f"{cpus * CPU_PERIOD} {CPU_PERIOD}")
-            if memory_mb is not None:
-                (path / "memory.max").write_text(str(memory_mb * 1024 * 1024))
-                (path / "memory.swap.max").write_text("0")
-                (path / "memory.oom.group").write_text("1")
+            _apply_resource_limits(parent, path, cpus=cpus, memory_mb=memory_mb)
         except BaseException:
             path.rmdir()
             raise

@@ -694,21 +694,15 @@ rm -f "$tmp_archive"
 
     async def install(self, environment: BaseEnvironment) -> None:
         await self._ensure_registry_entry()
-        platform_id = await self._detect_platform(environment)
-        kind, target = self._select_distribution(platform_id)
-        self._selected_distribution_kind = kind
-
+        kind: DistributionKind
         pi = self._pi_companion()
         if pi is not None:
             registry_entry = self._require_registry_entry()
-            expected_package = f"pi-acp@{registry_entry.version}"
-            if (
-                kind != "npx"
-                or not isinstance(target, AcpPackageDistribution)
-                or target.package != expected_package
-            ):
+            kind = "npx"
+            target = registry_entry.distribution.npx
+            if target is None:
                 raise ValueError(
-                    f"Image-provided Pi ACP requires the npx distribution {expected_package}"
+                    "Image-provided Pi ACP requires an npx registry target"
                 )
             await pi.install(environment)
             version_script = (
@@ -732,6 +726,8 @@ rm -f "$tmp_archive"
                 command=f'{self._RUNNER_VENV_PATH}/bin/python -c "import acp"',
             )
         else:
+            platform_id = await self._detect_platform(environment)
+            kind, target = self._select_distribution(platform_id)
             await self.exec_as_root(
                 environment,
                 command=self._build_dependencies_command(kind),
@@ -741,6 +737,7 @@ rm -f "$tmp_archive"
                 assert isinstance(target, AcpBinaryTarget)
                 await self._install_binary_target(environment, target)
 
+        self._selected_distribution_kind = kind
         launcher_path = self.logs_dir / "acp-launch.sh"
         launcher_path.write_text(self._build_launcher_script(kind, target))
         await environment.upload_file(

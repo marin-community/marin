@@ -8,16 +8,35 @@ import hashlib
 import json
 import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 RECIPE = Path(__file__).parent
 DEFAULT_REPOSITORY = "ghcr.io/marin-community/rollout-images"
 LOCKS = ("package-lock.json", "requirements.lock")
+DEPENDENCIES: dict[str, Any] = {
+    "recipe_revision": 5,
+    "platform": "linux/amd64",
+    "base_image": (
+        "ghcr.io/marin-community/rollout-images@sha256:17a0f60def260b484134ca7f137970735cd9d0a30900aeb1a037f59acac9484a"
+    ),
+    "tau2_bench_commit": "fc0055dc4e0a316c3f83133267fbd6faaa770992",
+    "node_version": "22.23.4",
+    "node_sha256": "b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406",
+    "runtime_images": {
+        "retail": (
+            "ghcr.io/marin-community/rollout-images@sha256:25899b6e12e657f7850108b70dbae6ceb82dc9c988bd912355b22d7cdbdec24a"
+        ),
+        "airline": (
+            "ghcr.io/marin-community/rollout-images@sha256:97798a165494fb42564dadae0eaa3b645c728d98004709e4e68c0cde2c8e6c98"
+        ),
+    },
+}
 
 
 def dependency_identity(base_image: str | None = None) -> tuple[dict[str, Any], str]:
     """Hash dependency locks and declared build configuration, without reading source code."""
-    dependencies = json.loads((RECIPE / "dependencies.json").read_text())
+    dependencies = dict(DEPENDENCIES)
     if base_image is not None:
         dependencies["base_image"] = base_image
     if "@sha256:" not in dependencies["base_image"]:
@@ -44,8 +63,8 @@ def registry_digest(image: str) -> str | None:
     raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
 
 
-def build_image(repository: str, base_image: str | None = None) -> dict[str, Any]:
-    """Reuse the dependency tag, or build and push it, and return immutable image references."""
+def tau3_image(repository: str = DEFAULT_REPOSITORY, base_image: str | None = None) -> str:
+    """Return the prepared main image, building and pushing missing dependencies once."""
     dependencies, identity = dependency_identity(base_image)
     tag = f"{repository}:tau3-pi-{identity[:16]}"
     digest = registry_digest(tag)
@@ -69,20 +88,56 @@ def build_image(repository: str, base_image: str | None = None) -> dict[str, Any
         digest = registry_digest(tag)
         if digest is None:
             raise RuntimeError(f"The pushed image is missing: {tag}")
-    return {
-        "identity": identity,
-        "tag": tag,
-        "main": f"{repository}@{digest}",
-        "runtime_images": dependencies["runtime_images"],
-        "dependencies": dependencies,
+    return f"{repository}@{digest}"
+
+
+def prepare_tau3_task(task: Path, repository: str = DEFAULT_REPOSITORY) -> None:
+    """Pin a reviewed Tau3 task's main and task-specific runtime images for Shellbox.
+
+    The pinned runtime supplies dependencies; the task supplies its server and
+    configuration. Docker's layer cache handles their rebuilds.
+    """
+    runtime = task / "environment/runtime-server"
+    config = json.loads((runtime / "task_config.json").read_text())
+    runtime_base = DEPENDENCIES["runtime_images"][config["domain"]]
+    main_image = tau3_image(repository)
+    with TemporaryDirectory(prefix="tau3-image-") as directory:
+        scratch = Path(directory)
+        dockerfile = scratch / "Dockerfile"
+        dockerfile.write_text(f"FROM {runtime_base}\nCOPY server.py task_config.json /app/\n")
+        metadata = scratch / "metadata.json"
+        subprocess.run(
+            [
+                "docker",
+                "buildx",
+                "build",
+                "--platform=linux/amd64",
+                "--provenance=false",
+                "--output=type=registry,compression=gzip,force-compression=true",
+                f"--tag={repository}:tau3-runtime-{task.name}",
+                f"--file={dockerfile}",
+                f"--metadata-file={metadata}",
+                str(runtime),
+            ],
+            check=True,
+        )
+        runtime_digest = json.loads(metadata.read_text())["containerimage.digest"]
+    manifest = {
+        "main": {"image": main_image, "workdir": "/app"},
+        "tau3-runtime": {
+            "image": f"{repository}@{runtime_digest}",
+            "workdir": "/app",
+            "agent_logs": "publish",
+        },
     }
+    (task / "environment/shellbox-images.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
     parser.add_argument("--base-image", help="Digest-pinned canonical Tau3 main image; included in the identity.")
-    parser.add_argument("--output", type=Path, help="Write resolved image references as JSON.")
+    parser.add_argument("--task", type=Path, help="Prepare images and write shellbox-images.json for this Tau3 task.")
     parser.add_argument("--plan", action="store_true", help="Print the dependency tag without contacting GHCR.")
     args = parser.parse_args()
     if args.plan:
@@ -93,12 +148,12 @@ def main() -> None:
             )
         )
         return
-    if args.output is None:
-        parser.error("--output is required when building or resolving an image")
-    record = build_image(args.repository, args.base_image)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(record, indent=2) + "\n")
-    print(record["main"])
+    if args.task is not None:
+        if args.base_image is not None:
+            parser.error("--base-image applies only to the standalone main image build")
+        prepare_tau3_task(args.task, args.repository)
+    else:
+        print(tau3_image(args.repository, args.base_image))
 
 
 if __name__ == "__main__":

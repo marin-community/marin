@@ -9,8 +9,9 @@ import json
 import os
 from pathlib import Path
 
-from harbor.environments.model_relay import MODEL_RELAY_PORT, JudgeAccess
-from harbor.environments.runtime import host_capabilities_from_environment
+from harbor.environments.model_relay import JudgeAccess
+from harbor.host_capabilities import MODEL_RELAY_PORT
+from harbor.host_capabilities import host_capabilities_from_environment
 from harbor.job import Job
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.job.config import JobConfig

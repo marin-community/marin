@@ -5,7 +5,7 @@ from pathlib import Path
 
 from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 from shellbox.machine import Command, ExitReason, Machine

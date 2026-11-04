@@ -12,13 +12,12 @@ from enum import StrEnum
 import httpx
 
 from harbor.llms.vllm_tokenization import tokenize_url
+from harbor.host_capabilities import CANDIDATE_MODEL_RELAY_PORT, MODEL_RELAY_PORT
 from harbor.models.agent.model_api import ModelAPI
 from harbor.trial.errors import RuntimeServiceError
 from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
 from shellbox.machine import Machine
 
-MODEL_RELAY_PORT = 8787
-CANDIDATE_MODEL_RELAY_PORT = 8788
 SUPPORTED_MODEL_APIS = frozenset({ModelAPI.OPENAI_CHAT})
 
 

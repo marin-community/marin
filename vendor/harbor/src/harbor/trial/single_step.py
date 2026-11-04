@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Mapping
 
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 
 from harbor.agents.base import MalformedModelResponseError, TurnCapExhaustedError
 from harbor.agents.installed.base import NonZeroAgentExitCodeError

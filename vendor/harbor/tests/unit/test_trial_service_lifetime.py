@@ -13,7 +13,7 @@ from harbor_config.errors import ErrorCategory, error_category
 
 from harbor.agents.base import BaseAgent
 from harbor.environments import local, model_relay
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,

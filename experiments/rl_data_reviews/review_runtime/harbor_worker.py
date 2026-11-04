@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from harbor.cli.utils import cli_guest_environment
-from harbor.environments.runtime import host_capabilities_from_environment
+from harbor.host_capabilities import host_capabilities_from_environment
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
 from review_io import append_event, capture_native_sources, execution_error, native_calls, write_json

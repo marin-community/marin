@@ -16,7 +16,7 @@ from harbor.agents.factory import AgentFactory
 from harbor.bridges.base import BaseBridge
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
 from harbor.environments.factory import EnvironmentFactory
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.agent.context import AgentContext
 from harbor.models.agent.name import AgentName
 from harbor.models.task.config import (

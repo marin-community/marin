@@ -1225,6 +1225,7 @@ def start(
         host_environment,
         environment_kwargs=config.environment.kwargs,
         agents=config.agents,
+        verifier_environment=config.verifier.env,
     )
     guest_environment = cli_guest_environment(config.environment.kwargs)
 
@@ -1401,6 +1402,7 @@ def resume(
         host_environment,
         environment_kwargs=config.environment.kwargs,
         agents=config.agents,
+        verifier_environment=config.verifier.env,
     )
     guest_environment = cli_guest_environment(config.environment.kwargs)
 

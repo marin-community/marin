@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
+from harbor.host_capabilities import model_api_url
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.base import (
     BASE_ENVIRONMENT_ARGUMENTS,
@@ -140,7 +141,6 @@ class LocalEnvironment(BaseEnvironment):
             self.task_env_config,
             cpu_enforcement_policy=self._cpu_resource_mode,
             memory_enforcement_policy=self._memory_resource_mode,
-            cgroup_parent=self.cgroup_parent,
         )
 
     def _command_user(self, user: str | int | None) -> str:
@@ -181,7 +181,7 @@ class LocalEnvironment(BaseEnvironment):
             ),
         )
         needs_model = any(
-            "OPENAI_BASE_URL" in container.machine.env
+            model_api_url(container.machine.env) is not None
             for container in task_spec.containers
         )
         judge = ModelRelay.from_endpoint(

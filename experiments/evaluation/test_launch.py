@@ -21,6 +21,7 @@ from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationBatch, EvaluationError, _record
 from marin.execution.step_runner import StepRunner
 from marin.inference.iris import RemoteInferenceStartupError
+from rigging.provenance import launch_provenance
 
 import experiments.evaluation.launch as launch_module
 import experiments.evaluation.policy_finalization as policy_module
@@ -186,7 +187,6 @@ def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(
     partial.parent.mkdir(parents=True)
     partial.write_text('{"response":"already generated"}')
     executed.clear()
-    monkeypatch.setattr(launch_module, "evalchemy_runtime_source_hash", lambda: "a" * 64)
 
     second = runner.invoke(cli, [*command, "--run-id", batch.group_id, "--instances", "8", "--max-concurrent", "8"])
     assert second.exit_code == 0, second.output
@@ -251,23 +251,6 @@ def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache
     assert executed == []
 
 
-@pytest.fixture
-def runtime_checkout(tmp_path, monkeypatch):
-    root = tmp_path / "runtime"
-    for directory in runtime._RUNTIME_DIRECTORIES:
-        source = root / directory / "source.py"
-        source.parent.mkdir(parents=True)
-        source.write_text("value = 1\n")
-    for filename in runtime._RUNTIME_FILES:
-        source = root / filename
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_text("runtime input\n")
-    subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
-    monkeypatch.setattr(runtime, "find_project_root", lambda _start: root)
-    return root
-
-
 def _pipeline_spec(tmp_path):
     return LaunchSpec(
         model=models()["qwen3-8b"],
@@ -286,8 +269,7 @@ def _pipeline_spec(tmp_path):
     )
 
 
-@pytest.mark.parametrize("dependency", ["lib/finestore/src/source.py", "lib/rigging/src/source.py"])
-def test_pipeline_dependency_update_reuses_completed_step_and_partial_archive(tmp_path, runtime_checkout, dependency):
+def test_pipeline_changed_launch_tree_creates_new_steps_and_preserves_partial_archive(tmp_path, monkeypatch):
     spec = _pipeline_spec(tmp_path)
     before = prepare_evaluation_batch(spec)
     executed = []
@@ -304,38 +286,17 @@ def test_pipeline_dependency_update_reuses_completed_step_and_partial_archive(tm
     partial.write_text('{"response":"already generated"}')
     executed.clear()
 
-    source = runtime_checkout / dependency
-    source.write_text(source.read_text() + "dependency update\n")
+    captured = launch_provenance()
+    monkeypatch.setattr(runtime, "launch_provenance", lambda: replace(captured, tree_hash="changed-tree"))
     after = prepare_evaluation_batch(spec)
     StepRunner().run(build_evaluation_steps(after, execute))
 
     assert after.group_id == before.group_id
     assert after.evaluations[0].identity.eval_runtime != before.evaluations[0].identity.eval_runtime
-    assert executed == [pending.identity.run_id]
-    assert after.evaluations[1].identity.output_dir == pending.identity.output_dir
-    assert partial.read_text() == '{"response":"already generated"}'
-
-
-@pytest.mark.parametrize("filename", ["vendor/evalchemy/eval/source.py", "vendor/evalchemy/uv.lock"])
-def test_pipeline_evaluator_update_uses_new_evaluation_steps(tmp_path, runtime_checkout, filename):
-    spec = _pipeline_spec(tmp_path)
-    before = prepare_evaluation_batch(spec)
-    executed = []
-
-    def execute(evaluation, _output_path):
-        executed.append(evaluation.identity.run_id)
-        return {"finished": evaluation.identity.run_id}
-
-    StepRunner().run(build_evaluation_steps(before, execute))
-    executed.clear()
-    source = runtime_checkout / filename
-    source.write_text(source.read_text() + "evaluator update\n")
-    after = prepare_evaluation_batch(spec)
-    StepRunner().run(build_evaluation_steps(after, execute))
-
-    assert after.group_id == before.group_id
     assert {evaluation.identity.run_id for evaluation in before.evaluations}.isdisjoint(executed)
     assert sorted(executed) == sorted(evaluation.identity.run_id for evaluation in after.evaluations)
+    assert after.evaluations[1].identity.output_dir != pending.identity.output_dir
+    assert partial.read_text() == '{"response":"already generated"}'
 
 
 @pytest.mark.parametrize("platform,accelerator", [("tpu", "v5litepod-4"), ("gpu", "GB200x1")])

@@ -33,6 +33,7 @@ from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
 from rigging.filesystem.storage_path import StoragePath
+from rigging.provenance import launch_provenance
 
 _ERROR_TAXONOMY = HarborErrorTaxonomy(
     infrastructure=frozenset({"InfrastructureError", "InternalServerError"}),
@@ -971,9 +972,7 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
 
 
 @pytest.mark.parametrize("changed_input", ["checkpoint", "judge", "policy", "evaluator"])
-def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(
-    tmp_path, monkeypatch, changed_input, harbor_runtime_sources
-):
+def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_path, monkeypatch, changed_input):
     executor = _harbor_executor("aime")
     stored_results = []
 
@@ -1003,8 +1002,11 @@ def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(
     elif changed_input == "policy":
         changed = replace(executor, config=replace(executor.config, digest=f"sha256:{'2' * 64}"))
     else:
-        source = harbor_runtime_sources / "vendor/harbor/src/source.py"
-        source.write_text("changed scoring = True\n")
+        captured = launch_provenance()
+        monkeypatch.setattr(
+            "marin.evaluation.harbor.driver_config.launch_provenance",
+            lambda: replace(captured, tree_hash="changed-tree"),
+        )
         changed = executor
     before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     with pytest.raises(EvaluationError, match="different dataset, model, policy"):

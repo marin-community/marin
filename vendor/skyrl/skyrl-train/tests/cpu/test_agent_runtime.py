@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 from harbor.environments import daytona
-from harbor.environments.runtime import DaytonaConnection, HostCapabilities
+from harbor.host_capabilities import DaytonaConnection, HostCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import AgentConfig
 from omegaconf import OmegaConf

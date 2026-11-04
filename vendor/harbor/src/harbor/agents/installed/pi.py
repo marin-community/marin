@@ -55,21 +55,7 @@ class Pi(BaseInstalledAgent):
     _ENDPOINT_ENV_PATH = "/tmp/harbor-pi-endpoint.env"
     _CONTEXT_BUDGET_EXTENSION_PATH = "/tmp/harbor-pi-context-budget.js"
     _MCP_EXTENSION_PATH = "/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"
-    _MCP_FILTER_EXTENSION = """
-import mcp from __MCP_EXTENSION_PATH__;
-const excluded = new Set(__EXCLUDED_TOOL_NAMES__);
-export default async function (pi) {
-  await mcp({
-    ...pi,
-    registerTool(tool) {
-      if (!excluded.has(tool.name)) pi.registerTool(tool);
-    },
-    setActiveTools(names) {
-      pi.setActiveTools(names.filter(name => !excluded.has(name)));
-    },
-  });
-}
-""".strip()
+    _MCP_CONFIGURE_PATH = "/installed-agent/pi_configure_mcp.cjs"
     _PROVIDER_CONFIG_RELATIVE_PATH = ".pi/agent/models.json"
     _SETTINGS_CONFIG_RELATIVE_PATH = ".pi/agent/settings.json"
     _AUTHENTICATION_FAILURE_MARKER = "HARBOR_PI_MODEL_AUTHENTICATION_ERROR"
@@ -441,41 +427,16 @@ export default function (pi) {
             else:
                 config["url"] = server.url
             servers[server.name] = config
-        content = shlex.quote(json.dumps({"mcpServers": servers}))
-        extension_path = shlex.quote(self._MCP_EXTENSION_PATH)
-        filtered_extension = (
-            self._MCP_FILTER_EXTENSION.replace(
-                "__MCP_EXTENSION_PATH__", json.dumps(self._MCP_EXTENSION_PATH)
-            ).replace("__EXCLUDED_TOOL_NAMES__", json.dumps(self._mcp_excluded_tools))
-            if self._mcp_excluded_tools
-            else ""
+        await environment.upload_file(
+            Path(__file__).with_name("pi_configure_mcp.cjs"), self._MCP_CONFIGURE_PATH
         )
-        register_script = """
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const directory = path.join(os.homedir(), '.pi/agent');
-fs.mkdirSync(directory, {recursive: true});
-const settingsPath = path.join(directory, 'settings.json');
-const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
-const wrapperPath = path.join(directory, 'harbor-mcp-filter.js');
-const wrapper = process.argv[3];
-if (wrapper) fs.writeFileSync(wrapperPath, wrapper);
-else fs.rmSync(wrapperPath, {force: true});
-// The prepared image already registers the unfiltered extension. Replace it,
-// including profiles reused after a previous filtered run, without double-loading.
-settings.extensions = [...new Set([
-  ...(settings.extensions ?? []).filter(entry => entry !== process.argv[2] && entry !== wrapperPath),
-  wrapper ? wrapperPath : process.argv[2],
-])];
-fs.writeFileSync(settingsPath, JSON.stringify(settings));
-fs.writeFileSync(path.join(directory, 'mcp.json'), process.argv[1]);
-""".strip()
         await self.exec_as_agent(
             environment,
             command=(
-                f"test -r {extension_path} || "
-                "{ echo 'Image does not provide pi-mcp-extension' >&2; exit 1; }; "
-                f"node -e {shlex.quote(register_script)} {content} {extension_path} "
-                f"{shlex.quote(filtered_extension)}"
+                f"node {shlex.quote(self._MCP_CONFIGURE_PATH)} "
+                f"{shlex.quote(self._MCP_EXTENSION_PATH)} "
+                f"{shlex.quote(json.dumps({'mcpServers': servers}))} "
+                f"{shlex.quote(json.dumps(self._mcp_excluded_tools))}"
             ),
         )
 

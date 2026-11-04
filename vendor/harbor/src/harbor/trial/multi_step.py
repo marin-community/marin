@@ -5,7 +5,7 @@ from pathlib import Path
 from harbor.agents.base import MalformedModelResponseError, TurnCapExhaustedError
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.environments.base import HealthcheckError
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.llms.base import ContextLengthExceededError
 from harbor.models.task.config import MultiStepRewardStrategy, StepConfig
 from harbor.models.task.task import Task

@@ -180,13 +180,17 @@ For prepared tasks and private container groups, select Harbor's local bubblewra
 n_concurrent_trials: 4
 environment:
   type: local
-  kwargs:
-    cgroup_parent: /sys/fs/cgroup/path/to/delegated-worker
 agents:
   - name: terminus-2
 datasets:
   - path: prepared-tasks
 ```
+
+Install `bubblewrap`, `umoci`, and `skopeo` on the trusted evaluator host. For an
+evaluation running as an Iris task, these tools belong in `iris-task`; they do
+not belong in the inner rollout images. The Iris task Dockerfile includes them,
+but workers need a rebuilt task image to use that addition. Namespace permissions
+and cgroup delegation are separate host requirements.
 
 Place this policy beside `prepared-tasks` inside the Marin workspace, then use the shared launcher:
 
@@ -195,9 +199,9 @@ uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b --harbor-config path/to/policy.yaml --limit 1 --dry-run
 ```
 
-Set `cgroup_parent` to the execution worker's delegated directory before submitting; see the
-local factory settings below. Launcher preflight does not validate a distant worker's delegation.
-Remove `--dry-run` to submit. Each task must set `allow_internet = false`. A single-container task
+Shellbox discovers the worker's delegated cgroup hierarchy. Launcher preflight does not
+validate a distant worker's delegation. Remove `--dry-run` to submit.
+Each task must set `allow_internet = false`. A single-container task
 names a prebuilt `docker_image` with an immutable `@sha256:` digest and an absolute `workdir`.
 Compose tasks instead provide `environment/shellbox-images.json`, mapping each service to its prepared
 image and working directory:
@@ -228,40 +232,18 @@ already installed. Terminus needs Bash and tmux; runtime downloads cannot succee
 Tasks using the model relay need Python 3 in their main image.
 Containers with timed readiness checks need Python 3 in their own images to supervise
 individual probes without stopping the container on the first timeout.
-For example, prepare a reviewed tau3 task snapshot on a trusted image builder. These commands
-preserve the runtime's per-task configuration and add Terminus's missing terminal dependencies:
+Prepare a reviewed Tau3 task snapshot with the shared image helper:
 
 ```bash
-TASK_DIR=prepared-tasks/tau3-airline-0
-MAIN_TAG=registry.example/harbor/tau3-airline-0-main:prepared
-RUNTIME_TAG=registry.example/harbor/tau3-airline-0-runtime:prepared
-cp "$TASK_DIR/environment/Dockerfile" "$TASK_DIR/environment/Dockerfile.prepared"
-cat >> "$TASK_DIR/environment/Dockerfile.prepared" <<'DOCKERFILE'
-RUN apt-get update && apt-get install -y --no-install-recommends bash tmux \
-    && rm -rf /var/lib/apt/lists/*
-DOCKERFILE
-docker buildx build --platform linux/amd64 --push --tag "$MAIN_TAG" \
-  --file "$TASK_DIR/environment/Dockerfile.prepared" "$TASK_DIR/environment"
-docker buildx build --platform linux/amd64 --push --tag "$RUNTIME_TAG" \
-  "$TASK_DIR/environment/runtime-server"
-MAIN_DIGEST=$(docker buildx imagetools inspect "$MAIN_TAG" --format '{{.Manifest.Digest}}')
-RUNTIME_DIGEST=$(docker buildx imagetools inspect "$RUNTIME_TAG" --format '{{.Manifest.Digest}}')
-cat > "$TASK_DIR/environment/shellbox-images.json" <<JSON
-{
-  "main": {"image": "$MAIN_TAG@$MAIN_DIGEST", "workdir": "/app"},
-  "tau3-runtime": {
-    "image": "$RUNTIME_TAG@$RUNTIME_DIGEST",
-    "workdir": "/app",
-    "agent_logs": "publish"
-  }
-}
-JSON
+uv run python -m experiments.evaluation.images.tau3.build --task prepared-tasks/tau3-airline-0
 ```
 
-Use an existing authenticated registry namespace in place of `registry.example`. Review the source
-Dockerfiles before building, set `allow_internet = false` in the prepared task's `task.toml`, and
-retain the prepared snapshot and manifest as Marin artifacts. These preparation commands require
-trusted build infrastructure; they are never run by the evaluation sandbox.
+The helper reuses the dependency-pinned Pi/ACP main image, builds the task-specific
+runtime, and writes `shellbox-images.json`. See the
+[image recipe](https://github.com/marin-community/marin/tree/main/experiments/evaluation/images/tau3) for registry setup.
+Set `allow_internet = false` in the prepared task's `task.toml` and retain the
+prepared snapshot as a Marin artifact. Image builds run on trusted preparation
+infrastructure.
 The primary stays alive for agent commands and verification. Sidecars retain their prepared
 image's ENTRYPOINT/CMD unless Compose explicitly overrides them. The adapter does not build
 images or install a nested container runtime.
@@ -354,12 +336,14 @@ Optional `registry_authfile` and `signature_policy` files configure host-side im
 they are never mounted into guests. Host mounts are unsupported. The guest has no external
 network route.
 
-The Harbor local adapter requires an explicitly delegated cgroup v2 `cgroup_parent`. Command
+The Harbor local adapter requires a writable delegated cgroup v2 hierarchy, discovered
+by Shellbox. Command
 timeouts kill that command's descendants without destroying the task filesystem or runtime peers.
 Before opening a verifier-only judge relay, the adapter stops all agent command groups, including detached processes;
 failure to confirm cleanup leaves the trial unscored. The same delegation enables CPU and memory limits
-across each container's processes and descendants. Use `limit` or `auto` to
-apply the task's declarations. The worker must run within that delegated
+across each container's processes and descendants. Shellbox attempts the task's
+numeric CPU and memory declarations independently, warning when a controller
+cannot enforce them. The worker must run within a delegated
 hierarchy; see the [Shellbox delegation instructions](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md#local-backend).
 Terminus reuses a tmux terminal: an agent deadline interrupts its foreground process group while
 preserving earlier background services for ordinary grading. This does not claim to stop deliberately
@@ -370,17 +354,16 @@ For example:
 ```yaml
 environment:
   type: local
-  cpu_enforcement_policy: limit
-  memory_enforcement_policy: limit
+  override_cpus: 2
+  override_memory_mb: 4096
   kwargs:
-    cgroup_parent: /sys/fs/cgroup/path/to/delegated-worker
     ttl: 3600
 ```
 
-Delegation remains required for command containment when CPU or memory enforcement is set to
-`ignore`; a worker without delegation cannot run this adapter. Select `ignore` to omit a declared
-resource limit. `auto` does not silently discard it. Storage quotas, GPU and TPU allocations
-remain unsupported.
+The local adapter rejects `ignore` resource policies. Adjust numeric task values or
+overrides to change limits. Missing CPU or memory controllers does not disable
+process containment; a worker without containment delegation cannot run this adapter.
+Storage quotas, GPU and TPU allocations remain unsupported.
 
 Run the policy through the isolated Harbor binary on that worker:
 
@@ -405,15 +388,9 @@ the same platform manifest digest in `shellbox-images.json`. Shellbox verifies
 the manifest, configuration and every layer before using that cache offline.
 An explicit signature policy still requires registry verification.
 
-To exercise the complete local Tau3 path with a real candidate, simulated user
-and assertion judge, use a prepared task whose canonical reward includes an
-NL assertion, such as `tau3-retail-2` from Tau3 1.0.1. Keep its runtime
-`task_config.json`, instructions and verifier unchanged. Select Terminus 2,
-configure a local tokenizer encoding for a hosted endpoint without `/tokenize`,
-and put the upstream `model_endpoint` and `model_name` in the local environment
-kwargs. The candidate's OpenAI client uses the host endpoint; the runtime and
-verifier receive the loopback relay and an inert key. Supply CPU/memory policies
-as above and omit the unsupported storage declaration from the prepared task.
+The Tau3 smoke runner requires a prepared task with an NL assertion, such as
+`tau3-retail-2` from Tau3 1.0.1, and a policy declaring the candidate and judge
+endpoints. It uses the task's native verifier:
 
 ```bash
 uv run --isolated --project vendor/harbor --frozen --extra runtime \
@@ -421,11 +398,8 @@ uv run --isolated --project vendor/harbor --frozen --extra runtime \
   --api-key-env GLM_BULK_TOKEN
 ```
 
-The command retains normal Harbor trial artifacts and checks that Tau2 evaluated
-a real runtime trajectory and returned NL assertion results. A model reward of
-zero is a scored outcome; an infrastructure error or skipped evaluator fails
-the smoke run. Task images contain the same MCP client and terminal dependencies
-used by the candidate. No oracle solution is uploaded.
+The runner retains trial artifacts and requires a scored result with native NL
+assertion results. Reward zero is valid; infrastructure failures fail the smoke.
 
 ## Sandbox environment isolation
 
@@ -542,12 +516,11 @@ through an isolated subprocess CLI for two calls:
 
 Runtime values do not change the source-policy digest. Policy kwargs override model-catalog kwargs;
 the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
-For a Harbor target or simulated user agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
-versions supplied by the policy or model configuration. Preflight includes this pin in the saved
-policy and the saved policy's digest; execution applies the same pin. The task image must
-provide Pi `0.87.0` on `PATH`; setup verifies the installed version. Pi setup does not install
-Node or npm packages. Historical task images that relied on runtime installation need a
-prepared harness image before they can run again.
+For a Harbor target or simulated user with `name: pi`, the prepared image supplies
+Pi. An explicit `kwargs.version` is checked against the installed binary; Marin
+does not replace it with a separate version pin. Pi setup does not install Node or
+npm packages. Historical tasks that relied on runtime installation need a prepared
+harness image.
 
 ACP Pi uses its own companion pin, `@earendil-works/pi-coding-agent@0.80.5`, with
 `pi-acp@0.0.33`. Its image must expose `node`, `pi`, and `pi-acp` on `PATH` and provide
@@ -555,8 +528,8 @@ ACP Pi uses its own companion pin, `@earendil-works/pi-coding-agent@0.80.5`, wit
 including Claude Code and Gemini, also requires image-provided `acpx@0.12.0` on `PATH`.
 The Tau3 simulated-user relay requires `python3` with `mcp==1.25.0`. Setup stages launchers,
 endpoint credentials, provider configuration, and ACP session configuration; it does not
-install these dependencies. The Tau3 ACP Pi image does not satisfy the standalone Pi
-`0.87.0` pin.
+install these dependencies. The same Tau3 image can run standalone Pi with its
+image-provided version.
 
 For Qwen3, set the model's `agent.agent_kwargs.thinking_format` to
 `qwen-chat-template` and `serve.reasoning_parser` to `qwen3`. The latter keeps reasoning

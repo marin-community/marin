@@ -9,7 +9,7 @@ from typing import NamedTuple
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.capabilities import EnvironmentResourceCapabilities
 from harbor.environments.resource_policies import validate_resource_capabilities
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import EnvironmentConfig as TrialEnvironmentConfig

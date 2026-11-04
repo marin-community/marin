@@ -24,9 +24,9 @@ from marin.evaluation.harbor.driver_config import (
     HarborErrorTaxonomy,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
+    harbor_runtime_descriptor,
     run_harbor_driver,
 )
-from marin.evaluation.harbor.runtime import harbor_runtime_descriptor, harbor_runtime_source_hash
 from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, ModelConfigRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceUnavailable
@@ -485,7 +485,7 @@ class HarborExecutor:
             task_limit=self.task_limit,
             model=self.model_config,
             judge=self.judge_config,
-            evaluator_identity=harbor_runtime_descriptor(harbor_runtime_source_hash()),
+            evaluator_identity=harbor_runtime_descriptor(),
         )
 
     def _run(

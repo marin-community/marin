@@ -49,8 +49,13 @@ class ScriptedLLM(BaseLLM):
 
 
 class ForegroundLLM(ScriptedLLM):
-    def __init__(self):
+    def __init__(self, builtin):
         self.command_sent = False
+        self.foreground = (
+            "echo $$ > foreground.pid; while :; do :; done"
+            if builtin
+            else "sh -c 'echo $$ > foreground.pid; exec sleep 3600'"
+        )
 
     async def call(self, prompt: str, **kwargs) -> LLMResponse:
         if self.command_sent:
@@ -64,7 +69,7 @@ class ForegroundLLM(ScriptedLLM):
                     "commands": [
                         {
                             "keystrokes": "sleep 3600 & echo $! > background.pid; "
-                            "sh -c 'echo $$ > foreground.pid; exec sleep 3600'; "
+                            f"{self.foreground}; "
                             "printf unexpected > after-timeout\n",
                             "duration": 0.1,
                         }
@@ -127,8 +132,9 @@ async def test_run_after_cleanup_starts_a_new_terminal_and_retains_phase_files(
             await adapter.stop(delete=True)
 
 
+@pytest.mark.parametrize("builtin", [False, True])
 async def test_cancelled_run_stops_foreground_job_and_preserves_background_service(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, builtin
 ):
     if shutil.which("tmux") is None:
         pytest.skip("The terminal lifecycle regression requires installed tmux")
@@ -136,7 +142,9 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
     async def token_count(url, payload):
         return 128
 
-    monkeypatch.setattr(Terminus2, "_init_llm", lambda self, **kwargs: ForegroundLLM())
+    monkeypatch.setattr(
+        Terminus2, "_init_llm", lambda self, **kwargs: ForegroundLLM(builtin)
+    )
     monkeypatch.setattr(terminus_2, "_server_token_count", token_count)
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir()
@@ -171,9 +179,10 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(running, 5)
 
-            assert (
-                await adapter.exec("kill -0 $(cat foreground.pid)")
-            ).return_code != 0
+            if not builtin:
+                assert (
+                    await adapter.exec("kill -0 $(cat foreground.pid)")
+                ).return_code != 0
             assert (
                 await adapter.exec("kill -0 $(cat background.pid)")
             ).return_code == 0
@@ -181,6 +190,14 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
                 await adapter.exec("tmux has-session -t terminus-2")
             ).return_code == 0
             assert not machine.path("/workspace/after-timeout").exists()
+            await adapter.exec(
+                "tmux send-keys -t terminus-2 'printf recovered > resumed' Enter"
+            )
+            assert (
+                await adapter.exec(
+                    "until test -s resumed; do sleep 0.01; done", timeout_sec=5
+                )
+            ).return_code == 0
         finally:
             running.cancel()
             await asyncio.gather(running, return_exceptions=True)

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 from rigging.config_discovery import find_project_root
+from rigging.provenance import launch_provenance
 from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS, env_vars_from_keys
@@ -71,6 +72,10 @@ _DRIVER_STORAGE_ENV_KEYS = (
 )
 
 HARBOR_RUNTIME_PROJECT = "vendor/harbor"
+
+
+def harbor_runtime_descriptor() -> str:
+    return f"harbor @ {HARBOR_RUNTIME_PROJECT}#tree={launch_provenance().dedup_key}"
 
 
 def _harbor_env_dir() -> Path:

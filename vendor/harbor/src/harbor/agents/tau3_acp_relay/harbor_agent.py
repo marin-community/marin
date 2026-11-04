@@ -9,10 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.installed.acp_registry import is_acp_registry_shorthand
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig
+from harbor.models.trial.config import AgentConfig, UserAgentConfig
+from harbor.models.agent.name import AgentName
 from harbor.trial.errors import AgentTimeoutError
 
 from .relay import (
@@ -24,6 +27,7 @@ from .relay import (
     DEFAULT_SEED,
     DEFAULT_TOOL_TIMEOUT_SEC,
     TURN_TIMEOUT_ERROR_PREFIX,
+    ORCHESTRATION_TOOLS,
     Tau3RuntimeInfrastructureError,
 )
 
@@ -34,6 +38,26 @@ SUMMARY_FILENAME = "tau3-harbor-acp-relay.json"
 POLICY_PATTERN = re.compile(
     r"^[ \t]*<policy>\s*(.*?)\s*</policy>", re.DOTALL | re.MULTILINE
 )
+
+
+def candidate_agent_config(
+    agent: AgentConfig, user_agent: UserAgentConfig | None
+) -> AgentConfig:
+    """Reserve Tau3 conversation control for its simulated-user relay."""
+    if (
+        user_agent is None
+        or user_agent.import_path != f"{__name__}:Tau3HarborACPRelay"
+        or agent.name is None
+        or not (agent.name == AgentName.ACP or is_acp_registry_shorthand(agent.name))
+    ):
+        return agent
+    excluded_tools = set(agent.kwargs.get("mcp_excluded_tools", ()))
+    excluded_tools.update(f"mcp_tau3_runtime_{name}" for name in ORCHESTRATION_TOOLS)
+    return agent.model_copy(
+        update={
+            "kwargs": {**agent.kwargs, "mcp_excluded_tools": sorted(excluded_tools)}
+        }
+    )
 
 
 class Tau3HarborACPRelay(BaseAgent):

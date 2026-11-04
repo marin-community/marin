@@ -23,7 +23,7 @@ from harbor.environments.capabilities import (
 from harbor.environments.docker_translate import COMPOSE_FILENAMES
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.execution import execute_shellbox_command
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities, model_api_url
 from harbor.environments.model_relay import (
     JudgeAccess,
     ModelRelay,
@@ -188,10 +188,12 @@ class DaytonaEnvironment(BaseEnvironment):
             self.candidate_model_name,
             authentication=self.host_capabilities.model_authentication,
         )
-        if (
-            "OPENAI_BASE_URL" in self.task_env_config.env
-            and self.judge_access is not JudgeAccess.RUNTIME
-        ):
+        needs_model = model_api_url(spec.env) is not None
+        if needs_model and judge is None:
+            raise ValueError(
+                "Task model calls require an explicit host judge endpoint and model"
+            )
+        if needs_model and self.judge_access is not JudgeAccess.RUNTIME:
             raise ValueError("Task model calls require explicit judge_access='runtime'")
         self._judge = judge
         self._stopping = None

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from harbor.cli.main import app
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.job.config import JobConfig
 from harbor.models.task.config import MCPServerConfig
 from harbor.models.trial.config import AgentConfig

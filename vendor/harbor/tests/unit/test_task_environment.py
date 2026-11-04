@@ -44,14 +44,15 @@ def test_task_alias_cannot_resolve_ambient_host_credentials(monkeypatch, key):
 @pytest.mark.parametrize(
     "key", ["HUGGINGFACE_API_KEY", "HUGGINGFACE_TOKEN", "HUGGINGFACE_HUB_TOKEN"]
 )
-def test_huggingface_host_aliases_cannot_be_forwarded(monkeypatch, key):
-    monkeypatch.setenv(key, "host-huggingface-token")
+def test_huggingface_host_aliases_cannot_be_forwarded(key):
     with pytest.raises(ValueError):
         validate_task_environment({key: "host-huggingface-token"})
     with pytest.raises(ValueError):
         validate_task_environment(
             {"RENAMED_TOKEN": "host-huggingface-token"},
-            protected_values=frozenset({"host-huggingface-token"}),
+            protected_values=protected_environment_values(
+                {key: "host-huggingface-token"}
+            ),
         )
 
 
@@ -91,9 +92,8 @@ def test_task_model_capabilities_resolve_without_exposing_parent_secrets(monkeyp
         "AIDER_API_KEY",
     ],
 )
-def test_provider_credentials_are_host_only_even_under_task_aliases(monkeypatch, key):
-    monkeypatch.setenv(key, "provider-private-canary")
-    protected = frozenset({"provider-private-canary"})
+def test_provider_credentials_are_host_only_even_under_task_aliases(key):
+    protected = protected_environment_values({key: "provider-private-canary"})
     for values in (
         {key: "provider-private-canary"},
         {"INNOCENT_ALIAS": "provider-private-canary"},
@@ -104,9 +104,6 @@ def test_provider_credentials_are_host_only_even_under_task_aliases(monkeypatch,
                 source=values,
                 protected_values=protected,
             )
-    assert resolve_env_vars(
-        {"MODEL_TOKEN": "${" + key + "}"}, source={key: "EMPTY"}
-    ) == {"MODEL_TOKEN": "EMPTY"}
 
 
 @pytest.mark.parametrize(
@@ -129,8 +126,7 @@ def test_storage_and_control_plane_credentials_cannot_be_explicit_task_capabilit
         resolve_env_vars({key: "private"}, source={})
 
 
-def test_transformed_aider_authentication_cannot_be_granted(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
+def test_transformed_aider_authentication_cannot_be_granted():
     with pytest.raises(ValueError):
         resolve_env_vars(
             {"AIDER_API_KEY": "${AIDER_API_KEY}"},

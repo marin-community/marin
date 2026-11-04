@@ -128,6 +128,7 @@ def run_sweeps(
         host_environment,
         environment_kwargs=base_config.environment.kwargs,
         agents=base_config.agents,
+        verifier_environment=base_config.verifier.env,
     )
     guest_environment = cli_guest_environment(base_config.environment.kwargs)
 

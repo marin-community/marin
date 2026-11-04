@@ -20,7 +20,7 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.definition import should_upload_environment_dir
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.environments.resource_policies import (
     validate_resource_capabilities,
     validate_resource_values,

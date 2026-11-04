@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.task.config import (
     AgentConfig as TaskAgentConfig,
     EnvironmentConfig as TaskEnvironmentConfig,

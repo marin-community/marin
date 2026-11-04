@@ -623,7 +623,7 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
-            from harbor.environments.runtime import DAYTONA_API_URL, DaytonaConnection
+            from harbor.host_capabilities import DAYTONA_API_URL, DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 

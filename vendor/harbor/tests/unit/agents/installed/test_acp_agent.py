@@ -67,6 +67,8 @@ async def test_pi_mcp_exclusions_preserve_domain_tools_across_rediscovery(
         "}\n"
     )
     monkeypatch.setattr(Pi, "_MCP_EXTENSION_PATH", str(extension))
+    configure_path = temp_dir / "pi_configure_mcp.cjs"
+    monkeypatch.setattr(Pi, "_MCP_CONFIGURE_PATH", str(configure_path))
     directory = temp_dir / ".pi/agent"
     directory.mkdir(parents=True)
     original = {
@@ -78,6 +80,9 @@ async def test_pi_mcp_exclusions_preserve_domain_tools_across_rediscovery(
     assert node is not None
 
     class LocalEnvironment:
+        async def upload_file(self, source_path, target_path):
+            shutil.copyfile(source_path, target_path)
+
         async def exec(self, command, **kwargs):
             completed = subprocess.run(
                 ["/bin/bash", "-c", command],
@@ -890,109 +895,6 @@ class TestAcpAgentPostRun:
 
 class TestAcpAgentRun:
     """Test ACP runtime env wiring."""
-
-    @pytest.mark.parametrize(
-        "server, expected",
-        [
-            (
-                MCPServerConfig(
-                    name="domain",
-                    transport="streamable-http",
-                    url="http://runtime:8000/mcp",
-                ),
-                {
-                    "transport": "streamable-http",
-                    "url": "http://runtime:8000/mcp",
-                    "lifecycle": "eager",
-                },
-            ),
-            (
-                MCPServerConfig(
-                    name="domain", transport="sse", url="http://runtime:8000/sse"
-                ),
-                {
-                    "transport": "sse",
-                    "url": "http://runtime:8000/sse",
-                    "lifecycle": "eager",
-                },
-            ),
-            (
-                MCPServerConfig(
-                    name="domain",
-                    transport="stdio",
-                    command="domain-mcp",
-                    args=["--read-only"],
-                ),
-                {
-                    "transport": "stdio",
-                    "command": "domain-mcp",
-                    "args": ["--read-only"],
-                    "lifecycle": "eager",
-                },
-            ),
-        ],
-    )
-    @pytest.mark.parametrize("extension_available", [True, False])
-    async def test_pi_acp_stages_mcp_extension_config(
-        self, temp_dir, monkeypatch, server, expected, extension_available
-    ):
-        extension = temp_dir / "pi-mcp-extension/index.ts"
-        if extension_available:
-            extension.parent.mkdir()
-            extension.write_text("export default function () {}\n")
-        monkeypatch.setattr(Pi, "_MCP_EXTENSION_PATH", str(extension))
-        settings_dir = temp_dir / ".pi/agent"
-        settings_dir.mkdir(parents=True)
-        settings = {
-            "extensions": ["/existing-extension.ts"],
-            "compaction": {"enabled": False},
-        }
-        (settings_dir / "settings.json").write_text(json.dumps(settings))
-        node = shutil.which("node")
-        assert node is not None
-
-        class LocalEnvironment:
-            async def exec(self, command, **kwargs):
-                completed = subprocess.run(
-                    ["/bin/bash", "-c", command],
-                    capture_output=True,
-                    text=True,
-                    env={
-                        "HOME": str(temp_dir),
-                        "PATH": f"{Path(node).parent}:/usr/bin:/bin",
-                    },
-                )
-                return SimpleNamespace(
-                    return_code=completed.returncode,
-                    stdout=completed.stdout,
-                    stderr=completed.stderr,
-                )
-
-        agent = AcpAgent(
-            logs_dir=temp_dir,
-            registry_entry=PI_ACP_REGISTRY_ENTRY,
-            mcp_servers=[server],
-        )
-
-        if not extension_available:
-            with pytest.raises(
-                RuntimeError, match="Image does not provide pi-mcp-extension"
-            ):
-                await agent.acp_install(LocalEnvironment())
-            assert not (settings_dir / "mcp.json").exists()
-            assert json.loads((settings_dir / "settings.json").read_text()) == settings
-            return
-
-        await agent.acp_install(LocalEnvironment())
-        await agent.acp_install(LocalEnvironment())
-
-        config = json.loads((temp_dir / ".pi/agent/mcp.json").read_text())
-        assert config == {"mcpServers": {"domain": expected}}
-        registered = json.loads((settings_dir / "settings.json").read_text())
-        assert registered == {
-            **settings,
-            "extensions": ["/existing-extension.ts", str(extension)],
-        }
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

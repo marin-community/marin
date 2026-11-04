@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.environments.local import LocalEnvironment
 from harbor.environments import model_relay
 from tests.unit.environments.transport import ProcessMachine, available_port

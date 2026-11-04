@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from harbor.models.job.config import RetryConfig
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import ExceptionInfo, TrialResult
 from harbor.telemetry.observer import (

@@ -16,7 +16,7 @@ import pytest
 
 from harbor.environments import local, model_relay
 from harbor.environments.local import LocalEnvironment
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import ResourceMode
 from harbor.models.trial.paths import TrialPaths
@@ -157,15 +157,13 @@ def local_environment(tmp_path: Path, **kwargs) -> LocalEnvironment:
 @pytest.mark.parametrize(
     "resources",
     [
-        {"cpus": 2},
-        {"memory_mb": 1024},
         {"storage_mb": 1024},
         {"gpus": 1},
         {"tpu": {"type": "v6e", "topology": "2x4"}},
     ],
-    ids=["cpu", "memory", "storage", "gpu", "tpu"],
+    ids=["storage", "gpu", "tpu"],
 )
-def test_local_declared_resources_fail_without_allocating_a_sandbox(
+def test_local_unsupported_resources_fail_without_allocating_a_sandbox(
     tmp_path, monkeypatch, resources
 ):
     def acquire(cache, source):
@@ -190,14 +188,50 @@ def test_local_declared_resources_fail_without_allocating_a_sandbox(
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("resource", ["cpu", "memory"])
+def test_local_rejects_ignore_policy_before_allocating_a_sandbox(
+    tmp_path, monkeypatch, resource
+):
+    def acquire(cache, source):
+        pytest.fail("An ignored resource request reached image acquisition")
+
+    monkeypatch.setattr(ImageCache, "prepare", acquire)
+    with pytest.raises(ValueError):
+        local_environment(
+            tmp_path, **{f"{resource}_enforcement_policy": ResourceMode.IGNORE}
+        )
+
+
+async def test_local_numeric_limits_do_not_bypass_required_containment(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "shellbox.backends.local.machine.delegated_cgroup_parent", lambda: None
+    )
+
+    def acquire(cache, source):
+        pytest.fail("A worker without containment reached image acquisition")
+
+    monkeypatch.setattr(ImageCache, "prepare", acquire)
+    adapter = local_environment(
+        tmp_path,
+        task_env_config=EnvironmentConfig(
+            docker_image="offline.test/task@sha256:" + "a" * 64,
+            allow_internet=False,
+            cpus=2,
+            memory_mb=1024,
+            workdir="/app",
+        ),
+    )
+    async with asyncio.TaskGroup() as service_tasks:
+        with pytest.raises(UnsupportedMachineSpec):
+            await adapter.start(False, service_tasks=service_tasks)
+
+
 def test_local_prepared_services_keep_state_private_and_collect_verifier_logs(
     tmp_path, monkeypatch, prepared_busybox_image, request
 ):
     cgroup_parent = request.config.getoption("--harbor-local-cgroup-parent")
-    if cgroup_parent is None:
-        pytest.skip(
-            "Real Harbor execution requires --harbor-local-cgroup-parent with delegated cgroup v2"
-        )
     umoci = shutil.which("umoci")
     if umoci is None:
         if os.environ.get("CI"):
@@ -246,11 +280,11 @@ def test_local_prepared_services_keep_state_private_and_collect_verifier_logs(
     adapter = local_environment(
         tmp_path,
         task_env_config=config,
-        cpu_enforcement_policy=ResourceMode.IGNORE,
-        memory_enforcement_policy=ResourceMode.IGNORE,
         cgroup_parent=cgroup_parent,
         umoci=umoci,
     )
+    if adapter.factory.cgroup_parent is None:
+        pytest.skip("Real Harbor execution requires delegated cgroup v2")
 
     async def run():
         async with asyncio.TaskGroup() as service_tasks:

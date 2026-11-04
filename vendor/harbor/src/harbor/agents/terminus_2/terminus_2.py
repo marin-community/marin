@@ -39,7 +39,7 @@ from harbor.context_management import (
     trim_latest_turn,
 )
 from harbor.environments.base import BaseEnvironment
-from harbor.environments.runtime import OPENAI_API_URL
+from harbor.host_capabilities import OPENAI_API_URL
 from harbor.llms.base import (
     BaseLLM,
     ContextBudgetExceededError,

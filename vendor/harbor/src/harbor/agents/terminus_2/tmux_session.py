@@ -516,17 +516,18 @@ class TmuxSession:
         """Stop the terminal's foreground job while preserving prior background jobs."""
         if not await self.is_session_alive():
             return
-        # Bash job control gives each foreground pipeline its own process group.
-        # Killing that group leaves the shell and earlier background services alive.
+        # Builtins run in the shell group; external foreground pipelines have
+        # their own group. Interrupt the shell so it discards the pending list.
         command = (
             "set -eu; "
             f"pane_pid=$(tmux display-message -p -t {shlex.quote(self._session_name)} '#{{pane_pid}}'); "
             'pane_status=$(<"/proc/$pane_pid/stat"); pane_status=${pane_status##*) }; '
             'read -r state parent shell_group session tty foreground_group remaining <<< "$pane_status"; '
-            'if [ "$foreground_group" -gt 0 ] && [ "$foreground_group" != "$shell_group" ]; then '
+            'if [ "$foreground_group" -gt 0 ]; then '
             'kill -INT -- "-$shell_group"; '
+            'if [ "$foreground_group" != "$shell_group" ]; then '
             'kill -KILL -- "-$foreground_group" 2>/dev/null || true; '
-            'while kill -0 -- "-$foreground_group" 2>/dev/null; do sleep 0.01; done; fi'
+            'while kill -0 -- "-$foreground_group" 2>/dev/null; do sleep 0.01; done; fi; fi'
         )
         result = await self.environment.exec(
             command=command, user=self._user, timeout_sec=_FOREGROUND_STOP_TIMEOUT

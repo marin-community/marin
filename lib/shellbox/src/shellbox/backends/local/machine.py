@@ -30,7 +30,7 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 from shellbox.backends.local import launch
-from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent
+from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, delegated_cgroup_parent
 from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.backends.local.transfers import unpack_local_archive
@@ -451,6 +451,12 @@ class LocalMachine:
         if self._cgroup_parent is not None:
             self._cgroup = MachineCgroup.create(self._cgroup_parent, cpus=self.spec.cpus, memory_mb=self.spec.memory_mb)
             self._keeper_cgroup = self._cgroup.create_child()
+        elif self.spec.cpus is not None or self.spec.memory_mb is not None:
+            logger.warning(
+                "Local CPU/memory limits cannot be applied without cgroup delegation (cpus=%s, memory_mb=%s)",
+                self.spec.cpus,
+                self.spec.memory_mb,
+            )
         if self.image is None:
             arguments = _sandbox_argv(
                 self._bwrap,
@@ -1006,9 +1012,7 @@ def _check_mounts(mounts: tuple[Mount, ...]) -> None:
             raise UnsupportedMachineSpec(f"The local backend's mount {mount.guest} lies inside another mount")
 
 
-def _check_spec(
-    spec: MachineSpec, cgroup_parent: Path | None = None
-) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
+def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
     if not isinstance(spec.source, (HostImage, PackageSpec, PreparedImage, RegistryImage)):
         raise UnsupportedMachineSpec(
             "The local backend requires HostImage, PackageSpec, or a prepared/pinned OCI image, "
@@ -1016,10 +1020,6 @@ def _check_spec(
         )
     if spec.storage_mb is not None or spec.gpus:
         raise UnsupportedMachineSpec("The local backend does not provide disk quotas or GPU allocations")
-    if spec.cpus is not None or spec.memory_mb is not None:
-        if cgroup_parent is None:
-            raise UnsupportedMachineSpec("Local CPU and memory limits require an explicit delegated cgroup parent")
-        check_cgroup_parent(cgroup_parent, resource_limits=True)
     if spec.memory_mb is not None and spec.memory_mb <= 0:
         raise ValueError("Local memory_mb must be positive")
     if (
@@ -1034,7 +1034,7 @@ def check_local_environment(
     requirements: ExecutionRequirements, spec: MachineSpec, *, cgroup_parent: Path | None = None
 ) -> None:
     """Check local execution support without acquiring a bubblewrap sandbox."""
-    source = _check_spec(spec, cgroup_parent)
+    source = _check_spec(spec)
     origin = source.source if isinstance(source, PreparedImage) else source
     reference = origin.reference if isinstance(origin, RegistryImage) else None
     capabilities = LINUX_PROCESS_CAPABILITIES
@@ -1065,8 +1065,9 @@ class LocalMachineFactory:
     Commands never inherit the host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``,
     ``HOME``, ``LANG``, ``PYTHONHASHSEED`` when the factory has a ``hash_seed``, and the spec's and
     command's variables. ``bin_dirs`` only sets ``PATH``; a directory outside the mounted ones is not
-    visible to commands. An explicit delegated ``cgroup_parent`` enables aggregate CPU and memory limits
-    for every process in each machine. Disk quotas remain unsupported.
+    visible to commands. The factory discovers a writable cgroup delegation for command containment
+    and attempts aggregate CPU and memory limits there. Unavailable limits produce warnings.
+    ``cgroup_parent`` overrides discovery. Disk quotas remain unsupported.
 
     ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap
     and any bwrap on ``PATH`` that can build a sandbox on this host, and raises ``SandboxUnavailable``
@@ -1100,7 +1101,7 @@ class LocalMachineFactory:
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
-        self.cgroup_parent = None if cgroup_parent is None else cgroup_parent.resolve()
+        self.cgroup_parent = delegated_cgroup_parent() if cgroup_parent is None else cgroup_parent.resolve()
         if self.cgroup_parent is not None:
             check_cgroup_parent(self.cgroup_parent)
         self.image_cache = process_image_cache(image_cache or Path.home() / ".cache/shellbox/images", authfile, policy)
@@ -1127,7 +1128,7 @@ class LocalMachineFactory:
     async def create_task(self, spec: TaskSpec) -> Task:
         """Start named containers with private filesystems and one network."""
         for container in spec.containers:
-            _check_spec(container.machine, self.cgroup_parent)
+            _check_spec(container.machine)
         if len(spec.containers) > 1 and spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("Local multi-container tasks require denied external networking")
         if any(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", container.name) is None for container in spec.containers):
@@ -1191,7 +1192,7 @@ class LocalMachineFactory:
     async def _create(
         self, spec: MachineSpec, peer: LocalMachine | None = None, aliases: str | None = None
     ) -> LocalMachine:
-        source = _check_spec(spec, self.cgroup_parent)
+        source = _check_spec(spec)
         if isinstance(source, (PreparedImage, RegistryImage)):
             return await self._create_image(spec, source, peer, aliases)
 

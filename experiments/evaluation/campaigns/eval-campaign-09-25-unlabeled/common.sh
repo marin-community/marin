@@ -29,12 +29,12 @@ CAMPAIGN_DATASET_REGISTRY_REVISION="38742b0f9f411c95e0c01468785cac7bb77c9894"
 eval "$(cd "$MARIN_DIR" && uv run python - <<'PY'
 import shlex
 
-from marin.evaluation.evalchemy.runtime import evalchemy_runtime_source_hash
+from rigging.provenance import launch_provenance
 
-print(f"CAMPAIGN_EVALCHEMY_SOURCE_HASH={shlex.quote(evalchemy_runtime_source_hash())}")
+print(f"CAMPAIGN_SOURCE_TREE={shlex.quote(launch_provenance().dedup_key)}")
 PY
 )"
-export CAMPAIGN_SHA_MARIN CAMPAIGN_EVALCHEMY_SOURCE_HASH
+export CAMPAIGN_SHA_MARIN CAMPAIGN_SOURCE_TREE
 
 die() {
   echo "error: $*" >&2
@@ -467,7 +467,7 @@ PY
 snapshot_launch_configs() {
   mkdir -p "$CONFIG_SNAPSHOT_DIR"
   CAMPAIGN_SHA_MARIN="$CAMPAIGN_SHA_MARIN" \
-  CAMPAIGN_EVALCHEMY_SOURCE_HASH="$CAMPAIGN_EVALCHEMY_SOURCE_HASH" \
+  CAMPAIGN_SOURCE_TREE="$CAMPAIGN_SOURCE_TREE" \
   SNAPSHOT_DIR="$CONFIG_SNAPSHOT_DIR" \
   uv run --project "$MARIN_DIR" python - "$@" <<'PY'
 import hashlib
@@ -494,7 +494,7 @@ payload = {
     "argv": arguments,
     "pins": {
         "marin": os.environ["CAMPAIGN_SHA_MARIN"],
-        "evalchemy_source_hash": os.environ["CAMPAIGN_EVALCHEMY_SOURCE_HASH"],
+        "source_tree": os.environ["CAMPAIGN_SOURCE_TREE"],
     },
     "files": [
         {"kind": kind, "source": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}

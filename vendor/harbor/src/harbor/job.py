@@ -26,7 +26,7 @@ from rich.progress import (
 )
 
 from harbor.metrics.base import BaseMetric
-from harbor.environments.runtime import HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.metrics.factory import MetricFactory
 from harbor.metrics.mean import Mean
 from harbor.models.benchmark import (
