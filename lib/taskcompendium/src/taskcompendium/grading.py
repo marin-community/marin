@@ -21,6 +21,7 @@ from verifyit.spec import (
     JudgeSpec,
     NumericSpec,
     PredictedActionSpec,
+    ReasoningMarkupSpec,
     Spec,
     StructuredExactSpec,
     UnsolvableSpec,
@@ -123,6 +124,9 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
             if not isinstance(final, AssistantToolCalls):
                 return ()
             return tuple(CandidateCall(call.name, call.object_arguments()) for call in final.calls)
+        case ReasoningMarkupSpec(), ActionSubmission(message=final):
+            # The markup under test precedes any function call, so grade the message text.
+            return final.content if isinstance(final, TextMessage) else final.content or ""
         case ExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
             if not isinstance(value, str):
                 raise SubmissionFailure("Text verifier requires a string JSON value")
