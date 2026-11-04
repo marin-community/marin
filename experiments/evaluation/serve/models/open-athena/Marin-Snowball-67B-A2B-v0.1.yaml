@@ -1,0 +1,25 @@
+# The v0.1 release is byte-identical to Snowball-Smartie-RL-2026.10.15.32-step14 and serves with its campaign settings.
+name: marin-snowball-67b-a2b-v0-1
+location: open-athena/Marin-Snowball-67B-A2B-v0.1
+revision: adc0078a19a4383bc998fcdb43867b3360baf5f3
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
