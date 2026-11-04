@@ -16,8 +16,8 @@ import click
 from huggingface_hub import CommitOperationAdd, HfApi
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.thoughtcrime.mine_prefixes import REPORT_FILENAME
 from experiments.post_training.task_curation.datasets.thoughtcrime import REPOSITORY, ROWS_FILE
+from experiments.post_training.thoughtcrime.mine_prefixes import REPORT_FILENAME
 
 
 @click.command(help=__doc__)
