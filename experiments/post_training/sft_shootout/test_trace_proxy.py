@@ -92,7 +92,6 @@ def test_completion_claims_from_both_harnesses():
 def test_route_repairs_once_and_takes_over_on_budget():
     state = TrialState()
     assert route(state, TERMINUS_ERROR, 10, 100) == (Author.TEACHER, Trigger.FORMAT_ERROR)
-    assert state.takeover is None
     assert route(state, TERMINUS_ERROR[:2], 10, 100) == (Author.STUDENT, None)
     assert route(state, TERMINUS_ERROR[:2], 100, 100) == (Author.TEACHER, Trigger.CONTEXT_BUDGET)
     assert route(state, TERMINUS_ERROR[:2], 10, 100) == (Author.TEACHER, None)

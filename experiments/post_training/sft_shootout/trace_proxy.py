@@ -13,11 +13,9 @@ teacher with ``relay.route``. For every chat completion it:
   conversation the request continues and the messages it adds, usage, latency and the full reply,
   reasoning included. ``rebuild_traces.py`` turns this log into one row per conversation.
 
-Records are grouped by Harbor's per-trial correlation header (``TRIAL_HEADER``). Harbor agents send
-it when they run with ``collect_rollout_details``. A trial can hold several conversations: Terminus-2's
-context summarization sends summarizer calls and then restarts from a shorter history. A request
-continues the trial's longest conversation whose messages are a prefix of its own. Otherwise it starts
-a new conversation.
+Records are grouped by Harbor's per-trial correlation header (``TRIAL_HEADER``). A request continues
+the trial's longest conversation whose messages are a prefix of its own. Otherwise it starts a new
+conversation.
 
 The proxy also serves vLLM's ``/tokenize`` (``count`` and ``max_model_len``), which Harbor's
 mini-swe-agent context limiter calls and many hosted APIs lack. The count is the largest over the

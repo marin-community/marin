@@ -6,16 +6,15 @@
 The student answers until one of these triggers:
 
 - Format error: the newest observation is the harness's parse-error message. The teacher writes that
-  one turn (a repair). Control then returns to the student. Terminus-2 keeps the bad reply in the
-  history before its error. mini-swe-agent drops it and appends its error as the newest message.
+  one turn (a repair). Control then returns to the student. mini-swe-agent drops the bad reply and
+  appends its error as the newest message.
 - Context budget: the prompt reaches ``budget_tokens`` (student tokenizer). The teacher takes over
   until the episode ends.
 - Completion claim: the student's reply claims the task is done. The proxy withholds the reply, the
   teacher answers the same request, and the teacher keeps control until the episode ends.
 
-The trigger texts come from the harnesses: Terminus-2's ``Previous response had parsing errors:``
-and ``"task_complete": true``, and mini-swe-agent 2.1.0's ``Tool call error:`` (``mini.yaml``
-``format_error_template``) and ``echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT``.
+mini-swe-agent 2.1.0 uses ``Tool call error:`` (``mini.yaml`` ``format_error_template``) and
+``echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`` for its triggers.
 """
 
 import json
