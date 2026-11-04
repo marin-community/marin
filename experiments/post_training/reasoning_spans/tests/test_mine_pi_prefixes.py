@@ -50,7 +50,9 @@ def _transcript(replies: list[tuple[str, int]], task: str = "Do the task.") -> l
                 }
             )
         )
-        lines.append(_message_end({"role": "toolResult", "toolCallId": call_id, "content": [{"type": "text", "text": "ok"}]}))
+        lines.append(
+            _message_end({"role": "toolResult", "toolCallId": call_id, "content": [{"type": "text", "text": "ok"}]})
+        )
     return lines
 
 
@@ -84,12 +86,14 @@ def test_mine_rows_deduplicates_identical_prompts_and_reports_counts():
         "run-b", "trial-2", "bfcl", "model-b", parse_pi_transcript(_transcript([(DOUBLE_THINK, 900)], "Other task."))
     )
     # The same opening prompt as ``first``, answered with a malformed span by a different checkpoint.
-    promoter = Trajectory("run-c", "trial-1", "bixbench", "model-c", parse_pi_transcript(_transcript([(DOUBLE_THINK, 950)])))
+    promoter = Trajectory(
+        "run-c", "trial-1", "bixbench", "model-c", parse_pi_transcript(_transcript([(DOUBLE_THINK, 950)]))
+    )
     report = MiningReport()
 
     rows = mine_rows([first, repeated, other_task, promoter], config, None, report)
 
-    assert [row["split"] for row in rows] == ["hazard", "hazard", "hazard"]
+    assert [row.split for row in rows] == ["hazard", "hazard", "hazard"]
     assert (report.hazard_rows, report.control_rows, report.duplicate_rows, report.controls_promoted_to_hazard) == (
         3,
         0,
@@ -98,7 +102,7 @@ def test_mine_rows_deduplicates_identical_prompts_and_reports_counts():
     )
     assert report.hazard_rows_by_run == {"run-a": 1, "run-b": 1, "run-c": 1}
     assert report.hazard_replies_by_violation == {"stray_end": 4}
-    promoted = next(row for row in rows if row["run"] == "run-c")
-    assert (promoted["model"], promoted["violation"], promoted["position"]) == ("model-c", "stray_end", 2)
-    other = next(row for row in rows if row["benchmark"] == "bfcl")
-    assert json.loads(other["messages"])[1]["content"] == "Other task."
+    promoted = next(row for row in rows if row.run == "run-c")
+    assert (promoted.model, promoted.violation, promoted.position) == ("model-c", "stray_end", 2)
+    other = next(row for row in rows if row.benchmark == "bfcl")
+    assert json.loads(other.messages)[1]["content"] == "Other task."

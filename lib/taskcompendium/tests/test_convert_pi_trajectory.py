@@ -4,6 +4,7 @@
 """Pi transcripts become prefix rows, and rows become one-turn tasks graded on reasoning markup."""
 
 import json
+from dataclasses import asdict
 
 import pytest
 from verifyit.reasoning_markup import ReasoningViolation
@@ -115,8 +116,8 @@ def test_transcript_yields_prefix_rows_classified_by_the_recorded_reply():
     ]
 
     row = _row(transcript, hazard)
-    assert (row["violation"], row["prompt_tokens"], row["position"]) == ("stray_end", 1300, 4)
-    task = prefix_row_task(RawRow("hazard-3", SOURCE, row), ConversionContext({}, None))
+    assert (row.violation, row.prompt_tokens, row.position) == ("stray_end", 1300, 4)
+    task = prefix_row_task(RawRow("hazard-3", SOURCE, asdict(row)), ConversionContext({}, None))
     require_submission_compatibility(task)
     assert (task.id, task.source) == ("hazard-3", SOURCE)
     assert task.final_tools == transcript.tools
@@ -135,13 +136,6 @@ def test_transcript_yields_prefix_rows_classified_by_the_recorded_reply():
     assert grade("<|start_think|>Read it.<|end_think|>") == (Outcome.GRADED, 1.0)
     assert grade("<|start_think|>Read it.<|end_think|>Reading.<|end_think|>") == (Outcome.GRADED, 0.0)
     assert grade("<|start_think|>Read it.") == (Outcome.GRADED, 0.0)
-
-
-def test_identical_prompts_share_a_digest_across_runs():
-    first = parse_pi_transcript(TRANSCRIPT)
-    second = parse_pi_transcript(TRANSCRIPT)
-    assert _row(first, first.replies[0])["digest"] == _row(second, second.replies[0])["digest"]
-    assert _row(first, first.replies[0])["digest"] != _row(first, first.replies[1])["digest"]
 
 
 def test_text_only_replies_cut_off_logs_and_media_content_are_handled():

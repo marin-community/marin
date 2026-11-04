@@ -47,13 +47,16 @@ from zephyr.writers import write_parquet_file
 from experiments.models import qwen2_5_0_5b_instruct
 from experiments.post_training.cat_count_canary.launcher import QWEN_SOURCE, role_plan, training_config
 from experiments.post_training.task_curation.datasets.reasoning_spans import ROWS_FILE, sources
-from experiments.post_training.task_curation.inventory import TASK_SCHEMA, TASK_SPEC_COLUMN, TRAIN_FILENAME, VALIDATION_FILENAME
+from experiments.post_training.task_curation.inventory import (
+    TASK_SCHEMA,
+    TASK_SPEC_COLUMN,
+    TRAIN_FILENAME,
+    VALIDATION_FILENAME,
+)
 
 logger = logging.getLogger(__name__)
 
 CLUSTER = "cw-rno2a"
-MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
-MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 SEED = 17
 BATCH_SIZE = 8
 GROUP_SIZE = 4
@@ -76,12 +79,16 @@ def write_prefix_tasks(config: PrefixTaskDataConfig) -> None:
         path = hf_hub_download(repository, ROWS_FILE, repo_type="dataset", revision=revision)
         for index, row in enumerate(pq.read_table(path).to_pylist()):
             source = Source(dataset=repository, revision=revision, row=f"{ROWS_FILE}:{index}", importer_revision="smoke")
-            tasks.append(prefix_row_task(RawRow(f"{row['split']}-{row['digest']}", source, row), ConversionContext({}, None)))
+            tasks.append(
+                prefix_row_task(RawRow(f"{row['split']}-{row['digest']}", source, row), ConversionContext({}, None))
+            )
     destination = StoragePath(config.output_path)
     destination.mkdirs()
     for filename in (TRAIN_FILENAME, VALIDATION_FILENAME):
         write_parquet_file(
-            ({TASK_SPEC_COLUMN: task.model_dump_json()} for task in tasks), str(destination / filename), schema=TASK_SCHEMA
+            ({TASK_SPEC_COLUMN: task.model_dump_json()} for task in tasks),
+            str(destination / filename),
+            schema=TASK_SCHEMA,
         )
     logger.info("Wrote %d prefix tasks to %s", len(tasks), destination)
 
@@ -131,12 +138,13 @@ def smoke_config(gpus: int) -> tuple[dict, SkyRLRolePlan]:
     generator["chat_template"] = None
     generator["engine_init_kwargs"] = {"enable_auto_tool_choice": True, "tool_call_parser": "hermes"}
     generator["gpu_memory_utilization"] = 0.4
-    config["trajectory_runner"] = {"max_concurrent_tasks": 16, "rollout_workers": {"num_workers": 2, "cpus_per_worker": 2}}
+    config["trajectory_runner"] = {
+        "max_concurrent_tasks": 16,
+        "rollout_workers": {"num_workers": 2, "cpus_per_worker": 2},
+    }
     trainer = config["trainer"]
     trainer["eval_batch_size"] = 64
-    trainer["callbacks"] = [
-        callback for callback in trainer["callbacks"] if callback["type"] != "database_registration"
-    ]
+    trainer["callbacks"] = [callback for callback in trainer["callbacks"] if callback["type"] != "database_registration"]
     for callback in trainer["callbacks"]:
         if callback["type"] == "evaluation":
             callback["additional_evaluations"] = {}
@@ -147,6 +155,9 @@ def smoke_config(gpus: int) -> tuple[dict, SkyRLRolePlan]:
 def build_smoke(version: str, *, gpus: int) -> ArtifactStep[SkyRLRun]:
     data = prefix_task_data_step(version)
     config, plan = smoke_config(gpus)
+    download = qwen2_5_0_5b_instruct.build_config(
+        StepContext.for_fingerprint(qwen2_5_0_5b_instruct.runtime_args, qwen2_5_0_5b_instruct.deps)
+    )
     model = ArtifactStep.adopt(
         qwen2_5_0_5b_instruct.name, qwen2_5_0_5b_instruct.version, QWEN_SOURCE, kind=qwen2_5_0_5b_instruct.artifact_type
     )
@@ -155,7 +166,9 @@ def build_smoke(version: str, *, gpus: int) -> ArtifactStep[SkyRLRun]:
             name=user_owned_name("checkpoints/reasoning-span-smoke"),
             version=version,
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            model=ArtifactHfModel(step=model, relative_path="", tokenizer_uri=MODEL, tokenizer_revision=MODEL_REVISION),
+            model=ArtifactHfModel(
+                step=model, relative_path="", tokenizer_uri=download.hf_dataset_id, tokenizer_revision=download.revision
+            ),
             train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(num_nodes=1, gpus_per_node=gpus, gpu_variant="H100", role_plan=plan),

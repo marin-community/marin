@@ -11,8 +11,8 @@ final tools, and the model answers with one assistant turn. The reply pi recorde
 the reasoning-span rules, so a miner can keep the prompts that preceded a malformed span (hazards)
 and matched prompts that preceded a well-formed one (controls).
 
-Mining produces one row per kept prompt (``prefix_row``); the curation pipeline converts a row into a
-task (``prefix_row_task``). Messages after pi's first context compaction are dropped, because the
+Mining produces one ``PrefixRow`` per kept prompt; the curation pipeline converts a row into a task
+(``prefix_row_task``). Messages after pi's first context compaction are dropped, because the
 compacted prompt the model saw is not in the transcript.
 
 A task is graded by the ``reasoning_markup`` mode and also carries the ``reject`` markup policy. The
@@ -20,18 +20,23 @@ SkyRL worker strips reasoning from the text of a reply without function calls, s
 token-level check covers that runtime while the grader covers runtimes that keep the markers.
 """
 
-import hashlib
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
 from verifyit.json_objects import unique_object
-from verifyit.reasoning_markup import ReasoningViolation, reasoning_span_violation
+from verifyit.reasoning_markup import (
+    COMPLETED_STOP_REASON,
+    LENGTH_STOP_REASON,
+    ReasoningViolation,
+    reasoning_span_violation,
+)
 from verifyit.spec import ReasoningMarkupSpec
 
-from taskcompendium.chat import chat_input
+from taskcompendium.chat import chat_input, message_text
 from taskcompendium.grader import verifyit_package
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -52,8 +57,6 @@ from taskcompendium.submission import conversation_messages
 MESSAGE_END = "message_end"
 COMPACTION_START = "compaction_start"
 SYSTEM_SECTION_SEPARATOR = "\n\n"
-LENGTH_STOP_REASON = "length"
-COMPLETED_STOP_REASON = "stop"
 HAZARD_SPLIT = "hazard"
 CONTROL_SPLIT = "control"
 WELL_FORMED = "well_formed"
@@ -89,22 +92,32 @@ class PiTranscript:
     """Whether the log ended in a record that was not complete JSON, such as a cut-off upload."""
 
 
-def _text(parts: Any) -> str:
-    if isinstance(parts, str):
-        return parts
-    if not isinstance(parts, list):
-        raise UnsupportedTranscript("Message content must be text or content parts")
-    unsupported = sorted({part.get("type") for part in parts if part.get("type") != "text"})
-    if unsupported:
-        raise UnsupportedTranscript(f"Unsupported message content: {', '.join(map(str, unsupported))}")
-    return "".join(part["text"] for part in parts)
+@dataclass(frozen=True)
+class PrefixRow:
+    """One source row: the prompt before a recorded reply, its tools, and where it came from.
+
+    ``messages`` and ``tools`` are JSON text so rows with different tool sets share one Parquet schema.
+    """
+
+    digest: str
+    messages: str
+    tools: str
+    split: str
+    violation: str | None
+    prompt_tokens: int
+    benchmark: str
+    model: str
+    run: str
+    trial: str
+    position: int
+    reply: str
 
 
 def _system_text(message: dict[str, Any]) -> str:
     sections = message.get("sections") or {}
     if sections:
         return SYSTEM_SECTION_SEPARATOR.join(sections.values())
-    return _text(message["content"])
+    return message_text(message["content"])
 
 
 def _tool_definition(tool: dict[str, Any]) -> FunctionDefinition:
@@ -136,6 +149,28 @@ def _prompt_tokens(message: dict[str, Any]) -> int | None:
     return int(usage["input"]) + int(usage.get("cacheRead") or 0)
 
 
+def _message_event(message: dict[str, Any], position: int) -> tuple[ConversationEvent, PiReply | None]:
+    role = message["role"]
+    if role == "system":
+        return TextMessage(role="system", content=_system_text(message)), None
+    if role == "user":
+        return TextMessage(role="user", content=message_text(message["content"])), None
+    if role == "toolResult":
+        return ToolResult(call_id=message["toolCallId"], content=message_text(message["content"])), None
+    if role != "assistant":
+        raise UnsupportedTranscript(f"Unsupported message role: {role}")
+    event, text = _assistant_event(message)
+    stop_reason = LENGTH_STOP_REASON if message.get("stopReason") == LENGTH_STOP_REASON else COMPLETED_STOP_REASON
+    reply = PiReply(
+        position=position,
+        text=text,
+        stop_reason=stop_reason,
+        prompt_tokens=_prompt_tokens(message),
+        violation=reasoning_span_violation(text, stop_reason),
+    )
+    return event, reply
+
+
 def parse_pi_transcript(lines: Iterable[str]) -> PiTranscript:
     """Read a pi event log into model-visible events and the replies it recorded.
 
@@ -163,29 +198,15 @@ def parse_pi_transcript(lines: Iterable[str]) -> PiTranscript:
         if kind != MESSAGE_END:
             continue
         message = record["message"]
-        role = message["role"]
-        if role == "system":
+        if message["role"] == "system":
             tools = tuple(_tool_definition(tool) for tool in message.get("toolsAdded") or ())
-            events.append(TextMessage(role="system", content=_system_text(message)))
-        elif role == "user":
-            events.append(TextMessage(role="user", content=_text(message["content"])))
-        elif role == "assistant":
-            event, text = _assistant_event(message)
-            stop_reason = LENGTH_STOP_REASON if message.get("stopReason") == LENGTH_STOP_REASON else COMPLETED_STOP_REASON
-            replies.append(
-                PiReply(
-                    position=len(events),
-                    text=text,
-                    stop_reason=stop_reason,
-                    prompt_tokens=_prompt_tokens(message),
-                    violation=reasoning_span_violation(text, stop_reason),
-                )
-            )
-            events.append(event)
-        elif role == "toolResult":
-            events.append(ToolResult(call_id=message["toolCallId"], content=_text(message["content"])))
-        else:
-            raise UnsupportedTranscript(f"Unsupported message role: {role}")
+        try:
+            event, reply = _message_event(message, len(events))
+        except ValueError as error:
+            raise UnsupportedTranscript(str(error)) from error
+        events.append(event)
+        if reply is not None:
+            replies.append(reply)
     return PiTranscript(
         tools=tools, events=tuple(events), replies=tuple(replies), compacted=compacted, truncated=truncated
     )
@@ -194,16 +215,6 @@ def parse_pi_transcript(lines: Iterable[str]) -> PiTranscript:
 def prompt_messages(transcript: PiTranscript, reply: PiReply) -> list[dict[str, Any]]:
     """The chat messages a model receives for ``reply``'s prompt, before the chat template."""
     return conversation_messages(transcript.events[: reply.position])
-
-
-def _tool_payload(tools: tuple[FunctionDefinition, ...]) -> list[dict[str, Any]]:
-    return [tool.model_dump(exclude_none=True) for tool in tools]
-
-
-def prefix_digest(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> str:
-    """Identify a prompt by its messages and tools, so identical prompts from different runs collapse."""
-    payload = {"messages": messages, "tools": tools}
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 def prefix_row(
@@ -215,29 +226,28 @@ def prefix_row(
     model: str,
     run: str,
     trial: str,
-) -> dict[str, Any]:
-    """One source row for the prompt before ``reply``: its messages and tools, and where it came from.
-
-    ``messages`` and ``tools`` are JSON text so rows with different tool sets share one Parquet schema.
-    """
+) -> PrefixRow:
+    """The source row for the prompt before ``reply``; identical prompts from different runs share a digest."""
     if reply.position == 0 or not transcript.tools:
         raise ValueError("A prefix row needs a prompt and pi's advertised tools")
+    if reply.prompt_tokens is None:
+        raise ValueError("A prefix row needs the prompt length pi observed")
     messages = prompt_messages(transcript, reply)
-    tools = _tool_payload(transcript.tools)
-    return {
-        "digest": prefix_digest(messages, tools),
-        "messages": json.dumps(messages, ensure_ascii=False),
-        "tools": json.dumps(tools, ensure_ascii=False),
-        "split": split,
-        "violation": reply.violation.value if reply.violation is not None else None,
-        "prompt_tokens": reply.prompt_tokens,
-        "benchmark": benchmark,
-        "model": model,
-        "run": run,
-        "trial": trial,
-        "position": reply.position,
-        "reply": json.dumps(conversation_messages((transcript.events[reply.position],))[0], ensure_ascii=False),
-    }
+    tools = [tool.model_dump(exclude_none=True) for tool in transcript.tools]
+    return PrefixRow(
+        digest=canonical_sha256({"messages": messages, "tools": tools}),
+        messages=json.dumps(messages, ensure_ascii=False),
+        tools=json.dumps(tools, ensure_ascii=False),
+        split=split,
+        violation=reply.violation.value if reply.violation is not None else None,
+        prompt_tokens=reply.prompt_tokens,
+        benchmark=benchmark,
+        model=model,
+        run=run,
+        trial=trial,
+        position=reply.position,
+        reply=json.dumps(conversation_messages((transcript.events[reply.position],))[0], ensure_ascii=False),
+    )
 
 
 def prefix_row_task(row: RawRow, _context: ConversionContext) -> TaskSpec:

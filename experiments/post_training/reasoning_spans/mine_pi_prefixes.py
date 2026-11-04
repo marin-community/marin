@@ -24,7 +24,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
 
 import click
 import pyarrow as pa
@@ -33,12 +32,13 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.convert.pi_trajectory import (
     CONTROL_SPLIT,
     HAZARD_SPLIT,
     PiReply,
     PiTranscript,
+    PrefixRow,
     UnsupportedTranscript,
     parse_pi_transcript,
     prefix_row,
@@ -76,8 +76,10 @@ TRANSCRIPT_PATH = "agent/pi.txt"
 MAX_PROMPT_TOKENS = 12_288
 MAX_HAZARDS_PER_TRAJECTORY = 4
 READ_THREADS = 16
-# Campaign runs with the #10400 rates, the SFT checkpoints behind them, and the 2026-11-03 quick-loop
-# and arm A checkpoints.
+# Evaluation runs under EVALS_ROOT whose pi transcripts hold replies with malformed reasoning spans:
+# Grug and Snowball checkpoints from the September-October 2026 evaluation campaign (issue #10400
+# measured their rates), the Datakit SFT checkpoints of 2026.09.21 and 2026.10.05 they trained from,
+# and 2026-11-03 checkpoints from 25-step quick-loop runs and 8-step RLVR1 runs on those SFT models.
 DEFAULT_RUNS = (
     "20261003-114254-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-bixbench-pi-ec3e",
     "20261004-053226-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom-bixbench-pi-4208",
@@ -192,8 +194,9 @@ def _read_trajectory(evals_root: str, run: str, trial_dir: str) -> Trajectory | 
 
 
 def _trial_dirs(evals_root: str, run: str) -> list[str]:
-    fs, root = filesystem_for(evals_root)
-    jobs = fs.ls(f"{root}/{run}/results/harbor_jobs", detail=False)
+    """Trial directories of one run, as protocol-stripped listing entries under the run's Harbor jobs."""
+    fs, jobs_root = filesystem_for(prefix_join(evals_root, f"{run}/results/harbor_jobs"))
+    jobs = fs.ls(jobs_root, detail=False)
     return sorted(trial for job in jobs for trial in fs.ls(job, detail=False) if fs.isdir(trial))
 
 
@@ -207,13 +210,54 @@ def read_trajectories(evals_root: str, runs: Iterable[str], *, threads: int = RE
                     yield trajectory
 
 
-def _rendered_prompt_tokens(tokenizer: PreTrainedTokenizerBase, row: dict[str, Any]) -> int:
-    tools = [{"type": "function", "function": tool} for tool in json.loads(row["tools"])]
+def _rendered_prompt_tokens(tokenizer: PreTrainedTokenizerBase, row: PrefixRow) -> int:
+    tools = [{"type": "function", "function": tool} for tool in json.loads(row.tools)]
     rendered = tokenizer.apply_chat_template(
-        json.loads(row["messages"]), tools=tools, add_generation_prompt=True, tokenize=False
+        json.loads(row.messages), tools=tools, add_generation_prompt=True, tokenize=False
     )
     # The template writes the begin-of-text marker itself.
     return len(tokenizer(rendered, add_special_tokens=False).input_ids)
+
+
+def _record_transcript(report: MiningReport, transcript: PiTranscript, max_prompt_tokens: int) -> None:
+    report.trajectories += 1
+    report.compacted_trajectories += transcript.compacted
+    report.truncated_trajectories += transcript.truncated
+    report.replies += len(transcript.replies)
+    report.replies_over_budget += sum(
+        reply.prompt_tokens is None or reply.prompt_tokens > max_prompt_tokens for reply in transcript.replies
+    )
+    for reply in transcript.replies:
+        if reply.violation is not None:
+            name = reply.violation.value
+            report.hazard_replies_by_violation[name] = report.hazard_replies_by_violation.get(name, 0) + 1
+
+
+def _admit_row(rows: dict[str, PrefixRow], row: PrefixRow, report: MiningReport) -> bool:
+    """Keep the first row per prompt, except that a hazard replaces a control for the same prompt."""
+    existing = rows.get(row.digest)
+    if existing is not None and (row.split == CONTROL_SPLIT or existing.split == HAZARD_SPLIT):
+        report.duplicate_rows += 1
+        return False
+    if existing is not None:
+        # A prompt one checkpoint answered well and another answered with a malformed span is a hazard.
+        report.controls_promoted_to_hazard += 1
+        report.control_rows -= 1
+    rows[row.digest] = row
+    if row.split == HAZARD_SPLIT:
+        report.hazard_rows += 1
+        report.hazard_rows_by_run[row.run] = report.hazard_rows_by_run.get(row.run, 0) + 1
+    else:
+        report.control_rows += 1
+    return True
+
+
+def _audit_prompt_tokens(report: MiningReport, tokenizer: PreTrainedTokenizerBase, row: PrefixRow) -> None:
+    gap = abs(_rendered_prompt_tokens(tokenizer, row) - row.prompt_tokens)
+    report.prompt_tokens_checked += 1
+    report.prompt_tokens_matching_tokenizer += gap == 0
+    report.prompt_tokens_within_one_percent += gap * 100 <= row.prompt_tokens
+    report.largest_prompt_token_gap = max(report.largest_prompt_token_gap, gap)
 
 
 def mine_rows(
@@ -221,22 +265,12 @@ def mine_rows(
     config: MiningConfig,
     tokenizer: PreTrainedTokenizerBase | None,
     report: MiningReport,
-) -> list[dict[str, Any]]:
+) -> list[PrefixRow]:
     """Select hazard and control prefixes, drop duplicate prompts, and record the mining statistics."""
-    rows: dict[str, dict[str, Any]] = {}
+    rows: dict[str, PrefixRow] = {}
     for trajectory in trajectories:
         transcript = trajectory.transcript
-        report.trajectories += 1
-        report.compacted_trajectories += transcript.compacted
-        report.truncated_trajectories += transcript.truncated
-        report.replies += len(transcript.replies)
-        report.replies_over_budget += sum(
-            reply.prompt_tokens is None or reply.prompt_tokens > config.max_prompt_tokens for reply in transcript.replies
-        )
-        for reply in transcript.replies:
-            if reply.violation is not None:
-                name = reply.violation.value
-                report.hazard_replies_by_violation[name] = report.hazard_replies_by_violation.get(name, 0) + 1
+        _record_transcript(report, transcript, config.max_prompt_tokens)
         selection = select_replies(
             transcript, max_prompt_tokens=config.max_prompt_tokens, max_hazards=config.max_hazards_per_trajectory
         )
@@ -251,26 +285,8 @@ def mine_rows(
                     run=trajectory.run,
                     trial=trajectory.trial,
                 )
-                existing = rows.get(row["digest"])
-                if existing is not None and (split == CONTROL_SPLIT or existing["split"] == HAZARD_SPLIT):
-                    report.duplicate_rows += 1
-                    continue
-                if existing is not None:
-                    # A prompt one checkpoint answered well and another answered with a malformed span is a hazard.
-                    report.controls_promoted_to_hazard += 1
-                    report.control_rows -= 1
-                rows[row["digest"]] = row
-                if split == HAZARD_SPLIT:
-                    report.hazard_rows += 1
-                    report.hazard_rows_by_run[trajectory.run] = report.hazard_rows_by_run.get(trajectory.run, 0) + 1
-                else:
-                    report.control_rows += 1
-                if tokenizer is not None:
-                    gap = abs(_rendered_prompt_tokens(tokenizer, row) - row["prompt_tokens"])
-                    report.prompt_tokens_checked += 1
-                    report.prompt_tokens_matching_tokenizer += gap == 0
-                    report.prompt_tokens_within_one_percent += gap * 100 <= row["prompt_tokens"]
-                    report.largest_prompt_token_gap = max(report.largest_prompt_token_gap, gap)
+                if _admit_row(rows, row, report) and tokenizer is not None:
+                    _audit_prompt_tokens(report, tokenizer, row)
     return list(rows.values())
 
 
@@ -288,7 +304,7 @@ def mine_prefixes(config: MiningConfig) -> None:
     with TemporaryDirectory(prefix="reasoning-span-prefixes-") as temporary:
         for split, filename in ((HAZARD_SPLIT, HAZARD_FILENAME), (CONTROL_SPLIT, CONTROL_FILENAME)):
             local = Path(temporary) / filename
-            write_parquet_file((row for row in rows if row["split"] == split), str(local), schema=ROW_SCHEMA)
+            write_parquet_file((asdict(row) for row in rows if row.split == split), str(local), schema=ROW_SCHEMA)
             (destination / filename).upload_from(str(local))
     summary = {"config": asdict(config), **asdict(report)}
     (destination / REPORT_FILENAME).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
@@ -313,7 +329,7 @@ def mining_step(version: str, runs: tuple[str, ...], *, check_prompt_tokens: boo
     "--run-id",
     "runs",
     multiple=True,
-    help="Evaluation run directory under the evals root. Repeatable; the default list covers the #10400 cohort.",
+    help="Evaluation run directory under the evals root. Repeatable; defaults to the runs listed in DEFAULT_RUNS.",
 )
 @click.option(
     "--skip-prompt-check",
@@ -322,7 +338,9 @@ def mining_step(version: str, runs: tuple[str, ...], *, check_prompt_tokens: boo
 )
 @build_options
 def main(runs: tuple[str, ...], skip_prompt_check: bool) -> ArtifactStep[Artifact]:
-    return mining_step(resolve_version(ARTIFACT_NAME, None), runs or DEFAULT_RUNS, check_prompt_tokens=not skip_prompt_check)
+    return mining_step(
+        resolve_version(ARTIFACT_NAME, None), runs or DEFAULT_RUNS, check_prompt_tokens=not skip_prompt_check
+    )
 
 
 if __name__ == "__main__":

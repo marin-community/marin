@@ -23,10 +23,11 @@ from experiments.post_training.reasoning_spans.mine_pi_prefixes import (
     HAZARD_FILENAME,
     REPORT_FILENAME,
 )
-
-HAZARD_REPO = "open-athena/Marin-Reasoning-Span-Hazard-Prefixes"
-CONTROL_REPO = "open-athena/Marin-Reasoning-Span-Control-Prefixes"
-ROWS_FILENAME = "rows.parquet"
+from experiments.post_training.task_curation.datasets.reasoning_spans import (
+    CONTROL_REPOSITORY,
+    HAZARD_REPOSITORY,
+    ROWS_FILE,
+)
 
 
 def upload_split(api: HfApi, rows_root: StoragePath, filename: str, repo: str, message: str) -> str:
@@ -34,7 +35,7 @@ def upload_split(api: HfApi, rows_root: StoragePath, filename: str, repo: str, m
     api.create_repo(repo, repo_type="dataset", exist_ok=True)
     api.upload_file(
         path_or_fileobj=(rows_root / filename).read_bytes(),
-        path_in_repo=ROWS_FILENAME,
+        path_in_repo=ROWS_FILE,
         repo_id=repo,
         repo_type="dataset",
         commit_message=message,
@@ -51,8 +52,8 @@ def upload_split(api: HfApi, rows_root: StoragePath, filename: str, repo: str, m
 
 @click.command(help=__doc__)
 @click.option("--rows-root", required=True, help="Published rl-data/inputs/reasoning-span-prefixes/<version> root.")
-@click.option("--hazard-repo", default=HAZARD_REPO, show_default=True)
-@click.option("--control-repo", default=CONTROL_REPO, show_default=True)
+@click.option("--hazard-repo", default=HAZARD_REPOSITORY, show_default=True)
+@click.option("--control-repo", default=CONTROL_REPOSITORY, show_default=True)
 def main(rows_root: str, hazard_repo: str, control_repo: str) -> None:
     if not os.environ.get("HF_TOKEN"):
         raise click.UsageError("Uploads use HF_TOKEN; export it first")
