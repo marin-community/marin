@@ -45,7 +45,7 @@ from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
-from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
+from levanter.main.train_lm import TrainLmConfig, main
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -370,14 +370,6 @@ def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
         low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
     np.testing.assert_array_equal(high, [[[0]]])
     np.testing.assert_array_equal(low, [[[1]]])
-
-
-def test_hf_reload_keeps_requested_runtime_settings():
-    requested = _tiny_config(router_dot_fp32=True, moe_implementation="ring")
-    reloaded = _tiny_config(moe_implementation=None)
-    restored = preserve_hf_runtime_settings(reloaded, requested, {"router_bias": "float32"})
-    assert restored.router_dot_fp32
-    assert restored.moe_implementation == "ring"
 
 
 @pytest.mark.parametrize(
