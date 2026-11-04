@@ -45,6 +45,7 @@ from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
 
 IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
 DEFAULT_RELAY_JOB = "/muchanem/glm53-relay-tok-02a"
+DEFAULT_RELAY_SERVICE = "glm-5.3-tok"
 POLICY = LLMPolicy(
     max_tokens=4096,
     reasoning_effort=ReasoningEffort.LOW,
@@ -80,6 +81,7 @@ COMMAND_TIMEOUT = 120.0
 @dataclass(frozen=True)
 class CTTConfig:
     relay_job: str = DEFAULT_RELAY_JOB
+    relay_service: str = DEFAULT_RELAY_SERVICE
     token_env: str = GLM_BULK_TOKEN_ENV
     model: str = GLM_MODEL
     k: int = 3
@@ -148,7 +150,7 @@ async def _calibrate(task: TaskSpec, config: CTTConfig, root: Path) -> dict[str,
         ledger=ledger,
         first_attempt=0,
     )
-    endpoint = RelayEndpoint(config.relay_job, token, Pool.BULK)
+    endpoint = RelayEndpoint(config.relay_job, token, Pool.BULK, config.relay_service)
     started = time.monotonic()
     async with GlmClient(endpoint, PROVIDER) as client:
         model = GlmRolloutModel(client, POLICY, CallLedger(ledger, task.id, 0, str(TrialKind.SOLVER)))
@@ -170,6 +172,7 @@ async def _calibrate(task: TaskSpec, config: CTTConfig, root: Path) -> dict[str,
         "task_family": task.tags[-1],
         "model": config.model,
         "relay_job": config.relay_job,
+        "relay_service": config.relay_service,
         "policy": asdict(POLICY),
         "policy_digest": digest(POLICY),
         "limits": LIMITS.model_dump(mode="json"),
@@ -216,12 +219,14 @@ def main() -> None:
     parser.add_argument("--k", type=int, default=3)
     parser.add_argument("--max-workers", type=int, default=8)
     parser.add_argument("--relay-job", default=DEFAULT_RELAY_JOB)
+    parser.add_argument("--relay-service", default=DEFAULT_RELAY_SERVICE)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if min(args.count, args.k, args.max_workers) < 1:
         parser.error("--count, --k, and --max-workers must be positive")
     tasks = generate(args.counts.read_bytes(), source_revision=args.source_revision, count=args.count)
-    result = run_zephyr(tasks, CTTConfig(relay_job=args.relay_job, k=args.k), args.output, args.max_workers)
+    config = CTTConfig(relay_job=args.relay_job, relay_service=args.relay_service, k=args.k)
+    result = run_zephyr(tasks, config, args.output, args.max_workers)
     print(f"output={args.output}")
     print(result)
 

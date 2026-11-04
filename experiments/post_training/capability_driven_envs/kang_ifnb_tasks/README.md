@@ -157,6 +157,7 @@ PYTHONPATH=. uv run --with-editable lib/taskforge-adapters --project lib/taskfor
   --source-revision sha256:229d767ff229cda5b8ec335ead831ef9eee3908bd763055515ce25874428deff \
   --count 25 --k 3 --max-workers 8 \
   --relay-job /muchanem/glm53-relay-tok-02a \
+  --relay-service glm-5.3-tok \
   --output s3://marin-us-east-02a/marin/taskforge/kang-ifnb-demo/ctt-glm53-k3/results.jsonl
 ```
 
