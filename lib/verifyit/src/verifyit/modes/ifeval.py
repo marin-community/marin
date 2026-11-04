@@ -466,7 +466,8 @@ def no_adjacent_consecutive(text: str, params: dict) -> tuple[bool, str]:
     Letters of any script are compared by code point, so "в городе" fails too, except Han and kana, which have no
     alphabet.
     """
-    initials = [w[0].lower() for w in words(text)]
+    # U+0130 lowercases to an "i" and a combining dot.
+    initials = [w[0].lower()[0] for w in words(text)]
     for index in range(1, len(initials)):
         left, right = initials[index - 1], initials[index]
         if has_alphabet(left) and has_alphabet(right) and abs(ord(right) - ord(left)) == 1:

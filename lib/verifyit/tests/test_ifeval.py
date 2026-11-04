@@ -891,6 +891,12 @@ CASES = [
         "\u0432 \u0433\u043e\u0440\u043e\u0434\u0435",
     ),
     (
+        "keywords:no_adjacent_consecutive",
+        {},
+        "\u0130stanbul Kars",
+        "\u0130stanbul Japonya",
+    ),
+    (
         "length_constraints:number_paragraphs",
         {"num_paragraphs": 1},
         "This is ***very*** important.",
