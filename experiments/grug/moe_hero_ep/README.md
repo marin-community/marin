@@ -279,7 +279,7 @@ thresholds; see the
 
 The 262K extension can train on a store that splits each Harrier bucket by document length.
 `harrier_long_context_mix.py` builds it: each bucket concatenates its partition of shorter documents with
-`LONG_CONTEXT_SKEW` (4) copies of its partition of documents of 64K tokens or more, and the bucket keeps its cooldown
+`LONG_CONTEXT_SKEW` (4) copies of its partition of documents around 64K tokens and longer, and the bucket keeps its cooldown
 weight, so the skew changes mass only inside the bucket. A bucket with no long tokens has no long children. The store
 is expected at `{LONG_CONTEXT_STORE_URI}/cluster=C/quality=Q/length={lte_64k,gt_64k}`, each partition a flat cache with
 its own `shard_ledger.json`. After a store lands, set `LONG_CONTEXT_STORE_URI` and run this command, which reads only

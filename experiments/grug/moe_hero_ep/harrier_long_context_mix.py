@@ -4,8 +4,8 @@
 """The hero's 262K extension: the Harrier cooldown weights on a store split by document length.
 
 Each Harrier bucket concatenates its partition of short documents with ``LONG_CONTEXT_SKEW`` copies of its
-partition of documents of 64K tokens or more, so the long documents gain mass inside the bucket while the
-bucket keeps its cooldown weight. Sources differ from the Harrier store, so the Harrier context history cannot
+partition of documents around 64K tokens and longer (the store sets the boundary), so the long documents gain
+mass inside the bucket while the bucket keeps its cooldown weight. Sources differ from the Harrier store, so the Harrier context history cannot
 replay here. The mixture instead starts at a chosen training step (``LmDataConfig.mixture_start_step``).
 
 Run this module to read the store's token counts into ``harrier_long_context_mix.json`` and print the skewed
@@ -35,7 +35,7 @@ LONG_CONTEXT_SKEW = 4
 LONG_CONTEXT_TAG = f"harrier-long-context-skew-{LONG_CONTEXT_SKEW}"
 SHORT_PARTITION = "lte_64k"
 LONG_PARTITION = "gt_64k"
-# Training tokens the extension may read, which depends on the open learning-rate decision.
+# Extension lengths to report passes for: the range the 262K extension may train.
 REPORTED_TRAINING_TOKENS = (50_000_000_000, 430_000_000_000, 490_000_000_000)
 
 _TOKEN_TABLE_PATH = Path(__file__).with_name("harrier_long_context_mix.json")
@@ -182,10 +182,9 @@ def _print_report(length_tokens: LengthTokens) -> None:
 
 
 @click.command()
-@click.option("--store", default=LONG_CONTEXT_STORE_URI, show_default=True, help="Store to read ledgers from.")
-def main(store: str) -> None:
-    """Write the store's token table next to this module and print its share and passes."""
-    length_tokens = read_length_tokens(store, list(_COOLDOWN_WEIGHTS))
+def main() -> None:
+    """Write LONG_CONTEXT_STORE_URI's token table next to this module and print its share and passes."""
+    length_tokens = read_length_tokens(LONG_CONTEXT_STORE_URI, list(_COOLDOWN_WEIGHTS))
     rows = ",\n".join(f'"{cell}": [{short}, {long}]' for cell, (short, long) in sorted(length_tokens.items()))
     _TOKEN_TABLE_PATH.write_text("{\n" + rows + "\n}\n")
     _print_report(length_tokens)

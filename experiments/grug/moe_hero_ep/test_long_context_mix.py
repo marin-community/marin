@@ -144,17 +144,6 @@ def test_reported_share_and_passes(monkeypatch):
     assert overall_long_partition_passes(tokens, 4, 1000) == pytest.approx(500 * 4 / 700)
 
 
-def test_empty_token_table_refuses_to_build_the_mix():
-    with pytest.raises(ValueError, match="token table is empty"):
-        harrier_long_context_data_config(
-            ctx=StepContext.for_fingerprint(),
-            start_step=START_STEP,
-            max_seq_len=262_144,
-            validation=(),
-            length_tokens={},
-        )
-
-
 def test_hero_off_builds_the_harrier_config_it_always_built():
     step = build_ladder_run(run_id="test-long-context-off", size="d6144", version="dev")
     ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)

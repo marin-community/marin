@@ -264,7 +264,8 @@ def build_ladder_run(
 
     ``context_phases`` is the run's context history and ``flops_baseline_total`` its cumulative training
     FLOPs at the last switch. Each data bucket resumes at its next shuffle window (see
-    ``LmDataConfig.prior_context_phases``). ``None`` selects the checked-in history: ``HERO_CONTEXT_PHASES``
+    ``LmDataConfig.prior_context_phases``), or at the start of the long-context store from the end of the history
+    when ``HERO_USES_LONG_CONTEXT_MIX`` applies. ``None`` selects the checked-in history: ``HERO_CONTEXT_PHASES``
     and ``HERO_FLOPS_BASELINE_TOTAL`` for d6144, and none for the narrow rungs, which train at their context
     length from their start. Pass both to build another history.
 
