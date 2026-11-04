@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, TypedDict, Union
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, model_validator
+from rigging.secrets import require_secret
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 from upath import UPath
 
@@ -1180,9 +1181,9 @@ class DaytonaEnvironment(BaseEnvironment):
             trial_paths: Path configuration object containing trial-related directory paths.
             task_env_config: Environment configuration specifying resources (CPU, memory,
                 storage), build timeout, and optional Docker image.
-            api_key_env: Host environment variable holding this environment's Daytona
-                API key. Explicit keys use separate shared clients without changing
-                process environment variables. Omit to use SDK-default credentials.
+            api_key_env: Named secret holding this environment's Daytona API key,
+                with environment fallback. Explicit keys use separate shared clients
+                without changing process environment variables. Omit to use SDK-default credentials.
             snapshot_template_name: Optional name of a snapshot template to use for
                 faster environment initialization. Should contain the {name} placeholder.
                 For example, "harbor__{name}__snapshot". The placeholder is replaced with
@@ -1253,9 +1254,7 @@ class DaytonaEnvironment(BaseEnvironment):
             extra_docker_compose
         )
         self._kwargs = kwargs
-        self._api_key = None if api_key_env is None else os.environ[api_key_env]
-        if api_key_env is not None and not self._api_key:
-            raise ValueError(f"Daytona credential variable is empty: {api_key_env}")
+        self._api_key = None if api_key_env is None else require_secret(api_key_env)
 
         super().__init__(
             environment_dir=environment_dir,

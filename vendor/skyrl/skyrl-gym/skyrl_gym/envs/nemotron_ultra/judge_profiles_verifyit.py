@@ -12,6 +12,7 @@ import sys
 import tempfile
 from typing import Any
 
+from rigging.secrets import require_secret
 from verifyit.grade import InvalidTask, Status, run
 from verifyit.modes.grade_exact import grade_exact_candidate
 from verifyit.spec import ExactSpec, JudgeSpec, ScriptSpec, render_spec
@@ -45,8 +46,10 @@ def _evaluate(data: dict[str, Any], root: Path) -> dict[str, Any]:
         raise InvalidTask("Missing judge task configuration")
     os.environ["VERIFYIT_JUDGE_BASE_URL"] = judge["base_url"]
     os.environ["VERIFYIT_JUDGE_MODEL"] = judge["model"]
-    os.environ["VERIFYIT_JUDGE_API_KEY"] = os.environ.get(
-        judge.get("api_key_env") or "", judge.get("api_key", "dummy_key")
+    os.environ["VERIFYIT_JUDGE_API_KEY"] = (
+        require_secret(judge["api_key_env"])
+        if judge.get("api_key_env") is not None
+        else judge.get("api_key", "dummy_key")
     )
     candidate_file, spec_file = root / "answer.txt", root / "verifier.toml"
 

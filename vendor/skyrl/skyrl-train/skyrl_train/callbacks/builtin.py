@@ -264,6 +264,7 @@ class HarborEvaluationCallback(TrainerCallback):
             job = cohort["job"]
             job["job_name"] = f"step-{state.global_step}-{cohort['name']}"
             job["jobs_dir"] = join_resource_path(trainer.cfg.trainer.export_path, "inline_harbor")
+            job.setdefault("environment", {}).setdefault("kwargs", {})["api_key_env"] = self.daytona_api_key_env
             for agent in job["agents"]:
                 agent["model_name"] = f"openai/{trainer.cfg.trainer.export_path}/step-{state.global_step}"
                 agent["model_alias"] = f"openai/{client.model_name}"
@@ -271,7 +272,6 @@ class HarborEvaluationCallback(TrainerCallback):
                     f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1"
                 )
         environment = os.environ.copy()
-        environment["DAYTONA_API_KEY"] = environment[self.daytona_api_key_env]
         environment["OPENAI_API_KEY"] = "unused-local-inference"
         async with asyncio.timeout(self.timeout):
             results = await collect_harbor(cohorts, pool, environment)
