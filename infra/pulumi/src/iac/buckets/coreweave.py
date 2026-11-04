@@ -22,8 +22,9 @@ COREWEAVE_MULTIPART_EXPIRATION = 7
 
 # Marin Belay's dedicated CoreWeave user. Iris attaches the submitter's keys to every CoreWeave job, so this
 # principal's access bounds what Belay runs (including agent-written code) can read and write. The organization
-# access policy below grants that access, but other organization grants also reach the user, so the bounds are
-# enforced by explicit denies in every bucket policy; an explicit deny overrides any allow.
+# access policy below grants that access, but `admin-use-bucket-go-fast` grants every principal far more, so the bounds
+# are explicit denies (which override any allow): per-bucket data denies in every bucket policy, and a management deny
+# in the Belay organization policy. Rotating the Belay key needs that management deny lifted temporarily.
 BELAY_USER_ID = "unAfPLe6TaiRmJsewaUog"
 BELAY_PRINCIPAL = f"coreweave/{BELAY_USER_ID}"
 BELAY_BUCKET_POLICY_PRINCIPAL = f"arn:aws:iam::{COREWEAVE_ORGANIZATION_ID}:coreweave/{BELAY_USER_ID}"
@@ -39,6 +40,38 @@ BELAY_WRITE_ACTIONS = (
 BELAY_READ_ACTION = "s3:GetObject"
 BELAY_LIST_ACTION = "s3:ListBucket"
 BELAY_OBJECT_ACTIONS = (BELAY_READ_ACTION, *BELAY_WRITE_ACTIONS)
+# Account and bucket management actions that the organization-wide `admin-use-bucket-go-fast` access policy (managed
+# in the console, not here) grants every principal. Bucket policies cannot deny the `cwobject:` control-plane actions
+# (access keys, organization access policies, audit logging), so the Belay organization policy denies them all.
+BELAY_DENIED_MANAGEMENT_ACTIONS = (
+    "s3:CreateBucket",
+    "s3:DeleteBucket",
+    "s3:DeleteBucketPolicy",
+    "s3:DeleteBucketTagging",
+    "s3:DeleteLifecycleConfiguration",
+    "s3:DeleteObjectTagging",
+    "s3:DeleteObjectVersion",
+    "s3:PutBucketCORS",
+    "s3:PutBucketPolicy",
+    "s3:PutBucketTagging",
+    "s3:PutBucketVersioning",
+    "s3:PutLifecycleConfiguration",
+    "s3:PutObjectTagging",
+    "cwobject:CreateAccessKey",
+    "cwobject:CreateAccessKeyOIDC",
+    "cwobject:CreateAccessKeySAML",
+    "cwobject:DeleteAccessPolicy",
+    "cwobject:DisableBucketAuditLogging",
+    "cwobject:DisableBucketAuditLoggingDefault",
+    "cwobject:DisableControlPlaneAuditLogging",
+    "cwobject:EnableBucketAuditLogging",
+    "cwobject:EnableBucketAuditLoggingDefault",
+    "cwobject:EnableControlPlaneAuditLogging",
+    "cwobject:EnsureAccessPolicy",
+    "cwobject:RevokeAccessKeyByAccessKey",
+    "cwobject:RevokeAccessKeysByPrincipal",
+    "cwobject:UpdateAccessKeyStatus",
+)
 BELAY_READ_PREFIXES = (
     f"{BELAY_BUCKET}/marin/datakit/hero_tok/*",
     f"{BELAY_BUCKET}/marin/paloma/*",
@@ -141,6 +174,13 @@ def belay_policy_statements(temp_bucket: str) -> list[coreweave.ObjectStorageOrg
             effect="Allow",
             actions=list(BELAY_OBJECT_ACTIONS),
             resources=list(grants.write_prefixes),
+            principals=[BELAY_PRINCIPAL],
+        ),
+        coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs(
+            name="belay-deny-management",
+            effect="Deny",
+            actions=list(BELAY_DENIED_MANAGEMENT_ACTIONS),
+            resources=["*"],
             principals=[BELAY_PRINCIPAL],
         ),
     ]

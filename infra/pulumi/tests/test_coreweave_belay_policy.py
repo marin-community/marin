@@ -19,7 +19,9 @@ RUN = f"{BELAY_BUCKET}/{BELAY_RUN_ROOT}/runs/belay-X0001-control"
 
 
 def allowed(statements, action: str, path: str) -> bool:
-    return any(action in s.actions and any(fnmatch(path, r) for r in s.resources) for s in statements)
+    return any(
+        s.effect == "Allow" and action in s.actions and any(fnmatch(path, r) for r in s.resources) for s in statements
+    )
 
 
 def test_belay_can_write_where_training_actually_puts_its_temp_checkpoints() -> None:
@@ -88,3 +90,13 @@ def test_bucket_policies_deny_belay_everything_its_grants_do_not_cover() -> None
     assert denied(policy_for(old_hero_object), "s3:ListBucket", "arn:aws:s3:::hero-checkpoints")
     assert denied(policy_for(BELAY_BUCKET), "s3:PutBucketPolicy", f"arn:aws:s3:::{BELAY_BUCKET}")
     assert denied(policy_for(BELAY_BUCKET), "s3:DeleteObjectVersion", object_arn(f"{RUN}/x"))
+
+
+def test_belay_organization_policy_denies_account_and_policy_management() -> None:
+    statements = belay_policy_statements(coreweave_temp_bucket(load_cluster_config("coreweave")))
+    (deny,) = [s for s in statements if s.effect == "Deny"]
+    assert deny.resources == ["*"]
+    for action in ("cwobject:EnsureAccessPolicy", "cwobject:DeleteAccessPolicy", "cwobject:CreateAccessKey"):
+        assert action in deny.actions
+    granted = {a for s in statements if s.effect == "Allow" for a in s.actions}
+    assert not granted & set(deny.actions)
