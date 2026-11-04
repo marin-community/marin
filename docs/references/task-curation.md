@@ -214,8 +214,8 @@ limits, harnesses and verifier backends when it loads these canonical tasks.
 ### Independent test panels
 
 `test_panel_step(TestPanelRecipe(...))` publishes an evaluation panel through the
-same ArtifactStep execution API. Each source pins its input, row count and format
-and declares a family, AAII category, license and selection count. The formats are
+same ArtifactStep execution API. Each named recipe part pins its input, row count
+and format, required tags, family, AAII category, license and selection count. The formats are
 `evaluation` for a verified Evalchemy corpus, `normalized` for evaluation-only
 curation output, `task_spec` for canonical parquet, and `historical` for the
 Snowball development input. Normalized row counts count converted tasks; source
@@ -231,7 +231,7 @@ and tests in one code-writing request. The source graders stay attached.
 
 The artifact contains `full_validation.parquet`, `validation.parquet`,
 `task_manifest.parquet` and `summary.json`. Its manifest records family, category,
-agentic flag, grader kind, source provenance and license. Publish provisional
+agentic flag, grader kind, recipe part, source provenance and license. Publish provisional
 membership first, then run qualification and eight-answer initializer evaluation.
 A distinct final version binds `pass_rates` and `provisional` inputs. The
 pass-rate parquet has one row per provisional task with `task_id`,
@@ -239,6 +239,11 @@ pass-rate parquet has one row per provisional task with `task_id`,
 requires eight attempts and at least one scored answer. The final manifest adds
 `difficulty` (one minus mean score), initializer mean and pass rate, and attempted
 and scored counts.
+
+The immutable measurement artifact is the initializer-evidence boundary. Its
+producer aggregates the native run's saved scores and records the run, resolved
+model revision and provisional panel in its audit receipt. Curation verifies
+counts, task IDs and measured task content against the required provisional input.
 
 The Agents stand-in stays in the final panel when its aggregate initializer pass
 rate is between 5% and 95%, inclusive. Otherwise the final panel contains the
