@@ -319,8 +319,9 @@ def iter_log_rows(
 
     One query scans every source so DuckDB parallelizes across files and row
     groups; matching rows stream back in batches. Only the hub's own rows are
-    kept (``cluster IS NULL``): rows forwarded from other clusters belong to
-    attempts that are not in this controller's checkpoint.
+    kept: ``cluster`` is NULL or empty, as in finelog's forwarder. Rows forwarded
+    from other clusters belong to attempts that are not in this controller's
+    checkpoint.
     """
     if not sources:
         return
@@ -329,7 +330,7 @@ def iter_log_rows(
         SELECT key, epoch_ms, data
         FROM read_parquet(?)
         WHERE epoch_ms >= ? AND epoch_ms < ?
-          AND cluster IS NULL
+          AND (cluster IS NULL OR cluster = '')
           AND key LIKE '/%:%'
           AND data LIKE '%gs://%'
         """,
