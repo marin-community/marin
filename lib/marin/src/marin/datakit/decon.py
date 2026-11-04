@@ -115,7 +115,7 @@ class ItemMatchConfig:
     the filter, so eval text inside a long paragraph (a JSON line, a code file, a
     quiz page) scores low. This rule scores each eval item instead: the share of
     the item's indexed n-grams that the record contains. Surrounding text cannot
-    dilute it (marin#6852).
+    dilute it.
 
     Attributes:
         thresholds: ``(eval_id_prefix, threshold)`` pairs. An item whose ``eval_id``

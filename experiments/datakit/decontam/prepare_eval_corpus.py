@@ -416,7 +416,8 @@ def _lmh_doc_views(doc: Any, prompt_fn: Callable, target_fn: Callable) -> list[t
     has_passage = isinstance(doc, dict) and any(k.lower() in _PASSAGE_FIELDS for k in doc)
     try:
         target = str(target_fn(doc) or "")
-    except Exception:
+    except Exception as e:
+        logger.warning("doc_to_target failed, indexing the doc without its answer: %r", e)
         target = ""
     excluded = _GRADER_FIELDS | (_PASSAGE_FIELDS if has_passage else frozenset())
     fields = _field_lines(doc, excluded) if isinstance(doc, dict) else ""
@@ -425,7 +426,8 @@ def _lmh_doc_views(doc: Any, prompt_fn: Callable, target_fn: Callable) -> list[t
         return [("", text)] if text else []
     try:
         prompt = str(prompt_fn(doc) or "")
-    except Exception:
+    except Exception as e:
+        logger.warning("doc_to_text failed, indexing the doc without its prompt: %r", e)
         prompt = ""
     question = _question_line(doc) if isinstance(doc, dict) else ""
     views = [
