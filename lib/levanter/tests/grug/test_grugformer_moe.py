@@ -48,6 +48,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
+from levanter.testing.devices import use_test_devices
 from levanter.grug._moe.ep_ring_filtered import destination_hit_fraction
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
@@ -59,7 +60,6 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
-from levanter.testing.devices import use_test_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -1652,6 +1652,96 @@ def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
     np.add.at(expected_x_gradient, token[valid], rows_cotangent[valid])
     np.testing.assert_array_equal(np.asarray(combined), np.asarray(expected_combined, jnp.bfloat16))
     np.testing.assert_array_equal(np.asarray(x_gradient), np.asarray(expected_x_gradient, jnp.bfloat16))
+
+
+@pytest.mark.multidevice
+def test_combine_in_fp32_matches_an_fp32_combine_reference_on_eight_devices():
+    with use_test_devices(8) as devices:
+
+        mesh = Mesh(
+            np.asarray(devices).reshape(2, 4, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        )
+        tokens, hidden, inter, experts, topk = 64, 8, 4, 8, 4
+        rng = np.random.default_rng(0)
+        # Entries in {-1, 0, 1} and a linear activation keep every expert output row an integer of magnitude at
+        # most 128, exact in bfloat16, so the combine is the only place the paths can round.
+        x = rng.integers(-1, 2, (tokens, hidden)).astype(np.float32)
+        w_up_gate = rng.integers(-1, 2, (experts, hidden, 2 * inter)).astype(np.float32)
+        w_down = rng.integers(-1, 2, (experts, inter, hidden)).astype(np.float32)
+        selected = np.stack([rng.permutation(experts)[:topk] for _ in range(tokens)]).astype(np.int32)
+        # Snowball-like sigmoid weights renormed to sum to 2.5; not representable in bfloat16.
+        weights = 1 / (1 + np.exp(-rng.normal(size=(tokens, topk))))
+        weights = (weights * (2.5 / weights.sum(-1, keepdims=True))).astype(np.float32)
+
+        def linear(a):
+            return a
+
+        hidden_rows = np.einsum("th,tkhi->tki", x, w_up_gate[selected])
+        rows = np.einsum("tki,tkih->tkh", hidden_rows[..., :inter] * hidden_rows[..., inter:], w_down[selected])
+        assert np.abs(rows).max() <= 128
+        reference = np.einsum("tkh,tk->th", rows.astype(np.float64), weights.astype(np.float64))
+
+        batch = NamedSharding(mesh, P(("data", "expert"), None))
+        expert = NamedSharding(mesh, P("expert", None, None))
+        args = {
+            "x": jax.device_put(jnp.asarray(x, jnp.bfloat16), batch),
+            "selected": jax.device_put(jnp.asarray(selected), batch),
+            "weights": jax.device_put(jnp.asarray(weights), batch),
+            "w_up_gate": jax.device_put(jnp.asarray(w_up_gate, jnp.bfloat16), expert),
+            "w_down": jax.device_put(jnp.asarray(w_down, jnp.bfloat16), expert),
+        }
+
+        def run(implementation, combine_in_fp32, mesh):
+            def forward(x, selected, weights, w_up_gate, w_down):
+                return grug_moe.moe_mlp(
+                    x,
+                    selected,
+                    weights,
+                    w_up_gate,
+                    w_down,
+                    activation=linear,
+                    implementation=implementation,
+                    mesh=mesh,
+                    capacity_factor=4.0,
+                    combine_in_fp32=combine_in_fp32,
+                )
+
+            if mesh is None:
+                local = {name: jnp.asarray(jax.device_get(value)) for name, value in args.items()}
+                return jax.jit(forward)(**local)
+            with jax.set_mesh(mesh):
+                return jax.jit(forward)(**args)
+
+        reference_bf16 = np.asarray(jnp.asarray(reference.astype(np.float32), jnp.bfloat16), np.float64)
+        for implementation, run_mesh in (("ring", mesh), ("ring_gather_combine", mesh), ("scatter", None)):
+            on = run(implementation, True, run_mesh)
+            off = run(implementation, False, run_mesh)
+            assert on.dtype == off.dtype == jnp.bfloat16, (implementation, on.dtype, off.dtype)
+            on = np.asarray(on, np.float64)
+            off = np.asarray(off, np.float64)
+            # One float32 sum rounded once to bfloat16: within half a bfloat16 ulp of the exact combine, plus
+            # float32 slack; rounding ties aside it is the rounded reference itself.
+            half_ulp = np.exp2(np.floor(np.log2(np.maximum(np.abs(reference), 1e-30))) - 8)
+            assert np.all(np.abs(on - reference) <= half_ulp * (1 + 1e-4)), implementation
+            assert np.mean(on == reference_bf16) > 0.99, (implementation, np.mean(on == reference_bf16))
+            off_error = np.abs(off - reference).mean()
+            on_error = np.abs(on - reference).mean()
+            assert off_error > 1.5 * on_error, (implementation, off_error, on_error)
+
+        with jax.set_mesh(mesh), pytest.raises(ValueError, match="combine_in_fp32"):
+            grug_moe.moe_mlp(
+                args["x"],
+                args["selected"],
+                args["weights"],
+                args["w_up_gate"],
+                args["w_down"],
+                activation=linear,
+                implementation="ragged_all_to_all",
+                mesh=mesh,
+                combine_in_fp32=True,
+            )
 
 
 @pytest.mark.timeout(240)

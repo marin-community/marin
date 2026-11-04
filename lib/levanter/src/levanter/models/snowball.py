@@ -236,6 +236,10 @@ class SnowballConfig(HFCompatConfig):
     """Compute the SiLU and sigmoid activations in FP32 and cast to the input dtype once: GatedNorm, the attention
     head gate, the shared MLP and the routed experts. Off, they run in the compute dtype. A runtime knob like
     ``router_dot_fp32``: not exported in HF metadata."""
+    router_combine_fp32: bool = False
+    """Keep the routed combine in FP32: FP32 combine weights, weighted expert outputs, per-token sum and
+    expert-axis reduction, cast to the compute dtype once at the end. Off, the weights are cast to the compute
+    dtype first. A runtime knob like ``router_dot_fp32``: not exported in HF metadata."""
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -656,6 +660,7 @@ class SnowballMoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=silu_fp32 if cfg.fp32_activations else ActivationFunctionEnum.silu,
                 capacity_factor=cfg.moe_capacity_factor,
+                combine_in_fp32=cfg.router_combine_fp32,
                 pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES),
             ),
             cfg=cfg,
@@ -694,7 +699,7 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
+        combine_weights = combine_weights_f if self.cfg.router_combine_fp32 else combine_weights_f.astype(x.dtype)
 
         valid_flat = None if token_valid is None else reshard(token_valid.reshape(b * s), P(_token_spec()[0]))
         result = self.expert_mlp(
