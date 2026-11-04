@@ -48,7 +48,6 @@ from experiments.grug.moe_hero_ep.model import (
     _embedding_gather,
     _init_weight,
     _seq_axis,
-    _unstacked_blocks,
 )
 from experiments.grug.moe_hero_ep.train import _tree_to_memory_kind
 from experiments.grug.moe_pipeline.pipeline import (
@@ -274,7 +273,7 @@ def split_transformer(
         embed_norm=model.embed_norm,
         embed_gated_norm=model.embed_gated_norm,
         output_proj=model.output_proj,
-        blocks=_unstacked_blocks(model),
+        blocks=tuple(model.stacked_blocks.unstacked()),
         final_norm=model.final_norm,
         final_gated_norm=model.final_gated_norm,
         config=model.config,

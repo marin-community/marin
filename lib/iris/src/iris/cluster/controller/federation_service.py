@@ -104,6 +104,7 @@ def _job_delta(
             max_retries_failure=job.max_retries_failure,
             max_retries_preemption=job.max_retries_preemption,
             max_task_failures=job.max_task_failures,
+            termination_grace=duration_to_proto(Duration.from_ms(job.termination_grace_ms)),
         ),
     )
 

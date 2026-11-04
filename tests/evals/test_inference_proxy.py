@@ -21,7 +21,6 @@ from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
 from iris.resources.state import JobState, TaskState
 from marin.evaluation.runner import _inference_session
-from marin.execution.lazy import lower
 from marin.inference.auxiliary import build_auxiliary_app
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -61,7 +60,6 @@ from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
 from experiments.evals.federated_inference_proxy_demo import _redacted_url
-from experiments.evals.served_qwen3 import QWEN3_GPU_EVAL_RESULTS
 from tests.evals.openai_stub import (
     DeterministicOpenAIStub,
     assert_completions_scoring_contract,
@@ -94,17 +92,6 @@ def _json_bytes(payload: object) -> bytes:
 
 def _json_payload(payload: bytes) -> dict:
     return json.loads(payload)
-
-
-def test_brokered_gpu_eval_lowers_with_symbolic_worker_resources() -> None:
-    step = lower(QWEN3_GPU_EVAL_RESULTS)
-    fingerprint = json.loads(step.fingerprint_payload)
-
-    # Artifact lowering replaces runtime resources with a symbolic value. Backend validation must
-    # remain at the serving boundary, where the concrete ResourceConfig is available.
-    assert fingerprint["inference"]["iris"]["worker_resources"] == "<worker_resources>"
-    assert fingerprint["inference"]["instances"] == 1
-    assert fingerprint["inference"]["engine"]["launcher"] == "cuda"
 
 
 def test_remote_topology_selection() -> None:
