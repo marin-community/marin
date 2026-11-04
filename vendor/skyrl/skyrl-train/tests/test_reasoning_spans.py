@@ -31,6 +31,7 @@ TOOL_CALL = {"id": "call-0", "type": "function", "function": {"name": "bash", "a
 
 class _Tokenizer:
     eos_token_id = 5
+    added_tokens_decoder = {}
 
     def decode(self, token_ids, skip_special_tokens):
         return "".join(VOCABULARY[token] for token in token_ids)
