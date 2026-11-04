@@ -22,6 +22,7 @@ from rigging.log_setup import configure_logging
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, grugmoe_inference_state_dict
 from experiments.grug.moe_hero_ep.ops.export_metadata import (
     EXPORT_VERSION,
+    bf16_hf_config,
     prepare_export,
     split_expert_names,
     write_export_metadata,
@@ -51,7 +52,7 @@ def export(config: ExportConfig) -> None:
     All JAX processes call this with the same config after distributed initialization.
     A destination belongs to exactly one exporting gang at a time.
     """
-    hf_config = config.model.to_hf_config(config.model.vocab_size).to_dict()
+    hf_config = bf16_hf_config(config.model)
     request = {"export_version": EXPORT_VERSION, "config": draccus.encode(config), "hf_config": hf_config}
     export_id = digest(request)
 

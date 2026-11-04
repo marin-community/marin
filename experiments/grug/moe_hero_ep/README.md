@@ -145,6 +145,42 @@ Use the output only when `export-manifest.json` exists. It is written after
 all shards, `config.json` and `model.safetensors.index.json`. Completed
 destinations are refused on subsequent runs.
 
+### Private Hugging Face upload
+
+After CPU export completes, upload it to a checkpoint-specific branch:
+
+```yaml
+export: <the complete CpuExportConfig mapping used for conversion>
+expected_payload_bytes: <BF16 tensor payload from the export index>
+repo_id: open-athena/Marin-Mochi-535B-A23B
+branch: step-378000
+base_revision: <immutable HF main commit containing only repository metadata>
+model_card: README.md
+license_file: LICENSE
+tokenizer: marin-community/marin-tokenizer
+tokenizer_revision: <pinned tokenizer commit>
+staging_dir: /cache/mochi-hf-staging
+```
+
+```bash
+uv run --package marin-levanter python -m \
+  experiments.grug.moe_hero_ep.ops.upload_hf --config_path upload.yaml
+```
+
+The repository must already exist and remain private. New branches start from
+the pinned metadata-only commit. The uploader binds each branch to its export,
+card, license and tokenizer through `hf-upload-request.json`, then stages one
+shard at a time on disk. It validates source BF16 headers and hashes and checks
+Hub sizes and hashes before reusing uploaded files. Allow enough scratch disk
+for the largest shard.
+
+Rerun the same upload configuration after an interrupted transfer. Changed
+inputs or unexpected Hub weights stop reuse. A checkpoint branch is complete
+only when `hf-upload-manifest.json` pins a verified weights commit. The uploader
+checks the published model card and official OpenMDW 1.1 license before writing
+that marker. Artifact checks do not establish serving numerical parity; serving
+also needs a vLLM revision with the split-expert loader.
+
 ## Hero cutovers and W&B lineage
 
 Hero launchers disable W&B source capture (`save_code=False`). The git commit remains

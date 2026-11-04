@@ -31,6 +31,7 @@ from experiments.grug.moe_hero_ep.model import (
 )
 from experiments.grug.moe_hero_ep.ops.export_metadata import (
     EXPORT_VERSION,
+    bf16_hf_config,
     prepare_export,
     split_expert_names,
     write_export_metadata,
@@ -221,7 +222,7 @@ class CpuCheckpointWeights:
 
 
 def export(config: CpuExportConfig) -> None:
-    hf_config = config.model.to_hf_config(config.model.vocab_size).to_dict()
+    hf_config = bf16_hf_config(config.model)
     request = {
         "export_version": EXPORT_VERSION,
         "implementation": "cpu",

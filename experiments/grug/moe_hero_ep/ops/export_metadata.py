@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from levanter.compat.hf_export import HFShardRecord, HFShardResume, write_export_json
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
 MANIFEST_FILENAME = "export-manifest.json"
@@ -17,6 +18,12 @@ REQUEST_FILENAME = "export-request.json"
 INDEX_FILENAME = "model.safetensors.index.json"
 EXPORT_VERSION = 2
 EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
+
+
+def bf16_hf_config(model: GrugModelConfig) -> dict:
+    config = model.to_hf_config(model.vocab_size).to_dict()
+    config["dtype"] = "bfloat16"
+    return config
 
 
 def split_expert_names(name: str, num_experts: int) -> tuple[str, ...]:

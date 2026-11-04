@@ -108,6 +108,7 @@ def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch):
             assert actual.shape == wanted.shape and actual.dtype == wanted.dtype, name
             assert actual.tobytes() == wanted.tobytes(), name
     expected_config = request.model.to_hf_config(request.model.vocab_size).to_dict()
+    expected_config["dtype"] = "bfloat16"
     assert json.loads((root / "config.json").read_text()) == json.loads(json.dumps(expected_config))
 
 
