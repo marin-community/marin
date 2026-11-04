@@ -84,8 +84,9 @@ class ExpertBlockSender:
             plan,
             Rendezvous(**init_info["rendezvous"]),
             device,
-            sources=self.sources,
-            expert_sources=self.expert_sources,
+            make_stream=lambda groups: Stream(
+                self.trainer.rank, plan, groups, device=device, sources=self.sources, expert_sources=self.expert_sources
+            ),
         )
         return {"participant": self.trainer.rank, "warmup_seconds": warm}
 

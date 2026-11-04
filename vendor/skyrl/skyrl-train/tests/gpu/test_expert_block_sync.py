@@ -40,7 +40,7 @@ from skyrl_train.weight_sync.expert_block.schedule import (
     build_schedule,
 )
 from skyrl_train.weight_sync.expert_block.source_views import ExpertSource, dtype_name
-from skyrl_train.weight_sync.expert_block.stream import bind
+from skyrl_train.weight_sync.expert_block.stream import Stream, bind
 
 HIDDEN = 128
 LATENT = 64
@@ -312,7 +312,13 @@ def transfer_worker(rank, rendezvous_values, directory, quantization, dp_port):
     }
     store.set("plan", json.dumps(plan))
     groups, stream, _ = bind(
-        0, schedule, rendezvous, torch.device("cuda", rank), sources=sources, expert_sources=expert_sources
+        0,
+        schedule,
+        rendezvous,
+        torch.device("cuda", rank),
+        make_stream=lambda groups: Stream(
+            0, schedule, groups, device=torch.device("cuda", rank), sources=sources, expert_sources=expert_sources
+        ),
     )
     for version in range(2):
         dense, experts = checkpoint(version)

@@ -9,9 +9,12 @@ Expert weights are written in place, so the engine's ``w13_weight`` must keep th
 backend that was tested.
 """
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from functools import partial
+from typing import Protocol
 
 import torch
+import torch.distributed as dist
 
 from skyrl_train.weight_sync.expert_block.groups import Rendezvous, destroy_groups
 from skyrl_train.weight_sync.expert_block.schedule import Schedule, from_wire
@@ -42,6 +45,45 @@ def installable_parameters(model, parameters: dict[str, torch.Tensor] | None = N
     return {name: value.narrow(0, 0, rows[name]) if name in rows else value for name, value in parameters.items()}
 
 
+class ReceiverStreamFactory(Protocol):
+    def __call__(
+        self,
+        participant: int,
+        schedule: Schedule,
+        groups: dict[str, dist.ProcessGroup],
+        *,
+        expert_maps: dict[str, tuple[int, ...]],
+        device: torch.device,
+    ) -> Stream: ...
+
+
+@dataclass(frozen=True)
+class PreparedReceiver:
+    parameters: dict[str, torch.Tensor]
+    make_stream: ReceiverStreamFactory
+
+
+def prepare_receiver(model: torch.nn.Module, vllm_config) -> PreparedReceiver:
+    """Bind checkpoint-shaped inventory to its matching serving stream constructor."""
+    if vllm_config.model_config.quantization is None:
+        parameters = installable_parameters(model)
+        return PreparedReceiver(parameters, partial(Stream, parameters=parameters))
+
+    # vLLM is an optional GPU dependency; BF16 transport remains importable without it.
+    from vllm.model_executor.layers.quantization.fp8 import Fp8Config
+
+    from skyrl_train.weight_sync.expert_block.online_fp8 import OnlineFp8Stream, checkpoint_parameters
+
+    quant_config = vllm_config.quant_config
+    if not isinstance(quant_config, Fp8Config) or quant_config.is_checkpoint_fp8_serialized:
+        raise ValueError("Expert-block sync supports BF16 and online FP8 weights only")
+    parameters = installable_parameters(model, checkpoint_parameters(model))
+    return PreparedReceiver(
+        parameters,
+        partial(OnlineFp8Stream, parameters=parameters, model=model, vllm_config=vllm_config),
+    )
+
+
 class ExpertBlockReceiver:
     def __init__(
         self,
@@ -64,33 +106,18 @@ class ExpertBlockReceiver:
         self.pp_size = pp_size
         self.gpu_uuid = gpu_uuid
         self.participant: int | None = None
-        self.parameters: dict[str, torch.Tensor] = {}
+        self.prepared: PreparedReceiver | None = None
         self.identity: dict[str, tuple] = {}
         self.expert_maps: dict[str, tuple[int, ...]] = {}
         self.groups = {}
         self.stream: Stream | None = None
-        self.stream_class: type[Stream] = Stream
-        self.stream_options: dict = {}
 
     def inventory(self) -> dict:
         """Check that this transport can write into the model, and report what this worker holds."""
         hf, parallel = self.vllm_config.model_config.hf_config, self.vllm_config.parallel_config
         if hf.model_type != SUPPORTED_MODEL_TYPE:
             raise ValueError(f"Expert-block sync supports {SUPPORTED_MODEL_TYPE}, not {hf.model_type}")
-        parameters = None
-        if self.vllm_config.model_config.quantization is not None:
-            # vLLM is an optional GPU dependency; the BF16 transport can be
-            # imported and tested without installing its CUDA build.
-            from vllm.model_executor.layers.quantization.fp8 import Fp8Config
-
-            from skyrl_train.weight_sync.expert_block.online_fp8 import OnlineFp8Stream, checkpoint_parameters
-
-            quant_config = self.vllm_config.quant_config
-            if not isinstance(quant_config, Fp8Config) or quant_config.is_checkpoint_fp8_serialized:
-                raise ValueError("Expert-block sync supports BF16 and online FP8 weights only")
-            parameters = checkpoint_parameters(self.model)
-            self.stream_class = OnlineFp8Stream
-            self.stream_options = {"model": self.model, "vllm_config": self.vllm_config}
+        prepared = prepare_receiver(self.model, self.vllm_config)
         if parallel.tensor_parallel_size != 1:
             raise ValueError("Expert-block sync requires TP=1 inference engines")
         if parallel.enable_eplb:
@@ -102,7 +129,7 @@ class ExpertBlockReceiver:
             if not name.endswith(ROUTED_EXPERTS):
                 continue
             backend = getattr(getattr(module.quant_method, "unquantized_backend", None), "name", None)
-            if parameters is not None:
+            if self.vllm_config.model_config.quantization is not None:
                 from vllm.model_executor.layers.quantization.online.fp8 import Fp8PerTensorOnlineMoEMethod
 
                 if not isinstance(module.quant_method, Fp8PerTensorOnlineMoEMethod):
@@ -119,12 +146,12 @@ class ExpertBlockReceiver:
         layers = sorted(int(LAYER_PREFIX.match(name)[1]) for name in maps)
         if self.pp_size == 1 and len(layers) != hf.num_hidden_layers:
             raise ValueError(f"Found {len(layers)} routed-expert layers, expected {hf.num_hidden_layers}")
-        self.parameters = installable_parameters(self.model, parameters)
+        self.prepared = prepared
         self.identity = storage_identity(dict(self.model.named_parameters()))
         self.expert_maps = maps
         dense = {
             name: (tuple(value.shape), dtype_name(value.dtype))
-            for name, value in self.parameters.items()
+            for name, value in prepared.parameters.items()
             if not name.endswith((".w13_weight", ".w2_weight"))
         }
         return {
@@ -151,6 +178,9 @@ class ExpertBlockReceiver:
         participants = init_info["participants"]
         if self.gpu_uuid not in participants:
             raise RuntimeError(f"GPU {self.gpu_uuid} is not a receiver in the expert-block schedule")
+        if self.prepared is None:
+            raise RuntimeError("Expert-block receiver inventory must be prepared before binding")
+        prepared = self.prepared
         plan = from_wire(Schedule, init_info["schedule"])
         participant = self.participant = participants[self.gpu_uuid]
         self.groups, self.stream, warm = bind(
@@ -158,10 +188,9 @@ class ExpertBlockReceiver:
             plan,
             Rendezvous(**init_info["rendezvous"]),
             self.device,
-            stream_class=self.stream_class,
-            parameters=self.parameters,
-            expert_maps=self.expert_maps,
-            **self.stream_options,
+            make_stream=lambda groups: prepared.make_stream(
+                participant, plan, groups, expert_maps=self.expert_maps, device=self.device
+            ),
         )
         return {"participant": participant, "warmup_seconds": warm}
 

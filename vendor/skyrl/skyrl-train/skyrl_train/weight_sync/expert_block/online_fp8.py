@@ -5,7 +5,8 @@ from copy import copy
 from enum import StrEnum
 
 import torch
-from vllm.config import set_current_vllm_config
+import torch.distributed as dist
+from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.model_executor.layers.quantization.online.fp8 import (
     Fp8PerTensorOnlineLinearMethod,
     Fp8PerTensorOnlineMoEMethod,
@@ -19,9 +20,9 @@ from vllm.model_executor.model_loader.reload.layerwise import (
 )
 from vllm.model_executor.model_loader.reload.meta import materialize_layer
 
-from skyrl_train.weight_sync.expert_block.schedule import BF16, DenseBroadcast, ExpertBroadcast
+from skyrl_train.weight_sync.expert_block.schedule import BF16, DenseBroadcast, ExpertBroadcast, Schedule
 from skyrl_train.weight_sync.expert_block.source_views import ROUTED_EXPERTS, dtype_name, is_widened_router
-from skyrl_train.weight_sync.expert_block.stream import Landing, Stream
+from skyrl_train.weight_sync.expert_block.stream import InstallReport, Landing, Stream
 from skyrl_train.weight_sync.expert_block.verify_weights import (
     REPLAY_COMPARE_CHUNK_BYTES,
     ReplayReport,
@@ -69,8 +70,19 @@ class OnlineFp8Stream(Stream):
     serving buffers and quant-method bindings untouched.
     """
 
-    def __init__(self, *args, model, vllm_config, **kwargs):
-        self.model = model
+    def __init__(
+        self,
+        participant: int,
+        schedule: Schedule,
+        groups: dict[str, dist.ProcessGroup],
+        *,
+        parameters: dict[str, torch.Tensor],
+        expert_maps: dict[str, tuple[int, ...]],
+        device: torch.device,
+        model: torch.nn.Module,
+        vllm_config: VllmConfig,
+    ):
+        super().__init__(participant, schedule, groups, parameters=parameters, expert_maps=expert_maps, device=device)
         self.vllm_config = vllm_config
         self.modules = dict(online_fp8_modules(model))
         self.state = UpdateState.READY
@@ -78,8 +90,7 @@ class OnlineFp8Stream(Stream):
         self.completed: set[str] = set()
         self.loaded: dict[str, int] = {}
         self.kernel_bytes = 0
-        self.mismatches = torch.zeros((), dtype=torch.int64, device=kwargs["device"])
-        super().__init__(*args, **kwargs)
+        self.mismatches = torch.zeros((), dtype=torch.int64, device=device)
         self.checkpoint = dict(self.parameters)
         self.expected = {
             name: sum(parameter.numel() for parameter in LAYERWISE_INFO[module].restore_metadata[0].values())
@@ -101,11 +112,9 @@ class OnlineFp8Stream(Stream):
             return f"model.layers.{item.entry.layer}.{ROUTED_EXPERTS}"
         return item.source.hf_name.rpartition(".")[0]
 
-    def prepare_layer(self, name: str) -> None:
-        if self.state == UpdateState.READY or name not in self.modules or name in self.started:
+    def _prepare_layer(self, name: str) -> None:
+        if name not in self.modules or name in self.started:
             return
-        if self.state == UpdateState.FAILED:
-            raise RuntimeError("Expert-block FP8 update failed; reinitialize the receiver before another sync")
         module = self.modules[name]
         initialize_layerwise_reload(module)
         info = LAYERWISE_INFO[module]
@@ -114,13 +123,12 @@ class OnlineFp8Stream(Stream):
             self.parameters[f"{name}.{parameter_name}"] = getattr(module, parameter_name)
         self.started.add(name)
 
-    def expert_landing(self, broadcast: ExpertBroadcast) -> Landing:
-        self.prepare_layer(self.module_name(broadcast))
-        return super().expert_landing(broadcast)
-
-    def dense_landing(self, item: DenseBroadcast) -> Landing:
-        self.prepare_layer(self.module_name(item))
-        return super().dense_landing(item)
+    def prepare(self, item: ExpertBroadcast | DenseBroadcast, landing: Landing) -> Landing:
+        name = self.module_name(item)
+        if name not in self.modules:
+            return landing
+        self._prepare_layer(name)
+        return self.expert_landing(item) if isinstance(item, ExpertBroadcast) else self.dense_landing(item)
 
     def wire_tensor(self, landing: Landing) -> torch.Tensor:
         if self.state == UpdateState.VERIFY:
@@ -184,7 +192,7 @@ class OnlineFp8Stream(Stream):
                 self.parameters[key] = self.checkpoint[key]
         self.completed.add(name)
 
-    def update(self, version: int, state: UpdateState):
+    def _update(self, version: int, state: UpdateState) -> InstallReport:
         if self.state != UpdateState.READY:
             raise RuntimeError(f"Cannot start expert-block FP8 update while receiver is {self.state}")
         self.state = state
@@ -204,8 +212,8 @@ class OnlineFp8Stream(Stream):
         self.state = UpdateState.READY
         return report
 
-    def run(self, version: int):
-        return self.update(version, UpdateState.INSTALL)
+    def run(self, version: int) -> InstallReport:
+        return self._update(version, UpdateState.INSTALL)
 
     def verify(self, version: int) -> ReplayReport:
         scratch = self.scratch
@@ -213,7 +221,7 @@ class OnlineFp8Stream(Stream):
             max(landing.nbytes for _, landing in self.transfers()), dtype=torch.uint8, device=self.device
         )
         try:
-            report = self.update(version, UpdateState.VERIFY)
+            report = self._update(version, UpdateState.VERIFY)
         finally:
             self.scratch = scratch
         parameter_bytes = sum(

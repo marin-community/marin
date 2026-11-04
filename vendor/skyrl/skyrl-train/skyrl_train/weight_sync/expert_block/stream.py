@@ -6,6 +6,7 @@ the live parameter. The router weight is the exception: it is BF16 on the wire a
 vLLM, so it is received into scratch and copied.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import time
 
@@ -203,6 +204,10 @@ class Stream:
         dist.broadcast(tensor, src=members.index(origin), group=self.groups[local_name])
         return item.source.nbytes
 
+    def prepare(self, item: ExpertBroadcast | DenseBroadcast, landing: Landing) -> Landing:
+        """Resolve the destination for an update after startup view validation."""
+        return landing
+
     def install(self, item, landing: Landing, tensor: torch.Tensor) -> None:
         """Install a received matrix or slice, converting the BF16 router to FP32."""
         if not landing.direct:
@@ -220,6 +225,7 @@ class Stream:
             if landing is None:
                 wire_bytes += self.send(item)
             else:
+                landing = self.prepare(item, landing)
                 tensor = self.wire_tensor(landing)
                 wire_bytes += self.receive(item, tensor)
                 self.install(item, landing, tensor)
@@ -252,18 +258,17 @@ def bind(
     rendezvous: Rendezvous,
     device: torch.device,
     *,
-    stream_class: type[Stream] = Stream,
-    **tensors,
-) -> tuple:
+    make_stream: Callable[[dict[str, dist.ProcessGroup]], Stream],
+) -> tuple[dict[str, dist.ProcessGroup], Stream, dict[str, float]]:
     """Create and warm this participant's groups and build its ``Stream``.
 
-    ``tensors`` are this side's ``Stream`` keyword arguments. If anything fails, the groups already
-    created are destroyed. Returns ``(groups, stream, warm-up seconds)``.
+    ``make_stream`` binds the created groups to the prepared tensors. Construction
+    failures destroy the groups. Returns ``(groups, stream, warm-up seconds)``.
     """
     groups = create_groups(participant, plan.groups, rendezvous)
     try:
         warm = warm_groups(participant, plan.groups, groups, device)
-        stream = stream_class(participant, plan, groups, device=device, **tensors)
+        stream = make_stream(groups)
     except BaseException:
         destroy_groups(groups)
         raise
