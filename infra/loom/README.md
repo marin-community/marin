@@ -364,7 +364,10 @@ share the doc, or the folder or Shared Drive that holds it, with that account
 as an editor. The account impersonates itself for the Docs and Drive scopes
 through the `roles/iam.serviceAccountTokenCreator` grant on itself in
 `infra/pulumi/src/iac/gcp/loom.py`, so no key is stored. Every session runs as
-this account, so every session can reach every doc shared with it.
+this account, so every session can reach every doc shared with it. Doc edits
+and comments direct the doc and the session's work, but anyone with comment
+access can write them, so the agent takes approval for an outward-facing step,
+such as a push or a pull request, only from the Loom session.
 
 A ```` ```dot ```` block renders with Graphviz and a ```` ```mermaid ```` block
 with a pinned mermaid-cli that `npx` installs on first use. The PNG goes to

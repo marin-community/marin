@@ -23,6 +23,7 @@ from infra.loom.gdoc.docs_format import (
     DiagramStore,
     Tab,
     append_markdown,
+    batch_update,
     find_tab,
     paragraph_text,
     prepend_markdown,
@@ -32,7 +33,6 @@ from infra.loom.gdoc.docs_format import (
     tab_text,
 )
 from infra.loom.gdoc.google_api import (
-    DOCS_API,
     DRIVE_API,
     GoogleApi,
     access_token,
@@ -129,8 +129,8 @@ def agent_status_request(tab: Tab, status: AgentStatus) -> dict:
 
 
 def set_agent_status(api: GoogleApi, doc_id: str, status: AgentStatus) -> None:
-    request = agent_status_request(find_tab(read_document(api, doc_id), None), status)
-    api.post(f"{DOCS_API}/documents/{doc_id}:batchUpdate", {"requests": [request]})
+    document = read_document(api, doc_id)
+    batch_update(api, document, [agent_status_request(find_tab(document, None), status)])
 
 
 def _parser() -> argparse.ArgumentParser:

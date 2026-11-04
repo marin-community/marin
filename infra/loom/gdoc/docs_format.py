@@ -18,10 +18,14 @@ numbered list keeps counting.
 Docs API indices count UTF-16 code units, and every request names its tab. All
 blocks go in at one index, the start of a paragraph, from the last block to the
 first: each insert pushes the blocks written before it down, so no index moves
-under a later request. Consecutive text blocks go in one batchUpdate; a table
-or diagram needs its own, because a table's cell indices exist only after Docs
-inserts it. Bullets are applied last in a batch and from the end backwards,
-because createParagraphBullets removes the tabs that set nesting levels.
+under a later request. Bullets are applied last in a group and from the end
+backwards, because createParagraphBullets removes the tabs that set nesting levels.
+
+Each write reads the doc once and sends one batchUpdate whose indices come from
+that read, with the read's revision as `writeControl.targetRevisionId`. Docs then
+transforms the requests over edits that people made after the read, so a person
+who types meanwhile keeps their text. Diagrams are drawn and a new table's cell
+indices computed before that write, so no second read or batch is needed.
 """
 
 import difflib
@@ -31,7 +35,7 @@ import re
 import struct
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -268,16 +272,32 @@ def find_tab(document: dict, title: str | None) -> Tab:
     return matches[0]
 
 
+def _chip_text(part: dict) -> str:
+    """The text a chip shows, as the doc's markdown export writes it, or "" for an element that is not a chip."""
+    if "dropdown" in part:
+        return part["dropdown"]["dropdownProperties"].get("displayValue", "")
+    if "person" in part:
+        person = part["person"].get("personProperties", {})
+        return person.get("name") or person.get("email", "")
+    if "richLink" in part:
+        link = part["richLink"].get("richLinkProperties", {})
+        return link.get("title") or link.get("uri", "")
+    if "dateElement" in part:
+        return part["dateElement"].get("dateElementProperties", {}).get("displayText", "")
+    return ""
+
+
 def paragraph_text(element: dict) -> str:
-    """A paragraph's text, with dropdown chips as their value and images as [image]."""
+    """A paragraph's text, with chips (dropdowns, people, links and dates) as the text they show and images as
+    [image]. A chip takes one index in the doc however long its text is."""
     parts = []
     for part in element["paragraph"]["elements"]:
         if "textRun" in part:
             parts.append(part["textRun"]["content"])
-        elif "dropdown" in part:
-            parts.append(part["dropdown"]["dropdownProperties"].get("displayValue", ""))
         elif "inlineObjectElement" in part:
             parts.append(IMAGE_PLACEHOLDER)
+        else:
+            parts.append(_chip_text(part))
     return "".join(parts)
 
 
@@ -342,6 +362,27 @@ def group_requests(blocks: list[Block], at: int, tab_id: str) -> list[dict]:
             {"createParagraphBullets": {"range": _range(list_start, list_end, tab_id), "bulletPreset": preset}}
         )
     return requests
+
+
+def inserted_table(at: int, rows: int, columns: int) -> dict:
+    """The table element that `insertTable` at `at` creates, with the cell indices table_fill_requests reads.
+
+    Docs puts a newline at `at` and the table after it. The table, each row and each cell open with one index,
+    and each new cell holds one empty paragraph.
+    """
+    table_start = at + 1
+
+    def cell_paragraph(row: int, column: int) -> int:
+        return table_start + 1 + row * (2 * columns + 1) + 1 + 2 * column + 1
+
+    return {
+        "table": {
+            "tableRows": [
+                {"tableCells": [{"content": [{"startIndex": cell_paragraph(r, c)}]} for c in range(columns)]}
+                for r in range(rows)
+            ]
+        }
+    }
 
 
 def table_fill_requests(table: dict, rows: tuple[tuple[str, ...], ...], tab_id: str) -> list[dict]:
@@ -446,8 +487,10 @@ def read_document(api: GoogleApi, doc_id: str) -> dict:
     return api.get(f"{DOCS_API}/documents/{doc_id}", params={"includeTabsContent": "true"})
 
 
-def _batch_update(api: GoogleApi, doc_id: str, requests: list[dict]) -> None:
-    api.post(f"{DOCS_API}/documents/{doc_id}:batchUpdate", {"requests": requests})
+def batch_update(api: GoogleApi, document: dict, requests: list[dict]) -> None:
+    """Apply requests whose indices come from `document`, transformed over the edits made since that read."""
+    body = {"requests": requests, "writeControl": {"targetRevisionId": document["revisionId"]}}
+    api.post(f"{DOCS_API}/documents/{document['documentId']}:batchUpdate", body)
 
 
 def _groups(blocks: list[Block]) -> list[list[Block]]:
@@ -462,47 +505,41 @@ def _groups(blocks: list[Block]) -> list[list[Block]]:
     return groups
 
 
-def _write_blocks(
-    api: GoogleApi,
-    doc_id: str,
-    tab_title: str | None,
-    blocks: list[Block],
-    at: int,
-    diagrams: DiagramStore | None,
-) -> None:
-    """Write blocks at `at`, a paragraph start in the tab, the last group first."""
-    tab_id = find_tab(read_document(api, doc_id), tab_title).id
+def write_requests(doc_id: str, tab_id: str, blocks: list[Block], at: int, diagrams: DiagramStore | None) -> list[dict]:
+    """Requests that write blocks at `at`, a paragraph start in the tab, the last group first.
+
+    A diagram is drawn and published while the requests are built, before anything is written.
+    """
+    requests: list[dict] = []
     for group in reversed(_groups(blocks)):
         block = group[0]
         if block.kind is BlockKind.DIAGRAM:
             png = render_diagram(block)
             uri = diagrams.publish(doc_id, png)
-            _batch_update(api, doc_id, diagram_requests(at, uri, image_size_pt(png), tab_id))
+            requests += diagram_requests(at, uri, image_size_pt(png), tab_id)
         elif block.kind is BlockKind.TABLE:
-            rows = block.rows
-            table_request = {"rows": len(rows), "columns": len(rows[0]), "location": {"index": at, "tabId": tab_id}}
-            _batch_update(api, doc_id, [{"insertTable": table_request}])
-            # Docs puts a newline at `at` and the table after it.
-            body = find_tab(read_document(api, doc_id), tab_title).body
-            table = next(e for e in body if "table" in e and e["startIndex"] == at + 1)
-            normal = _paragraph_style(at, at + 1, {"namedStyleType": "NORMAL_TEXT"}, tab_id)
-            _batch_update(api, doc_id, [normal, *table_fill_requests(table, rows, tab_id)])
+            rows, columns = len(block.rows), len(block.rows[0])
+            requests += [
+                {"insertTable": {"rows": rows, "columns": columns, "location": {"index": at, "tabId": tab_id}}},
+                _paragraph_style(at, at + 1, {"namedStyleType": "NORMAL_TEXT"}, tab_id),
+                *table_fill_requests(inserted_table(at, rows, columns), block.rows, tab_id),
+            ]
         else:
-            _batch_update(api, doc_id, group_requests(group, at, tab_id))
+            requests += group_requests(group, at, tab_id)
+    return requests
 
 
-def _add_last_paragraph(api: GoogleApi, doc_id: str, tab_id: str, end: int) -> None:
-    """Add an empty normal paragraph after the tab's last paragraph, which ends at `end`.
+def _last_paragraph_requests(tab_id: str, end: int) -> list[dict]:
+    """Requests that add an empty normal paragraph after the tab's last paragraph, which ends at `end`.
 
     The new paragraph would take the last paragraph's style, e.g. a heading or a bullet, so it is reset.
     """
     new = _range(end, end + 1, tab_id)
-    requests = [
+    return [
         {"insertText": {"location": {"index": end - 1, "tabId": tab_id}, "text": "\n"}},
         {"deleteParagraphBullets": {"range": new}},
         _paragraph_style(end, end + 1, {"namedStyleType": "NORMAL_TEXT"}, tab_id),
     ]
-    _batch_update(api, doc_id, requests)
 
 
 def _parse_checked(markdown: str, diagrams: DiagramStore | None) -> list[Block]:
@@ -515,15 +552,17 @@ def _parse_checked(markdown: str, diagrams: DiagramStore | None) -> list[Block]:
 def append_markdown(api: GoogleApi, doc_id: str, markdown: str, diagrams: DiagramStore | None, tab: str | None) -> None:
     """Add markdown at the end of a tab (the first tab for None)."""
     blocks = _parse_checked(markdown, diagrams)
-    found = find_tab(read_document(api, doc_id), tab)
+    document = read_document(api, doc_id)
+    found = find_tab(document, tab)
     last = found.body[-1]
+    requests: list[dict] = []
     if "paragraph" in last and paragraph_text(last) == "\n":
         at = last["startIndex"]
     else:
         # Give the tab an empty last paragraph, so the blocks become new paragraphs before it.
         at = last["endIndex"]
-        _add_last_paragraph(api, doc_id, found.id, at)
-    _write_blocks(api, doc_id, tab, blocks, at, diagrams)
+        requests += _last_paragraph_requests(found.id, at)
+    batch_update(api, document, requests + write_requests(doc_id, found.id, blocks, at, diagrams))
 
 
 def top_insert_point(body: list[dict]) -> tuple[int, bool]:
@@ -575,9 +614,8 @@ def prepend_markdown(
         at, needs_paragraph = section_top(found.body, section) if section else top_insert_point(found.body)
     except MissingHeading as error:
         raise _naming_tabs(error, document, found) from None
-    if needs_paragraph:
-        _add_last_paragraph(api, doc_id, found.id, at)
-    _write_blocks(api, doc_id, tab, blocks, at, diagrams)
+    requests = _last_paragraph_requests(found.id, at) if needs_paragraph else []
+    batch_update(api, document, requests + write_requests(doc_id, found.id, blocks, at, diagrams))
 
 
 def section_bounds(body: list[dict], heading: str) -> tuple[int, int, bool]:
@@ -608,8 +646,8 @@ class OldUnit:
 
     start: int
     end: int
-    # (kind, level, numbered, runs) for a paragraph, ("T", cells) for a table, and a unique value for anything
-    # replace_section cannot compare, such as an image or a chip.
+    # (kind, level, numbered, runs) for a paragraph, ("T", cells) for a table, ("X", text) for a paragraph with
+    # a chip or an image, which replace_section keeps or deletes whole, and a unique value for anything else.
     signature: tuple
     # A paragraph's text without its newline.
     text: str = ""
@@ -628,7 +666,7 @@ class NewUnit:
 
 @dataclass(frozen=True)
 class WriteBlocks:
-    """An edit that writes blocks as new paragraphs at a paragraph start (see _write_blocks)."""
+    """An edit that writes blocks as new paragraphs at a paragraph start (see write_requests)."""
 
     blocks: tuple[Block, ...]
     at: int
@@ -686,7 +724,8 @@ def _old_paragraph(element: dict, lists: dict) -> OldUnit:
     start, end = element["startIndex"], element["endIndex"]
     paragraph = element["paragraph"]
     if not all("textRun" in part for part in paragraph["elements"]):
-        return OldUnit(start, end, ("X", start))
+        text = paragraph_text(element).removesuffix("\n")
+        return OldUnit(start, end, ("X", text), text)
     pieces = [
         (part["textRun"]["content"], _text_run_style(part["textRun"].get("textStyle", {})))
         for part in paragraph["elements"]
@@ -849,10 +888,22 @@ def _edit_paragraph(old: OldUnit, new: NewUnit, tab_id: str) -> list[dict]:
     return requests
 
 
+def _keeping_chip_paragraphs(old: list[OldUnit], new: list[NewUnit]) -> list[NewUnit]:
+    """New units, where a paragraph with the text of an old paragraph that holds a chip takes that paragraph's
+    signature. The two then match, so the old paragraph stays with its chips and the comments on it, instead of
+    being retyped as plain text."""
+    chip_texts = {unit.text for unit in old if unit.signature[0] == "X" and unit.text}
+    return [
+        replace(unit, signature=("X", unit.text)) if _shape(unit) is not None and unit.text in chip_texts else unit
+        for unit in new
+    ]
+
+
 def section_edits(old: list[OldUnit], new: list[NewUnit], end: int, tab_id: str) -> list[list[dict] | WriteBlocks]:
     """The edits that turn a section's units into new ones, the last in the tab first, so each edit's indices
     stay valid. end is where the section ends, a paragraph start."""
     edits: list[list[dict] | WriteBlocks] = []
+    new = _keeping_chip_paragraphs(old, new)
     matcher = difflib.SequenceMatcher(None, [u.signature for u in old], [u.signature for u in new], autojunk=False)
     for tag, i1, i2, j1, j2 in reversed(matcher.get_opcodes()):
         if tag == "equal":
@@ -888,27 +939,24 @@ def replace_section(
         start, end, last = section_bounds(found.body, heading)
     except MissingHeading as error:
         raise _naming_tabs(error, document, found) from None
+    requests: list[dict] = []
     if last and paragraph_text(found.body[-1]) != "\n":
         # A last section ends at an empty paragraph, which no edit deletes, since a tab must end with a newline.
-        _add_last_paragraph(api, doc_id, found.id, found.body[-1]["endIndex"])
-        found = find_tab(read_document(api, doc_id), tab)
-        start, end, last = section_bounds(found.body, heading)
-    if last:
+        # The new paragraph starts where the tab's last paragraph ended, and the section ends there.
+        end = found.body[-1]["endIndex"]
+        requests += _last_paragraph_requests(found.id, end)
+    elif last:
         end = found.body[-1]["startIndex"]
     # The tab's first element, a section break, has no startIndex.
     content = [element for element in found.body if start <= element.get("startIndex", 0) < end]
     units = old_units(content, found.lists)
-    requests: list[dict] = []
     for edit in section_edits(units, new_units(blocks), end, found.id):
         if isinstance(edit, WriteBlocks):
-            if requests:
-                _batch_update(api, doc_id, requests)
-                requests = []
-            _write_blocks(api, doc_id, tab, list(edit.blocks), edit.at, diagrams)
+            requests += write_requests(doc_id, found.id, list(edit.blocks), edit.at, diagrams)
         else:
             requests += edit
     if requests:
-        _batch_update(api, doc_id, requests)
+        batch_update(api, document, requests)
 
 
 def tab_text(tab: Tab) -> str:

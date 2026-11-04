@@ -9,10 +9,12 @@ from infra.loom.gdoc.docs_format import (
     BlockKind,
     Tab,
     WriteBlocks,
+    append_markdown,
     find_tab,
     group_requests,
     image_size_pt,
     inline,
+    inserted_table,
     new_units,
     old_units,
     parse,
@@ -20,6 +22,7 @@ from infra.loom.gdoc.docs_format import (
     section_edits,
     section_top,
     tab_length,
+    tab_text,
     table_fill_requests,
     top_insert_point,
     utf16_length,
@@ -330,3 +333,68 @@ def test_an_unchanged_table_stays_when_the_paragraph_after_it_changes():
 
     assert all(r["range"]["startIndex"] >= 40 for r in requests_of(edits, "deleteContentRange"))
     assert all(r["location"]["index"] >= 40 for r in requests_of(edits, "insertText"))
+
+
+def chip_paragraph(start: int) -> dict:
+    """A paragraph with a person chip, as documents.get returns it: the chip takes one index."""
+    person = {"personId": "kix.p1", "personProperties": {"name": "Ada Lovelace", "email": "ada@example.com"}}
+    elements = [
+        {"startIndex": start, "endIndex": start + 4, "textRun": {"content": "Ask ", "textStyle": {}}},
+        {"startIndex": start + 4, "endIndex": start + 5, "person": person},
+        {"startIndex": start + 5, "endIndex": start + 15, "textRun": {"content": " about it\n", "textStyle": {}}},
+    ]
+    return {
+        "startIndex": start,
+        "endIndex": start + 15,
+        "paragraph": {"elements": elements, "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"}},
+    }
+
+
+def test_a_paragraph_with_a_person_chip_stays_when_the_new_section_keeps_its_text():
+    # Regression: such a paragraph never matched, so replace_section retyped it as plain text and lost the chip.
+    gates, end = section(*GATES)
+    elements = [*gates, chip_paragraph(end)]
+    # The doc's markdown export, which the agent reads, writes the chip as a mailto link.
+    markdown = GATES_MARKDOWN + "\nAsk [Ada Lovelace](mailto:ada@example.com) about it\n"
+
+    assert edits_for(elements, end + 15, markdown) == []
+    assert tab_text(Tab("t.0", "Main", [chip_paragraph(1)])) == "Ask Ada Lovelace about it"
+
+
+def test_a_new_tables_cells_are_where_docs_puts_them():
+    # The cell paragraph indices that Docs returned after an insertTable of 2 rows and 3 columns at index 65.
+    cells = [
+        [cell["content"][0]["startIndex"] for cell in row["tableCells"]]
+        for row in inserted_table(65, 2, 3)["table"]["tableRows"]
+    ]
+    assert cells == [[69, 71, 73], [76, 78, 80]]
+
+
+class RecordingDocsApi:
+    """Serves one document, and counts its reads and records the batchUpdate bodies posted to it."""
+
+    def __init__(self, document: dict):
+        self.document = document
+        self.reads = 0
+        self.batches: list[dict] = []
+
+    def get(self, url: str, params: dict | None = None) -> dict:
+        self.reads += 1
+        return self.document
+
+    def post(self, url: str, body: dict, params: dict | None = None) -> dict:
+        self.batches.append(body)
+        return {}
+
+
+def test_a_write_is_one_batch_that_docs_transforms_over_edits_made_since_its_read():
+    # Regression: index-based batches without write control misplaced text that a person typed meanwhile.
+    content = [{"endIndex": 1, "sectionBreak": {}}, *body(("Progress\n", "HEADING_3"), ("Old entry.\n", "NORMAL_TEXT"))]
+    tab = {"tabProperties": {"tabId": "t.0", "title": "Main"}, "documentTab": {"body": {"content": content}}}
+    api = RecordingDocsApi({"documentId": "doc", "revisionId": "rev-7", "tabs": [tab]})
+
+    append_markdown(api, "doc", "New entry.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n", None, None)
+
+    assert (api.reads, len(api.batches)) == (1, 1)
+    assert api.batches[0]["writeControl"] == {"targetRevisionId": "rev-7"}
+    assert any("insertTable" in request for request in api.batches[0]["requests"])
