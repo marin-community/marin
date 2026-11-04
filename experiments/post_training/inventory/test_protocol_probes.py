@@ -6,7 +6,7 @@ from collections import Counter
 import pyarrow.parquet as pq
 from shellbox.machine import CommandSemantics
 from taskcompendium.examples.protocol_probes import probe_check
-from taskcompendium.models import TaskSpec, VerifyitGrader
+from taskcompendium.models import SCHEMA_VERSION, TaskSpec, VerifyitGrader
 from taskcompendium.runtime.local import LOCK_FILE
 
 from experiments.post_training.inventory.protocol_probes import PROBES_FILENAME, write_probe_tasks
@@ -15,7 +15,7 @@ from experiments.post_training.task_curation.inventory import TASK_SPEC_COLUMN
 
 def test_probe_rows_round_trip_with_a_shellsim_task_machine_and_a_lock_graded_answer_file(tmp_path):
     grader_root = tmp_path / "env"
-    write_probe_tasks(str(tmp_path), str(grader_root), variants=2)
+    write_probe_tasks(str(tmp_path), str(grader_root), variants=2, schema_version=SCHEMA_VERSION)
 
     rows = pq.read_table(tmp_path / PROBES_FILENAME).column(TASK_SPEC_COLUMN).to_pylist()
     tasks = [TaskSpec.model_validate_json(row) for row in rows]
