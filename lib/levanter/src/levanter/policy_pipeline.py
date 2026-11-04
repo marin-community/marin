@@ -49,15 +49,16 @@ logger = logging.getLogger(__name__)
 PIPELINE_SCHEDULE = "std_1f1b"
 _SCORING_WINDOW_SIZE = 8
 _NO_ROUTING_DROP_LAYER = -1
+_ROUTING_DROP_LAYER = "routing_drop_layer"
 BATCH_AXES = ("replica_dcn", "data", "expert")
 ROUTING_METRIC_NAMES = (
     "routing_assignments",
     "routing_sender_drops",
     "routing_receiver_drops",
     "routing_max_layer_drops",
-    "routing_drop_layer",
+    _ROUTING_DROP_LAYER,
 )
-ROUTING_MAX_METRICS = ("routing_max_layer_drops", "routing_drop_layer")
+ROUTING_MAX_METRICS = ("routing_max_layer_drops", _ROUTING_DROP_LAYER)
 METRIC_NAMES = (
     "loss",
     "policy_loss",
@@ -121,15 +122,15 @@ class PipelinePolicyBatch:
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
 class PipelineState:
-    trainable: tuple[Any, ...]
-    frozen: tuple[Any, ...]
+    trainable: tuple[PipelineStage, ...]
+    frozen: tuple[PipelineStage, ...]
     opt_state: tuple[optax.OptState, ...]
 
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
 class _OptimizerState:
-    trainable: tuple[Any, ...]
+    trainable: tuple[PipelineStage, ...]
     opt_state: tuple[optax.OptState, ...]
 
 
@@ -291,7 +292,7 @@ def _score_stages(
         # Integer auxiliary outputs generate float0 cotangents that JaxPP cannot
         # transfer. Cast exact per-microbatch counts back to int32 after AD.
         name: jnp.asarray(
-            _NO_ROUTING_DROP_LAYER if name == "routing_drop_layer" else 0,
+            _NO_ROUTING_DROP_LAYER if name == _ROUTING_DROP_LAYER else 0,
             dtype=jnp.float32,
         )
         for name in ROUTING_METRIC_NAMES
@@ -617,8 +618,8 @@ def _scorer_repeatability_details(first_logprobs, repeated_logprobs, policy_weig
 class _PreparedPipelineScorer:
     execute: Callable
     batch_specs: Any
-    trainable: tuple[Any, ...]
-    frozen: tuple[Any, ...]
+    trainable: tuple[PipelineStage, ...]
+    frozen: tuple[PipelineStage, ...]
     report_routing: bool
     output_sharding: NamedSharding | tuple[NamedSharding, dict[str, P]]
 
@@ -683,7 +684,7 @@ def score_pipeline_batch(
     sample = jax.tree.map(lambda x: x[0], batches)
     prepared = _compile_pipeline_scorer(scorer, state, sample, mpmd_mesh)
     routing_totals = {
-        name: _NO_ROUTING_DROP_LAYER if name == "routing_drop_layer" else 0 for name in ROUTING_METRIC_NAMES
+        name: _NO_ROUTING_DROP_LAYER if name == _ROUTING_DROP_LAYER else 0 for name in ROUTING_METRIC_NAMES
     }
 
     def checked_score(result, index):

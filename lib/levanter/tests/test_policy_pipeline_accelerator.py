@@ -11,6 +11,7 @@ import dataclasses
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import equinox as eqx
 import haliax as hax
@@ -174,6 +175,12 @@ def _reference_scores(params, frozen, batch, policy):
     return jnp.take_along_axis(full_softmax_logprobs(logits), batch.tokens.array[:, -2:, None], axis=-1)[..., 0]
 
 
+class _ReferenceUpdate(NamedTuple):
+    state: PipelineState
+    loss: jax.Array
+    grad_norm: jax.Array
+
+
 def _reference_step(optimizer, policy, microbatches):
     @jax.jit
     def update(state, batch):
@@ -210,7 +217,7 @@ def _reference_step(optimizer, policy, microbatches):
             )
             next_params.append(eqx.apply_updates(params, updates))
             next_opt.append(opt_state)
-        return PipelineState(tuple(next_params), state.frozen, tuple(next_opt)), objective, norm
+        return _ReferenceUpdate(PipelineState(tuple(next_params), state.frozen, tuple(next_opt)), objective, norm)
 
     return update
 
