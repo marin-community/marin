@@ -181,13 +181,8 @@ async def _model_turn(
                     max_prompt_length=max_prompt_length,
                 )
             output = await client.generate(model_input)
-    except ContextLengthExceededError as error:
-        if isinstance(error, GenerationBudgetExceededError) and request.prompt_token_ids is not None:
-            raise GenerationLimitReached(error.prompt_token_ids) from error
-        raise ContextWindowExceeded(
-            f"This request exceeds the maximum context length of {max_context_length} tokens. "
-            "Compact the conversation and retry."
-        ) from error
+    except GenerationBudgetExceededError as error:
+        raise GenerationLimitReached(error.prompt_token_ids) from error
     if output["token_provenance"] != TokenProvenance.ENGINE:
         raise RolloutContractError("The canonical rollout engine requires exact model tokens")
     logprobs = output.get("response_logprobs")
@@ -286,12 +281,12 @@ def _failed_rollout(
         diagnostics["cause_error_type"] = type(error).__name__
     elif isinstance(error, TaskMachineError):
         exception_type = "TaskMachineError"
-    elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
-        exception_type = VERIFIER_RUNTIME_ERROR
-        diagnostics.setdefault("cause_error_type", type(error).__name__)
     elif isinstance(error, ContextWindowExceeded):
         exception_type = "ContextLengthExceededError"
         diagnostics["error_category"] = "context_overflow"
+    elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
+        exception_type = VERIFIER_RUNTIME_ERROR
+        diagnostics.setdefault("cause_error_type", type(error).__name__)
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
@@ -485,15 +480,23 @@ class TaskRolloutWorker:
             session_id = session_ids[index]
 
             async def model(request):
-                return await _model_turn(
-                    self.model_client,
-                    request,
-                    sampling_params=sampling,
-                    max_context_length=max_context_length,
-                    max_prompt_length=max_input_length,
-                    chat_template_kwargs=self.chat_template_kwargs,
-                    session_id=session_id,
-                )
+                try:
+                    return await _model_turn(
+                        self.model_client,
+                        request,
+                        sampling_params=sampling,
+                        max_context_length=max_context_length,
+                        max_prompt_length=max_input_length,
+                        chat_template_kwargs=self.chat_template_kwargs,
+                        session_id=session_id,
+                    )
+                except (GenerationLimitReached, ContextLengthExceededError) as error:
+                    if lowered.harness != SKYRL_AGENT_HARNESS:
+                        raise
+                    raise ContextWindowExceeded(
+                        f"This request exceeds the maximum context length of {max_context_length} tokens. "
+                        "Compact the conversation and retry."
+                    ) from error
 
             engine = engines[index]
             harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
