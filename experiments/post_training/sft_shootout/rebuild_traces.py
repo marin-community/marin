@@ -11,8 +11,9 @@ trigger. The final reply, which no later request echoes, closes the conversation
 Each output row is one conversation of one trial: trial_id, conversation, n_conversations, the Harbor
 trial fields (task_name, trial_name, retry, reward, exception), triggers, tokens (per author: turns,
 prompt, completion, reasoning), messages, tools, dropped_replies (replies the harness discarded, with
-the message index they preceded) and problems. A trial is joined to its Harbor result through
-``agent_result.metadata.rollout_correlation_id`` in ``result.json``. ``problems`` reports gaps in the
+the message index they preceded) and problems. A trial is joined to its Harbor result through the
+``trial_correlation_id.txt`` that the agents in ``harbor_agents/trial_agents.py`` write next to their
+logs. ``problems`` reports gaps in the
 logged message ranges, echoed assistant messages that differ from the logged reply, and trials with
 no Harbor result.
 
@@ -29,6 +30,8 @@ from rigging.filesystem.storage_path import StoragePath
 
 RESULT_FILE = "result.json"
 ATTEMPTS_DIR = "attempts"
+# Written by harbor_agents/trial_agents.py, which imports Harbor and so cannot be imported here.
+ID_FILE = "trial_correlation_id.txt"
 
 
 def assistant_turn(record: dict) -> dict:
@@ -106,23 +109,23 @@ def token_counts(conversation: list[dict]) -> dict[str, dict[str, int]]:
 
 
 def harbor_results(root: StoragePath) -> dict[str, dict]:
-    """Map rollout correlation id to its Harbor trial attempt.
+    """Map trial correlation id to its Harbor trial attempt.
 
+    The id file sits in the attempt's ``agent/`` logs directory, next to the attempt's ``result.json``.
     ``retry`` is NNN for an ``attempts/NNN`` directory (Harbor's retry after an infrastructure error) and 0
     for a trial without retries.
     """
     results = {}
     for directory, _, names in root.walk():
-        if RESULT_FILE not in names:
+        if ID_FILE not in names:
             continue
-        result = json.loads((directory / RESULT_FILE).read_text())
-        trial_id = ((result.get("agent_result") or {}).get("metadata") or {}).get("rollout_correlation_id")
-        if trial_id is None:
-            continue
+        trial_id = (directory / ID_FILE).read_text().strip()
+        attempt = directory.parent
+        result = json.loads((attempt / RESULT_FILE).read_text())
         results[trial_id] = {
             "task_name": result["task_name"],
             "trial_name": result["trial_name"],
-            "retry": int(directory.name) if directory.parent.name == ATTEMPTS_DIR else 0,
+            "retry": int(attempt.name) if attempt.parent.name == ATTEMPTS_DIR else 0,
             "reward": ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward"),
             "exception": (result.get("exception_info") or {}).get("exception_type"),
         }
