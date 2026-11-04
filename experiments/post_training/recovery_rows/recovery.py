@@ -48,7 +48,7 @@ TERMINUS_VARIANTS = {
     "missing_fields": {"bare_command": 122, "no_plan": 19, "commands_only": 6, "analysis_only": 4, "no_analysis": 1},
     "commands_not_array": {"single_object": 1, "null": 1, "string": 1},
 }
-# The parser error prefix each Terminus-2 style must produce.
+# Expected parser error prefixes for planned Terminus-2 styles.
 TERMINUS_ERRORS = {
     "no_json": "No valid JSON found",
     "invalid_json": "Invalid JSON",
@@ -150,7 +150,7 @@ def terminus_prose(data: dict, rng: random.Random) -> str:
 
 
 def terminus_broken_json(data: dict, rng: random.Random, variant: str) -> str | None:
-    """The turn's JSON broken as `variant` says, indented or compact; None if the turn cannot take the variant."""
+    """Render an invalid response as `variant`, or return None if it does not apply."""
     indent = rng.choice((2, None))
     keys = list(data)
     if variant == "unquoted_key":
