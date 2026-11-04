@@ -85,6 +85,7 @@ class _UploadPlan:
 
 
 def _rate_limit_delay(error: HfHubHTTPError) -> tuple[float, bool]:
+    """Return the retry delay and whether a repository commit quota caused the limit."""
     headers = error.response.headers
     delays = [0.0]
     retry_after = headers.get("Retry-After")
