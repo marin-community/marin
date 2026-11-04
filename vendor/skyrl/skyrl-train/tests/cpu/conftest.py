@@ -11,7 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 from omegaconf import OmegaConf
-from rigging.filesystem.s3_compat import s3_credential_options
+from rigging.filesystem.cluster_config import StoreType
+from rigging.filesystem.s3_compat import s3_credentials
 
 # CPU tests already run in the locked uv environment. Ray's uv hook would package
 # this checkout and create another environment for every local Ray session.
@@ -32,7 +33,7 @@ from tests.cpu.util import stub_megatron_modules  # noqa: E402
 
 @pytest.fixture(scope="session")
 def cat_count_policy(pytestconfig) -> Path:
-    if not s3_credential_options().get("key"):
+    if s3_credentials(StoreType.COREWEAVE) is None:
         pytest.skip("CatCount CPU canary: S3 credentials unavailable (e.g. fork PR); policy is not pretrained in CI")
     directory = Path(pytestconfig.cache.mkdir("cat_count_policy")) / "llama-530k-v1"
     directory.mkdir(exist_ok=True)
