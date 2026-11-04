@@ -138,7 +138,15 @@ To run all four probes against the same model served by vLLM on one H100,
 including the answer file graded in the local sandbox, submit
 `uv run python -m experiments.post_training.inventory.protocol_probes_smoke
 --version <label>-dev --run`. It trains one dry step so the probes are
-evaluated before and after it, and writes the same metrics and dumps.
+evaluated before and after it, and writes the same metrics and dumps. To
+evaluate a Snowball checkpoint without training, `uv run python -m
+experiments.post_training.inventory.protocol_probes_eval --model snowball-v0.1
+--version <label>-dev --run` serves it with vLLM on one 8xH100 node through
+SkyRL's evaluation-only entrypoint, in about eight minutes once the model is
+staged. Snowball v0.1 calls the tools on every tool and URL probe but keeps
+generating past `<|eot_id|>`, writing its own tool responses before the real
+ones arrive, so those probes grade `executed` and `retrieved` with wrong answers;
+the dumped rows show the fabricated tool output.
 
 The final update saves a checkpoint; HF export is opt-in with `--export-hf` and
 adds a separate export job after training. Local graders require the privileged
