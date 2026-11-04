@@ -127,6 +127,20 @@ TEST_DIRS: dict[str, tuple[str, ...]] = {
     "marin": ("tests", "experiments"),
 }
 
+# Files outside a scope's test directories that its tests read. The import graph cannot
+# see these reads, so a change to one runs the whole scope.
+EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
+    "iac": frozenset(
+        {
+            ".github/actions/launch-loom-run/action.yaml",
+            ".github/workflows/ops-codehealth-refinement.yaml",
+            ".github/workflows/ops-fork-ferry.yaml",
+            ".github/workflows/ops-loom-holistic-review.yaml",
+            ".github/workflows/ops-loom-review.yaml",
+        }
+    ),
+}
+
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
 # every other scope finishes in a few minutes on one. A sharded scope splits its selected
 # files across this many parallel matrix legs.
@@ -744,6 +758,8 @@ def classify(
         if filepath in broad_triggers:
             broad = True
             continue
+
+        forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
