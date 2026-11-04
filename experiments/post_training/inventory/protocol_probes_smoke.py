@@ -35,6 +35,7 @@ from taskcompendium.examples.protocol_probes import PROBE_DATASET, PROBE_TURNS, 
 
 from experiments.post_training.cat_count_canary.launcher import MODELS, role_plan, training_config
 from experiments.post_training.inventory.protocol_probes import PROBE_VARIANTS, PROBES_FILENAME, probe_tasks_step
+from experiments.post_training.inventory.train_quick_loop import TOOL_PARSER
 
 ARTIFACT_NAME = "checkpoints/protocol-probes-smoke"
 MODEL = "qwen3-0.6b"
@@ -82,6 +83,7 @@ def smoke_config() -> tuple[dict, SkyRLRolePlan]:
         }
     }
     config["generator"]["gpu_memory_utilization"] = 0.4
+    config["generator"].setdefault("engine_init_kwargs", {}).update(enable_auto_tools=True, tool_parser=TOOL_PARSER)
     config["trajectory_runner"] = {
         "max_concurrent_tasks": 8,
         "rollout_workers": {"num_workers": 2, "cpus_per_worker": 2},

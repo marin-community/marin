@@ -104,7 +104,8 @@ execution, thinking disabled, URL loading), built by
 Their file and tool tasks run on a ShellSim machine with four turns, set through
 `task_sessions.task_spec.max_turns_by_dataset` and `task_machine_by_dataset`, and
 the answer file is graded in the worker from a verifyit-only environment lock
-that the graph builds. Evaluation attempts the fixed panel and the probes before
+that the graph builds. The launcher enables vLLM's Hermes tool-call parser; without
+it, vLLM rejects every request that offers tools. Evaluation attempts the fixed panel and the probes before
 training and after the last update, and saves task-level verifier outcomes. Under the run artifact's `exports/`,
 `dumped_evals/global_step_0_evals/` holds the baseline and
 `dumped_evals/global_step_<steps>_evals/` holds the final evaluation. Each contains

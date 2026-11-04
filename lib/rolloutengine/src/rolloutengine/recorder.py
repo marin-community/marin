@@ -123,13 +123,7 @@ class _Conversation:
             steps = (*steps, replace(self.pending, transition=incomplete))
         prompt = self.trace.prompt if self.unserved_prompt is None else self.unserved_prompt
         return ConversationRecord(
-            tuple(self.messages),
-            prompt,
-            self.trace.response,
-            self.trace.loss_mask,
-            self.trace.logprobs,
-            steps,
-            self.options,
+            tuple(self.messages), prompt, self.trace.response, self.trace.loss_mask, self.trace.logprobs, steps
         )
 
 

@@ -123,7 +123,15 @@ class ServedModel:
     async def complete(self, request: ModelRequest) -> ModelTurn:
         self.requests.append(request)
         visible = self.raw_response.rsplit("</think>", 1)[-1]
-        return ModelTurn(reply(visible), (10, 11), (20,), (-0.5,), "stop", raw_response=self.raw_response)
+        return ModelTurn(
+            reply(visible),
+            (10, 11),
+            (20,),
+            (-0.5,),
+            "stop",
+            raw_response=self.raw_response,
+            request_settings=request.options,
+        )
 
 
 class ThinkingOffHarness:

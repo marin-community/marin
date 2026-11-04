@@ -49,6 +49,7 @@ REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
+TOOL_PARSER = "hermes"
 
 
 def training_recipe(steps: int) -> dict:
@@ -66,6 +67,8 @@ def training_recipe(steps: int) -> dict:
     config = training_config(preset)
     config["entrypoint"] = "taskcompendium"
     config["data"] = {"kind": "parquet", "shuffle": True}
+    # Tool-bearing requests need vLLM's tool-call parser; Datakit SFT and Qwen3 both use the Hermes format.
+    config["generator"]["engine_init_kwargs"].update(enable_auto_tools=True, tool_parser=TOOL_PARSER)
     config["environment"] = {
         "task_sessions": {
             "local": {},

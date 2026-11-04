@@ -71,14 +71,15 @@ async def _grade_rollout(
     task = spec.task
     if isinstance(task.grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, task.grader.reason)
-    raw = tuple(step.turn.raw_response for step in conversation.steps if step.turn.raw_response is not None)
+    turns = [step.turn for step in conversation.steps]
+    raw = tuple(turn.raw_response for turn in turns if turn.raw_response is not None)
     attempt = GradingAttempt(
         chat_conversation(list(conversation.messages)),
         outputs,
         stop_reason=stop_reason,
         # The thinking check needs every turn, so a transport that decodes none of them records none.
-        raw_responses=raw if len(raw) == len(conversation.steps) else (),
-        request_settings=conversation.options,
+        raw_responses=raw if len(raw) == len(turns) else (),
+        request_settings=next((turn.request_settings for turn in turns if turn.request_settings is not None), {}),
     )
     grade = await _answer_grade(spec, attempt, machine, factories, cleanup, resources)
     return with_protocol_assessment(task, attempt, grade)

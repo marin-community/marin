@@ -220,6 +220,7 @@ async def _model_turn(
         },
         reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
         raw_response=(output.get(RAW_RESPONSES_KEY) or [None])[0],
+        request_settings=options,
     )
 
 
