@@ -445,13 +445,13 @@ MACHINELESS_SHELLSIM = replace(PROPOSAL, header=replace(PROPOSAL.header, solver_
         (NULL_PROPOSAL, "null proposal: the capability has no gradable artifact here"),
     ],
 )
-async def test_a_failed_preflight_holds_before_any_later_stage(tmp_path, proposal, reason):
+async def test_a_failed_preflight_rejects_before_any_later_stage(tmp_path, proposal, reason):
     assert proposal.header.environment is Environment.SHELLSIM
     log = InMemoryEventLog()
     stages = replace(STAGES, author=no_call, load_program=no_call, build=no_call, validate=no_call, review=no_call)
-    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, proposal, log) is Terminal.HELD
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, proposal, log) is Terminal.REJECTED
 
-    assert exits(log) == [("opened", None), ("triaged", "hold"), ("terminal", "held")]
+    assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
     triaged, terminal = log.events()[1:]
     assert triaged.attrs["reason"] == terminal.attrs["reason"]
     assert terminal.attrs["reason"].startswith("triage rejected the proposal: ")
