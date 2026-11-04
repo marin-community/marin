@@ -73,6 +73,7 @@ from levanter.checkpoint import (
     load_checkpoint_or_initialize,
 )
 from levanter.config import JsonAtom
+from levanter.compute_dtype import compute_policy
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
@@ -86,7 +87,7 @@ from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct
 from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.telemetry import TelemetryConfig, capture_stall_diagnostics
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
+from levanter.trainer_state import FrozenParameterStorage, InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
 from levanter.utils.jax_utils import zeros_like_tree
@@ -329,7 +330,7 @@ class Trainer:
         """
         return WrappedLossFunction(
             self._raw_loss_function,
-            self.mp,
+            self.config.compute_policy,
             self.compute_axis_mapping,
         )
 
@@ -482,6 +483,7 @@ class Trainer:
                 key=training_key,
                 is_trainable=is_trainable,
                 mp=self.mp,
+                frozen_parameter_storage=self.config.frozen_parameter_storage,
                 quantization=self.config.quantization,
                 model_averaging=self.config.model_averaging,
             )
@@ -688,7 +690,6 @@ class Trainer:
 
             @eqx.filter_jit
             def eval_loss(model, *batch, **batch_kwargs):
-                model = self.mp.cast_to_compute(model)
                 return self.loss_fn(model, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
@@ -764,7 +765,7 @@ class Trainer:
         def obj_fun(trainable_model):
             model = eqx.combine(trainable_model, state.model)
             with hax.axis_mapping(self.compute_axis_mapping):
-                model = self.mp.cast_to_compute(model)
+                model = self.config.compute_policy.cast_to_compute(model)
                 result = self._raw_loss_function(model, *batch, **batch_kwargs, key=key)
                 # result is (loss, metrics) tuple
                 loss_for_opt, _metrics = result
@@ -875,6 +876,14 @@ def _initialize_global_tracker(config, run_id):
 class TrainerConfig:
     seed: int = 0  # random seed
     mp: jmp.Policy = jmp.get_policy("f32")  # mixed precision policy
+    compute_dtype_overrides: dict[str, str] | None = None
+    """Opt-in compute dtypes for exact array-valued attribute names; storage is unchanged."""
+    frozen_parameter_storage: FrozenParameterStorage = FrozenParameterStorage.COMPUTE
+    """Use native to retain frozen parameter dtypes, including when reconstructing a resumed model.
+
+    This affects storage only; compute_dtype_overrides controls exceptions in the loss view.
+    Native partial checkpoints still require the same pinned source for frozen leaves.
+    """
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
 
@@ -906,6 +915,11 @@ class TrainerConfig:
     This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
     because JAX disallows using named `PartitionSpec`s under `AxisType.Auto`/`AxisType.Manual` meshes.
     """
+
+    @property
+    def compute_policy(self) -> jmp.Policy:
+        """The model compute policy, including field dtype overrides."""
+        return compute_policy(self.mp, self.compute_dtype_overrides)
 
     @property
     def batch_axis_name(self) -> str | None:
