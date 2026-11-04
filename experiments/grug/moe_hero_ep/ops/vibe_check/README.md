@@ -10,6 +10,9 @@ They include a final end-of-sequence (EOS) token, which measures the probability
 of stopping after the reference. The report shows EOS and includes it in the totals.
 Token colors show model probabilities. Hover, focus, or tap a token for its
 probability and the five most likely alternatives.
+Completions containing valid SVG have an image preview, including when prose
+follows the image markup. Expand **Full generated text** to inspect the SVG
+source and any continuation. Incomplete or malformed SVG remains visible as text.
 Each prompt in [prompts.json](prompts.json) includes an expected answer, which
 is scored separately. Open-ended expected answers are examples, and probability
 does not measure answer correctness. Probabilities use the model distribution
