@@ -38,11 +38,14 @@
     "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": 9008,
     "SnowballV01:structure-closure": 11634
   },
-  "heldout": {
-    "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
-    "version": "2026.10.23.1",
-    "rows": 910
-  },
+  "heldout": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
+      "version": "2026.10.23.1",
+      "rows": 910,
+      "format": "historical"
+    }
+  ],
   "validation_per_family": 20,
   "seed": 20261019
 }

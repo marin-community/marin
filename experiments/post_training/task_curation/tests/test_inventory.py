@@ -13,7 +13,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
+from taskcompendium.evaluation.corpus import evaluation_cases
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     Boxed,
@@ -27,9 +30,17 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.models import IntendedUse
+from taskcompendium.pipeline.conversion import convert_row
+from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import IntendedUse, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from verifyit.spec import JudgeSpec
+from zephyr.context import ZephyrContext
 
+from experiments.post_training.task_curation.datasets.evalchemy.code import sources as code_sources
+from experiments.post_training.task_curation.datasets.evalchemy.reasoning import sources as reasoning_sources
+from experiments.post_training.task_curation.datasets.nemo_tool_calls import convert as convert_tool_call
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
@@ -44,6 +55,13 @@ from experiments.post_training.task_curation.inventory import (
     task_selection_step,
     validation_task,
 )
+from experiments.post_training.task_curation.inventory import (
+    TestPanelRecipe as PanelRecipe,
+)
+from experiments.post_training.task_curation.inventory import (
+    test_panel_step as panel_step,
+)
+from experiments.post_training.task_curation.pipeline import source_recipe
 
 FAMILIES = (*HELDOUT_FAMILIES.values(), "structural")
 
@@ -124,7 +142,7 @@ def recipe(tmp_path: Path) -> SelectionRecipe:
         version="2026.10.23.1",
         sources={"fixture:first": "calendar", "fixture:second": "calendar"},
         family_limits={"calendar": 2},
-        heldout={"uri": str(heldout), "version": "2026.10.15.1", "rows": len(rows)},
+        heldout=({"uri": str(heldout), "version": "2026.10.15.1", "rows": len(rows), "format": "historical"},),
         validation_per_family=20,
         seed=20261023,
     )
@@ -232,7 +250,7 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
             task["grader"]["timeout"] = 330
         originals[task["id"]] = task
         row["lowered_task_spec"] = json.dumps(document)
-    pq.write_table(pa.Table.from_pylist(rows), settings.heldout.uri)
+    pq.write_table(pa.Table.from_pylist(rows), settings.heldout[0].uri)
     output = Path(run(task_selection_step(curated, settings))[0].path)
     full = read_tasks(output / FULL_VALIDATION_FILENAME)
     manifest = pq.read_table(output / TASK_MANIFEST_FILENAME).to_pylist()
@@ -376,3 +394,276 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     )
     assert resumed.exit_code == 0, resumed.output
     assert tasks == read_tasks(cache / "rl-data/task-selection/fixture/2026.10.23.2" / TRAIN_FILENAME)
+
+
+def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
+    declarations = reasoning_sources() if benchmark == "mmlu" else code_sources()
+    name = "evalchemy-mmlu-pro" if benchmark == "mmlu" else "evalchemy-mbppplus"
+    dataset = next(source.config for source in declarations if source.name == name)
+    assert dataset is not None
+    source_root, fewshot = tmp_path / "questions", tmp_path / "examples"
+    question = {
+        "question": "Panel question",
+        "options": ["1", "2"],
+        "answer": "B",
+        "category": "math",
+        "cot_content": "A: Let's think step by step. The answer is (B).",
+    }
+    inputs = {}
+    files = [
+        (
+            source_root,
+            dataset.recipe.files[0],
+            [
+                (
+                    {**question, "question": f"Panel question {i}"}
+                    if benchmark == "mmlu"
+                    else {
+                        "prompt": f"Write function number_{i} that returns {i}.",
+                        "test_list": [f"assert number_{i}() == {i}"],
+                        "test": f"assert number_{i}() == {i}",
+                        "code": f"EXAMPLE_SENTINEL_{i} = 1",
+                    }
+                )
+                for i in range(6)
+            ],
+        )
+    ]
+    if benchmark == "mmlu":
+        inputs["fewshot"] = str(fewshot)
+        files.append(
+            (
+                fewshot,
+                dataset.recipe.inputs["fewshot"].files[0],
+                [{**question, "question": f"EXAMPLE_SENTINEL_{i}"} for i in range(6)],
+            )
+        )
+    for root, filename, records in files:
+        path = root / filename
+        path.parent.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pylist(records), path)
+    corpus = tmp_path / "general"
+    client = LocalClient()
+    try:
+        with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+            publish_evaluation_corpus(
+                source_recipe(
+                    dataset.recipe,
+                    inputs,
+                    EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="tomli-w==1.2.0\n"
+                    ),
+                ),
+                dataset.protocol.model_copy(update={"expected_population": 6}),
+                dataset.item_builder,
+                context,
+                str(source_root),
+                str(corpus),
+            )
+    finally:
+        client.shutdown()
+    agents = tmp_path / "agents"
+    (agents / "normalize").mkdir(parents=True)
+    (agents / "manifest.json").write_text(json.dumps({"intended_use": "eval"}))
+    fixture = Path(__file__).parents[4] / "lib/taskcompendium/tests/fixtures/nemo/predicted-action.json"
+    tasks = []
+    for index in range(4):
+        data = json.loads(fixture.read_text())
+        data["responses_create_params"]["input"][-1]["content"] = f"Native tool request {index}"
+        raw = RawRow(f"agent-{index}", source_task(f"agent-{index}").source, data)
+        converted = convert_row(raw, convert_tool_call, ConversionContext({}, None))
+        assert isinstance(converted, NormalizedTask)
+        tasks.append(converted.task)
+    pq.write_table(
+        pa.Table.from_pylist([*[{"task_json": task.model_dump_json()} for task in tasks], {"task_json": None}]),
+        agents / "normalize/part-00000.parquet",
+    )
+    exclusions = {}
+    for name in ("training", "development"):
+        path = tmp_path / f"{name}.parquet"
+        pq.write_table(pa.Table.from_pylist([{"task_spec": source_task(name).model_dump_json()}]), path)
+        exclusions[name] = {"uri": str(path), "version": "2026.11.04", "rows": 1, "format": "task_spec"}
+    family = "general" if benchmark == "mmlu" else "coding"
+    return PanelRecipe(
+        name="test-panel",
+        version="2026.11.04",
+        seed=20261104,
+        sources=(
+            {
+                "input": {"uri": str(corpus), "version": "2026.11.04", "rows": 6, "format": "evaluation"},
+                "family": family,
+                "aaii_category": family,
+                "license": "fixture-general",
+                "count": 5,
+            },
+            {
+                "input": {"uri": str(agents), "version": "2026.11.04", "rows": 4, "format": "normalized"},
+                "family": "agents",
+                "aaii_category": "agents",
+                "license": "fixture-agents",
+                "count": 3,
+            },
+        ),
+        fast_counts={family: 2, "agents": 2},
+        **exclusions,
+    )
+
+
+@pytest.mark.parametrize("agent_passed", [0, 6])
+@pytest.mark.parametrize("benchmark,family", [("mmlu", "general"), ("mbpp", "coding")])
+def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evidence(
+    tmp_path, agent_passed, benchmark, family
+):
+    settings = panel_recipe(tmp_path, benchmark)
+    original = [case.task for case in evaluation_cases(settings.sources[0].input.uri)]
+    assert all("EXAMPLE_SENTINEL" in task.context.events[0].content for task in original)
+    provisional = Path(run(panel_step(settings))[0].path)
+    full, fast = read_tasks(provisional / FULL_VALIDATION_FILENAME), read_tasks(provisional / VALIDATION_FILENAME)
+    assert len(full) == 8 and len(fast) == 4
+    assert {task.id for task in fast} < {task.id for task in full}
+    assert all("EXAMPLE_SENTINEL" not in task.context.events[0].content for task in full)
+    annotations = pq.read_table(provisional / TASK_MANIFEST_FILENAME).to_pylist()
+    by_id = {row["task_id"]: row for row in annotations}
+    assert Counter(row["family"] for row in annotations) == {family: 5, "agents": 3}
+    assert Counter(by_id[task.id]["family"] for task in fast) == {family: 2, "agents": 2}
+    assert {row["license"] for row in annotations} == {"fixture-general", "fixture-agents"}
+    assert all(row["source"] and row["grader_kind"] in {"package", "in_process"} for row in annotations)
+    assert all(row["difficulty"] is None for row in annotations)
+    measurements = tmp_path / "pass-rates.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "task_id": task.id,
+                    "model_revision": "fixture-model",
+                    "attempted": 8,
+                    "samples": 8,
+                    "passed": agent_passed if by_id[task.id]["family"] == "agents" else 6,
+                    "mean_score": agent_passed / 8 if by_id[task.id]["family"] == "agents" else 0.75,
+                }
+                for task in full
+            ]
+        ),
+        measurements,
+    )
+    final_recipe = PanelRecipe.model_validate(
+        {
+            **settings.model_dump(),
+            "version": "2026.11.04.1",
+            "pass_rates": {
+                "uri": str(measurements),
+                "version": "2026.11.04",
+                "rows": 8,
+                "model_revision": "fixture-model",
+                "run_output": str(tmp_path / "saved-answer-run"),
+            },
+            "provisional": {
+                "uri": str(provisional / FULL_VALIDATION_FILENAME),
+                "version": "2026.11.04",
+                "rows": 8,
+                "format": "task_spec",
+            },
+        }
+    )
+    final = Path(run(panel_step(final_recipe))[0].path)
+    final_full, final_fast = read_tasks(final / FULL_VALIDATION_FILENAME), read_tasks(final / VALIDATION_FILENAME)
+    if agent_passed:
+        assert final_full == full and final_fast == fast
+    else:
+        assert final_full == [task for task in full if by_id[task.id]["family"] == family]
+        assert len(final_fast) == 4
+    measured = pq.read_table(final / TASK_MANIFEST_FILENAME).to_pylist()
+    assert all(row["difficulty"] == 0.25 and row["attempted"] == row["scored"] == 8 for row in measured)
+    assert all(row["initializer_pass_rate"] == row["initializer_mean_score"] == 0.75 for row in measured)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "judge",
+        "image",
+        "training-id",
+        "training-context",
+        "development-id",
+        "development-context",
+        "missing-rate",
+        "duplicate-rate",
+    ],
+)
+def test_panel_publication_refuses_remote_graders_and_training_or_development_overlap(tmp_path, failure):
+    settings = panel_recipe(tmp_path)
+    if failure.endswith("rate"):
+        provisional = Path(run(panel_step(settings))[0].path)
+        tasks = read_tasks(provisional / FULL_VALIDATION_FILENAME)
+        rows = [
+            {
+                "task_id": task.id,
+                "model_revision": "fixture-model",
+                "attempted": 8,
+                "samples": 8,
+                "passed": 6,
+                "mean_score": 0.75,
+            }
+            for task in tasks
+        ]
+        rows = rows[:-1] if failure == "missing-rate" else [*rows, rows[0]]
+        measurements = tmp_path / "invalid-pass-rates.parquet"
+        pq.write_table(pa.Table.from_pylist(rows), measurements)
+        settings = PanelRecipe.model_validate(
+            {
+                **settings.model_dump(),
+                "version": "2026.11.04.1",
+                "pass_rates": {
+                    "uri": str(measurements),
+                    "version": "2026.11.04",
+                    "rows": 8,
+                    "model_revision": "fixture-model",
+                    "run_output": str(tmp_path / "saved-answer-run"),
+                },
+                "provisional": {
+                    "uri": str(provisional / FULL_VALIDATION_FILENAME),
+                    "version": "2026.11.04",
+                    "rows": 8,
+                    "format": "task_spec",
+                },
+            }
+        )
+        step = panel_step(settings)
+        with pytest.raises(RuntimeError):
+            run(step)
+        assert not (Path(step.path()) / FULL_VALIDATION_FILENAME).exists()
+        assert not (Path(step.path()) / TASK_MANIFEST_FILENAME).exists()
+        return
+    source = settings.sources[1].input
+    path = Path(source.uri) / "normalize/part-00000.parquet"
+    rows = pq.read_table(path).to_pylist()
+    task = TaskSpec.model_validate_json(rows[0]["task_json"])
+    if failure == "judge":
+        task = source_task("judge").model_copy(
+            update={
+                "grader": verifyit_package(JudgeSpec(references=("target",))).grader,
+                "tags": ("eval",),
+            }
+        )
+    elif failure == "image":
+        task = source_task("image").model_copy(update={"tags": ("eval",)})
+    else:
+        name, kind = failure.split("-")
+        excluded = read_tasks(Path(getattr(settings, name).uri))[0]
+        task = task.model_copy(
+            update=(
+                {"id": excluded.id}
+                if kind == "id"
+                else {
+                    "context": excluded.context,
+                    "tags": (*task.tags, "alias"),
+                }
+            )
+        )
+    rows[0] = {"task_json": task.model_dump_json()}
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    step = panel_step(settings)
+    with pytest.raises(RuntimeError):
+        run(step)
+    assert not (Path(step.path()) / FULL_VALIDATION_FILENAME).exists()
+    assert not (Path(step.path()) / TASK_MANIFEST_FILENAME).exists()

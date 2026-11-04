@@ -135,8 +135,8 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin \
 `--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
 The implementation is
 [`inventory.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py).
-It depends on the recipe's admitted source artifacts and a pinned heldout
-Parquet. Selection reads only `final/*.parquet` from training sources whose
+It depends on the recipe's admitted source artifacts and a list of pinned heldout
+inputs. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
@@ -154,11 +154,12 @@ this small recipe selects 100 calendar tasks from two admitted sources:
     "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
   },
   "family_limits": {"calendar": 100},
-  "heldout": {
+  "heldout": [{
     "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
     "version": "2026.10.23.1",
-    "rows": 910
-  },
+    "rows": 910,
+    "format": "historical"
+  }],
   "validation_per_family": 20,
   "seed": 20261023
 }
@@ -209,6 +210,43 @@ environment from an admitted task in their matching training component; their
 private grader resources and command stay attached to each task. The historical
 structural heldout tasks use the shared closure converter. SkyRL chooses rollout
 limits, harnesses and verifier backends when it loads these canonical tasks.
+
+### Independent test panels
+
+`test_panel_step(TestPanelRecipe(...))` publishes an evaluation panel through the
+same ArtifactStep execution API. Each source pins its input, row count and format
+and declares a family, AAII category, license and selection count. The formats are
+`evaluation` for a verified Evalchemy corpus, `normalized` for evaluation-only
+curation output, `task_spec` for canonical parquet, and `historical` for the
+Snowball development input. Normalized row counts count converted tasks; source
+rejections stay in the curation ledger.
+
+Panel tasks must carry the `eval` tag and use an in-process or package grader.
+The publisher refuses image graders, judge services and any task matching the
+pinned training or development inputs by ID, public digest or conversation.
+Sampling is seeded, with explicit source counts and fast-subset family quotas.
+Evalchemy cases use chat answering without benchmark trials or examples:
+MMLU-Pro uses its declared zero-shot context, and MBPP+ uses its public problem
+and tests in one code-writing request. The source graders stay attached.
+
+The artifact contains `full_validation.parquet`, `validation.parquet`,
+`task_manifest.parquet` and `summary.json`. Its manifest records family, category,
+agentic flag, grader kind, source provenance and license. Publish provisional
+membership first, then run qualification and eight-answer initializer evaluation.
+A distinct final version binds `pass_rates` and `provisional` inputs. The
+pass-rate parquet has one row per provisional task with `task_id`,
+`model_revision`, `attempted`, `samples`, `passed` and `mean_score`; every task
+requires eight attempts and at least one scored answer. The final manifest adds
+`difficulty` (one minus mean score), initializer mean and pass rate, and attempted
+and scored counts.
+
+The Agents stand-in stays in the final panel when its aggregate initializer pass
+rate is between 5% and 95%, inclusive. Otherwise the final panel contains the
+other provisional tasks and redistributes the fast quotas among their families.
+Every retained task keeps its measured content; with all strata retained, full
+and fast membership both match the provisional artifact. Qualification receipts
+and coverage gaps belong with the experiment record; `pass_rate_measured` in the
+summary reports the presence of initializer evidence.
 
 ## Dataset-owned invocation
 
