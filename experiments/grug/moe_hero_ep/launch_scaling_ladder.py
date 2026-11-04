@@ -161,12 +161,12 @@ LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, 
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
-# A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
-# interval would spend a large part of the run inside a checkpoint write.
 # The hero keeps a permanent checkpoint every FINAL_DENSE_CHECKPOINT_EVERY steps over its last
 # FINAL_DENSE_CHECKPOINT_STEPS steps.
 FINAL_DENSE_CHECKPOINT_STEPS = 5000
 FINAL_DENSE_CHECKPOINT_EVERY = 500
+# A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
+# interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
 # Rolling resume checkpoints expire this many days after they are written. The live run's newest one
 # is at most RESUME_SAVE_INTERVAL old, so the TTL only deletes checkpoints that replaced runs leave
@@ -299,7 +299,8 @@ def build_ladder_run(
     run_flops = flops_per_example * batch_size * num_steps
 
     # The narrow rungs are short: eval every 5% of the run and keep only the forced final checkpoint.
-    # The d6144 hero is long: eval every 3000 steps and keep a permanent checkpoint every 6000.
+    # The d6144 hero is long: eval every 3000 steps and keep a permanent checkpoint every 6000, densified
+    # to every FINAL_DENSE_CHECKPOINT_EVERY steps over the final FINAL_DENSE_CHECKPOINT_STEPS.
     # `keep_permanent=None` still writes the final checkpoint; restore is not used (see run_grug).
     if size == "d6144":
         steps_per_eval = 3000

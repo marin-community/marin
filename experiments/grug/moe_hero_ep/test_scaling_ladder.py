@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
 import optax
 import pytest
+from levanter.checkpoint import Checkpointer, CheckpointInterval
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
@@ -200,13 +202,9 @@ def test_scaling_ladder_keeps_hero_checkpoints_separate_from_shared_scratch(monk
 
 
 def _permanent_steps(keep: list[dict[str, int | None]], steps: range) -> list[int]:
-    """The steps Levanter keeps permanently: the first `until` range covering a step sets its interval."""
-    kept = []
-    for step in steps:
-        every = next(p["every"] for p in keep if p["until"] is None or p["until"] >= step)
-        if step % every == 0:
-            kept.append(step)
-    return kept
+    """The steps a Levanter checkpointer built from ``keep`` saves permanently."""
+    policies = SimpleNamespace(step_policies=[CheckpointInterval(**k) for k in keep])
+    return [step for step in steps if step % Checkpointer._get_current_step_save_interval(policies, step) == 0]
 
 
 def test_d6144_permanent_checkpoints_pin_55000_and_densify_over_the_final_5000_steps():
