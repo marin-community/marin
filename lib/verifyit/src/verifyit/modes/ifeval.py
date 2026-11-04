@@ -122,7 +122,8 @@ SECTION_MARKER_LEAD = MARKDOWN_LEAD + "\"'\u201c\u2018([{\u00ab\u300c\u300e\uff0
 CONSTRAINED_RESPONSES = ("My answer is yes.", "My answer is no.", "My answer is maybe.")
 # Exactly six asterisks; a longer run is not the separator.
 TWO_RESPONSE_SEPARATOR = re.compile(r"(?<!\*)\*{6}(?!\*)")
-# Full stop, fullwidth and small full stops, one- and two-dot leaders, and the ellipsis "…".
+# The prompt shows "." and calls it a dot: that mark, its fullwidth and small forms, the one- and two-dot leaders and
+# the ellipsis "…". The full stops of other scripts, such as the hollow U+3002, are different marks.
 DOTS = ".\uff0e\ufe52\u2024\u2025\u2026"
 # Markdown emphasis or straight double quotes around the whole answer, as in "**My answer is yes.**".
 ANSWER_WRAPPING = re.compile(r'^(\*{1,2}|")(.*)\1$', re.DOTALL)

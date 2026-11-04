@@ -543,6 +543,12 @@ CASES = [
         "Wait\u2025",
     ),
     (
+        "punctuation:punctuation_dot",
+        {},
+        "\u4f60\u597d\u3002",
+        "\u4f60\u597d.",
+    ),
+    (
         "length_constraints:number_words",
         {"relation": "less than", "num_words": 2},
         "क्\u200dष",
