@@ -13,7 +13,7 @@ mod provider;
 mod remote;
 
 pub use admission::QueryCacheAdmission;
-pub use cached::CachedObjectStore;
+pub use cached::{CachePins, CachedObjectStore};
 pub use legacy::LegacyObjectStore;
 pub use provider::is_remote_object_store;
 pub use remote::{build_remote_object_store, RemoteObjectStore};
@@ -282,11 +282,11 @@ pub trait ObjectStore: Send + Sync {
         Ok(None)
     }
 
-    /// Keep a cached file readable until this scan's admission state is dropped.
+    /// Keep a cached file readable until the supplied pin set is dropped.
     async fn pin_cached_path(
         &self,
         reference: &ObjectReference,
-        _query: &QueryCacheAdmission,
+        _pins: &CachePins,
     ) -> Result<Option<PathBuf>, StatsError> {
         self.cached_path(reference).await
     }
@@ -298,7 +298,7 @@ pub trait ObjectStore: Send + Sync {
         reference: &ObjectReference,
         query: &QueryCacheAdmission,
     ) -> Result<ScanSource, StatsError> {
-        if let Some(path) = self.pin_cached_path(reference, query).await? {
+        if let Some(path) = self.pin_cached_path(reference, &query.pins).await? {
             return Ok(ScanSource::Local(path));
         }
         if let Some(url) = self.remote_scan_url(&reference.id) {

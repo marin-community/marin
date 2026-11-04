@@ -35,6 +35,12 @@ use super::local_file::atomic_write;
 /// Concurrent cache-miss downloads across every caller of this store.
 pub(crate) const MAX_PARALLEL_FETCHES: usize = 8;
 
+/// Files kept resident for a read, independent of query warming policy.
+#[derive(Default)]
+pub struct CachePins {
+    files: Mutex<HashMap<PathBuf, CacheFilePin>>,
+}
+
 const MAX_PARALLEL_UPLOADS: usize = 8;
 
 /// Yield between batches of filesystem removals.
@@ -542,7 +548,7 @@ impl ObjectStore for CachedObjectStore {
     async fn pin_cached_path(
         &self,
         reference: &ObjectReference,
-        query: &QueryCacheAdmission,
+        pins: &CachePins,
     ) -> Result<Option<PathBuf>, StatsError> {
         let cache = self.cache.clone();
         let reference = reference.clone();
@@ -559,7 +565,11 @@ impl ObjectStore for CachedObjectStore {
             return Ok(None);
         };
         let path = pin.path.clone();
-        query.pin_file(path.clone(), pin);
+        pins.files
+            .lock()
+            .unwrap()
+            .entry(path.clone())
+            .or_insert(pin);
         Ok(Some(path))
     }
 

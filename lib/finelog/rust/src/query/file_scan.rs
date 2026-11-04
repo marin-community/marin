@@ -19,7 +19,7 @@ use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 
 use crate::errors::StatsError;
-use crate::store::object_store::{ObjectReference, ObjectStore, QueryCacheAdmission};
+use crate::store::object_store::{CachePins, ObjectReference, ObjectStore};
 
 /// Fetch the usual object footer in one ranged read, with a second request
 /// when the metadata exceeds this hint.
@@ -55,7 +55,7 @@ pub async fn open_cached_parquet(
     store: Arc<dyn ObjectStore>,
     reference: &ObjectReference,
 ) -> Result<ParquetInput, StatsError> {
-    let guard = Arc::new(QueryCacheAdmission::new(0, 0));
+    let guard = CachePins::default();
     let cached = store.pin_cached_path(reference, &guard).await?.is_some();
     let reader = super::object_reader::ObjectRangeReader::new(store, reference.clone());
     let builder =
@@ -70,7 +70,7 @@ pub async fn open_cached_parquet(
 
 pub struct ParquetInput {
     builder: ParquetRecordBatchStreamBuilder<Box<dyn AsyncFileReader>>,
-    cache_guard: Option<Arc<QueryCacheAdmission>>,
+    cache_guard: Option<CachePins>,
 }
 
 impl ParquetInput {

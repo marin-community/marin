@@ -371,9 +371,9 @@ impl ObjectStore for FaultInjectingObjectStore {
     async fn pin_cached_path(
         &self,
         reference: &ObjectReference,
-        query: &crate::store::object_store::QueryCacheAdmission,
+        pins: &crate::store::object_store::CachePins,
     ) -> Result<Option<PathBuf>, StatsError> {
-        self.inner.pin_cached_path(reference, query).await
+        self.inner.pin_cached_path(reference, pins).await
     }
 
     async fn compare_and_swap(

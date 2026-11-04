@@ -2,13 +2,12 @@
 //! bypass this policy because their local files are part of the storage contract.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::task::AbortHandle;
 
-use super::cached::CacheFilePin;
+use super::cached::CachePins;
 use super::{ObjectId, ObjectReference};
 
 const QUERY_WARM_BYTES: u64 = 256 * 1024 * 1024;
@@ -28,7 +27,7 @@ pub(super) enum AdmissionDecision {
 /// Shared by every table and scan in one query's SessionConfig.
 pub struct QueryCacheAdmission {
     state: Mutex<QueryBudget>,
-    pins: Mutex<HashMap<PathBuf, CacheFilePin>>,
+    pub(super) pins: CachePins,
     fills: Mutex<Option<Vec<AbortHandle>>>,
 }
 
@@ -54,7 +53,7 @@ impl QueryCacheAdmission {
                 remaining_objects: objects,
                 fill_deadline: None,
             }),
-            pins: Mutex::new(HashMap::new()),
+            pins: CachePins::default(),
             fills: Mutex::new(Some(Vec::new())),
         }
     }
@@ -85,10 +84,6 @@ impl QueryCacheAdmission {
         budget.remaining_objects -= 1;
         budget.remaining_bytes -= reference.version.byte_size;
         AdmissionDecision::Admitted
-    }
-
-    pub(super) fn pin_file(&self, path: PathBuf, pin: CacheFilePin) {
-        self.pins.lock().unwrap().entry(path).or_insert(pin);
     }
 
     pub(super) fn track_fill(&self, task: AbortHandle) {
