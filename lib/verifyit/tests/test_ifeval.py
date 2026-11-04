@@ -76,6 +76,18 @@ CASES = [
         "Everything here shouts.",
     ),
     (
+        "change_case:english_lowercase",
+        {},
+        "we spent a week in hawai\u02bbi.",
+        "We spent a week in Hawai\u02bbi.",
+    ),
+    (
+        "change_case:english_capital",
+        {},
+        "DON\u02bcT WORRY ABOUT IT.",
+        "Don\u02bct worry about it.",
+    ),
+    (
         "punctuation:no_comma",
         {},
         "No commas appear anywhere in this reply.",

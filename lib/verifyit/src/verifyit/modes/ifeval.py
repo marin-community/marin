@@ -490,9 +490,15 @@ def start_end(text: str, params: dict) -> tuple[bool, str]:
 # === change_case ============================================================
 
 
+def case_letters(text: str) -> list[str]:
+    """The letters of the text except modifier letters, such as the Hawaiian okina, which have no case."""
+    return [c for c in text if c.isalpha() and unicodedata.category(c) != "Lm"]
+
+
 @constraint("change_case:english_capital")
 def english_capital(text: str, params: dict) -> tuple[bool, str]:
-    letters = [c for c in text if c.isalpha()]
+    """Only the letter case; the prompt also asks for English, which this check does not look at."""
+    letters = case_letters(text)
     if not letters:
         return False, "no letters"
     passed = all(c.isupper() for c in letters)
@@ -501,7 +507,8 @@ def english_capital(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("change_case:english_lowercase")
 def english_lowercase(text: str, params: dict) -> tuple[bool, str]:
-    letters = [c for c in text if c.isalpha()]
+    """Only the letter case; the prompt also asks for English, which this check does not look at."""
+    letters = case_letters(text)
     if not letters:
         return False, "no letters"
     passed = all(c.islower() for c in letters)
