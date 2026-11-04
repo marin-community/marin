@@ -120,6 +120,12 @@ class Stream:
         with torch.no_grad():
             return self._run(version)
 
+    def verify(self, version: int):
+        # The replay implementation also imports Stream for its transport API.
+        from skyrl_train.weight_sync.expert_block.verify_weights import replay
+
+        return replay(self, version)
+
     def _sync_device(self) -> None:
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
@@ -159,6 +165,11 @@ class Stream:
         dist.broadcast(tensor, src=members.index(origin), group=self.groups[local_name])
         return item.source.nbytes
 
+    def install(self, item, landing: Landing, tensor: torch.Tensor) -> None:
+        """Install a received matrix or slice, converting the BF16 router to FP32."""
+        if not landing.direct:
+            landing.installed.copy_(tensor)
+
     def _run(self, version: int) -> InstallReport:
         self._sync_device()
         started = time.perf_counter()
@@ -173,8 +184,7 @@ class Stream:
             else:
                 tensor = self.wire_tensor(landing)
                 wire_bytes += self.receive(item, tensor)
-                if not landing.direct:
-                    landing.installed.copy_(tensor)
+                self.install(item, landing, tensor)
             if isinstance(item, ExpertBroadcast):
                 matrices += 1
         self._sync_device()
@@ -198,7 +208,15 @@ class Stream:
         return None
 
 
-def bind(participant: int, plan: Schedule, rendezvous: Rendezvous, device: torch.device, **tensors) -> tuple:
+def bind(
+    participant: int,
+    plan: Schedule,
+    rendezvous: Rendezvous,
+    device: torch.device,
+    *,
+    stream_class: type[Stream] = Stream,
+    **tensors,
+) -> tuple:
     """Create and warm this participant's groups and build its ``Stream``.
 
     ``tensors`` are this side's ``Stream`` keyword arguments. If anything fails, the groups already
@@ -207,7 +225,7 @@ def bind(participant: int, plan: Schedule, rendezvous: Rendezvous, device: torch
     groups = create_groups(participant, plan.groups, rendezvous)
     try:
         warm = warm_groups(participant, plan.groups, groups, device)
-        stream = Stream(participant, plan, groups, device=device, **tensors)
+        stream = stream_class(participant, plan, groups, device=device, **tensors)
     except BaseException:
         destroy_groups(groups)
         raise

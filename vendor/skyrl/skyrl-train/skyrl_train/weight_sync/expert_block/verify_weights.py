@@ -24,9 +24,23 @@ class ReplayReport:
     compared_bytes: int
     parameter_bytes: int
     mismatched_bytes: int
+    quantized_bytes: int = 0
 
 
 REPLAY_COMPARE_CHUNK_BYTES = 16 << 20
+
+
+def mismatched_bytes(actual: torch.Tensor, expected: torch.Tensor, chunk_bytes: int) -> torch.Tensor:
+    """Count differing bytes without expanding a whole tensor to int64."""
+    if actual.shape != expected.shape or actual.dtype != expected.dtype:
+        raise ValueError("Replay tensors differ in shape or dtype")
+    actual_bytes = actual.detach().contiguous().view(-1).view(torch.uint8)
+    expected_bytes = expected.detach().contiguous().view(-1).view(torch.uint8)
+    mismatched = torch.zeros((), dtype=torch.int64, device=actual.device)
+    for start in range(0, actual_bytes.numel(), chunk_bytes):
+        count = min(chunk_bytes, actual_bytes.numel() - start)
+        mismatched.add_(actual_bytes.narrow(0, start, count).ne(expected_bytes.narrow(0, start, count)).sum())
+    return mismatched
 
 
 def replay(stream: Stream, version: int, *, chunk_bytes: int = REPLAY_COMPARE_CHUNK_BYTES) -> ReplayReport:
@@ -52,13 +66,9 @@ def _replay(stream: Stream, version: int, chunk_bytes: int) -> ReplayReport:
         stream.receive(item, wire)
         # The router weight is stored as FP32; compare it in its wire dtype.
         installed = landing.installed.to(landing.wire_dtype)
-        wire_bytes = wire.view(-1).view(torch.uint8)
-        installed_bytes = installed.view(-1).view(torch.uint8)
         # Summing bool bytes can materialize an int64 input. A vocabulary tensor
         # otherwise needs eight times its byte size in additional GPU memory.
-        for start in range(0, landing.nbytes, chunk_bytes):
-            count = min(chunk_bytes, landing.nbytes - start)
-            mismatched.add_(wire_bytes.narrow(0, start, count).ne(installed_bytes.narrow(0, start, count)).sum())
+        mismatched.add_(mismatched_bytes(wire, installed, chunk_bytes))
         compared += landing.nbytes
     parameter_bytes = 0
     if not stream.trainer:
