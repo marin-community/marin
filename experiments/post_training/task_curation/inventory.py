@@ -198,6 +198,16 @@ class TestPanelConfig:
 
 
 @dataclass(frozen=True)
+class PanelRate:
+    task_id: str
+    model_revision: str
+    attempted: int
+    samples: int
+    passed: int
+    mean_score: float
+
+
+@dataclass(frozen=True)
 class Candidate:
     task_id: str
     task_json: str
@@ -546,24 +556,24 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
     )
 
 
-def _panel_measurements(measurement: PanelMeasurement | None) -> dict[str, dict[str, Any]]:
+def _panel_measurements(measurement: PanelMeasurement | None) -> dict[str, PanelRate]:
     if measurement is None:
         return {}
     with StoragePath(measurement.uri).open("rb") as stream:
-        rows = pq.read_table(stream).to_pylist()
-    by_id = {row["task_id"]: row for row in rows}
+        rows = [PanelRate(**row) for row in pq.read_table(stream).to_pylist()]
+    by_id = {row.task_id: row for row in rows}
     if len(by_id) != len(rows) or len(rows) != measurement.rows:
         raise ValueError("Panel pass-rate rows must have unique task IDs and the declared population")
     for row in rows:
         if (
-            row["attempted"] != 8
-            or not 0 < row["samples"] <= row["attempted"]
-            or not 0 <= row["passed"] <= row["samples"]
-            or not math.isfinite(row["mean_score"])
-            or not 0 <= row["mean_score"] <= 1
-            or row["model_revision"] != measurement.model_revision
+            row.attempted != 8
+            or not 0 < row.samples <= row.attempted
+            or not 0 <= row.passed <= row.samples
+            or not math.isfinite(row.mean_score)
+            or not 0 <= row.mean_score <= 1
+            or row.model_revision != measurement.model_revision
         ):
-            raise ValueError(f"Panel pass-rate evidence is incomplete: {row['task_id']}")
+            raise ValueError(f"Panel pass-rate evidence is incomplete: {row.task_id}")
     return by_id
 
 
@@ -631,7 +641,7 @@ def prepare_test_panel(config: TestPanelConfig) -> None:
     if rates and rates.keys() != selected_ids:
         raise ValueError("Pass-rate evidence must join every provisional panel task exactly once")
     agents = [rates[task.id] for task, source in selected if source.aaii_category == "agents" and rates]
-    agent_pass_rate = sum(row["passed"] for row in agents) / sum(row["samples"] for row in agents) if agents else None
+    agent_pass_rate = sum(row.passed for row in agents) / sum(row.samples for row in agents) if agents else None
     if agent_pass_rate is not None and not 0.05 <= agent_pass_rate <= 0.95:
         selected = [(task, source) for task, source in selected if source.aaii_category != "agents"]
     selected.sort(key=lambda entry: entry[0].id)
@@ -684,11 +694,11 @@ def prepare_test_panel(config: TestPanelConfig) -> None:
                 "part": source.name,
                 "source": task.source.model_dump_json(),
                 "license": source.license,
-                "difficulty": None if rate is None else 1 - rate["mean_score"],
-                "initializer_mean_score": None if rate is None else rate["mean_score"],
-                "initializer_pass_rate": None if rate is None else rate["passed"] / rate["samples"],
-                "attempted": None if rate is None else rate["attempted"],
-                "scored": None if rate is None else rate["samples"],
+                "difficulty": None if rate is None else 1 - rate.mean_score,
+                "initializer_mean_score": None if rate is None else rate.mean_score,
+                "initializer_pass_rate": None if rate is None else rate.passed / rate.samples,
+                "attempted": None if rate is None else rate.attempted,
+                "scored": None if rate is None else rate.samples,
             }
         )
     schema = pa.schema(
