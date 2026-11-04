@@ -1098,10 +1098,10 @@ mod tests {
             ];
             for query in &queries {
                 if warm_small_first {
-                    store.warm_query(&small, &query);
+                    store.warm_query(&small, query);
                 }
-                store.warm_query(&large, &query);
-                store.warm_query(&tail, &query);
+                store.warm_query(&large, query);
+                store.warm_query(&tail, query);
             }
             let _drained = store
                 .fetches

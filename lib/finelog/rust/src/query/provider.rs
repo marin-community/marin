@@ -620,19 +620,6 @@ impl TableProvider for NamespaceProvider {
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
                 let integer_ranges = crate::query::predicate::int_column_ranges(filters);
                 let admission = state.config().get_extension::<QueryCacheAdmission>();
-                if self.segment_indexes_enabled
-                    && (!needles.is_empty()
-                        || !crate::query::exact_prune::values_by_column(filters).is_empty())
-                {
-                    if let Some(sources) = &self.object_sources {
-                        let admission = admission.as_ref().ok_or_else(|| {
-                            datafusion::error::DataFusionError::Internal(
-                                "query cache admission is missing from SessionConfig".into(),
-                            )
-                        })?;
-                        sources.prepare_indexes(&segment_paths, admission).await?;
-                    }
-                }
                 if self.segment_indexes_enabled && !needles.is_empty() && !integer_ranges.is_empty()
                 {
                     segment_paths = tokio::task::spawn_blocking(move || {
@@ -658,6 +645,19 @@ impl TableProvider for NamespaceProvider {
                             "Parquet range prune task join: {error}"
                         ))
                     })?;
+                }
+                if self.segment_indexes_enabled
+                    && (!needles.is_empty()
+                        || !crate::query::exact_prune::values_by_column(filters).is_empty())
+                {
+                    if let Some(sources) = &self.object_sources {
+                        let admission = admission.as_ref().ok_or_else(|| {
+                            datafusion::error::DataFusionError::Internal(
+                                "query cache admission is missing from SessionConfig".into(),
+                            )
+                        })?;
+                        sources.prepare_indexes(&segment_paths, admission).await?;
+                    }
                 }
                 let mut trigram_pruning = None;
                 if self.segment_indexes_enabled && !needles.is_empty() {
@@ -2167,6 +2167,7 @@ mod tests {
             .unwrap()
             .unwrap(),
         );
+        let remote = crate::test_support::FaultInjectingObjectStore::new(remote);
         let bundle_id = ObjectId::table("logs", "indices/one.fidx").unwrap();
         let bundle_version = remote
             .write(&bundle_id, bundle_bytes.clone())
@@ -2187,8 +2188,12 @@ mod tests {
         // A missing remote source makes any attempt to plan it fail. Its index
         // proves that this predicate needs none of its rows.
         let store = Arc::new(
-            crate::store::object_store::CachedObjectStore::new(remote, dir.join("cache"), None)
-                .unwrap(),
+            crate::store::object_store::CachedObjectStore::new(
+                remote.clone(),
+                dir.join("cache"),
+                None,
+            )
+            .unwrap(),
         );
         let planned = store
             .planned_local_path(&source.id)
@@ -2206,16 +2211,16 @@ mod tests {
             planned.clone(),
             crate::store::table_state::LocalArtifacts {
                 binding: binding.clone(),
-                bundle: Some(planned_bundle),
+                bundle: Some(planned_bundle.clone()),
                 projections: BTreeMap::new(),
             },
         )]))
         .with_object_sources(
-            store,
+            store.clone(),
             BTreeMap::from([(
                 planned,
                 crate::store::table::query_view::SegmentObjects {
-                    source,
+                    source: source.clone(),
                     artifacts: crate::store::table_state::ArtifactReferences {
                         binding,
                         bundle: Some(bundle_ref),
@@ -2232,9 +2237,36 @@ mod tests {
             )));
         let ctx = datafusion::prelude::SessionContext::new_with_config(config);
         crate::query::udf::register_scalar_udfs(&ctx);
-        ctx.register_table("logs", Arc::new(provider)).unwrap();
+        let provider = Arc::new(provider);
+        ctx.register_table("logs", provider.clone()).unwrap();
         let rows = ctx.sql("SELECT * FROM logs WHERE contains(data, 'model cache') OR contains(data, 'download complete')").await.unwrap().collect().await.unwrap();
         assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        drop(ctx);
+        store
+            .write(
+                &source.id,
+                bytes::Bytes::from(std::fs::read(&path).unwrap()),
+            )
+            .await
+            .unwrap();
+        std::fs::remove_file(planned_bundle).unwrap();
+        remote.clear_calls();
+        let ctx = crate::query::make_ctx();
+        ctx.register_table("logs", provider).unwrap();
+        let rows = ctx
+            .sql("SELECT * FROM logs WHERE seq > 100000 AND contains(data, 'model cache')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        assert!(
+            remote
+                .keys_for(crate::test_support::ObjectOp::Read)
+                .is_empty(),
+            "cached source bounds must exclude the segment before downloading its index"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
