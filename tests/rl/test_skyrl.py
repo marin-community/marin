@@ -22,6 +22,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
+    InferenceEngineBackend,
     IrisSkyRLExecution,
     MegatronGeometry,
     SkyRLRetentionPolicy,
@@ -196,6 +197,7 @@ def _role_plan() -> SkyRLRolePlan:
         policy_num_nodes=1,
         policy_num_gpus_per_node=4,
         num_inference_engines=4,
+        inference_engine_backend=InferenceEngineBackend.RAY,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=1,
@@ -371,7 +373,7 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
         "megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 8}
     }
     recipe["trainer"]["ref"] = {"megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 16}}
-    with pytest.raises(ValueError, match=r"Megatron ref has 16 GPUs.*data-parallel size by EP"):
+    with pytest.raises(ValueError, match=r"Megatron ref has 16 GPUs.*ETP\*EP\*PP"):
         dataclasses.replace(_spec(), topology=topology, config_yaml=yaml.safe_dump(recipe))
     recipe["trainer"]["ref"]["megatron_config"]["expert_model_parallel_size"] = 8
     spec = dataclasses.replace(
@@ -739,10 +741,78 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
 
 def test_megatron_geometry_rejects_incomplete_expert_groups() -> None:
     geometry = MegatronGeometry(1, 2, 1, 8, 1)
-    with pytest.raises(
-        ValueError, match=r"Megatron policy has 8 GPUs.*TP=1, PP=2, CP=1, EP=8.*data-parallel size by EP"
-    ):
+    with pytest.raises(ValueError, match=r"Megatron policy has 8 GPUs.*TP=1, PP=2, CP=1, EP=8.*ETP\*EP\*PP"):
         validate_megatron_geometry(geometry, role="policy", num_gpus=8)
+
+
+@pytest.mark.parametrize(
+    ("num_gpus", "geometry"),
+    [
+        (128, MegatronGeometry(1, 16, 2, 8, 1)),
+        (192, MegatronGeometry(1, 24, 4, 8, 1)),
+        (192, MegatronGeometry(1, 48, 4, 4, 1)),
+    ],
+)
+def test_megatron_geometry_accepts_historical_hero_context_and_expert_grids(
+    num_gpus: int, geometry: MegatronGeometry
+) -> None:
+    # These real Hero layouts must pass preflight: expert groups include CP ranks,
+    # so EP need not divide the dense data-parallel size.
+    validate_megatron_geometry(geometry, role="policy", num_gpus=num_gpus)
+
+
+def test_megatron_geometry_includes_expert_tensor_parallelism() -> None:
+    with pytest.raises(ValueError, match=r"ETP\*EP\*PP"):
+        validate_megatron_geometry(MegatronGeometry(1, 2, 1, 2, 4), role="policy", num_gpus=8)
+
+
+@pytest.mark.parametrize(
+    ("backend", "engines", "tp", "dp", "expected_nodes"),
+    [
+        (InferenceEngineBackend.MULTIPROCESSING, 1, 1, 24, 19),
+        (InferenceEngineBackend.MULTIPROCESSING, 2, 3, 3, 19),
+        (InferenceEngineBackend.RAY, 3, 3, 1, 18),
+    ],
+)
+def test_skyrl_launch_accounts_for_inference_placement_atoms(
+    backend: InferenceEngineBackend, engines: int, tp: int, dp: int, expected_nodes: int
+) -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=16,
+        policy_num_gpus_per_node=8,
+        num_inference_engines=engines,
+        inference_engine_backend=backend,
+        inference_engine_tensor_parallel_size=tp,
+        inference_engine_data_parallel_size=dp,
+    )
+    topology = SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    spec = dataclasses.replace(_spec(), topology=topology)
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+
+    assert launch["iris"]["allocation"]["num_nodes"] == expected_nodes
+    assert launch["skyrl"]["generator"]["inference_engine_mp_backend"] is (
+        backend is InferenceEngineBackend.MULTIPROCESSING
+    )
+    # The second case needs three nodes despite claiming only 18 serving GPUs:
+    # each three-GPU TP group is node-atomic and leaves two GPUs unused per node.
+    with pytest.raises(ValueError, match="core role plan exceeds the allocated topology"):
+        dataclasses.replace(topology, num_nodes=expected_nodes - 1)
+
+
+def test_skyrl_ray_engine_still_requires_one_node() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_gpus_per_node=8,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=24,
+    )
+    with pytest.raises(ValueError, match="ray placement group must fit on one node"):
+        SkyRLTopology(num_nodes=4, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
 
 def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:

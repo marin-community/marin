@@ -125,6 +125,7 @@ field is required:
 
 - policy node and per-node GPU counts;
 - inference engine count;
+- inference backend (`InferenceEngineBackend.RAY` or `MULTIPROCESSING`);
 - tensor, pipeline, data, and expert parallel sizes;
 - train, policy mini-batch, and per-GPU micro-batch sizes;
 - samples per prompt and whether roles are colocated.
@@ -140,7 +141,11 @@ engine slice = tensor parallel * pipeline parallel
 engine ranks = engine slice * data parallel
 ```
 
-For disaggregated roles, one engine's ranks must fit within one node. For colocated roles, each
+For disaggregated roles, the Ray backend packs each entire engine within one node.
+The multiprocessing backend packs individual TP-by-PP groups; an engine's DP ranks can span nodes.
+Set `SkyRLRolePlan.inference_engine_backend` to `InferenceEngineBackend.MULTIPROCESSING` for that
+placement. Marin renders `generator.inference_engine_mp_backend=true` from the plan and rejects
+a conflicting recipe value. Each TP-by-PP group must still fit on one node. For colocated roles, each
 TP-by-PP slice must fit within and divide a policy node; DP replicas occupy separate slices. Expert
 parallel size must divide `tensor parallel * data parallel`; pipeline stages form separate expert
 groups. Total planned GPUs are:
@@ -153,15 +158,21 @@ separate roles: policy GPUs + rollout GPUs
 colocated roles: policy GPUs, which must equal rollout GPUs
 ```
 
-That total must equal `num_nodes * gpus_per_node`. For example, four 8-GPU policy nodes plus four
-node-sized rollout engines require 64 GPUs. Leaving rollout DP at one describes only 36 GPUs and is
-rejected during graph construction.
+`role_plan.num_nodes` includes policy, separate reference, and packed rollout nodes. Packing can
+leave GPUs unused when a placement group does not divide the node width; those gaps still consume
+allocated nodes. For example, a single TP1/PP1/DP24 multiprocessing engine occupies three 8-GPU nodes.
+Two engines with TP3/PP1/DP3 need three nodes: each node fits only two three-GPU groups. A Ray-backed
+TP1/PP1/DP24 engine is rejected because its whole engine cannot fit on one node. Additional teacher
+or draft roles are checked by the vendored runtime against the complete allocation.
 
 The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
 rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
 setting. For every launcher, preflight checks policy and reference Megatron parallelism against
-the GPUs assigned to each role.
+the GPUs assigned to each role. Megatron has separate dense and expert grids: the role GPU count
+must be divisible by both `TP * PP * CP` and `ETP * EP * PP`. Expert groups include ranks that belong
+to different dense context shards, so EP need not divide dense data parallelism. The historical
+192-GPU Hero layouts PP24/CP4/EP8 and PP48/CP4/EP4 both satisfy these rules at TP1/ETP1.
 
 ## Artifact and runtime boundaries
 
@@ -225,3 +236,4 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 
 For the current curation, training and evaluation recipe, see the
 [quick RL loop](../recipes/quick-rl-loop.md).
+For the bounded Hero probe and four-update recipe, see [Hero RL qualification](../recipes/hero-rl.md).

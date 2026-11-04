@@ -68,15 +68,24 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
     pp = geometry.pipeline_model_parallel_size
     cp = geometry.context_parallel_size
     ep = geometry.expert_model_parallel_size
-    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}"
-    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep)):
+    etp = geometry.expert_tensor_parallel_size
+    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}, ETP={etp}"
+    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep, etp)):
         raise ValueError(f"Megatron {role} has {num_gpus} GPUs with {sizes}; parallel sizes must be positive integers")
-    model_parallel = tp * pp * cp
-    if num_gpus % model_parallel or (num_gpus // model_parallel) % ep:
+    # Megatron builds separate dense (TP, CP, DP, PP) and expert
+    # (ETP, EP, expert-DP, PP) grids. CP ranks also participate in the expert grid.
+    if num_gpus % (tp * pp * cp) or num_gpus % (etp * ep * pp):
         raise ValueError(
             f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
-            "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
+            "GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
         )
+
+
+class InferenceEngineBackend(StrEnum):
+    """Ray packs whole engines; multiprocessing packs individual DP rank groups."""
+
+    RAY = "ray"
+    MULTIPROCESSING = "mp"
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,7 @@ class SkyRLRolePlan:
     policy_num_nodes: int
     policy_num_gpus_per_node: int
     num_inference_engines: int
+    inference_engine_backend: InferenceEngineBackend
     inference_engine_tensor_parallel_size: int
     inference_engine_pipeline_parallel_size: int
     inference_engine_data_parallel_size: int
@@ -110,15 +120,17 @@ class SkyRLRolePlan:
     def num_nodes(self) -> int:
         if self.colocate_all:
             return self.policy_num_nodes
-        engine_gpus = (
-            self.inference_engine_tensor_parallel_size
-            * self.inference_engine_pipeline_parallel_size
-            * self.inference_engine_data_parallel_size
-        )
-        engines_per_node = self.policy_num_gpus_per_node // engine_gpus
-        if not engines_per_node:
-            raise ValueError("each SkyRL inference engine must fit on one node")
-        rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
+        rank_gpus = self.inference_engine_tensor_parallel_size * self.inference_engine_pipeline_parallel_size
+        if self.inference_engine_backend is InferenceEngineBackend.MULTIPROCESSING:
+            atoms = self.num_inference_engines * self.inference_engine_data_parallel_size
+            atom_gpus = rank_gpus
+        else:
+            atoms = self.num_inference_engines
+            atom_gpus = rank_gpus * self.inference_engine_data_parallel_size
+        atoms_per_node = self.policy_num_gpus_per_node // atom_gpus
+        if not atoms_per_node:
+            raise ValueError(f"each SkyRL {self.inference_engine_backend} placement group must fit on one node")
+        rollout_nodes = (atoms + atoms_per_node - 1) // atoms_per_node
         return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
 
 
@@ -164,16 +176,17 @@ class SkyRLTopology:
             raise ValueError("SkyRL reference_num_nodes must be positive")
 
         tensor_pipeline_gpus = plan.inference_engine_tensor_parallel_size * plan.inference_engine_pipeline_parallel_size
-        engine_gpus = tensor_pipeline_gpus * plan.inference_engine_data_parallel_size
+        if plan.colocate_all and plan.inference_engine_backend is InferenceEngineBackend.MULTIPROCESSING:
+            raise ValueError("SkyRL multiprocessing inference requires non-colocated roles")
         if plan.colocate_all and self.gpus_per_node % tensor_pipeline_gpus:
             raise ValueError(
                 "each colocated SkyRL inference engine TP*PP slice must divide gpus_per_node; "
                 f"got TP*PP={tensor_pipeline_gpus} and gpus_per_node={self.gpus_per_node}"
             )
-        if not plan.colocate_all and engine_gpus > self.gpus_per_node:
+        if not plan.colocate_all and plan.num_nodes > self.num_nodes:
             raise ValueError(
-                "each SkyRL inference engine must fit on one node, but "
-                f"TP*PP*DP={engine_gpus} exceeds gpus_per_node={self.gpus_per_node}"
+                "SkyRL core role plan exceeds the allocated topology: "
+                f"placement requires {plan.num_nodes} nodes, topology has {self.num_nodes}"
             )
         expert_group_gpus = plan.inference_engine_tensor_parallel_size * plan.inference_engine_data_parallel_size
         if expert_group_gpus % plan.inference_engine_expert_parallel_size:
@@ -509,6 +522,9 @@ def _role_plan_config_values(role_plan: SkyRLRolePlan) -> dict[str, object]:
         "trainer.policy_mini_batch_size": role_plan.policy_mini_batch_size,
         "trainer.micro_train_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
         "generator.num_inference_engines": role_plan.num_inference_engines,
+        "generator.inference_engine_mp_backend": (
+            role_plan.inference_engine_backend is InferenceEngineBackend.MULTIPROCESSING
+        ),
         "generator.inference_engine_tensor_parallel_size": role_plan.inference_engine_tensor_parallel_size,
         "generator.inference_engine_pipeline_parallel_size": role_plan.inference_engine_pipeline_parallel_size,
         "generator.inference_engine_data_parallel_size": role_plan.inference_engine_data_parallel_size,

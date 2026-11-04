@@ -62,6 +62,11 @@ UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
   "${runtime_extras[@]}"
 
 python="$environment/bin/python"
+if [[ "$profile" == megatron ]]; then
+  "$python" "$project_root/../../experiments/post_training/hero_rl/piecewise_runtime.py" \
+    --workspace "$project_root/../.." \
+    --receipt "${IRIS_OUTPUT_DIR:?}/hero-piecewise-runtime.json"
+fi
 "$python" "$project_root/marinskyrl/environment_contract.py" write-frozen-cuda-runtime "$runtime_file"
 # Native JITs invoke tools such as ninja by name after bootstrap completes.
 printf 'export PATH=%q${PATH:+:$PATH}\n' "$environment/bin" >> "$runtime_file"

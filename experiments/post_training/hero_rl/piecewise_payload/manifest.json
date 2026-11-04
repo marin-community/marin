@@ -1,0 +1,47 @@
+{
+  "marin_revision": "260d93767112780da77918f2c3394ee09608bf04",
+  "source_revision": "39e62869693c46402b1a95fde4fc55ca1aab9ae1",
+  "patch_sha256": "1b377716b4586cc8ad5e4c607048aa6bb39ce159893da847cf6514ba9aae1896",
+  "wheel": {
+    "version": "0.0.0.dev20260929+marin.39e62869693c.cu132",
+    "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260929-39e62869693c/vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_aarch64.whl",
+    "hash": "sha256:8a3ba6d09d43c779d67775ee9be0e54febcad724bce5192021b005407df0fdf8"
+  },
+  "overlay": [
+    {
+      "path": "vllm/config/compilation.py",
+      "base_sha256": "c9cec5c7200e8e559810ec8c30113ad61dab6780f9f7fb3c116bd0d9b5a43065",
+      "patched_sha256": "3f47904e6cdf9525c6b443bfa78e606954a0d0ba00371e2e8d716b02233288ec",
+      "runtime_overlay": true,
+      "payload_path": "compilation.payload"
+    },
+    {
+      "path": "vllm/model_executor/models/config.py",
+      "base_sha256": "ebee5e39c8cbdc2428d8afad365ccac8fa99ce55aea404f8d2887b008c1779fc",
+      "patched_sha256": "26874358bc0adf7c26619e57bf247fc0c6bf2d49518eeec8f07a23283fa9ec3d",
+      "runtime_overlay": true,
+      "payload_path": "model-config.payload"
+    },
+    {
+      "path": "vllm/model_executor/models/grugmoe.py",
+      "base_sha256": "d648df94f0a32e3a4d152e1b3706917e1ce8b20509c1677ac6ff747e8fa6b5b8",
+      "patched_sha256": "2495769de21a75da35ce00a07b6107abde0577f1b5b64d98f3ec2c187f209a0a",
+      "runtime_overlay": true,
+      "payload_path": "grugmoe.payload"
+    }
+  ],
+  "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+  "expected_core": {
+    "torch": "2.13.0+cu132",
+    "torchvision": "0.28.0+cu132",
+    "transformers": "5.16.1"
+  },
+  "managed_inputs": {
+    "vendor/skyrl/pyproject.toml": "20d36bdb03519e05df7592f081111338caca92c0f4d6a53f19cf279875dd1a06",
+    "vendor/skyrl/uv.lock": "fec8e9d4cab8258050df12fb93d90d51dcd7aeb9b7075dc33aa8594d680951b9",
+    "vendor/skyrl/.uv-version": "44712a66e62881fe24778a22d0f57d0e74084311fd2cd84070fc7fa9ce0f65bf",
+    "vendor/skyrl/cloud/iris/runtime_environment.py": "c0d3e341f628fc6166af1245ca629cce6a0203b74a0823e307613654eb2ebaf9",
+    "vendor/skyrl/marinskyrl/environment_contract.py": "c9270125a0889ee4290dc46579511c571b4fc0acaeba128fbcfd6ccba72775c9"
+  },
+  "qualification": "EXPERIMENTAL: kernel, matched-route DP4 and fresh full-Hero numerics gates required"
+}

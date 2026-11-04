@@ -468,6 +468,7 @@ generator:
     top_k: -1
     logprobs: null
     stop: null
+    stop_token_ids: null
 
   eval_sampling_params:
     max_generate_length: ${generator.sampling_params.max_generate_length}
@@ -478,6 +479,7 @@ generator:
     top_k: -1
     logprobs: null
     stop: null
+    stop_token_ids: null
 
   eval_n_samples_per_prompt: 1
 
