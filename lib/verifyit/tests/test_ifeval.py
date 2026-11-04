@@ -1,15 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import unicodedata
 from types import SimpleNamespace
 
 import pytest
+from verifyit.execution.worker import call_bounded
 from verifyit.grade import InvalidTask, Status
 from verifyit.instruction_observations import prepare_extended_instruction_observations
 from verifyit.modes import grade_ifeval
+from verifyit.modes.ifeval import CONSTRAINTS
 from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalSpec
 
-# One passing and one failing response per constraint, written the way a model would answer.
+# A passing and a failing response per constraint, written the way a model would answer.
 CASES = [
     (
         "length_constraints:number_paragraphs",
@@ -131,7 +135,188 @@ CASES = [
         "First take on the question.\n******\nSecond take on the question.",
         "Only one take on the question.",
     ),
+    (
+        "change_case:capital_word_frequency",
+        {"capital_relation": "at least", "capital_frequency": 2},
+        "СССР и США",  # noqa: RUF001 - Cyrillic capitals.
+        "СССР и мир",  # noqa: RUF001 - Cyrillic capitals.
+    ),
+    (
+        "length_constraints:number_sentences",
+        {"relation": "at least", "num_sentences": 2},
+        "第一句。第二句。",
+        "只有一句。",
+    ),
+    (
+        "length_constraints:number_words",
+        {"relation": "less than", "num_words": 2},
+        "ಪ್ರಪಂಚ",
+        "ಮತ್ತು ಪ್ರಪಂಚ",
+    ),
+    (
+        "last_word:last_word_sent",
+        {"last_word": "baseball"},
+        "<<We love baseball!>> Everyone plays baseball.",
+        "<<Go to Taiwan!>> Everyone plays baseball.",
+    ),
+    (
+        "length_constraints:number_sentences",
+        {"relation": "at most", "num_sentences": 1},
+        "“只有一句。”",
+        "“第一句。”“第二句。”",
+    ),
+    (
+        "length_constraints:number_words",
+        {"relation": "less than", "num_words": 2},
+        "می\u200cخواهم",  # noqa: RUF001 - Persian letters.
+        "می خواهم",
+    ),
+    (
+        "length_constraints:number_words",
+        {"relation": "less than", "num_words": 2},
+        "क्\u200dष",
+        "क् ष",
+    ),
+    (
+        "length_constraints:number_sentences",
+        {"relation": "at least", "num_sentences": 2},
+        "Wait… Then go.",
+        "Wait, then go.",
+    ),
+    (
+        "length_constraints:number_sentences",
+        {"relation": "at least", "num_sentences": 2},
+        "पहला वाक्य। दूसरा वाक्य",
+        "पहला वाक्य दूसरा वाक्य",
+    ),
+    (
+        "keywords:keyword_specific_position",
+        {"keyword": "cat", "n": 1, "m": 3},
+        "我爱cat。",
+        "我cat。",
+    ),
+    (
+        "keywords:start_end",
+        {},
+        "我爱你\uff0c你也爱我",
+        "我爱北京",
+    ),
+    (
+        "first_word:first_word_answer",
+        {"first_word": "senior"},
+        "Senior工程师很忙。",
+        "工程师很忙。",
+    ),
+    (
+        "length_constraints:number_words",
+        {"relation": "at least", "num_words": 2},
+        "high-risk",
+        "risk",
+    ),
+    (
+        "length_constraints:number_words",
+        {"relation": "less than", "num_words": 4},
+        "the-cat-sat",
+        "the-cat-sat-on-the-mat",
+    ),
+    (
+        "first_word:first_word_answer",
+        {"first_word": "well"},
+        "Well-known facts.",
+        "Known facts.",
+    ),
+    (
+        "length_constraints:number_sentences",
+        {"relation": "at least", "num_sentences": 2},
+        "Overview\nThe plan works.",
+        "The plan works.",
+    ),
+    (
+        "length_constraints:number_sentences",
+        {"relation": "less than", "num_sentences": 2},
+        "One. . . .",
+        "One. Two.",
+    ),
+    (
+        "first_word:first_word_sent",
+        {"first_word": "peace"},
+        "Peace now.\n***\nPeace then.",
+        "Peace now\nWe rest\nPeace then",
+    ),
+    (
+        "last_word:last_word_sent",
+        {"last_word": "rest"},
+        "We rest.\nThey rest",
+        "We rest\nThey run\nWe rest",
+    ),
+    (
+        "first_word:first_word_answer",
+        {"first_word": "well-known"},
+        "Well-known facts are here.",
+        "Well facts are here.",
+    ),
+    (
+        "first_word:first_word_answer",
+        {"first_word": "世界"},
+        "世界很大。",
+        "世人很大。",
+    ),
+    (
+        "first_word:first_word_sent",
+        {"first_word": "long-term"},
+        "Long-term plans win. Long-term goals stay.",
+        "Long-term plans win. Term goals stay.",
+    ),
+    (
+        "last_word:last_word_answer",
+        {"last_word": "follow-up"},
+        "This is the follow-up",
+        "This is the up",
+    ),
+    (
+        "last_word:last_word_sent",
+        {"last_word": "self-care"},
+        "I love self-care. You need self-care.",
+        "I love self-care. You need care.",
+    ),
+    (
+        "keywords:keyword_specific_position",
+        {"keyword": "long-term", "n": 1, "m": 2},
+        "A long-term plan wins.",
+        "A term plan wins.",
+    ),
+    (
+        "length_constraints:nth_paragraph_first_word",
+        {"num_paragraphs": 2, "nth_paragraph": 2, "first_word": "well-being"},
+        "Intro here.\n\nWell-being matters.",
+        "Intro here.\n\nBeing matters.",
+    ),
 ]
+
+
+# Degenerate output, such as a long run of marks, must stay linear in the text's length.
+@pytest.mark.parametrize(
+    "name, params, text, passed",
+    [
+        (
+            "length_constraints:number_sentences",
+            {"relation": "at least", "num_sentences": 2},
+            "Wait" + "." * 40_000,
+            False,
+        ),
+    ],
+    ids=[
+        "sentence_marks",
+    ],
+)
+def test_check_of_degenerate_text_finishes_within_its_deadline(name, params, text, passed):
+    assert call_bounded(CONSTRAINTS[name], text, params, timeout=5)[0] is passed
+
+
+def test_combining_mark_stays_inside_its_word():
+    check = CONSTRAINTS["length_constraints:number_words"]
+    marks = (chr(code) for code in range(sys.maxunicode + 1) if unicodedata.category(chr(code))[0] == "M")
+    assert all(check(f"a{mark}b", {"relation": "less than", "num_words": 2})[0] for mark in marks)
 
 
 @pytest.fixture

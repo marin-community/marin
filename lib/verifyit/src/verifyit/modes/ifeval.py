@@ -10,19 +10,78 @@ pure stdlib: this module has to run inside every task image without an extra.
 Several IFEval instruction ids describe an instruction the model was given rather than a property
 that can be measured exactly (``count:count_unique``, ``language:response_language``,
 ``detectable_format:bigram_wrapping``). Those are approximations, and the docstring on each says so.
+
+A word is a letter or digit followed by any letters, digits and combining marks in any script,
+with apostrophes and zero-width joiners or non-joiners inside it, so ``don't`` is one word,
+``high-risk`` is two and a Devanagari vowel sign stays in its word. A run of Han or kana characters
+is one word, which undercounts Chinese and Japanese, except in a check that compares words, where
+each such letter is one word. A sentence ends at a line break, at ``.``, ``!``, ``?`` or an ellipsis
+before whitespace, after any closing quotes or brackets, and at a Chinese, Japanese, Devanagari,
+Arabic, Armenian or Ethiopic sentence-final mark wherever it stands, after any closing quotes or
+brackets that follow it.
 """
 
 import json
 import re
+import unicodedata
 from collections.abc import Callable
+from itertools import chain
 
 Check = Callable[[str, dict], tuple[bool, str]]
 
 CONSTRAINTS: dict[str, Check] = {}
 
 PARAGRAPH_SEPARATOR = re.compile(r"\n\s*\n+")
-SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
-WORD = re.compile(r"[A-Za-z0-9'\-]+")
+SENTENCE_FINAL = ".!?\u2026"
+# Closing quotes and brackets, including the >> of <<title>>, that may stand between a sentence's
+# final mark and the space after it.
+CLOSERS = "\"'\u201d\u2019)]}>\u00bb\u300d\u300f\uff09"
+# Sentence-final marks of Chinese, Japanese, Devanagari, Arabic, Urdu, Armenian and Ethiopic text,
+# which end a sentence wherever they stand.
+SCRIPT_SENTENCE_MARKS = "\u3002\uff0e\uff01\uff1f\uff61\u0964\u0965\u06d4\u061f\u0589\u1362"
+# A run of final marks, captured, and any closers after it; and a run of a script's sentence-final
+# marks and any closers after it. A match starts only at the first mark of a run and never gives
+# marks back, so a long run of marks takes linear time.
+FINAL_MARK_RUN = rf"(?<![{re.escape(SENTENCE_FINAL)}])([{re.escape(SENTENCE_FINAL)}]++)[{re.escape(CLOSERS)}]*+"
+SCRIPT_MARK_RUN = rf"(?<![{SCRIPT_SENTENCE_MARKS}])[{SCRIPT_SENTENCE_MARKS}]++[{re.escape(CLOSERS)}]*+"
+SENTENCE_END = re.compile(rf"{FINAL_MARK_RUN}(?=\s)|{SCRIPT_MARK_RUN}")
+APOSTROPHES = "'\u2019"
+# Inside a word these join word characters: "don't", and Persian or Indic words written with a
+# zero-width non-joiner or joiner. A hyphen separates words, so "high-risk" is two.
+WORD_JOINERS = APOSTROPHES + "\u200c\u200d"
+
+
+# Combining marks occur only in planes 0 and 1 and among the variation selectors of plane 14, so the
+# scan below skips the other code points.
+MARK_CODE_POINTS = (range(0x20000), range(0xE0100, 0xE01F0))
+
+
+def _combining_mark_ranges() -> str:
+    """Every Unicode combining mark (category M), as ranges for a regex character class."""
+    ranges: list[list[int]] = []
+    for code in chain(*MARK_CODE_POINTS):
+        if unicodedata.category(chr(code))[0] != "M":
+            continue
+        if ranges and ranges[-1][1] == code - 1:
+            ranges[-1][1] = code
+        else:
+            ranges.append([code, code])
+    return "".join(f"{chr(low)}-{chr(high)}" for low, high in ranges)
+
+
+# A word character is a letter, a digit or a combining mark, such as a Devanagari vowel sign.
+WORD_CHARACTER = rf"(?:[^\W_]|[{_combining_mark_ranges()}])"
+WORD = re.compile(rf"[^\W_](?:{WORD_CHARACTER}|[{re.escape(WORD_JOINERS)}](?={WORD_CHARACTER}))*")
+# Han ideographs, hiragana and katakana. Chinese and Japanese leave no space between words, so a check that compares
+# words takes each of these letters as a word.
+UNSPACED_RANGES = (
+    "\u3041-\u3096\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0003ffff"
+)
+SPACED_WORD_CHARACTER = rf"(?![{UNSPACED_RANGES}]){WORD_CHARACTER}"
+COMPARED_WORD = re.compile(
+    rf"[{UNSPACED_RANGES}]|(?![{UNSPACED_RANGES}])[^\W_]"
+    rf"(?:{SPACED_WORD_CHARACTER}|[{re.escape(WORD_JOINERS)}](?={SPACED_WORD_CHARACTER}))*"
+)
 BULLET = re.compile(r"^\s*[\*\-]\s+")
 SQUARE_BRACKETS = re.compile(r"\[[^\[\]\n]+\]")
 TITLE_MARKER = re.compile(r"<<[^<>\n]+>>")
@@ -74,11 +133,36 @@ def paragraphs(text: str) -> list[str]:
 
 
 def sentences(text: str) -> list[str]:
-    return [s.strip() for s in SENTENCE_BOUNDARY.split(text.strip()) if s.strip()]
+    """The sentences of the text: a line break ends one, and a part with no word, such as a divider, does not count."""
+    found = []
+    for line in text.splitlines():
+        start = 0
+        for end in SENTENCE_END.finditer(line):
+            found.append(line[start : end.end()])
+            start = end.end()
+        found.append(line[start:])
+    return [sentence.strip() for sentence in found if WORD.search(sentence)]
 
 
 def words(text: str) -> list[str]:
     return WORD.findall(text)
+
+
+def compared_words(text: str) -> list[str]:
+    """The words of the text for a check that compares them: each Han or kana letter is a word."""
+    return COMPARED_WORD.findall(text)
+
+
+def starts_with_word(found: list[str], word: str) -> bool:
+    """Whether the words start with the required word, which may split into several, as "well-known" and "世界" do."""
+    keys = [part.lower() for part in compared_words(word)]
+    return bool(keys) and [part.lower() for part in found[: len(keys)]] == keys
+
+
+def ends_with_word(found: list[str], word: str) -> bool:
+    """Whether the words end with the required word, which may split into several."""
+    keys = [part.lower() for part in compared_words(word)]
+    return bool(keys) and [part.lower() for part in found[-len(keys) :]] == keys
 
 
 def count_keyword(text: str, keyword: str) -> int:
@@ -149,8 +233,8 @@ def nth_paragraph_first_word(text: str, params: dict) -> tuple[bool, str]:
     found = paragraphs(text)
     if len(found) != expected_paragraphs or nth < 1 or nth > len(found):
         return False, f"paragraphs={len(found)} need={expected_paragraphs} nth={nth}"
-    actual = words(found[nth - 1])
-    if not actual or actual[0].lower() != first_word.lower():
+    actual = compared_words(found[nth - 1])
+    if not starts_with_word(actual, first_word):
         return False, f"got first_word={actual[:1]} expected={first_word!r}"
     return True, "ok"
 
@@ -226,12 +310,12 @@ def keyword_specific_position(text: str, params: dict) -> tuple[bool, str]:
     found = sentences(text)
     if sentence_index < 1 or sentence_index > len(found):
         return False, f"only {len(found)} sentences, need sentence {sentence_index}"
-    in_sentence = words(found[sentence_index - 1])
+    in_sentence = compared_words(found[sentence_index - 1])
     if word_index < 1 or word_index > len(in_sentence):
         return False, f"sentence has {len(in_sentence)} words, need pos {word_index}"
     actual = in_sentence[word_index - 1]
     return (
-        actual.lower() == keyword.lower(),
+        starts_with_word(in_sentence[word_index - 1 :], keyword),
         f"pos[{sentence_index},{word_index}]={actual!r} expected={keyword!r}",
     )
 
@@ -259,7 +343,7 @@ def no_adjacent_consecutive(text: str, params: dict) -> tuple[bool, str]:
 @constraint("keywords:start_end")
 def start_end(text: str, params: dict) -> tuple[bool, str]:
     """The response must start and end with the same word."""
-    found = words(text)
+    found = compared_words(text)
     if not found:
         return False, "empty"
     return found[0].lower() == found[-1].lower(), f"start={found[0]!r} end={found[-1]!r}"
@@ -471,9 +555,9 @@ def first_word_answer(text: str, params: dict) -> tuple[bool, str]:
     expected = params.get("first_word")
     if not isinstance(expected, str):
         return False, "missing first_word"
-    found = words(text)
+    found = compared_words(text)
     actual = found[0] if found else ""
-    return actual.lower() == expected.lower(), f"first={actual!r} expected={expected!r}"
+    return starts_with_word(found, expected), f"first={actual!r} expected={expected!r}"
 
 
 @constraint("first_word:first_word_sent")
@@ -485,8 +569,8 @@ def first_word_sent(text: str, params: dict) -> tuple[bool, str]:
     if not found:
         return False, "no sentences"
     for sentence in found:
-        in_sentence = words(sentence)
-        if not in_sentence or in_sentence[0].lower() != expected.lower():
+        in_sentence = compared_words(sentence)
+        if not starts_with_word(in_sentence, expected):
             return False, f"sent starts with {in_sentence[:1]} need={expected!r}"
     return True, f"all {len(found)} sentences start with {expected!r}"
 
@@ -496,9 +580,9 @@ def last_word_answer(text: str, params: dict) -> tuple[bool, str]:
     expected = params.get("last_word")
     if not isinstance(expected, str):
         return False, "missing last_word"
-    found = words(text)
+    found = compared_words(text)
     actual = found[-1] if found else ""
-    return actual.lower() == expected.lower(), f"last={actual!r} expected={expected!r}"
+    return ends_with_word(found, expected), f"last={actual!r} expected={expected!r}"
 
 
 @constraint("last_word:last_word_sent")
@@ -510,8 +594,8 @@ def last_word_sent(text: str, params: dict) -> tuple[bool, str]:
     if not found:
         return False, "no sentences"
     for sentence in found:
-        in_sentence = words(sentence.rstrip(".!?\"' "))
-        if not in_sentence or in_sentence[-1].lower() != expected.lower():
+        in_sentence = compared_words(sentence.rstrip(".!?\"' "))
+        if not ends_with_word(in_sentence, expected):
             return False, f"sent ends with {in_sentence[-1:]} need={expected!r}"
     return True, f"all {len(found)} sentences end with {expected!r}"
 
