@@ -320,9 +320,9 @@ async def run_program(
         storage = next((error for error in exception_chain(failures) if storage_fault(error, program_files)), None)
         if storage is not None:
             raise storage from failures
-        if not authored_failure(failures, program_files):
-            raise BuildInfrastructureFailure("unclassified_build_failure", str(failures)) from failures
         failure = failures.exceptions[0]
+        if not authored_failure(failure, program_files):
+            raise BuildInfrastructureFailure("unclassified_build_failure", str(failure)) from failures
         raise failure.with_traceback(raised.get(failure, failure.__traceback__)) from failure.__cause__
     return sink.result(), tuple(outcomes[name] for name in program.order)
 
