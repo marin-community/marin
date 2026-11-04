@@ -37,6 +37,10 @@ print(f"CAMPAIGN_HARBOR_RUNTIME={shlex.quote(harbor_runtime_descriptor())}")
 PY
 )"
 export CAMPAIGN_SHA_MARIN CAMPAIGN_SHA_HARBOR CAMPAIGN_EVALCHEMY_SOURCE_HASH CAMPAIGN_HARBOR_RUNTIME
+# Harbor registry-backed datasets keep the campaign's registry revision. The vendored
+# runtime (CAMPAIGN_SHA_HARBOR) moved separately, so the two pins are checked separately.
+CAMPAIGN_SHA_HARBOR_REGISTRY=38742b0f9f411c95e0c01468785cac7bb77c9894
+export CAMPAIGN_SHA_HARBOR_REGISTRY
 
 die() {
   echo "error: $*" >&2
@@ -230,7 +234,7 @@ validate_campaign_configs() {
   HARBOR_CONFIG_DIR="$HARBOR_CONFIG_DIR" \
   CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" \
   JUDGE_MODEL_CONFIG="$JUDGE_MODEL_CONFIG" \
-  CAMPAIGN_SHA_HARBOR="$CAMPAIGN_SHA_HARBOR" \
+  CAMPAIGN_SHA_HARBOR_REGISTRY="$CAMPAIGN_SHA_HARBOR_REGISTRY" \
   uv run python - <<'PY'
 import os
 import re
@@ -429,7 +433,7 @@ assert swebench["datasets"] == [
     {
         "name": "swebench-verified",
         "version": "1.0",
-        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/registry.json",
+        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR_REGISTRY']}/registry.json",
     }
 ]
 for name in (
@@ -446,7 +450,7 @@ assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwarg
     "max_output_tokens": 32768,
 }
 
-registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/"
+registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR_REGISTRY']}/"
 for path in harbor.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
     for agent in document.get("agents") or []:
