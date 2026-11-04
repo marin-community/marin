@@ -237,7 +237,7 @@ def test_wait_non_silent_conditions_still_escalate(
 def test_child_wait_timeout_shutdown_cancels_a_gang_whose_tasks_never_start(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # A Kueue-gated gang reports a RUNNING job while every task is still BUILDING (#10897).
+    # A Kueue-gated gang reports a RUNNING job while every task is still BUILDING.
     parent_job_id = "/runner/hero-canary"
     cluster = FakeClusterClient(
         [
