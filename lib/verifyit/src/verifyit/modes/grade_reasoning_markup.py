@@ -12,10 +12,8 @@ when the reply was cut off by a length limit.
 from pathlib import Path
 
 from verifyit.grade import Reward, empty_output_policy, read_output, scored
-from verifyit.reasoning_markup import reasoning_span_violation
+from verifyit.reasoning_markup import COMPLETED_STOP_REASON, reasoning_span_violation
 from verifyit.spec import ReasoningMarkupSpec
-
-_COMPLETED_STOP_REASON = "stop"
 
 
 def validate_reasoning_markup(spec: ReasoningMarkupSpec) -> None:
@@ -24,7 +22,7 @@ def validate_reasoning_markup(spec: ReasoningMarkupSpec) -> None:
 
 def grade_reasoning_markup_candidate(spec: ReasoningMarkupSpec, candidate: str) -> Reward:
     validate_reasoning_markup(spec)
-    violation = reasoning_span_violation(candidate, _COMPLETED_STOP_REASON)
+    violation = reasoning_span_violation(candidate, COMPLETED_STOP_REASON)
     if violation is None:
         return scored(1.0, violation=None)
     return scored(0.0, violation=violation.value)

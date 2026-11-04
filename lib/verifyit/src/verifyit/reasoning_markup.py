@@ -17,7 +17,10 @@ REASONING_DELIMITERS = (
     ("<thinking>", "</thinking>"),
     ("<|start_think|>", "<|end_think|>"),
 )
-_LENGTH_STOP_REASON = "length"
+LENGTH_STOP_REASON = "length"
+"""The stop reason of a reply cut off by its token limit; an open span there is truncation, not a violation."""
+COMPLETED_STOP_REASON = "stop"
+"""The stop reason of a reply that ended on its own."""
 
 _CLOSING_MARKER = dict(REASONING_DELIMITERS)
 _REASONING_MARKER = re.compile("|".join(re.escape(marker) for pair in REASONING_DELIMITERS for marker in pair))
@@ -51,7 +54,7 @@ def first_reasoning_violation(markers: Sequence[str], stop_reason: str) -> Reaso
             return ReasoningSpanError(ReasoningViolation.SECOND_SPAN, index)
         else:
             return ReasoningSpanError(ReasoningViolation.STRAY_END, index)
-    if expected_close is not None and stop_reason != _LENGTH_STOP_REASON:
+    if expected_close is not None and stop_reason != LENGTH_STOP_REASON:
         return ReasoningSpanError(ReasoningViolation.UNCLOSED, None)
     return None
 
