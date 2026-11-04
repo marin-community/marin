@@ -88,6 +88,18 @@ CASES = [
         "That covers the deployment. Let me know.",
     ),
     (
+        "startend:end_checker",
+        {"end_phrase": "Any other questions?"},
+        "Rimas con «supermán»: talismán, capitán, volcán, huracán y alacrán.\n\n**Any other questions?**",
+        "Finish your response with this exact phrase Any other questions?. No other words should follow this phrase.",
+    ),
+    (
+        "startend:end_checker",
+        {"end_phrase": "Any other questions?"},
+        '"That covers the deployment. Any other questions?"',
+        '"Any other questions?" That covers the deployment.',
+    ),
+    (
         "detectable_format:number_bullet_lists",
         {"num_bullets": 3},
         "* first\n* second\n* third",
