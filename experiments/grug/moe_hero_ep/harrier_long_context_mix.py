@@ -24,6 +24,7 @@ from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe.launch_datakit_moe_mix import _MIXTURE_BLOCK_SIZE
@@ -188,6 +189,7 @@ def _print_report(length_tokens: LengthTokens) -> None:
 @click.command()
 def main() -> None:
     """Write LONG_CONTEXT_STORE_URI's token table next to this module and print its share and passes."""
+    configure_coreweave_s3()
     length_tokens = read_length_tokens(LONG_CONTEXT_STORE_URI, list(_COOLDOWN_WEIGHTS))
     rows = ",\n".join(f'"{cell}": [{short}, {long}]' for cell, (short, long) in sorted(length_tokens.items()))
     _TOKEN_TABLE_PATH.write_text("{\n" + rows + "\n}\n")
