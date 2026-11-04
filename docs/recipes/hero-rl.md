@@ -42,7 +42,7 @@ Prepare the fixed-weight stage locally with the completed SFT64 export:
 
 ```bash
 uv run python -m experiments.post_training.hero_rl.launch \
-  --version 2026.11.04.31 --hardware gb200-48 --priority interactive \
+  --version 2026.11.04.32 --hardware gb200-48 --priority interactive \
   --stage numerics --probe-prompts 128 \
   --model-uri s3://marin-us-east-02a/marin/users/dlwh/hero-rl/sft64-bf16-fp32-router/2026.11.03.49 \
   --model-version 2026.10.22.64 \

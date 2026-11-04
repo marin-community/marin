@@ -114,11 +114,17 @@ def stage_runtime(workspace: Path, environment: Path, receipt_path: Path) -> dic
     # uv 0.13.5 writes archive_info:{} even after a frozen, hash-checked sync.
     # A receipt hash, when present, must agree; the wheel bytes below provide
     # the required proof independently of this optional receipt field.
-    receipt_hash = direct["archive_info"].get("hashes", {}).get("sha256")
+    archive_info = direct["archive_info"]
+    receipt_hashes = dict(archive_info.get("hashes", {}))
+    if "hash" in archive_info:
+        algorithm, value = archive_info["hash"].split("=", 1)
+        if algorithm in receipt_hashes and receipt_hashes[algorithm] != value:
+            raise ValueError("Wheel receipt hash fields disagree")
+        receipt_hashes[algorithm] = value
     if (
         distribution.version != wheel["version"]
         or unquote(direct["url"]) != unquote(wheel["url"])
-        or (receipt_hash is not None and receipt_hash != wheel["hash"].removeprefix("sha256:"))
+        or receipt_hashes.get("sha256", wheel["hash"].removeprefix("sha256:")) != wheel["hash"].removeprefix("sha256:")
     ):
         raise ValueError("Installed vLLM is not the exact locked 39e ARM wheel")
     # Keep the package entry lexical: resolving it here would select uv's cache.
@@ -139,6 +145,11 @@ def stage_runtime(workspace: Path, environment: Path, receipt_path: Path) -> dic
         wheel_archive = Path(temporary) / "locked-vllm.whl"
         wheel_payload = verified_wheel_payload(wheel, wheel_archive)
         wheel_archive_bytes = wheel_archive.stat().st_size
+        for algorithm, expected_hash in receipt_hashes.items():
+            with wheel_archive.open("rb") as source:
+                actual_hash = hashlib.file_digest(source, algorithm).hexdigest()
+            if actual_hash != expected_hash:
+                raise ValueError(f"Wheel receipt {algorithm} hash differs from verified archive")
         if wheel_payload != package_payload_hashes(entry):
             raise ValueError("Installed vLLM payload differs from the SHA256-verified wheel")
         wheel_extensions = {name: wheel_payload[name] for name in before_extensions}

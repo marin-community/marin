@@ -166,6 +166,30 @@ def test_missing_receipt_hash_still_requires_wheel_and_binary_identity(wheel_env
     assert not receipt.exists()
 
 
+@pytest.mark.parametrize(
+    "archive_info",
+    [{"hash": "sha256=" + "0" * 64}, {"hash": "sha512=" + "0" * 128}, {"hashes": {"sha512": "0" * 128}}],
+)
+def test_conflicting_receipt_hashes_preserve_original_package(wheel_environment, tmp_path, archive_info):
+    workspace, cache, site, _ = wheel_environment
+    entry = site / "vllm"
+    link_package(cache, entry, "directory")
+    direct_path = site / "vllm-1.0.dist-info/direct_url.json"
+    direct = json.loads(direct_path.read_text())
+    direct["archive_info"] = archive_info
+    direct_path.write_text(json.dumps(direct))
+    before = tree_bytes(cache)
+    receipt = tmp_path / "receipt.json"
+
+    with pytest.raises(ValueError):
+        runtime.stage_runtime(workspace, site.parent.parent, receipt)
+
+    assert entry.is_symlink() and entry.resolve() == cache
+    assert tree_bytes(cache) == before
+    assert not receipt.exists()
+    assert not entry.with_name("vllm.before-hero-piecewise").exists()
+
+
 def test_failed_package_publish_restores_original_entry(wheel_environment, monkeypatch, tmp_path):
     workspace, cache, site, _ = wheel_environment
     entry = site / "vllm"
