@@ -169,6 +169,9 @@ license_file: LICENSE
 tokenizer: marin-community/marin-tokenizer
 tokenizer_revision: <pinned tokenizer commit>
 staging_dir: /cache/mochi-hf-staging
+max_files_per_commit: 8
+min_commit_interval: 75
+max_rate_limit_retries: 4
 ```
 
 ```bash
@@ -178,14 +181,30 @@ uv run --package marin-levanter python -m \
 
 The repository must already exist and remain private. New branches start from
 the pinned metadata-only commit. The uploader binds each branch to its export,
-card, license and tokenizer through `hf-upload-request.json`, then stages one
-shard at a time on disk. It validates source BF16 headers and hashes and checks
-Hub sizes and hashes before reusing uploaded files. Allow enough scratch disk
-for the largest shard.
+card, license and tokenizer through `hf-upload-request.json`, then stages at most
+eight missing shards per commit. It validates source BF16 headers and hashes and
+checks Hub sizes and hashes before reusing uploaded files. Eight largest Hero
+shards need about 58 GB of staging disk per worker; use a 128 GB disk-backed
+scratch volume for each worker.
 
-Rerun the same upload configuration after an interrupted transfer. Changed
-inputs or unexpected Hub weights stop reuse. A checkpoint branch is complete
-only when `hf-upload-manifest.json` pins a verified weights commit. The uploader
+Every commit, including request and completion metadata, shares a per-worker
+limiter. The default 75-second interval also delays the first commit. At most
+four simultaneous uploaders stay below the repository commit limit of 256 per
+hour observed for Mochi when no other clients are creating commits there.
+Increase the interval when running more uploaders, sharing the quota with other
+writers, or using a lower quota.
+
+HTTP 429 responses retry up to four times. A repository commit-limit response
+waits at least one hour, even when its generic API `Retry-After` header names a
+shorter delay. Other HTTP failures propagate. Completed shards remain reusable
+if the retry limit is exhausted.
+
+Rerun the same artifact inputs after an interrupted transfer; batch size and
+commit pacing may change. The uploader accepts completed v2 and v3 CPU exports
+without rewriting their requests. V2 exports require the original full export
+configuration; v3 separates execution limits from artifact identity. Changed
+artifact inputs or unexpected Hub weights stop reuse. A checkpoint branch is
+complete only when `hf-upload-manifest.json` pins a verified weights commit. The uploader
 checks the published model card and official OpenMDW 1.1 license before writing
 that marker. Artifact checks do not establish serving numerical parity; serving
 also needs a vLLM revision with the split-expert loader.
