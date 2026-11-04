@@ -7,7 +7,7 @@ Run it from the root of a marin checkout with the system Python; see `google_api
     python3 -m infra.loom.gdoc read DOC_ID [--tab TAB]             # the whole doc, or one tab
     python3 -m infra.loom.gdoc append DOC_ID "Markdown" [--tab TAB]   # or `-` to read it from stdin
     python3 -m infra.loom.gdoc prepend DOC_ID - [--section HEADING] [--tab TAB]   # newest first, below the heading
-    python3 -m infra.loom.gdoc replace-section DOC_ID "Heading" - [--tab TAB]   # changes only what differs
+    python3 -m infra.loom.gdoc replace-section DOC_ID "Heading" - [--tab TAB]   # preserves unchanged text paragraphs
     python3 -m infra.loom.gdoc length DOC_ID [--exclude-section HEADING] [--tab TAB]   # words and estimated pages
     python3 -m infra.loom.gdoc comment DOC_ID "A comment on the doc."
     python3 -m infra.loom.gdoc comments DOC_ID                     # every comment with its id, status and replies
@@ -166,7 +166,7 @@ def _parser() -> argparse.ArgumentParser:
     comment.add_argument("text")
     replace = commands.add_parser(
         "replace-section",
-        help="Make the content under a heading equal to markdown, changing only what differs. `-` reads stdin.",
+        help="Replace a section with markdown, preserving unchanged text paragraphs. `-` reads stdin.",
     )
     replace.add_argument("doc_id")
     replace.add_argument("heading")

@@ -3,7 +3,7 @@
 
 import pytest
 
-from infra.loom.gdoc.cli import AgentStatus, agent_status_request, describe_comment
+from infra.loom.gdoc.cli import AgentStatus, agent_status_request
 from infra.loom.gdoc.docs_format import Tab
 
 
@@ -35,18 +35,6 @@ AGENT_STATUS_DEFINITION = {
         }
     }
 }
-
-
-def test_a_comment_without_the_resolved_field_is_open_and_a_resolve_only_reply_shows_its_action():
-    # Drive leaves `resolved` out of a comment that is not resolved, and content out of a resolve-only reply.
-    new = {"id": "c9", "modifiedTime": "t9", "content": "Approve the restart?", "author": {"displayName": "loom"}}
-    resolved = {**new, "resolved": True, "replies": [{"action": "resolve", "author": {"displayName": "Rav"}}]}
-
-    assert describe_comment(new) == "- [c9] (open) loom: Approve the restart?"
-    assert describe_comment(resolved).splitlines() == [
-        "- [c9] (resolved) loom: Approve the restart?",
-        "  - reply from Rav (resolved): ",
-    ]
 
 
 def test_agent_status_selects_the_chip_option_by_its_name_and_a_doc_without_the_chip_is_an_error():

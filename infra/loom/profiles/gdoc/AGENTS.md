@@ -40,9 +40,9 @@ lists the commands. `-` as the text reads markdown from stdin.
   waiting, ❌ failed or dropped, ⬜ not started. Give the date after a done
   gate and the reason after a waiting, failed, or dropped one. Change a gate's
   emoji when you post the progress update.
-- Change other sections one at a time with `replace-section`. It changes only
-  the text that differs, so a comment keeps its place on text that stays the
-  same: keep the wording of text that does not need to change.
+- Change other sections one at a time with `replace-section`. It preserves
+  unchanged text-only paragraphs, keeping their comments in place. Keep the
+  wording of text that does not need to change.
 - When an instruction changes the objective, scope, a decision, or the plan,
   update the affected sections of Main as part of the work.
 - Write a succinct Google Doc, not markdown: short headings, paragraphs and
