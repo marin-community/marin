@@ -61,7 +61,7 @@ class BaseAgent(ABC):
     MODEL_API = ModelAPI.OPENAI_CHAT
 
     async def cleanup(self, environment: BaseEnvironment) -> None:
-        """Stop persistent agent sessions before collection and verification."""
+        """Release sessions at teardown or before isolated verifier model access."""
 
     # ``logs_dir`` may be a remote ``UPath`` (e.g. gs://, s3://) when the trial
     # writes directly to object storage. ``UPath`` is NOT a ``pathlib.Path``

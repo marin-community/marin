@@ -14,6 +14,7 @@ from harbor.utils.logger import logger
 
 DEFAULT_BATCH_EXEC_TIMEOUT_MARGIN_SEC = 180.0
 _MAX_CAPTURE_BYTES = 1_000_000
+_FOREGROUND_STOP_TIMEOUT = 5
 _ENTER_KEYS = {"Enter", "C-m", "KPEnter", "C-j", "^M", "^J"}
 
 
@@ -501,7 +502,7 @@ class TmuxSession:
         return result.return_code == 0
 
     async def close(self) -> None:
-        """Stop the agent terminal before the verifier reads its files."""
+        """Stop the agent terminal when its owner releases the session."""
         if not await self.is_session_alive():
             return
         result = await self.environment.exec(
@@ -510,6 +511,28 @@ class TmuxSession:
         )
         if result.return_code != 0 or await self.is_session_alive():
             raise TmuxCommandError("Cannot stop the agent tmux session")
+
+    async def interrupt(self) -> None:
+        """Stop the terminal's foreground job while preserving prior background jobs."""
+        if not await self.is_session_alive():
+            return
+        # Bash job control gives each foreground pipeline its own process group.
+        # Killing that group leaves the shell and earlier background services alive.
+        command = (
+            "set -eu; "
+            f"pane_pid=$(tmux display-message -p -t {shlex.quote(self._session_name)} '#{{pane_pid}}'); "
+            'pane_status=$(<"/proc/$pane_pid/stat"); pane_status=${pane_status##*) }; '
+            'read -r state parent shell_group session tty foreground_group remaining <<< "$pane_status"; '
+            'if [ "$foreground_group" -gt 0 ] && [ "$foreground_group" != "$shell_group" ]; then '
+            'kill -INT -- "-$shell_group"; '
+            'kill -KILL -- "-$foreground_group" 2>/dev/null || true; '
+            'while kill -0 -- "-$foreground_group" 2>/dev/null; do sleep 0.01; done; fi'
+        )
+        result = await self.environment.exec(
+            command=command, user=self._user, timeout_sec=_FOREGROUND_STOP_TIMEOUT
+        )
+        if result.return_code != 0:
+            raise TmuxCommandError("Cannot stop the agent terminal's foreground job")
 
     def _is_executing_command(self, key: str) -> bool:
         return self._is_enter_key(key) or self._ends_with_newline(key)

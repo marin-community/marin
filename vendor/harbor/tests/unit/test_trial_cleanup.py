@@ -6,6 +6,8 @@ import logging
 import tempfile
 from pathlib import Path
 
+from harbor_config.errors import ErrorCategory, error_category
+
 import harbor.environments.factory as environment_factory
 import pytest
 from harbor.agents.base import BaseAgent
@@ -372,6 +374,11 @@ class TestStopBoundedByWallClock:
             assert result.completion is None
             assert result.exception_info is not None
             assert result.verifier_result is None
+            assert (
+                error_category(result.exception_info.exception_type)
+                is ErrorCategory.INFRASTRUCTURE
+            )
+            assert Job._is_resume_retryable_result(result)
 
 
 class TestPrepareLogsForHostCalledDuringTrial:
@@ -441,7 +448,11 @@ async def test_environment_failure_logs_error_with_traceback(
         result = await trial.run()
 
     assert result.exception_info is not None
-    assert result.exception_info.exception_type == "RuntimeError"
+    assert result.exception_info.exception_type == (
+        "RuntimeError"
+        if environment_class is FailingStartEnvironment
+        else "EnvironmentStopError"
+    )
     failure = next(
         record for record in caplog.records if record.levelno == logging.ERROR
     )

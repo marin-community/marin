@@ -2,27 +2,37 @@ import asyncio
 import concurrent.futures
 import contextlib
 import logging
+import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from harbor.environments.base import SandboxDiskFullError
-from harbor_config import ErrorCategory, error_category
 from harbor.models.job.config import RetryConfig
 from harbor.models.trial.config import TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
+from harbor.models.verifier.result import VerifierResult
 from harbor.trial.errors import (
     AgentDiskFullError,
     AgentTimeoutError,
     PhaseCancellationError,
+    RuntimeServiceError,
 )
 from harbor.trial.hooks import TrialEvent, TrialHookEvent, emit_trial_hooks
 from harbor.trial.queue import TrialQueue
 from harbor.trial.trial import Trial
-from harbor.utils.artifact_writer import ArtifactUploadTimeoutError
+from harbor.utils import artifact_writer
+from harbor.utils.artifact_writer import (
+    ArtifactPersistenceError,
+    ArtifactUploadTimeoutError,
+    ArtifactWriter,
+)
+from harbor_config import ErrorCategory, error_category
+from harbor_config.errors import is_resume_retryable
+
+from tests.unit.agents.terminus_2.bare_agent import make_bare_terminus2
 
 Behavior = Callable[["FakeTrial"], Awaitable[None]]
 
@@ -64,6 +74,9 @@ class PhaseCancellationTrial(Trial):
         self.events.append("finalized")
 
     async def _stop_agent_environment(self) -> None:
+        return None
+
+    async def _cleanup_agents(self) -> None:
         return None
 
     def _close_logger_handler(self) -> None:
@@ -198,6 +211,7 @@ async def test_agent_disk_exhaustion_is_a_model_failure(tmp_path: Path) -> None:
         with_default_user=lambda user: contextlib.nullcontext(),
         with_agent_timeout=lambda timeout: contextlib.nullcontext(),
         quiesce_agent_commands=cleanup,
+        requires_agent_quiescence_for_verifier=False,
     )
 
     with pytest.raises(AgentDiskFullError) as raised:
@@ -314,6 +328,7 @@ async def test_trial_reports_result_persistence_after_lifecycle_write(
     trial = object.__new__(PhaseTrial)
     trial._is_agent_environment_stopped = True
     trial._environment_cleanup_failed = False
+    trial._artifact_persistence_failure = None
     trial.config = config
     trial.task = SimpleNamespace(name="task")
     trial.paths = TrialPaths(config.trials_dir / config.trial_name / "attempts" / "000")
@@ -338,6 +353,138 @@ async def test_trial_reports_result_persistence_after_lifecycle_write(
 
     assert observed == [(TrialEvent.RESULT_PERSISTENCE_START, True)]
     assert lifecycle_path.exists()
+
+
+class ObservedArtifactWriter(ArtifactWriter):
+    def __init__(self) -> None:
+        super().__init__(num_workers=2)
+        self.flush_started = asyncio.Event()
+
+    async def flush_async(self, prefix=None, timeout=None) -> int:
+        self.flush_started.set()
+        return await super().flush_async(prefix=prefix, timeout=timeout)
+
+
+def _trial_ready_to_finalize(config: TrialConfig) -> PhaseTrial:
+    trial = object.__new__(PhaseTrial)
+    trial._is_agent_environment_stopped = True
+    trial._environment_cleanup_failed = False
+    trial._artifact_persistence_failure = None
+    trial.config = config
+    trial.task = SimpleNamespace(name="task", has_steps=False)
+    trial.paths = TrialPaths(config.trials_dir / config.trial_name / "attempts" / "000")
+    trial.paths.mkdir()
+    trial._attempt_index = 0
+    trial._result = _result(config, 0)
+    trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
+    trial._hooks = {event: [] for event in TrialEvent}
+    trial.logger = logging.getLogger(__name__)
+    return trial
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("flush_timeout", [False, True])
+async def test_finalization_waits_for_queued_trajectory_or_stays_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flush_timeout: bool
+) -> None:
+    writer = ObservedArtifactWriter()
+    monkeypatch.setattr(artifact_writer, "_WRITER", writer)
+    # The blocked optional upload must not block the required lifecycle write.
+    for index in range(64):
+        config = _config(
+            tmp_path,
+            f"trajectory-{index}",
+            attempt_timeout=None,
+            cleanup_grace=0.000001 if flush_timeout else 5,
+        )
+        paths = TrialPaths(config.trials_dir / config.trial_name / "attempts" / "000")
+        trajectory_path = paths.agent_dir / "trajectory.json"
+        if hash(str(trajectory_path)) % 2 != hash(str(paths.lifecycle_result_path)) % 2:
+            break
+    else:
+        pytest.fail("Could not place trajectory and lifecycle on separate shards")
+
+    trial = _trial_ready_to_finalize(config)
+    release = threading.Event()
+    upload_started = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def trajectory_payload() -> str:
+        loop.call_soon_threadsafe(upload_started.set)
+        if not release.wait(timeout=10):
+            raise TimeoutError("Test did not release the trajectory upload")
+        return '{"steps": [{"message": "final answer"}]}'
+
+    trajectory_write = writer.submit_optional(
+        trajectory_path, trajectory_payload, description="queued final trajectory"
+    )
+    await asyncio.wait_for(upload_started.wait(), 5)
+    finalizing = asyncio.create_task(trial._finalize())
+    try:
+        await asyncio.wait_for(writer.flush_started.wait(), 5)
+        if not flush_timeout:
+            assert not finalizing.done()
+            assert not paths.lifecycle_result_path.exists()
+            release.set()
+        await asyncio.wait_for(finalizing, 5)
+        native = TrialResult.model_validate_json(
+            paths.lifecycle_result_path.read_text()
+        )
+        if flush_timeout:
+            assert not trajectory_write.done()
+            assert native.completion is None
+            assert native.verifier_result is None
+            error = native.exception_info.exception_type
+            assert error == "ArtifactWriteTimeoutError"
+            assert error_category(error) is ErrorCategory.INFRASTRUCTURE
+            assert is_resume_retryable(error)
+        else:
+            assert native.completion is not None
+            assert native.completion.trajectory_present
+            assert native.verifier_result.rewards == {"reward": 1.0}
+            assert native.exception_info is None
+            assert (
+                trajectory_path.read_text()
+                == '{"steps": [{"message": "final answer"}]}'
+            )
+    finally:
+        release.set()
+        await writer.await_write(trajectory_write, timeout=5)
+        await asyncio.gather(finalizing, return_exceptions=True)
+
+
+@pytest.mark.unit
+async def test_failed_final_trajectory_stays_incomplete_after_later_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = ArtifactWriter(num_workers=1)
+    monkeypatch.setattr(artifact_writer, "_WRITER", writer)
+    config = _config(tmp_path, "failed-upload", attempt_timeout=None)
+    trial = _trial_ready_to_finalize(config)
+    trajectory_path = trial.paths.agent_dir / "trajectory.json"
+    agent = make_bare_terminus2(trial.paths.agent_dir)
+    open_path = type(tmp_path).open
+
+    def failed_upload(path, *args, **kwargs):
+        if path == trajectory_path:
+            raise OSError("final trajectory upload failed")
+        return open_path(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(tmp_path), "open", failed_upload)
+    with pytest.raises(ArtifactPersistenceError) as failure:
+        await agent._persist_final_trajectory()
+    await trial._record_exception(failure.value)
+    await trial._record_exception(RuntimeServiceError("later service cleanup failed"))
+
+    await trial._finalize()
+
+    native = TrialResult.model_validate_json(
+        trial.paths.lifecycle_result_path.read_text()
+    )
+    assert native.completion is None
+    assert native.verifier_result is None
+    assert native.exception_info.exception_type == "RuntimeServiceError"
+    assert not trajectory_path.exists()
 
 
 def _install_factory(monkeypatch, behaviors: dict[tuple[str, int], FakeTrial]) -> None:

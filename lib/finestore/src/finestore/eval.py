@@ -379,11 +379,7 @@ class EvaluationStore:
         )
 
     def add_source_artifacts(self, sources: Iterable[SourceArtifact]) -> list[str]:
-        """Commit one attempt's native files and metadata atomically.
-
-        The caller already holds the payloads in memory. An unbounded transaction
-        retains normal blob chunking without splitting a large attempt's commit.
-        """
+        """Commit native files and metadata atomically and return their blob URIs."""
         uris = []
         with self._store.unbounded_transaction() as transaction:
             for source in sources:

@@ -13,6 +13,7 @@ import httpx
 
 from harbor.llms.vllm_tokenization import tokenize_url
 from harbor.models.agent.model_api import ModelAPI
+from harbor.trial.errors import RuntimeServiceError
 from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
 from shellbox.machine import Machine
 
@@ -56,9 +57,14 @@ async def start_model_relays(
         (candidate, CANDIDATE_MODEL_RELAY_PORT),
     ):
         if relay is not None:
-            await stack.enter_async_context(
-                serve_http(machine, relay.handle, port=port, task_group=service_tasks)
-            )
+            try:
+                await stack.enter_async_context(
+                    serve_http(
+                        machine, relay.handle, port=port, task_group=service_tasks
+                    )
+                )
+            except Exception as exc:
+                raise RuntimeServiceError("Model relay failed to start") from exc
 
 
 class ModelRelay:

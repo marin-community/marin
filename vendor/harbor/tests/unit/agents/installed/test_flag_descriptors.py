@@ -1,5 +1,7 @@
 """Unit tests for declarative CliFlag and EnvVar descriptors on BaseInstalledAgent."""
 
+import shlex
+
 import pytest
 
 from harbor.agents.installed.base import _coerce_value
@@ -203,18 +205,6 @@ class TestEnvVarResolving:
 class TestEnvFallback:
     """Test env_fallback behavior for descriptors."""
 
-    def test_cli_flag_env_fallback(self, temp_dir):
-        agent = ClaudeCode(logs_dir=temp_dir, extra_env={"CLAUDE_CODE_MAX_TURNS": "15"})
-        assert "--max-turns 15" in agent.build_cli_flags()
-
-    def test_cli_flag_kwarg_overrides_env_fallback(self, temp_dir):
-        agent = ClaudeCode(
-            logs_dir=temp_dir, max_turns=20, extra_env={"CLAUDE_CODE_MAX_TURNS": "15"}
-        )
-        flags = agent.build_cli_flags()
-        assert "--max-turns 20" in flags
-        assert "15" not in flags
-
     def test_env_var_env_fallback(self, temp_dir):
         agent = ClaudeCode(logs_dir=temp_dir, extra_env={"MAX_THINKING_TOKENS": "4096"})
         assert agent.resolve_env_vars()["MAX_THINKING_TOKENS"] == "4096"
@@ -228,9 +218,32 @@ class TestEnvFallback:
         assert agent.resolve_env_vars()["MAX_THINKING_TOKENS"] == "8000"
 
 
+@pytest.mark.parametrize(
+    "kwargs,explicit_environment,expected_argv",
+    [
+        ({}, {"CLAUDE_CODE_MAX_TURNS": "15"}, ["--max-turns", "15"]),
+        ({"max_turns": 20}, {"CLAUDE_CODE_MAX_TURNS": "15"}, ["--max-turns", "20"]),
+        ({}, {"CLAUDE_CODE_EFFORT_LEVEL": "medium"}, ["--effort", "medium"]),
+        (
+            {"reasoning_effort": "high"},
+            {"CLAUDE_CODE_EFFORT_LEVEL": "low"},
+            ["--effort", "high"],
+        ),
+    ],
+)
+def test_cli_option_precedence_uses_explicit_environment(
+    temp_dir, monkeypatch, kwargs, explicit_environment, expected_argv
+):
+    monkeypatch.setenv("CLAUDE_CODE_MAX_TURNS", "99")
+    monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "max")
+    agent = ClaudeCode(logs_dir=temp_dir, extra_env=explicit_environment, **kwargs)
+    assert shlex.split(agent.build_cli_flags()) == expected_argv
+
+
 def test_descriptor_fallbacks_ignore_ambient_environment(temp_dir, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_MAX_TURNS", "15")
     monkeypatch.setenv("MAX_THINKING_TOKENS", "4096")
+    monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "high")
     agent = ClaudeCode(logs_dir=temp_dir)
     assert agent.build_cli_flags() == ""
     assert agent.resolve_env_vars() == {}

@@ -348,11 +348,15 @@ network route.
 
 The Harbor local adapter requires an explicitly delegated cgroup v2 `cgroup_parent`. Command
 timeouts kill that command's descendants without destroying the task filesystem or runtime peers.
-Before verification, the adapter stops all agent command groups, including detached processes;
+Before opening a verifier-only judge relay, the adapter stops all agent command groups, including detached processes;
 failure to confirm cleanup leaves the trial unscored. The same delegation enables CPU and memory limits
 across each container's processes and descendants. Use `limit` or `auto` to
 apply the task's declarations. The worker must run within that delegated
 hierarchy; see the [Shellbox delegation instructions](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md#local-backend).
+Terminus reuses a tmux terminal: an agent deadline interrupts its foreground process group while
+preserving earlier background services for ordinary grading. This does not claim to stop deliberately
+detached descendants of a terminal command. Full local quiescence before private judge access, or
+final task teardown, stops those remaining command groups.
 For example:
 
 ```yaml
@@ -431,8 +435,10 @@ The template mapping is a resolution source, not an environment forwarded to eve
 Candidates receive only their declared agent variables; installed candidates use the separate
 candidate relay on port 8788. Judge access defaults to `judge_access: verifier`: the relay on port
 8787 opens at verification and closes when verification ends. This restricts when the service
-exists; it does not create a separate verifier network. Local execution stops candidate command
-cgroups before grading. Daytona has no equivalent confirmation for every detached descendant,
+exists; it does not create a separate verifier network. Ordinary grading preserves services left
+by successful agent commands. Before verifier-only judge access, local execution stops candidate command
+cgroups. A grader that needs both a live agent-started service and private judge access requires
+separate isolation. Daytona has no equivalent confirmation for every detached descendant,
 so an independently surviving candidate process could reach the relay during grading.
 
 Tau3's simulated user/runtime and Sotopia's partner/evaluator need their model during execution.
@@ -448,7 +454,6 @@ Harbor infrastructure values name images, resource limits and log mount paths.
 | Backend | Environment and configuration supplied by the launcher |
 | --- | --- |
 | Shellbox local / bubblewrap | Fixed `PATH`, `HOME`, `LANG`, optional hash seed and explicit task/command variables. Task variables take effect inside bubblewrap and reach it through a private inherited descriptor, keeping values out of host process listings. Private `/etc` copies allowlisted runtime files; host startup files, password hashes, private keys, `/opt` contents and sysfs are hidden. Shared program directories and explicit mounts remain trusted inputs. |
-| Shellbox Docker / local gVisor | Image configuration and explicit task/command variables; no host directory mounts or implicit forwarding of host variables in Shellbox. Docker client configuration, including automatic proxy settings, remains an operator-controlled input. `runsc` changes the execution boundary, not credential policy. |
 | Shellbox Daytona | Image/snapshot configuration and explicit task/command variables. The Daytona client keeps its API credentials in the harness; creation forwards only `MachineSpec.env`. |
 | Shellbox QEMU | Image configuration and explicit task/command variables reach the guest over its serial protocol. The QEMU host process uses host runtime settings; these do not become guest variables. No host filesystem is shared with the guest. |
 | Shellbox ShellSim | Simulator defaults and explicit task/command variables in a private virtual filesystem. |
@@ -460,8 +465,7 @@ These contracts describe repository launch paths. They do not certify deployed
 images, existing snapshots, provider-side injected settings or Docker daemon
 configuration. Keep those inputs free of credentials. Bubblewrap shares the
 worker's kernel and should run on an isolated worker. Its `ALLOW` network policy
-shares the host network. Docker/gVisor bridge networking can also reach host or
-cloud metadata services. Use denied networking and the host relay for task code.
+shares the host network. Use denied networking and the host relay for task code.
 
 ## Endpoint lifecycle
 
@@ -570,6 +574,9 @@ Undecided errors are known to Harbor but have no default scoring
 policy; Marin leaves them ungraded and counts them against the completion gate. Names absent from all
 four categories fail the run as an infrastructure failure, so taxonomy changes cannot silently alter
 scoring or completion coverage.
+Required relay loss, runtime-log collection failure and environment teardown failure use named
+infrastructure errors and remain retryable on resume. They leave the affected trial unscored;
+the evaluation's completion gate still applies.
 
 ## Agent context limits
 
@@ -628,6 +635,10 @@ missing required evidence fails the run and leaves the archive unsealed.
 An attempt with unconfirmed completion retains native evidence with unknown trajectory presence,
 but contributes no normalized rows. It remains retryable on resume and does not prevent a later
 complete selected attempt from sealing the archive.
+Queued trajectory writes drain before trajectory presence becomes authoritative. Terminus commits
+its final trajectory through the required artifact lane; persistence failure leaves the attempt
+incomplete. A selected incomplete attempt prevents sealing and fails the evaluation until it is
+retried successfully.
 
 Tau3's ACP bridge retains `agent/bridge-trajectory.json` as a raw ACPX export in the trial
 directory. It does not currently convert that export to Harbor's ATIF `agent/trajectory.json`.

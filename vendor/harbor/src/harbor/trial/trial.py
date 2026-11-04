@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from harbor_config.errors import ErrorCategory, error_category
+
 from harbor.agents.factory import AgentFactory
 from harbor.bridges.base import BaseBridge
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
@@ -51,7 +53,10 @@ from harbor.trial.errors import (
     AgentSetupTimeoutError,
     AgentTimeoutError,
     EnvironmentStartTimeoutError,
+    EnvironmentStopError,
     PhaseCancellationError,
+    RuntimeLogCollectionError,
+    RuntimeServiceError,
     TrialNotScoredError,
     VerifierTimeoutError,
     VerificationNotCompletedError,
@@ -63,7 +68,7 @@ from harbor.trial.simulated_user import (
     render_user_prompt,
     validate_user_agent_version_pin,
 )
-from harbor.utils.artifact_writer import get_artifact_writer
+from harbor.utils.artifact_writer import ArtifactPersistenceError, get_artifact_writer
 from harbor.utils.artifact_authority import validate_artifact_authority
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
@@ -171,6 +176,7 @@ class Trial(ABC):
         self._are_agent_logs_downloaded = False
         self._is_agent_environment_stopped = False
         self._environment_cleanup_failed = False
+        self._artifact_persistence_failure: ArtifactPersistenceError | None = None
         self._reached_verifier = False
         self._result: TrialResult | None = None
         self._log_handler: logging.Handler | None = None
@@ -320,7 +326,11 @@ class Trial(ABC):
                     await self._recover_outputs_safely()
                 finally:
                     cleanup_failure: BaseException | None = None
-                    for cleanup in (self._close_bridge, self._stop_agent_environment):
+                    for cleanup in (
+                        self._close_bridge,
+                        self._cleanup_agents,
+                        self._stop_agent_environment,
+                    ):
                         try:
                             await cleanup()
                         except BaseException as cleanup_error:
@@ -345,6 +355,10 @@ class Trial(ABC):
             self.result.verifier_result = None
             while isinstance(exc, ExceptionGroup) and len(exc.exceptions) == 1:
                 exc = exc.exceptions[0]
+            if error_category(type(exc).__name__) is not ErrorCategory.INFRASTRUCTURE:
+                failure = RuntimeServiceError("Required trial service failed")
+                failure.__cause__ = exc
+                exc = failure
             self.logger.error(
                 "Trial %s failed",
                 self.config.trial_name,
@@ -384,11 +398,16 @@ class Trial(ABC):
             )
 
     async def _collect_runtime_logs(self) -> None:
-        await self._await_phase(
-            self.agent_environment.collect_runtime_logs(),
-            timeout_sec=self.config.trial_cleanup_grace_sec,
-            timeout_error=TimeoutError("Runtime log collection timed out"),
-        )
+        try:
+            await self._await_phase(
+                self.agent_environment.collect_runtime_logs(),
+                timeout_sec=self.config.trial_cleanup_grace_sec,
+                timeout_error=TimeoutError("Runtime log collection timed out"),
+            )
+        except PhaseCancellationError:
+            raise
+        except Exception as exc:
+            raise RuntimeLogCollectionError("Runtime log collection failed") from exc
 
     async def _prepare(self) -> None:
         await self._setup_agent_environment()
@@ -405,20 +424,40 @@ class Trial(ABC):
 
     async def _finalize(self) -> None:
         await self._enforce_verifier_result_invariant()
-        self.result.finished_at = self._now()
-        if self._is_agent_environment_stopped and not self._environment_cleanup_failed:
-            self.result.completion = TrialCompletion(
-                trajectory_present=await asyncio.to_thread(
-                    (self.paths.agent_dir / "trajectory.json").exists
+        writer = get_artifact_writer()
+        if self._artifact_persistence_failure is not None:
+            self.result.completion = None
+            self.result.verifier_result = None
+        elif (
+            self._is_agent_environment_stopped and not self._environment_cleanup_failed
+        ):
+            try:
+                # Final agent trajectories can still be queued after teardown.
+                # Establish their durability before recording authoritative absence.
+                failed = await writer.flush_async(
+                    prefix=str(self.paths.agent_dir / "trajectory.json"),
+                    timeout=self.config.trial_cleanup_grace_sec,
                 )
-            )
+                if failed:
+                    raise ArtifactPersistenceError(
+                        f"{failed} agent artifact write(s) failed before finalization"
+                    )
+            except ArtifactPersistenceError as exc:
+                self.result.completion = None
+                self.result.verifier_result = None
+                await self._record_exception(exc)
+            else:
+                self.result.completion = TrialCompletion(
+                    trajectory_present=await asyncio.to_thread(
+                        (self.paths.agent_dir / "trajectory.json").exists
+                    )
+                )
+        self.result.finished_at = self._now()
         # The lifecycle result is written to the (remote, s3://) trials_dir. Route it
         # through the required artifact lane (NOT asyncio.to_thread: the
         # default executor fills up under concurrent trials and starves every
-        # other to_thread user). Optional diagnostics drain independently and
-        # cannot hold the trial open.
+        # other to_thread user). Other optional diagnostics drain independently.
         result_json = self.result.model_dump_json(indent=4)
-        writer = get_artifact_writer()
         result_path = (
             self.paths.result_path
             if self._attempt_index is None
@@ -501,6 +540,8 @@ class Trial(ABC):
         )
 
     async def _record_exception(self, exc: BaseException) -> None:
+        if isinstance(exc, ArtifactPersistenceError):
+            self._artifact_persistence_failure = exc
         # Last error chronologically wins. An earlier exception is frequently a
         # benign / non-terminal condition — most importantly an
         # ``AgentTimeoutError``, which is EXPECTED and is meant to fall through
@@ -615,20 +656,17 @@ class Trial(ABC):
             raise
         finally:
             try:
-                await self._await_phase(
-                    running_agent.cleanup(self.agent_environment),
-                    timeout_sec=self.config.trial_cleanup_grace_sec,
-                    timeout_error=TimeoutError("Agent session cleanup timed out"),
-                )
                 if self.user_agent is not None:
                     await self._close_bridge(user=user)
-                await self._await_phase(
-                    self.agent_environment.quiesce_agent_commands(),
-                    timeout_sec=self.config.trial_cleanup_grace_sec,
-                    timeout_error=TimeoutError(
-                        "Agent commands did not stop before collection"
-                    ),
-                )
+                if self.agent_environment.requires_agent_quiescence_for_verifier:
+                    await self._cleanup_agents()
+                    await self._await_phase(
+                        self.agent_environment.quiesce_agent_commands(),
+                        timeout_sec=self.config.trial_cleanup_grace_sec,
+                        timeout_error=TimeoutError(
+                            "Agent commands did not stop before verifier model access"
+                        ),
+                    )
             except Exception as exc:
                 if isinstance(primary, asyncio.CancelledError):
                     primary.add_note(f"Agent cleanup failed: {exc}")
@@ -641,6 +679,20 @@ class Trial(ABC):
                     ) from exc
             finally:
                 target.agent_execution.finished_at = self._now()
+
+    async def _cleanup_agents(self) -> None:
+        try:
+            for agent in (self.user_agent, self.agent):
+                if agent is not None:
+                    await self._await_phase(
+                        agent.cleanup(self.agent_environment),
+                        timeout_sec=self.config.trial_cleanup_grace_sec,
+                        timeout_error=TimeoutError("Agent session cleanup timed out"),
+                    )
+        except Exception as exc:
+            raise PhaseCancellationError(
+                "Could not confirm agent session cleanup"
+            ) from exc
 
     async def _await_phase(
         self,
@@ -860,8 +912,26 @@ class Trial(ABC):
         assert self._service_tasks is not None
 
         async def verify() -> VerifierResult:
-            async with environment.verifier_model_access(self._service_tasks):
+            services = contextlib.AsyncExitStack()
+            try:
+                try:
+                    await services.enter_async_context(
+                        environment.verifier_model_access(self._service_tasks)
+                    )
+                except RuntimeServiceError:
+                    raise
+                except Exception as exc:
+                    raise RuntimeServiceError(
+                        "Verifier model services failed to start"
+                    ) from exc
                 return await verifier.verify()
+            finally:
+                try:
+                    await services.aclose()
+                except Exception as exc:
+                    raise RuntimeServiceError(
+                        "Verifier model services failed to close"
+                    ) from exc
 
         return await self._await_phase(
             verify(),
@@ -1507,9 +1577,9 @@ class Trial(ABC):
                 self._environment_cleanup_failed = True
                 _log_abandoned_stop_failure(stop_task, self.logger, label)
                 self._track_cleanup_task(stop_task)
-                raise RuntimeError(
+                raise EnvironmentStopError(
                     "Environment teardown did not complete before its deadline"
-                )
+                ) from TimeoutError("Environment stop deadline exceeded")
             try:
                 await asyncio.wait({stop_task}, timeout=remaining)
             except asyncio.CancelledError as exc:
@@ -1517,9 +1587,12 @@ class Trial(ABC):
 
         try:
             stop_task.result()
-        except BaseException:
+        except asyncio.CancelledError:
             self._environment_cleanup_failed = True
             raise
+        except Exception as exc:
+            self._environment_cleanup_failed = True
+            raise EnvironmentStopError("Environment teardown failed") from exc
         if cancellation is not None:
             raise cancellation
 

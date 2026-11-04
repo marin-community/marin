@@ -92,6 +92,9 @@ _ROLES: dict[str, tuple[str | None, str]] = {
     "/tmp/task-server-error": ("InternalServerError", "no available server"),
     "/tmp/task-connection-error": ("APIConnectionError", "Connection error"),
     "/tmp/task-api-timeout": ("APITimeoutError", "Request timed out"),
+    "/tmp/task-runtime-service": ("RuntimeServiceError", "relay exited"),
+    "/tmp/task-runtime-log": ("RuntimeLogCollectionError", "log collection failed"),
+    "/tmp/task-environment-stop": ("EnvironmentStopError", "teardown failed"),
     # Legacy pre-fix result: BadRequestError + the structured max_tokens=0 signal.
     "/tmp/task-legacy-400": ("BadRequestError", _MAX_TOKENS_ZERO_MSG),
     "/tmp/task-valid": (None, ""),
@@ -110,6 +113,9 @@ _RERUN_PATHS = {
     "/tmp/task-server-error",
     "/tmp/task-connection-error",
     "/tmp/task-api-timeout",
+    "/tmp/task-runtime-service",
+    "/tmp/task-runtime-log",
+    "/tmp/task-environment-stop",
     "/tmp/task-legacy-400",
 }
 _KEPT_PATHS = {

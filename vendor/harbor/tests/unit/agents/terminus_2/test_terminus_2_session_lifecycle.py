@@ -1,5 +1,6 @@
 """A reused Terminus agent must open a terminal after phase cleanup."""
 
+import asyncio
 import json
 import shutil
 import tempfile
@@ -45,6 +46,33 @@ class ScriptedLLM(BaseLLM):
 
     def get_model_output_limit(self) -> int:
         return 4096
+
+
+class ForegroundLLM(ScriptedLLM):
+    def __init__(self):
+        self.command_sent = False
+
+    async def call(self, prompt: str, **kwargs) -> LLMResponse:
+        if self.command_sent:
+            await asyncio.Event().wait()
+        self.command_sent = True
+        return LLMResponse(
+            content=json.dumps(
+                {
+                    "analysis": "Start a service, then run a foreground command.",
+                    "plan": "Leave the service available for grading.",
+                    "commands": [
+                        {
+                            "keystrokes": "sleep 3600 & echo $! > background.pid; "
+                            "sh -c 'echo $$ > foreground.pid; exec sleep 3600'; "
+                            "printf unexpected > after-timeout\n",
+                            "duration": 0.1,
+                        }
+                    ],
+                    "task_complete": False,
+                }
+            )
+        )
 
 
 async def test_run_after_cleanup_starts_a_new_terminal_and_retains_phase_files(
@@ -95,5 +123,67 @@ async def test_run_after_cleanup_starts_a_new_terminal_and_retains_phase_files(
                 await adapter.exec("tmux has-session -t terminus-2")
             ).return_code != 0
         finally:
+            await adapter.exec("tmux kill-server")
+            await adapter.stop(delete=True)
+
+
+async def test_cancelled_run_stops_foreground_job_and_preserves_background_service(
+    tmp_path, monkeypatch
+):
+    if shutil.which("tmux") is None:
+        pytest.skip("The terminal lifecycle regression requires installed tmux")
+
+    async def token_count(url, payload):
+        return 128
+
+    monkeypatch.setattr(Terminus2, "_init_llm", lambda self, **kwargs: ForegroundLLM())
+    monkeypatch.setattr(terminus_2, "_server_token_count", token_count)
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    adapter = DaytonaEnvironment(
+        environment_dir=environment_dir,
+        environment_name="foreground-lifecycle",
+        session_id="foreground-lifecycle",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(docker_image="test/image"),
+        client_factory=lambda: pytest.fail("Unexpected provider access"),
+    )
+    with tempfile.TemporaryDirectory(prefix="harbor-tmux-") as socket_dir:
+        machine = ProcessMachine(
+            tmp_path / "guest",
+            MachineSpec(
+                PackageSpec(),
+                workdir="/workspace",
+                env={"TMUX_TMPDIR": socket_dir, "TMUX": ""},
+            ),
+        )
+        adapter.machine = machine
+        agent = Terminus2(logs_dir=tmp_path / "agent", model_name="test/terminal")
+        running = asyncio.create_task(
+            agent.run("Run a service.", adapter, AgentContext())
+        )
+        try:
+            ready = await adapter.exec(
+                "until test -s foreground.pid; do sleep 0.01; done", timeout_sec=5
+            )
+            assert ready.return_code == 0
+            running.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(running, 5)
+
+            assert (
+                await adapter.exec("kill -0 $(cat foreground.pid)")
+            ).return_code != 0
+            assert (
+                await adapter.exec("kill -0 $(cat background.pid)")
+            ).return_code == 0
+            assert (
+                await adapter.exec("tmux has-session -t terminus-2")
+            ).return_code == 0
+            assert not machine.path("/workspace/after-timeout").exists()
+        finally:
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+            await agent.cleanup(adapter)
             await adapter.exec("tmux kill-server")
             await adapter.stop(delete=True)

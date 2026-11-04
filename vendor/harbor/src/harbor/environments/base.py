@@ -753,7 +753,12 @@ class BaseEnvironment(ABC):
         """Copy declared runtime output into the actor before grading or recovery."""
 
     async def quiesce_agent_commands(self) -> None:
-        """Confirm agent commands have stopped before collecting their output."""
+        """Stop retained agent commands before granting verifier-only authority."""
+
+    @property
+    def requires_agent_quiescence_for_verifier(self) -> bool:
+        """Whether grading grants authority that must be isolated from the agent."""
+        return False
 
     @contextlib.asynccontextmanager
     async def verifier_model_access(

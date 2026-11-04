@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 import yaml
+from marin.evaluation.harbor.driver_config import HarborErrorTaxonomy
+from marin.evaluation.harbor.runner import _read_trial
+from rigging.filesystem.storage_path import StoragePath
 
 from tests.evaluation.harbor_runtime import external_python as _external_python
 from tests.evaluation.harbor_runtime import preflight as _preflight
@@ -61,6 +64,26 @@ def test_prepared_compose_preflight_accepts_pinned_peers(tmp_path, prepared_poli
     )
     completed = _preflight(tmp_path, [(prepared_policy, {})])
     assert json.loads(completed.stdout)[0]["benchmark_metadata"]["n_benchmark"] == 1
+
+
+def test_runtime_failures_use_published_infrastructure_taxonomy_in_marin(tmp_path, prepared_policy):
+    report = json.loads(_preflight(tmp_path, [(prepared_policy, {})]).stdout)[0]
+    taxonomy = HarborErrorTaxonomy(**{role: frozenset(names) for role, names in report["error_taxonomy"].items()})
+    for failure in ("RuntimeServiceError", "RuntimeLogCollectionError", "EnvironmentStopError"):
+        result_path = tmp_path / f"{failure}.json"
+        result_path.write_text(
+            json.dumps(
+                {
+                    "task_name": "test/offline",
+                    "verifier_result": {"rewards": {"reward": 1}},
+                    "exception_info": {"exception_type": failure, "exception_message": "failed"},
+                }
+            )
+        )
+        trial = _read_trial(StoragePath(str(result_path)), taxonomy)
+        assert trial.scored is False
+        assert trial.error is not None
+        assert trial.error["type"] == failure
 
 
 def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_capabilities(tmp_path, prepared_policy):

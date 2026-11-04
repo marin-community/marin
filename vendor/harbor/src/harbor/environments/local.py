@@ -282,6 +282,10 @@ class LocalEnvironment(BaseEnvironment):
         if self.machine is not None:
             await self.machine.quiesce_commands()
 
+    @property
+    def requires_agent_quiescence_for_verifier(self) -> bool:
+        return self._judge is not None and self.judge_access is JudgeAccess.VERIFIER
+
     def verifier_model_access(
         self, service_tasks: asyncio.TaskGroup
     ) -> AbstractAsyncContextManager[None]:
