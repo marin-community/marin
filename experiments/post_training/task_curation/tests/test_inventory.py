@@ -63,6 +63,7 @@ from experiments.post_training.task_curation.inventory import (
 from experiments.post_training.task_curation.inventory import (
     test_panel_step as panel_step,
 )
+from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.pipeline import source_recipe
 
 FAMILIES = (*HELDOUT_FAMILIES.values(), "structural")
@@ -596,6 +597,11 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
             assert f"assert number_{function}()" in prompt
             assert "isinstance" not in prompt
     annotations = pq.read_table(provisional / TASK_MANIFEST_FILENAME).to_pylist()
+    with artifact_prefix(str(tmp_path / "replayed-artifacts")):
+        replayed = Path(run(panel_step(settings))[0].path)
+    assert read_tasks(replayed / FULL_VALIDATION_FILENAME) == full
+    assert read_tasks(replayed / VALIDATION_FILENAME) == fast
+    assert pq.read_table(replayed / TASK_MANIFEST_FILENAME).to_pylist() == annotations
     by_id = {row["task_id"]: row for row in annotations}
     assert Counter(row["family"] for row in annotations) == {family: 5, "agents": 3}
     assert Counter(row["part"] for row in annotations) == {"questions": 5, "tool-calls": 3}
