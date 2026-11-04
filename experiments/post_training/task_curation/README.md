@@ -18,6 +18,14 @@ selection recipe and the training/evaluation handoff.
 See [task selection](../../../docs/references/task-curation.md#final-task-selection)
 for the recipe and resume commands.
 
+## Test panels
+
+Use `--corpus <converted-corpus.json> --test-panel recipes/snowball-test-panel.json`
+to build the full panel, fast subset and manifest. Named parts select catalog
+sources; training files and the development panel are exclusions. The
+[panel reference](../../../docs/references/task-curation.md#independent-test-panels)
+explains measured task digests, recipe edits and qualification.
+
 ## Local conversion loop
 
 From the repository root:

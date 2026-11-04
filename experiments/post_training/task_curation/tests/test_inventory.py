@@ -61,10 +61,6 @@ from experiments.post_training.task_curation.inventory import (
 from experiments.post_training.task_curation.inventory import (
     TestPanelRecipe as PanelRecipe,
 )
-from experiments.post_training.task_curation.inventory import (
-    test_panel_step as panel_step,
-)
-from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.pipeline import source_recipe
 
 FAMILIES = (*HELDOUT_FAMILIES.values(), "structural")
@@ -348,8 +344,28 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     staged = tmp_path / "input"
     staged.mkdir()
     input_file = staged / "test.jsonl"
-    input_file.write_text('{"problem": "Two plus two?", "answer": "4"}\n')
+    input_file.write_text('{"problem": "Two plus two?", "answer": "4"}\n{"problem": "Two plus three?", "answer": "5"}\n')
     settings = recipe(tmp_path).model_copy(update={"sources": {source.info.id: "math"}, "family_limits": {"math": 1}})
+    excluded = source_task("independent-exclusion").model_copy(
+        update={
+            "context": ConversationInput(events=(TextMessage(role="user", content="Two plus two?"),)),
+        }
+    )
+    excluded_file = tmp_path / "exclude.parquet"
+    pq.write_table(pa.Table.from_pylist([{"task_spec": excluded.model_dump_json()}]), excluded_file)
+    settings = SelectionRecipe.model_validate(
+        {
+            **settings.model_dump(),
+            "exclusions": [
+                {
+                    "uri": str(excluded_file),
+                    "version": "2026.11.04",
+                    "rows": 1,
+                    "format": "task_spec",
+                }
+            ],
+        }
+    )
     selection_file = tmp_path / "selection.json"
     selection_file.write_text(settings.model_dump_json())
     cache = tmp_path / "cache"
@@ -381,7 +397,14 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     assert executed.exit_code == 0, executed.output
     tasks = read_tasks(output / TRAIN_FILENAME)
     assert len(tasks) == 1
-    assert tasks[0].context.events[-1].content == "Two plus two?"
+    assert tasks[0].context.events[-1].content == "Two plus three?"
+    summary = json.loads((output / "summary.json").read_text())
+    assert summary["source_counts"][source.info.id]["heldout_overlap"] == 1
+    expected_ids = {
+        json.loads(row["lowered_task_spec"])["task"]["id"] for row in pq.read_table(settings.heldout[0].uri).to_pylist()
+    }
+    assert {task.id for task in read_tasks(output / FULL_VALIDATION_FILENAME)} == expected_ids
+    assert {task.id for task in read_tasks(output / VALIDATION_FILENAME)} <= expected_ids
     input_file.unlink()
     selection_file.write_text(settings.model_copy(update={"version": "2026.10.23.2"}).model_dump_json())
     resumed = runner.invoke(
@@ -481,11 +504,43 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
         pa.Table.from_pylist([*[{"task_json": task.model_dump_json()} for task in tasks], {"task_json": None}]),
         agents / "normalize/part-00000.parquet",
     )
+    general_tasks = [case.task for case in evaluation_cases(str(corpus))]
     exclusions = {}
-    for name in ("training", "development"):
+    for name in ("training", "training-second", "development"):
         path = tmp_path / f"{name}.parquet"
-        pq.write_table(pa.Table.from_pylist([{"task_spec": source_task(name).model_dump_json()}]), path)
+        task = source_task(name)
+        if name == "training":
+            task = task.model_copy(update={"id": general_tasks[0].id})
+        elif name == "training-second":
+            task = task.model_copy(
+                update={
+                    "context": ConversationInput(
+                        events=(
+                            TextMessage(role="system", content="Historical request wrapper"),
+                            TextMessage(role="user", content="  Native\n tool  request\t0  "),
+                        )
+                    )
+                }
+            )
+        pq.write_table(pa.Table.from_pylist([{"task_spec": task.model_dump_json()}]), path)
         exclusions[name] = {"uri": str(path), "version": "2026.11.04", "rows": 1, "format": "task_spec"}
+    corpus_file = tmp_path / "corpus.json"
+    corpus_file.write_text(
+        json.dumps(
+            {
+                "population": "converted",
+                "inventory": [],
+                "sources": [
+                    {
+                        "source_id": source_id,
+                        "root": str(root),
+                        "source_key": canonical_sha256(json.loads((root / "manifest.json").read_text())),
+                    }
+                    for source_id, root in (("Evalchemy:questions", corpus), ("NeMo:predicted-action", agents))
+                ],
+            }
+        )
+    )
     family = "general" if benchmark == "mmlu" else "coding"
     return PanelRecipe(
         name="test-panel",
@@ -494,7 +549,9 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
         sources=(
             {
                 "name": "questions",
-                "input": {"uri": str(corpus), "version": "2026.11.04", "rows": 6, "format": "evaluation"},
+                "source_id": "Evalchemy:questions",
+                "rows": 6,
+                "format": "evaluation",
                 "required_tags": ["eval"],
                 "family": family,
                 "aaii_category": family,
@@ -503,7 +560,9 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
             },
             {
                 "name": "tool-calls",
-                "input": {"uri": str(agents), "version": "2026.11.04", "rows": 4, "format": "normalized"},
+                "source_id": "NeMo:predicted-action",
+                "rows": 4,
+                "format": "normalized",
                 "required_tags": ["eval", "tool-call-proxy"],
                 "family": "agents",
                 "aaii_category": "agents",
@@ -512,12 +571,31 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
             },
         ),
         fast_counts={family: 2, "agents": 2},
-        **exclusions,
+        training=(exclusions["training"], exclusions["training-second"]),
+        development=exclusions["development"],
     )
 
 
-def measured_recipe(settings: PanelRecipe, provisional: Path, rows: list[dict]) -> PanelRecipe:
-    measurements = provisional.parent / "pass-rates.parquet"
+def publish_panel(settings: PanelRecipe, tmp_path: Path, cache: str = "artifacts"):
+    recipe_file = tmp_path / f"panel-{settings.version}.json"
+    recipe_file.write_text(settings.model_dump_json())
+    result = CliRunner().invoke(
+        main,
+        [
+            "--corpus",
+            str(tmp_path / "corpus.json"),
+            "--test-panel",
+            str(recipe_file),
+            "--cache-dir",
+            str(tmp_path / cache),
+            "--run",
+        ],
+    )
+    return result, tmp_path / cache / "rl-data/task-selection" / settings.name / settings.version
+
+
+def measured_recipe(settings: PanelRecipe, tmp_path: Path, rows: list[dict]) -> PanelRecipe:
+    measurements = tmp_path / "pass-rates.parquet"
     pq.write_table(pa.Table.from_pylist(list(reversed(rows))), measurements)
     return PanelRecipe.model_validate(
         {
@@ -526,53 +604,45 @@ def measured_recipe(settings: PanelRecipe, provisional: Path, rows: list[dict]) 
             "pass_rates": {
                 "uri": str(measurements),
                 "version": "2026.11.04",
-                "rows": 8,
+                "rows": len(rows),
                 "model_revision": "fixture-model",
-                "run_output": str(provisional.parent / "saved-answer-run"),
-            },
-            "provisional": {
-                "uri": str(provisional / FULL_VALIDATION_FILENAME),
-                "version": "2026.11.04",
-                "rows": 8,
-                "format": "task_spec",
             },
         }
     )
 
 
-def panel_rates(tasks: list[TaskSpec], agent_passed: int) -> list[dict]:
+def panel_rates(tasks: list[TaskSpec]) -> list[dict]:
     return [
         {
             "task_id": task.id,
+            "task_digest": canonical_sha256(task.model_dump(mode="json")),
             "model_revision": "fixture-model",
             "attempted": 8,
             "samples": 8,
-            "passed": agent_passed if "agentic" in task.tags else index + 1,
-            "mean_score": (agent_passed if "agentic" in task.tags else index + 1) / 8,
+            "passed": index + 1,
+            "mean_score": (index + 1) / 8,
         }
         for index, task in enumerate(tasks)
     ]
 
 
-@pytest.mark.parametrize("agent_passed", [0, 6, 8])
 @pytest.mark.parametrize("benchmark,family", [("mmlu", "general"), ("mbpp", "coding")])
-def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evidence(
-    tmp_path, agent_passed, benchmark, family
-):
+def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evidence(tmp_path, benchmark, family):
     settings = panel_recipe(tmp_path, benchmark)
-    original = [case.task for case in evaluation_cases(settings.sources[0].input.uri)]
-    assert all("EXAMPLE_SENTINEL" in task.context.events[0].content for task in original)
-    provisional = Path(run(panel_step(settings))[0].path)
+    original_tasks = [case.task for case in evaluation_cases(str(tmp_path / "general"))]
+    assert all("EXAMPLE_SENTINEL" in task.context.events[0].content for task in original_tasks)
+    result, provisional = publish_panel(settings, tmp_path)
+    assert result.exit_code == 0, result.output
     full, fast = read_tasks(provisional / FULL_VALIDATION_FILENAME), read_tasks(provisional / VALIDATION_FILENAME)
     assert len(full) == 8 and len(fast) == 4
     assert {task.id for task in fast} < {task.id for task in full}
     assert all("EXAMPLE_SENTINEL" not in task.context.events[0].content for task in full)
-    originals = {task.id: task for task in original}
+    originals = {task.id: task for task in original_tasks}
     agents = {
         task.id: task
         for task in (
             TaskSpec.model_validate_json(row["task_json"])
-            for row in pq.read_table(Path(settings.sources[1].input.uri) / "normalize/part-00000.parquet").to_pylist()
+            for row in pq.read_table(tmp_path / "agents/normalize/part-00000.parquet").to_pylist()
             if row["task_json"] is not None
         )
     }
@@ -594,8 +664,8 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
             assert all(public_test in prompt for public_test in evidence["test_list"])
             assert "isinstance" not in prompt
     annotations = pq.read_table(provisional / TASK_MANIFEST_FILENAME).to_pylist()
-    with artifact_prefix(str(tmp_path / "replayed-artifacts")):
-        replayed = Path(run(panel_step(settings))[0].path)
+    result, replayed = publish_panel(settings, tmp_path, "replayed-artifacts")
+    assert result.exit_code == 0, result.output
     assert read_tasks(replayed / FULL_VALIDATION_FILENAME) == full
     assert read_tasks(replayed / VALIDATION_FILENAME) == fast
     assert pq.read_table(replayed / TASK_MANIFEST_FILENAME).to_pylist() == annotations
@@ -617,23 +687,52 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
     assert {row["license"] for row in annotations} == {"fixture-general", "fixture-agents"}
     assert all(row["source"] and row["grader_kind"] in {"package", "in_process"} for row in annotations)
     assert all(row["difficulty"] is None for row in annotations)
-    rates = panel_rates(full, agent_passed)
+    summary = json.loads((provisional / "summary.json").read_text())
+    assert summary["source_counts"]["questions"]["overlap"] == 1
+    assert summary["source_counts"]["tool-calls"]["overlap"] == 1
+    assert original_tasks[0].id not in by_id and "agent-0" not in by_id
+    rates = panel_rates(full)
     expected = {row["task_id"]: row for row in rates}
-    final_recipe = measured_recipe(settings, provisional, rates)
-    final = Path(run(panel_step(final_recipe))[0].path)
-    final_full, final_fast = read_tasks(final / FULL_VALIDATION_FILENAME), read_tasks(final / VALIDATION_FILENAME)
-    if agent_passed == 6:
-        assert final_full == full and final_fast == fast
-    else:
-        assert final_full == [task for task in full if by_id[task.id]["family"] == family]
-        assert len(final_fast) == 4
-    measured = pq.read_table(final / TASK_MANIFEST_FILENAME).to_pylist()
-    for row in measured:
-        rate = expected[row["task_id"]]
-        assert row["difficulty"] == 1 - rate["mean_score"]
-        assert row["attempted"] == row["scored"] == 8
-        assert row["initializer_pass_rate"] == rate["passed"] / 8
-        assert row["initializer_mean_score"] == rate["mean_score"]
+    final_recipe = measured_recipe(settings, tmp_path, rates)
+    result, final = publish_panel(final_recipe, tmp_path)
+    assert result.exit_code == 0, result.output
+    assert read_tasks(final / FULL_VALIDATION_FILENAME) == full
+    assert read_tasks(final / VALIDATION_FILENAME) == fast
+    for row in pq.read_table(final / TASK_MANIFEST_FILENAME).to_pylist():
+        assert row["difficulty"] == 1 - expected[row["task_id"]]["mean_score"]
+    subset = final_recipe.model_copy(
+        update={
+            "version": "2026.11.04.2",
+            "sources": (final_recipe.sources[0],),
+            "fast_counts": {family: 4},
+        }
+    )
+    result, subset_output = publish_panel(subset, tmp_path)
+    assert result.exit_code == 0, result.output
+    assert read_tasks(subset_output / FULL_VALIDATION_FILENAME) == [task for task in full if task.id in originals]
+    assert len(read_tasks(subset_output / VALIDATION_FILENAME)) == 4
+    path = tmp_path / "agents/normalize/part-00000.parquet"
+    rows = pq.read_table(path).to_pylist()
+    measured_agent = next(task for task in full if task.id in agents)
+    calls = json.loads(json.dumps(measured_agent.grader.parameters["expected_calls"]))
+    calls[0]["arguments"]["user_id"] = "DIFFERENT_USER"
+    changed = measured_agent.model_copy(
+        update={
+            "grader": measured_agent.grader.model_copy(
+                update={
+                    "parameters": {**measured_agent.grader.parameters, "expected_calls": calls},
+                }
+            )
+        }
+    )
+    for row in rows:
+        if row["task_json"] is not None and json.loads(row["task_json"])["id"] == changed.id:
+            row["task_json"] = changed.model_dump_json()
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    stale = final_recipe.model_copy(update={"version": "2026.11.04.3"})
+    result, stale_output = publish_panel(stale, tmp_path)
+    assert result.exit_code != 0
+    assert not (stale_output / FULL_VALIDATION_FILENAME).exists()
 
 
 @pytest.mark.parametrize(
@@ -647,26 +746,28 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
         "development-context",
         "missing-rate",
         "duplicate-rate",
+        "digest-rate",
     ],
 )
 def test_panel_publication_refuses_remote_graders_and_training_or_development_overlap(tmp_path, failure):
     settings = panel_recipe(tmp_path)
     if failure.endswith("rate"):
-        provisional = Path(run(panel_step(settings))[0].path)
-        tasks = read_tasks(provisional / FULL_VALIDATION_FILENAME)
-        rows = panel_rates(tasks, 6)
-        rows[-1] = {**rows[-1], "task_id": "unknown" if failure == "missing-rate" else rows[0]["task_id"]}
-        settings = measured_recipe(settings, provisional, rows)
-        step = panel_step(settings)
-        with pytest.raises(RuntimeError):
-            run(step)
-        assert not (Path(step.path()) / FULL_VALIDATION_FILENAME).exists()
-        assert not (Path(step.path()) / TASK_MANIFEST_FILENAME).exists()
+        result, provisional = publish_panel(settings, tmp_path)
+        assert result.exit_code == 0, result.output
+        rows = panel_rates(read_tasks(provisional / FULL_VALIDATION_FILENAME))
+        if failure == "digest-rate":
+            rows[-1] = {**rows[-1], "task_digest": "0" * 64}
+        else:
+            rows[-1] = {**rows[-1], "task_id": "unknown" if failure == "missing-rate" else rows[0]["task_id"]}
+        settings = measured_recipe(settings, tmp_path, rows)
+        result, output = publish_panel(settings, tmp_path)
+        assert result.exit_code != 0
+        assert not (output / FULL_VALIDATION_FILENAME).exists()
+        assert not (output / TASK_MANIFEST_FILENAME).exists()
         return
-    source = settings.sources[1].input
-    path = Path(source.uri) / "normalize/part-00000.parquet"
+    path = tmp_path / "agents/normalize/part-00000.parquet"
     rows = pq.read_table(path).to_pylist()
-    task = TaskSpec.model_validate_json(rows[0]["task_json"])
+    task = TaskSpec.model_validate_json(rows[1]["task_json"])
     if failure == "judge":
         task = source_task("judge").model_copy(
             update={
@@ -678,7 +779,17 @@ def test_panel_publication_refuses_remote_graders_and_training_or_development_ov
         task = source_task("image").model_copy(update={"tags": ("eval", "tool-call-proxy")})
     else:
         name, kind = failure.split("-")
-        excluded = read_tasks(Path(getattr(settings, name).uri))[0]
+        exclusion = settings.training[0] if name == "training" else settings.development
+        excluded = read_tasks(Path(exclusion.uri))[0]
+        if kind == "context":
+            excluded = excluded.model_copy(
+                update={
+                    "context": ConversationInput(
+                        events=(TextMessage(role="system", content="Complete the supplied tool action."),)
+                    )
+                }
+            )
+            pq.write_table(pa.Table.from_pylist([{"task_spec": excluded.model_dump_json()}]), exclusion.uri)
         task = task.model_copy(
             update=(
                 {"id": excluded.id}
@@ -689,10 +800,9 @@ def test_panel_publication_refuses_remote_graders_and_training_or_development_ov
                 }
             )
         )
-    rows[0] = {"task_json": task.model_dump_json()}
+    rows[1] = {"task_json": task.model_dump_json()}
     pq.write_table(pa.Table.from_pylist(rows), path)
-    step = panel_step(settings)
-    with pytest.raises(RuntimeError):
-        run(step)
-    assert not (Path(step.path()) / FULL_VALIDATION_FILENAME).exists()
-    assert not (Path(step.path()) / TASK_MANIFEST_FILENAME).exists()
+    result, output = publish_panel(settings, tmp_path)
+    assert result.exit_code != 0
+    assert not (output / FULL_VALIDATION_FILENAME).exists()
+    assert not (output / TASK_MANIFEST_FILENAME).exists()

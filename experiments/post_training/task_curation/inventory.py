@@ -3,6 +3,7 @@
 
 """Select a training inventory from admitted curation artifacts."""
 
+import hashlib
 import json
 import math
 from collections import Counter
@@ -12,19 +13,20 @@ from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MappingProxyType
-from typing import Any, Self
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
-from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
+from pydantic import BaseModel, ConfigDict, PositiveInt
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_cases
 from taskcompendium.evaluation.spec import ChatGeneration, TextGeneration
 from taskcompendium.grader import grader_config
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import mbpp_example
 from taskcompendium.models import (
     SCHEMA_VERSION,
@@ -123,6 +125,7 @@ class SelectionRecipe(BaseModel):
     family_limits: dict[str, PositiveInt]
     source_limits: dict[str, PositiveInt] | None = None
     heldout: tuple[HeldoutSource, ...]
+    exclusions: tuple[HeldoutSource, ...] = ()
     validation_per_family: PositiveInt
     seed: int
 
@@ -140,6 +143,7 @@ class SelectionConfig:
     recipe: SelectionRecipe
     heldout: tuple[HeldoutSource, ...]
     output_path: str
+    exclusions: tuple[HeldoutSource, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -153,7 +157,9 @@ class PanelSource(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
-    input: HeldoutSource
+    source_id: str
+    rows: PositiveInt
+    format: PanelFormat
     required_tags: tuple[str, ...]
     family: str
     aaii_category: str
@@ -168,7 +174,6 @@ class PanelMeasurement(BaseModel):
     version: str
     rows: PositiveInt
     model_revision: str
-    run_output: str
 
 
 class TestPanelRecipe(BaseModel):
@@ -177,34 +182,36 @@ class TestPanelRecipe(BaseModel):
     name: str
     version: str
     sources: tuple[PanelSource, ...]
-    training: HeldoutSource
+    training: tuple[HeldoutSource, ...]
     development: HeldoutSource
     fast_counts: dict[str, PositiveInt]
     seed: int
     pass_rates: PanelMeasurement | None = None
-    provisional: HeldoutSource | None = None
-
-    @model_validator(mode="after")
-    def measured_membership(self) -> Self:
-        if (self.pass_rates is None) != (self.provisional is None):
-            raise ValueError("Measured panels require both pass rates and provisional membership")
-        return self
 
 
 @dataclass(frozen=True)
 class TestPanelConfig:
     recipe: TestPanelRecipe
+    sources: dict[str, HeldoutSource]
     output_path: str
 
 
 @dataclass(frozen=True)
 class PanelRate:
     task_id: str
+    task_digest: str
     model_revision: str
     attempted: int
     samples: int
     passed: int
     mean_score: float
+
+
+@dataclass(frozen=True)
+class PanelSelection:
+    tasks: tuple[tuple[TaskSpec, PanelSource], ...]
+    fast: tuple[TaskSpec, ...]
+    counts: dict[str, Counter[str]]
 
 
 @dataclass(frozen=True)
@@ -476,7 +483,8 @@ def prepare(config: SelectionConfig) -> None:
     selection = select_heldout(heldout, config.recipe)
     with TemporaryDirectory(prefix="task-selection-") as temporary:
         directory = Path(temporary)
-        counts = write_training(config, selection.full, directory / TRAIN_FILENAME)
+        excluded = tuple(task for source in config.exclusions for task in _panel_source_tasks(source, environments))
+        counts = write_training(config, (*selection.full, *excluded), directory / TRAIN_FILENAME)
         write_parquet_file(
             task_records(iter(selection.sample)), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA
         )
@@ -530,6 +538,10 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
         ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}-heldout-{index}", source.version, source.uri)
         for index, source in enumerate(recipe.heldout)
     )
+    exclusions = tuple(
+        ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}-exclude-{index}", source.version, source.uri)
+        for index, source in enumerate(recipe.exclusions)
+    )
     inputs = {source_id: curated[source_id] for source_id in sorted(recipe.sources)}
 
     def build_config(ctx: StepContext) -> SelectionConfig:
@@ -544,13 +556,17 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
                 for source, step in zip(recipe.heldout, heldout, strict=True)
             ),
             ctx.output_path,
+            tuple(
+                source.model_copy(update={"uri": ctx.artifact_path(step)})
+                for source, step in zip(recipe.exclusions, exclusions, strict=True)
+            ),
         )
 
     return ArtifactStep(
         name=f"{SELECTION_PREFIX}/{recipe.name}",
         version=recipe.version,
         artifact_type=Artifact,
-        deps=(*inputs.values(), *heldout),
+        deps=(*inputs.values(), *heldout, *exclusions),
         run=prepare,
         build_config=build_config,
     )
@@ -577,29 +593,49 @@ def _panel_measurements(measurement: PanelMeasurement | None) -> dict[str, Panel
     return by_id
 
 
-def prepare_test_panel(config: TestPanelConfig) -> None:
-    """Publish seeded locally graded evaluation tasks after checking training and development exclusions."""
-    recipe = config.recipe
-    excluded_ids, excluded_digests, excluded_contexts = set(), set(), set()
-    for source in (recipe.training, recipe.development):
-        for task in _panel_source_tasks(source, {}):
-            excluded_ids.add(task.id)
-            excluded_digests.add(semantic_digest(task, False))
-            excluded_contexts.add(task.context.model_dump_json())
+def _statement_digest(task: TaskSpec) -> str | None:
+    message = next(
+        (event for event in reversed(task.context.events) if isinstance(event, TextMessage) and event.role == "user"),
+        None,
+    )
+    return hashlib.sha256(" ".join(message.content.split()).encode()).hexdigest() if message is not None else None
+
+
+def select_test_panel(
+    recipe: TestPanelRecipe,
+    sources: Mapping[str, Iterator[TaskSpec]],
+    excluded: Iterator[TaskSpec],
+    rates: Mapping[str, PanelRate],
+) -> PanelSelection:
+    """Select canonical tasks from source iterators; named-part order gives duplicates to the first part."""
+    excluded_ids, excluded_digests, excluded_contexts, excluded_statements = set(), set(), set(), set()
+    for task in excluded:
+        excluded_ids.add(task.id)
+        excluded_digests.add(semantic_digest(task, False))
+        excluded_contexts.add(task.context.model_dump_json())
+        statement = _statement_digest(task)
+        if statement is not None:
+            excluded_statements.add(statement)
     selected: list[tuple[TaskSpec, PanelSource]] = []
     selected_ids, selected_digests, selected_contexts = set(), set(), set()
-    source_counts = []
+    source_counts: dict[str, Counter[str]] = {}
 
-    def candidates(source: PanelSource, counts: Counter[str]) -> Iterator[TaskSpec]:
+    def candidates(part: PanelSource, counts: Counter[str]) -> Iterator[TaskSpec]:
         seen_ids, seen_digests, seen_contexts = set(), set(), set()
-        for task in _panel_source_tasks(source.input, {}):
+        for task in sources[part.name]:
             digest, context = semantic_digest(task, False), task.context.model_dump_json()
             counts["input"] += 1
-            if not set(source.required_tags).issubset(task.tags):
+            if not set(part.required_tags).issubset(task.tags):
                 counts["filtered"] += 1
                 continue
-            if task.id in excluded_ids or digest in excluded_digests or context in excluded_contexts:
-                raise ValueError(f"Test panel overlaps training or development: {task.id}")
+            if (
+                task.id in excluded_ids
+                or digest in excluded_digests
+                or context in excluded_contexts
+                or _statement_digest(task) in excluded_statements
+            ):
+                counts["overlap"] += 1
+                continue
             if "eval" not in task.tags:
                 raise ValueError(f"Test panel source must reserve its tasks for evaluation: {task.id}")
             if _grader_kind(task) not in (GraderKind.IN_PROCESS, GraderKind.PACKAGE):
@@ -619,115 +655,94 @@ def prepare_test_panel(config: TestPanelConfig) -> None:
             seen_contexts.add(context)
             yield task
 
-    for source in recipe.sources:
+    for part in recipe.sources:
         counts: Counter[str] = Counter()
         count, tasks = seeded_sample(
-            candidates(source, counts), size=source.count, key=lambda task: seeded_order(task.id, recipe.seed)
+            candidates(part, counts), size=part.count, key=lambda task: seeded_order(task.id, recipe.seed)
         )
-        if count < source.count:
-            raise ValueError(
-                f"Test panel source shortfall: {source.input.uri}: requested {source.count}, eligible {count}"
-            )
+        if count < part.count:
+            raise ValueError(f"Test panel part shortfall: {part.name}: requested {part.count}, eligible {count}")
         for task in tasks:
-            selected.append((task, source))
+            selected.append((task, part))
             selected_ids.add(task.id)
             selected_digests.add(semantic_digest(task, False))
             selected_contexts.add(task.context.model_dump_json())
-        source_counts.append(
-            {"part": source.name, "source": source.input.uri, **counts, "eligible": count, "selected": len(tasks)}
-        )
-
-    rates = _panel_measurements(recipe.pass_rates)
-    if rates and rates.keys() != selected_ids:
-        raise ValueError("Pass-rate evidence must join every provisional panel task exactly once")
-    agents = [rates[task.id] for task, source in selected if source.aaii_category == "agents" and rates]
-    agent_pass_rate = sum(row.passed for row in agents) / sum(row.samples for row in agents) if agents else None
-    if agent_pass_rate is not None and not 0.05 <= agent_pass_rate <= 0.95:
-        selected = [(task, source) for task, source in selected if source.aaii_category != "agents"]
+        counts.update(eligible=count, selected=len(tasks))
+        source_counts[part.name] = counts
     selected.sort(key=lambda entry: entry[0].id)
-    full = tuple(task for task, _ in selected)
-    family_counts = Counter(source.family for _, source in selected)
-    requested_fast = {family: count for family, count in recipe.fast_counts.items() if family in family_counts}
-    if set(requested_fast) != family_counts.keys():
+    if recipe.pass_rates is not None:
+        if not selected_ids <= rates.keys():
+            raise ValueError("Pass-rate evidence must cover every selected panel task")
+        for task, _ in selected:
+            if rates[task.id].task_digest != canonical_sha256(task.model_dump(mode="json")):
+                raise ValueError(f"Pass-rate evidence measures different task content: {task.id}")
+    families = {part.family for _, part in selected}
+    if recipe.fast_counts.keys() != families:
         raise ValueError("Fast-panel quotas must cover every selected family")
-    total_fast = sum(recipe.fast_counts.values())
-    total_weights = sum(requested_fast.values())
-    fast_counts = {family: total_fast * count // total_weights for family, count in requested_fast.items()}
-    remainder = total_fast - sum(fast_counts.values())
-    for family in sorted(
-        requested_fast, key=lambda family: (-(total_fast * requested_fast[family] % total_weights), family)
-    )[:remainder]:
-        fast_counts[family] += 1
     fast_ids = set()
-    for family, size in fast_counts.items():
+    for family, size in recipe.fast_counts.items():
         count, sample = seeded_sample(
-            (task for task, source in selected if source.family == family),
+            (task for task, part in selected if part.family == family),
             size=size,
             key=lambda task: seeded_order(task.id, recipe.seed),
         )
         if count < size:
             raise ValueError(f"Fast-panel source shortfall for {family}")
         fast_ids.update(task.id for task in sample)
-    fast = tuple(task for task in full if task.id in fast_ids)
-    if recipe.provisional is not None:
-        previous = tuple(_panel_source_tasks(recipe.provisional, {}))
-        previous_by_id = {task.id: task for task in previous}
-        if set(previous_by_id) != rates.keys() or any(previous_by_id[task.id] != task for task in full):
-            raise ValueError("Final panel membership or task content differs from its measured provisional panel")
-        if len(full) == len(previous):
-            with (StoragePath(recipe.provisional.uri).parent / VALIDATION_FILENAME).open("rb") as stream:
-                previous_fast = tuple(
-                    TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN]) for row in pq.read_table(stream).to_pylist()
-                )
-            if previous_fast != fast:
-                raise ValueError("Final fast-panel membership differs from its measured provisional panel")
-    manifest = []
-    for task, source in selected:
-        rate = rates.get(task.id)
-        manifest.append(
-            {
-                "task_id": task.id,
-                "family": source.family,
-                "aaii_category": source.aaii_category,
-                "agentic": "agentic" in task.tags,
-                "grader_kind": _grader_kind(task),
-                "part": source.name,
-                "source": task.source.model_dump_json(),
-                "license": source.license,
-                "difficulty": None if rate is None else 1 - rate.mean_score,
-                "initializer_mean_score": None if rate is None else rate.mean_score,
-                "initializer_pass_rate": None if rate is None else rate.passed / rate.samples,
-                "attempted": None if rate is None else rate.attempted,
-                "scored": None if rate is None else rate.samples,
-            }
-        )
+    return PanelSelection(tuple(selected), tuple(task for task, _ in selected if task.id in fast_ids), source_counts)
+
+
+def prepare_test_panel(config: TestPanelConfig) -> None:
+    """Read pinned sources and publish the selected full panel, fast subset, manifest and audit summary."""
+    recipe = config.recipe
+    rates = _panel_measurements(recipe.pass_rates)
+    selection = select_test_panel(
+        recipe,
+        {name: _panel_source_tasks(source, {}) for name, source in config.sources.items()},
+        (task for source in (*recipe.training, recipe.development) for task in _panel_source_tasks(source, {})),
+        rates,
+    )
+    manifest = (
+        {
+            "task_id": task.id,
+            "family": part.family,
+            "aaii_category": part.aaii_category,
+            "agentic": "agentic" in task.tags,
+            "grader_kind": _grader_kind(task),
+            "part": part.name,
+            "source": task.source.model_dump_json(),
+            "license": part.license,
+            "difficulty": None if not rates else 1 - rates[task.id].mean_score,
+        }
+        for task, part in selection.tasks
+    )
     schema = pa.schema(
         [
-            *TASK_MANIFEST_SCHEMA,
+            *TASK_MANIFEST_SCHEMA.remove(TASK_MANIFEST_SCHEMA.get_field_index("upstream_pass_rate")),
             ("part", pa.string()),
             ("source", pa.string()),
             ("license", pa.string()),
             ("difficulty", pa.float64()),
-            ("initializer_mean_score", pa.float64()),
-            ("initializer_pass_rate", pa.float64()),
-            ("attempted", pa.int32()),
-            ("scored", pa.int32()),
         ]
     )
     with TemporaryDirectory(prefix="test-panel-") as temporary:
         directory = Path(temporary)
-        for name, tasks in ((FULL_VALIDATION_FILENAME, full), (VALIDATION_FILENAME, fast)):
-            write_parquet_file(task_records(iter(tasks)), str(directory / name), schema=TASK_SCHEMA)
-        write_parquet_file(iter(manifest), str(directory / TASK_MANIFEST_FILENAME), schema=schema)
+        for name, tasks in (
+            (FULL_VALIDATION_FILENAME, (task for task, _ in selection.tasks)),
+            (VALIDATION_FILENAME, iter(selection.fast)),
+        ):
+            write_parquet_file(task_records(tasks), str(directory / name), schema=TASK_SCHEMA)
+        write_parquet_file(manifest, str(directory / TASK_MANIFEST_FILENAME), schema=schema)
         summary = {
             "recipe": recipe.model_dump(mode="json"),
-            "full_validation_rows": len(full),
-            "validation_rows": len(fast),
-            "family_counts": dict(family_counts),
-            "fast_family_counts": fast_counts,
-            "category_counts": dict(Counter(source.aaii_category for _, source in selected)),
-            "source_counts": source_counts,
-            "agents_pass_rate": agent_pass_rate,
+            "full_validation_rows": len(selection.tasks),
+            "validation_rows": len(selection.fast),
+            "family_counts": dict(Counter(part.family for _, part in selection.tasks)),
+            "fast_family_counts": recipe.fast_counts,
+            "category_counts": dict(Counter(part.aaii_category for _, part in selection.tasks)),
+            "source_counts": {
+                part.name: {"source_id": part.source_id, **selection.counts[part.name]} for part in recipe.sources
+            },
             "pass_rate_measured": recipe.pass_rates is not None,
             "grader_kind_counts": {
                 name.removesuffix(".parquet"): _grader_counts(directory / name)
@@ -741,52 +756,58 @@ def prepare_test_panel(config: TestPanelConfig) -> None:
         (destination / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
-def test_panel_step(recipe: TestPanelRecipe) -> ArtifactStep[Artifact]:
-    """Bind a locally graded panel to pinned sources, exclusions and optional initializer measurements."""
-    if len({source.name for source in recipe.sources}) != len(recipe.sources):
+def test_panel_step(curated: dict[str, ArtifactStep], recipe: TestPanelRecipe) -> ArtifactStep[Artifact]:
+    """Bind named recipe parts and training/development exclusions to their versioned source artifacts."""
+    if len({part.name for part in recipe.sources}) != len(recipe.sources):
         raise ValueError("Panel recipe parts must have unique names")
-    sources = (*[source.input for source in recipe.sources], recipe.training, recipe.development)
-    if recipe.provisional is not None:
-        sources = (*sources, recipe.provisional)
-    dependencies = tuple(
-        ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/panel-{index}", source.version, source.uri)
-        for index, source in enumerate(sources)
+    missing = {part.source_id for part in recipe.sources} - curated.keys()
+    if missing:
+        raise ValueError(f"Panel requires corpus sources: {', '.join(sorted(missing))}")
+    inputs = {part.name: curated[part.source_id] for part in recipe.sources}
+    exclusions = tuple(
+        ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/exclude-{index}", source.version, source.uri)
+        for index, source in enumerate((*recipe.training, recipe.development))
     )
-    if recipe.pass_rates is not None:
-        dependencies = (
-            *dependencies,
-            ArtifactStep.adopt(
-                f"rl-data/selection-inputs/{recipe.name}/pass-rates", recipe.pass_rates.version, recipe.pass_rates.uri
-            ),
+    measurement = (
+        ArtifactStep.adopt(
+            f"rl-data/selection-inputs/{recipe.name}/pass-rates", recipe.pass_rates.version, recipe.pass_rates.uri
         )
+        if recipe.pass_rates is not None
+        else None
+    )
 
     def build_config(context: StepContext) -> TestPanelConfig:
-        paths = iter(context.artifact_path(step) for step in dependencies)
+        paths = [context.artifact_path(step) for step in exclusions]
         resolved = recipe.model_copy(
             update={
-                "sources": tuple(
-                    source.model_copy(update={"input": source.input.model_copy(update={"uri": next(paths)})})
-                    for source in recipe.sources
+                "training": tuple(
+                    source.model_copy(update={"uri": path})
+                    for source, path in zip(recipe.training, paths[:-1], strict=True)
                 ),
-                "training": recipe.training.model_copy(update={"uri": next(paths)}),
-                "development": recipe.development.model_copy(update={"uri": next(paths)}),
-                "provisional": (
-                    recipe.provisional.model_copy(update={"uri": next(paths)})
-                    if recipe.provisional is not None
-                    else None
-                ),
+                "development": recipe.development.model_copy(update={"uri": paths[-1]}),
                 "pass_rates": (
-                    recipe.pass_rates.model_copy(update={"uri": next(paths)}) if recipe.pass_rates is not None else None
+                    recipe.pass_rates.model_copy(update={"uri": context.artifact_path(measurement)})
+                    if measurement is not None
+                    else None
                 ),
             }
         )
-        return TestPanelConfig(resolved, context.output_path)
+        sources = {
+            part.name: HeldoutSource(
+                uri=context.artifact_path(inputs[part.name]),
+                version=inputs[part.name].version,
+                rows=part.rows,
+                format=part.format,
+            )
+            for part in recipe.sources
+        }
+        return TestPanelConfig(resolved, sources, context.output_path)
 
     return ArtifactStep(
         name=f"{SELECTION_PREFIX}/{recipe.name}",
         version=recipe.version,
         artifact_type=Artifact,
-        deps=dependencies,
+        deps=(*dict.fromkeys(inputs.values()), *exclusions, *((measurement,) if measurement is not None else ())),
         run=prepare_test_panel,
         build_config=build_config,
     )
