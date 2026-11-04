@@ -234,14 +234,19 @@ def test_wait_non_silent_conditions_still_escalate(
     assert cluster.terminated == []
 
 
-def test_child_wait_timeout_shutdown_cancels_a_parent_whose_child_never_starts(
+def test_child_wait_timeout_shutdown_cancels_a_gang_whose_tasks_never_start(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # A Kueue-gated gang reports a RUNNING job while every task is still BUILDING (#10897).
     parent_job_id = "/runner/hero-canary"
     cluster = FakeClusterClient(
         [
             job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING, has_children=True),
-            job_pb2.JobStatus(job_id=f"{parent_job_id}/train", state=job_pb2.JOB_STATE_PENDING),
+            job_pb2.JobStatus(
+                job_id=f"{parent_job_id}/train",
+                state=job_pb2.JOB_STATE_RUNNING,
+                task_state_counts={"building": 16},
+            ),
         ]
     )
     github_output = tmp_path / "github-output"
