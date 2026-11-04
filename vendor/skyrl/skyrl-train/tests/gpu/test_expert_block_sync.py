@@ -167,7 +167,7 @@ def serving_output(model, config, x, ep_rank):
             return model(x)
 
 
-def receiver_worker(rank, rendezvous, store, directory, quantization, dp_port):
+def receiver_worker(rank, store, directory, quantization, dp_port):
     device = torch.device("cuda", rank)
     ep_rank = rank - 1
     config = VllmConfig()
@@ -277,7 +277,7 @@ def transfer_worker(rank, rendezvous_values, directory, quantization, dp_port):
         rendezvous.address, rendezvous.port, world_size=None, is_master=False, timeout=timedelta(seconds=180)
     )
     if rank:
-        receiver_worker(rank, rendezvous, store, directory, quantization, dp_port)
+        receiver_worker(rank, store, directory, quantization, dp_port)
         return
     inventories = [json.loads(store.get(f"inventory-{index}")) for index in range(2)]
     assert inventories[0]["dense"] == inventories[1]["dense"]

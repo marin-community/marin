@@ -22,6 +22,12 @@ from skyrl_train.weight_sync.expert_block.source_views import (
     expert_source_view,
 )
 
+from skyrl_train.weight_sync.expert_block.verify_weights import (
+    REPLAY_COMPARE_CHUNK_BYTES,
+    ReplayReport,
+    mismatched_bytes,
+)
+
 
 def storage_identity(tensors: dict[str, torch.Tensor]) -> dict[str, tuple]:
     """Each tensor's storage address, shape, stride, dtype and device. A sync refuses to run if these changed."""
@@ -120,11 +126,43 @@ class Stream:
         with torch.no_grad():
             return self._run(version)
 
-    def verify(self, version: int):
-        # The replay implementation also imports Stream for its transport API.
-        from skyrl_train.weight_sync.expert_block.verify_weights import replay
+    def verify(self, version: int, *, chunk_bytes: int = REPLAY_COMPARE_CHUNK_BYTES) -> ReplayReport:
+        """Replay transfers and compare each received tensor with serving weights."""
+        if chunk_bytes <= 0:
+            raise ValueError("Replay comparison chunks must contain at least one byte")
+        with torch.no_grad():
+            return self._verify(version, chunk_bytes)
 
-        return replay(self, version)
+    def _verify(self, version: int, chunk_bytes: int) -> ReplayReport:
+        landings = [(item, landing) for item, landing in self.transfers() if landing is not None]
+        scratch = torch.empty(
+            max([landing.nbytes for _, landing in landings] + [0]), dtype=torch.uint8, device=self.device
+        )
+        mismatched = torch.zeros((), dtype=torch.int64, device=self.device)
+        compared = 0
+        for item, landing in self.transfers():
+            if landing is None:
+                self.send(item)
+                continue
+            wire = scratch.narrow(0, 0, landing.nbytes).view(landing.wire_dtype).view(landing.installed.shape)
+            self.receive(item, wire)
+            # The router weight is stored as FP32; compare it in its wire dtype.
+            installed = landing.installed.to(landing.wire_dtype)
+            # Summing bool bytes can materialize an int64 input. A vocabulary tensor
+            # otherwise needs eight times its byte size in additional GPU memory.
+            mismatched.add_(mismatched_bytes(wire, installed, chunk_bytes))
+            compared += landing.nbytes
+        parameter_bytes = 0
+        if not self.trainer:
+            # Count parameter bytes in the wire dtype, so the FP32 router weight counts as BF16.
+            parameter_bytes = sum(value.numel() * value.element_size() for value in self.parameters.values())
+            for _, landing in landings:
+                parameter_bytes -= landing.installed.numel() * (
+                    landing.installed.element_size() - landing.nbytes // landing.installed.numel()
+                )
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        return ReplayReport(self.participant, version, compared, parameter_bytes, int(mismatched.item()))
 
     def _sync_device(self) -> None:
         if self.device.type == "cuda":

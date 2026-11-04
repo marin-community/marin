@@ -18,7 +18,7 @@ from skyrl_train.weight_sync.expert_block.schedule import Schedule, TrainerRank,
 from skyrl_train.weight_sync.expert_block.megatron_source import local_source_slices
 from skyrl_train.weight_sync.expert_block.source_views import local_expert_sources
 from skyrl_train.weight_sync.expert_block.stream import Stream, bind, storage_identity
-from skyrl_train.weight_sync.expert_block.verify_weights import compare_replicas, replay
+from skyrl_train.weight_sync.expert_block.verify_weights import compare_replicas
 
 
 class ExpertBlockSender:
@@ -121,7 +121,7 @@ class ExpertBlockSender:
             for name in self.sources
         }
         return {
-            "replay": asdict(replay(self.stream, version)),
+            "replay": asdict(self.stream.verify(version)),
             "replicas": asdict(compare_replicas(self.sources, groups, self.trainer.rank, version)),
         }
 

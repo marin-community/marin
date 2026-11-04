@@ -14,8 +14,6 @@ from dataclasses import dataclass
 import torch
 import torch.distributed as dist
 
-from skyrl_train.weight_sync.expert_block.stream import Stream
-
 
 @dataclass(frozen=True)
 class ReplayReport:
@@ -41,46 +39,6 @@ def mismatched_bytes(actual: torch.Tensor, expected: torch.Tensor, chunk_bytes: 
         count = min(chunk_bytes, actual_bytes.numel() - start)
         mismatched.add_(actual_bytes.narrow(0, start, count).ne(expected_bytes.narrow(0, start, count)).sum())
     return mismatched
-
-
-def replay(stream: Stream, version: int, *, chunk_bytes: int = REPLAY_COMPARE_CHUNK_BYTES) -> ReplayReport:
-    """Run the sync's broadcasts again. Receivers compare each transfer with their installed weights."""
-    if chunk_bytes <= 0:
-        raise ValueError("Replay comparison chunks must contain at least one byte")
-    with torch.no_grad():
-        return _replay(stream, version, chunk_bytes)
-
-
-def _replay(stream: Stream, version: int, chunk_bytes: int) -> ReplayReport:
-    landings = [(item, landing) for item, landing in stream.transfers() if landing is not None]
-    scratch = torch.empty(
-        max([landing.nbytes for _, landing in landings] + [0]), dtype=torch.uint8, device=stream.device
-    )
-    mismatched = torch.zeros((), dtype=torch.int64, device=stream.device)
-    compared = 0
-    for item, landing in stream.transfers():
-        if landing is None:
-            stream.send(item)
-            continue
-        wire = scratch.narrow(0, 0, landing.nbytes).view(landing.wire_dtype).view(landing.installed.shape)
-        stream.receive(item, wire)
-        # The router weight is stored as FP32; compare it in its wire dtype.
-        installed = landing.installed.to(landing.wire_dtype)
-        # Summing bool bytes can materialize an int64 input. A vocabulary tensor
-        # otherwise needs eight times its byte size in additional GPU memory.
-        mismatched.add_(mismatched_bytes(wire, installed, chunk_bytes))
-        compared += landing.nbytes
-    parameter_bytes = 0
-    if not stream.trainer:
-        # Count parameter bytes in the wire dtype, so the FP32 router weight counts as BF16.
-        parameter_bytes = sum(value.numel() * value.element_size() for value in stream.parameters.values())
-        for _, landing in landings:
-            parameter_bytes -= landing.installed.numel() * (
-                landing.installed.element_size() - landing.nbytes // landing.installed.numel()
-            )
-    if stream.device.type == "cuda":
-        torch.cuda.synchronize(stream.device)
-    return ReplayReport(stream.participant, version, compared, parameter_bytes, int(mismatched.item()))
 
 
 @dataclass(frozen=True)
