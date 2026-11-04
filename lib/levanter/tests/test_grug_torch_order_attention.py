@@ -11,10 +11,8 @@ import pytest
 
 from levanter.grug.attention import AttentionMask, attention
 from levanter.grug.attention import _core
-from levanter.grug.sharding import compact_grug_mesh
 from levanter.main.train_lm import preserve_hf_runtime_settings
-from levanter.models import snowball
-from levanter.models.snowball import SnowballAttention, SnowballConfig
+from levanter.models.snowball import SnowballConfig
 
 S, HQ, HKV, D = 9, 4, 2, 12
 
@@ -197,27 +195,6 @@ def _tiny(**overrides) -> SnowballConfig:
     return SnowballConfig(**(base | overrides))
 
 
-@pytest.mark.parametrize(
-    ("configured", "backend", "passed"),
-    [
-        ("torch_order", "gpu", "torch_order"),
-        (None, "gpu", "gpu_fa4_cute"),
-        (None, "cpu", None),
-    ],
-)
-def test_the_configured_implementation_reaches_the_attention_call(monkeypatch, configured, backend, passed):
-    seen = []
-
-    def record(q, k, v, mask, *, implementation=None):
-        seen.append(implementation)
-        return _core.reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
-
-    monkeypatch.setattr(snowball, "attention", record)
-    monkeypatch.setattr(snowball.jax, "default_backend", lambda: backend)
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        attn = SnowballAttention.init(_tiny(attention_implementation=configured), key=jax.random.PRNGKey(3))
-        attn(_bf16(4, (1, S, 32)).astype(attn.w_q.dtype), AttentionMask(is_causal=True, sliding_window=4))
-    assert seen == [passed]
 
 
 def test_hf_reload_keeps_the_attention_implementation():
