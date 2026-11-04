@@ -73,7 +73,7 @@ def test_runtime_metadata_round_trip_preserves_resolved_termination_grace(monkey
 
 
 def test_task_on_worker_without_termination_grace_uses_default(monkeypatch):
-    # Workers deployed before the grace existed do not set IRIS_TERMINATION_GRACE_MS.
+    # Older worker images do not set IRIS_TERMINATION_GRACE_MS.
     monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0:1")
     monkeypatch.delenv(TERMINATION_GRACE_ENV, raising=False)
 

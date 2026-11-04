@@ -122,9 +122,9 @@ def get_job_info() -> JobInfo | None:
         if constraints_json:
             for item in json.loads(constraints_json):
                 constraints.append(Constraint.from_proto(json_format.ParseDict(item, job_pb2.Constraint())))
-        # Workers whose image predates #10774 do not set the grace. The default
-        # matches the supervisor grace their tasks used before #10774. Remove the
-        # fallback once no such workers remain.
+        # Older worker images do not set the grace. The default matches the fixed
+        # supervisor grace that tasks used on them. Remove the fallback once no
+        # such workers remain.
         raw_grace = os.environ.get(TERMINATION_GRACE_ENV)
         termination_grace = resolve_termination_grace(Duration.from_ms(int(raw_grace)) if raw_grace else None)
 
