@@ -197,7 +197,7 @@ def run_task_shard(
 def run_zephyr(tasks: list[TaskSpec], config: CTTConfig, output: str, max_workers: int) -> object:
     rows = [{"task_json": task.model_dump_json()} for task in tasks]
     dataset = Dataset.from_list(rows).reshard(len(rows))
-    pipeline = dataset.map_shard(partial(run_task_shard, config=config)).write_jsonl(output)
+    pipeline = dataset.map_shard(partial(run_task_shard, config=config)).reshard(1).write_jsonl(output)
     with ZephyrContext(
         max_workers=min(max_workers, len(rows)),
         resources=ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=True),
