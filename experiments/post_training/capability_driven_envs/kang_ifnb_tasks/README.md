@@ -145,6 +145,27 @@ solver/adversary trials. Record solve rates, answer leakage, runtime, token cost
 and failure modes, including evidence that a task itself is poor. Do not collapse
 grader validity and educational value into one opaque score.
 
+## CTT solver calibration
+
+The demo keeps trial-level responses rather than only aggregate solve rates. Run
+three ordinary GLM-5.3 rollouts per frozen task through one Zephyr shard per task:
+
+```bash
+PYTHONPATH=. uv run --with-editable lib/taskforge-adapters --project lib/taskforge python \
+  experiments/post_training/capability_driven_envs/kang_ifnb_tasks/calibrate_ctt_zephyr.py \
+  --counts "$COUNTS/pseudobulk_counts.csv" \
+  --source-revision sha256:229d767ff229cda5b8ec335ead831ef9eee3908bd763055515ce25874428deff \
+  --count 25 --k 3 --max-workers 8 \
+  --relay-job /muchanem/glm53-relay-tok-02a \
+  --output s3://marin-us-east-02a/marin/taskforge/kang-ifnb-demo/ctt-glm53-k3/results.jsonl
+```
+
+Each result retains the frozen task digest, model and policy identity, individual
+binary rewards, full rollout/grade attempt records, token usage, stop reasons,
+and append-only ledger entries. Ordinary solver trials are labeled separately
+from future adversarial searches. These records support immediate CTT difficulty
+and discrimination summaries and preserve the response matrix for later IRT.
+
 ## Current limits
 
 - The gene panel is intentionally small and predefined.

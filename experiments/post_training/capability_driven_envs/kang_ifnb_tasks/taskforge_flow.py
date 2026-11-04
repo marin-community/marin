@@ -200,7 +200,7 @@ def proposal(candidate: Candidate, source_revision: str) -> TaskProposal:
         id=f"kang-ifnb/{candidate.family}/{candidate.identity}",
         source=SourceRef(kind=SourceKind.REPO, ref="GEO:GSE96583", hash=source_revision),
         environment=Environment.REASONING,
-        solver_machine=SolverMachine.PACKAGES,
+        solver_machine=SolverMachine.CPYTHON,
         verification=Verification.CODE,
         composite=(),
         grounding=Grounding.GROUNDED,

@@ -27,6 +27,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.runtime.resources import inline_resource
+from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from verifyit.spec import StructuredExactSpec
 
 DATA_PATH = "workspace/data/pseudobulk_counts.csv"
@@ -406,6 +407,7 @@ def task_spec(candidate: Candidate, data: bytes, source_revision: str) -> TaskSp
         environment_requirements=EnvironmentRequirements(
             capabilities=("shell", "filesystem"),
             command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image=GRADER_BASE_IMAGE,
             working_directory="/workspace",
         ),
         answer_type=AnswerType.JSON,
