@@ -191,12 +191,7 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
 
 
 def _candidate_parse(parse: Callable[[], list]) -> list:
-    """A candidate's parse, empty when SymPy cannot even build its literal.
-
-    A candidate such as a 70,000-digit integer makes ``sympify`` raise (Python's
-    integer string limit) instead of returning an expression; that candidate is
-    unparsable, which grades zero, not a grader failure.
-    """
+    """Return parsed candidates, or an empty list for SymPy construction errors."""
     from sympy import SympifyError  # noqa: PLC0415
 
     try:
