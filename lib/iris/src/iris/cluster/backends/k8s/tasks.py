@@ -864,6 +864,28 @@ def _topology_request_annotations(
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
+# Avoid the kubelet (10250) and stay below Linux's default ephemeral range
+# (32768+). Kubernetes hostPort reservations handle conflicts between Pods.
+_HOST_PORT_BLOCK_START = 20_000
+_HOST_PORT_BLOCK_SIZE = 16
+_HOST_PORT_BLOCKS = 750
+
+
+def _reserved_host_ports(task_id: str, names: Sequence[str]) -> dict[str, int]:
+    """Assign one schedulable host-port block per task, stable across retries.
+
+    Kubernetes rejects co-location when two pods claim the same hostPort, even
+    when hashes collide. Its scheduler therefore owns the cross-pod reservation;
+    probing a free socket in each container cannot provide that guarantee.
+    """
+    sorted_names = sorted(set(names))
+    if len(sorted_names) > _HOST_PORT_BLOCK_SIZE:
+        raise PodManifestError(f"Host-network task requests more than {_HOST_PORT_BLOCK_SIZE} named ports")
+    slot = int.from_bytes(hashlib.sha256(task_id.encode()).digest()[:8], "big") % _HOST_PORT_BLOCKS
+    start = _HOST_PORT_BLOCK_START + slot * _HOST_PORT_BLOCK_SIZE
+    return {name: start + offset for offset, name in enumerate(sorted_names)}
+
+
 def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
     """Whether the task pod joins its node's network, when the cluster enables host networking.
 
@@ -926,6 +948,9 @@ def _build_pod_manifest(
         resources=run_req.resources if run_req.HasField("resources") else None,
         termination_grace=termination_grace,
     )
+    host_ports = _reserved_host_ports(run_req.task_id, run_req.ports) if host_network else {}
+    for name, port in host_ports.items():
+        iris_env[f"IRIS_PORT_{name.upper()}"] = str(port)
     cluster_env = config.task_env if isolation.include_cluster_env else {}
     job_secrets = task_secret_values(run_req.environment)
     if config.require_coreweave_credentials and isolation.include_cluster_env:
@@ -1016,6 +1041,10 @@ def _build_pod_manifest(
         # message with the container's own tail log output instead.
         "terminationMessagePolicy": "FallbackToLogsOnError",
     }
+    if host_ports:
+        container["ports"] = [
+            {"containerPort": port, "hostPort": port, "protocol": "TCP"} for port in host_ports.values()
+        ]
     if job_secrets or _needs_task_policy(run_req, network):
         # The required volume also holds task startup until the pod's egress
         # policy exists: the provider writes the Secret after the policy.
