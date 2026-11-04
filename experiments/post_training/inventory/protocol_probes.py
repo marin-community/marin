@@ -21,7 +21,7 @@ from experiments.post_training.task_curation.inventory import TASK_SCHEMA, task_
 
 PROBES_FILENAME = "probes.parquet"
 PROBE_ARTIFACT_NAME = f"rl-data/{PROBE_DATASET}"
-PROBE_ARTIFACT_VERSION = "2026.11.03"
+PROBE_ARTIFACT_VERSION = "2026.11.04"
 """Bump when the probe tasks change; the grader environment and variant count enter the identity."""
 PROBE_VARIANTS = 8
 """Tasks per check; one evaluation of all variants gives each check's rate."""
