@@ -56,6 +56,26 @@ def test_gsm8k_flexible_grader_preserves_complete_final_box(response, reference,
     assert verdict.reward == expected
 
 
+@pytest.mark.parametrize(
+    ("response", "reference", "question", "expected"),
+    [
+        ("#### 18.", "18", "How many apples?", 1),
+        ("#### 0.25", "25", "What percentage of the watermelon does each adult get?", 1),
+        ("#### 0.7", "70", "What is the school's overall pass rate?", 1),
+        ("#### 0.5", "1", "How many apples?", 0),
+        ("#### 9.1", "9", "How many apples?", 0),
+    ],
+)
+def test_gsm8k_strict_match_uses_the_flexible_equivalence_rules(response, reference, question, expected):
+    verdict = score(
+        "harness_generation",
+        {"profile": "gsm8k", "references": ((reference,),), "question": question},
+        response,
+    )
+    metrics = verdict.detail["metrics"]
+    assert (metrics["exact_match,strict-match"], metrics["exact_match,flexible-extract"]) == (expected, expected)
+
+
 @pytest.mark.parametrize("threaded", [False, True])
 def test_minerva_symbolic_timeout_is_a_nonmatch(threaded):
     if threaded:
