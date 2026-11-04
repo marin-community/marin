@@ -190,6 +190,48 @@ CASES = [
         "पहला वाक्य दूसरा वाक्य",
     ),
     (
+        "keywords:existence",
+        {"keywords": ["front"]},
+        "Use the _front_ door.",
+        "Use the frontal door.",
+    ),
+    (
+        "keywords:forbidden_words",
+        {"forbidden_words": ["name"]},
+        "Set the user field.",
+        "Set the user_name field.",
+    ),
+    (
+        "keywords:existence",
+        {"keywords": ["cafe"]},
+        "Meet at the cafe.",
+        "Meet at the cafe\u0301.",
+    ),
+    (
+        "keywords:word_once",
+        {"keyword": "bar"},
+        "Meet me at the \u2764\ufe0fbar tonight.",
+        "Meet me at the barn tonight.",
+    ),
+    (
+        "keywords:existence",
+        {"keywords": ["\u0915\u0940"]},
+        "\u0930\u093e\u092e \u0915\u0940 \u0915\u093f\u0924\u093e\u092c",
+        "\u092c\u093e\u0915\u0940 \u0938\u092c \u0920\u0940\u0915",
+    ),
+    (
+        "keywords:existence",
+        {"keywords": ["\u0926\u0940"]},
+        "\u0909\u0938\u0928\u0947 \u0915\u093f\u0924\u093e\u092c \u0926\u0940",
+        "\u092e\u0941\u091d\u0947 \u0939\u093f\u0902\u0926\u0940 \u092a\u0938\u0902\u0926 \u0939\u0948",
+    ),
+    (
+        "language:response_language",
+        {"language": "hi"},
+        "यह अच्छा है।",
+        "This is good.",
+    ),
+    (
         "keywords:keyword_specific_position",
         {"keyword": "cat", "n": 1, "m": 3},
         "我爱cat。",
@@ -291,6 +333,24 @@ CASES = [
         "Intro here.\n\nWell-being matters.",
         "Intro here.\n\nBeing matters.",
     ),
+    (
+        "keywords:existence",
+        {"keywords": ["Python"]},
+        "我喜欢Python语言",
+        "我喜欢Java语言",
+    ),
+    (
+        "keywords:forbidden_words",
+        {"forbidden_words": ["banana"]},
+        "我喜欢苹果的味道",
+        "我喜欢banana的味道",
+    ),
+    (
+        "keywords:word_once",
+        {"keyword": "senior"},
+        "Senior工程师很忙。",
+        "工程师很忙。",
+    ),
 ]
 
 
@@ -304,13 +364,20 @@ CASES = [
             "Wait" + "." * 40_000,
             False,
         ),
+        ("keywords:existence", {"keywords": ["b"]}, "a" + "\u0301" * 100_000 + "b", False),
     ],
     ids=[
         "sentence_marks",
+        "keyword_after_marks",
     ],
 )
 def test_check_of_degenerate_text_finishes_within_its_deadline(name, params, text, passed):
     assert call_bounded(CONSTRAINTS[name], text, params, timeout=5)[0] is passed
+
+
+def test_empty_keyword_finishes_within_its_deadline():
+    # An empty keyword matches at every position, so the search must still advance.
+    assert call_bounded(CONSTRAINTS["keywords:existence"], "Hello world.", {"keywords": [""]}, timeout=5)[0] is True
 
 
 def test_combining_mark_stays_inside_its_word():

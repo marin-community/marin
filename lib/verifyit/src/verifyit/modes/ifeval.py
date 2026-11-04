@@ -77,6 +77,7 @@ WORD = re.compile(rf"[^\W_](?:{WORD_CHARACTER}|[{re.escape(WORD_JOINERS)}](?={WO
 UNSPACED_RANGES = (
     "\u3041-\u3096\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0003ffff"
 )
+UNSPACED_LETTER = re.compile(f"[{UNSPACED_RANGES}]")
 SPACED_WORD_CHARACTER = rf"(?![{UNSPACED_RANGES}]){WORD_CHARACTER}"
 COMPARED_WORD = re.compile(
     rf"[{UNSPACED_RANGES}]|(?![{UNSPACED_RANGES}])[^\W_]"
@@ -166,7 +167,25 @@ def ends_with_word(found: list[str], word: str) -> bool:
 
 
 def count_keyword(text: str, keyword: str) -> int:
-    return len(re.findall(r"\b" + re.escape(keyword) + r"\b", text, flags=re.IGNORECASE))
+    """Occurrences of the keyword that no letter or digit precedes, directly or through combining marks, and that
+    no letter, digit or combining mark follows.
+
+    An underscore is none of these, so ``_keyword_`` and ``user_keyword`` hold the keyword, and here neither is a Han
+    or kana letter, since Chinese and Japanese leave no space between words. Combining marks after a symbol do not join
+    the keyword to it, so an emoji with a variation selector may stand right before it.
+    """
+    pattern = re.compile(rf"(?i:{re.escape(keyword)})(?!{SPACED_WORD_CHARACTER})")
+    count, position = 0, 0
+    while position <= len(text) and (found := pattern.search(text, position)):
+        start = found.start()
+        while start > 0 and unicodedata.category(text[start - 1])[0] == "M":
+            start -= 1
+        if start > 0 and text[start - 1].isalnum() and not UNSPACED_LETTER.match(text[start - 1]):
+            position = found.start() + 1
+        else:
+            count += 1
+            position = max(found.end(), found.start() + 1)
+    return count
 
 
 def contains_keyword(text: str, keyword: str, word_boundary: bool = True) -> bool:
