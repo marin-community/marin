@@ -46,7 +46,7 @@ lists the commands. `-` as the text reads markdown from stdin.
   gate and the reason after a waiting, failed, or dropped one. Change a gate's
   emoji when you post the progress update.
 - Change other sections one at a time with `replace-section`. It preserves
-  unchanged text-only paragraphs, keeping their comments in place. Keep the
+  unchanged paragraphs, including ones with chips, and the comments on them. Keep the
   wording of text that does not need to change.
 - When an instruction changes the objective, scope, a decision, or the plan,
   update the affected sections of Main as part of the work.

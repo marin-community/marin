@@ -10,9 +10,9 @@ prefix that expires after a day, and Docs copies it in from a short-lived signed
 (append_markdown), at the top of a section (prepend_markdown), or becomes the
 content under one heading (replace_section).
 
-replace_section preserves unchanged text-only paragraphs and edits matching
-text-only paragraphs where their characters differ, so comments on unchanged
-text keep their place. New list items go into the list next to them, so a
+replace_section preserves unchanged paragraphs, including ones with chips, and
+edits matching text-only paragraphs where their characters differ, so comments
+on unchanged text keep their place. New list items go into the list next to them, so a
 numbered list keeps counting.
 
 Docs API indices count UTF-16 code units, and every request names its tab. All
@@ -928,7 +928,7 @@ def section_edits(old: list[OldUnit], new: list[NewUnit], end: int, tab_id: str)
 def replace_section(
     api: GoogleApi, doc_id: str, tab: str | None, heading: str, markdown: str, diagrams: DiagramStore | None
 ) -> None:
-    """Make the content under a heading equal to markdown, preserving unchanged text-only paragraphs.
+    """Make the content under a heading equal to markdown, preserving unchanged paragraphs.
 
     The heading itself stays.
     """
