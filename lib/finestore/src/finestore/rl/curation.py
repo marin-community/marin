@@ -34,6 +34,13 @@ class JudgmentStatus(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+# Assessments may publish with a small share of recorded unavailable judgments — reviewer
+# refusals or unparseable answers on adversarial tasks — instead of failing the campaign.
+# Above this share the campaign still fails, because an assessment that could not be
+# judged is not a partial success.
+MAX_UNAVAILABLE_JUDGMENT_SHARE: float = 0.02
+
+
 class AssessmentStatus(StrEnum):
     COMPLETE = "complete"
     FAILED = "failed"
