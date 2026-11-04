@@ -8,6 +8,7 @@ import io
 import json
 import re
 import shlex
+import subprocess
 import tarfile
 from dataclasses import replace
 
@@ -15,7 +16,9 @@ import pytest
 from click.testing import CliRunner
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.runtime.local import local_runtime
 
+from experiments.post_training.task_curation.datasets.evalchemy.environments import MATH_GRADER, PYTHON_GRADER
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images import __main__ as images
 from experiments.post_training.task_curation.images import build
@@ -105,6 +108,53 @@ def test_an_unchanged_environment_resolves_without_building(docker_log, monkeypa
     (second,) = run(environment_artifact(environment, REPOSITORY))
     assert second.image == first.image
     assert docker_log.read_text() == calls
+
+
+def test_changed_runtime_dependencies_rebuild_the_cached_lock(docker_log, monkeypatch):
+    environment = Environment(requirements=REQUIREMENTS)
+    (first,) = run(environment_artifact(environment, REPOSITORY))
+    first_lock = StoragePath(first.lock_url).read_text()
+    original = build.requires("marin-verifyit") or []
+    monkeypatch.setattr(build, "requires", lambda _name: [*original, "attrs==25.3.0", 'unused-extra; extra == "math"'])
+    (second,) = run(environment_artifact(environment, REPOSITORY))
+    assert first.lock_url != second.lock_url
+    assert StoragePath(first.lock_url).read_text() == first_lock
+    second_lock = StoragePath(second.lock_url).read_text()
+    assert "attrs==25.3.0" in second_lock
+    assert "unused-extra" not in second_lock
+
+
+@pytest.mark.integration
+def test_resolved_base_lock_grades_answers_in_an_isolated_python(tmp_path):
+    environment = Environment()
+    built = build_environment(
+        environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "environment"))
+    )
+    runtime = local_runtime(built.lock_url)
+    runtime.ensure_built()
+    spec = tmp_path / "verifier.toml"
+    spec.write_text('mode = "exact"\nexpected = ["red"]\noutput = "answer.txt"\n')
+    for answer, expected in (("red", 1), ("blue", 0)):
+        (tmp_path / "answer.txt").write_text(answer)
+        logs = tmp_path / answer
+        result = subprocess.run(
+            [
+                str(runtime.environment.python),
+                "-I",
+                "-m",
+                "verifyit.grade",
+                str(spec),
+                "--workspace",
+                str(tmp_path),
+                "--logs-dir",
+                str(logs),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        verdict = json.loads((logs / "verdict.json").read_text())
+        assert (verdict["status"], verdict["reward"]) == ("scored", expected)
 
 
 @pytest.mark.parametrize(
@@ -221,12 +271,11 @@ def test_an_image_build_requires_repository_credentials(docker_log, tmp_path):
         build_environment(environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out")))
 
 
-def test_registered_environment_build_command_resolves_new_grader(tmp_path, monkeypatch):
+@pytest.mark.parametrize("environment", [MATH_GRADER, PYTHON_GRADER])
+def test_registered_environment_build_command_resolves_new_grader(tmp_path, monkeypatch, environment):
     install_fake_build_tools(tmp_path, monkeypatch)
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    environment = Environment(requirements=REQUIREMENTS)
-    monkeypatch.setattr(images, "BUILDABLE_ENVIRONMENTS", (environment,))
     identity = identity_digest(environment)[:IDENTITY_CHARS]
     result = CliRunner().invoke(images.main, ["--identity", identity, "--repository", REPOSITORY])
     assert result.exit_code == 0, result.output
-    assert StoragePath(built_environment(environment).lock_url).read_text().startswith("numpy==2.3.5")
+    assert StoragePath(built_environment(environment).lock_url).read_text()
