@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 import pulumi
 import pytest
 import yaml
+from pulumi.output import Unknown
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
@@ -55,6 +57,17 @@ class RecordingMocks(Mocks):
             outputs["email"] = f"{args.args['accountId']}@example.iam.gserviceaccount.com"
             outputs["uniqueId"] = "99887766554433221100"
         return outputs, []
+
+
+class SkippedPreviewBuildMocks(RecordingMocks):
+    """docker-build reports the bare tag as its ref when a preview skips the build."""
+
+    def new_resource(self, args: MockResourceArgs):
+        resource_id, outputs = super().new_resource(args)
+        if args.typ == "docker-build:index:Image":
+            outputs["ref"] = outputs["tags"][0]
+            del outputs["digest"]
+        return resource_id, outputs
 
 
 def deployment_config() -> DeploymentConfig:
@@ -523,6 +536,56 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
         assert serialized_metadata == metadata
 
     return infrastructure.activation.id.apply(check)
+
+
+@pulumi.runtime.test
+def test_preview_without_a_built_image_leaves_the_vm_image_unknown():
+    # Regression: with the Loom commit unchanged, preview raised on the bare tag.
+    mocks = SkippedPreviewBuildMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=True)
+    infrastructure = create_infrastructure(deployment_config())
+
+    def check(_: object) -> None:
+        assert isinstance(by_name(mocks, "loom").inputs["metadata"]["loom-image"], Unknown)
+
+    return infrastructure.activation.id.apply(check)
+
+
+def test_activation_does_not_need_gnu_timeout_on_the_operator_host(tmp_path: Path) -> None:
+    # Regression: macOS has no `timeout`, so activation exited 127 before reaching the VM.
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for tool in ("grep", "seq", "sleep"):
+        (tools / tool).symlink_to(shutil.which(tool))
+    restarts = tmp_path / "restarts"
+    fakes = {
+        "gcloud": f"#!/bin/sh\necho restart >> '{restarts}'\n",
+        "curl": "#!/bin/sh\nprintf '%s' '{\"status\":\"ready\"}'\n",
+    }
+    for name, script in fakes.items():
+        (tools / name).write_text(script)
+        (tools / name).chmod(0o755)
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    (ssh / "google_compute_engine").touch()
+    (ssh / "google_compute_engine.pub").touch()
+
+    result = subprocess.run(
+        [shutil.which("bash"), str(ROOT / "activate.sh")],
+        env={
+            "PATH": str(tools),
+            "HOME": str(tmp_path),
+            "LOOM_PROJECT": "example",
+            "LOOM_ZONE": "us-central1-a",
+            "LOOM_INSTANCE": "loom",
+            "LOOM_DOMAIN": "loom.example.com",
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert restarts.read_text().splitlines() == ["restart"]
 
 
 @pulumi.runtime.test
