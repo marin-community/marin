@@ -443,14 +443,14 @@ def test_duplicate_execution_id_joins_terminal_execution(coordinator, tmp_path):
     result_path = _execution_result_path(str(tmp_path / "chunks"), "same-run")
     expected = ZephyrExecutionResult(results=[], counters={}, execution_id="same-run")
 
-    coordinator.run_pipeline(compute_plan(Dataset.from_list([])), "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
+    plan = compute_plan(Dataset.from_list([]))
+    coordinator.run_pipeline(plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
     assert _read_coordinator_result(result_path) == expected
 
     # The repeat carries a non-empty plan. Joining returns the first run's stored
     # result; running it again would wait for workers this coordinator never gets.
-    coordinator.run_pipeline(
-        compute_plan(Dataset.from_list([1, 2, 3])), "same-run", "test", TEST_TASK_COST, TEST_TASK_COST
-    )
+    repeat_plan = compute_plan(Dataset.from_list([1, 2, 3]))
+    coordinator.run_pipeline(repeat_plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
     assert _read_coordinator_result(result_path) == expected
 
 
