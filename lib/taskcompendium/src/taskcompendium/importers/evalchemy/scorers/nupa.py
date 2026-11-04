@@ -4,10 +4,11 @@
 """NUPA representation-sensitive component and aligned-digit exact grading."""
 
 import json
-from collections.abc import Callable
 
-from verifyit.adapters.skyrl import grade_literal_candidate
 from verifyit.grade import Aggregation, Reward, Status, aggregate_rewards, invalid_task
+from verifyit.modes.grade_exact import grade_literal_candidate
+
+from .nupa_preparation import NupaAnswerFormat, digit_parts, extract_answer, full_answer
 
 ALIGNMENT = {
     "Integer": (True,),
@@ -21,15 +22,11 @@ def grade_nupa_answer(
     candidate: object,
     expected: object,
     answer_format: str,
-    *,
-    extract_answer: Callable[[str | None, str], str | None],
-    full_answer: Callable[[str, str], str | None],
-    digit_parts: Callable[[str, str], tuple[str, ...]],
 ) -> Reward:
     """Keep trusted source extraction; grade full components and each aligned digit.
 
-    The callbacks prepare representations, never compute correctness. All five
-    benchmark metrics are retained; reward is the source exact-match metric.
+    Source preparation preserves representations and all five benchmark metrics.
+    Reward is the source exact-match metric.
     Source digit preparation omits signs, including scientific exponent signs.
     These are digit-component metrics, not mathematical numeric equivalence.
     """
@@ -67,3 +64,18 @@ def grade_nupa_answer(
         "no_answer": float(not format_valid),
     }
     return Reward(exact.reward, exact.status, {**exact.detail, "metrics": metrics, "extracted": extracted})
+
+
+def grade_nupa_candidate(expected: str, answer_format: str, candidate: str) -> Reward:
+    """Retain source exact/digit/length/format metrics without numeric equivalence."""
+    representation = NupaAnswerFormat(answer_format)
+    verdict = grade_nupa_answer(
+        candidate,
+        expected,
+        representation,
+    )
+    if verdict.status is not Status.SCORED:
+        return verdict
+    names = {"format_valid": "format_valid_rate", "no_answer": "no_answer_rate"}
+    metrics = {names.get(name, name): value for name, value in verdict.detail["metrics"].items()}
+    return Reward(verdict.reward, verdict.status, {**verdict.detail, "metrics": metrics})

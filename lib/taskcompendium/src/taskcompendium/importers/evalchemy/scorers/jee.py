@@ -12,7 +12,16 @@ from verifyit.modes.grade_exact import grade_collection_subset, grade_exact_cand
 from verifyit.modes.grade_math import grade_numeric_candidate_float
 from verifyit.spec import ExactSpec
 
+from .amc import last_boxed_answer
+
 LETTERS = "ABCD"
+
+
+class JeeQuestionType(StrEnum):
+    SINGLE_CHOICE = "MCQ"
+    MULTIPLE_CHOICE = "MCQ(multiple)"
+    INTEGER = "Integer"
+    NUMERIC = "Numeric"
 
 
 class JEEPolicy(StrEnum):
@@ -101,3 +110,12 @@ def grade_jee_answer(
     except InvalidTask as error:
         return invalid_task(str(error))
     return grade_prepared_jee(prepared)
+
+
+def grade_jee_candidate(expected: str, question_type: str, response: str) -> Reward:
+    """Apply the source's last-box extraction before type-specific grading."""
+    declared_type = JeeQuestionType(question_type)
+    prepare_jee_input(capture_jee_input(expected, "", declared_type), JEEPolicy.SOURCE)
+    extracted = last_boxed_answer(response)
+    verdict = grade_jee_answer(expected, extracted, declared_type)
+    return Reward(verdict.reward, verdict.status, {**verdict.detail, "extracted": extracted})

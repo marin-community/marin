@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from verifyit.adapters.evalchemy_jee import grade_jee_answer
 from verifyit.grade import Status
+
+from taskcompendium.importers.evalchemy.scorers.jee import grade_jee_answer
 
 
 @pytest.mark.parametrize(
