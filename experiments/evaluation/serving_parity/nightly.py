@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submit the two bounded score-check jobs and report their outcome."""
+"""Submit the two bounded logprob jobs and report their outcome."""
 
 import argparse
 import json
@@ -15,20 +15,40 @@ from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.types import JobName
 from iris.resources.state import TERMINAL_JOB_STATES
+from marin.testing.inference.backend_parity import NextTokenParity
+from marin.testing.inference.snowball import SNOWBALL, read_representative_goldens
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.serving_parity.launch import H100_WEIGHTS, V4_WEIGHTS
-from experiments.evaluation.serving_parity.score_check import scored_items
 
 
-def classify(states: list[str], score_exit: int | None) -> str:
+def classify(states: list[str]) -> str:
     """A failed arm takes precedence over its peer having no capacity."""
     if len(states) != 2 or any(state not in ("succeeded", "no_capacity") for state in states):
         return "crash"
     if "no_capacity" in states:
         return "no_capacity"
-    return {0: "pass", 1: "gap"}.get(score_exit, "crash")
+    return "pass"
+
+
+def validate_result(result: dict, hardware: str) -> None:
+    """Reject a succeeded job with incomplete or invalid probability evidence."""
+    assert result["hardware"] == hardware
+    assert result["export_sha256"] == SNOWBALL.export_sha256
+    assert result["same_rank_repeatability"] is True
+    goldens = read_representative_goldens()
+    by_id = {golden.id: golden for golden in goldens}
+    parities = result["parities"]
+    assert len(parities) == len(by_id) and {row["case_id"] for row in parities} == by_id.keys()
+    # Import the optional scorer dependencies only when validating a result.
+    # Use the production bound, never a threshold supplied by an archive.
+    from marin.testing.inference.snowball_backend_parity_jobs import VLLM_MAX_PROBABILITY_ERROR  # noqa: PLC0415
+
+    assert result["max_probability_error"] == VLLM_MAX_PROBABILITY_ERROR
+    for row in parities:
+        assert row["golden_top_token_ids"] == [score.token_id for score in by_id[row["case_id"]].top_logprobs]
+        NextTokenParity(**row).assert_matches(max_probability_error=VLLM_MAX_PROBABILITY_ERROR)
 
 
 def cleanup() -> None:
@@ -52,7 +72,7 @@ def run(run_id: str, scheduling_timeout: int) -> None:
         ("h100", H100_WEIGHTS, "s3://marin-us-east-02a"),
         ("v4", V4_WEIGHTS, "gs://marin-us-central2"),
     ):
-        outputs[hardware] = f"{bucket}/ci/serving-score/{run_id}/{hardware}"
+        outputs[hardware] = f"{bucket}/ci/serving-logprob/{run_id}/{hardware}"
         subprocess.run(
             [
                 sys.executable,
@@ -86,29 +106,24 @@ def run(run_id: str, scheduling_timeout: int) -> None:
                 state = "no_capacity" if no_capacity else status.state.value
                 if state == "succeeded":
                     result = json.loads((StoragePath(outputs[hardware]) / "result.json").read_text())
-                    scored_items(result, hardware)
+                    validate_result(result, hardware)
                     Path(f"{hardware}.json").write_text(json.dumps(result))
+                    maximum_error = max(row["max_probability_error"] for row in result["parities"])
+                    with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                        summary.write(
+                            f"- {hardware}: {len(result['parities'])} prompts, "
+                            f"max probability error {maximum_error:.6f}, "
+                            f"wall {result['wall_seconds']:.1f}s, same-rank repeat PASS\n"
+                        )
                 states.append(state)
                 with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
                     summary.write(f"- `{job}`: {state}\n")
-    score_exit = None
-    if states == ["succeeded", "succeeded"]:
-        score = subprocess.run(
-            [sys.executable, "-m", f"{module}.score_check", "--h100", "h100.json", "--tpu", "v4.json"],
-            capture_output=True,
-            text=True,
-        )
-        score_exit = score.returncode
-        details = score.stdout + score.stderr
-        print(details)
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-            summary.write(details)
-    outcome = classify(states, score_exit)
+    outcome = classify(states)
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write(f"outcome={outcome}\n")
     if outcome == "no_capacity":
-        print("::warning::No capacity: a job expired before starting; no paired score available")
-    raise SystemExit(1 if outcome in ("crash", "gap") else 0)
+        print("::warning::No capacity: a job expired before starting; no complete paired check available")
+    raise SystemExit(1 if outcome == "crash" else 0)
 
 
 if __name__ == "__main__":

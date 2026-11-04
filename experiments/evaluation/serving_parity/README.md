@@ -28,3 +28,7 @@ on each data-parallel rank. Partial runs never publish a passing result.
 The exact June d819 export is fixed; TPU uses its verified central2 mirror.
 H100 uses eight DP/EP ranks; v4 uses four hosts at TP16 with one DP rank.
 Each job has a one-hour runtime, a bounded queue, and no automatic retries.
+
+The nightly submits both arms with a 4.5-hour queue bound (one hour for manual
+dispatch). Scheduled failures alert immediately; capacity expiry alerts only
+after three consecutive scheduled nights. Manual runs never notify Slack.

@@ -1,4 +1,4 @@
-name: "Marin - Canary - Serving score check"
+name: "Marin - Canary - Serving logprob check"
 
 on:
   schedule:
@@ -10,17 +10,17 @@ permissions:
   actions: read
 
 concurrency:
-  group: serving-score-check-${{ github.ref }}
+  group: serving-logprob-check-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  score-check:
+  logprob-check:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     outputs:
       capacity_alert: ${{ steps.history.outputs.alert }}
     env:
-      RUN_ID: serving-score-${{ github.run_id }}-${{ github.run_attempt }}
+      RUN_ID: serving-logprob-${{ github.run_id }}-${{ github.run_attempt }}
       QUEUE_SECONDS: ${{ github.event_name == 'schedule' && '16200' || '3600' }}
       CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
       CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
@@ -51,7 +51,7 @@ jobs:
           printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
-      - name: Run score check
+      - name: Run logprob check
         id: check
         shell: bash -l {0}
         run: |
@@ -65,7 +65,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: serving-score
+          name: serving-logprob
           path: |
             h100.json
             v4.json
@@ -73,7 +73,7 @@ jobs:
           if-no-files-found: warn
       - name: No capacity
         if: steps.check.outputs.outcome == 'no_capacity'
-        run: echo '::warning::No capacity; no paired score this run.'
+        run: echo '::warning::No capacity; no complete paired check this run.'
       - name: Check previous scheduled nights
         id: history
         continue-on-error: true
@@ -93,18 +93,18 @@ jobs:
               const { data: jobs } = await github.rest.actions.listJobsForWorkflowRun({
                 ...context.repo, run_id: run.id, per_page: 100
               });
-              streak &&= jobs.jobs.some(j => j.name === 'score-check' &&
+              streak &&= jobs.jobs.some(j => j.name === 'logprob-check' &&
                 j.steps.some(s => s.name === 'No capacity' && s.conclusion === 'success'));
             }
             core.setOutput('alert', String(streak));
             if (streak) await core.summary.addRaw('No capacity for three consecutive scheduled runs.').write();
 
   notify-slack:
-    needs: score-check
+    needs: logprob-check
     if: |
       always() && github.event_name == 'schedule' && (
-        needs.score-check.result == 'failure' || needs.score-check.result == 'cancelled' ||
-        needs.score-check.outputs.capacity_alert == 'true'
+        needs.logprob-check.result == 'failure' || needs.logprob-check.result == 'cancelled' ||
+        needs.logprob-check.outputs.capacity_alert == 'true'
       )
     runs-on: ubuntu-latest
     steps:
@@ -112,4 +112,4 @@ jobs:
         uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          fallback-text: "Serving score check: failure or three nights without capacity. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fallback-text: "Serving logprob check: failure or three nights without capacity. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
