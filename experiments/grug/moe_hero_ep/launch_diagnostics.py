@@ -627,6 +627,10 @@ def main(
 ) -> ArtifactStep[HeroThroughputResult]:
     if (extension_steps is None) != (extension_final_lr_ratio is None):
         raise click.UsageError("--extension-steps and --extension-final-lr-ratio go together")
+    if extension_steps is not None and schedule_steps is None:
+        raise click.UsageError(
+            "--extension-steps requires --schedule-steps: a run that stops at its schedule's end trains none"
+        )
     return build_diagnostic_run(
         run_id=run_id,
         dp_racks=dp_racks,

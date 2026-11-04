@@ -1100,10 +1100,8 @@ def _check_restored_step(restored_step: int, stop_step: int) -> None:
 
 
 def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
-    """Whether a complete permanent checkpoint of ``step`` exists under the checkpointer's permanent root.
-
-    Process 0 decides for all, so every process takes the same branch around the collective save.
-    """
+    """Whether a complete permanent checkpoint of ``step`` exists under the checkpointer's permanent root."""
+    # Every process must take the same branch around the collective save, so process 0 decides for all.
     committed = jax.process_index() == 0 and any(
         candidate.step == step and candidate.metadata.get("is_temporary") is False
         for candidate in discover_checkpoint_candidates(checkpointer.base_path, max_step=step)

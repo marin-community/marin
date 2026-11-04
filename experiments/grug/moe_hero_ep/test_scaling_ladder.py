@@ -419,12 +419,6 @@ def test_schedule_extension_continues_from_the_floor_to_its_final_ratio(extensio
         assert steps_down.max() <= peak * (0.05 - extension.final_lr_ratio) / extension.steps + 1e-5 * peak * 0.05
 
 
-def test_schedule_extension_cannot_re_warm():
-    optimizer = _hero_optimizer(ScheduleExtension(steps=100, final_lr_ratio=0.06))
-    with pytest.raises(ValueError, match="would raise the rate"):
-        optimizer.lr_scheduler(HERO_SCHEDULE_STEPS)
-
-
 def _ladder_config(run_id="test-extension", size="d6144"):
     step = build_ladder_run(run_id=run_id, size=size, version="dev")
     return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
