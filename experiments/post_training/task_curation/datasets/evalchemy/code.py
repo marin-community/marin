@@ -55,7 +55,7 @@ def python_source(
             ),
             protocol=EvaluationProtocol(
                 benchmark=name,
-                version="2026.11.02",
+                version="2026.11.02" if completion else "2026.11.04",
                 operation=OperationKind.TEXT_GENERATION if completion else OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=0.2 if sampled else 0,

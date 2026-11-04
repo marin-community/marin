@@ -73,7 +73,7 @@ def instruction_source(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.02",
+                version="2026.11.02" if profile is InstructionProfile.HARNESS else "2026.11.04",
                 operation=(
                     OperationKind.TEXT_GENERATION
                     if profile is InstructionProfile.HARNESS

@@ -202,6 +202,13 @@ def test_evaluation_metadata_scan_and_selected_rows_avoid_unselected_task_decodi
         list(evaluation_cases(str(output)))
 
 
+def test_chat_items_grade_the_final_answer_unless_they_choose_otherwise(corpus, tmp_path):
+    _, output, _, _ = corpus
+    publish(corpus, tmp_path)
+    selections = {item.operation.response_selection for item in evaluation_items(str(output))}
+    assert selections == {"final_or_complete_reasoning"}
+
+
 def raw_item(task):
     return chat_item(task).model_copy(update={"operation": TextGeneration()})
 

@@ -13,6 +13,7 @@ from taskcompendium.models import ConversationInput
 
 EVALUATION_SCHEMA_VERSION = 3
 type ResponseSelection = Literal["combine", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning"]
+DEFAULT_RESPONSE_SELECTION: ResponseSelection = "final_or_complete_reasoning"
 
 
 class OperationKind(StrEnum):
@@ -37,7 +38,7 @@ class ChatGeneration(EvaluationModel):
     kind: Literal[OperationKind.CHAT_GENERATION] = OperationKind.CHAT_GENERATION
     variants: tuple[ChatPromptVariant, ...] = ()
     prompt_selection: Literal["fixed", "fit_context"] = "fixed"
-    response_selection: ResponseSelection = "combine"
+    response_selection: ResponseSelection = DEFAULT_RESPONSE_SELECTION
     historical_assistant_reasoning: Literal["omit", "empty"] = "omit"
 
     @model_validator(mode="after")

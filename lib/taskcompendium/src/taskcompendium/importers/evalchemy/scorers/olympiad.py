@@ -3,8 +3,10 @@
 
 """Legacy OlympiadBench answer preparation, adopted from Marin Evalchemy (MIT).
 
-The legacy protocol extracts the first box, including boxes in reasoning, and
-accepts any flattened reference. These rules differ from AIME's final-box path.
+The legacy protocol extracts the first box of the graded text, including inline
+reasoning, and accepts any flattened reference. A reasoning field reaches the
+graded text only in a reply with no content. These rules differ from AIME's
+final-box path.
 """
 
 import re

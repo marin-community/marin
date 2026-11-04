@@ -153,12 +153,12 @@ def test_python_evaluation_artifact_cache_separates_operation_models_and_options
     )
     # Publication packages the grader without running it, so no image or lock build is needed.
     recipe = replace(dataset.recipe, grader=Environment(image="fixture@sha256:" + "0" * 64))
-    content_first = ChatGeneration(response_selection="final_or_complete_reasoning")
+    combined = ChatGeneration(response_selection="combine")
     operations = (
         TextGeneration(),
         ChatGeneration(),
-        content_first,
-        ChatGeneration.model_validate_json(content_first.model_dump_json()),
+        combined,
+        ChatGeneration.model_validate_json(combined.model_dump_json()),
     )
     published = []
     for operation in operations:

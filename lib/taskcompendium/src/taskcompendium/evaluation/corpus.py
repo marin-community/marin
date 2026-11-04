@@ -17,6 +17,7 @@ from rigging.filesystem.path_validation import validate_relative_file_path
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.evaluation.spec import (
+    DEFAULT_RESPONSE_SELECTION,
     ChatGeneration,
     EvaluationItem,
     EvaluationModel,
@@ -135,7 +136,7 @@ def source_order(locator: str) -> tuple[str, int]:
     return file, ordinal
 
 
-def chat_item(task: TaskSpec, *, response_selection: ResponseSelection = "combine") -> EvaluationItem:
+def chat_item(task: TaskSpec, *, response_selection: ResponseSelection = DEFAULT_RESPONSE_SELECTION) -> EvaluationItem:
     return EvaluationItem(
         task_id=task.id,
         source_row=task.source.row,
