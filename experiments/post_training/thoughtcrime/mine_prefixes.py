@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mine double-think prefixes from Marin pi evaluation trajectories.
+"""Mine the thoughtcrime rows: double-think prefixes from Marin pi evaluation trajectories.
 
 A double-think reply closes its reasoning span a second time or opens a second span (#10400): the
 ``stray_end`` and ``second_span`` reasoning-span violations. Each row is the conversation before such
@@ -13,10 +13,10 @@ a reply, with the tools pi advertised. Rows are independent samples:
 
 Source runs are the bixbench-pi, bfclparity-pi and tau3-pi runs of Marin models (Grug, Snowball and
 quick-loop checkpoints) under the evals root that started before ``RUNS_BEFORE``. The rows are the
-pinned source input of the ``Marin:double-think`` task-curation dataset.
+pinned source input of the ``Marin:thoughtcrime`` task-curation dataset.
 
-    uv run python -m experiments.post_training.double_think.mine_prefixes --version 2026.11.04
-    uv run python -m experiments.post_training.double_think.mine_prefixes --version 2026.11.04 --run
+    uv run python -m experiments.post_training.thoughtcrime.mine_prefixes --version 2026.11.04
+    uv run python -m experiments.post_training.thoughtcrime.mine_prefixes --version 2026.11.04 --run
 
 Prefixes stop at pi's first context compaction and at the prompt-length cap, which keeps them inside
 the quick RL loop's input window. ``report.json`` records the counts per benchmark, model and
@@ -56,11 +56,11 @@ from verifyit.reasoning_markup import ReasoningViolation
 from zephyr.writers import write_parquet_file
 
 from experiments.post_training.inventory.train_quick_loop import MODEL_ID, MODEL_REVISION
-from experiments.post_training.task_curation.datasets.double_think import ROWS_FILE
+from experiments.post_training.task_curation.datasets.thoughtcrime import ROWS_FILE
 
 logger = logging.getLogger(__name__)
 
-ARTIFACT_NAME = "rl-data/inputs/double-think-prefixes"
+ARTIFACT_NAME = "rl-data/inputs/thoughtcrime"
 REPORT_FILENAME = "report.json"
 ROW_SCHEMA = pa.schema(
     [
@@ -298,7 +298,7 @@ def mine_prefixes(config: MiningConfig) -> None:
         raise ValueError("No double-think prefixes were selected from the source runs")
     destination = StoragePath(config.output_path)
     destination.mkdirs()
-    with TemporaryDirectory(prefix="double-think-prefixes-") as temporary:
+    with TemporaryDirectory(prefix="thoughtcrime-") as temporary:
         local = Path(temporary) / ROWS_FILE
         write_parquet_file((asdict(row) for row in rows), str(local), schema=ROW_SCHEMA)
         (destination / ROWS_FILE).upload_from(str(local))

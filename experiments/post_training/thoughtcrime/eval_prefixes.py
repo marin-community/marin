@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score one served model on the double-think prefix tasks with a single in-process vLLM server.
+"""Score one served model on the thoughtcrime tasks with a single in-process vLLM server.
 
 Serves the model from its catalog config, samples replies to every double-think prefix the way pi
 requested them (pi's tools advertised, thinking enabled, special tokens kept), and grades each reply with
@@ -12,10 +12,10 @@ verifyit's ``reasoning_markup`` grader. The grader counts a span left open by th
     uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\
       --enable-extra-resources --target-cluster cw-rno2a --priority interactive \\
       --gpu H100x8 --cpu 64 --memory 512GB --disk 600GB --timeout 14400 \\
-      --job-name double-think-eval-<model> \\
-      -- python -m experiments.post_training.double_think.eval_prefixes \\
+      --job-name thoughtcrime-eval-<model> \\
+      -- python -m experiments.post_training.thoughtcrime.eval_prefixes \\
       --model-config experiments/evaluation/serve/models/open-athena/Marin-Snowball-67B-A2B-v0.1.yaml \\
-      --output-prefix s3://marin-us-east-02a/marin/rl-data/evals/double-think-prefixes/<model>/<version>
+      --output-prefix s3://marin-us-east-02a/marin/rl-data/evals/thoughtcrime/<model>/<version>
 """
 
 import json
@@ -44,7 +44,7 @@ from verifyit.modes.grade_reasoning_markup import grade_reasoning_markup_candida
 from verifyit.reasoning_markup import reasoning_span_violation
 from verifyit.spec import ReasoningMarkupSpec
 
-from experiments.post_training.task_curation.datasets.double_think import REPOSITORY, REVISION, ROWS_FILE
+from experiments.post_training.task_curation.datasets.thoughtcrime import REPOSITORY, REVISION, ROWS_FILE
 
 logger = logging.getLogger(__name__)
 

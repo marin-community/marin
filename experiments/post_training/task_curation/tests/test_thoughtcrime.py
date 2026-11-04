@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mined double-think prefix rows convert to one-turn tool-calling tasks whose golden reply passes the grader."""
+"""Mined thoughtcrime rows convert to one-turn tool-calling tasks whose golden reply passes the grader."""
 
 import json
 
@@ -9,7 +9,7 @@ from taskcompendium.models import AnswerType, AssistantToolCalls, ToolResult
 from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.models import CheckStatus, IntendedUse
 
-from experiments.post_training.task_curation.datasets.double_think import sources
+from experiments.post_training.task_curation.datasets.thoughtcrime import sources
 from experiments.post_training.task_curation.tests.conversion import converted_task
 
 BASH = {
@@ -45,7 +45,7 @@ ROW = {
 }
 
 
-def test_double_think_rows_become_tool_calling_tasks_whose_golden_reply_scores_one():
+def test_thoughtcrime_rows_become_tool_calling_tasks_whose_golden_reply_scores_one():
     (source,) = sources()
     config = source.config
     assert config is not None and config.controls is not None and config.intended_use == IntendedUse.EVAL

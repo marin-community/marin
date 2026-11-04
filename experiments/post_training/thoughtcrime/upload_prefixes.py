@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Upload mined double-think prefix rows to the Hugging Face dataset repository the catalog pins.
+"""Upload the mined thoughtcrime rows to the Hugging Face dataset repository the catalog pins.
 
 Prints the commit of the upload; pin it as ``REVISION`` in
-``experiments/post_training/task_curation/datasets/double_think.py``.
+``experiments/post_training/task_curation/datasets/thoughtcrime.py``.
 
-    uv run python -m experiments.post_training.double_think.upload_prefixes \\
-        --rows-root s3://marin-us-east-02a/marin/rl-data/inputs/double-think-prefixes/<version>
+    uv run python -m experiments.post_training.thoughtcrime.upload_prefixes \\
+        --rows-root s3://marin-us-east-02a/marin/rl-data/inputs/thoughtcrime/<version>
 """
 
 import os
@@ -16,12 +16,12 @@ import click
 from huggingface_hub import CommitOperationAdd, HfApi
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.double_think.mine_prefixes import REPORT_FILENAME
-from experiments.post_training.task_curation.datasets.double_think import REPOSITORY, ROWS_FILE
+from experiments.post_training.thoughtcrime.mine_prefixes import REPORT_FILENAME
+from experiments.post_training.task_curation.datasets.thoughtcrime import REPOSITORY, ROWS_FILE
 
 
 @click.command(help=__doc__)
-@click.option("--rows-root", required=True, help="Published rl-data/inputs/double-think-prefixes/<version> root.")
+@click.option("--rows-root", required=True, help="Published rl-data/inputs/thoughtcrime/<version> root.")
 @click.option("--repo", default=REPOSITORY, show_default=True)
 def main(rows_root: str, repo: str) -> None:
     if not os.environ.get("HF_TOKEN"):

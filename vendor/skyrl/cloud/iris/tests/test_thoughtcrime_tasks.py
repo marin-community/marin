@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Double-think prefix tasks run through the canonical task loader and the rollout worker."""
+"""Thoughtcrime tasks run through the canonical task loader and the rollout worker."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 from verifyit.reasoning_markup import ReasoningViolation
 
-REPOSITORY = "open-athena/Marin-Double-Think-Prefixes"
+REPOSITORY = "open-athena/Marin-Thoughtcrime"
 BASH = {
     "name": "bash",
     "description": "Execute a bash command.",
@@ -88,7 +88,7 @@ class WorkerTokenizer:
 
 def prefix_task():
     source = Source(dataset=REPOSITORY, revision="f6ab8adc", row="rows.parquet:0", importer_revision="1")
-    return prefix_row_task(RawRow("double-think-0", source, ROW), ConversionContext({}, None))
+    return prefix_row_task(RawRow("thoughtcrime-0", source, ROW), ConversionContext({}, None))
 
 
 def lowered_prefix_task(tmp_path: Path):

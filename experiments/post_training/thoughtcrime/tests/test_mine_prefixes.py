@@ -7,7 +7,7 @@ import json
 
 from taskcompendium.convert.pi_trajectory import parse_pi_transcript
 
-from experiments.post_training.double_think.mine_prefixes import (
+from experiments.post_training.thoughtcrime.mine_prefixes import (
     MiningConfig,
     MiningReport,
     Trajectory,

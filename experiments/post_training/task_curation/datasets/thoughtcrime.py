@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Double-think prefixes mined from Marin pi evaluation trajectories (#10400).
+"""Thoughtcrime: double-think prefixes mined from Marin pi evaluation trajectories (#10400).
 
 Each task is the conversation before an assistant reply in a bixbench-pi, bfclparity-pi or tau3-pi
 trajectory where the recorded model closed its reasoning span a second time or opened a second span,
 with the tools pi advertised as final tools. The model answers with one turn and scores one when its
-reasoning markup is well formed. ``experiments/post_training/double_think/mine_prefixes.py`` mines
+reasoning markup is well formed. ``experiments/post_training/thoughtcrime/mine_prefixes.py`` mines
 the rows, one per benchmark task, and ``upload_prefixes.py`` publishes them to the pinned repository.
 """
 
@@ -18,10 +18,10 @@ from taskcompendium.pipeline.models import Controls, IntendedUse, Reply
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-REPOSITORY = "open-athena/Marin-Double-Think-Prefixes"
+REPOSITORY = "open-athena/Marin-Thoughtcrime"
 REVISION = "PENDING"
 ROWS_FILE = "rows.parquet"
-SOURCE_ID = "Marin:double-think"
+SOURCE_ID = "Marin:thoughtcrime"
 FAMILY = "reasoning_markup"
 WELL_FORMED_REPLY = "<|start_think|>Check the workspace before acting.<|end_think|>"
 
@@ -44,7 +44,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             info=SourceInfo(
                 id=SOURCE_ID,
-                title="Marin pi double-think prefixes",
+                title="Marin thoughtcrime: pi double-think prefixes",
                 origin="Marin",
                 family=FAMILY,
                 tags=("eval", "single-turn", "tool-calling", "reasoning-markup", "pi", "bixbench", "bfcl", "tau3"),
@@ -52,7 +52,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 notes="One prefix per benchmark task; prefixes stop at pi's first compaction and 12,288 prompt tokens.",
             ),
             config=CurationRecipe(
-                name="double-think",
+                name="thoughtcrime",
                 version="1",
                 source=HfSource(REPOSITORY, REVISION, (ROWS_FILE,), SourceFormat.PARQUET),
                 convert=prefix_row_task,
