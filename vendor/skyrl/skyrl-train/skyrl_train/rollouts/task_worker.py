@@ -111,6 +111,9 @@ DAYTONA_RATE_LIMIT_HEADERS = frozenset(
     for throttler in ("anonymous", "authenticated", "sandbox-create", "sandbox-lifecycle")
 ) | {"retry-after"}
 
+SERVER_ERROR_MESSAGE_CHARS = 500
+"""How much of a model server's error message a failed rollout keeps."""
+
 
 class InstalledAgentWorker(Protocol):
     async def startup(self) -> None: ...
@@ -288,6 +291,8 @@ def _failed_rollout(
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
         diagnostics.update(error_category=error.category, request_id=error.request_id, status_code=error.status_code)
+        if error.message is not None:
+            diagnostics["error_message"] = error.message[:SERVER_ERROR_MESSAGE_CHARS]
     if interruption.grade.failure == GradingFailure.TIMEOUT:
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
