@@ -104,11 +104,7 @@ def _empty_manifest() -> Manifest:
 
 
 def _create_or_read(path: str, data: bytes, *, operation: str) -> bytes:
-    """Create the object at ``path`` with ``data`` unless it exists, and return the stored bytes.
-
-    A create can conflict with another writer's create that is still in flight. The reread
-    then finds no object, so the attempt is retried until that object is visible.
-    """
+    """Create the object at ``path`` with ``data`` unless it exists, and return the stored bytes."""
     obj = conditional_object(path)
 
     def attempt() -> bytes:
@@ -121,6 +117,7 @@ def _create_or_read(path: str, data: bytes, *, operation: str) -> bytes:
         except ConditionalWriteError:
             existing = obj.read()
             if existing is None:
+                # The competing create is still in flight; retry until its object is visible.
                 raise
             return existing.data
 
