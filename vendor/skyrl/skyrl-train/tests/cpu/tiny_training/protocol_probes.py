@@ -19,9 +19,11 @@ from taskcompendium.examples.protocol_probes import (
     PROBE_TURNS,
     SHELLSIM_MACHINE,
     lock_grader_environment,
+    probe_check,
     probe_tasks,
 )
-from taskcompendium.models import ENABLE_THINKING, RequiredFileCheck
+from taskcompendium.models import ENABLE_THINKING
+from taskcompendium.protocol import ProtocolCheck
 
 from tests.cpu.tiny_training.experiment import run_tiny_training
 
@@ -35,7 +37,7 @@ def write_probe_rows(path: Path, variants: int) -> Path:
     tasks = [
         task
         for task in probe_tasks(grader_environment=lock_grader_environment(UNBUILT_GRADER_LOCK), variants=variants)
-        if not isinstance(task.protocol_check, RequiredFileCheck)
+        if probe_check(task) != ProtocolCheck.REQUIRED_FILE
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     table = pa.table({TASK_SPEC_COLUMN: [task.model_dump_json() for task in tasks]})

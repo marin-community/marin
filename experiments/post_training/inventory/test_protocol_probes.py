@@ -5,6 +5,7 @@ from collections import Counter
 
 import pyarrow.parquet as pq
 from shellbox.machine import CommandSemantics
+from taskcompendium.examples.protocol_probes import probe_check
 from taskcompendium.models import TaskSpec, VerifyitGrader
 from taskcompendium.runtime.local import LOCK_FILE
 
@@ -18,7 +19,7 @@ def test_probe_rows_round_trip_with_a_shellsim_task_machine_and_a_lock_graded_an
 
     rows = pq.read_table(tmp_path / PROBES_FILENAME).column(TASK_SPEC_COLUMN).to_pylist()
     tasks = [TaskSpec.model_validate_json(row) for row in rows]
-    checks = Counter(task.protocol_check.kind for task in tasks if task.protocol_check is not None)
+    checks = Counter(probe_check(task) for task in tasks)
     assert checks == {"required_file": 2, "tool_execution": 2, "thinking_disabled": 2, "url_loading": 2}
     assert len({task.id for task in tasks}) == len(tasks)
 

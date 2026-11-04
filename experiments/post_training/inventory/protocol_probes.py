@@ -5,8 +5,7 @@
 
 The probes are the ``protocol-probes`` dataset of ``taskcompendium.examples.protocol_probes``. The
 answer file is graded in the worker from the verifyit lock of an environment with no extra packages.
-Evaluation reports each check's results as ``eval/protocol-probes/protocol/<check>/<result>`` with an
-``_assessed`` denominator.
+Each dumped evaluation row keeps its assessment under ``verification.diagnostics.protocol``.
 """
 
 from marin.execution.artifact import Artifact

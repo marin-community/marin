@@ -11,26 +11,30 @@ from taskcompendium.examples.protocol_probes import (
     FETCH_REQUIREMENT,
     NONCE_FILE,
     PROBE_URL,
+    probe_check,
     probe_nonce,
     probe_tasks,
 )
 from taskcompendium.fetch import FETCH_ACTION_INTERFACE, HttpPage, NetworkFailure, fetch_requirement
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
-from taskcompendium.protocol import PROTOCOL_DIAGNOSTICS_KEY
+from taskcompendium.models import (
+    CHAT_TEMPLATE_KWARGS,
+    ENABLE_THINKING,
+    CommandSemantics,
+    EnvironmentRequirements,
+    TaskSpec,
+)
+from taskcompendium.protocol import PROTOCOL_DIAGNOSTICS_KEY, ProtocolCheck
 
 from rolloutengine.harness.fetch import FetchProvider
 from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.models import ModelRequest, ModelTurn, Prompt, RolloutContractError
+from rolloutengine.models import ModelRequest, ModelTurn, Prompt
 from rolloutengine.test_support import SHELL, ReplayModel, engine, machine_runtime, rollout_spec
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 ENVIRONMENT = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=FIXTURE_IMAGE)
-TASKS = {
-    task.protocol_check.kind: task
-    for task in probe_tasks(grader_environment=ENVIRONMENT, variants=1)
-    if task.protocol_check is not None
-}
+TASKS = {probe_check(task): task for task in probe_tasks(grader_environment=ENVIRONMENT, variants=1)}
 FETCH_HARNESS = {SHELL: ShellHarness(command_timeout=None, tools={FETCH_ACTION_INTERFACE: FetchProvider()})}
+THINKING_OFF = {CHAT_TEMPLATE_KWARGS: {ENABLE_THINKING: False}}
 
 
 def tool_call(name: str, arguments: dict, call_id: str = "call-0") -> dict:
@@ -43,18 +47,18 @@ def reply(content: str) -> dict:
 
 
 def protocol(graded) -> dict:
-    return graded.grade.diagnostics[PROTOCOL_DIAGNOSTICS_KEY]
+    return graded.grade.diagnostics.get(PROTOCOL_DIAGNOSTICS_KEY, {})
 
 
 async def test_tool_probe_grades_a_real_shell_rollout():
-    task = TASKS["tool_execution"]
+    task = TASKS[ProtocolCheck.TOOL_EXECUTION]
     model = ReplayModel([tool_call("run_command", {"command": f"cat /{NONCE_FILE}"}), reply(probe_nonce(task.id))])
 
     graded = await engine(model, {Backend.SHELLSIM: ShellSimMachineFactory()}).run_task(
         rollout_spec(task, machine=machine_runtime(backend=Backend.SHELLSIM))
     )
 
-    assessment = protocol(graded)
+    assessment = protocol(graded)["tool_execution"]
     assert (assessment["label"], assessment["protocol_compliance"], assessment["answer_correctness"]) == (
         "executed",
         True,
@@ -71,7 +75,7 @@ async def test_tool_probe_grades_a_real_shell_rollout():
     ],
 )
 async def test_url_probe_serves_declared_pages_and_labels_failed_retrievals(page, label, correct):
-    task = TASKS["url_loading"]
+    task = TASKS[ProtocolCheck.URL_LOADING]
     if page is not None:
         environment = task.environment_requirements.model_copy(
             update={"tool_providers": {FETCH_REQUIREMENT: fetch_requirement({PROBE_URL: page})}}
@@ -84,7 +88,7 @@ async def test_url_probe_serves_declared_pages_and_labels_failed_retrievals(page
 
     [_, observation] = graded.rollout.conversations[0].messages[-3:-1]
     assert json.loads(observation["content"])["url"] == PROBE_URL
-    assessment = protocol(graded)
+    assessment = protocol(graded)["url_loading"]
     assert (assessment["label"], assessment["protocol_compliance"], graded.grade.reward == 1.0) == (
         label,
         True,
@@ -93,7 +97,7 @@ async def test_url_probe_serves_declared_pages_and_labels_failed_retrievals(page
 
 
 async def test_fetch_provider_answers_unknown_urls_and_bad_arguments_as_observations():
-    task = TASKS["url_loading"]
+    task = TASKS[ProtocolCheck.URL_LOADING]
     model = ReplayModel(
         [
             tool_call("fetch_url", {"address": PROBE_URL}, "bad"),
@@ -106,7 +110,7 @@ async def test_fetch_provider_answers_unknown_urls_and_bad_arguments_as_observat
 
     tool_messages = [message for message in graded.rollout.conversations[0].messages if message["role"] == "tool"]
     assert [json.loads(message["content"]).get("status") for message in tool_messages] == [None, 404]
-    assert protocol(graded)["label"] == "not_attempted"
+    assert protocol(graded)["url_loading"]["label"] == "not_attempted"
 
 
 @dataclass
@@ -122,6 +126,17 @@ class ServedModel:
         return ModelTurn(reply(visible), (10, 11), (20,), (-0.5,), "stop", raw_response=self.raw_response)
 
 
+class ThinkingOffHarness:
+    """Ask the model with thinking turned off, as a launch that disables thinking does."""
+
+    def check(self, task: TaskSpec, limits) -> None:
+        pass
+
+    async def run(self, context, session) -> None:
+        [instruction] = context.task.context.events
+        await session.start(Prompt(({"role": "user", "content": instruction.content},), THINKING_OFF))
+
+
 @pytest.mark.parametrize(
     "raw,expected",
     [
@@ -129,32 +144,22 @@ class ServedModel:
         pytest.param("<think>easy</think>{nonce}", ("reasoning_emitted", False), id="emitted"),
     ],
 )
-async def test_thinking_probe_disables_thinking_and_grades_the_raw_response(raw, expected):
-    task = TASKS["thinking_disabled"]
+async def test_thinking_probe_grades_the_raw_response_when_the_request_turned_thinking_off(raw, expected):
+    task = TASKS[ProtocolCheck.THINKING_DISABLED]
     model = ServedModel(raw.format(nonce=probe_nonce(task.id)))
 
-    graded = await engine(model).run_task(rollout_spec(task))
+    graded = await engine(model, harnesses={"off": ThinkingOffHarness()}).run_task(rollout_spec(task, harness="off"))
 
-    assert [request.options["chat_template_kwargs"] for request in model.requests] == [{"enable_thinking": False}]
-    assessment = protocol(graded)
-    assert (assessment["label"], assessment["protocol_compliance"]) == expected
-    assert graded.grade.reward == 1.0
+    assessment = protocol(graded)["thinking_disabled"]
+    assert (assessment["label"], assessment["protocol_compliance"], graded.grade.reward) == (*expected, 1.0)
 
 
-class ThinkingHarness:
-    """A harness that enables thinking whatever the task requests."""
+async def test_thinking_is_not_assessed_without_raw_responses_or_when_thinking_was_not_turned_off():
+    task = TASKS[ProtocolCheck.THINKING_DISABLED]
+    model = ReplayModel([reply(probe_nonce(task.id))])
 
-    def check(self, task, limits):
-        pass
+    off = await engine(model, harnesses={"off": ThinkingOffHarness()}).run_task(rollout_spec(task, harness="off"))
+    default = await engine(ServedModel(probe_nonce(task.id))).run_task(rollout_spec(task))
 
-    async def run(self, context, session):
-        prompt = Prompt(
-            ({"role": "user", "content": "Return 12."},), {"chat_template_kwargs": {"enable_thinking": True}}
-        )
-        await session.start(prompt)
-
-
-async def test_a_harness_cannot_enable_thinking_for_a_thinking_disabled_check():
-    spec = rollout_spec(TASKS["thinking_disabled"], harness="thinking")
-    with pytest.raises(RolloutContractError, match="thinking-disabled"):
-        await engine(ReplayModel([reply("12")]), harnesses={"thinking": ThinkingHarness()}).run_task(spec)
+    assert "not_evaluable" in protocol(off)["thinking_disabled"]
+    assert protocol(default) == {}

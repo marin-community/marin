@@ -68,6 +68,12 @@ class ReasoningMarkupPolicy(StrEnum):
     REJECT = "reject"
 
 
+CHAT_TEMPLATE_KWARGS = "chat_template_kwargs"
+"""The request option that carries chat-template arguments."""
+ENABLE_THINKING = "enable_thinking"
+"""The chat-template argument that turns reasoning on or off."""
+
+
 class Source(BaseModel):
     """Pinned provenance for the source row and the importer that converted it."""
 
@@ -642,52 +648,6 @@ class NoGrader(BaseModel):
 Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader, Field(discriminator="kind")]
 
 
-class RequiredFileCheck(BaseModel):
-    """Every output path must hold a nonempty file when the attempt ends."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["required_file"] = "required_file"
-
-
-class ToolExecutionCheck(BaseModel):
-    """The model must invoke ``tool`` and the tool must execute it."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["tool_execution"] = "tool_execution"
-    tool: str = Field(min_length=1)
-
-
-CHAT_TEMPLATE_KWARGS = "chat_template_kwargs"
-"""The request option that carries chat-template arguments."""
-ENABLE_THINKING = "enable_thinking"
-"""The chat-template argument that a thinking-disabled check sets to false on every request."""
-
-
-class ThinkingDisabledCheck(BaseModel):
-    """Every request disables thinking, and no raw response may contain a reasoning delimiter."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["thinking_disabled"] = "thinking_disabled"
-
-
-class UrlLoadingCheck(BaseModel):
-    """The model must try to retrieve ``url`` with ``tool``."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["url_loading"] = "url_loading"
-    tool: str = Field(min_length=1)
-    url: str = Field(min_length=1)
-
-
-ProtocolCheck = Annotated[
-    RequiredFileCheck | ToolExecutionCheck | ThinkingDisabledCheck | UrlLoadingCheck, Field(discriminator="kind")
-]
-
-
 def grades_in_process(grader: Grader) -> bool:
     """Whether the grader scores the extracted answer without a grading machine."""
     return isinstance(grader, VerifyitGrader) and grader.environment is None
@@ -942,8 +902,6 @@ class TaskSpec(BaseModel):
     grader: Grader
     reasoning_markup: ReasoningMarkupPolicy = ReasoningMarkupPolicy.GRADE
     source: Source
-    # Omitted when unset, so tasks without a check keep their serialized bytes and digests.
-    protocol_check: ProtocolCheck | None = Field(default=None, exclude_if=lambda value: value is None)
     schema_version: str = SCHEMA_VERSION
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
@@ -972,13 +930,4 @@ class TaskSpec(BaseModel):
             installed = {f"/tests/{resource.path}" for resource in self.resources.verifier}
             if self.grader.conversation_path in installed:
                 raise ValueError("The conversation path collides with a verifier resource")
-        self._validate_protocol_check()
         return self
-
-    def _validate_protocol_check(self) -> None:
-        check = self.protocol_check
-        if isinstance(check, RequiredFileCheck) and (self.answer_type != AnswerType.FILE or not self.output_paths):
-            raise ValueError("A required-file check needs a file answer with output paths")
-        if isinstance(check, ToolExecutionCheck | UrlLoadingCheck):
-            if check.tool not in {tool.name for tool in self.interaction_tools}:
-                raise ValueError(f"The protocol check's tool {check.tool!r} is not an interaction tool")

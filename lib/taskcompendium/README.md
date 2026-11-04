@@ -70,33 +70,32 @@ For example, a task asking “What is 7 + 5?” can have `answer_type=number` an
 
 ## Protocol checks
 
-A `protocol_check` asks whether an attempt followed an agent protocol, separately from whether its
-answer is right. `grade_task` and RolloutEngine add the result to
-`GradeResult.diagnostics["protocol"]` without changing the reward. The result reports
-`protocol_compliance`, `submission_completeness`, and `answer_correctness` separately, plus a
-`label` naming what happened. A result the check does not assess is omitted. When the evidence
+Grading also asks whether an attempt followed the agent protocols its task implies, separately
+from whether its answer is right. `grade_task` and RolloutEngine add the result to
+`GradeResult.diagnostics["protocol"]`, keyed by check, without changing the reward. Each check
+reports `protocol_compliance`, `submission_completeness` and `answer_correctness` separately, plus
+a `label` naming what happened. A result the check does not assess is omitted. When the evidence
 cannot decide the check, the result carries `not_evaluable` with the reason instead.
 
-| Check | Requires | Labels |
+| Check | Applies when | Labels |
 | --- | --- | --- |
-| `required_file` | A `file` answer and `output_paths` | `submitted`, `missing_file`, `empty_file` |
-| `tool_execution` | `tool` declared in `interaction_tools` | `executed`, `command_failed`, `no_invocation`, `markup_in_text`, `invalid_invocation`, `not_executed`, `executor_timeout`, `executor_failure` |
-| `thinking_disabled` | Nothing | `respected`, `reasoning_emitted` |
-| `url_loading` | `tool` declared in `interaction_tools`, and the `url` to load | `retrieved`, `http_error`, `network_error`, `not_attempted` |
+| `required_file` | The task has a `file` answer with `output_paths` | `submitted`, `missing_file`, `empty_file` |
+| `tool_execution` | The task has `tool_bindings` | `executed`, `command_failed`, `no_invocation`, `markup_in_text`, `invalid_invocation`, `not_executed`, `executor_timeout`, `executor_failure` |
+| `thinking_disabled` | The request's `chat_template_kwargs` set `enable_thinking` to false | `respected`, `reasoning_emitted` |
+| `url_loading` | The task declares `fetch-v1` pages in `tool_providers` | `retrieved`, `http_error`, `network_error`, `not_attempted` |
 
 The required-file check reports only submission completeness, because writing the file is the
 protocol under test. A URL attempt that fails with an HTTP or network error still complies; the
-label records the failure. A thinking-disabled check makes RolloutEngine send
-`enable_thinking=False` with every request. The check then searches each turn's response, decoded
-with its special tokens (`GradingAttempt.raw_responses`), for a reasoning delimiter. It is not
-evaluable when the runtime recorded no raw responses. `GradingAttempt.request_settings` keeps the
-request options the runtime sent, so a trace shows what the model was asked for.
+label records the failure. The thinking check searches each turn's response, decoded with its
+special tokens (`GradingAttempt.raw_responses`), for a reasoning delimiter, and is not evaluable
+when the runtime recorded none. `GradingAttempt.request_settings` holds the request options the
+runtime sent, which is how the check knows thinking was off.
 
-`taskcompendium.examples.protocol_probes` builds minimal tasks per check, with nonce answers a
-model cannot guess. SkyRL evaluation reports each check's results per data source as
-`eval/<source>/protocol/<check>/<result>`, with an `_assessed` denominator, and the dumped
-evaluation rows keep the assessment under `verification.diagnostics.protocol`. The
-[quick RL loop](../../docs/recipes/quick-rl-loop.md#train-and-evaluate) evaluates the probes.
+`taskcompendium.examples.protocol_probes` builds one minimal task per check, with nonce answers a
+model cannot guess, so on a probe `no_invocation` with a correct answer is a protocol failure by
+construction. On other tasks the labels describe tool and fetch usage. The dumped SkyRL evaluation
+rows keep each assessment under `verification.diagnostics.protocol`; aggregate rates from them.
+The [quick RL loop](../../docs/recipes/quick-rl-loop.md#train-and-evaluate) evaluates the probes.
 
 ## What can a task represent?
 
@@ -428,5 +427,3 @@ uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 Schema `0.28` adds `FinalAction.normal_submission` for private unsolvability labels while
 preserving the normal answer presentation. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.
-The optional `protocol_check` field is omitted from the serialized spec when unset, so tasks
-without one keep their bytes and digests.

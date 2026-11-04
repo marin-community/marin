@@ -11,6 +11,7 @@ from taskcompendium.examples.protocol_probes import (
     PROBE_TURNS,
     SHELLSIM_MACHINE,
     lock_grader_environment,
+    probe_check,
     probe_tasks,
 )
 
@@ -43,9 +44,8 @@ def lowered(task, settings) -> TaskRolloutSpec:
 def test_probe_rows_get_their_turns_and_a_machine_where_needed_while_other_rows_keep_the_defaults(tmp_path):
     settings = task_sessions(tmp_path)
     probes = {
-        task.protocol_check.kind: lowered(task, settings)
+        probe_check(task): lowered(task, settings)
         for task in probe_tasks(grader_environment=lock_grader_environment("/locks/grader.lock"), variants=1)
-        if task.protocol_check is not None
     }
 
     assert {kind: spec.limits.max_turns for kind, spec in probes.items()} == dict.fromkeys(probes, PROBE_TURNS)

@@ -1,4 +1,4 @@
-"""The protocol probes run through the production trainer on CPU and report each check separately.
+"""The protocol probes run through the production trainer on CPU, and each attempt's assessment reaches the dump.
 
 ``PROTOCOL_PROBES_MODEL`` names a local Hugging Face model directory to evaluate instead of the pinned
 CatCount policy, for example a Qwen3-0.6B snapshot; a chat model that renders tools shows what the
@@ -16,7 +16,6 @@ from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.utils.trainer_utils import sanitize_data_source
 from taskcompendium.examples.protocol_probes import PROBE_DATASET
 
-from tests.cpu.tiny_training.experiment import read_metrics
 from tests.cpu.tiny_training.protocol_probes import (
     MACHINE_FREE_CHECKS,
     RUN_TIMEOUT_SECONDS,
@@ -35,7 +34,7 @@ def probe_model(request) -> Path:
     return Path(model) if model else request.getfixturevalue("cat_count_policy")
 
 
-def evaluate_probes(forkserver_context: ForkServerContext, root: Path, model: Path) -> tuple[dict, list[dict]]:
+def evaluate_probes(forkserver_context: ForkServerContext, root: Path, model: Path) -> list[dict]:
     cfg = protocol_probes_config(root, model, variants=VARIANTS)
     process = forkserver_context.Process(target=run_protocol_probes, args=(cfg,))
     process.start()
@@ -45,27 +44,21 @@ def evaluate_probes(forkserver_context: ForkServerContext, root: Path, model: Pa
         process.join()
         pytest.fail(f"the run did not finish within {RUN_TIMEOUT_SECONDS} seconds")
     assert process.exitcode == 0
-    [before, *_] = [row for row in read_metrics(root) if f"eval/{PROBE_DATASET}/avg_score" in row]
     dump = Path(evaluation_dump_dir(str(cfg.trainer.export_path), 0)) / f"{sanitize_data_source(PROBE_DATASET)}.jsonl"
-    return before, [json.loads(line) for line in dump.read_text().splitlines()]
+    return [json.loads(line) for line in dump.read_text().splitlines()]
 
 
 def test_each_machine_free_check_is_assessed_on_every_variant_and_labeled_in_the_dump(
     tmp_path, probe_model, forkserver_context
 ):
-    metrics, rows = evaluate_probes(forkserver_context, tmp_path / "probes", probe_model)
-
-    prefix = f"eval/{PROBE_DATASET}/protocol"
-    assessed = {check: metrics.get(f"{prefix}/{check}/protocol_compliance_assessed") for check in MACHINE_FREE_CHECKS}
-    assert assessed == dict.fromkeys(MACHINE_FREE_CHECKS, float(VARIANTS))
-    assert {check: metrics[f"{prefix}/{check}/answer_correctness_assessed"] for check in MACHINE_FREE_CHECKS} == assessed
-    assert all(0.0 <= metrics[f"{prefix}/{check}/protocol_compliance"] <= 1.0 for check in MACHINE_FREE_CHECKS)
+    rows = evaluate_probes(forkserver_context, tmp_path / "probes", probe_model)
 
     assessments = [
-        row["verification"]["diagnostics"]["protocol"]
+        (check, assessment)
         for row in rows
-        if row["verification"] is not None and "protocol" in row["verification"]["diagnostics"]
+        if row["verification"] is not None
+        for check, assessment in row["verification"]["diagnostics"].get("protocol", {}).items()
     ]
-    assert Counter(assessment["check"] for assessment in assessments) == dict.fromkeys(MACHINE_FREE_CHECKS, VARIANTS)
-    assert all("label" in assessment for assessment in assessments)
-    print("PROTOCOL_PROBES", json.dumps(Counter(a["label"] for a in assessments), sort_keys=True))
+    assert Counter(check for check, _ in assessments) == dict.fromkeys(MACHINE_FREE_CHECKS, VARIANTS)
+    assert all("label" in assessment for _, assessment in assessments)
+    print("PROTOCOL_PROBES", json.dumps(Counter(f"{check}:{a['label']}" for check, a in assessments), sort_keys=True))

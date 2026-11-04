@@ -109,12 +109,14 @@ training and after the last update, and saves task-level verifier outcomes. Unde
 `dumped_evals/global_step_0_evals/` holds the baseline and
 `dumped_evals/global_step_<steps>_evals/` holds the final evaluation. Each contains
 per-dataset JSONL responses and `aggregated_results.jsonl`; compare its
-`avg_score` and `pass_at_1` metrics alongside verifier coverage. The probes report
-`eval/protocol-probes/protocol/<check>/<result>` rates for protocol compliance,
-submission completeness and answer correctness, each with an `_assessed`
-denominator; a check whose evidence cannot decide it is left out of the rate. Each
-row of `protocol-probes.jsonl` keeps its label under
-`verification.diagnostics.protocol`, such as `no_invocation` or `missing_file`.
+`avg_score` and `pass_at_1` metrics alongside verifier coverage. Each row of
+`protocol-probes.jsonl` keeps its protocol assessment under
+`verification.diagnostics.protocol`, keyed by check, with a label such as
+`no_invocation` or `missing_file` and separate protocol-compliance,
+submission-completeness and answer-correctness results. Aggregate rates over
+those rows; a check whose evidence cannot decide it carries `not_evaluable`
+instead. The thinking check applies only to launches that set
+`enable_thinking: false` in `generator.chat_template_kwargs`.
 
 To see the probe labels for a small model before a launch, run them through the
 trainer's CPU harness. It evaluates the three probes that need no grading

@@ -6,14 +6,11 @@ import json
 import pytest
 from verifyit.tool_call_markup import TOOL_OPEN
 
-from taskcompendium.examples.protocol_probes import (
-    ANSWER_PATH,
-    PROBE_URL,
-    probe_nonce,
-    probe_tasks,
-)
+from taskcompendium.examples.protocol_probes import ANSWER_PATH, PROBE_URL, probe_check, probe_nonce, probe_tasks
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
+    CHAT_TEMPLATE_KWARGS,
+    ENABLE_THINKING,
     AssistantToolCalls,
     CommandSemantics,
     ConversationToolCall,
@@ -24,18 +21,18 @@ from taskcompendium.models import (
     TextMessage,
     ToolResult,
 )
-from taskcompendium.protocol import PROTOCOL_DIAGNOSTICS_KEY, assess_protocol
+from taskcompendium.protocol import PROTOCOL_DIAGNOSTICS_KEY, ProtocolCheck, assess_protocol
 from taskcompendium.runtime.task_grading import grade_task
 
 IMAGE = "fixture@sha256:" + "0" * 64
 TASKS = {
-    task.protocol_check.kind: task
+    probe_check(task): task
     for task in probe_tasks(
         grader_environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE),
         variants=1,
     )
-    if task.protocol_check is not None
 }
+THINKING_OFF = {CHAT_TEMPLATE_KWARGS: {ENABLE_THINKING: False}}
 
 
 def answer(task: TaskSpec, text: str | None = None) -> TextMessage:
@@ -51,9 +48,13 @@ def shell_result(exit_code: int = 0, stdout: str = "", reason: str = "exited") -
     return {"exit_code": exit_code, "reason": reason, "stdout": stdout, "stderr": ""}
 
 
-def protocol(task: TaskSpec, *events, raw_responses: tuple[str, ...] = ()) -> dict:
-    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, *events)), raw_responses=raw_responses)
-    return grade_task(task, attempt).diagnostics[PROTOCOL_DIAGNOSTICS_KEY]
+def protocol(task: TaskSpec, *events, raw_responses: tuple[str, ...] = (), request_settings: dict | None = None) -> dict:
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, *events)),
+        raw_responses=raw_responses,
+        request_settings=request_settings or {},
+    )
+    return grade_task(task, attempt).diagnostics.get(PROTOCOL_DIAGNOSTICS_KEY, {})
 
 
 def results(assessment: dict) -> tuple:
@@ -65,7 +66,7 @@ def results(assessment: dict) -> tuple:
     )
 
 
-TOOL = TASKS["tool_execution"]
+TOOL = TASKS[ProtocolCheck.TOOL_EXECUTION]
 NONCE_COMMAND = {"command": "cat /probe/nonce"}
 
 
@@ -119,18 +120,17 @@ NONCE_COMMAND = {"command": "cat /probe/nonce"}
     ],
 )
 def test_tool_execution_separates_compliance_from_answer_correctness(events, expected):
-    assert results(protocol(TOOL, *events)) == expected
+    assert results(protocol(TOOL, *events)["tool_execution"]) == expected
 
 
 def test_an_infrastructure_failure_is_an_executor_failure_that_cannot_be_evaluated():
     attempt = GradingAttempt(ConversationTrace(events=(*TOOL.context.events, answer(TOOL))))
-    assessment = assess_protocol(TOOL, attempt, GradeResult(Outcome.INFRA_ERROR, None, "machine lost"))
-    assert assessment is not None
+    [assessment] = assess_protocol(TOOL, attempt, GradeResult(Outcome.INFRA_ERROR, None, "machine lost")).values()
     assert (assessment.label, assessment.protocol_compliance) == ("executor_failure", None)
     assert assessment.not_evaluable is not None
 
 
-URL = TASKS["url_loading"]
+URL = TASKS[ProtocolCheck.URL_LOADING]
 
 
 @pytest.mark.parametrize(
@@ -160,11 +160,11 @@ URL = TASKS["url_loading"]
     ],
 )
 def test_url_loading_counts_failed_retrievals_as_attempts(events, expected):
-    assessment = protocol(URL, *events, answer(URL))
+    assessment = protocol(URL, *events, answer(URL))["url_loading"]
     assert (assessment["label"], assessment["protocol_compliance"]) == expected
 
 
-THINKING = TASKS["thinking_disabled"]
+THINKING = TASKS[ProtocolCheck.THINKING_DISABLED]
 
 
 @pytest.mark.parametrize(
@@ -180,10 +180,15 @@ THINKING = TASKS["thinking_disabled"]
     ],
 )
 def test_thinking_disabled_reads_the_raw_response_of_every_turn(raw_responses, expected):
-    assert results(protocol(THINKING, answer(THINKING), raw_responses=raw_responses)) == expected
+    assessment = protocol(THINKING, answer(THINKING), raw_responses=raw_responses, request_settings=THINKING_OFF)
+    assert results(assessment["thinking_disabled"]) == expected
 
 
-REQUIRED_FILE = TASKS["required_file"]
+def test_a_request_that_did_not_turn_thinking_off_is_not_assessed_for_it():
+    assert protocol(THINKING, answer(THINKING), raw_responses=("<think>hm</think>" + probe_nonce(THINKING.id),)) == {}
+
+
+REQUIRED_FILE = TASKS[ProtocolCheck.REQUIRED_FILE]
 
 
 @pytest.mark.parametrize(
@@ -196,14 +201,12 @@ REQUIRED_FILE = TASKS["required_file"]
 )
 def test_required_file_reports_submission_completeness_only(files, grade, expected):
     attempt = GradingAttempt(ConversationTrace(events=(*REQUIRED_FILE.context.events, answer(REQUIRED_FILE))), files)
-    assessment = assess_protocol(REQUIRED_FILE, attempt, grade)
-    assert assessment is not None
+    assessment = assess_protocol(REQUIRED_FILE, attempt, grade)[ProtocolCheck.REQUIRED_FILE]
     assert (assessment.label, assessment.submission_completeness, assessment.answer_correctness) == expected
     assert assessment.protocol_compliance is None
 
 
-def test_a_task_without_a_protocol_check_serializes_without_the_field():
-    plain = TOOL.model_copy(update={"protocol_check": None})
-    serialized = json.loads(plain.model_dump_json())
-    assert "protocol_check" not in serialized
-    assert TaskSpec.model_validate(serialized) == plain
+def test_a_task_implying_several_protocols_is_assessed_for_each():
+    task = TOOL.model_copy(update={"environment_requirements": URL.environment_requirements})
+    assessments = protocol(task, answer(task), request_settings=THINKING_OFF, raw_responses=(probe_nonce(task.id),))
+    assert set(assessments) == {"tool_execution", "thinking_disabled", "url_loading"}

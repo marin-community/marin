@@ -4,7 +4,8 @@
 """One minimal task per agent protocol check.
 
 Each answer is a nonce derived from the task id, so a model cannot guess it without following the
-protocol.
+protocol: writing the answer file, running the shell tool, or fetching the declared page. The
+thinking probe asks for a bare token; its check applies when the launch turns thinking off.
 """
 
 import hashlib
@@ -20,17 +21,13 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     FunctionDefinition,
     PlainText,
-    ProtocolCheck,
-    RequiredFileCheck,
     ResourceGroups,
     ShellToolBinding,
     Source,
     TaskSpec,
     TextMessage,
-    ThinkingDisabledCheck,
-    ToolExecutionCheck,
-    UrlLoadingCheck,
 )
+from taskcompendium.protocol import ProtocolCheck
 from taskcompendium.runtime.resources import inline_resource
 
 PROBE_DATASET = "protocol-probes"
@@ -80,13 +77,13 @@ def probe_nonce(task_id: str) -> str:
     return hashlib.sha256(f"{PROBE_DATASET}/{task_id}".encode()).hexdigest()[:16]
 
 
-def _probe_id(check: ProtocolCheck, index: int) -> str:
-    return f"{check.kind}-{index}"
+def probe_check(task: TaskSpec) -> ProtocolCheck:
+    """The check a probe task exercises, from its id ``<check>-<variant>``."""
+    return ProtocolCheck(task.id.rsplit("-", 1)[0])
 
 
 def _task(
     task_id: str,
-    check: ProtocolCheck,
     instruction: str,
     environment: EnvironmentRequirements,
     *,
@@ -112,7 +109,6 @@ def _task(
         grader=package.grader,
         source=Source(dataset=PROBE_DATASET, revision=PROBE_REVISION, row=task_id, importer_revision=PROBE_REVISION),
         resources=resources or ResourceGroups(),
-        protocol_check=check,
     )
 
 
@@ -122,15 +118,12 @@ def probe_tasks(*, grader_environment: EnvironmentRequirements, variants: int) -
         raise ValueError("At least one variant per check is required")
     tasks = []
     for index in range(variants):
-        tool_check = ToolExecutionCheck(tool=COMMAND_TOOL.name)
-        tool_id = _probe_id(tool_check, index)
-        url_check = UrlLoadingCheck(tool=FETCH_TOOL.name, url=PROBE_URL)
-        url_id = _probe_id(url_check, index)
+        tool_id = f"{ProtocolCheck.TOOL_EXECUTION}-{index}"
+        url_id = f"{ProtocolCheck.URL_LOADING}-{index}"
         tasks.extend(
             (
                 _task(
-                    _probe_id(RequiredFileCheck(), index),
-                    RequiredFileCheck(),
+                    f"{ProtocolCheck.REQUIRED_FILE}-{index}",
                     f"Write {{nonce}} to {ANSWER_PATH}. Only the file is graded; an answer in chat does not count.",
                     TASK_ENVIRONMENT,
                     grader_environment=grader_environment,
@@ -139,7 +132,6 @@ def probe_tasks(*, grader_environment: EnvironmentRequirements, variants: int) -
                 ),
                 _task(
                     tool_id,
-                    tool_check,
                     f"Run `cat /{NONCE_FILE}` with the {COMMAND_TOOL.name} tool and reply with only its "
                     "output. The value cannot be guessed.",
                     TASK_ENVIRONMENT,
@@ -148,14 +140,12 @@ def probe_tasks(*, grader_environment: EnvironmentRequirements, variants: int) -
                     resources=ResourceGroups(worker=(inline_resource(NONCE_FILE, probe_nonce(tool_id).encode()),)),
                 ),
                 _task(
-                    _probe_id(ThinkingDisabledCheck(), index),
-                    ThinkingDisabledCheck(),
+                    f"{ProtocolCheck.THINKING_DISABLED}-{index}",
                     "Reply with only this token: {nonce}",
                     EnvironmentRequirements(),
                 ),
                 _task(
                     url_id,
-                    url_check,
                     f"Retrieve {PROBE_URL} with the {FETCH_TOOL.name} tool and reply with only the token it "
                     "contains. The token cannot be guessed.",
                     EnvironmentRequirements(

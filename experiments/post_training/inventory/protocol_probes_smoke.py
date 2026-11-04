@@ -5,8 +5,8 @@
 
 The run trains one dry step on the probes so the trainer evaluates them twice, before and after,
 through the same path as the quick RL loop: the taskcompendium entrypoint, ShellSim task machines,
-the fetch provider, and the local grading backend for the answer file. Read the labels from
-``eval/protocol-probes/protocol/<check>/<result>`` and the dumped ``protocol-probes.jsonl``.
+the fetch provider, and the local grading backend for the answer file. Read the labels from the
+dumped ``protocol-probes.jsonl`` rows, under ``verification.diagnostics.protocol``.
 """
 
 from dataclasses import replace

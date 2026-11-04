@@ -112,7 +112,7 @@ class RolloutEngine:
             spec,
             self.harnesses[spec.harness],
             run_id,
-            _Recorder(model, spec.task, spec.limits, spec.trace, events),
+            _Recorder(model, spec.limits, spec.trace, events),
             _Cleanup(spec.limits.cleanup_timeout),
             events,
             GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),

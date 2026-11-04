@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
 from shellbox.machine import Machine
-from taskcompendium.models import CHAT_TEMPLATE_KWARGS, ENABLE_THINKING, TaskSpec, ThinkingDisabledCheck
+from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.harness.core import Harness, HarnessContext
@@ -61,14 +61,6 @@ def _failure_record(operation: RolloutOperation, cause: BaseException) -> Rollou
     if notes:
         diagnostics["notes"] = list(notes)
     return RolloutFailure(type(cause).__name__, diagnostics)
-
-
-def _without_thinking(prompt: Prompt) -> Prompt:
-    """Disable thinking in every request of the conversation, for a thinking-disabled check."""
-    kwargs = prompt.options.get(CHAT_TEMPLATE_KWARGS, {})
-    if kwargs.get(ENABLE_THINKING, False):
-        raise RolloutContractError("The harness enables thinking for a task with a thinking-disabled check")
-    return replace(prompt, options={**prompt.options, CHAT_TEMPLATE_KWARGS: {**kwargs, ENABLE_THINKING: False}})
 
 
 class _NoEvents:
@@ -186,10 +178,9 @@ class _Recorder:
     and records a sent request that has no answer. Final observations replace such a request.
     """
 
-    def __init__(self, model: Model, task: TaskSpec, limits: RolloutLimits, mode: TraceMode, events: EventSink):
+    def __init__(self, model: Model, limits: RolloutLimits, mode: TraceMode, events: EventSink):
         self.model = model
         self.limits = limits
-        self.disable_thinking = isinstance(task.protocol_check, ThinkingDisabledCheck)
         self.mode = mode
         self.events = events
         self.earlier: list[ConversationRecord] = []
@@ -232,7 +223,7 @@ class _Recorder:
         assert deadlines is not None
         if current is None and deadlines.total.when() is None and self.limits.total_turn_timeout is not None:
             deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
-        conversation = _Conversation(_without_thinking(prompt) if self.disable_thinking else prompt, self.mode)
+        conversation = _Conversation(prompt, self.mode)
         request = _Request(self.step_observations, None, conversation, self._waited())
         return await self._send(request, conversation.request((), prompt.token_ids))
 
@@ -554,7 +545,7 @@ async def harness_rollout(
     """
     harness.check(task, limits)
     run_id = uuid.uuid4().hex if run_id is None else run_id
-    recorder = _Recorder(model, task, limits, trace, events)
+    recorder = _Recorder(model, limits, trace, events)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as resources:
         context = HarnessContext(task, limits, machine, events, _CleanupScope(resources, cleanup), run_id)
