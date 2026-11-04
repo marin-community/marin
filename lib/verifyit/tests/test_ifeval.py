@@ -125,15 +125,45 @@ CASES = [
     ),
     (
         "count:lowercase_counting",
-        {"N": 4},
-        "these five words stay lowercase",
-        "These Words Are Capitalised",
+        {"N": 2},
+        "The cat sat on a mat, then the dog sat.",
+        "the cat and the dog and the bird",
+    ),
+    (
+        "count:lowercase_counting",
+        {"N": 2},
+        "The sun rose. The sky cleared. We saw the sea.",
+        "The sun rose. We saw the sky, the sea and the hills.",
     ),
     (
         "combination:two_responses",
         {},
         "First take on the question.\n******\nSecond take on the question.",
         "Only one take on the question.",
+    ),
+    (
+        "keywords:no_adjacent_consecutive",
+        {},
+        "Zebras eat grass quietly.",
+        "An apple boat.",
+    ),
+    (
+        "count:count_unique",
+        {},
+        "Every word here differs.",
+        "Each word differs, except this word.",
+    ),
+    (
+        "letters:letter_counting",
+        {"N": 3, "relation": "less than"},
+        "42",
+        "Yes",
+    ),
+    (
+        "copy:repeat_phrase",
+        {"phrase": "The pen is mightier than sword", "small_n": 2},
+        "The pen is stronger than sword. The pen is sharper than sword.",
+        "The pen is mightier than sword. The pen is mightier than sword.",
     ),
     (
         "change_case:capital_word_frequency",
@@ -154,6 +184,18 @@ CASES = [
         "ಮತ್ತು ಪ್ರಪಂಚ",
     ),
     (
+        "copy:repeat_phrase",
+        {"phrase": "The pen is mightier than sword", "small_n": 2},
+        "The pen is stronger than sword. The pen is sharper than sword.",
+        "A pen is mightier than sword. The pen is sharper than sword.",
+    ),
+    (
+        "copy:repeat_phrase",
+        {"phrase": "The pen is mightier than sword", "small_n": 2},
+        "The pen is stronger than sword. The pen is sharper than sword.",
+        "The pen is stronger than sword. The pen is sharper than sword. The pen is greater than sword.",
+    ),
+    (
         "last_word:last_word_sent",
         {"last_word": "baseball"},
         "<<We love baseball!>> Everyone plays baseball.",
@@ -166,10 +208,52 @@ CASES = [
         "“第一句。”“第二句。”",
     ),
     (
+        "letters:letter_counting",
+        {"N": 3, "relation": "less than"},
+        "42",
+        "答案是四十二",
+    ),
+    (
+        "letters:letter_counting",
+        {"N": 3, "relation": "at least"},
+        "答案是四十二",
+        "Да",
+    ),
+    (
+        "keywords:no_adjacent_consecutive",
+        {},
+        "Big dogs run.",
+        "Big apples run.",
+    ),
+    (
+        "count:count_unique",
+        {},
+        "One cat saw a dog.",
+        "The cat saw the dog.",
+    ),
+    (
         "length_constraints:number_words",
         {"relation": "less than", "num_words": 2},
         "می\u200cخواهم",  # noqa: RUF001 - Persian letters.
         "می خواهم",
+    ),
+    (
+        "keywords:word_once",
+        {"keyword": "fix"},
+        "Fix the bug, then fix the test.",
+        "Repair the bug, then test it.",
+    ),
+    (
+        "keywords:word_count_different_numbers",
+        {"keyword": "chicken", "frequency": 2, "relation": "less than"},
+        "The chicken ate. The chicken slept.",
+        "The chicken ate.",
+    ),
+    (
+        "keywords:word_count_different_numbers",
+        {"keyword": "chicken", "frequency": 2, "relation": "at least"},
+        "The chicken ate. The chicken slept.",
+        "The chicken ate. The chicken slept. The chicken woke.",
     ),
     (
         "length_constraints:number_words",
@@ -248,6 +332,30 @@ CASES = [
         {"first_word": "senior"},
         "Senior工程师很忙。",
         "工程师很忙。",
+    ),
+    (
+        "copy:repeat_phrase",
+        {"phrase": "The pen is mightier than sword", "small_n": 2},
+        "The pen is stronger than sword. The pen is sharper than sword.",
+        "The pen is mightier than sword. The pen is sharper than sword.",
+    ),
+    (
+        "count:count_unique",
+        {},
+        "我爱北京",
+        "我爱北京我爱上海",
+    ),
+    (
+        "count:count_unique",
+        {},
+        "こんにちは世界",
+        "ありがとうありがとう",
+    ),
+    (
+        "count:lowercase_counting",
+        {"N": 1},
+        "the世界",
+        "the世界the",
     ),
     (
         "length_constraints:number_words",
@@ -350,6 +458,48 @@ CASES = [
         {"keyword": "senior"},
         "Senior工程师很忙。",
         "工程师很忙。",
+    ),
+    (
+        "count:count_unique",
+        {},
+        "high-risk zone",
+        "high-risk risk",
+    ),
+    (
+        "count:count_unique",
+        {},
+        "the-cat-and-a-dog",
+        "the-cat-and-the-dog",
+    ),
+    (
+        "count:lowercase_counting",
+        {"N": 1},
+        "the-cat a-dog",
+        "the-cat the-dog",
+    ),
+    (
+        "count:lowercase_counting",
+        {"N": 2},
+        "The-cat-sat-on-the-mat",
+        "The-cat-sat-on-the-mat-and-the-dog-sat-on-the-rug",
+    ),
+    (
+        "keywords:no_adjacent_consecutive",
+        {},
+        "apple-cherry",
+        "apple-banana",
+    ),
+    (
+        "keywords:no_adjacent_consecutive",
+        {},
+        "\u4e00 \u4e01",
+        "apple banana",
+    ),
+    (
+        "keywords:no_adjacent_consecutive",
+        {},
+        "\u0432 \u0434\u043e\u043c\u0435",
+        "\u0432 \u0433\u043e\u0440\u043e\u0434\u0435",
     ),
 ]
 

@@ -8,8 +8,8 @@ The detail is a short human-readable string that lands in the reward's ``detail`
 pure stdlib: this module has to run inside every task image without an extra.
 
 Several IFEval instruction ids describe an instruction the model was given rather than a property
-that can be measured exactly (``count:count_unique``, ``language:response_language``,
-``detectable_format:bigram_wrapping``). Those are approximations, and the docstring on each says so.
+that can be measured exactly (``language:response_language``, ``detectable_format:bigram_wrapping``).
+Those are approximations, and the docstring on each says so.
 
 A word is a letter or digit followed by any letters, digits and combining marks in any script,
 with apostrophes and zero-width joiners or non-joiners inside it, so ``don't`` is one word,
@@ -24,6 +24,7 @@ brackets that follow it.
 import json
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable
 from itertools import chain
 
@@ -116,8 +117,6 @@ LANGUAGE_HINTS: dict[str, set[str]] = {
 }
 NON_ASCII_MIN = 10
 NON_ASCII_SHARE = 0.2
-UNIQUE_WORDS_MIN = 5
-UNIQUE_WORDS_SHARE = 0.5
 PALINDROME_MIN_LETTERS = 3
 
 
@@ -164,6 +163,12 @@ def ends_with_word(found: list[str], word: str) -> bool:
     """Whether the words end with the required word, which may split into several."""
     keys = [part.lower() for part in compared_words(word)]
     return bool(keys) and [part.lower() for part in found[-len(keys) :]] == keys
+
+
+def word_key(word: str) -> str:
+    """The word lowercased and without a trailing 's, so "Space's" and "space" share a key, as do "it's" and "it"."""
+    lowered = word.lower()
+    return lowered[:-2] if len(lowered) > 2 and lowered[-2] in APOSTROPHES and lowered[-1] == "s" else lowered
 
 
 def count_keyword(text: str, keyword: str) -> int:
@@ -274,11 +279,12 @@ def forbidden_words(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("keywords:word_once")
 def word_once(text: str, params: dict) -> tuple[bool, str]:
+    """The prompt asks to include the keyword; "once" is only in the instruction id."""
     keyword = params.get("keyword")
     if not isinstance(keyword, str):
         return False, "missing keyword"
     count = count_keyword(text, keyword)
-    return count == 1, f"count={count} keyword={keyword!r}"
+    return count >= 1, f"count={count} keyword={keyword!r}"
 
 
 @constraint("keywords:letter_frequency")
@@ -314,8 +320,8 @@ def keyword_frequency(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("keywords:word_count_different_numbers")
 def word_count_different_numbers(text: str, params: dict) -> tuple[bool, str]:
-    """Same params as ``keywords:frequency`` in the Nemotron dataset."""
-    return keyword_frequency(text, params)
+    """The prompt asks for the keyword N times and does not show the stored relation, so the count must be N."""
+    return keyword_frequency(text, {**params, "relation": "exactly"})
 
 
 @constraint("keywords:keyword_specific_position")
@@ -349,14 +355,23 @@ def palindrome(text: str, params: dict) -> tuple[bool, str]:
     return False, "no palindrome found"
 
 
+def has_alphabet(letter: str) -> bool:
+    return letter.isalpha() and not UNSPACED_LETTER.match(letter)
+
+
 @constraint("keywords:no_adjacent_consecutive")
 def no_adjacent_consecutive(text: str, params: dict) -> tuple[bool, str]:
-    """No two adjacent words may be identical, ignoring case."""
-    lowered = [w.lower() for w in words(text)]
-    for index in range(1, len(lowered)):
-        if lowered[index] == lowered[index - 1]:
-            return False, f"adjacent dup at pos {index}: {lowered[index]!r}"
-    return True, "no adjacent duplicates"
+    """No two adjacent words may start with consecutive letters, in either order, as "apple banana" and "big apple" do.
+
+    Letters of any script are compared by code point, so "в городе" fails too, except Han and kana, which have no
+    alphabet.
+    """
+    initials = [w[0].lower() for w in words(text)]
+    for index in range(1, len(initials)):
+        left, right = initials[index - 1], initials[index]
+        if has_alphabet(left) and has_alphabet(right) and abs(ord(right) - ord(left)) == 1:
+            return False, f"adjacent words at pos {index} start with {left!r} and {right!r}"
+    return True, "no adjacent consecutive initials"
 
 
 @constraint("keywords:start_end")
@@ -624,13 +639,12 @@ def last_word_sent(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("count:count_unique")
 def count_unique(text: str, params: dict) -> tuple[bool, str]:
-    """Approximate: the response must use mostly distinct words."""
-    lowered = [w.lower() for w in words(text)]
-    if not lowered:
+    """No word may appear twice, ignoring case and a trailing 's; in Chinese and Japanese, no letter may."""
+    counts = Counter(word_key(w) for w in compared_words(text))
+    if not counts:
         return False, "empty"
-    unique = len(set(lowered))
-    passed = unique >= max(UNIQUE_WORDS_MIN, int(UNIQUE_WORDS_SHARE * len(lowered)))
-    return passed, f"unique={unique} total={len(lowered)}"
+    repeated = sorted(word[:20] for word, count in counts.items() if count > 1)
+    return not repeated, f"unique={len(counts)} total={counts.total()} repeated={repeated[:5]}"
 
 
 @constraint("count:count_increment_word")
@@ -648,11 +662,13 @@ def count_increment_word(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("count:lowercase_counting")
 def lowercase_counting(text: str, params: dict) -> tuple[bool, str]:
+    """No lowercase word may appear more than N times; a word with a capital letter, such as "The", is not counted."""
     expected = params.get("N")
     if not isinstance(expected, int):
         return False, "missing N"
-    actual = sum(1 for w in words(text) if w.isalpha() and w.islower())
-    return actual >= expected, f"lower_words={actual} need>={expected}"
+    counts = Counter(w for w in compared_words(text) if w.islower())
+    repeated = sorted(word[:20] for word, count in counts.items() if count > expected)
+    return not repeated, f"most={max(counts.values(), default=0)} need<={expected} repeated={repeated[:5]}"
 
 
 @constraint("count:counting_composition")
@@ -676,11 +692,12 @@ def counting_composition(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("letters:letter_counting")
 def letter_counting(text: str, params: dict) -> tuple[bool, str]:
-    """Approximate: the Nemotron rows carry no letter threshold, so this counts words."""
+    """The prompt counts letters ("Answer with less than N letters"); letters of every script count."""
     expected = params.get("N")
     if not isinstance(expected, int):
         return False, "missing N"
-    return _with_relation(len(words(text)), params.get("relation", "at least"), expected, "words:")
+    actual = sum(1 for c in text if c.isalpha())
+    return _with_relation(actual, params.get("relation", "at least"), expected, "letters:")
 
 
 @constraint("letters:letter_counting2")
@@ -713,12 +730,25 @@ def response_language(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("copy:repeat_phrase")
 def repeat_phrase(text: str, params: dict) -> tuple[bool, str]:
+    """The phrase must appear exactly small_n times, each time with one word other than the first and last replaced."""
     phrase = params.get("phrase")
     expected = params.get("small_n")
     if not isinstance(phrase, str) or not isinstance(expected, int):
         return False, "bad kwargs"
-    actual = len(re.findall(re.escape(phrase), text, flags=re.IGNORECASE))
-    return actual >= expected, f"phrase_count={actual} need>={expected}"
+    target = [word_key(w) for w in compared_words(phrase)]
+    found = [word_key(w) for w in compared_words(text)]
+    changes = []
+    index = 0
+    while target and index + len(target) <= len(found):
+        differing = [j for j, word in enumerate(target) if found[index + j] != word]
+        if len(differing) <= 1:
+            changes.append(differing)
+            index += len(target)
+        else:
+            index += 1
+    inner = range(1, len(target) - 1)
+    passed = len(changes) == expected and all(len(change) == 1 and change[0] in inner for change in changes)
+    return passed, f"copies={len(changes)} need={expected} changed_positions={changes}"
 
 
 # === combination ============================================================
