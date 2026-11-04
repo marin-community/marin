@@ -83,6 +83,10 @@ message Controller {
     // If not set or milliseconds=0, no timeout.
     iris.time.Duration timeout = 21;
 
+    // SIGTERM-to-SIGKILL budget for task processes. Unset uses the controller
+    // default. The controller validates and persists the effective duration.
+    iris.time.Duration termination_grace = 41;
+
     // If true, return ALREADY_EXISTS error even if an existing job with the same
     // name is in a terminal state. If false (default), finished jobs are automatically
     // removed and replaced with the new submission.
@@ -120,9 +124,13 @@ message Controller {
     // when auth is enabled; see service.LaunchJob.
     iris.job.ContainerProfile container_profile = 37;
 
-    // What the job's network can reach. UNSPECIFIED => INTERNET for a SANDBOX
-    // job and CLUSTER for every other profile; SANDBOX rejects CLUSTER.
+    // What the job's network can reach. UNSPECIFIED resolves as documented on
+    // iris.job.EgressPolicy; SANDBOX rejects CLUSTER and ALLOWLIST.
     iris.job.EgressPolicy egress_policy = 39;
+
+    // Destinations the job needs beyond the cluster allowlist. They take effect
+    // when the job runs under ALLOWLIST; an explicit policy must be ALLOWLIST.
+    repeated iris.job.EgressRule egress_allow = 40;
 
     // Set only when a federation parent hands a whole job off to this cluster as
     // a peer. Its presence marks the job as peer-owned: the receiving controller
@@ -813,6 +821,17 @@ message Controller {
     // contact or after the parent lost its cursor — the peer then answers with a
     // full active-set snapshot (cursor_stale = true).
     string cursor = 2;
+    FederationBudgetPolicy budget_policy = 3;
+  }
+
+  // Requested limits shown by the hub for jobs created on an execution peer.
+  message FederationJobLimits {
+    iris.time.Duration timeout = 1;
+    iris.time.Duration scheduling_timeout = 2;
+    int32 max_retries_failure = 3;
+    int32 max_retries_preemption = 4;
+    int32 max_task_failures = 5;
+    iris.time.Duration termination_grace = 6;
   }
 
   // One handed-off job's state as the peer currently holds it. The parent mirrors
@@ -824,6 +843,7 @@ message Controller {
     iris.job.JobStatus summary = 2;               // job state + counts (+ spend once reported)
     repeated iris.job.TaskStatus changed_tasks = 3;  // full row for each task changed since the cursor
     bool tombstone = 4;                           // peer has pruned the job; parent drops its projection
+    FederationJobLimits limits = 5;
   }
 
   // One service endpoint exported by a handed-off (RECEIVED) job on the peer.
@@ -844,6 +864,21 @@ message Controller {
     iris.time.Duration lease_remaining = 7;
   }
 
+  // Complete policy and usage from all clusters except the receiving child.
+  // The child adds its current local usage when scheduling.
+  message FederationBudgetPolicy {
+    repeated GetUserBudgetResponse users = 1;
+    int64 default_budget_limit = 2;
+    iris.job.PriorityBand default_max_band = 3;
+  }
+
+  message FederationBudgetUsage {
+    // Complete locally executed usage, excluding federation mirrors. The parent
+    // counts it only when budget_parent names that parent's cluster.
+    string budget_parent = 1;
+    map<string, int64> spend = 2;
+  }
+
   message FederationSyncResponse {
     repeated FederationJobDelta deltas = 1;
     string next_cursor = 2;   // persisted to federation_sync_state.cursor; sent back next tick
@@ -855,6 +890,7 @@ message Controller {
     // every sync regardless of `cursor_stale`. The parent set-replaces its remote
     // endpoints for this peer from it.
     repeated FederationEndpoint endpoints = 4;
+    FederationBudgetUsage budget_usage = 5;
   }
 }
 

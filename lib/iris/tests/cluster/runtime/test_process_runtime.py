@@ -71,6 +71,34 @@ def _run(runtime: ProcessRuntime, config: ContainerConfig):
     return handle, lines
 
 
+def test_process_remaps_secret_mount_without_exporting_values(tmp_path, monkeypatch):
+    monkeypatch.delenv("SERVICE_KEY", raising=False)
+    secret_dir = tmp_path / "secrets"
+    secret_dir.mkdir()
+    (secret_dir / "SERVICE_KEY").write_text("submitted-credential")
+    config = _make_config(
+        [MountSpec("task-secrets", "/run/rigging/secrets", MountKind.SECRET, read_only=True)],
+        args=[],
+        env={
+            "RIGGING_SECRETS_DIR": "/run/rigging/secrets",
+        },
+    )
+    config.secret_host_path = secret_dir
+    config.entrypoint.run_command.argv[:] = [
+        sys.executable,
+        "-c",
+        "import os; from rigging.secrets import require_secret; "
+        "assert 'SERVICE_KEY' not in os.environ; "
+        "assert require_secret('SERVICE_KEY') == 'submitted-credential'; print('file-only')",
+    ]
+    runtime = ProcessRuntime(cache_dir=tmp_path / "cache")
+    handle, lines = _run(runtime, config)
+    try:
+        assert lines == ["file-only"]
+    finally:
+        handle.cleanup()
+
+
 def test_tmpfs_mounts_across_containers_use_distinct_host_directories(tmp_path):
     runtime = ProcessRuntime(cache_dir=tmp_path)
     mounts = [MountSpec("tmp", "/tmp", kind=MountKind.TMPFS)]

@@ -17,6 +17,7 @@ from sqlalchemy import Row
 from iris.cluster.controller import jobs, reads, tasks
 from iris.cluster.controller.codec import resource_spec_from_job_row
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.federation.manager import FederationManager
@@ -35,6 +36,7 @@ class FederationRuntime(Protocol):
 class FederationDependencies:
     db: ControllerDB
     runtime: FederationRuntime
+    budgets: FederationBudgets
 
 
 def list_peers(
@@ -96,6 +98,14 @@ def _job_delta(
         job_id=job_id.to_wire(),
         summary=_job_summary(q, job),
         changed_tasks=changed_tasks,
+        limits=controller_pb2.Controller.FederationJobLimits(
+            timeout=duration_to_proto(Duration.from_ms(job.timeout_ms or 0)),
+            scheduling_timeout=duration_to_proto(Duration.from_ms(job.scheduling_timeout_ms or 0)),
+            max_retries_failure=job.max_retries_failure,
+            max_retries_preemption=job.max_retries_preemption,
+            max_task_failures=job.max_task_failures,
+            termination_grace=duration_to_proto(Duration.from_ms(job.termination_grace_ms)),
+        ),
     )
 
 
@@ -165,11 +175,14 @@ def federation_sync(
     """Return the peer-visible job changes since the requester's cursor."""
     requester_id = request.requester_id
     _authorize_sync(requester_id)
+    if request.HasField("budget_policy"):
+        dependencies.budgets.receive_policy(requester_id, request.budget_policy)
     cursor = request.cursor
     cursor_seq = int(cursor) if cursor else 0
     deltas: list[controller_pb2.Controller.FederationJobDelta] = []
 
     with dependencies.db.read_snapshot() as q:
+        budget_usage = dependencies.budgets.local_usage(q)
         min_seq = reads.changelog_min_seq(q)
         next_cursor = str(reads.changelog_max_seq(q))
         endpoints = _endpoint_snapshot(q, requester_id, Timestamp.now())
@@ -184,6 +197,7 @@ def federation_sync(
                 next_cursor=next_cursor,
                 cursor_stale=True,
                 endpoints=endpoints,
+                budget_usage=budget_usage,
             )
 
         changes = _fold_changelog(reads.changelog_rows_since(q, requester_id, cursor_seq))
@@ -202,4 +216,5 @@ def federation_sync(
         next_cursor=next_cursor,
         cursor_stale=False,
         endpoints=endpoints,
+        budget_usage=budget_usage,
     )

@@ -24,13 +24,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlopen
 
-import fsspec.core
+from rigging.filesystem.factory import url_to_fs
+from rigging.timing import Deadline, Duration
 
 logger = logging.getLogger(__name__)
 
 # Maximum size (bytes) of a submitted workspace bundle. Enforced by the client
 # when creating the zip and re-checked by the controller when receiving it.
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+BUNDLE_UPLOAD_TIMEOUT = Duration.from_seconds(30)
+
+
+class BundleUploadError(Exception):
+    """A launch payload could not be persisted."""
+
+
+def _remaining_upload_time(deadline: Deadline) -> float:
+    remaining = deadline.remaining_seconds()
+    # fsspec treats a zero timeout as unbounded.
+    if remaining <= 0:
+        raise TimeoutError("Bundle upload deadline exceeded")
+    return remaining
 
 
 @dataclass
@@ -51,16 +65,18 @@ class BundleStore:
         controller_address: str | None = None,
         max_cache_items: int = 1000,
         max_cache_bytes: int = 1_000_000_000,
+        upload_timeout: Duration = BUNDLE_UPLOAD_TIMEOUT,
     ):
         self._storage_dir = storage_dir
         self._controller_address = controller_address.rstrip("/") if controller_address else ""
         self._max_cache_items = max_cache_items
         self._max_cache_bytes = max_cache_bytes
+        self._upload_timeout = upload_timeout
         self._cache_lock = threading.RLock()
         self._content_locks_guard = threading.Lock()
         self._content_locks: dict[str, _ContentLock] = {}
 
-        self._fs, self._fs_path = fsspec.core.url_to_fs(storage_dir)
+        self._fs, self._fs_path = url_to_fs(storage_dir)
         self._fs.mkdirs(self._fs_path, exist_ok=True)
 
         # content id -> bytes, ordered by access (MRU at end).
@@ -71,7 +87,7 @@ class BundleStore:
         return f"{self._fs_path}/{cid}"
 
     @contextmanager
-    def _content_lock(self, cid: str) -> Iterator[None]:
+    def _content_lock(self, cid: str, deadline: Deadline) -> Iterator[None]:
         with self._content_locks_guard:
             state = self._content_locks.get(cid)
             if state is None:
@@ -79,8 +95,12 @@ class BundleStore:
                 self._content_locks[cid] = state
             state.users += 1
         try:
-            with state.lock:
+            if not state.lock.acquire(timeout=deadline.remaining_seconds()):
+                raise TimeoutError(f"Timed out waiting for bundle {cid} to finish uploading")
+            try:
                 yield
+            finally:
+                state.lock.release()
         finally:
             with self._content_locks_guard:
                 state.users -= 1
@@ -114,14 +134,18 @@ class BundleStore:
         """Write bytes if absent and return canonical content id."""
         cid = content_id(data)
         path = self._path_for(cid)
-        with self._content_lock(cid):
-            # Always ensure disk has the bytes: a cache hit without disk write
-            # would leave workers unable to fetch this id after a restart.
-            if not self._fs.exists(path):
-                with self._fs.open(path, "wb") as f:
-                    f.write(data)
-            with self._cache_lock:
-                self._cache_put(cid, data)
+        deadline = Deadline.from_now(self._upload_timeout)
+        try:
+            with self._content_lock(cid, deadline):
+                # A cache hit must still ensure workers can fetch the persisted bytes.
+                if not self._fs.exists(path, timeout=_remaining_upload_time(deadline)):
+                    # Async filesystems cancel the upload coroutine on timeout. A
+                    # timed-out background thread would keep the content lock held.
+                    self._fs.pipe_file(path, data, timeout=_remaining_upload_time(deadline))
+                with self._cache_lock:
+                    self._cache_put(cid, data)
+        except Exception as exc:
+            raise BundleUploadError(f"Failed to upload bundle {cid}: {exc}") from exc
         return cid
 
     def get(self, cid: str) -> bytes:
@@ -130,7 +154,7 @@ class BundleStore:
         cached = self._cache_get(cid)
         if cached is not None:
             return cached
-        with self._content_lock(cid):
+        with self._content_lock(cid, Deadline.from_now(self._upload_timeout)):
             cached = self._cache_get(cid)
             if cached is not None:
                 return cached

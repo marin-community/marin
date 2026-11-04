@@ -6,6 +6,7 @@
 import pytest
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.journeys.federation import PEER_ID, FederationJourney
+from rigging.timing import Duration
 
 
 @pytest.fixture
@@ -18,13 +19,15 @@ def federation(tmp_path, monkeypatch):
 
 
 def test_federated_job_runs_on_peer_and_syncs_attempt_to_parent(federation: FederationJourney) -> None:
-    job = federation.submit("train", tasks=2)
+    job = federation.submit("train", tasks=2, termination_grace=Duration.from_seconds(60))
 
     federation.promote()
     assert federation.parent_job(job).pending_reason == f"Awaiting acceptance by peer {PEER_ID}"
 
     federation.sync()
     assert {task.task_id for task in federation.peer_tasks(job)} == {job[0].wire_id, job[1].wire_id}
+    stored = federation.peer.controller.get_job_status(job.wire_id).request
+    assert stored.termination_grace.milliseconds == 60_000
 
     federation.run_peer()
     federation.succeed_on_peer(job[0])
@@ -59,6 +62,37 @@ def test_peer_outage_preserves_last_known_state_until_recovery_sync(federation: 
     assert federation.peer_summary().reachable
     assert federation.parent_tasks(job)[0].state == job_pb2.TASK_STATE_SUCCEEDED
     assert federation.parent_job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_direct_peer_usage_reaches_parent_and_clears_after_completion(federation: FederationJourney) -> None:
+    job = federation.peer.submit("direct", tasks=2)
+    federation.run_peer()
+    federation.sync()
+    assert federation.parent.budget_spent("journey") == 12
+    assert federation.peer.budget_spent("journey") == 12
+
+    federation.succeed_on_peer(job[0])
+    federation.succeed_on_peer(job[1])
+    federation.sync()
+    assert federation.parent.budget_spent("journey") == 0
+    assert federation.peer.budget_spent("journey") == 0
+
+
+def test_unreachable_pinned_queue_reports_peer_outage_and_recovers(federation: FederationJourney) -> None:
+    job = federation.submit("queued")
+    waiting_reason = federation.parent_job(job).pending_reason
+    assert "free capacity" in waiting_reason
+
+    federation.set_peer_reachable(False)
+    outage_reason = federation.parent_job(job).pending_reason
+    assert PEER_ID in outage_reason
+    assert "unreachable" in outage_reason
+    assert "free capacity" not in outage_reason
+    (listed,) = [status for status in federation.parent.jobs() if status.job_id == job.wire_id]
+    assert listed.pending_reason == outage_reason
+
+    federation.set_peer_reachable(True)
+    assert federation.parent_job(job).pending_reason == waiting_reason
 
 
 def test_unreachable_handoff_reports_awaiting_peer_and_recovers(federation: FederationJourney) -> None:
@@ -177,3 +211,39 @@ def test_mixed_kick_peer_outage_preserves_local_success_without_retry(federation
     federation.parent.settle()
     assert federation.parent.task(local[0]).current_attempt_id == 1
     assert federation.peer_tasks(job)[0].state == job_pb2.TASK_STATE_RUNNING
+
+
+@pytest.mark.parametrize(
+    "failure_retries,preemption_retries,execution_timeout,scheduling_timeout,termination_grace",
+    [(2, 7, 600, 120, 60), (0, 0, 0, 0, 10)],
+)
+def test_peer_child_requested_limits_survive_federation_sync(
+    federation: FederationJourney,
+    failure_retries: int,
+    preemption_retries: int,
+    execution_timeout: int,
+    scheduling_timeout: int,
+    termination_grace: int,
+) -> None:
+    root = federation.submit("limits")
+    federation.promote()
+    federation.sync()
+    child = federation.peer.submit_child(
+        root,
+        "train",
+        failure_retries=failure_retries,
+        preemption_retries=preemption_retries,
+        max_task_failures=4,
+        scheduling_timeout=scheduling_timeout,
+        execution_timeout=execution_timeout,
+        termination_grace=Duration.from_seconds(termination_grace),
+    )
+    for _ in range(2):
+        federation.sync()
+        request = federation.parent.controller.get_job_status(child.wire_id).request
+        assert request.timeout.milliseconds == execution_timeout * 1000
+        assert request.scheduling_timeout.milliseconds == scheduling_timeout * 1000
+        assert request.max_retries_failure == failure_retries
+        assert request.max_retries_preemption == preemption_retries
+        assert request.max_task_failures == 4
+        assert request.termination_grace.milliseconds == termination_grace * 1000

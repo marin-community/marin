@@ -52,6 +52,8 @@ pub struct NativeAuthConfig {
     pub federation_keys: HashMap<String, String>,
     #[serde(default)]
     pub admin_users: Vec<String>,
+    #[serde(default)]
+    pub user_roles: HashMap<String, String>,
     pub default_user_role: String,
 }
 
@@ -152,6 +154,7 @@ struct IapVerifier {
     public_keys_url: String,
     issuer: String,
     admin_users: Vec<String>,
+    user_roles: HashMap<String, String>,
     default_user_role: String,
     client: reqwest::Client,
     cache: Mutex<IapKeyCache>,
@@ -195,6 +198,7 @@ impl NativeVerifier {
                     config.iap_public_keys_url.clone(),
                     config.iap_issuer.clone(),
                     config.admin_users.clone(),
+                    config.user_roles.clone(),
                     config.default_user_role.clone(),
                 )
             })
@@ -445,6 +449,7 @@ impl IapVerifier {
         public_keys_url: String,
         issuer: String,
         admin_users: Vec<String>,
+        user_roles: HashMap<String, String>,
         default_user_role: String,
     ) -> Result<Self, String> {
         if audience.is_empty() || public_keys_url.is_empty() || issuer.is_empty() {
@@ -459,6 +464,7 @@ impl IapVerifier {
             public_keys_url,
             issuer,
             admin_users,
+            user_roles,
             default_user_role,
             client,
             cache: Mutex::new(IapKeyCache {
@@ -514,7 +520,9 @@ impl IapVerifier {
             .claims;
         Ok(VerifiedIdentity {
             user_id: claims.email.clone(),
-            role: if self.admin_users.contains(&claims.email) {
+            role: if let Some(role) = self.user_roles.get(&claims.email) {
+                role.clone()
+            } else if self.admin_users.contains(&claims.email) {
                 ADMIN_ROLE.to_string()
             } else {
                 self.default_user_role.clone()
@@ -560,6 +568,7 @@ C/edCMRM78P8eQTBCDUTK1ywSYaszvQZvneiW6gNtWEJndSreEcyyUdVvg==
             "https://unused.example/iap-keys".to_string(),
             TEST_IAP_ISSUER.to_string(),
             vec![],
+            HashMap::new(),
             "dashboard".to_string(),
         )
         .unwrap();
