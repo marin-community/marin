@@ -35,7 +35,10 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
 from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
 from transformers import GPT2Config as HfGpt2Config
+from transformers import PreTrainedTokenizerFast
 
 import levanter.compat.hf_export as hf_export
 import levanter.compat.hf_checkpoints as hf_checkpoints
@@ -576,6 +579,41 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
             assert_trees_all_close(original_value, reloaded_value)
 
     fs.rm(base_path, recursive=True)
+
+
+def _chat_tokenizer() -> PreTrainedTokenizerFast:
+    vocab = {"[UNK]": 0, "<|begin_of_text|>": 1, "<|end_of_text|>": 2, "<|eot_id|>": 3, "hello": 4}
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel(vocab=vocab, unk_token="[UNK]")),
+        unk_token="[UNK]",
+        bos_token="<|begin_of_text|>",
+        eos_token="<|end_of_text|>",
+    )
+    tokenizer.chat_template = "{% for message in messages %}{{ message['content'] }}<|eot_id|>{% endfor %}"
+    return tokenizer
+
+
+@pytest.mark.parametrize(
+    ("explicit", "expected"),
+    [
+        (None, {"bos_token_id": 1, "eos_token_id": [2, 3], "do_sample": True, "temperature": 0.6, "top_p": 0.95}),
+        (
+            {"eos_token_id": [2], "temperature": 0.3},
+            {"bos_token_id": 1, "eos_token_id": [2, 3], "do_sample": True, "temperature": 0.3, "top_p": 0.95},
+        ),
+    ],
+)
+def test_save_pretrained_writes_complete_generation_config(local_gpt2_tokenizer_path, tmp_path, explicit, expected):
+    gpt2_config = Gpt2Config(
+        num_layers=1, num_heads=1, hidden_dim=8, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    converter = gpt2_config.hf_checkpoint_converter().replaced(tokenizer=_chat_tokenizer())
+
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, gpt2_config, key=PRNGKey(0))
+        converter.save_pretrained(model, str(tmp_path), save_reference_code=False, generation_config=explicit)
+
+    assert json.loads((tmp_path / "generation_config.json").read_text()) == expected
 
 
 def test_causal_lm_architecture_name_is_torch_free():

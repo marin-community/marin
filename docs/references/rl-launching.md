@@ -194,6 +194,16 @@ to false as well. Without export, successful runs retain native recovery checkpo
 in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
 is null. Pipelines that serve the resulting model for downstream evaluation must request export.
 
+Every HF export writes `generation_config.json` through
+`rigging.hf_generation_config.export_generation_config`. It keeps the explicit
+fields of the source model's generation config and fills in the rest:
+`bos_token_id`, `eos_token_id` as the union of the tokenizer EOS id and the
+end-of-turn tokens the chat template emits (128001 and 128009 for the Llama 3
+header template), and `do_sample: true`, `temperature: 0.6`, `top_p: 0.95`.
+vLLM applies these sampling values to requests that omit them. SkyRL rollouts
+send explicit sampling parameters, and behavior-logprob training sets
+`generation_config: vllm` so the checkpoint's defaults never reach rollouts.
+
 The temporary checkpoint root is derived from the RL artifact name and version.
 After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old

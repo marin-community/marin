@@ -198,33 +198,27 @@ completed cache and skip the reference forward passes during validation. If a
 job is preempted mid-build, the unfinished cache is ignored and rebuilt on the
 next start.
 
-### Generation Stop Tokens
+### Generation Config
 
-Chat models typically use a turn-boundary token (e.g. `<|eot_id|>`, ID 128009)
-to end assistant responses, while the tokenizer's `eos_token` remains the
-pre-training document boundary (e.g. `<|end_of_text|>`, ID 128001). Inference
-tools like vLLM use `eos_token_id` from `config.json` to decide when to stop,
-so they will miss the chat stop token unless told otherwise.
+Every HF export writes a `generation_config.json`. Inference tools like vLLM
+read stop tokens and sampling defaults from it; without one they stop only at
+`config.json`'s `eos_token_id` and sample at temperature 1.0 with no nucleus
+cutoff.
 
-Set `hf_generation_eos_token_ids` to write a `generation_config.json` alongside
-each HF checkpoint with the correct stop tokens:
+Chat models end assistant turns with a turn-boundary token (e.g. `<|eot_id|>`,
+ID 128009), while the tokenizer's `eos_token` remains the pre-training document
+boundary (e.g. `<|end_of_text|>`, ID 128001). The export's `eos_token_id` is the
+union of the tokenizer's EOS id and every end-of-turn token the exported chat
+template emits, so a Llama 3 header template yields `[128001, 128009]`. The
+export also sets the tokenizer's `bos_token_id` and the sampling defaults in
+`rigging.hf_generation_config.EXPORT_SAMPLING_DEFAULTS`: `do_sample: true`,
+`temperature: 0.6`, `top_p: 0.95`. Pretraining exports get the same file.
+
+Set `hf_generation_eos_token_ids` to add stop tokens that the chat template does
+not reveal:
 
 ```yaml
 hf_generation_eos_token_ids: [128001, 128009]  # <|end_of_text|> + <|eot_id|>
-```
-
-The tokenizer's `eos_token_id` is auto-added if not in the list. This field
-defaults to `null` (no `generation_config.json` written), preserving backward
-compatibility with pretraining checkpoints.
-
-To determine the right stop token for your model's chat template:
-
-```python
-tokens = tokenizer.apply_chat_template(
-    [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
-    tokenize=True,
-)
-# The last token is the chat stop token (e.g. 128009 for Llama 3)
 ```
 
 ## Running
