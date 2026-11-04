@@ -39,6 +39,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_RAM,
     HERO_PROCESSES_PER_TASK,
     HERO_RACK_GPUS,
+    HERO_SCHEDULE_EXTENSION,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
@@ -52,6 +53,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.optimizer import ScheduleExtension
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -73,6 +75,8 @@ def build_diagnostic_run(
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None = None,
+    schedule_extension: ScheduleExtension | None = HERO_SCHEDULE_EXTENSION,
+    optimizer_racks: int | None = None,
     seed: int = 0,
     batch_size: int | None = None,
     num_experts: int | None = None,
@@ -116,6 +120,13 @@ def build_diagnostic_run(
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
     ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
+
+    ``schedule_extension`` defaults to the hero's. It sets the learning rate past ``schedule_steps``, and
+    ``num_steps`` can reach its last step.
+
+    ``optimizer_racks`` sizes the heuristic's learning rates, epsilon, and beta2 for that many racks of the hero's
+    tokens per rack instead of this run's batch, so a partial-rack run can take a larger run's optimizer values.
+    It requires ``schedule_steps``. ``None`` scales them from this run's batch.
     """
     if expert_axis_size is None:
         expert_axis_size = hero_expert_axis_size(context_axis_size)
@@ -143,9 +154,15 @@ def build_diagnostic_run(
     # rather than the head of a long one. Default keeps the two equal, which is the previous behavior.
     if schedule_steps is not None and schedule_steps <= 0:
         raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
-    if schedule_steps is not None and schedule_steps < num_steps:
-        raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
+    extension_steps = schedule_extension.steps if schedule_extension is not None else 0
+    if schedule_steps is not None and schedule_steps + extension_steps < num_steps:
+        raise ValueError(
+            f"num_steps={num_steps} must not pass schedule_steps={schedule_steps} "
+            f"plus the {extension_steps}-step schedule extension"
+        )
     total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
+    if optimizer_racks is not None and schedule_steps is None:
+        raise ValueError("optimizer_racks pins a long run's optimizer values, so it requires schedule_steps")
     model = HERO_MODEL_CONFIG
     overrides = {
         name: value
@@ -170,10 +187,11 @@ def build_diagnostic_run(
         batch_size = hero_rack_batch_size(model.max_seq_len)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=total_schedule_steps,
-        batch_size=batch_size,
+        batch_size=batch_size if optimizer_racks is None else hero_rack_batch_size(model.max_seq_len) * optimizer_racks,
         hidden_dim=model.hidden_dim,
         seq_len=model.max_seq_len,
     )
+    optimizer = dataclasses.replace(optimizer, schedule_extension=schedule_extension)
     batch_axes = validated_batch_axis_size(
         device_count=HERO_RACK_GPUS * dp_racks,
         dp_racks=dp_racks,
@@ -357,6 +375,27 @@ def build_diagnostic_run(
         "Build the learning-rate schedule for this many steps instead of --num-steps. The optimizer "
         "heuristic scales its rates from the implied token budget, so this trains the head of a long "
         "run's schedule. Defaults to --num-steps."
+    ),
+)
+@click.option(
+    "--extension-steps",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Steps of learning rate past --schedule-steps; requires --extension-final-lr-ratio. Defaults to the hero's.",
+)
+@click.option(
+    "--extension-final-lr-ratio",
+    type=click.FloatRange(min=0),
+    default=None,
+    help="Fraction of peak that the rate reaches at the end of --extension-steps. The schedule's 0.05 holds its floor.",
+)
+@click.option(
+    "--optimizer-racks",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Take the heuristic learning rates, epsilon, and beta2 for this many hero racks rather than for --batch-size. "
+        "Pass 11 with --schedule-steps 390251 for the hero's values on a partial-rack run. Default off."
     ),
 )
 @click.option(
@@ -553,6 +592,9 @@ def main(
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None,
+    extension_steps: int | None,
+    extension_final_lr_ratio: float | None,
+    optimizer_racks: int | None,
     seed: int,
     batch_size: int | None,
     num_experts: int | None,
@@ -583,11 +625,19 @@ def main(
     qk_mult_long_scale: float | None,
     restore_from: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
+    if (extension_steps is None) != (extension_final_lr_ratio is None):
+        raise click.UsageError("--extension-steps and --extension-final-lr-ratio go together")
     return build_diagnostic_run(
         run_id=run_id,
         dp_racks=dp_racks,
         num_steps=num_steps,
         schedule_steps=schedule_steps,
+        schedule_extension=(
+            HERO_SCHEDULE_EXTENSION
+            if extension_steps is None or extension_final_lr_ratio is None
+            else ScheduleExtension(steps=extension_steps, final_lr_ratio=extension_final_lr_ratio)
+        ),
+        optimizer_racks=optimizer_racks,
         seed=seed,
         batch_size=batch_size,
         num_experts=num_experts,

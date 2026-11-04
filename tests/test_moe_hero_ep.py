@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
+import logging
 import math
 import os
 import tomllib
 from datetime import timedelta
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -24,8 +27,10 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, 
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import save_checkpoint
+from levanter.checkpoint import CheckpointerConfig, discover_checkpoint_candidates, save_checkpoint
+from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
+from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
@@ -35,6 +40,8 @@ from levanter.grug.grug_moe import (
     MOE_VALID_ASSIGNMENTS_METRIC,
 )
 from levanter.testing.devices import use_test_devices
+from levanter.tracker.json_logger import JsonLoggerConfig
+from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
@@ -49,7 +56,7 @@ from experiments.grug.moe_hero_ep.grugmuon_hero import (
     _zeropower_via_newtonschulz_local,
     _zeropower_via_newtonschulz_replicated,
 )
-from experiments.grug.moe_hero_ep.optimizer import ExpertNormalization, GrugMoeMuonHConfig
+from experiments.grug.moe_hero_ep.optimizer import ExpertNormalization, GrugMoeMuonHConfig, ScheduleExtension
 
 GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
 
@@ -1661,3 +1668,137 @@ def test_a_clipping_run_restores_a_checkpoint_saved_without_clipping(tmp_path, m
     assert jax.tree.structure(stepped.opt_state) == jax.tree.structure(written.opt_state)
     assert float(metrics[train.GRAD_CLIPPED_METRIC]) == 1.0
     assert int(stepped.step) == 2
+
+
+_EXTENSION_LOGGER = "test_schedule_extension_run"
+
+
+@pytest.fixture
+def extension_run(tmp_path, monkeypatch):
+    """Run the real loop and checkpointing with a 4-step schedule and a 2-step extension from 5% to 1% of peak."""
+    # MuonH's sharded Newton-Schulz does not lower on one CPU device. SGD reads the same schedule.
+    monkeypatch.setattr(
+        GrugMoeMuonHConfig,
+        "build",
+        lambda self, num_train_steps: optax.inject_hyperparams(optax.sgd)(
+            learning_rate=self.lr_scheduler(num_train_steps)
+        ),
+    )
+    stream = StringIO()
+    logger = logging.getLogger(_EXTENSION_LOGGER)
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler(stream)
+    logger.addHandler(handler)
+
+    def run(stop_step, device_memory_hook=lambda step: None):
+        monkeypatch.setattr(train, "log_device_memory", device_memory_hook)
+        stream.seek(0)
+        stream.truncate()
+        trainer = TrainerConfig(
+            id="extension",
+            num_train_steps=4,
+            train_batch_size=len(jax.devices()),
+            tracker=JsonLoggerConfig(logger_name=_EXTENSION_LOGGER),
+            require_accelerator=False,
+            use_explicit_mesh_axes=True,
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_dir=tmp_path / "logs",
+            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "checkpoints"), keep=[{"every": 3}]),
+        )
+        train._run_grug_local(
+            train.GrugRunConfig(
+                model=model.GrugModelConfig(
+                    vocab_size=64,
+                    hidden_dim=32,
+                    intermediate_dim=16,
+                    shared_expert_intermediate_dim=16,
+                    num_layers=1,
+                    num_heads=2,
+                    num_kv_heads=2,
+                    max_seq_len=8,
+                    num_experts=4,
+                    num_experts_per_token=2,
+                ),
+                data=LmDataConfig(components={}, vocab_size=64, tokenizer="passthrough"),
+                resources=ResourceConfig.with_cpu(),
+                optimizer=GrugMoeMuonHConfig(
+                    learning_rate=1e-2,
+                    adam_lr=1e-3,
+                    min_lr_ratio=0.05,
+                    schedule_extension=ScheduleExtension(steps=2, final_lr_ratio=0.01),
+                ),
+                trainer=train.GrugTrainerConfig(
+                    trainer=trainer,
+                    training_data_mode=train.TrainingDataMode.SYNTHETIC,
+                    save_checkpoints=True,
+                ),
+                eval=None,
+                stop_after_steps=stop_step,
+            )
+        )
+        records = [json.loads(line) for line in stream.getvalue().splitlines() if line.startswith("{")]
+        return {
+            record["step"]: record["metrics"]["optim/learning_rate"]
+            for record in records
+            if record["event"] == "log" and "optim/learning_rate" in record["metrics"]
+        }
+
+    yield SimpleNamespace(run=run, checkpoint_root=tmp_path / "checkpoints" / "extension")
+    logger.removeHandler(handler)
+
+
+def _committed_checkpoints(root):
+    return {candidate.step: candidate for candidate in discover_checkpoint_candidates(str(root))}
+
+
+@pytest.mark.timeout(240)
+def test_run_trains_past_its_schedule_and_resumes_at_the_extension_rate(extension_run):
+    first = extension_run.run(stop_step=5)
+    assert _committed_checkpoints(extension_run.checkpoint_root)[5].metadata["is_temporary"] is False
+    # The update at count 4 is the first past the schedule and still uses the floor.
+    assert first[4] == pytest.approx(1e-2 * 0.05, rel=1e-5)
+
+    resumed = extension_run.run(stop_step=6)
+    assert list(resumed) == [5]
+    assert resumed[5] == pytest.approx(1e-2 * 0.03, rel=1e-5)
+    assert _committed_checkpoints(extension_run.checkpoint_root)[6].metadata["is_temporary"] is False
+
+    with pytest.raises(ValueError, match="past the stop step"):
+        extension_run.run(stop_step=5)
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("failing_pass", [pytest.param(1, id="periodic"), pytest.param(2, id="forced")])
+def test_final_hook_failure_keeps_the_checkpoint_and_a_retry_exits_without_repeating_either(extension_run, failing_pass):
+    visits = []
+
+    def fail_at_the_stop_step(step):
+        visits.append(step.step)
+        if visits.count(4) == failing_pass:
+            raise RuntimeError("final eval failed")
+
+    with pytest.raises(RuntimeError, match="final eval failed"):
+        extension_run.run(stop_step=5, device_memory_hook=fail_at_the_stop_step)
+    written = _committed_checkpoints(extension_run.checkpoint_root)[5]
+
+    retry_visits = []
+    retried = extension_run.run(stop_step=5, device_memory_hook=retry_visits.append)
+
+    assert retry_visits == []
+    assert retried == {}
+    assert _committed_checkpoints(extension_run.checkpoint_root)[5].timestamp == written.timestamp
+
+
+@pytest.mark.timeout(240)
+def test_restore_of_a_temporary_checkpoint_at_the_stop_step_promotes_it_and_runs_the_final_hooks(extension_run):
+    extension_run.run(stop_step=5)
+    metadata_path = extension_run.checkpoint_root / "step-5" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata_path.write_text(json.dumps({**metadata, "is_temporary": True}))
+
+    visits = []
+    extension_run.run(stop_step=5, device_memory_hook=visits.append)
+
+    assert visits
+    assert _committed_checkpoints(extension_run.checkpoint_root)[5].metadata["is_temporary"] is False
