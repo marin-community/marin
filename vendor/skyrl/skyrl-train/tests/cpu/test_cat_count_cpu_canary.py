@@ -16,15 +16,19 @@ import torch
 import zstandard
 from omegaconf import OmegaConf
 from taskcompendium.grading_result import Outcome
+from taskcompendium.grader import verifyit_package
+from verifyit.spec import ExactSpec
 from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.dataset.tasks import source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
-from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC
+from skyrl_gym.envs.cat_count.reward import TARGET_WORD
+from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
+from tests.cpu.task_specs import lowered_task, text_task
 from tests.cpu.tiny_training.cat_count import (
     FAST_STEPS,
     RUN_TIMEOUT_SECONDS,
@@ -335,6 +339,40 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
+def test_task_grading_timers_reach_training_and_evaluation(
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context
+):
+    root = tmp_path / "task-timers"
+    cfg = cat_count_config(root, cat_count_policy, steps=2)
+    tasks = [
+        lowered_task(
+            text_task(str(n), prompt=PROMPT.format(N=n), source="task-timers").model_copy(
+                update={"grader": verifyit_package(ExactSpec(expected=(" ".join([TARGET_WORD] * n),))).grader}
+            ),
+            max_turns=1,
+        )
+        for n in range(1, 9)
+    ]
+    path = root / "data/tasks.parquet"
+    write_tasks(path, tasks)
+    cfg.data.train_data = [str(path)]
+    cfg.data.val_data = [str(path)]
+    records = run_process(forkserver_context, root, cfg)
+    training = [row for row in records if "policy/raw_grad_norm" in row]
+    evaluations = [row for row in records if "eval/all/timing/grading/mean" in row]
+    assert [int(row["step"]) for row in training] == [1, 2]
+    assert [int(row["step"]) for row in evaluations] == [0, 2]
+    for rows, prefix in ((training, ""), (evaluations, "eval/all/")):
+        for row in rows:
+            for raw in TASK_TIMING_KEYS:
+                values = [row[f"{prefix}{raw}/{stat}"] for stat in ("mean", "p50", "p95", "max")]
+                assert all(math.isfinite(value) and value >= 0 for value in values)
+                assert values[1] <= values[2] <= values[3]
+            assert row[f"{prefix}timing/grading/mean"] > 0
+            assert row[f"{prefix}timing/setup/max"] == 0
+
+
+@pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
 def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     tmp_path, cat_count_policy, cat_count_session, forkserver_context
 ):
@@ -351,6 +389,9 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         }
         lowered = source_row_task(row, 0, source_name="cat-count", environment_configs=environment_configs)
         spec = lowered.task.model_copy(update={"id": identifier})
+        if n == 7:
+            spec = spec.model_copy(update={"grader": verifyit_package(ExactSpec(expected=(TARGET_WORD,))).grader})
+            return lowered_task(spec, max_turns=1)
         return lowered.model_copy(update={"task": spec})
 
     expected = {f"stable-cat-count-{n}": PROMPT.format(N=n) for n in (7, 1, 4, 2)}
@@ -398,6 +439,10 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         "unavailable": 2,
     }
     assert metrics["generate/outcome/rollout_failure"] == 2
+    for raw in TASK_TIMING_KEYS:
+        assert all(math.isfinite(metrics[f"{raw}/{stat}"]) for stat in ("mean", "p50", "p95", "max"))
+    assert metrics["timing/grading/mean"] > 0
+    assert metrics["timing/setup/max"] == 0
 
 
 @pytest.mark.nightly

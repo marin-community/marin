@@ -93,7 +93,6 @@ class Gap(StrEnum):
     REUSED_DEV_PANEL = "reused-dev-panel"
     NO_AGENTIC_TASKS = "no-agentic-tasks"
     NO_IMAGE_SANDBOX = "no-image-sandbox"
-    NO_GRADING_TIMER = "no-grading-timer"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
     EVAL_USES_TRAINING_SAMPLING = "eval-uses-training-sampling"
 
@@ -354,9 +353,13 @@ _GAPS = (
     Gap.NO_AGENTIC_TASKS,
     Gap.NO_IMAGE_SANDBOX,
     Gap.REMOTE_JUDGE,
-    Gap.NO_GRADING_TIMER,
 )
 _PANEL = EVALUATIONS["panel-100"]
+_TIMER_REPORTS = tuple(
+    Metric(f"timing/{phase}/{statistic}", False)
+    for phase in ("grading", "setup")
+    for statistic in ("mean", "p50", "p95", "max")
+)
 _MISMATCH_REPORTS = tuple(
     Metric(f"policy/mismatch/staleness0/{name}", False)
     for name in (
@@ -370,6 +373,7 @@ _MISMATCH_REPORTS = tuple(
     )
 )
 _TRAINING_REPORTS = (
+    *_TIMER_REPORTS,
     *_MISMATCH_REPORTS,
     *(
         Metric(key, higher)
@@ -388,6 +392,7 @@ _TRAINING_REPORTS = (
     ),
 )
 _SPEED_REPORTS = (
+    *_TIMER_REPORTS,
     *_MISMATCH_REPORTS,
     *(
         Metric(f"timing/step_wall/{phase}", False)
@@ -435,6 +440,7 @@ PRESETS = MappingProxyType(
                 evaluations=(EVALUATIONS["speed-512x4"],),
                 guards=(Metric("generate/tokens_per_second_per_gpu", True),),
                 reported=(
+                    *_TIMER_REPORTS,
                     Metric("generate/wall_seconds", False),
                     Metric("generate/response_tokens", True),
                     Metric("generate/vllm/latency_ttft_mean", False),
@@ -452,6 +458,7 @@ PRESETS = MappingProxyType(
                 evaluations=(EVALUATIONS["screen-256x4"],),
                 guards=(Metric("screen-256x4/mixed_fraction", True),),
                 reported=(
+                    *_TIMER_REPORTS,
                     Metric("screen-256x4/mean", True),
                     Metric("screen-256x4/all_right_fraction", False),
                     Metric("screen-256x4/all_wrong_fraction", False),
@@ -522,6 +529,7 @@ PRESETS = MappingProxyType(
                 measured=range(1, 101),
                 evaluations=(replace(_PANEL, every=10, at_start=True),),
                 checkpoint_every=10,
+                reported=_TIMER_REPORTS,
                 gaps=(*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
             ),
         )

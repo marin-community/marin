@@ -25,6 +25,7 @@ from skyrl_train.metric_names import (
     EVAL_OUTCOME_METRIC_PREFIX,
     GENERATE_OUTCOME_METRIC_PREFIX,
     PROMPTS_DROPPED_TOO_LONG_METRIC,
+    TASK_TIMING_KEYS,
 )
 from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray, num_rollout_gpus
 from skyrl_train.evaluate import evaluate
@@ -106,6 +107,11 @@ class EvalOnlyEntrypoint(BasePPOExp):
                         GENERATE_OUTCOME_METRIC_PREFIX + key.removeprefix(EVAL_OUTCOME_METRIC_PREFIX): value
                         for key, value in results.items()
                         if key.startswith(EVAL_OUTCOME_METRIC_PREFIX)
+                    },
+                    **{
+                        key.removeprefix("eval/all/"): value
+                        for key, value in results.items()
+                        if any(key.startswith(f"eval/all/{raw}/") for raw in TASK_TIMING_KEYS)
                     },
                 }
             )
