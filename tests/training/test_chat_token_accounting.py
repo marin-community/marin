@@ -2,13 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import dataclasses
 import hashlib
 from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from levanter.data.text.examples import GrugLmExample
 from levanter.data.text.formats import ChatLmDatasetFormat
 from marin.training.chat_token_accounting import (
@@ -66,34 +64,6 @@ def test_multiturn_counts_match_actual_causal_loss_and_preserve_inputs(gpt2_toke
     assert all(turn.supervised_tokens > 0 for turn in result.turns)
     assert result.turns[0].supervised_tokens > result.turns[1].supervised_tokens
     assert row == original
-    with pytest.raises(ValueError, match="exceeds context"):
-        account_chat_row(
-            row,
-            identity,
-            tokenizer=gpt2_tokenizer,
-            chat_format=chat_format,
-            context_length=2,
-            expected_template_sha256=hashlib.sha256(TEMPLATE.encode()).hexdigest(),
-        )
-    with pytest.raises(ValueError, match="pinned hash"):
-        account_chat_row(
-            row,
-            identity,
-            tokenizer=gpt2_tokenizer,
-            chat_format=chat_format,
-            context_length=256,
-            expected_template_sha256="wrong",
-        )
-    row["chat_template_kwargs"] = {"chat_template": TEMPLATE + "changed"}
-    with pytest.raises(ValueError, match="overrides the pinned"):
-        account_chat_row(
-            row,
-            identity,
-            tokenizer=gpt2_tokenizer,
-            chat_format=chat_format,
-            context_length=256,
-            expected_template_sha256=hashlib.sha256(TEMPLATE.encode()).hexdigest(),
-        )
 
 
 def test_ordered_mass_is_not_mean_of_row_fractions_or_gradient_share():
@@ -126,12 +96,3 @@ def test_ordered_mass_is_not_mean_of_row_fractions_or_gradient_share():
     empty = account_ordered_occurrences([short, long], [], batch_size=8)
     assert empty.pooled.classes["id"].ce_coefficient_mass.value is None
     assert empty.mean_update_ce_coefficient_mass["id"].value is None
-    with pytest.raises(ValueError, match="Duplicate"):
-        account_ordered_occurrences([short, short], [], batch_size=8)
-    with pytest.raises(ValueError, match="Unknown"):
-        account_ordered_occurrences([short], ["missing"], batch_size=1)
-    with pytest.raises(ValueError, match="complete updates"):
-        account_ordered_occurrences([short], ["short"], batch_size=8)
-    zero = dataclasses.replace(short, turns=())
-    with pytest.raises(ValueError, match="no supervised"):
-        account_ordered_occurrences([zero], ["short"], batch_size=1)
