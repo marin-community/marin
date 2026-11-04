@@ -39,6 +39,7 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
     tokenizer = SimpleNamespace(eos_token_id=2)
     inputs, rollouts = [], []
     for index, duration in enumerate((1.0, 3.0, 5.0, 101.0, None)):
+        turn_count = 1 if duration == 101.0 else 2
         task = text_task(str(index)).model_copy(
             update={"grader": ScriptGrader(argv=("true",), environment=NATIVE_ENVIRONMENT, reward=ExitCodeReward())}
         )
@@ -56,21 +57,26 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
                 logprobs=(-0.1,),
                 stop_reason="stop",
             )
-            for _ in range(2)
+            for _ in range(turn_count)
         )
         rollouts.append(
             TrainingRollout(
                 task_id=task.id,
                 messages=(),
                 prompt_token_ids=(1,),
-                response_token_ids=(2, 2),
-                loss_mask=(1, 1),
-                logprobs=(-0.1, -0.1),
+                response_token_ids=(2,) * turn_count,
+                loss_mask=(1,) * turn_count,
+                logprobs=(-0.1,) * turn_count,
                 grade=GradeResult(Outcome.GRADED, 1.0),
                 stop_reason="stop",
                 steps=tuple(
-                    TrainingStep(turn, TrainingTransition(done=last, reward=float(last)), i, ())
-                    for i, (turn, last) in enumerate(zip(turns, (False, True), strict=True))
+                    TrainingStep(
+                        turn,
+                        TrainingTransition(done=i == turn_count - 1, reward=float(i == turn_count - 1)),
+                        i,
+                        (),
+                    )
+                    for i, turn in enumerate(turns)
                 ),
                 metrics={} if duration is None else {"timing/grading": duration, "timing/setup": duration - 1},
             )
@@ -95,5 +101,7 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
         assert metrics["timing/setup/p50"] == 3.0
         assert metrics["timing/setup/p95"] == pytest.approx(85.6)
         assert not any(key.startswith("environment/timing/") for key in metrics)
-    first_turns = filter_trajectory_batch(stepped, [0, 2, 4, 6, 8])
+    first_turns = filter_trajectory_batch(
+        stepped, [index for index, last in enumerate(stepped["is_last_step"]) if not last]
+    )
     assert not any(key.startswith(("timing/grading/", "timing/setup/")) for key in first_turns["rollout_metrics"])
