@@ -15,9 +15,11 @@ machine, exactly as validation replays a control: ``trials.run_trial`` with a ``
 replays ``spec.controls.candidate_turns`` on a fresh machine, so the verifier's files exist only on the grading
 machine. ``finish_search`` hands in a ``SearchReport``: the defects found, each naming the graded submissions that
 show it and whether it needs addressing, and a summary. It refuses a report before ``min_probes`` distinct
-candidates were graded, or whose defects cite no graded submission; an accepted report ends the loop. A task
-without a task machine offers ``submit`` and ``finish_search`` alone. ``AdversaryPolicy.submissions`` bounds the
-submissions of an attempt; a ``submit`` past it returns an error and grades nothing.
+candidates were graded, whose defects cite no graded submission, or after a report was accepted; an accepted
+report ends the loop. A task without a task machine offers ``submit`` and ``finish_search`` alone.
+``AdversaryPolicy.submissions`` bounds the submissions of an attempt. A ``submit`` past it, or one repeating a
+graded candidate, returns an error and grades nothing, so the budget counts distinct candidates and
+``min_probes`` within it stays reachable.
 
 The two modes differ only in the brief (``adversary_brief``). ``BLACKBOX`` gives the task as the solver sees it
 (the shell harness's ``task_prompt``), the tools and the budget. ``WHITEBOX`` adds the grader's specification and
@@ -473,6 +475,8 @@ class Verifier:
     report: SearchReport | None = None
 
     async def finish(self, arguments: Mapping[str, object]) -> str:
+        if self.report is not None:
+            return json.dumps({"error": "a search report was already accepted; it is final"})
         report = TypeAdapter(SearchReport).validate_python(arguments)
         known = {submission.record.ordinal: submission for submission in self.submissions}
         distinct = {digest((item.record.reply, item.record.files)) for item in self.submissions}
@@ -504,6 +508,11 @@ class Verifier:
             return json.dumps({"error": f"no file at {error.args[0]} in your workspace"})
         except BadPath as error:
             return json.dumps({"error": f"{error.args[0]} is not an absolute, normalized path in your workspace"})
+        recorded = tuple(submitted_file(file) for file in files)
+        candidate = digest((reply, recorded))
+        for prior in self.submissions:
+            if digest((prior.record.reply, prior.record.files)) == candidate:
+                return json.dumps({"error": f"submission {prior.record.ordinal} already graded this candidate"})
         ordinal = len(self.submissions) + 1
         name = f"{SUBMISSION_PREFIX}{ordinal}"
         started = time.monotonic()
@@ -515,7 +524,7 @@ class Verifier:
             turn=None,
             trial=name,
             reply=reply,
-            files=tuple(submitted_file(file) for file in files),
+            files=recorded,
             grade=grade,
             passed=passed(grade),
             wall_time=time.monotonic() - started,

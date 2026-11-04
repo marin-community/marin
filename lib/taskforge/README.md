@@ -484,6 +484,7 @@ handoff-count cap. A relaunch starts from the saved workspace instead of resumin
 |----------|-----------------|-------------------|----------|
 | triage   | `TRIAGED`       | accept            | author   |
 | triage   | `TRIAGED`       | repair            | triage   |
+| triage   | `TRIAGED`       | reject            | done     |
 | triage   | `TRIAGED`       | hold / abandon    | done     |
 | author   | `AUTHORED`      | authored          | build    |
 | author   | `AUTHOR_FAILED` | revise            | author   |
@@ -497,14 +498,14 @@ handoff-count cap. A relaunch starts from the saved workspace instead of resumin
 | review   | `DECIDED`       | retry             | validate |
 | review   | `DECIDED`       | modify            | author   |
 
-`ACCEPTED` and `REJECTED` are final decisions requiring complete evaluation evidence.
+`ACCEPTED` and `REJECTED` are final decisions. Past triage, they require complete evaluation evidence.
 Acceptance requires a solver solve rate within the configured band. Exhausting a workpiece's triage repairs, author/build
 revisions, validation retries, modify rounds or outer infrastructure retries produces `ABANDONED`.
 Other execution failures and missing evidence produce `HELD`. Both retain the event log, completed artifacts and next stage for resume.
 Historical reject edges remain readable, and historical `FAILED` records are read as `HELD`.
 
-Triage's preflight verdict is distinct from a task evaluation verdict. A failed preflight holds
-at triage. A REPAIR verdict within budget rewrites the proposal to `repaired/<k>.json` and triages
+Triage's preflight verdict is distinct from a task evaluation verdict. A failed preflight rejects
+at triage: it is deterministic, so a resume would only reject the proposal again. A REPAIR verdict within budget rewrites the proposal to `repaired/<k>.json` and triages
 it again. Exhaustion abandons at triage; an invalid rewrite holds there. Every later stage reads
 the last successful rewrite and verifies its recorded digest.
 

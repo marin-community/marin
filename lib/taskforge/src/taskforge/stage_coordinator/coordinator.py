@@ -313,7 +313,7 @@ async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
         return WorkpieceEvent(EventKind.TRIAGED, state.round, state.proposal_digest, attrs)
     reason = f"{TRIAGE_REJECTED}: {'; '.join(verdict.reasons)}"
     budget = workpiece.coordinator.budget.max_triage_repairs
-    way = Exit.HOLD
+    way = Exit.REJECT
     if verdict.decision is TriageDecision.REPAIR and state.triage_repairs - state.triage_repairs_at_resume >= budget:
         way = Exit.ABANDON
         spent_repairs = state.triage_repairs - state.triage_repairs_at_resume
@@ -322,6 +322,7 @@ async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
         try:
             rewrite = await stages.repair(proposal, verdict)
         except ProposalFormatError as error:
+            way = Exit.HOLD
             reason = f"the rewrite for the REPAIR verdict is not a valid proposal: {error}"
         else:
             return _repaired(workpiece, state, rewrite)
