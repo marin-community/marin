@@ -36,6 +36,9 @@ Serving bindings follow each checkpoint's own training configuration:
   context). The raw ``Qwen3-30B-A3B-Base`` and ``Qwen3.5-35B-A3B-Base`` bases
   run with no additional training; their parsers match their families'
   validated paths even though a raw base rarely emits parseable calls.
+- ``qwen35-35b-a3b-base-im-end-stop`` keeps the raw Qwen3.5 base binding but
+  loads a serving-side generation config with both its EOS and turn-end token.
+  The separate key preserves the original arm for comparison.
 """
 
 from dataclasses import dataclass
@@ -61,6 +64,7 @@ class CohortModel:
     max_num_batched_tokens: int = 8192
     chat_template_file: str | None = None
     chat_template_kwargs: dict | None = None
+    generation_config_dir: str | None = None
     # "hub" stages tokenizer metadata from the pinned Hub revision; "model-artifact"
     # reads it from the object-store mirror, which is what a gated checkpoint needs
     # because the evaluation containers carry no Hub credentials.
@@ -143,6 +147,14 @@ COHORT_MODELS: dict[str, CohortModel] = {
         tool_parser="qwen3_coder",
         chat_template_kwargs={"enable_thinking": True},
     ),
+    "qwen35-35b-a3b-base-im-end-stop": CohortModel(
+        key="qwen35-35b-a3b-base-im-end-stop",
+        repo="Qwen/Qwen3.5-35B-A3B-Base",
+        revision="0f0813072d2358973511097385626f21fcb6d422",
+        tool_parser="qwen3_coder",
+        chat_template_kwargs={"enable_thinking": True},
+        generation_config_dir="qwen35-35b-a3b-base-im-end-stop",
+    ),
     "grug-67b-a2b-datakit-sft": CohortModel(
         key="grug-67b-a2b-datakit-sft",
         repo="open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step471-2026.10.25",
@@ -177,12 +189,13 @@ def cohort_model(key: str) -> CohortModel:
 
 
 def engine_init_kwargs(model: CohortModel) -> dict:
-    """SkyRL generator engine arguments bound to the model's parser bindings.
-
-    SkyRL sets the actor-level engine kwargs (expert parallel, concurrency,
-    prefill budget) itself from the generator config, so none are passed here.
-    """
-    return {"enable_auto_tool_choice": True, "tool_call_parser": model.tool_parser}
+    """Return vLLM arguments for the model's tool parser and generation config."""
+    kwargs = {"enable_auto_tool_choice": True, "tool_call_parser": model.tool_parser}
+    if model.generation_config_dir is not None:
+        kwargs["generation_config"] = (
+            "/app/experiments/evaluation/mini_policy_runtime/generation-configs/" + model.generation_config_dir
+        )
+    return kwargs
 
 
 def chat_template_config(model: CohortModel) -> dict:

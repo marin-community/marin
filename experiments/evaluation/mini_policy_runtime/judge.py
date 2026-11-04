@@ -14,6 +14,8 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import remote_inference
 from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, run_skyrl
 
+_RNO2A_TEMP_PREFIX = "s3://marin-rno2a"
+
 
 @dataclass(frozen=True)
 class JudgedEvaluation:
@@ -40,7 +42,7 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
     inference = inference_config_for_model(
         config.judge,
         AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster="cw-rno2a"),
-        env_vars={},
+        env_vars={"MARIN_TEMP_PREFIX": _RNO2A_TEMP_PREFIX},
         priority=priority_band_value(launch["iris"]["priority"]),
         capability_origin=config.capability_origin,
         api_model=config.judge.location,
