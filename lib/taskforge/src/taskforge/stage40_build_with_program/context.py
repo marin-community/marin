@@ -38,7 +38,8 @@ class BuildInfrastructureFailure(Exception):
     Not a ``BuildFailure``: the original host error is in the ``__cause__`` chain.
 
     Attributes:
-        cause: An ``infrastructure.InfrastructureCause`` value, the label of the failure.
+        cause: The failure's label: an ``infrastructure.InfrastructureCause`` value where the host
+            error was classified, otherwise a label from the raise site, such as ``author_incomplete``.
         message: The host's account of the failure.
     """
 
