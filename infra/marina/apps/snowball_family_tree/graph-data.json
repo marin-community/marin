@@ -5748,7 +5748,7 @@
       ],
       "summary": "Linear weight merge of two identity SFT arms (0.75 A3 + 0.25 A8a), both trained from v0.1. BFCL 30.4% (+2.8 [-0.8, +6.0]) vs v0.1, but GSM8K -1.5 [-2.4, -0.7] trips the stop line. Merges did not separate A3's tool-calling strength from A8a's cleaner reasoning: both switch together near t = 0.5.",
       "source": "https://github.com/marin-community/marin/issues/10695",
-      "flops": "FLOPs unknown · training H100-hours not audited for this node",
+      "flops": "FLOPs unknown · no training compute (weight construction)",
       "notes": "HF weight revision 5c8f0b1e8da27fa53e7532e0192282b091cf3c2c; later Hub commits may change only the model card. Merge weights are on the two SFT checkpoints' full parameters; no further training.",
       "status": "public checkpoint; research candidate, not a release",
       "confidence": "documented",
