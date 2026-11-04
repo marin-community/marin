@@ -59,13 +59,25 @@ class UploadConfig:
     staging_dir: str
 
 
+@dataclass(frozen=True)
+class _UploadPlan:
+    root: StoragePath
+    manifest: dict
+    config_text: str
+    index_text: str
+    records: list[HFShardRecord]
+    card: bytes
+    license_text: bytes
+
+
 def _json_bytes(value: dict) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
 
 
 def _status(config: UploadConfig, phase: str, **fields) -> None:
     value = {"phase": phase, "repo": config.repo_id, "branch": config.branch, **fields}
-    StoragePath(config.export.destination.rstrip("/") + ".upload-status.json").write_text(json.dumps(value, indent=2))
+    root = StoragePath(config.export.destination)
+    (root.parent / (root.name + ".upload-status.json")).write_text(json.dumps(value, indent=2))
     logger.info("Upload status: %s", json.dumps(value))
 
 
@@ -130,8 +142,7 @@ def _verify_card(api: HfApi, config: UploadConfig, revision: str, card: bytes, l
         raise ValueError("Published model card or license differs from the reviewed input")
 
 
-def upload(config: UploadConfig) -> dict:
-    """Verify, resume and complete one private checkpoint upload using bounded disk staging."""
+def _upload_plan(config: UploadConfig) -> _UploadPlan:
     card = Path(config.model_card).read_bytes()
     license_text = Path(config.license_file).read_bytes()
     validate_model_card(card, license_text)
@@ -164,7 +175,21 @@ def upload(config: UploadConfig) -> dict:
     if any(record.export_id != manifest["export_id"] for record in records):
         raise ValueError("Shard receipts belong to another export")
 
-    api = HfApi(token=require_secret("HF_TOKEN"))
+    return _UploadPlan(
+        root=root,
+        manifest=manifest,
+        config_text=config_text,
+        index_text=index_text,
+        records=records,
+        card=card,
+        license_text=license_text,
+    )
+
+
+def _prepare_branch(api: HfApi, config: UploadConfig, plan: _UploadPlan) -> dict[str, RepoFile]:
+    records = plan.records
+    request = plan.manifest["request"]
+    card, license_text = plan.card, plan.license_text
     if not api.model_info(config.repo_id).private:
         raise ValueError("Model repository must remain private")
     baseline = _repo_files(api, config, config.base_revision)
@@ -176,7 +201,7 @@ def upload(config: UploadConfig) -> dict:
     files = _repo_files(api, config, config.branch)
     _verify_hub_shards(files, records, complete=False)
     upload_request = {
-        "export_id": manifest["export_id"],
+        "export_id": plan.manifest["export_id"],
         "export": request,
         "repo": config.repo_id,
         "branch": config.branch,
@@ -205,123 +230,145 @@ def upload(config: UploadConfig) -> dict:
         )
         _verify_card(api, config, pinned.oid, card, license_text)
 
+    return files
+
+
+def _upload_shards(
+    api: HfApi, config: UploadConfig, plan: _UploadPlan, files: dict[str, RepoFile], scratch: Path
+) -> None:
+    root, records = plan.root, plan.records
     validated_payload = 0
+    for number, record in enumerate(records, start=1):
+        _status(config, "uploading", shard=number, total_shards=len(records), filename=record.filename)
+        source = root / record.filename
+        if record.filename in files:
+            # Matching Hub SHA-256 verifies reuse; still validate the source
+            # header so the total BF16 payload is checked on every resume.
+            if source.size() != record.bytes:
+                raise ValueError(f"Source shard size differs: {record.filename}")
+            with source.open("rb") as stream:
+                validated_payload += _payload(stream, record)
+            continue
+        local = scratch / record.filename
+        source.download_to(str(local))
+        if local.stat().st_size != record.bytes:
+            raise ValueError(f"Source shard size differs: {record.filename}")
+        with local.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != record.sha256:
+                raise ValueError(f"Source shard SHA-256 differs: {record.filename}")
+            stream.seek(0)
+            validated_payload += _payload(stream, record)
+        api.upload_file(
+            repo_id=config.repo_id,
+            repo_type="model",
+            revision=config.branch,
+            path_in_repo=record.filename,
+            path_or_fileobj=str(local),
+            commit_message=f"Add {config.branch} BF16 shard {number}/{len(records)}",
+        )
+        remote = api.get_paths_info(config.repo_id, paths=[record.filename], repo_type="model", revision=config.branch)[
+            0
+        ]
+        _verify_hub_shards({record.filename: remote}, [record], complete=True)
+        local.unlink()
+    if validated_payload != config.expected_payload_bytes:
+        raise ValueError("Validated BF16 payload differs from the expected model size")
+
+
+def _complete_upload(api: HfApi, config: UploadConfig, plan: _UploadPlan, scratch: Path) -> dict:
+    records, manifest = plan.records, plan.manifest
+    card, license_text = plan.card, plan.license_text
+    config_text, index_text = plan.config_text, plan.index_text
+    files = _repo_files(api, config, config.branch)
+    _verify_hub_shards(files, records, complete=True)
+
+    expected_result = {
+        "repo": config.repo_id,
+        "branch": config.branch,
+        "export_id": manifest["export_id"],
+        "shards": len(records),
+        "payload_bytes": config.expected_payload_bytes,
+        "tokenizer": config.tokenizer,
+        "tokenizer_revision": config.tokenizer_revision,
+    }
+    if UPLOAD_MANIFEST_FILENAME in files:
+        result = json.loads(_download(api, config, UPLOAD_MANIFEST_FILENAME, config.branch))
+        if any(result.get(key) != value for key, value in expected_result.items()):
+            raise ValueError("Completed HF upload differs from this request")
+        _verify_hub_shards(_repo_files(api, config, result["weights_commit"]), records, complete=True)
+        _verify_card(api, config, result["weights_commit"], card, license_text)
+        _verify_card(api, config, config.branch, card, license_text)
+        _status(config, "complete", **result)
+        return result
+
+    _status(config, "finalizing", verified_shards=len(records))
+    metadata = scratch / "metadata"
+    metadata.mkdir()
+    snapshot_download(
+        config.tokenizer,
+        revision=config.tokenizer_revision,
+        token=api.token,
+        local_dir=metadata,
+        allow_patterns=["tokenizer*", "special_tokens_map.json", "added_tokens.json", "chat_template*"],
+    )
+    (metadata / "README.md").write_bytes(card)
+    (metadata / "LICENSE").write_bytes(license_text)
+    (metadata / "config.json").write_text(config_text)
+    (metadata / INDEX_FILENAME).write_text(index_text)
+    (metadata / MANIFEST_FILENAME).write_bytes(_json_bytes(manifest))
+    commit = api.create_commit(
+        repo_id=config.repo_id,
+        repo_type="model",
+        revision=config.branch,
+        commit_message=f"Complete verified {config.branch} BF16 checkpoint",
+        operations=[
+            CommitOperationAdd(path_in_repo=str(path.relative_to(metadata)), path_or_fileobj=str(path))
+            for path in sorted(metadata.rglob("*"))
+            if path.is_file() and ".cache" not in path.relative_to(metadata).parts
+        ],
+    )
+    _verify_hub_shards(_repo_files(api, config, commit.oid), records, complete=True)
+    _verify_card(api, config, commit.oid, card, license_text)
+    result = {
+        **expected_result,
+        "weights_commit": commit.oid,
+        "checks": [
+            "BF16 headers",
+            "tensor names",
+            "payload bytes",
+            "export SHA-256",
+            "Hub sizes and SHA-256",
+            "model card and license",
+        ],
+        "generation_parity_tested": False,
+    }
+    completion = api.upload_file(
+        repo_id=config.repo_id,
+        repo_type="model",
+        revision=config.branch,
+        path_in_repo=UPLOAD_MANIFEST_FILENAME,
+        path_or_fileobj=_json_bytes(result),
+        commit_message=f"Record verified {config.branch} upload",
+    )
+    if json.loads(_download(api, config, UPLOAD_MANIFEST_FILENAME, completion.oid)) != result:
+        raise ValueError("Published upload completion marker differs")
+    _verify_card(api, config, completion.oid, card, license_text)
+    result["completion_commit"] = completion.oid
+    _status(config, "complete", **result)
+    return result
+
+
+def upload(config: UploadConfig) -> dict:
+    """Verify, resume and complete one private checkpoint upload using bounded disk staging."""
+    plan = _upload_plan(config)
+    api = HfApi(token=require_secret("HF_TOKEN"))
+    files = _prepare_branch(api, config, plan)
     staging = Path(config.staging_dir)
     staging.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="hero-hf-", dir=staging) as directory:
         scratch = Path(directory)
-        for number, record in enumerate(records, start=1):
-            _status(config, "uploading", shard=number, total_shards=len(records), filename=record.filename)
-            source = root / record.filename
-            if record.filename in files:
-                # Matching Hub SHA-256 verifies reuse; still validate the source
-                # header so the total BF16 payload is checked on every resume.
-                if source.size() != record.bytes:
-                    raise ValueError(f"Source shard size differs: {record.filename}")
-                with source.open("rb") as stream:
-                    validated_payload += _payload(stream, record)
-                continue
-            local = scratch / record.filename
-            source.download_to(str(local))
-            if local.stat().st_size != record.bytes:
-                raise ValueError(f"Source shard size differs: {record.filename}")
-            with local.open("rb") as stream:
-                if hashlib.file_digest(stream, "sha256").hexdigest() != record.sha256:
-                    raise ValueError(f"Source shard SHA-256 differs: {record.filename}")
-                stream.seek(0)
-                validated_payload += _payload(stream, record)
-            api.upload_file(
-                repo_id=config.repo_id,
-                repo_type="model",
-                revision=config.branch,
-                path_in_repo=record.filename,
-                path_or_fileobj=str(local),
-                commit_message=f"Add {config.branch} BF16 shard {number}/{len(records)}",
-            )
-            remote = api.get_paths_info(
-                config.repo_id, paths=[record.filename], repo_type="model", revision=config.branch
-            )[0]
-            _verify_hub_shards({record.filename: remote}, [record], complete=True)
-            local.unlink()
-        if validated_payload != config.expected_payload_bytes:
-            raise ValueError("Validated BF16 payload differs from the expected model size")
-        files = _repo_files(api, config, config.branch)
-        _verify_hub_shards(files, records, complete=True)
-
-        expected_result = {
-            "repo": config.repo_id,
-            "branch": config.branch,
-            "export_id": manifest["export_id"],
-            "shards": len(records),
-            "payload_bytes": validated_payload,
-            "tokenizer": config.tokenizer,
-            "tokenizer_revision": config.tokenizer_revision,
-        }
-        if UPLOAD_MANIFEST_FILENAME in files:
-            result = json.loads(_download(api, config, UPLOAD_MANIFEST_FILENAME, config.branch))
-            if any(result.get(key) != value for key, value in expected_result.items()):
-                raise ValueError("Completed HF upload differs from this request")
-            _verify_hub_shards(_repo_files(api, config, result["weights_commit"]), records, complete=True)
-            _verify_card(api, config, result["weights_commit"], card, license_text)
-            _verify_card(api, config, config.branch, card, license_text)
-            _status(config, "complete", **result)
-            return result
-
-        _status(config, "finalizing", verified_shards=len(records))
-        metadata = scratch / "metadata"
-        metadata.mkdir()
-        snapshot_download(
-            config.tokenizer,
-            revision=config.tokenizer_revision,
-            token=api.token,
-            local_dir=metadata,
-            allow_patterns=["tokenizer*", "special_tokens_map.json", "added_tokens.json", "chat_template*"],
-        )
-        (metadata / "README.md").write_bytes(card)
-        (metadata / "LICENSE").write_bytes(license_text)
-        (metadata / "config.json").write_text(config_text)
-        (metadata / INDEX_FILENAME).write_text(index_text)
-        (metadata / MANIFEST_FILENAME).write_bytes(_json_bytes(manifest))
-        commit = api.create_commit(
-            repo_id=config.repo_id,
-            repo_type="model",
-            revision=config.branch,
-            commit_message=f"Complete verified {config.branch} BF16 checkpoint",
-            operations=[
-                CommitOperationAdd(path_in_repo=str(path.relative_to(metadata)), path_or_fileobj=str(path))
-                for path in sorted(metadata.rglob("*"))
-                if path.is_file() and ".cache" not in path.relative_to(metadata).parts
-            ],
-        )
-        _verify_hub_shards(_repo_files(api, config, commit.oid), records, complete=True)
-        _verify_card(api, config, commit.oid, card, license_text)
-        result = {
-            **expected_result,
-            "weights_commit": commit.oid,
-            "checks": [
-                "BF16 headers",
-                "tensor names",
-                "payload bytes",
-                "export SHA-256",
-                "Hub sizes and SHA-256",
-                "model card and license",
-            ],
-            "generation_parity_tested": False,
-        }
-        completion = api.upload_file(
-            repo_id=config.repo_id,
-            repo_type="model",
-            revision=config.branch,
-            path_in_repo=UPLOAD_MANIFEST_FILENAME,
-            path_or_fileobj=_json_bytes(result),
-            commit_message=f"Record verified {config.branch} upload",
-        )
-        if json.loads(_download(api, config, UPLOAD_MANIFEST_FILENAME, completion.oid)) != result:
-            raise ValueError("Published upload completion marker differs")
-        _verify_card(api, config, completion.oid, card, license_text)
-        result["completion_commit"] = completion.oid
-        _status(config, "complete", **result)
-        return result
+        _upload_shards(api, config, plan, files, scratch)
+        return _complete_upload(api, config, plan, scratch)
 
 
 @draccus.wrap()
