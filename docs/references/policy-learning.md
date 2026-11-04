@@ -79,11 +79,27 @@ model dropout. Reference-policy scoring is supplied separately by the caller.
 
 For SPMD execution, save the Trainer's `state.saveable_state` together with
 the scored `PolicyBatch` through `levanter.checkpoint.save_checkpoint`.
-Restore both with `load_checkpoint`, using the destination Trainer's mesh and
-parameter axis mapping. The scored batch carries the old-policy snapshot,
-advantages, weights, and fixed-reference scores needed for subsequent epochs.
-Record the batch and epoch cursor and the resolved objective, model, precision,
-and optimizer configuration alongside the checkpoint.
+The batch preserves frozen old-policy log-probabilities, advantages, weights,
+and fixed-reference scores for subsequent updates.
+
+```python
+from levanter.checkpoint import load_checkpoint, save_checkpoint
+
+path = f"/tmp/policy-checkpoint/step-{int(state.step)}"
+save_checkpoint({"state": state.saveable_state, "batch": scored_batch}, int(state.step), path)
+restored = load_checkpoint(
+    {"state": initial_state, "batch": batch_template},
+    path,
+    axis_mapping=trainer.parameter_axis_mapping,
+    mesh=trainer.device_mesh,
+)
+```
+
+`initial_state` and `batch_template` supply the destination's array shapes and
+tree structure. Record the admitted-batch identity and the index of the next
+update to execute on that batch, together with the resolved objective, model,
+precision, and optimizer configuration. Save after a completed optimizer step;
+these examples do not resume a partially accumulated step.
 
 The bounded synthetic Llama smoke exercises group advantages, whole-step
 weights, scoring, AdamW updates, and continuation in separate Python processes:
