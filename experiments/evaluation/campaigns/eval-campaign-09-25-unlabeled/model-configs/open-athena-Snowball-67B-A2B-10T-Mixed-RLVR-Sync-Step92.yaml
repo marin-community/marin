@@ -28,6 +28,9 @@ serve:
 
 # The in-repo template maps enable_thinking to its /think soft-switch. Benchmark configs select the
 # policy mode explicitly; model-default benchmarks leave the switch to the model.
+generation:
+  extra_gen_kwargs:
+    skip_special_tokens: "false"
 agent:
   agent_kwargs:
     thinking_format: chat-template

@@ -4,9 +4,8 @@
 
 from collections.abc import Sequence, Set
 
-from verifyit.adapters.skyrl import grade_literal_candidate
 from verifyit.grade import Aggregation, InvalidTask, Reward, aggregate_rewards
-from verifyit.modes.grade_exact import grade_collection_f1
+from verifyit.modes.grade_exact import grade_collection_f1, grade_literal_candidate
 
 
 def grade_qa_exact(candidate: str, references: Sequence[str]) -> Reward:

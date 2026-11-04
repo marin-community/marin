@@ -34,6 +34,8 @@ TASK_SCHEMA = pa.schema(
             ),
         ),
         ("task_json", pa.string()),
+        ("tags", pa.list_(pa.string())),
+        ("labels", pa.map_(pa.string(), pa.string())),
         ("raw_json", pa.string()),
         ("normalization_kind", pa.string()),
         ("normalization_reason", pa.string()),
@@ -54,7 +56,7 @@ TASK_SCHEMA = pa.schema(
         ("grader_readiness", pa.string()),
         ("admission", pa.string()),
     ],
-    metadata={b"taskcompendium.curation_schema": b"10"},
+    metadata={b"taskcompendium.curation_schema": b"11"},
 )
 
 
@@ -72,6 +74,8 @@ NORMALIZED_COLUMNS = (
     "source_row",
     "original_path",
     "task_json",
+    "tags",
+    "labels",
     "normalization_kind",
     "normalization_reason",
     "normalization_detail",

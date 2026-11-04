@@ -343,6 +343,32 @@ def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
         SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
 
+@pytest.mark.parametrize(("reference_nodes", "allocated_nodes"), [(None, 2), (1, 3)])
+def test_static_preference_launch_reserves_policy_and_reference_without_rollout_nodes(reference_nodes, allocated_nodes):
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=2,
+        num_inference_engines=0,
+        reference_num_nodes=reference_nodes,
+    )
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["trainer"]["evaluation_runner"] = "training"
+    recipe["trainer"]["algorithm"].update(policy_loss_type="dpo", loss_reduction="pair_mean")
+    recipe["environment"] = {"env_class": "preference_pair"}
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(num_nodes=allocated_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["iris"]["allocation"]["num_nodes"] == allocated_nodes
+    assert launch["skyrl"]["generator"]["num_inference_engines"] == 0
+    assert plan.num_nodes == allocated_nodes
+
+
 def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
     with pytest.raises(ValueError, match=r"trainer\.train_batch_size=32"):
         dataclasses.replace(

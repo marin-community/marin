@@ -16,7 +16,10 @@ from skyrl_gym.verification import (
 from taskcompendium.grading_result import GradeResult, Outcome
 from skyrl_gym.task_records import grade_skipped, skipped_grade
 from rolloutengine.models import RolloutContractError
-from skyrl_train.rollouts.training_record import TrainingRollout
+from skyrl_train.rollouts.training_record import (
+    REASONING_VIOLATION_TOKEN_METADATA_KEY,
+    TrainingRollout,
+)
 
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
@@ -258,6 +261,7 @@ class WholeTaskProjection:
             self.tokenizer,
             [row.metadata.metric_class for row in request.rows],
         )
+        _attach_reasoning_violations(batch, rollouts, ends_attempt=[True] * len(rollouts))
         _merge_task_metrics(batch, rollouts, request)
         return batch
 
@@ -304,6 +308,7 @@ class StepTaskProjection:
         batch = _training_batch(samples, decisions, required, self.runner_config, self.tokenizer, None)
         batch["trajectory_ids"] = projected_ids
         batch["is_last_step"] = final_steps
+        _attach_reasoning_violations(batch, samples, ends_attempt=final_steps)
         _merge_task_metrics(batch, rollouts, request)
         return batch
 
@@ -495,6 +500,35 @@ def _attach_span_tags(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout
     tags = _token_channels(batch, rollouts, RESPONSE_SPAN_TAGS_KEY, np.int64)
     if tags is not None:
         batch["response_span_tags"] = [row.tolist() for row in tags]
+
+
+def _violation_tokens(rollout: TrainingRollout) -> list[int]:
+    """Response positions of the violations located on one marker token in the optimized conversation."""
+    positions = []
+    for step in rollout.steps:
+        token = step.turn.metadata.get(REASONING_VIOLATION_TOKEN_METADATA_KEY)
+        if token is not None:
+            positions.append(step.response_end + 1 - len(step.turn.response_token_ids) + token)
+    return positions
+
+
+def _reasoning_violation_count(rollout: TrainingRollout, ends_attempt: bool) -> int:
+    """Violations in the row's optimized turns, plus, on the row that ends the attempt, those in earlier
+    conversations, which no row optimizes."""
+    count = sum(step.turn.reasoning_violation is not None for step in rollout.steps)
+    if not ends_attempt:
+        return count
+    earlier = rollout.conversations[:-1]
+    return count + sum(step.turn.reasoning_violation is not None for conversation in earlier for step in conversation.steps)
+
+
+def _attach_reasoning_violations(
+    batch: TrajectoryBatch, rows: Sequence[TrainingRollout], ends_attempt: Sequence[bool]
+) -> None:
+    batch["reasoning_span_violations"] = [
+        _reasoning_violation_count(row, last) for row, last in zip(rows, ends_attempt, strict=True)
+    ]
+    batch["reasoning_span_violation_tokens"] = [_violation_tokens(row) for row in rows]
 
 
 def _task_error_policies(
