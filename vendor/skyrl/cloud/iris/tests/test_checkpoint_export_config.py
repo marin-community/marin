@@ -235,17 +235,35 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("best_metadata", [None, {"step": 0, "model_format": "hf"}])
-async def test_best_export_waits_until_train_end(tmp_path: Path, best_metadata) -> None:
+@pytest.mark.parametrize(
+    ("best_metadata", "expected_error"),
+    [
+        (None, FileNotFoundError),
+        ({"step": 0, "model_format": "hf"}, ValueError),
+        ({"step": 15, "model_format": "native"}, None),
+    ],
+)
+async def test_best_export_waits_until_train_end(tmp_path: Path, best_metadata, expected_error) -> None:
     config = get_default_config()
     config.trainer.ckpt_path = str(tmp_path)
+    config.trainer.export_path = str(tmp_path / "exports")
     config.trainer.hf_export_checkpoint = "best"
+    config.trainer.policy.model.path = "org/policy"
     if best_metadata is not None:
         (tmp_path / "best_checkpoint.json").write_text(json.dumps(best_metadata))
+        if best_metadata["model_format"] == "native":
+            checkpoint = tmp_path / "global_step_15"
+            checkpoint.mkdir()
+            (checkpoint / "trainer_state.pt").write_bytes(b"complete")
     trainer = RayPPOTrainer.__new__(RayPPOTrainer)
     trainer.cfg = config
     trainer.global_step = 10
     trainer.all_timings = {}
+    trainer.all_metrics = {}
+    trainer.num_steps_per_epoch = 20
+    trainer.total_training_steps = 20
+    trainer.eval_dataset = None
+    trainer.colocate_all = False
     trainer._control = TrainerControl()
     trainer.callback_handler = CallbackHandler([HFModelSaveCallback(save_steps=10)])
     state = TrainerState(global_step=10, epoch=0, total_steps=20, num_steps_per_epoch=20)
@@ -253,7 +271,14 @@ async def test_best_export_waits_until_train_end(tmp_path: Path, best_metadata) 
     await trainer._run_step_end_callbacks(state)
 
     assert not list(tmp_path.glob("global_step_*/hf_export_request.json"))
-    assert not trainer._control.should_save_hf_model
-    expected_error = FileNotFoundError if best_metadata is None else ValueError
-    with pytest.raises(expected_error):
-        trainer.handle_hf_export()
+    if expected_error is not None:
+        with pytest.raises(expected_error):
+            await trainer._finalize_training(completed_step=20, epoch=0)
+        assert not list(tmp_path.glob("global_step_*/hf_export_request.json"))
+        return
+
+    await trainer._finalize_training(completed_step=20, epoch=0)
+    request = read_hf_export_request(str(tmp_path / "global_step_15"))
+    assert request is not None
+    assert request.step == 15
+    assert request.checkpoint_path == str(tmp_path / "global_step_15")

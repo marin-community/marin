@@ -3148,7 +3148,8 @@ class RayPPOTrainer:
         return actor_info.rank
 
     async def save_checkpoints(self) -> None:
-        """Save and publish a complete checkpoint before returning."""
+        """Wait for prior uploads, then save and publish a complete checkpoint."""
+        await self._drain_checkpoint_upload()
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
         upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot, commit=True)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration
