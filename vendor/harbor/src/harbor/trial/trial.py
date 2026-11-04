@@ -257,7 +257,15 @@ class Trial(ABC):
 
     def _track_cleanup_task(self, task: asyncio.Task[Any]) -> None:
         self._pending_cleanup_tasks.add(task)
-        task.add_done_callback(self._pending_cleanup_tasks.discard)
+
+        def finished(task: asyncio.Task[Any]) -> None:
+            self._pending_cleanup_tasks.discard(task)
+            if not task.cancelled():
+                error = task.exception()
+                if isinstance(error, ArtifactPersistenceError):
+                    self._artifact_persistence_failure = error
+
+        task.add_done_callback(finished)
 
     @staticmethod
     async def _load_task(config: TrialConfig) -> Task:
@@ -425,7 +433,10 @@ class Trial(ABC):
     async def _finalize(self) -> None:
         await self._enforce_verifier_result_invariant()
         writer = get_artifact_writer()
-        if self._artifact_persistence_failure is not None:
+        if (
+            self._artifact_persistence_failure is not None
+            or self.pending_cleanup_tasks()
+        ):
             self.result.completion = None
             self.result.verifier_result = None
         elif (
@@ -701,6 +712,7 @@ class Trial(ABC):
         timeout_sec: float | None,
         timeout_error: asyncio.TimeoutError,
     ) -> Any:
+        """Bound a phase while preserving persistence failures and caller cancellation."""
         task = asyncio.ensure_future(awaitable)
         try:
             done, _ = await asyncio.wait({task}, timeout=timeout_sec)
@@ -725,6 +737,11 @@ class Trial(ABC):
             except asyncio.CancelledError:
                 pass
             except Exception as cleanup_error:
+                if isinstance(cleanup_error, ArtifactPersistenceError):
+                    self._artifact_persistence_failure = cleanup_error
+                    self.result.secondary_exception_info.append(
+                        ExceptionInfo.from_exception(cleanup_error)
+                    )
                 cancellation.add_note(
                     f"Trial phase cancellation failed: {cleanup_error}"
                 )
@@ -756,6 +773,9 @@ class Trial(ABC):
             await task
         except asyncio.CancelledError:
             raise timeout_error from None
+        except ArtifactPersistenceError as error:
+            self._artifact_persistence_failure = error
+            raise
         except Exception as error:
             raise PhaseCancellationError(
                 "Trial phase failed while stopping its commands"

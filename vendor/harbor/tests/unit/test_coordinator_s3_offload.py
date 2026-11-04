@@ -83,6 +83,9 @@ async def test_finalize_writes_result_json_off_event_loop(
 
     trial = object.__new__(SingleStepTrial)
     trial._attempt_index = None
+    trial.config = TrialConfig(task=TaskConfig(path=tmp_path))
+    trial._artifact_persistence_failure = None
+    trial._pending_cleanup_tasks = set()
     trial._is_agent_environment_stopped = True
     trial._environment_cleanup_failed = False
     trial._stop_agent_environment = AsyncMock()  # type: ignore[attr-defined]
