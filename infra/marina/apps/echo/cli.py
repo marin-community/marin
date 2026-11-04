@@ -31,7 +31,6 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -75,9 +74,6 @@ SEARCH_DETAIL_INSTRUCTION = f"Detail: {CLI_COMMAND} get <source-id> (copy the SO
 SEARCH_DETAIL_MAX_CHARACTERS = 240
 MISSING_EMAIL_SCOPE_WARNING = "Not all requested scopes were granted by the authorization server, missing scopes email."
 DEFAULT_REQUEST_TIMEOUT = 30
-# Agent harnesses that name the current session in every shell command's environment.
-AGENT_SESSION_ENV_VARS = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
-WORK_LOG_DENIAL_DIR = Path(tempfile.gettempdir())
 
 
 class EchoAccessDenied(Exception):
@@ -501,30 +497,14 @@ def cmd_work_log_show(args: argparse.Namespace) -> None:
         print(f"\n{entry['body']}")
 
 
-def work_log_denial_marker() -> Path | None:
-    """The file that records a refused work-log write for this agent session, if one is running."""
-    session = next((os.environ[name] for name in AGENT_SESSION_ENV_VARS if os.environ.get(name)), None)
-    return WORK_LOG_DENIAL_DIR / f"echo-work-log-denied-{session}" if session else None
-
-
 def cmd_work_log_add(args: argparse.Namespace) -> None:
-    # The work log is shared context, not part of the agent's task. A caller without
-    # access warns once and continues, and later adds in the same agent session skip
-    # Echo, so an agent does not retry or debug access at every milestone.
-    marker = work_log_denial_marker()
-    if marker is not None and marker.exists():
-        return
+    # The work log is shared context, not part of the agent's task, so a caller without
+    # access gets a warning and exit 0 instead of a failed command.
     body = {"project": args.project, "title": args.title, "body": read_body(args.body) if args.body else None}
     try:
         entry = response_object(request("POST", "/work_log", body=body))
     except EchoAccessDenied as error:
         print(f"Work-log entry not written: {error}", file=sys.stderr)
-        if marker is not None:
-            marker.touch()
-            print(
-                f"Later work-log adds in this agent session are skipped. Delete {marker} to write again.",
-                file=sys.stderr,
-            )
         return
     print(f"logged #{entry['id']}")
 

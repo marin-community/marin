@@ -49,7 +49,7 @@ service-account credentials. See
 [Echo setup and access](../../../infra/marina/apps/echo/README.md).
 
 If the caller has no credentials or no IAP access, `recent`, `projects`, and
-`show` exit 1 with the error, and `add` prints one warning and exits 0. In a
-Claude Code or Codex session, later `add` calls in that session do nothing. Do
-not retry, change credentials, or debug access for the work log. Continue the
-task without it.
+`show` exit 1 with the error, and `add` prints `Work-log entry not written` and
+exits 0. After the first such refusal, do not use the work log again in this
+session. Do not retry, change credentials, or debug access for the work log.
+Continue the task without it.
