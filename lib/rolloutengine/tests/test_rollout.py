@@ -73,6 +73,7 @@ from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, Too
 from rolloutengine.harness.step import StepHarness
 from rolloutengine.machines import task_machine
 from rolloutengine.models import (
+    LENGTH_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
     ContextWindowExceeded,
@@ -2993,6 +2994,61 @@ async def test_a_judge_task_without_a_connection_uses_the_environment(judge_serv
     assert request["model"] == "environment-judge"
 
 
+@pytest.mark.parametrize(
+    "source_model,connection",
+    [
+        pytest.param(
+            "fixture-judge", JudgeConnection("http://judge.invalid/v1", "runtime-private-key"), id="source-model"
+        ),
+        pytest.param("", JudgeConnection("http://judge.invalid/v1", "runtime-private-key"), id="ambient-model"),
+        pytest.param("", None, id="ambient-connection"),
+    ],
+)
+async def test_script_judge_runs_in_its_own_machine_with_runtime_connection(monkeypatch, source_model, connection):
+    monkeypatch.setenv(BASE_URL_ENV, "http://judge.invalid/v1")
+    monkeypatch.setenv(API_KEY_ENV, "runtime-private-key")
+    monkeypatch.setenv(MODEL_ENV, "ambient-must-not-win" if source_model else "fixture-judge")
+    source_task = judge_task()
+    judge = JudgeSpec(
+        references=("12",),
+        rubric=RUBRIC_LABELS,
+        prompt_template="Reference: {reference}\nCandidate: {candidate}",
+        label_scores={"PASS": 1.0, "FAIL": 0.0},
+        model=source_model,
+    )
+    script = (
+        b'test "$VERIFYIT_JUDGE_API_KEY" = runtime-private-key || exit 1\n'
+        b'test "$VERIFYIT_JUDGE_MODEL" = fixture-judge || exit 1\n'
+        b'test "$VERIFYIT_JUDGE_BASE_URL" = http://judge.invalid/v1 || exit 1\n'
+        b"test -f /tests/judge.toml || exit 1\n"
+        b'printf \'{"status":"scored","reward":1,"detail":{"model":"fixture-judge"}}\' > /logs/verifier/verdict.json\n'
+    )
+    task = source_task.model_copy(
+        update={
+            "grader": ScriptGrader(
+                argv=("sh", "/tests/grade.sh"),
+                environment=GRADER_ENVIRONMENT,
+                judge=judge,
+                reward=FileReward(
+                    files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
+                ),
+            ),
+            "resources": ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
+        }
+    )
+    factory = RecordingShellSimFactory()
+    spec = rollout_spec(
+        task,
+        verifier_machine=machine_runtime(),
+        judge_connection=connection,
+    )
+    record = await engine(ReplayModel([{"role": "assistant", "content": "twelve"}]), {"local": factory}).run_task(spec)
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0), record.grade
+    assert len(factory.machines) == 1
+    assert "runtime-private-key" not in spec.model_dump_json()
+    assert "runtime-private-key" not in json.dumps(record.grade.diagnostics)
+
+
 def test_a_judge_connection_never_reaches_the_serialized_spec():
     spec = rollout_spec(judge_task(), judge_connection=JudgeConnection("http://judge.invalid/v1", "private-test-key"))
     serialized = spec.model_dump_json()
@@ -3477,6 +3533,56 @@ async def test_a_task_machine_reports_its_close_failure_when_the_body_fails():
         async with task_machine(task, Factory(), machine_runtime(), cleanup_timeout=1):
             raise ValueError("body failed")
     assert caught.value.__notes__ == ["Machine cleanup failed: ['machine_close']"]
+
+
+async def test_a_task_machine_raises_its_close_failure_after_a_clean_body():
+    class FailingClose:
+        async def run(self, command):
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+        async def close(self):
+            raise OSError("close failed")
+
+    class Factory(DockerMachineFactory):
+        backend = Backend.DOCKER
+
+        async def create(self, spec):
+            return FailingClose()
+
+    task = arithmetic_task(environment_requirements=GRADER_ENVIRONMENT)
+    with pytest.raises(RuntimeError, match="machine_close"):
+        async with task_machine(task, Factory(), machine_runtime(), cleanup_timeout=1):
+            pass
+
+
+async def test_a_task_machine_closes_its_machine_when_setup_fails():
+    factory = RecordingShellSimFactory()
+    environment = GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("exit 3",)})
+    with pytest.raises(RuntimeError, match="setup command failed"):
+        async with task_machine(
+            arithmetic_task(environment_requirements=environment), factory, machine_runtime(), cleanup_timeout=5
+        ):
+            pass
+    with pytest.raises(RuntimeError):
+        await factory.machines[0].run(Command(("true",)))
+
+
+async def test_a_length_cut_tool_call_is_graded_without_execution():
+    class BudgetCutModel(ReplayModel):
+        async def complete(self, request):
+            return replace(await super().complete(request), stop_reason=LENGTH_STOP_REASON)
+
+    task = file_task()
+    task = task.model_copy(
+        update={"resources": task.resources.model_copy(update={"all": (inline_resource("workspace/answer", b"0"),)})}
+    )
+    model = BudgetCutModel([shell_call("echo 12 > /workspace/answer")])
+    record = await engine(model, {"local": FixtureImageFactory()}).run_task(
+        rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    assert len(model.requests) == 1
+    assert record.rollout.stop_reason == LENGTH_STOP_REASON
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 0.0)
 
 
 class StartsTwice:

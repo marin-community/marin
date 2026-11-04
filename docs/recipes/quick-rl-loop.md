@@ -103,18 +103,19 @@ and saves task-level verifier outcomes. Under the run artifact's `exports/`,
 `dumped_evals/global_step_<steps>_evals/` holds the final evaluation. Each contains
 per-dataset JSONL responses and `aggregated_results.jsonl`; compare its
 `avg_score` and `pass_at_1` metrics alongside verifier coverage. The final update saves a checkpoint;
-the graph then produces an HF export. Local graders require the privileged
-container profile; image graders and host judges use their configured backends.
+HF export is opt-in with `--export-hf` and adds a separate export job after training.
+Local graders require the privileged container profile; image graders and host judges use their configured backends.
 
 ## Compare the iteration
 
 Require `SUCCESS` from the Iris coordinator submitted by `--run` and its training
-and export children, plus successful completion of the Marin training artifact.
-Its `terminal.json` records the terminal model; the returned `SkyRLRun` supplies
-`iris_job_id`, `checkpoint_root` and `hf_model_uri` for follow-up inspection. Check
+child, plus successful completion of the Marin training artifact. With `--export-hf`,
+also require the export child to succeed. Its `terminal.json` records the run result;
+the returned `SkyRLRun` supplies `iris_job_id` and `checkpoint_root` for follow-up inspection.
+`hf_model_uri` is populated only when export is requested. Check
 optimizer-update counts, finite metrics, initial/final attempted and scored
-counts, checkpoint metadata and the completed export. A missing verifier
-result is an evaluation error, not a wrong answer; report coverage with scores.
+counts and native checkpoint metadata; check the completed HF export only when requested.
+A missing verifier result is an evaluation error, not a wrong answer; report coverage with scores.
 
 Record the source revision, selection identity, initializer, run version and
 elapsed submission-to-completion time with each comparison. Hold the validation

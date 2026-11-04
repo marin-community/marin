@@ -232,6 +232,7 @@ filterwarnings = [
 ]
 markers = [
     "tpu: include in TPU CI; also run on CPU when supported",
+    "multidevice: exercise multi-device code in TPU CI and CPU CI",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
 ]
