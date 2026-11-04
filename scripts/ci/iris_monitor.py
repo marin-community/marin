@@ -218,7 +218,7 @@ def wait_for_child_job(
 ) -> WaitResult:
     """Wait for a parent job to terminate or shut it down after resource exhaustion.
 
-    If no child reaches ``JOB_STATE_RUNNING`` within ``child_wait_timeout``, the escalate policy
+    If no child task reaches RUNNING within ``child_wait_timeout``, the escalate policy
     raises ``TimeoutError`` — this catches a parent stuck in the queue before it ever launches work —
     and the shutdown policy cancels the parent and reports the wait as resource exhaustion.
     Once a child has started, the child wait timeout is dropped — total runtime is bounded by the
@@ -255,7 +255,7 @@ def wait_for_child_job(
 
             if not child_running and time.monotonic() >= deadline:
                 reason = (
-                    f"No child reached RUNNING within {child_wait_timeout:.0f}s. "
+                    f"No child task reached RUNNING within {child_wait_timeout:.0f}s. "
                     f"parent={_row(parent)} child={_row(child)}"
                 )
                 if child_wait_timeout_policy is ResourceExhaustionPolicy.SHUTDOWN:
@@ -714,7 +714,7 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     default=None,
     type=float,
     help=(
-        "Fail fast if no child reaches RUNNING within this many seconds. Mutually exclusive with --timeout; "
+        "Fail fast if no child task reaches RUNNING within this many seconds. Mutually exclusive with --timeout; "
         "once a child runs, total runtime is bounded by the caller's wall clock."
     ),
 )
