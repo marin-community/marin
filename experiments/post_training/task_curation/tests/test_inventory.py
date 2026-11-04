@@ -15,6 +15,7 @@ import pytest
 from click.testing import CliRunner
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
+from taskcompendium.convert.answers import source_evidence
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.grader import verifyit_package
 from taskcompendium.identity import canonical_sha256
@@ -413,25 +414,20 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
         "cot_content": "A: Let's think step by step. The answer is (B).",
     }
     inputs = {}
-    files = [
+    questions = [
         (
-            source_root,
-            dataset.recipe.files[0],
-            [
-                (
-                    {**question, "question": f"Panel question {i}"}
-                    if benchmark == "mmlu"
-                    else {
-                        "prompt": f"Write function number_{i} that returns {i}.",
-                        "test_list": [f"assert number_{i}() == {i}"],
-                        "test": f"assert number_{i}() == {i}\nassert isinstance(number_{i}(), int)",
-                        "code": f"def number_{i}():\n    # EXAMPLE_SENTINEL_{i}\n    return {i}",
-                    }
-                )
-                for i in range(6)
-            ],
+            {**question, "question": f"Panel question {i}"}
+            if benchmark == "mmlu"
+            else {
+                "prompt": f"Write function number_{i} that returns {i}.",
+                "test_list": [f"assert number_{i}() == {i}"],
+                "test": f"assert number_{i}() == {i}\nassert isinstance(number_{i}(), int)",
+                "code": f"def number_{i}():\n    # EXAMPLE_SENTINEL_{i}\n    return {i}",
+            }
         )
+        for i in range(6)
     ]
+    files = [(source_root, dataset.recipe.files[0], questions)]
     if benchmark == "mmlu":
         inputs["fewshot"] = str(fewshot)
         files.append(
@@ -593,8 +589,9 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
             assert "Question:\n" + target in prompt
             assert "Panel question" in prompt and "A. 1" in prompt and "B. 2" in prompt
         else:
-            function = prompt.split("Write function number_", 1)[1].split(" ", 1)[0]
-            assert f"assert number_{function}()" in prompt
+            evidence = source_evidence(original)
+            assert evidence["prompt"] in prompt
+            assert all(public_test in prompt for public_test in evidence["test_list"])
             assert "isinstance" not in prompt
     annotations = pq.read_table(provisional / TASK_MANIFEST_FILENAME).to_pylist()
     with artifact_prefix(str(tmp_path / "replayed-artifacts")):
@@ -603,6 +600,17 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
     assert read_tasks(replayed / VALIDATION_FILENAME) == fast
     assert pq.read_table(replayed / TASK_MANIFEST_FILENAME).to_pylist() == annotations
     by_id = {row["task_id"]: row for row in annotations}
+    assert by_id.keys() == {task.id for task in full}
+    for task in full:
+        agent = task.id in agents
+        native = agents[task.id] if agent else originals[task.id]
+        row = by_id[task.id]
+        assert row["part"] == ("tool-calls" if agent else "questions")
+        assert row["family"] == row["aaii_category"] == ("agents" if agent else family)
+        assert row["license"] == ("fixture-agents" if agent else "fixture-general")
+        assert row["source"] == native.source.model_dump_json()
+        assert row["agentic"] == ("agentic" in native.tags)
+        assert row["grader_kind"] == ("in_process" if agent else "package")
     assert Counter(row["family"] for row in annotations) == {family: 5, "agents": 3}
     assert Counter(row["part"] for row in annotations) == {"questions": 5, "tool-calls": 3}
     assert Counter(by_id[task.id]["family"] for task in fast) == {family: 2, "agents": 2}
