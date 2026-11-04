@@ -381,6 +381,7 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
     show_default=True,
     help="CPU cores to request for the dev pod (request only, burstable).",
 )
+@click.option("--task-image", default=None, help="Pin the task container image instead of the cluster default.")
 @click.option(
     "--memory",
     default=DEFAULT_MEMORY,
@@ -404,6 +405,7 @@ def allocate(
     priority: str,
     system_reason: str | None,
     cpu: float,
+    task_image: str | None,
     memory: str,
     disk: str,
     timeout: int,
@@ -442,6 +444,7 @@ def allocate(
                 submit_argv=redact_submit_argv(list(sys.argv)),
                 replicas=node_count,
                 coscheduling=coscheduling,
+                task_image=task_image,
             )
         except JobAlreadyExists as exc:
             raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc
