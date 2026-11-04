@@ -70,6 +70,7 @@ from marinskyrl.distillation import (
     compile_distillation_plan_from_config,
 )
 from skyrl_train.objective.teacher import teacher_advantages
+from skyrl_train.response_loss_mask import exclude_response_token_ids
 from skyrl_train.objective.correction import compute_correction
 from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
@@ -1539,6 +1540,9 @@ class RayPPOTrainer:
         training_input = await asyncio.to_thread(self.convert_rollout_groups_to_training_input, groups)
         if scored_distillation is not None:
             self._attach_teacher_evidence(training_input, scored_distillation)
+        self.all_metrics.update(
+            exclude_response_token_ids(training_input, self.cfg.trainer.algorithm.excluded_response_token_ids)
+        )
         self._log_rollout_batch_completed(groups, duration_seconds=rollout_wait_timer.duration)
 
         step_wall.start("training_preparation")
