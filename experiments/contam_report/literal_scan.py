@@ -131,7 +131,7 @@ def make_searcher(patterns_path: str, out_prefix: str):
                 fs, local = filesystem_for(path)
                 with fs.open(local, "rb") as fh:
                     for batch in pq.ParquetFile(fh).iter_batches(batch_size=BATCH_ROWS, columns=["id", "text"]):
-                        texts = batch.column("text")
+                        texts = batch.column("text").cast(pa.large_string())  # one batch can exceed 2 GB
                         stats["docs"] += len(batch)
                         stats["bytes"] += pc.sum(pc.binary_length(texts)).as_py() or 0
                         ids = [str(i) for i in batch.column("id").to_pylist()]
