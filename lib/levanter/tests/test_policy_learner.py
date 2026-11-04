@@ -11,6 +11,7 @@ import numpy as np
 import optax
 import pytest
 
+from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.policy import ClippedPolicyConfig
 from levanter.policy_learner import PolicyLearner, SpmdPolicyLearner
 from levanter.policy_model import PolicyBatch, policy_model_loss
@@ -63,7 +64,7 @@ def _model():
 
 
 @pytest.mark.timeout(180)
-def test_spmd_policy_updates_preserve_frozen_scores_and_objective_across_microbatches(tmp_path):
+def test_spmd_policy_updates_resume_with_frozen_scores_across_microbatches(tmp_path):
     batch = _batch()
     full_scores = eqx.filter_jit(full_softmax_response_logprobs)
     initial = _arrays(_model())
@@ -96,6 +97,7 @@ def test_spmd_policy_updates_preserve_frozen_scores_and_objective_across_microba
             frozen = np.asarray(scored.old_logprobs.array).copy()
             advantages = np.asarray(scored.advantages.array)
             weights = np.asarray(scored.policy_weights.array)
+            checkpoint_path = tmp_path / f"parallelism-{per_device_parallelism}" / "step-1"
             for step in (1, 2):
                 # Full-vocabulary scoring plus NumPy's clipped-surrogate equation
                 # is independent of the learner's blocked projection and loss.
@@ -110,9 +112,31 @@ def test_spmd_policy_updates_preserve_frozen_scores_and_objective_across_microba
                 assert int(state.step) == step
                 np.testing.assert_allclose(result.loss, expected, atol=1e-6)
                 np.testing.assert_array_equal(scored.old_logprobs.array, frozen)
+                if step == 1:
+                    saved_arrays = _arrays(state)
+                    save_checkpoint(
+                        {"state": state.saveable_state, "batch": scored},
+                        step=1,
+                        checkpoint_path=checkpoint_path,
+                    )
             updated = _arrays(result.state.model)
             assert any(not np.array_equal(before, after) for before, after in zip(initial, updated, strict=True))
-            outcomes.append((result.loss, _arrays(result.state)))
+            uninterrupted = (result.loss, _arrays(result.state))
+            restored = load_checkpoint(
+                {"state": trainer.initial_state(jax.random.PRNGKey(99), model_init=_model), "batch": batch},
+                checkpoint_path,
+                axis_mapping=trainer.parameter_axis_mapping,
+                mesh=trainer.device_mesh,
+            )
+            for actual, saved in zip(_arrays(restored["state"]), saved_arrays, strict=True):
+                np.testing.assert_array_equal(actual, saved)
+            np.testing.assert_array_equal(restored["batch"].old_logprobs.array, frozen)
+            resumed = backend.update(restored["state"], restored["batch"])
+            np.testing.assert_allclose(resumed.loss, uninterrupted[0], atol=1e-6, rtol=1e-5)
+            for actual, expected in zip(_arrays(resumed.state), uninterrupted[1], strict=True):
+                np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-5)
+            np.testing.assert_array_equal(restored["batch"].old_logprobs.array, frozen)
+            outcomes.append(uninterrupted)
     for loss, arrays in outcomes[1:]:
         np.testing.assert_allclose(loss, outcomes[0][0], atol=1e-6, rtol=1e-5)
         for actual, expected in zip(arrays, outcomes[0][1], strict=True):
