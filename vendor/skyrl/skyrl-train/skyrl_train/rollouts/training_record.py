@@ -10,6 +10,7 @@ from taskcompendium.models import NoGrader
 from verifyit.reasoning_markup import ReasoningViolation
 
 REASONING_VIOLATIONS_DIAGNOSTIC = "reasoning_violations"
+REASONING_VIOLATION_TOKEN_METADATA_KEY = "reasoning_violation_token"
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,7 @@ def training_rollout(result: GradedRollout, spec: TaskRolloutSpec) -> TrainingRo
     )
 
 
-def _reasoning_violations(rollout: TrainingRollout) -> list[TurnReasoningViolation]:
+def reasoning_violations(rollout: TrainingRollout) -> list[TurnReasoningViolation]:
     return [
         TurnReasoningViolation(index, turn, step.turn.reasoning_violation)
         for index, conversation in enumerate(rollout.conversations)
@@ -123,7 +124,7 @@ def reject_malformed_reasoning(rollout: TrainingRollout) -> TrainingRollout:
 
     Step rewards are cleared so the zero grade is the whole reward.
     """
-    violations = _reasoning_violations(rollout)
+    violations = reasoning_violations(rollout)
     if not violations:
         return rollout
     grade = GradeResult(

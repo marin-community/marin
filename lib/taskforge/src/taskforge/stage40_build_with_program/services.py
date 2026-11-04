@@ -17,7 +17,6 @@ from shellbox.machine import MachineFactory
 
 from taskforge.ledger.records import Ledger
 from taskforge.llm.agent import AgentTool, ReasoningReplay
-from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import ImageBuilder
 
 
@@ -42,9 +41,9 @@ class RLEnvBuildServices:
     """The host resources of a build.
 
     Attributes:
-        host: Where the build runs; machine backends are chosen for it.
         factories: Machine factories keyed by shellbox ``Backend`` value, as
-            ``taskforge.sandbox.factories.machine_factories(backends, ...)`` returns them.
+            ``taskforge.sandbox.factories.machine_factories(backends, ...)`` returns them; machine backends are
+            chosen from them.
         images: Publishes task images by digest, or ``None`` when this host cannot.
         web_tools: Web search and fetch tools (``taskforge.llm.web.web_tools``), or empty.
         ledger: Where steps, model calls and tool calls are recorded, use ``DiscardingLedger`` to record nothing.
@@ -52,7 +51,6 @@ class RLEnvBuildServices:
         agent_limits: The bounds of every agent loop.
     """
 
-    host: MachineHost
     factories: Mapping[str, MachineFactory]
     images: ImageBuilder | None
     web_tools: tuple[AgentTool, ...]

@@ -22,7 +22,7 @@ from taskcompendium.grader import GraderPackage
 from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
 from verifyit.spec import ExactSpec
 
-from taskforge.sandbox.factories import MachineHost, grading_environment
+from taskforge.sandbox.factories import grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import LOCAL_CPYTHON
@@ -157,7 +157,7 @@ def settings(local: MachineFactory | None, container: MachineFactory | None = No
 async def test_a_setup_command_writing_under_a_read_only_root_moves_the_task_machine_to_a_container():
     engine = settings(ReadOnlyLocalFactory())
 
-    result = await preflight(cpython_task(("mkdir -p /workspace /opt/gen",)), MachineHost.LAPTOP, engine)
+    result = await preflight(cpython_task(("mkdir -p /workspace /opt/gen",)), engine)
 
     assert result.spec.task_machine is not None
     assert result.spec.task_machine.backend == Backend.DOCKER.value
@@ -172,7 +172,7 @@ async def test_the_fallback_moves_the_task_machine_alone_and_keeps_the_verifier_
     engine = settings(ReadOnlyLocalFactory())
     task = cpython_task(("mkdir -p /workspace /opt/gen",), grader=file_grader())
 
-    result = await preflight(task, MachineHost.LAPTOP, engine)
+    result = await preflight(task, engine)
 
     assert result.fallback is not None and result.fallback.to_backend == Backend.DOCKER.value
     spec = result.spec
@@ -189,7 +189,7 @@ async def test_a_local_machine_the_host_failed_twice_is_the_hosts_failure_and_is
     engine = settings(local, container)
 
     with pytest.raises(BuildInfrastructureFailure) as failure:
-        await preflight(cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine)
+        await preflight(cpython_task(("mkdir -p /workspace/out",)), engine)
 
     assert failure.value.cause == InfrastructureCause.MACHINE_CREATE_FAILED
     assert (local.creates, container.creates) == (2, 0)
@@ -199,7 +199,7 @@ async def test_a_local_machine_the_host_failed_once_keeps_the_local_backend():
     local = UnreachableIndexLocalFactory(failures=1)
     engine = settings(local)
 
-    result = await preflight(cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine)
+    result = await preflight(cpython_task(("mkdir -p /workspace/out",)), engine)
 
     assert result.fallback is None and local.creates == 2
     assert result.spec.task_machine is not None
@@ -209,7 +209,7 @@ async def test_a_local_machine_the_host_failed_once_keeps_the_local_backend():
 async def test_a_task_whose_setup_runs_locally_keeps_the_local_backend():
     engine = settings(ReadOnlyLocalFactory())
 
-    result = await preflight(cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine)
+    result = await preflight(cpython_task(("mkdir -p /workspace/out",)), engine)
 
     assert result.fallback is None
     assert result.spec.task_machine is not None
@@ -219,7 +219,7 @@ async def test_a_task_whose_setup_runs_locally_keeps_the_local_backend():
 async def test_a_host_without_the_local_backend_is_not_probed():
     engine = settings(None)
 
-    result = await preflight(cpython_task(("mkdir -p /opt/gen",)), MachineHost.LAPTOP, engine)
+    result = await preflight(cpython_task(("mkdir -p /opt/gen",)), engine)
 
     assert result.fallback is None
     assert result.spec.task_machine is not None
@@ -233,7 +233,7 @@ async def test_a_package_machine_is_neither_probed_nor_moved_off_the_local_backe
     environment = draft.requirements(image=None, packages=("numpy",), setup=("mkdir -p /opt/gen",), workdir="/workspace")
     task = cpython_task(()).model_copy(update={"environment_requirements": environment})
 
-    result = await preflight(task, MachineHost.LAPTOP, engine)
+    result = await preflight(task, engine)
 
     assert result.fallback is None and local.creates == 0
     assert result.spec.task_machine is not None

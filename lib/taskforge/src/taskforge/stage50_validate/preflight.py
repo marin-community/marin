@@ -42,7 +42,6 @@ from rolloutengine.models import GradedRollout, TaskRolloutSpec
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import TaskSpec
 
-from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
 from taskforge.spec.controls import ScriptedModel, context_assistant_turns
 from taskforge.stage10_proposal.model import SolverMachine
@@ -82,18 +81,17 @@ class Preflight:
 
 async def preflight(
     task: TaskSpec,
-    host: MachineHost,
     settings: EngineSettings,
 ) -> Preflight:
-    """Lower ``task`` for ``host``, probing a local grader-base task machine and falling back to a container when
-    the task cannot be prepared there.
+    """Lower ``task`` onto ``settings.factories``, probing a local grader-base task machine and falling back to a
+    container when the task cannot be prepared there.
 
     Raises:
         ValueError: RolloutEngine rejects the lowered spec (``lowering.lower``).
         BuildInfrastructureFailure: the local task machine did not start, or not in time, on two probes.
     """
     factories = settings.factories
-    spec = lower(task, host, factories, settings.limits)
+    spec = lower(task, factories, settings.limits)
     machine = spec.task_machine
     if machine is None or machine.backend != Backend.LOCAL.value:
         return Preflight(spec, None)
@@ -109,7 +107,7 @@ async def preflight(
             )
     if not isinstance(outcome, Ungraded) or outcome.cause not in FALLBACK_CAUSES:
         return Preflight(spec, None)
-    fallback = _task_machine_fallback(task, host, factories, spec)
+    fallback = _task_machine_fallback(task, factories, spec)
     assert fallback.task_machine is not None
     return Preflight(
         fallback,
@@ -118,11 +116,11 @@ async def preflight(
 
 
 def _task_machine_fallback(
-    task: TaskSpec, host: MachineHost, factories: Mapping[str, MachineFactory], spec: TaskRolloutSpec
+    task: TaskSpec, factories: Mapping[str, MachineFactory], spec: TaskRolloutSpec
 ) -> TaskRolloutSpec:
     """``spec`` with its task machine on the container backend and its verifier as it was."""
     without_local = {backend: factory for backend, factory in factories.items() if backend != Backend.LOCAL.value}
-    container = lower(task, host, without_local, spec.limits)
+    container = lower(task, without_local, spec.limits)
     hosted = container.task.model_copy(update={"grader": spec.task.grader})
     fallback = spec.model_copy(update={"task": hosted, "task_machine": container.task_machine})
     draft.check(fallback, factories)

@@ -79,7 +79,7 @@ from rolloutengine.models import RolloutInterrupted, RolloutOperation
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineFactory, MachineSpec, Result
 
 from taskforge.llm.client import ModelRequestRejected, ModelUnavailable
-from taskforge.sandbox.factories import MachineHost, container_backend
+from taskforge.sandbox.factories import CONTAINER_BACKENDS, container_backend
 from taskforge.sandbox.host_failures import machine_create_failed, machine_lost
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
@@ -132,19 +132,21 @@ def machine_available(services: RLEnvBuildServices, proposal: TaskProposal) -> N
 
     Raises:
         BuildInfrastructureFailure: ``NO_IMAGE_BUILDER`` for a container proposal on a host without an
-            image builder, or ``NO_FACTORY`` when its container or package machine backend is absent.
+            image builder, or ``NO_FACTORY`` when its package machine backend is absent or its factories
+            select not exactly one container backend (``container_backend``).
     """
     machine = proposal.header.solver_machine
     if machine is None and services.images is None:
         raise BuildInfrastructureFailure(
             InfrastructureCause.NO_IMAGE_BUILDER, "the proposal declares a container and this host cannot publish images"
         )
-    backend = container_backend(services.host)
-    if machine is None and backend.value not in services.factories:
-        raise BuildInfrastructureFailure(
-            InfrastructureCause.NO_FACTORY,
-            f"the proposal declares a container and this host has no {backend} machine factory",
-        )
+    if machine is None:
+        try:
+            container_backend(services.factories)
+        except ValueError as error:
+            raise BuildInfrastructureFailure(
+                InfrastructureCause.NO_FACTORY, f"the proposal declares a container and this host has none: {error}"
+            ) from error
     if machine is SolverMachine.PACKAGES and Backend.LOCAL.value not in services.factories:
         raise BuildInfrastructureFailure(
             InfrastructureCause.NO_FACTORY,
@@ -369,16 +371,26 @@ class AbsentFactory:
         )
 
 
-def host_backends(host: MachineHost) -> tuple[Backend, ...]:
-    """The backends ``spec.draft.lower`` can choose on ``host``: ShellSim and the host's container backend."""
-    return (Backend.SHELLSIM, container_backend(host))
+ABSENT_CONTAINER_BACKEND = Backend.DOCKER
+"""The container backend an ``AbsentFactory`` stands in for on a host whose factories select none."""
 
 
-def host_checked_factories(factories: Mapping[str, MachineFactory], host: MachineHost) -> dict[str, MachineFactory]:
+def host_backends(factories: Mapping[str, MachineFactory]) -> tuple[Backend, ...]:
+    """The backends ``spec.draft.lower`` can choose on ``factories`` that are not the local one: ShellSim and the
+    selected container backend, or ``ABSENT_CONTAINER_BACKEND`` when ``factories`` select no container backend."""
+    if not {backend.value for backend in CONTAINER_BACKENDS} & set(factories):
+        return (Backend.SHELLSIM, ABSENT_CONTAINER_BACKEND)
+    return (Backend.SHELLSIM, container_backend(factories))
+
+
+def host_checked_factories(factories: Mapping[str, MachineFactory]) -> dict[str, MachineFactory]:
     """``factories`` with host errors classified, and an ``AbsentFactory`` for every backend of
-    ``host_backends(host)`` it lacks. Keys are ``Backend`` values, as ``machine_factories`` returns them.
+    ``host_backends(factories)`` they lack. Keys are ``Backend`` values, as ``machine_factories`` returns them.
+
+    The absent container backend makes lowering an image machine on a host without one fail with
+    ``NO_FACTORY``, the host's failure, rather than with ``container_backend``'s ``ValueError``.
     """
     checked: dict[str, MachineFactory] = {key: HostCheckedFactory(factory) for key, factory in factories.items()}
-    for backend in host_backends(host):
+    for backend in host_backends(factories):
         checked.setdefault(backend.value, AbsentFactory(backend))
     return checked

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""run_trials: deadlines, concurrency, retries on retryable causes, refusals, ledger spans and rollout evidence."""
+"""run_trials: deadlines, concurrency, retries on retryable causes, ledger spans and rollout evidence."""
 
 import asyncio
 import json
@@ -20,7 +20,6 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.test_support import fake_source
-from taskforge.sandbox.factories import MachineHost
 from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.stage50_validate.trials import (
@@ -142,18 +141,6 @@ async def test_a_failing_setup_command_is_a_task_defect_and_is_not_retried(tmp_p
     assert factory.creates == 3
 
 
-async def test_a_task_the_factories_refuse_never_starts_a_machine(tmp_path, file_task, fakes):
-    factory = fakes.flaky_factory(failures=0, error=RuntimeError)
-    refused = file_task.model_copy(update={"task_machine": file_task.task_machine.model_copy(update={"cpus": 2})})
-
-    outcomes = await run_trials(refused, plan(tmp_path), settings(factory), fakes.script_model([]))
-
-    assert all(isinstance(o, Ungraded) and o.cause is Cause.MACHINE_UNSUPPORTED for o in outcomes)
-    assert all(isinstance(o, Ungraded) and "ShellSim does not provide host CPU" in o.detail for o in outcomes)
-    assert factory.creates == 0
-    assert [e.cause for e in ledger(tmp_path)] == [Cause.MACHINE_UNSUPPORTED] * 3
-
-
 async def test_trials_run_concurrently(tmp_path, math_task, fakes):
     # Every model call waits until all 20 trials are in flight, so serial trials would never finish.
     model = fakes.script_model([fakes.text("395")], barrier=asyncio.Barrier(20))
@@ -189,7 +176,7 @@ async def test_lowering_applies_the_validation_turn_deadline(tmp_path, file_task
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
     engine = settings(fakes.flaky_factory(0, RuntimeError))
     limits = engine.limits.model_copy(update={"total_turn_timeout": 0.5, "attempt_timeout": 30})
-    lowered = lower(file_task.task, MachineHost.LAPTOP, engine.factories, limits)
+    lowered = lower(file_task.task, engine.factories, limits)
 
     outcomes = await run_trials(
         lowered,
@@ -322,7 +309,7 @@ async def test_lowering_applies_the_validation_turn_budget(tmp_path, file_task, 
         [fakes.shell("true", "c0"), fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")]
     )
     engine = settings(fakes.flaky_factory(0, RuntimeError))
-    lowered = lower(file_task.task, MachineHost.LAPTOP, engine.factories, engine.limits)
+    lowered = lower(file_task.task, engine.factories, engine.limits)
 
     outcomes = await run_trials(lowered, plan(tmp_path, k=1), engine, model)
 

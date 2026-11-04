@@ -43,17 +43,17 @@ with the rest of the task. A task whose format cannot carry its answer for its g
 (TaskCompendium ``submission_compatibility``) is not started: each of its trials is one
 ``SUBMISSION_UNSUPPORTED`` attempt naming the reasons.
 
-``EngineSettings.factories`` come from ``taskforge.sandbox.factories.machine_factories``. Before a
-trial starts, ``task_refusals`` passes each of the task's machines to its factory's
-``check_environment``. When a factory is missing or rejects a machine, the task is not started: each
-of its trials is one ``MACHINE_UNSUPPORTED`` attempt carrying the refusals.
+``EngineSettings.factories`` come from ``taskforge.sandbox.factories.machine_factories``. A trial runs
+a spec ``lowering.lower`` built on those factories, which ``RolloutEngine.check`` already accepted; a
+factory that rejects a machine once it is created raises ``UnsupportedMachineSpec``, which
+``classify.trial_outcome`` records as ``MACHINE_UNSUPPORTED``.
 """
 
 import asyncio
 import base64
 import dataclasses
 import json
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,7 +71,6 @@ from taskcompendium.submission import submission_compatibility
 
 from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
-from taskforge.sandbox.factories import Refusal, task_refusals
 from taskforge.spec import draft
 from taskforge.stage50_validate.classify import trial_outcome
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
@@ -175,7 +174,7 @@ async def run_trial(
     """Run one trial of ``spec`` under the lowered spec's limits and ``settings``, attempting it again
     after a backoff while it fails for a retryable cause, up to ``plan.max_retries`` times."""
     digest = task_digest(spec, settings.command_timeout)
-    refused = refusal(spec, settings.factories)
+    refused = refusal(spec)
     if refused is not None:
         return _refuse(digest, plan, trial, refused)
     engine = settings.engine()
@@ -198,19 +197,12 @@ async def run_attempts(plan: TrialPlan, trial: str, attempt: Callable[[int, str]
     raise AssertionError("a nonnegative retry budget always runs an attempt")
 
 
-def refusal(spec: TaskRolloutSpec, factories: Mapping[str, MachineFactory]) -> Ungraded | None:
-    """Why a trial cannot start on these factories, or ``None`` when it can."""
+def refusal(spec: TaskRolloutSpec) -> Ungraded | None:
+    """Why a trial of ``spec`` cannot start, or ``None`` when it can."""
     unsupported = submission_refusal(spec.task)
-    if unsupported is not None:
-        return Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None, None)
-    refusals = task_refusals(spec, factories)
-    if refusals:
-        return Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None, None)
-    return None
-
-
-def refusal_detail(refusals: Sequence[Refusal]) -> str:
-    return "; ".join(f"{refusal.where}: {refusal.reason}: {refusal.detail}" for refusal in refusals)
+    if unsupported is None:
+        return None
+    return Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None, None)
 
 
 def trial_record(spec: TaskRolloutSpec, command_timeout: float) -> dict[str, JsonValue]:

@@ -78,9 +78,9 @@ async def build_machine(
         BuildInfrastructureFailure: the host failed to create or drive the machine, or the machine did
             not start within ``settings.startup_timeout`` (``SANDBOX_DEADLINE``).
     """
-    factories = host_checked_factories(services.factories, services.host)
+    factories = host_checked_factories(services.factories)
     hosted = draft.host_requirements(requirements, factories)
-    runtime = machine_runtime(settings, hosted, services.host)
+    runtime = machine_runtime(settings, hosted, factories)
     async with AsyncExitStack() as owned:
         try:
             prepared = await owned.enter_async_context(
@@ -199,11 +199,10 @@ async def grade_candidate_on_host(
     if workspace and not machine:
         raise BuildFailure("grade_candidate: workspace files need a task machine")
     turns = candidate_turns(reply, sorted(workspace, key=lambda resource: resource.path))
-    factories = host_checked_factories(services.factories, services.host)
+    factories = host_checked_factories(services.factories)
     try:
         spec = draft.lower(
             task,
-            host=services.host,
             task_machine=settings if machine else None,
             verifier_machine=None if grading_environment(task) is None else settings,
             limits=draft.rollout_limits(

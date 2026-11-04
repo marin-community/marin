@@ -20,7 +20,6 @@ from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import ControlKind
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, parse
 from taskforge.stage20_triage.preflight import preflight
@@ -114,7 +113,7 @@ async def task(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec:
 
 async def validate(draft: TaskDraft, context: ValidationContext) -> ValidationResult:
     stats = RewardStats(graded=4, mean_reward=0.5, solved=2, timed_out=0, candidate_code_errors=0)
-    lowering = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
+    lowering = Lowering(LoweringStatus.LOWERED, "", None, "lowered-task")
     trials = tuple(
         TrialResult(str(i), TrialStatus.GRADED, reward, None, f"solver/{i}/attempt-0.json")
         for i, reward in enumerate((1.0, 0.0, 1.0, 0.0))
@@ -148,7 +147,6 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
     model = UnusedModel()
     sampling = LLMPolicy()
     services = RLEnvBuildServices(
-        host=MachineHost.LAPTOP,
         factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
         images=None,
         web_tools=(),

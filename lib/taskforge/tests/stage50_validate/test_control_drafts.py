@@ -19,7 +19,6 @@ from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.structured import IncompleteOutput
-from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
 from taskforge.spec.controls import Transcript
 from taskforge.stage10_proposal.model import parse
@@ -133,9 +132,7 @@ async def test_validation_writes_controls_the_grader_has_not_seen_and_replays_th
         ledger=JsonlLedger(tmp_path / "ledger"),
         first_attempts={},
     )
-    outcomes = await replay(
-        lower(TASK, MachineHost.LAPTOP, FACTORIES, engine_settings().limits), written, plan, engine_settings()
-    )
+    outcomes = await replay(lower(TASK, FACTORIES, engine_settings().limits), written, plan, engine_settings())
     assert {o.control.id: o.verdict for o in outcomes} == {c.id: ControlVerdict.MET for c in written}
 
 

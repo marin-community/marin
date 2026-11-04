@@ -120,9 +120,6 @@ def evidence_gaps(result: ValidationResult) -> tuple[str, ...]:
 async def default_review(result: ValidationResult, *, band: BandRules) -> Decision:
     """Hold unavailable evidence, request repair for authored defects, or accept a complete in-band round."""
     lowering = result.lowering
-    if lowering.status is LoweringStatus.REFUSED:
-        refusals = tuple(f"the {r.where} machine was refused ({r.reason}): {r.detail}" for r in lowering.refusals)
-        return Hold(refusals)
     if lowering.status is LoweringStatus.REJECTED:
         return Hold((f"RolloutEngine rejected the lowered task: {lowering.detail}",))
     solver = result.solver
