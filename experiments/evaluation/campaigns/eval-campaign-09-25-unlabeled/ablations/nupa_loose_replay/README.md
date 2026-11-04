@@ -6,10 +6,10 @@ run's `provenance.json` record `scorer_sha256`, the SHA-256 digest of the import
 scorer's Python source. The replay refuses to resume an output prefix whose
 recorded scorer differs. Use a new output prefix for each scorer revision.
 
-The grader accepts numeric answers after sentence-ending punctuation, including
-`1046.1046` when the same number precedes the period. It also accepts final
-numbers in `$...$` and `**...**`. It does not repair concatenated repeats such as
-`1818` for target `18` or `486.612486.612` for target `486.612`. See the
+The grader accepts final numbers in `$...$` and `**...**`. It does not split
+period-separated numeric text such as `1046.1046` into an answer, or repair
+concatenated repeats such as `1818` for target `18` or `486.612486.612` for
+target `486.612`. See the
 [grader contract](../../../../../../vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/README.md).
 
 The original completion archive remains the source of each trial, including

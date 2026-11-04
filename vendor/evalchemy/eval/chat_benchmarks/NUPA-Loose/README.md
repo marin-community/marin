@@ -15,11 +15,11 @@ extracts a numeric prefix after its answer delimiter or marker.
 Evalchemy's [permissive extraction change](https://github.com/marin-community/evalchemy/pull/187)
 also accepts trailing boxed numbers, inline math (`\(...\)` or `$...$`),
 bold numbers (`**...**`), equations, explicit answer lines, a bare number on the
-last line, and a type-valid numeric suffix after a sentence-ending period.
-A period immediately after a digit qualifies only when it separates two copies
-of the same number, such as `1046.1046`. Concatenated repeats such as `1818`
-for target `18` and `486.612486.612` for target `486.612` receive no repetition
-recovery. The grader discards content before the last `<|end_think|>` marker
+last line. A period between numbers is not treated as an answer boundary:
+`1046.1046` is ambiguous for an integer target of `1046`. Concatenated repeats
+such as `1818` for target `18` and `486.612486.612` for target `486.612` receive
+no repetition recovery. The grader discards content before the last
+`<|end_think|>` marker
 and rejects an unfinished `<|start_think|>` block.
 These rules can credit a correct number after a reasoning response even when the
 model did not follow the direct-answer instruction. They measure numeracy with

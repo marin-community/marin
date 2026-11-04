@@ -69,19 +69,6 @@ def test_extract_answer_uses_final_content(prediction, answer_format, expected):
     assert scorer.extract_answer(prediction, answer_format) == expected
 
 
-@pytest.mark.parametrize(
-    ("prediction", "answer_format", "expected"),
-    [
-        ("The calculation ends here.42", scorer.INTEGER, "42"),
-        ("The calculation ends here.486.612", scorer.FLOAT, "486.612"),
-        ("The calculation ends here.43/20", scorer.FRACTION, "43/20"),
-        ("The calculation ends here.5.09786549e52", scorer.SCIENTIFIC, "5.09786549e52"),
-    ],
-)
-def test_extract_answer_accepts_typed_terminal_suffix(prediction, answer_format, expected):
-    assert scorer.extract_answer(prediction, answer_format) == expected
-
-
 def test_nupa_grade_records_the_answer_used_for_scoring():
     spec = EvalSpec(
         task="NUPA5K-Loose",
@@ -93,7 +80,7 @@ def test_nupa_grade_records_the_answer_used_for_scoring():
         target="18",
     )
 
-    grade = nupa(spec, ["The calculation ends with 18.18"])
+    grade = nupa(spec, ["The answer is 18."])
 
     assert grade.metrics["exact_match"] == 1.0
     assert grade.filtered_resps == ["18"]
@@ -185,24 +172,19 @@ def test_score_prediction_rejects_concatenated_repetition(prediction, gold, answ
     assert scorer.score_prediction(prediction, gold, answer_format).exact_match == 0.0
 
 
-@pytest.mark.parametrize("prediction,answer_format,expected", [
-    ("The calculation ends with 1046.1046", scorer.INTEGER, "1046"),
-    ("The calculation ends with 486.612.486.612", scorer.FLOAT, "486.612"),
-    ("The calculation ends with 43/20.43/20", scorer.FRACTION, "43/20"),
-    ("The calculation ends with 5.09786549e52.5.09786549e52", scorer.SCIENTIFIC, "5.09786549e52"),
+@pytest.mark.parametrize("prediction,answer_format,gold", [
+    ("The calculation ends with 18.18", scorer.INTEGER, "18"),
+    ("The answer is 18.18", scorer.INTEGER, "18"),
+    ("18.18", scorer.INTEGER, "18"),
+    ("The calculation ends here.486.612", scorer.FLOAT, "486.612"),
+    ("The answer is 486.612.486.612", scorer.FLOAT, "486.612"),
+    ("The calculation ends here.43/20", scorer.FRACTION, "43/20"),
+    ("The calculation ends here.5.09786549e52", scorer.SCIENTIFIC, "5.09786549e52"),
 ])
-def test_extract_answer_accepts_equal_numbers_across_terminal_period(prediction, answer_format, expected):
-    assert scorer.extract_answer(prediction, answer_format) == expected
-
-
-@pytest.mark.parametrize("prediction", [
-    "The final answer is 11046.1046",
-    "The final answer is 1.1046.1046",
-    "The final answer is 3/1046.1046",
-    "The final answer is -1046.1046",
-])
-def test_score_prediction_does_not_split_a_longer_number_at_a_period(prediction):
-    assert scorer.score_prediction(prediction, "1046", scorer.INTEGER).exact_match == 0.0
+def test_score_prediction_rejects_period_separated_answers(prediction, answer_format, gold):
+    score = scorer.score_prediction(prediction, gold, answer_format)
+    assert score.extracted_answer is None
+    assert score.no_answer == 1.0
 
 
 @pytest.mark.parametrize("template", ["${}$", "**{}**", "Answer: **{}**", "The answer is ${}$."])
