@@ -39,7 +39,7 @@ import s3fs
 from aiobotocore.httpsession import AIOHTTPSession
 from botocore.credentials import SharedCredentialProvider
 
-from rigging.filesystem.cluster_config import StoreType, store_config
+from rigging.filesystem.cluster_config import StoreType, data_buckets, store_config
 from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME, configured_listing_cache_options
 from rigging.secrets import get_secret
 
@@ -228,6 +228,30 @@ def s3_credentials(store: StoreType) -> tuple[str, str] | None:
             if frozen.access_key and frozen.secret_key:
                 return frozen.access_key, frozen.secret_key
     return None
+
+
+def polars_s3_storage_options(url: str) -> dict[str, str]:
+    """Resolve *url*'s declared-store credentials as Polars object-store options.
+
+    Polars' Rust client is the one S3 reader that consults neither the fsspec
+    configuration nor the ``AWS_SHARED_CREDENTIALS_FILE`` profile, and Iris task pods
+    deliver submitted storage keys as files only (#10474); left to its environment
+    chain the client falls through to instance metadata, which CoreWeave answers 404.
+    Route the bucket like :func:`rigging.filesystem.buckets.filesystem_for` does and
+    return its :func:`s3_credentials` pair under Polars' option names. Undeclared
+    buckets, non-S3 URLs, and stores without available credentials yield ``{}``,
+    leaving the ambient chain in charge.
+    """
+    if not url.startswith("s3://"):
+        return {}
+    spec = data_buckets().get(urlparse(url).netloc)
+    if spec is None or spec.store not in (StoreType.R2, StoreType.COREWEAVE):
+        return {}
+    credentials = s3_credentials(spec.store)
+    if credentials is None:
+        return {}
+    key, secret = credentials
+    return {"aws_access_key_id": key, "aws_secret_access_key": secret}
 
 
 def s3_endpoint(store: StoreType) -> str:

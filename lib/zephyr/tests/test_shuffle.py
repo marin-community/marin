@@ -20,7 +20,7 @@ import pytest
 from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
 from rigging.filesystem.storage_path import StoragePath
-from zephyr import memory_budget
+from zephyr import memory_budget, parquet_scan
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
@@ -158,6 +158,7 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setattr(parquet_scan, "polars_s3_storage_options", lambda path: {})
     monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
 
     schema = frame.collect_schema()
@@ -822,6 +823,7 @@ def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setattr(parquet_scan, "polars_s3_storage_options", lambda path: {})
     monkeypatch.setattr(StoragePath, "mkdirs", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(StoragePath, "open", open_spill)
     monkeypatch.setattr(StoragePath, "rm", remove_spill)
