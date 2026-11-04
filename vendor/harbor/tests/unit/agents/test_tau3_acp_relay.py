@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shlex
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
+import anyio
 import pytest
 from mcp import Client
 from mcp.server import MCPServer
@@ -24,13 +26,49 @@ from harbor.agents.tau3_acp_relay.relay import (
     Tau3ACPRelay,
     Tau3RuntimeInfrastructureError,
 )
-from harbor.agents.tau3_acp_relay.runtime_client import MCPRuntimeClient
+from harbor.agents.tau3_acp_relay.runtime_client import (
+    MCPRuntimeClient,
+    runtime_http_errors,
+)
 from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig
 from harbor.trial.errors import AgentTimeoutError
 
 pytestmark = pytest.mark.unit
+
+
+async def test_runtime_http_boundary_preserves_acp_process_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acpx = tmp_path / "acpx"
+    acpx.write_text("#!/bin/sh\ncat >/dev/null\necho candidate-failure >&2\nexit 7\n")
+    acpx.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    with pytest.raises(ExceptionGroup) as error:
+        with runtime_http_errors():
+            async with anyio.create_task_group():
+                await ACPXPromptClient(5).prompt("Please help.")
+    assert error.value.subgroup(Tau3RuntimeInfrastructureError) is None
+    assert error.value.subgroup(RuntimeError).exceptions[0].args == (
+        "acpx prompt failed with exit code 7: candidate-failure",
+    )
+
+
+async def test_runtime_http_boundary_preserves_caller_cancellation() -> None:
+    entered = asyncio.Event()
+
+    async def relay():
+        with runtime_http_errors():
+            async with anyio.create_task_group():
+                entered.set()
+                await asyncio.Event().wait()
+
+    task = asyncio.create_task(relay())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.parametrize(

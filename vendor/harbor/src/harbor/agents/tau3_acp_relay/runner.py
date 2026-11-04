@@ -21,33 +21,34 @@ from .relay import (
     DEFAULT_TOOL_TIMEOUT_SEC,
     Tau3ACPRelay,
 )
-from .runtime_client import MCPRuntimeClient
+from .runtime_client import MCPRuntimeClient, runtime_http_errors
 
 
 async def run(args: argparse.Namespace) -> None:
     """Connect the runtime and execute the deterministic relay."""
     policy = Path(args.policy_file).read_text(encoding="utf-8")
-    async with streamablehttp_client(
-        args.mcp_url,
-        timeout=args.read_timeout_sec,
-        sse_read_timeout=args.read_timeout_sec,
-    ) as streams:
-        read_stream, write_stream, _ = streams
-        async with ClientSession(
-            read_stream,
-            write_stream,
-            read_timeout_seconds=None,
-        ) as session:
-            await session.initialize()
-            relay = Tau3ACPRelay(
-                MCPRuntimeClient(session, args.tool_timeout_sec),
-                ACPXPromptClient(args.turn_timeout_sec),
-                seed=args.seed,
-                max_steps=args.max_steps,
-                max_errors=args.max_errors,
-                max_target_turns=args.max_target_turns,
-            )
-            result = await relay.run(policy)
+    with runtime_http_errors():
+        async with streamablehttp_client(
+            args.mcp_url,
+            timeout=args.read_timeout_sec,
+            sse_read_timeout=args.read_timeout_sec,
+        ) as streams:
+            read_stream, write_stream, _ = streams
+            async with ClientSession(
+                read_stream,
+                write_stream,
+                read_timeout_seconds=None,
+            ) as session:
+                await session.initialize()
+                relay = Tau3ACPRelay(
+                    MCPRuntimeClient(session, args.tool_timeout_sec),
+                    ACPXPromptClient(args.turn_timeout_sec),
+                    seed=args.seed,
+                    max_steps=args.max_steps,
+                    max_errors=args.max_errors,
+                    max_target_turns=args.max_target_turns,
+                )
+                result = await relay.run(policy)
 
     summary = {
         "status": asdict(result.status),

@@ -4,11 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
+import httpx
 from mcp import ClientSession
 
 from .relay import RuntimeStatus, RuntimeTurn, Tau3RuntimeInfrastructureError
+
+
+@contextmanager
+def runtime_http_errors() -> Iterator[None]:
+    """Classify HTTP failures raised by MCP's transport task group."""
+    try:
+        yield
+    except* httpx.HTTPError as exc:
+        raise Tau3RuntimeInfrastructureError(
+            "Tau3 runtime HTTP transport failed"
+        ) from exc
 
 
 class MCPRuntimeClient:

@@ -290,10 +290,12 @@ and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. The relay fi
 model name and keeps provider authentication in the host process. Its supported routes are listed below.
 Tau3 requires an explicit `--judge-model` in the shared launch command. That hosted model serves
 both the simulated user and verifier assertions; the candidate agent keeps its own model endpoint.
-For Pi and Pi/ACP, Marin excludes Tau3's conversation-control tools from the candidate's
+For Tau3's Pi/ACP candidates, Marin excludes conversation-control tools from the candidate's
 MCP extension. Domain tools remain available; the benchmark relay advances user turns.
 After each candidate turn, the relay checks the runtime's canonical status before submitting
 another message, so a conversation that ended during the turn proceeds to native grading.
+HTTP failures from the runtime's MCP task group are infrastructure errors; candidate
+process failures retain their agent classification.
 This tool filtering controls the harness interface; it does not isolate callers sharing
 the runtime's task-local network.
 Without a hosted model, the adapter rejects the task before allocating its container group. A direct

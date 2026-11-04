@@ -592,7 +592,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
         user_agent is not None
         and user_agent.import_path == _TAU3_USER_AGENT
         and agent.name is not None
-        and (agent.name in {AgentName.PI, AgentName.ACP} or is_acp_registry_shorthand(agent.name))
+        and (agent.name == AgentName.ACP or is_acp_registry_shorthand(agent.name))
     ):
         # The relay advances Tau3's conversation; Pi receives only task tools.
         excluded_tools = set(agent.kwargs.get("mcp_excluded_tools", ()))
