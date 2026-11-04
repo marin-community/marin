@@ -33,7 +33,7 @@ src/taskforge/
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
                                verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
-                               author.py: Revision, AuthoredProgram, AuthorContext, AuthorFailure, the
+                               author.py: Revision, AuthoredProgram, AuthorContext, the
                                Author protocol, `static_author`, the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
   stage40_build_with_program/  agentic_author.py: `AgenticAuthor`, the author whose agent sessions write,
@@ -516,11 +516,10 @@ package's authors ignore it.
 
 A build error costs a revision, except `BuildInfrastructureFailure`, `BuildExpired`,
 `ModelUnavailable` and `OSError`, which fail the workpiece at the build stage. An author call
-raising `StructuredOutputError` or `AuthorFailure` costs a revision from the same budget. Its
-structured reply stayed invalid through the repair turns, as when the output limit cut it, or it ended
-without a program to hand in, as when the agentic author's sessions did not submit, and the next author
-call tries again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
-author stage.
+raising `StructuredOutputError` costs a revision from the same budget. Its structured reply stayed
+invalid through the repair turns, as when the output limit cut it, and the next author call tries
+again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the author
+stage.
 
 The coordinator calls the author with an `AuthorContext` (the workpiece id, the round and the
 workpiece's directory), the proposal, the revision and the author state. An author keeps its own

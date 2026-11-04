@@ -36,7 +36,7 @@ An attempt is ``Ungraded`` when any submission's grading or the agent loop itsel
 takes precedence over an exhausted turn budget, which takes precedence over an authored task defect. An
 interrupted attempt keeps its partial rollout and submissions. An attempt that ended without an accepted report is
 ``SEARCH_INCOMPLETE``. Otherwise it reports its last submission's grade, or ``SUBMISSION_FAILURE`` without one.
-Whether a defect is real is review's judgement (``second_review`` is a stub), not the round's.
+Whether a defect is real is review's judgement, not the round's.
 """
 
 import asyncio
@@ -839,8 +839,3 @@ async def run_adversary_trial(
 
 
 _RECORD: TypeAdapter[AdversaryRecord] = TypeAdapter(AdversaryRecord)
-
-
-def second_review(spec: TaskRolloutSpec, search: AdversaryRecord, defect: Defect) -> None:
-    """Optional future review with the full task and candidate evidence; not performed."""
-    return None

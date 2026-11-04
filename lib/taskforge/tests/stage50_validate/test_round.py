@@ -863,7 +863,7 @@ ALL_SOLVE_RATES = BandRules(0, 1, frozenset({BandOutcome.IN_BAND}))
 
 @pytest.mark.parametrize("spec", [FALSE_ACCEPT, FALSE_REJECT])
 @pytest.mark.parametrize("actionable", [True, False])
-async def test_defects_use_same_contract_without_second_review(glm_client, fake_glm, ledger, tmp_path, spec, actionable):
+async def test_defects_use_same_contract(glm_client, fake_glm, ledger, tmp_path, spec, actionable):
     fake_glm.stream(content=controls_reply("41"))
     built = built_draft(tmp_path / "store")
     settings = round_settings(ledger, adversary=replace(adversary_policy(k=1), spec=spec))
