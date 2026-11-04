@@ -225,6 +225,7 @@ class LoraAdaptorConfig(LoraConfig, AdaptorConfig):
                     converter,
                     export.merged_hf_upload,
                     generation_config=export.generation_config,
+                    chat_template=export.chat_template,
                     model_getter=export_model,
                 ),
                 every=export.hf_save_steps,
