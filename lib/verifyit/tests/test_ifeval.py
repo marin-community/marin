@@ -591,6 +591,24 @@ CASES = [
         "This is good.",
     ),
     (
+        "language:response_language",
+        {"language": "fi"},
+        "Tämä on hyvä kysymys, ja vastaus on yksinkertainen.",
+        "This is a good question, and the answer is simple.",
+    ),
+    (
+        "language:response_language",
+        {"language": "pl"},
+        "To jest dobre pytanie, a odpowiedź nie jest trudna.",
+        "This is a good question, and the answer is not hard.",
+    ),
+    (
+        "language:response_language",
+        {"language": "sw"},
+        "Hili ni swali zuri, na jibu lake ni rahisi.",
+        "This is a good question, and its answer is easy.",
+    ),
+    (
         "keywords:keyword_specific_position",
         {"keyword": "cat", "n": 1, "m": 3},
         "我爱cat。",
