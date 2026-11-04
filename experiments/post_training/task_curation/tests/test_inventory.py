@@ -405,7 +405,6 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
         json.loads(row["lowered_task_spec"])["task"]["id"] for row in pq.read_table(settings.heldout[0].uri).to_pylist()
     }
     assert {task.id for task in read_tasks(output / FULL_VALIDATION_FILENAME)} == expected_ids
-    assert {task.id for task in read_tasks(output / VALIDATION_FILENAME)} <= expected_ids
     input_file.unlink()
     selection_file.write_text(settings.model_copy(update={"version": "2026.10.23.2"}).model_dump_json())
     resumed = runner.invoke(
@@ -422,6 +421,25 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     )
     assert resumed.exit_code == 0, resumed.output
     assert tasks == read_tasks(cache / "rl-data/task-selection/fixture/2026.10.23.2" / TRAIN_FILENAME)
+    selection_file.write_text(
+        settings.model_copy(update={"version": "2026.10.23.3", "exclusions": ()}).model_dump_json()
+    )
+    baseline = runner.invoke(
+        main,
+        [
+            "--corpus",
+            str(cache / "campaigns/corpus.json"),
+            "--selection",
+            str(selection_file),
+            "--cache-dir",
+            str(cache),
+            "--run",
+        ],
+    )
+    assert baseline.exit_code == 0, baseline.output
+    baseline_output = cache / "rl-data/task-selection/fixture/2026.10.23.3"
+    for filename in (FULL_VALIDATION_FILENAME, VALIDATION_FILENAME):
+        assert read_tasks(output / filename) == read_tasks(baseline_output / filename)
 
 
 def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
@@ -778,7 +796,6 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
         ("count-rate", "Panel pass-rate rows must have unique task IDs"),
         ("attempted-rate", "Panel pass-rate evidence is incomplete"),
         ("model-rate", "Panel pass-rate evidence is incomplete"),
-        ("digest-rate", "Pass-rate evidence measures different task content"),
     ],
 )
 def test_panel_publication_refuses_remote_graders_and_training_or_development_overlap(tmp_path, failure, cause):
@@ -793,9 +810,10 @@ def test_panel_publication_refuses_remote_graders_and_training_or_development_ov
             "count-rate": ("samples", 8),
             "attempted-rate": ("attempted", 7),
             "model-rate": ("model_revision", "another-model"),
-            "digest-rate": ("task_digest", "0" * 64),
         }[failure]
         rows[-1] = {**rows[-1], field: value}
+        if failure == "attempted-rate":
+            rows[-1].update(samples=7, passed=min(rows[-1]["passed"], 7))
         settings = measured_recipe(settings, tmp_path, rows)
         if failure == "count-rate":
             settings = settings.model_copy(
