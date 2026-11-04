@@ -547,13 +547,16 @@ def no_exclamation(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("startend:end_checker")
 def end_checker(text: str, params: dict) -> tuple[bool, str]:
-    """The response must end with the phrase, case included. The prompt forbids other words after it, so a closing
-    quote, Markdown markup or an emoji may follow, as in "**Any other questions?**"."""
+    """The response must end with the phrase, case ignored as in the postscript and section markers. The prompt
+    forbids other words after it, so a closing quote, Markdown markup or an emoji may follow, as in
+    "**Any other questions?**"."""
     end_phrase = params.get("end_phrase")
     if not isinstance(end_phrase, str):
         return False, "missing end_phrase"
-    position = text.rfind(end_phrase)
-    passed = position >= 0 and WORD.search(text, position + len(end_phrase)) is None
+    # The look-ahead finds overlapping occurrences; each match is as long as the phrase, so the last ends latest.
+    occurrences = re.finditer(f"(?=({re.escape(end_phrase)}))", text, flags=re.IGNORECASE)
+    end = max((found.end(1) for found in occurrences), default=-1)
+    passed = end >= 0 and WORD.search(text, end) is None
     return passed, f"ends_with={end_phrase!r}"
 
 

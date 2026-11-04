@@ -100,6 +100,19 @@ CASES = [
         '"Any other questions?" That covers the deployment.',
     ),
     (
+        "startend:end_checker",
+        {"end_phrase": "Any other questions?"},
+        "that covers the deployment. any other questions?",
+        "that covers the deployment. any other questions? thanks",
+    ),
+    (
+        "startend:end_checker",
+        {"end_phrase": "Is there anything else I can help with?"},
+        "MIX WARM WATER WITH A LITTLE VINEGAR, WIPE THE GLASS WITH A MICROFIBER CLOTH AND DRY IT WITH NEWSPAPER. "
+        "IS THERE ANYTHING ELSE I CAN HELP WITH?",
+        "Pencils contain graphite, not lead, so they are safe to use. Is there anything else I can help you with?",
+    ),
+    (
         "detectable_format:number_bullet_lists",
         {"num_bullets": 3},
         "* first\n* second\n* third",
@@ -946,6 +959,7 @@ CASES = [
         ("detectable_format:json_format", {}, "```" + "\n" * 100_000 + "x", False),
         ("keywords:existence", {"keywords": ["b"]}, "a" + "\u0301" * 100_000 + "b", False),
         ("keywords:palindrome", {}, " ".join(["ab"] * 20_000), False),
+        ("startend:end_checker", {"end_phrase": "a a"}, "a " * 50_000, True),
     ],
     ids=[
         "sentence_marks",
@@ -956,6 +970,7 @@ CASES = [
         "fence_newlines",
         "keyword_after_marks",
         "many_words",
+        "overlapping_phrase",
     ],
 )
 def test_check_of_degenerate_text_finishes_within_its_deadline(name, params, text, passed):
