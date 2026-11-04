@@ -189,11 +189,7 @@ def cohort_model(key: str) -> CohortModel:
 
 
 def engine_init_kwargs(model: CohortModel) -> dict:
-    """SkyRL generator engine arguments bound to the model's parser bindings.
-
-    SkyRL sets the actor-level engine kwargs (expert parallel, concurrency,
-    prefill budget) itself from the generator config, so none are passed here.
-    """
+    """Return vLLM arguments for the model's tool parser and generation config."""
     kwargs = {"enable_auto_tool_choice": True, "tool_call_parser": model.tool_parser}
     if model.generation_config_dir is not None:
         kwargs["generation_config"] = (
