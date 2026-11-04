@@ -10,7 +10,6 @@ import pytest
 from verifyit.reasoning_markup import ReasoningViolation
 
 from taskcompendium.convert.pi_trajectory import (
-    HAZARD_SPLIT,
     UnsupportedTranscript,
     parse_pi_transcript,
     prefix_row,
@@ -38,7 +37,7 @@ BASH = {
     "parameters": {"type": "object", "required": ["command"], "properties": {"command": {"type": "string"}}},
     "constrainedSampling": {"type": "json_schema", "strict": "prefer"},
 }
-SOURCE = Source(dataset="open-athena/prefixes", revision="abc123", row="hazard.parquet:3", importer_revision="1")
+SOURCE = Source(dataset="open-athena/prefixes", revision="abc123", row="rows.parquet:3", importer_revision="1")
 
 
 def _message_end(message: dict) -> str:
@@ -86,7 +85,7 @@ TRANSCRIPT = [
 
 
 def _row(transcript, reply) -> dict:
-    return prefix_row(transcript, reply, split=HAZARD_SPLIT, benchmark="bixbench", model="m", run="run-1", trial="t")
+    return prefix_row(transcript, reply, benchmark="bixbench", task="bix-1-q1", model="m", run="run-1", trial="t")
 
 
 def test_transcript_yields_prefix_rows_classified_by_the_recorded_reply():
@@ -101,8 +100,8 @@ def test_transcript_yields_prefix_rows_classified_by_the_recorded_reply():
         (ReasoningViolation.STRAY_END, 1300),
     ]
 
-    hazard = transcript.replies[1]
-    assert prompt_messages(transcript, hazard) == [
+    malformed = transcript.replies[1]
+    assert prompt_messages(transcript, malformed) == [
         {"role": "system", "content": "You are an agent.\n\n<tools>\n- bash\n</tools>"},
         {"role": "user", "content": "List the workspace."},
         {
@@ -115,14 +114,14 @@ def test_transcript_yields_prefix_rows_classified_by_the_recorded_reply():
         {"role": "tool", "tool_call_id": "call-1", "content": "a.txt\n"},
     ]
 
-    row = _row(transcript, hazard)
-    assert (row.violation, row.prompt_tokens, row.position) == ("stray_end", 1300, 4)
-    task = prefix_row_task(RawRow("hazard-3", SOURCE, asdict(row)), ConversionContext({}, None))
+    row = _row(transcript, malformed)
+    assert (row.recorded_violation, row.prompt_tokens, row.position) == ("stray_end", 1300, 4)
+    task = prefix_row_task(RawRow("row-3", SOURCE, asdict(row)), ConversionContext({}, None))
     require_submission_compatibility(task)
-    assert (task.id, task.source) == ("hazard-3", SOURCE)
+    assert (task.id, task.source) == ("row-3", SOURCE)
     assert task.final_tools == transcript.tools
     assert task.context.events == transcript.events[:4]
-    assert task.tags == ("hazard", "bixbench", "m", "stray_end")
+    assert task.tags == ("bixbench", "m", "stray_end")
 
     def grade(text: str) -> tuple[Outcome, float | None]:
         reply = AssistantToolCalls(

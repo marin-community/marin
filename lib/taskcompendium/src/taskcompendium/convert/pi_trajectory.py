@@ -8,8 +8,7 @@ messages the model saw: the structured system prompt with the tools pi advertise
 the assistant replies with their raw reasoning markers and function calls, and the tool results.
 Every assistant reply is a candidate: the conversation before it is a prompt, pi's tools are the
 final tools, and the model answers with one assistant turn. The reply pi recorded is classified with
-the reasoning-span rules, so a miner can keep the prompts that preceded a malformed span (hazards)
-and matched prompts that preceded a well-formed one (controls).
+the reasoning-span rules, so a miner can keep the prompts that preceded a malformed span.
 
 Mining produces one ``PrefixRow`` per kept prompt; the curation pipeline converts a row into a task
 (``prefix_row_task``). Messages after pi's first context compaction are dropped, because the
@@ -57,9 +56,6 @@ from taskcompendium.submission import conversation_messages
 MESSAGE_END = "message_end"
 COMPACTION_START = "compaction_start"
 SYSTEM_SECTION_SEPARATOR = "\n\n"
-HAZARD_SPLIT = "hazard"
-CONTROL_SPLIT = "control"
-WELL_FORMED = "well_formed"
 
 
 class UnsupportedTranscript(ValueError):
@@ -94,7 +90,7 @@ class PiTranscript:
 
 @dataclass(frozen=True)
 class PrefixRow:
-    """One source row: the prompt before a recorded reply, its tools, and where it came from.
+    """One source row: the prompt before a recorded malformed reply, its tools, and where it came from.
 
     ``messages`` and ``tools`` are JSON text so rows with different tool sets share one Parquet schema.
     """
@@ -102,10 +98,12 @@ class PrefixRow:
     digest: str
     messages: str
     tools: str
-    split: str
-    violation: str | None
+    recorded_violation: str
+    """How the recorded reply's reasoning span was malformed."""
     prompt_tokens: int
     benchmark: str
+    task: str
+    """The benchmark task the trajectory attempted."""
     model: str
     run: str
     trial: str
@@ -221,15 +219,17 @@ def prefix_row(
     transcript: PiTranscript,
     reply: PiReply,
     *,
-    split: str,
     benchmark: str,
+    task: str,
     model: str,
     run: str,
     trial: str,
 ) -> PrefixRow:
-    """The source row for the prompt before ``reply``; identical prompts from different runs share a digest."""
+    """The source row for the prompt before a malformed ``reply``; identical prompts share a digest."""
     if reply.position == 0 or not transcript.tools:
         raise ValueError("A prefix row needs a prompt and pi's advertised tools")
+    if reply.violation is None:
+        raise ValueError("A prefix row precedes a reply with a malformed reasoning span")
     if reply.prompt_tokens is None:
         raise ValueError("A prefix row needs the prompt length pi observed")
     messages = prompt_messages(transcript, reply)
@@ -238,10 +238,10 @@ def prefix_row(
         digest=canonical_sha256({"messages": messages, "tools": tools}),
         messages=json.dumps(messages, ensure_ascii=False),
         tools=json.dumps(tools, ensure_ascii=False),
-        split=split,
-        violation=reply.violation.value if reply.violation is not None else None,
+        recorded_violation=reply.violation.value,
         prompt_tokens=reply.prompt_tokens,
         benchmark=benchmark,
+        task=task,
         model=model,
         run=run,
         trial=trial,
@@ -265,5 +265,5 @@ def prefix_row_task(row: RawRow, _context: ConversionContext) -> TaskSpec:
         grader=verifyit_package(ReasoningMarkupSpec()).grader,
         reasoning_markup=ReasoningMarkupPolicy.REJECT,
         source=row.source,
-        tags=(data["split"], data["benchmark"], data["model"], data["violation"] or WELL_FORMED),
+        tags=(data["benchmark"], data["model"], data["recorded_violation"]),
     )
