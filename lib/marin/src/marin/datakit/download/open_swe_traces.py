@@ -185,27 +185,24 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     )
 
 
-def source_rows(input_path: str) -> Dataset:
-    return Dataset.from_files(prefix_join(input_path, "**/*.parquet")).flat_map(load_parquet_batched)
+def transform_chat(input_path: str, output_path: str, exclusion_path: str | None = None) -> None:
+    """Write the chat documents of one partition.
 
-
-def write_chat(rows: Dataset, output_path: str) -> None:
+    The Qwen3.8 partitions pass ``exclusion_path``: their listed traces are dropped and the kept ones get the
+    Solution Originality section back.
+    """
+    rows = Dataset.from_files(prefix_join(input_path, "**/*.parquet")).flat_map(load_parquet_batched)
+    if exclusion_path is not None:
+        trajectory_ids = pinned_jsonl_ids(
+            prefix_join(exclusion_path, EXCLUSION_FILE), "trajectory_id", EXCLUSION_LIST_SIZE
+        )
+        rows = rows.flat_map(partial(repaired_qwen38_rows, excluded_trajectory_ids=trajectory_ids))
     pipeline = rows.flat_map(row_to_chat_doc).write_parquet(
         prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
         schema=SOURCE_CHAT_SCHEMA,
         skip_existing=True,
     )
     ZephyrContext(name="open-swe-traces-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
-
-
-def transform_chat(input_path: str, output_path: str) -> None:
-    write_chat(source_rows(input_path), output_path)
-
-
-def transform_qwen38_chat(input_path: str, exclusion_path: str, output_path: str) -> None:
-    trajectory_ids = pinned_jsonl_ids(prefix_join(exclusion_path, EXCLUSION_FILE), "trajectory_id", EXCLUSION_LIST_SIZE)
-    rows = source_rows(input_path).flat_map(partial(repaired_qwen38_rows, excluded_trajectory_ids=trajectory_ids))
-    write_chat(rows, output_path)
 
 
 def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ...]:
@@ -222,7 +219,7 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
         processed = StepSpec(
             name=f"processed-chat/{source_name}",
             deps=[raw, exclusions],
-            fn=lambda output_path: transform_qwen38_chat(raw.output_path, exclusions.output_path, output_path),
+            fn=lambda output_path: transform_chat(raw.output_path, output_path, exclusions.output_path),
             hash_attrs={"version": TRANSFORM_VERSION, "exclusion_revision": EXCLUSION_REVISION},
         )
     else:
