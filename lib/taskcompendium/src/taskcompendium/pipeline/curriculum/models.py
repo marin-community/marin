@@ -29,13 +29,22 @@ class EmbeddingSpec(_Record):
 
 
 class AlignmentSource(_Record):
+    """One source in a curriculum release.
+
+    ``basis`` separates sources the pipeline embedded and matched ("matched")
+    from inventory-only declarations carried at their pinned count without
+    curriculum placement ("declared"). Declared sources have no placement
+    statistics and a null ``intended_use``.
+    """
+
     source_id: str
     source_key: str
     population: Literal["converted", "admitted"]
-    intended_use: str
+    intended_use: str | None
     task_count: int
     ready_count: int
     insufficient_context_count: int
+    basis: Literal["matched", "declared"]
     curation_root: str | None = None
     input_rows: int | None = None
     converted_rows: int | None = None

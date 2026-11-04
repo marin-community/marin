@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from finestore.rl.curation import PipelineReference, SourceDeclaration
+from finestore.rl.curation import IndependentQC, PipelineReference, SourceDeclaration
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
@@ -62,6 +62,10 @@ class SourceInfo:
     ``dataset`` identifies inventory entries without a configuration. Runnable
     sources expose their configured pinned input directly. Tags describe task type,
     interaction, benchmark status, and source-specific search terms.
+
+    ``independent_qc`` records quality control the pinned release performed itself.
+    Inventory-only pointers use it to surface that evidence in the Atlas, separate
+    from any sampled curation assessment.
     """
 
     id: str
@@ -72,6 +76,7 @@ class SourceInfo:
     count: int | None = None
     notes: str = ""
     dataset: SourceReference | None = None
+    independent_qc: IndependentQC | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +157,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status="Excluded" if "excluded" in tags else "Available",
             pipeline=invocation,
+            independent_qc=info.independent_qc,
         )
 
 

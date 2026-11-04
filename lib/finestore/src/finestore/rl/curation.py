@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
@@ -51,6 +51,27 @@ class CatalogRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class IndependentQC(CatalogRecord):
+    """Quality control performed inside a pinned release, outside the curation pipeline.
+
+    Inventory-only pointers use this to make their release's own admission evidence
+    visible in the Atlas. ``verdict`` describes the inspected population; the curation
+    pipeline never re-litigates it.
+    """
+
+    verdict: Verdict
+    method: str = Field(min_length=1)
+    reviewed: int = Field(ge=0)
+    admitted: int = Field(ge=0)
+    evidence_url: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _admitted_within_reviewed(self) -> "IndependentQC":
+        if self.admitted > self.reviewed:
+            raise ValueError(f"admitted {self.admitted} exceeds reviewed {self.reviewed}")
+        return self
+
+
 class PipelineReference(CatalogRecord):
     name: str
     version: str
@@ -77,6 +98,7 @@ class SourceDeclaration(CatalogRecord):
     kind: str
     status: str
     pipeline: PipelineReference | None
+    independent_qc: IndependentQC | None = None
 
 
 class AdmissionCounts(CatalogRecord):
