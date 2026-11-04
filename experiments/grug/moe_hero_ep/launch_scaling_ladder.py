@@ -40,6 +40,8 @@ Changelog:
     2026-11-02 (#8435): the hero trains at 65K context with qk_mult 1.66 and receiver capacity factor 1.5
         from step 372000. hero-ctx65k-step372k forks hero-gradclip-step356k at permanent step 372000
         (see ``trigger_hero.sh``).
+    2026-11-03: the hero keeps a permanent checkpoint every 500 steps over its final 5000 steps
+        (385500 through 390000, plus the final step), instead of every 6000.
 """
 
 import dataclasses
@@ -161,6 +163,10 @@ LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, 
 TOKENS_PER_ACTIVE_PARAM = 791
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
+# The hero keeps a permanent checkpoint every FINAL_DENSE_CHECKPOINT_EVERY steps over its last
+# FINAL_DENSE_CHECKPOINT_STEPS steps.
+FINAL_DENSE_CHECKPOINT_STEPS = 5000
+FINAL_DENSE_CHECKPOINT_EVERY = 500
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
 # Rolling resume checkpoints expire this many days after they are written. The live run's newest one
 # is at most RESUME_SAVE_INTERVAL old, so the TTL only deletes checkpoints that replaced runs leave
@@ -298,12 +304,14 @@ def build_ladder_run(
     if size == "d6144":
         steps_per_eval = 3000
         # Permanent checkpoint every 6000 steps, plus a one-off at step 55000 for the post-handoff
-        # weight-decay comparison (#8818). Interval keeps are modular within each `until` range, so
-        # the 6000 cadence brackets the pinned 55000 range on both sides.
+        # weight-decay comparison (#8818), and every 500 steps over the final 5000 steps for the
+        # end-of-run analysis. Interval keeps are modular within each `until` range, so the 6000
+        # cadence brackets the pinned 55000 range on both sides.
         keep_permanent: list[dict[str, int | None]] | None = [
             {"until": 54000, "every": 6000},
             {"until": 55000, "every": 55000},
-            {"until": None, "every": 6000},
+            {"until": num_steps - FINAL_DENSE_CHECKPOINT_STEPS, "every": 6000},
+            {"until": None, "every": FINAL_DENSE_CHECKPOINT_EVERY},
         ]
     else:
         steps_per_eval = max(1, round(num_steps / 20))

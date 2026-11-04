@@ -199,19 +199,27 @@ def test_scaling_ladder_keeps_hero_checkpoints_separate_from_shared_scratch(monk
     assert trainer.checkpointer.temporary_base_path == temporary_path
 
 
-def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
+def _permanent_steps(keep: list[dict[str, int | None]], steps: range) -> list[int]:
+    """The steps Levanter keeps permanently: the first `until` range covering a step sets its interval."""
+    kept = []
+    for step in steps:
+        every = next(p["every"] for p in keep if p["until"] is None or p["until"] >= step)
+        if step % every == 0:
+            kept.append(step)
+    return kept
+
+
+def test_d6144_permanent_checkpoints_pin_55000_and_densify_over_the_final_5000_steps():
     step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", version="2026.08.18")
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
-    keep = step.build_config(ctx).trainer.trainer.checkpointer.keep
+    config = step.build_config(ctx)
+    keep = config.trainer.trainer.checkpointer.keep
+    num_steps = config.trainer.trainer.num_train_steps
 
-    # Modular per-`until` ranges: the 6000 cadence holds up to 54000, the middle range pins exactly
-    # 55000, and the open-ended range restores the 6000 cadence for every step past it. Building the
-    # step already runs CheckpointerConfig's monotonic-interval validation.
-    assert keep == [
-        {"until": 54_000, "every": 6_000},
-        {"until": 55_000, "every": 55_000},
-        {"until": None, "every": 6_000},
-    ]
+    # Building the step already runs CheckpointerConfig's monotonic-interval validation.
+    assert num_steps == 390_251
+    assert _permanent_steps(keep, range(48_000, 62_001)) == [48_000, 54_000, 55_000, 60_000]
+    assert _permanent_steps(keep, range(378_000, num_steps + 1)) == [378_000, 384_000, *range(385_500, 390_001, 500)]
 
 
 def _set_hero_seq_len(monkeypatch, seq_len):
