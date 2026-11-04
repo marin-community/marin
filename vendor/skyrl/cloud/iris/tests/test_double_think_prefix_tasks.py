@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reasoning-span prefix tasks run through the canonical task loader and the rollout worker."""
+"""Double-think prefix tasks run through the canonical task loader and the rollout worker."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 from verifyit.reasoning_markup import ReasoningViolation
 
-REPOSITORY = "open-athena/Marin-Reasoning-Span-Hazard-Prefixes"
+REPOSITORY = "open-athena/Marin-Double-Think-Prefixes"
 BASH = {
     "name": "bash",
     "description": "Execute a bash command.",
@@ -55,10 +55,10 @@ ROW = {
         ]
     ),
     "tools": json.dumps([BASH]),
-    "split": "hazard",
-    "violation": "stray_end",
+    "recorded_violation": "stray_end",
     "prompt_tokens": 1300,
     "benchmark": "bixbench-cli-marin-corrections",
+    "task": "bix-1-q1",
     "model": "Grug-67B-A2B-Datakit-SFT-262K-2026.09.21",
     "run": "20261017-022041-bixbench-pi",
     "trial": "bix-1-q1__abc",
@@ -88,7 +88,7 @@ class WorkerTokenizer:
 
 def prefix_task():
     source = Source(dataset=REPOSITORY, revision="f6ab8adc", row="rows.parquet:0", importer_revision="1")
-    return prefix_row_task(RawRow("reasoning-span-hazard-0", source, ROW), ConversionContext({}, None))
+    return prefix_row_task(RawRow("double-think-0", source, ROW), ConversionContext({}, None))
 
 
 def lowered_prefix_task(tmp_path: Path):

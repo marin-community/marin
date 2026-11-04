@@ -1,15 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke the reasoning-span prefix tasks through MarinSkyRL on a small model.
+"""Smoke the double-think prefix tasks through MarinSkyRL on a small model.
 
-Converts the pinned hazard and control rows into ``task_spec`` Parquet, then trains Qwen2.5-0.5B-Instruct
+Converts the pinned double-think rows into ``task_spec`` Parquet, then trains Qwen2.5-0.5B-Instruct
 for one synchronous update on them with evaluation before and after, through the ``taskcompendium``
 entrypoint the quick RL loop uses. The run proves the tasks lower, roll out without a machine, grade in
 process and report per-dataset ``eval/<repository>/avg_score`` metrics; its scores say nothing about Snowball.
 
-    uv run python -m experiments.post_training.reasoning_spans.smoke --version dev
-    uv run python -m experiments.post_training.reasoning_spans.smoke --version dev --run
+    uv run python -m experiments.post_training.double_think.smoke --version dev
+    uv run python -m experiments.post_training.double_think.smoke --version dev --run
 """
 
 import logging
@@ -46,7 +46,7 @@ from zephyr.writers import write_parquet_file
 
 from experiments.models import qwen2_5_0_5b_instruct
 from experiments.post_training.cat_count_canary.launcher import QWEN_SOURCE, role_plan, training_config
-from experiments.post_training.task_curation.datasets.reasoning_spans import ROWS_FILE, sources
+from experiments.post_training.task_curation.datasets.double_think import ROWS_FILE, sources
 from experiments.post_training.task_curation.inventory import (
     TASK_SCHEMA,
     TASK_SPEC_COLUMN,
@@ -80,7 +80,7 @@ def write_prefix_tasks(config: PrefixTaskDataConfig) -> None:
         for index, row in enumerate(pq.read_table(path).to_pylist()):
             source = Source(dataset=repository, revision=revision, row=f"{ROWS_FILE}:{index}", importer_revision="smoke")
             tasks.append(
-                prefix_row_task(RawRow(f"{row['split']}-{row['digest']}", source, row), ConversionContext({}, None))
+                prefix_row_task(RawRow(row["digest"], source, row), ConversionContext({}, None))
             )
     destination = StoragePath(config.output_path)
     destination.mkdirs()
@@ -98,7 +98,7 @@ def prefix_task_data_step(version: str) -> ArtifactStep[Artifact]:
         (source.config.source.repo, source.config.source.revision) for source in sources() if source.config is not None
     )
     return ArtifactStep(
-        name=user_owned_name("documents/reasoning-span-smoke"),
+        name=user_owned_name("documents/double-think-smoke"),
         version=version,
         artifact_type=Artifact,
         run=write_prefix_tasks,
@@ -163,7 +163,7 @@ def build_smoke(version: str, *, gpus: int) -> ArtifactStep[SkyRLRun]:
     )
     return skyrl_step(
         SkyRLSpec(
-            name=user_owned_name("checkpoints/reasoning-span-smoke"),
+            name=user_owned_name("checkpoints/double-think-smoke"),
             version=version,
             config_yaml=yaml.safe_dump(config, sort_keys=False),
             model=ArtifactHfModel(
@@ -195,7 +195,7 @@ def build_smoke(version: str, *, gpus: int) -> ArtifactStep[SkyRLRun]:
 @click.option("--gpus", type=click.IntRange(1, 8), default=1, show_default=True, help="H100s on the one node.")
 @rl_build_options
 def main(gpus: int) -> ArtifactStep[SkyRLRun]:
-    return build_smoke(resolve_version("reasoning-span-smoke", None), gpus=gpus)
+    return build_smoke(resolve_version("double-think-smoke", None), gpus=gpus)
 
 
 if __name__ == "__main__":

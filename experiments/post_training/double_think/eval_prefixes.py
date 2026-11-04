@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score one served model on the reasoning-span prefix tasks with a single in-process vLLM server.
+"""Score one served model on the double-think prefix tasks with a single in-process vLLM server.
 
-Serves the model from its catalog config, samples replies to every hazard and control prefix the way pi
+Serves the model from its catalog config, samples replies to every double-think prefix the way pi
 requested them (pi's tools advertised, thinking enabled, special tokens kept), and grades each reply with
 verifyit's ``reasoning_markup`` grader. The grader counts a span left open by the token limit as
 ``unclosed``; ``length_exempt_violation`` records the verdict with that truncation exempt. Writes
@@ -12,10 +12,10 @@ verifyit's ``reasoning_markup`` grader. The grader counts a span left open by th
     uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\
       --enable-extra-resources --target-cluster cw-rno2a --priority interactive \\
       --gpu H100x8 --cpu 64 --memory 512GB --disk 600GB --timeout 14400 \\
-      --job-name reasoning-span-eval-<model> \\
-      -- python -m experiments.post_training.reasoning_spans.eval_prefixes \\
+      --job-name double-think-eval-<model> \\
+      -- python -m experiments.post_training.double_think.eval_prefixes \\
       --model-config experiments/evaluation/serve/models/open-athena/Marin-Snowball-67B-A2B-v0.1.yaml \\
-      --output-prefix s3://marin-us-east-02a/marin/rl-data/evals/reasoning-span-prefixes/<model>/<version>
+      --output-prefix s3://marin-us-east-02a/marin/rl-data/evals/double-think-prefixes/<model>/<version>
 """
 
 import json
@@ -40,25 +40,14 @@ from marin.inference.serve import local_inference
 from openai import OpenAI
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.convert.pi_trajectory import CONTROL_SPLIT, HAZARD_SPLIT
 from verifyit.modes.grade_reasoning_markup import grade_reasoning_markup_candidate
 from verifyit.reasoning_markup import reasoning_span_violation
 from verifyit.spec import ReasoningMarkupSpec
 
-from experiments.post_training.task_curation.datasets.reasoning_spans import (
-    CONTROL_REPOSITORY,
-    CONTROL_REVISION,
-    HAZARD_REPOSITORY,
-    HAZARD_REVISION,
-    ROWS_FILE,
-)
+from experiments.post_training.task_curation.datasets.double_think import REPOSITORY, REVISION, ROWS_FILE
 
 logger = logging.getLogger(__name__)
 
-SPLITS = (
-    (HAZARD_SPLIT, HAZARD_REPOSITORY, HAZARD_REVISION),
-    (CONTROL_SPLIT, CONTROL_REPOSITORY, CONTROL_REVISION),
-)
 # The quick RL loop's per-turn generation budget.
 MAX_NEW_TOKENS = 8_192
 SAMPLES_PER_PROMPT = 4
@@ -75,10 +64,10 @@ SUMMARY_FILENAME = "summary.json"
 @dataclass(frozen=True)
 class GradedSample:
     digest: str
-    split: str
     benchmark: str
+    task: str
     source_model: str
-    source_violation: str | None
+    recorded_violation: str
     sample: int
     finish_reason: str
     content: str
@@ -116,10 +105,10 @@ def graded_samples(row: dict[str, Any], choices: Sequence[dict[str, Any]]) -> li
         graded.append(
             GradedSample(
                 digest=row["digest"],
-                split=row["split"],
                 benchmark=row["benchmark"],
+                task=row["task"],
                 source_model=row["model"],
-                source_violation=row["violation"],
+                recorded_violation=row["recorded_violation"],
                 sample=index,
                 finish_reason=choice["finish_reason"],
                 content=content,
@@ -151,15 +140,12 @@ def _grouped(samples: Iterable[GradedSample], key: Callable[[GradedSample], str]
 
 
 def evaluation_summary(samples: Sequence[GradedSample]) -> dict[str, Any]:
-    """Scores by split, and within each split by the source reply's violation, source model and benchmark."""
+    """Scores overall and by the recorded reply's violation, the source model and the benchmark."""
     return {
         "all": _group_summary(samples),
-        "split": _grouped(samples, lambda sample: sample.split),
-        "split_source_violation": _grouped(
-            samples, lambda sample: f"{sample.split}/{sample.source_violation or 'well_formed'}"
-        ),
-        "split_source_model": _grouped(samples, lambda sample: f"{sample.split}/{sample.source_model}"),
-        "split_benchmark": _grouped(samples, lambda sample: f"{sample.split}/{sample.benchmark}"),
+        "recorded_violation": _grouped(samples, lambda sample: sample.recorded_violation),
+        "source_model": _grouped(samples, lambda sample: sample.source_model),
+        "benchmark": _grouped(samples, lambda sample: sample.benchmark),
     }
 
 
@@ -202,14 +188,14 @@ def sample_rows(
 @click.option("--output-prefix", required=True, help="Object-store prefix for samples.jsonl and summary.json.")
 @click.option("--samples", default=SAMPLES_PER_PROMPT, show_default=True, help="Replies sampled per prefix.")
 @click.option("--max-tokens", default=MAX_NEW_TOKENS, show_default=True)
-@click.option("--limit", type=int, help="Score only the first N prefixes of each split, for a smoke run.")
+@click.option("--limit", type=int, help="Score only the first N prefixes, for a smoke run.")
 def main(model_config: Path, output_prefix: str, samples: int, max_tokens: int, limit: int | None) -> None:
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     output = StoragePath(output_prefix)
     if (output / SUMMARY_FILENAME).exists():
         raise click.UsageError(f"{output / SUMMARY_FILENAME} exists; choose a new output prefix")
-    rows = [row for _, repository, revision in SPLITS for row in prefix_rows(repository, revision)[:limit]]
+    rows = prefix_rows(REPOSITORY, REVISION)[:limit]
     logger.info("scoring %d prefixes, %d samples each", len(rows), samples)
 
     model = load_model_config(model_config)
@@ -227,7 +213,7 @@ def main(model_config: Path, output_prefix: str, samples: int, max_tokens: int, 
 
     summary = {
         "model_config": model_config.read_text(),
-        "datasets": {split: f"{repository}@{revision}" for split, repository, revision in SPLITS},
+        "dataset": f"{REPOSITORY}@{REVISION}",
         "samples_per_prompt": samples,
         "max_tokens": max_tokens,
         "request_extra_body": REQUEST_EXTRA_BODY,
@@ -235,7 +221,7 @@ def main(model_config: Path, output_prefix: str, samples: int, max_tokens: int, 
     }
     (output / SAMPLES_FILENAME).write_text("".join(json.dumps(asdict(sample)) + "\n" for sample in graded))
     (output / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2))
-    logger.info("wrote %s: %s", output, json.dumps(summary["scores"]["split"]))
+    logger.info("wrote %s: %s", output, json.dumps(summary["scores"]["all"]))
 
 
 if __name__ == "__main__":
