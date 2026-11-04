@@ -175,5 +175,30 @@ cast boundary with an optimization barrier.
 Scoring verifies exact repeatability on the first microbatch. Routing drops are
 rejected by default; `RoutingDropPolicy.REPORT` permits explicit capacity
 experiments and reports counts including padding. Rollout router replay remains
-separate integration work. Pipeline checkpoint integration and distributed
-model acceptance require validation with the chosen model and parallelism.
+separate integration work.
+
+For pipeline checkpoints, save the stage-owned state and scored batch together
+through `levanter.mpmd_checkpoint.checkpoint_arrays` before passing the resulting
+tree to `levanter.checkpoint.save_checkpoint`. The adapter exposes stage-local
+buffers without gathering the model. Record the current admitted-batch identity
+and the zero-based index of the next optimizer update on that batch in metadata
+(for example, `batch_id` and `next_update_index`). Restore into the same stage layout with
+`levanter.mpmd_checkpoint.restore_checkpoint`, supplying an exemplar payload
+and its destination sharding tree.
+
+The explicit GPU acceptance module is
+`lib/levanter/tests/test_policy_pipeline_accelerator.py`. In a root `pipeline`
+extra environment with pytest installed, run it on four GPUs with one worker:
+
+```bash
+python -m pytest -c pyproject.toml lib/levanter/tests/test_policy_pipeline_accelerator.py -n 0 -m 'manual and not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker'
+```
+
+It compares two-stage pipeline updates, clipping norms, and AdamW state against
+an independent SPMD calculation, then checks checkpoint reload and continuation.
+FP32 compares PP2/data2 against SPMD/data4. BF16 compares PP2/data2 against
+SPMD/data2 because its local gradient rounding depends on the spatial partition.
+Two and four execution microbatches retain the same precomputed policy and KL
+loss weights. The bounded test
+uses one host and a synthetic stage model; multihost execution and real MoE/EP
+model acceptance remain separate gates.
