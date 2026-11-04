@@ -47,6 +47,10 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 
 ## Inference export
 
+Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. The device
+exporter below remains a byte-parity reference and supports checkpoint layouts
+handled by the native loader, including flat checkpoints.
+
 Choose a permanent checkpoint and fresh destination in the same region.
 Copy `model` from the training run's recorded `config.yaml` artifact or resolved
 launch configuration into `export.yaml`:
