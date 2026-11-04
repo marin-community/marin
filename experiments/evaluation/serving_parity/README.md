@@ -13,7 +13,7 @@ uv run python -m experiments.evaluation.serving_parity.launch \
 ```
 
 Without `--submit`, prints the plan. Use fresh output prefixes. Each successful
-arm writes `result.json` with all case distributions, the bound, and wall time.
+arm writes `result.json` with per-case errors, the bound, and wall time.
 Iris logs retain backend startup and per-case probability diagnostics.
 
 ## Pass
