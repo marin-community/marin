@@ -98,7 +98,7 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v5"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v10"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
 LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
@@ -121,12 +121,12 @@ def _lmh_output_root() -> str:
     return f"{marin_prefix()}/{LMH_EVALS_RELATIVE}"
 
 
-# Bump when the LMH text-extraction policy (`_lmh_doc_text`) changes. Written to a
+# Bump when the LMH text-extraction policy (`_lmh_doc_views`) changes. Written to a
 # `.extraction_version` sidecar next to each `lmh/<task>/eval.parquet`; the prepare
 # step rewrites (does not skip) any shard whose sidecar doesn't match. Without this,
 # a policy change like the cluster-B passage drop (marin#6852) never reaches an
 # already-staged corpus — the bloom keeps reading the old passage-bearing text.
-_LMH_EXTRACTION_VERSION = "2-passage-drop"
+_LMH_EXTRACTION_VERSION = "7-question-view-all"
 _LMH_VERSION_SIDECAR = ".extraction_version"
 
 
@@ -355,32 +355,87 @@ _PASSAGE_FIELDS: frozenset[str] = frozenset(
 )
 
 
-def _lmh_doc_text(doc: Any, prompt_fn: Callable, target_fn: Callable) -> str:
-    """Indexed eval text for one lm-eval-harness doc.
+# Suffixes of the record ids for an lm-eval doc's raw-field and question-only views
+# (see `_lmh_doc_views`).
+LMH_FIELDS_ID_SUFFIX = "-fields"
+LMH_QUESTION_ID_SUFFIX = "-question"
+# Hidden grader fields, left out of the raw-field view: copies of a coding item
+# hold its prompt and solution, rarely its tests. Harness prompts or targets that
+# render the tests (HumanEval's target, MBPP's prompt) still index them.
+_GRADER_FIELDS: frozenset[str] = frozenset({"test", "test_list"})
 
-    Passage-bearing docs (a field in :data:`_PASSAGE_FIELDS`) index only
-    question + answer (drop the passage field and ``doc_to_text``, which renders
-    it). Non-passage docs are unchanged: ``doc_to_text`` (question) +
-    ``doc_to_target`` (answer) + every raw string field.
+
+def _field_lines(record: dict[str, Any], exclude: frozenset[str]) -> str:
+    """Multi-word string fields in dataset order, then the items of string-list fields, one per line.
+
+    Dataset order puts a coding prompt before its solution, and lists usually hold
+    answer choices, so they follow the question, as they do in copies of the
+    dataset. One-token strings are labels (``subject``, ``task_id``, an answer
+    letter) that copies rarely keep next to the question; indexing them adds
+    n-grams no copy holds, which lowers the item's matched share. Keys whose
+    lowercase name is in *exclude* are skipped.
+    """
+    keys = [k for k in record if k.lower() not in exclude]
+    lines = [record[k] for k in keys if isinstance(record[k], str) and len(record[k].split()) > 1]
+    for k in keys:
+        value = record[k]
+        if isinstance(value, list) and all(isinstance(x, str) for x in value):
+            lines.extend(x for x in value if x.strip())
+    return "\n".join(lines)
+
+
+# Shorter questions ("Which of the following is true?", "What is a cell?") recur in
+# unrelated quizzes and FAQs, so alone they mark documents that never saw the item.
+_QUESTION_VIEW_MIN_WORDS = 20
+
+
+def _question_line(record: dict[str, Any]) -> str:
+    """The question (or coding prompt) of a record: its first multi-word string field.
+
+    Returned only when it has at least :data:`_QUESTION_VIEW_MIN_WORDS` words, else ``""``.
+    """
+    strings = (v for k, v in record.items() if k.lower() not in _GRADER_FIELDS and isinstance(v, str))
+    question = next((v for v in strings if len(v.split()) > 1), "")
+    return question if len(question.split()) >= _QUESTION_VIEW_MIN_WORDS else ""
+
+
+def _lmh_doc_views(doc: Any, prompt_fn: Callable, target_fn: Callable) -> list[tuple[str, str]]:
+    """Indexed eval records for one lm-eval-harness doc, as ``(id_suffix, text)`` pairs.
+
+    A copy of an eval item in training data usually follows one rendering: the
+    harness prompt (``doc_to_text`` + ``doc_to_target``, with lettered choices) or
+    the raw dataset fields. Each rendering is its own record so the decon item
+    rule can match a copy of either one; joined, a copy of one rendering holds only
+    part of the record. Passage-bearing docs (a field in :data:`_PASSAGE_FIELDS`)
+    give one record, the answer and the raw fields without the passage, since
+    ``doc_to_text`` renders the passage. A doc without a passage also gets its
+    question alone: copies in quiz pages and SFT prompts often drop the choices
+    or the worked answer, and coding copies keep the prompt but rewrite the
+    solution, so the rest of the item outweighs the copied question.
     """
     has_passage = isinstance(doc, dict) and any(k.lower() in _PASSAGE_FIELDS for k in doc)
-    parts: list[str] = []
-    if not has_passage:
-        try:
-            prompt = prompt_fn(doc) or ""
-        except Exception:
-            prompt = ""
-        if prompt:
-            parts.append(str(prompt))
     try:
-        target = target_fn(doc) or ""
-    except Exception:
+        target = str(target_fn(doc) or "")
+    except Exception as e:
+        logger.warning("doc_to_target failed, indexing the doc without its answer: %r", e)
         target = ""
-    if target:
-        parts.append(str(target))
-    if isinstance(doc, dict):
-        parts.append(_concat_strings(doc, exclude=_PASSAGE_FIELDS if has_passage else frozenset()))
-    return "\n\n".join(p for p in parts if p.strip())
+    excluded = _GRADER_FIELDS | (_PASSAGE_FIELDS if has_passage else frozenset())
+    fields = _field_lines(doc, excluded) if isinstance(doc, dict) else ""
+    if has_passage:
+        text = "\n\n".join(p for p in (target, fields) if p.strip())
+        return [("", text)] if text else []
+    try:
+        prompt = str(prompt_fn(doc) or "")
+    except Exception as e:
+        logger.warning("doc_to_text failed, indexing the doc without its prompt: %r", e)
+        prompt = ""
+    question = _question_line(doc) if isinstance(doc, dict) else ""
+    views = [
+        ("", "\n\n".join(p for p in (prompt, target) if p.strip())),
+        (LMH_FIELDS_ID_SUFFIX, fields),
+        (LMH_QUESTION_ID_SUFFIX, question),
+    ]
+    return [(suffix, text) for suffix, text in views if text.strip()]
 
 
 _PARQUET_SCHEMA = pa.schema([("id", pa.string()), ("text", pa.string())])
@@ -912,10 +967,8 @@ def _prepare_lmh() -> dict[str, Any]:
 
             def rows(task=task, docs=docs, split=split, name=child_name) -> Iterator[dict]:
                 for i, doc in enumerate(docs):
-                    text = _lmh_doc_text(doc, task.doc_to_text, task.doc_to_target)
-                    if not text:
-                        continue
-                    yield {"id": f"{name}-{split}-{i}", "text": text}
+                    for suffix, text in _lmh_doc_views(doc, task.doc_to_text, task.doc_to_target):
+                        yield {"id": f"{name}-{split}-{i}{suffix}", "text": text}
 
             try:
                 n = _write_parquet(out_path, rows())

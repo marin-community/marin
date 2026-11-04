@@ -28,7 +28,7 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
     AARecordType,
     _aa_records,
     _iter_aa_rows,
-    _lmh_doc_text,
+    _lmh_doc_views,
 )
 
 # A rendered prompt embeds the passage (as lm-eval-harness doc_to_text does).
@@ -42,6 +42,20 @@ def _prompt(doc: dict) -> str:
 
 def _target(doc: dict) -> str:
     return str(doc.get("answer", ""))
+
+
+def test_lmh_raw_field_view_leaves_out_grader_tests():
+    doc = {"prompt": "def add(a, b):", "canonical_solution": "    return a + b", "test": "assert add(1, 2) == 3"}
+
+    views = dict(_lmh_doc_views(doc, lambda d: d["prompt"], lambda d: d["test"]))
+
+    assert "assert add" in views[""]
+    assert "assert add" not in views["-fields"]
+    assert "return a + b" in views["-fields"]
+
+
+def _lmh_doc_text(doc: dict, prompt_fn, target_fn) -> str:
+    return "\n\n".join(text for _, text in _lmh_doc_views(doc, prompt_fn, target_fn))
 
 
 def test_lmh_passage_doc_drops_passage_keeps_qa():
@@ -59,12 +73,57 @@ def test_lmh_passage_doc_drops_passage_keeps_qa():
     assert "C" in text  # answer kept
 
 
-def test_lmh_non_passage_doc_unchanged():
-    """No passage field → doc_to_text (the question) is kept as before."""
-    doc = {"question": "What is the sum of two and two", "answer": "4"}
-    text = _lmh_doc_text(doc, _prompt, _target)
-    assert "What is the sum of two and two" in text
-    assert "4" in text
+def test_lmh_non_passage_doc_indexes_the_prompt_and_the_raw_fields_as_separate_records():
+    doc = {"question": "Which planet is largest", "choices": ["Mars", "Jupiter"], "answer": "1"}
+
+    views = _lmh_doc_views(doc, lambda d: f"{d['question']}\nA. Mars\nB. Jupiter\nAnswer:", _target)
+
+    # A short question gets no record of its own: it recurs in unrelated quizzes.
+    assert views == [
+        ("", "Which planet is largest\nA. Mars\nB. Jupiter\nAnswer:\n\n1"),
+        # Choices follow the question on single lines, as dataset copies print them.
+        ("-fields", "Which planet is largest\nMars\nJupiter"),
+    ]
+
+
+def test_lmh_doc_indexes_a_long_question_alone():
+    question = (
+        "A box contains 4 white balls and 4 black balls. I draw them out of the box, one at a time. "
+        "What is the probability that all of my draws alternate colors?"
+    )
+    doc = {"question": question, "subject": "high_school_mathematics", "choices": ["1/35", "1/70"], "answer": 0}
+
+    views = dict(_lmh_doc_views(doc, lambda d: d["question"], _target))
+
+    # Copies in quiz pages and SFT prompts often drop the choices.
+    assert views["-question"] == question
+
+
+def test_lmh_question_view_covers_docs_without_choices():
+    question = (
+        "A plane travels 1200 miles in 3 hours. At the same rate, how many additional hours "
+        "would it take to travel an additional 2000 miles?"
+    )
+    doc = {"question": question, "answer": "The rate is 1200/3=<<1200/3=400>>400 mph.\n#### 5"}
+
+    views = dict(_lmh_doc_views(doc, lambda d: f"Question: {d['question']}\nAnswer:", lambda d: d["answer"]))
+
+    # Copies of a math problem often drop the worked answer.
+    assert views["-question"] == question
+
+
+def test_lmh_raw_field_view_keeps_dataset_order_and_drops_labels():
+    doc = {
+        "task_id": "HumanEval/0",
+        "prompt": "def add(a, b):\n    '''Add two numbers.'''",
+        "canonical_solution": "    return a + b",
+        "entry_point": "add",
+    }
+
+    views = dict(_lmh_doc_views(doc, lambda d: d["prompt"], lambda d: d["canonical_solution"]))
+
+    assert views["-fields"] == "def add(a, b):\n    '''Add two numbers.'''\n    return a + b"
+    assert "-question" not in views  # the prompt is under the 20-word floor
 
 
 @pytest.mark.parametrize("field", sorted(_PASSAGE_FIELDS))
@@ -332,7 +391,8 @@ def test_lmh_artifacts_are_stored_below_the_versioned_corpus_root(tmp_path, monk
 
     artifact_path = tmp_path / prepare_eval_corpus.EVALS_RELATIVE / "lmh/example-task/eval.parquet"
     assert artifact_path.exists()
-    assert manifest["artifacts"] == [{"task": "example-task", "artifact": "example-task/eval.parquet", "records": 1}]
+    # One doc gives a prompt record and a raw-field record.
+    assert manifest["artifacts"] == [{"task": "example-task", "artifact": "example-task/eval.parquet", "records": 2}]
     assert manifest["required_tasks"] == {"example-task": ["example-task"]}
 
 

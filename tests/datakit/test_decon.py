@@ -13,8 +13,10 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from marin.datakit import decon
 from marin.datakit.decon import (
     EvalBloom,
+    ItemMatchConfig,
     NGramConfig,
     RequiredEvalSuite,
     _bloom_hash,
@@ -197,13 +199,21 @@ def test_decon_output_schema(fox_corpus):
     output_files = sorted(Path(fox_corpus["output_dir"]).glob("outputs/main/part-*.parquet"))
     assert output_files, "expected at least one output partition"
     schema = pq.read_schema(str(output_files[0]))
-    assert set(schema.names) == {"id", "partition_id", "contaminated", "max_overlap", "matched_hashes"}
+    assert set(schema.names) == {
+        "id",
+        "partition_id",
+        "contaminated",
+        "max_overlap",
+        "matched_hashes",
+        "matched_eval_ids",
+    }
     assert pa.types.is_string(schema.field("id").type)
     assert pa.types.is_integer(schema.field("partition_id").type)
     assert pa.types.is_boolean(schema.field("contaminated").type)
     assert pa.types.is_floating(schema.field("max_overlap").type)
     assert pa.types.is_list(schema.field("matched_hashes").type)
     assert schema.field("matched_hashes").type.value_type == pa.uint64()
+    assert schema.field("matched_eval_ids").type.value_type == pa.string()
 
 
 def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
@@ -889,6 +899,129 @@ def test_decon_misses_word_order_permutation(tmp_path: Path):
 
 
 # --- prebuilt-bloom path (build_eval_bloom + merge_eval_blooms) ----------
+
+
+_QUIZ_ITEM = "Which planet in our solar system has the largest number of confirmed moons orbiting it today"
+_FILLER = (
+    "Our weekly trivia newsletter collects questions from readers across the country and prints the best "
+    "ones with short explanations so that families can practice together on long winter evenings at home "
+)
+
+
+def _item_ngram(*, thresholds=(("", 0.5),), min_matched: int = 1) -> NGramConfig:
+    return NGramConfig(
+        min_matched_features=2,
+        ngram_length=4,
+        overlap_threshold=0.5,
+        item_match=ItemMatchConfig(thresholds=tuple(thresholds), min_matched_features=min_matched),
+    )
+
+
+def test_item_rule_marks_eval_item_diluted_in_a_long_paragraph(tmp_path: Path):
+    record = {"id": "doc", "partition_id": 0, "text": f"{_FILLER} {_QUIZ_ITEM} {_FILLER}"}
+
+    paragraph_only = _run_decon_one_shot(
+        tmp_path / "paragraph",
+        eval_records=[{"id": "quiz-1", "text": _QUIZ_ITEM}],
+        input_records=[record],
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
+    )
+    with_items = _run_decon_one_shot(
+        tmp_path / "items",
+        eval_records=[{"id": "quiz-1", "text": _QUIZ_ITEM}],
+        input_records=[record],
+        ngram=_item_ngram(),
+    )
+
+    assert paragraph_only["doc"]["contaminated"] is False
+    assert with_items["doc"]["contaminated"] is True
+    assert with_items["doc"]["matched_eval_ids"] == ["quiz-1"]
+
+
+@pytest.mark.parametrize("piece_chars", [16 * 1024 * 1024, len(_FILLER)], ids=["whole", "pieces"])
+def test_item_rule_matches_a_copy_stored_in_a_json_string(tmp_path: Path, monkeypatch, piece_chars: int):
+    # Filler-sized pieces cut the record around the copy, the way a multi-GB record is cut.
+    monkeypatch.setattr(decon, "_UNESCAPE_PIECE_CHARS", piece_chars)
+    item = "def add(a, b):\n    Return the sum of two integers a and b without overflow checks\n    return a + b"
+    # json.dumps writes each line break as a literal backslash-n joined to the token before it.
+    record = {"id": "doc", "partition_id": 0, "text": f"{_FILLER} {json.dumps({'prompt': item})} {_FILLER}"}
+
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "code-1", "text": item}],
+        input_records=[record],
+        ngram=_item_ngram(thresholds=[("", 0.8)]),
+    )
+
+    assert rows["doc"]["matched_eval_ids"] == ["code-1"]
+
+
+def test_item_rule_uses_the_longest_matching_threshold_prefix(tmp_path: Path):
+    half = " ".join(_QUIZ_ITEM.split()[:8])
+    records = dict(
+        eval_records=[
+            {"id": "quiz-1", "text": _QUIZ_ITEM},
+            {"id": "word-1", "text": _QUIZ_ITEM.replace("planet", "world")},
+        ],
+        input_records=[{"id": "doc", "partition_id": 0, "text": f"{_FILLER} {half} {_FILLER}"}],
+    )
+
+    default = _run_decon_one_shot(tmp_path / "default", **records, ngram=_item_ngram())
+    lowered = _run_decon_one_shot(
+        tmp_path / "lowered", **records, ngram=_item_ngram(thresholds=[("", 0.5), ("q", 0.9), ("quiz-", 0.3)])
+    )
+
+    assert default["doc"]["contaminated"] is False
+    assert lowered["doc"]["matched_eval_ids"] == ["quiz-1"]
+
+
+def test_item_rule_ignores_items_outside_its_prefixes(tmp_path: Path):
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "quiz-1", "text": _QUIZ_ITEM}],
+        input_records=[{"id": "doc", "partition_id": 0, "text": f"{_FILLER} {_QUIZ_ITEM} {_FILLER}"}],
+        ngram=_item_ngram(thresholds=[("word-", 0.5)]),
+    )
+
+    assert rows["doc"]["contaminated"] is False
+
+
+def test_item_rule_requires_the_minimum_matched_features(tmp_path: Path):
+    short_item = "the largest number of confirmed moons"
+    records = dict(
+        eval_records=[{"id": "quiz-1", "text": short_item}],
+        input_records=[{"id": "doc", "partition_id": 0, "text": f"{_FILLER} {short_item} {_FILLER}"}],
+    )
+
+    one = _run_decon_one_shot(tmp_path / "one", **records, ngram=_item_ngram(min_matched=1))
+    five = _run_decon_one_shot(tmp_path / "five", **records, ngram=_item_ngram(min_matched=5))
+
+    assert one["doc"]["matched_eval_ids"] == ["quiz-1"]
+    assert five["doc"]["contaminated"] is False
+
+
+def test_item_rule_ignores_matches_on_drop_set_ngrams(tmp_path: Path):
+    _write_eval_jsonl(tmp_path / "eval" / "eval.jsonl.gz", [{"id": "quiz-1", "text": _QUIZ_ITEM}])
+    _write_input_parquet(
+        tmp_path / "input" / "part-00000-of-00001.parquet",
+        [{"id": "doc", "partition_id": 0, "text": f"{_FILLER} {_QUIZ_ITEM} {_FILLER}"}],
+    )
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    common = [_bloom_hash(feature) for feature in _extract_ngrams(_QUIZ_ITEM, 4, 0)]
+    pq.write_table(pa.table({"hash": pa.array(common, type=pa.uint64())}), str(drop_dir / "drop.parquet"))
+
+    decon_to_parquet(
+        normalized_data=_as_source(tmp_path / "input"),
+        eval_data_sources=str(tmp_path / "eval"),
+        output_path=str(tmp_path / "output"),
+        ngram=_item_ngram(),
+        drop_set_dirs=[str(drop_dir)],
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+
+    assert _read_attributes(tmp_path / "output")["doc"]["contaminated"] is False
 
 
 def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
