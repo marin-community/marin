@@ -35,7 +35,16 @@ The 87 formal candidates are not 87 automatically acceptable lessons. Many share
 the same computation with a different gene or cell type. The 25-task set is sized
 for review and calibration, not as a quota.
 
-## Human acceptance checks
+## Demo disposition
+
+For the upcoming demo, all 25 structurally accepted candidates proceed without
+item-level human keep/revise/reject review. This is an explicit speed/observability
+decision: weak, ambiguous, trivial, or repetitive tasks are useful demo evidence
+and must remain visible rather than being silently filtered. The waiver applies
+only to the demo. It does not change `unreviewed_do_not_publish`, complete the
+rights audit, or qualify the set as a curated release.
+
+## Human acceptance checks for a later release
 
 For each candidate, mark keep, revise, or reject after checking:
 
@@ -50,10 +59,11 @@ For each candidate, mark keep, revise, or reject after checking:
 9. The task is not a near-duplicate of another retained candidate.
 10. A model failure would reveal a meaningful scientific-analysis weakness.
 
-## Calibration still required
+## Calibration
 
 Taskforge currently records reference reward 1.0 and severe-negative reward 0.0.
-Run solver and adversary trials before release. Preserve per-task solve rate,
+The demo may proceed directly to solver and adversary trials without prior human
+filtering. Preserve per-task solve rate,
 model/version, rollout count, token/runtime cost, malformed-answer rate, leakage
 findings, and qualitative failure category. Do not turn those dimensions into one
 opaque effectiveness score.

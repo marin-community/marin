@@ -15,8 +15,9 @@ pinned source object
 
 All current outputs are `unreviewed_do_not_publish`. Taskforge structural
 acceptance verifies the build and grader contract; it is not a claim that a task
-is educationally effective. Human review and model solver/adversary calibration
-remain release gates.
+is educationally effective. For the upcoming demo, all 25 candidates proceed
+without item-level human filtering so weak tasks and failure modes remain visible.
+Human review remains a later publication gate, not a demo gate.
 
 ## Source
 
@@ -138,10 +139,11 @@ PYTHONPATH=. uv run --project lib/taskforge python \
   --output /tmp/kang-ifnb-taskforge-release-25/private-review.md
 ```
 
-Review every task as keep, revise, or reject. Then run ordinary Taskforge model
-solver/adversary trials and record solve rates, answer leakage, runtime, token
-cost, and failure modes. Do not collapse grader validity and educational value
-into one opaque score.
+For a curated release, review every task as keep, revise, or reject. The current
+demo intentionally skips that filter and sends all 25 candidates to model
+solver/adversary trials. Record solve rates, answer leakage, runtime, token cost,
+and failure modes, including evidence that a task itself is poor. Do not collapse
+grader validity and educational value into one opaque score.
 
 ## Current limits
 
