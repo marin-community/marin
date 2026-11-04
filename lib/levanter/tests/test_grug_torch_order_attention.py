@@ -195,8 +195,6 @@ def _tiny(**overrides) -> SnowballConfig:
     return SnowballConfig(**(base | overrides))
 
 
-
-
 def test_hf_reload_keeps_the_attention_implementation():
     requested = _tiny(attention_implementation="torch_order")
     reloaded = SnowballConfig.from_hf_config(requested.to_hf_config(requested.vocab_size))
