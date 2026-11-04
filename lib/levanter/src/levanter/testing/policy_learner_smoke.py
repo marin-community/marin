@@ -30,6 +30,9 @@ from levanter.tracker.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
 
 
+_PROJECTION_BLOCK_SIZE = 8
+
+
 @dataclass(frozen=True)
 class SmokeConfig:
     batch_size: int
@@ -165,7 +168,7 @@ def run(config: SmokeConfig, *, phase: str, output_dir: Path, require_accelerato
         policy_model_loss,
         config=ClippedPolicyConfig(config.eps_clip, config.eps_clip, config.kl_loss_coef),
         accumulation_steps=config.batch_size // microbatch_size,
-        block_size=8,
+        block_size=_PROJECTION_BLOCK_SIZE,
     )
     optimizer = optax.adamw(
         config.learning_rate,
@@ -179,7 +182,7 @@ def run(config: SmokeConfig, *, phase: str, output_dir: Path, require_accelerato
             jax.random.PRNGKey(17 if phase == "save" else 99),
             model_init=partial(_model, config, seed=7 if phase == "save" else 97),
         )
-        backend = SpmdPolicyLearner(trainer, block_size=8)
+        backend = SpmdPolicyLearner(trainer, block_size=_PROJECTION_BLOCK_SIZE)
         batch = _batch(config)
         if phase == "save":
             initial_fingerprint = _fingerprint(state.model)
