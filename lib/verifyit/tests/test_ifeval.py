@@ -386,6 +386,12 @@ CASES = [
         "“第一句。”“第二句。”",
     ),
     (
+        "first_word:first_word_answer",
+        {"first_word": "space"},
+        "Space's edge is far.",
+        "Spaces are vast.",
+    ),
+    (
         "letters:letter_counting",
         {"N": 3, "relation": "less than"},
         "42",

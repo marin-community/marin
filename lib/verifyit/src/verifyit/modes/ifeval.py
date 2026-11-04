@@ -200,14 +200,14 @@ def compared_words(text: str) -> list[str]:
 
 def starts_with_word(found: list[str], word: str) -> bool:
     """Whether the words start with the required word, which may split into several, as "well-known" and "世界" do."""
-    keys = [part.lower() for part in compared_words(word)]
-    return bool(keys) and [part.lower() for part in found[: len(keys)]] == keys
+    keys = [word_key(part) for part in compared_words(word)]
+    return bool(keys) and [word_key(part) for part in found[: len(keys)]] == keys
 
 
 def ends_with_word(found: list[str], word: str) -> bool:
     """Whether the words end with the required word, which may split into several."""
-    keys = [part.lower() for part in compared_words(word)]
-    return bool(keys) and [part.lower() for part in found[-len(keys) :]] == keys
+    keys = [word_key(part) for part in compared_words(word)]
+    return bool(keys) and [word_key(part) for part in found[-len(keys) :]] == keys
 
 
 def token_before(text: str, end: int) -> str:
@@ -243,6 +243,10 @@ def word_key(word: str) -> str:
     """The word lowercased and without a trailing 's, so "Space's" and "space" share a key, as do "it's" and "it"."""
     lowered = word.lower()
     return lowered[:-2] if len(lowered) > 2 and lowered[-2] in APOSTROPHES and lowered[-1] == "s" else lowered
+
+
+def same_word(word: str, target: str) -> bool:
+    return word_key(word) == word_key(target)
 
 
 def count_keyword(text: str, keyword: str) -> int:
@@ -459,7 +463,7 @@ def start_end(text: str, params: dict) -> tuple[bool, str]:
     first, last = found[0].group(), found[-1]
     if last.end() != len(stripped):
         return False, f"text ends with {stripped[last.end() :][:20]!r} after the last word"
-    return first.lower() == last.group().lower(), f"start={first!r} end={last.group()!r}"
+    return same_word(first, last.group()), f"start={first!r} end={last.group()!r}"
 
 
 # === change_case ============================================================
@@ -764,7 +768,7 @@ def last_word_sent(text: str, params: dict) -> tuple[bool, str]:
     if not found:
         return False, "no sentences"
     for sentence in found:
-        in_sentence = compared_words(sentence.rstrip(".!?\"' "))
+        in_sentence = compared_words(sentence)
         if not ends_with_word(in_sentence, expected):
             return False, f"sent ends with {in_sentence[-1:]} need={expected!r}"
     return True, f"all {len(found)} sentences end with {expected!r}"
