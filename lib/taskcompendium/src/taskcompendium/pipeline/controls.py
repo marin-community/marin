@@ -160,7 +160,7 @@ async def _control_checks(
     if judge_task and judge_connection is None:
         raise ValueError("Judge controls require an explicit remote connection")
     sandbox = None
-    if not grades_in_process(grader) and not judge_task:
+    if not grades_in_process(grader) and not (judge_task and isinstance(grader, VerifyitGrader)):
         environment = grader.environment
         assert environment is not None
         require_resolved_environment(environment)
@@ -178,7 +178,7 @@ async def _control_checks(
         expected = controls.negative_reward(task) if controls.negative_reward is not None else 0.0
         check = await _control(task, "negative", negative, expected, sandbox, judge_connection)
     elif sandbox is not None:
-        check = await _empty_sandbox_control(task, sandbox)
+        check = await _empty_sandbox_control(task, sandbox, judge_connection)
     else:
         check = await _control(task, "empty", _empty_submission(task), 0.0, None, judge_connection)
     return VerificationReport([check])
@@ -241,7 +241,7 @@ async def _control(
     grade = (
         grade_task(task, attempt, judge_connection=judge_connection)
         if sandbox is None
-        else await sandbox_grade(task, attempt, *sandbox.grader)
+        else await sandbox_grade(task, attempt, *sandbox.grader, judge_connection=judge_connection)
     )
     if (
         grades_with_judge(task.grader)
@@ -256,13 +256,15 @@ async def _control(
     return control_result(grade, name, expected)
 
 
-async def _empty_sandbox_control(task: TaskSpec, sandbox: _Sandbox) -> CheckResult:
+async def _empty_sandbox_control(
+    task: TaskSpec, sandbox: _Sandbox, judge_connection: JudgeConnection | None
+) -> CheckResult:
     """Run the grader on an empty answer in a fresh grader machine; it must run cleanly.
 
     A zero reward or a rejected submission passes; a positive reward marks the task defective.
     """
     try:
-        grade = await grade_empty_in_sandbox(task, *sandbox.grader)
+        grade = await grade_empty_in_sandbox(task, *sandbox.grader, judge_connection=judge_connection)
     except (RuntimeError, OSError) as error:
         return CheckResult(check="empty", status=CheckStatus.INFRA_ERROR, detail=str(error))
     return control_result(grade, "empty", 0.0)

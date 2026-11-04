@@ -35,9 +35,10 @@ _FAKE_NSYS_WRITE_REPORT_ENV = "FAKE_NSYS_WRITE_REPORT"
 
 
 @pytest.fixture(autouse=True)
-def clear_job_info_cache() -> Iterator[None]:
+def clear_job_info_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Drop the memoized JobInfo (a ContextVar) around every test in this module."""
     set_job_info(None)
+    monkeypatch.setenv("IRIS_TERMINATION_GRACE_MS", "10000")
     yield
     set_job_info(None)
 

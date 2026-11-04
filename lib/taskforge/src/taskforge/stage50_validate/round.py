@@ -35,8 +35,8 @@ Each unit is idempotent on its own file, so a relaunch redoes only the units who
 ``<task>`` the ``trials.task_digest`` of the lowered spec as its trials run, and ``<controls>``
 ``content_hash.digest`` of the control set, and ``<name>`` the ``AdversarySpec`` name. A file covers
 what its path names, so the lowering or controls of another task, the trials of another lowered spec and the
-replay of another control set are never read as done. The lowering also records the host and the
-factory backends it lowered for, and a lowering for another host is done again. An adversary attempt records its
+replay of another control set are never read as done. The lowering also records the factory backends it
+lowered for, and a lowering for other backends is done again. An adversary attempt records its
 brief, which holds the mode, the budget and, white-box, the controls: an attempt under another brief is kept, and
 the trial runs again after it with its full retries. An adversary attempt is numbered after any submissions an
 attempt cancelled in flight graded, so its submissions directory is its own.
@@ -51,15 +51,15 @@ only), so a cancelled trial is run again rather than counted as ungraded.
 
 The result is read back from the unit files, each outcome through ``trials.attempt_outcome``, so a resumed
 round returns what an uninterrupted one would. The result holds every decision input and no rollout, which
-stays in the attempt files it names: the lowering's status, refusals and backend fallback; per solver
+stays in the attempt files it names: the lowering's status and backend fallback; per solver
 trial its status, reward and cause, with the solver ``Evidence``'s reward totals and ungraded causes; per
 control its verdict, reward and cause; and per adversary trial its status, cause, report and every submission with its
 grade status, reward and whether it passed. Review requests repair for submitted defects needing addressing
 after checking evidence completeness. ``write_validation`` writes it to ``<round_dir>/validation.json``, and
 ``load_validation`` reads it back without the evidence files.
 
-A spec RolloutEngine rejects is ``REJECTED`` and no trial runs. A spec a factory refuses is ``REFUSED`` and its
-trials run, each recording the one ``MACHINE_UNSUPPORTED`` attempt ``run_trial`` records for it.
+A spec RolloutEngine rejects is ``REJECTED`` and no trial runs; ``draft.lower`` runs ``RolloutEngine.check``, which
+asks each factory about the spec's machines, so a factory's refusal is a rejection.
 """
 
 import asyncio
@@ -79,7 +79,6 @@ from taskforge.ledger.records import Ledger
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
-from taskforge.sandbox.factories import MachineHost, Refusal, task_refusals
 from taskforge.spec.controls import Control, ControlKind
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import GRADER_STEP
@@ -149,7 +148,6 @@ class ValidationSettings:
     """The validating host's settings, the same for every round it validates.
 
     Attributes:
-        host: Where the machine factories run.
         engine: The engine settings every trial and the preflight probe run under.
         k: The number of solver trials.
         max_retries: The retries of a trial that fails for a retryable cause.
@@ -160,7 +158,6 @@ class ValidationSettings:
         ledger: Where the trials and the control writing are recorded.
     """
 
-    host: MachineHost
     engine: EngineSettings
     k: int
     max_retries: int
@@ -177,10 +174,8 @@ class ValidationSettings:
 
 class LoweringStatus(StrEnum):
     LOWERED = "lowered"
-    REFUSED = "refused"
-    """A factory refuses a machine of the lowered spec; the trials record the refusal."""
     REJECTED = "rejected"
-    """RolloutEngine rejects the lowered spec, so no trial runs."""
+    """RolloutEngine, or a factory it asks, rejects the lowered spec, so no trial runs."""
 
 
 @dataclass(frozen=True)
@@ -191,7 +186,6 @@ class Lowering:
 
     status: LoweringStatus
     detail: str
-    refusals: tuple[Refusal, ...]
     fallback: BackendFallback | None
     task_digest: str | None
 
@@ -293,18 +287,16 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class _Lowered:
-    """The host and backends the task was lowered for, the spec it lowered to (``None`` when
-    RolloutEngine rejected it, with the reason in ``detail``), and the preflight's refusals and fallback.
+    """The backends the task was lowered for, the spec it lowered to (``None`` when RolloutEngine
+    rejected it, with the reason in ``detail``), and the preflight's fallback.
 
     It holds no task digest: the digest also covers the trials' deadlines and engine settings, which a relaunch
     may change, so each round derives it from ``spec``.
     """
 
-    host: MachineHost
     backends: tuple[str, ...]
     spec: TaskRolloutSpec | None
     detail: str
-    refusals: tuple[Refusal, ...]
     fallback: BackendFallback | None
 
 
@@ -385,20 +377,18 @@ async def _lowering_unit(draft: TaskDraft, settings: ValidationSettings, directo
     backends = tuple(sorted(settings.engine.factories))
     if path.exists():
         done = _LOWERED.validate_json(path.read_bytes())
-        if done.host == settings.host and done.backends == backends:
+        if done.backends == backends:
             return done
     write_bytes_atomic(str(path), pretty_json(await _lower(draft, settings, backends)).encode())
     return _LOWERED.validate_json(path.read_bytes())
 
 
 async def _lower(draft: TaskDraft, settings: ValidationSettings, backends: tuple[str, ...]) -> _Lowered:
-    engine = settings.engine
     try:
-        lowered = await preflight(draft.task, settings.host, engine)
+        lowered = await preflight(draft.task, settings.engine)
     except (ValueError, NotImplementedError) as error:
-        return _Lowered(settings.host, backends, None, str(error), (), None)
-    refusals = tuple(task_refusals(lowered.spec, engine.factories))
-    return _Lowered(settings.host, backends, lowered.spec, "", refusals, lowered.fallback)
+        return _Lowered(backends, None, str(error), None)
+    return _Lowered(backends, lowered.spec, "", lowered.fallback)
 
 
 def _trial_digest(settings: ValidationSettings, spec: TaskRolloutSpec) -> str:
@@ -615,11 +605,10 @@ def _result(
 ) -> ValidationResult:
     """The round's result, read back from the unit files of every trial ``early`` did not cancel."""
     if lowered.spec is None:
-        rejected = Lowering(LoweringStatus.REJECTED, lowered.detail, (), None, None)
+        rejected = Lowering(LoweringStatus.REJECTED, lowered.detail, None, None)
         return ValidationResult(context.workpiece_id, context.round, rejected, None, (), (), None)
     trial_digest = _trial_digest(settings, lowered.spec)
-    status = LoweringStatus.REFUSED if lowered.refusals else LoweringStatus.LOWERED
-    lowering = Lowering(status, "", lowered.refusals, lowered.fallback, trial_digest)
+    lowering = Lowering(LoweringStatus.LOWERED, "", lowered.fallback, trial_digest)
     trials_dir = _trials_dir(directory, settings, lowered.spec)
     cancelled = set() if early is None else set(early.cancelled)
     solver = [str(index) for index in range(settings.k) if f"{TrialKind.SOLVER}/{index}" not in cancelled]
