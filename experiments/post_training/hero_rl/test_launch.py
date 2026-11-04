@@ -68,6 +68,7 @@ for path in sys.argv[1:]:
             "max_retries_failure", "max_retries_preemption", "max_task_failures",
         )},
         "memory": launch.iris.allocation.memory,
+        "allocator_config": client.request["environment"].env_vars["PYTORCH_CUDA_ALLOC_CONF"],
         "geometry": {key: launch.skyrl.trainer.policy.megatron_config[key] for key in (
             "tensor_model_parallel_size", "pipeline_model_parallel_size", "context_parallel_size",
             "expert_model_parallel_size", "expert_tensor_parallel_size",
@@ -144,6 +145,7 @@ def test_hero_qualification_composes_multinode_probe_and_updates(tmp_path: Path)
         assert stage["response_cap"] == 3072
         assert stage["resume_mode"] == "none"
         assert stage["export_hf"] is False
+        assert stage["allocator_config"] == "expandable_segments:True"
         assert "CheckpointCallback" not in stage["callbacks"]
         assert "HFModelSaveCallback" not in stage["callbacks"]
 
@@ -196,6 +198,7 @@ def test_experimental_gb200_profile_composes_36_learners_and_12_servers(tmp_path
         assert stage["cluster"] == stage["target_cluster"] == "cw-us-east-08a"
         assert stage["priority"] == "interactive"
         assert stage["memory"] == "940GiB"
+        assert stage["allocator_config"] == "expandable_segments:True,pinned_max_round_threshold_mb:1"
         assert stage["submission_retries"] == {
             "max_retries_failure": 0,
             "max_retries_preemption": 0,

@@ -52,6 +52,34 @@ class LearnerCudaMetrics:
             "device_free_bytes": free,
             "device_total_bytes": total,
         }
+        # Host allocator keys differ from the CUDA allocator's *.all.* keys.
+        # Allocated includes free cached blocks. Native active bytes can include
+        # completed transfers until the allocator next processes their events;
+        # sampling must not synchronize or allocate merely to poll those events.
+        host_stats = torch.cuda.host_memory_stats()
+        if host_stats:
+            host_allocated = host_stats["allocated_bytes.current"]
+            host_active = host_stats["active_bytes.current"]
+            fields.update(
+                host_allocated_bytes=host_allocated,
+                host_active_bytes=host_active,
+                host_cached_bytes=host_allocated - host_active,
+                host_allocations=host_stats["allocations.current"],
+                host_active_requests=host_stats["active_requests.current"],
+                host_alloc_count=host_stats["num_host_alloc"],
+                host_free_count=host_stats["num_host_free"],
+            )
+            logger.info(
+                "PINNED_HOST_MEMORY rank={} phase={} boundary={} step={} allocated_bytes={} active_bytes={} "
+                "cached_bytes={}",
+                self._rank,
+                phase,
+                boundary,
+                step,
+                host_allocated,
+                host_active,
+                host_allocated - host_active,
+            )
         if boundary == "exit" and not overlapped:
             fields.update(
                 peak_allocated_bytes=stats["allocated_bytes.all.peak"],

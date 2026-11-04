@@ -37,6 +37,17 @@ positive completed PIECEWISE executions for all twelve serving DP ranks before
 accepting the full-model gate. Coordinator and GPU tasks have zero failure and
 preemption retries.
 
+The GB200 update candidate uses
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,pinned_max_round_threshold_mb:1`
+to keep pinned allocations larger than 1 MiB at their requested size. Optimizer
+offload, CPU Muon momentum and activation offload remain enabled. Worker phase
+observations record native pinned allocated, active and cached bytes, including
+offload/backload boundaries. Native active bytes can include completed transfers
+whose events the allocator has not polled; the observations do not force polling
+or synchronization. This change preserves the numerical configuration and the
+validated vLLM overlay. It does not establish full-model host-memory fit. Require
+the separate two-cycle allocator probe and a fresh bounded update trial.
+
 The CPU tests establish staging and launch composition only. Keep the
 qualification hold until the seven kernel/config cases, a matched route-enabled
 DP4 engine comparison, and fresh full-Hero numerical qualification all pass.
