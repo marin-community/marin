@@ -72,7 +72,7 @@ pub enum ScanSource {
 pub enum CacheMode<'a> {
     Query(&'a QueryCacheAdmission),
     /// Use existing cache entries without populating misses or recording demand.
-    Disabled,
+    Disabled(&'a QueryCacheAdmission),
 }
 
 /// Result of a best-effort batch deletion.
@@ -264,14 +264,35 @@ pub trait ObjectStore: Send + Sync {
         Ok(None)
     }
 
+    /// Keep a cached file readable until this scan's admission state is dropped.
+    async fn pin_cached_path(
+        &self,
+        reference: &ObjectReference,
+        _query: &QueryCacheAdmission,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        self.cached_path(reference).await
+    }
+
+    /// Load an index bundle before pruning, within the query's cache allowance.
+    async fn query_index_path(
+        &self,
+        reference: &ObjectReference,
+        query: &QueryCacheAdmission,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        self.pin_cached_path(reference, query).await
+    }
+
     /// Resolve an input using the cache when present, otherwise its backing
-    /// scan location. Callers must protect cached paths from concurrent eviction.
+    /// scan location. The admission state pins any returned cache path.
     async fn scan_source(
         &self,
         reference: &ObjectReference,
         cache_mode: CacheMode<'_>,
     ) -> Result<ScanSource, StatsError> {
-        if let Some(path) = self.cached_path(reference).await? {
+        let query = match cache_mode {
+            CacheMode::Query(query) | CacheMode::Disabled(query) => query,
+        };
+        if let Some(path) = self.pin_cached_path(reference, query).await? {
             return Ok(ScanSource::Local(path));
         }
         if let Some(url) = self.remote_scan_url(&reference.id) {

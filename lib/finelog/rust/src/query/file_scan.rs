@@ -12,10 +12,11 @@ use futures::TryStreamExt;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
-use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
 use crate::errors::StatsError;
-use crate::store::object_store::{CacheMode, ObjectReference, ObjectStore, ScanSource};
+use crate::store::object_store::{
+    CacheMode, ObjectReference, ObjectStore, QueryCacheAdmission, ScanSource,
+};
 
 /// Fetch the usual object footer in one ranged read, with a second request
 /// when the metadata exceeds this hint.
@@ -47,10 +48,12 @@ pub async fn open_parquet(source: &str, byte_size: u64) -> Result<ParquetInput, 
 pub async fn open_cached_parquet(
     store: &dyn ObjectStore,
     reference: &ObjectReference,
-    visibility: &Arc<RwLock<()>>,
 ) -> Result<ParquetInput, StatsError> {
-    let guard = Arc::clone(visibility).read_owned().await;
-    match store.scan_source(reference, CacheMode::Disabled).await? {
+    let guard = Arc::new(QueryCacheAdmission::new(0, 0));
+    match store
+        .scan_source(reference, CacheMode::Disabled(&guard))
+        .await?
+    {
         ScanSource::Local(path) => {
             let mut input =
                 open_parquet(&path.to_string_lossy(), reference.version.byte_size).await?;
@@ -66,7 +69,7 @@ pub async fn open_cached_parquet(
 
 pub struct ParquetInput {
     builder: ParquetRecordBatchStreamBuilder<ParquetObjectReader>,
-    cache_guard: Option<OwnedRwLockReadGuard<()>>,
+    cache_guard: Option<Arc<QueryCacheAdmission>>,
 }
 
 impl ParquetInput {

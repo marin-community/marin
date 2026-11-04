@@ -52,8 +52,7 @@ pub async fn maintain(runtime: &TableRuntime) -> Result<bool, StatsError> {
             .get(&row.path)
             .expect("candidate object record was selected above");
         let reference = ObjectReference::try_from(&record.source)?;
-        let input =
-            open_cached_parquet(store.as_ref(), &reference, &runtime.query_visibility).await?;
+        let input = open_cached_parquet(store.as_ref(), &reference).await?;
         let Some(metadata) = segment_metadata_from_parquet(
             input.metadata(),
             row.level,

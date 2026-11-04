@@ -339,6 +339,22 @@ impl ObjectStore for FaultInjectingObjectStore {
         self.inner.warm_query(reference, query)
     }
 
+    async fn pin_cached_path(
+        &self,
+        reference: &ObjectReference,
+        query: &crate::store::object_store::QueryCacheAdmission,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        self.inner.pin_cached_path(reference, query).await
+    }
+
+    async fn query_index_path(
+        &self,
+        reference: &ObjectReference,
+        query: &crate::store::object_store::QueryCacheAdmission,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        self.inner.query_index_path(reference, query).await
+    }
+
     async fn compare_and_swap(
         &self,
         id: &ObjectId,

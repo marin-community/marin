@@ -73,22 +73,44 @@ gcloud compute ssh finelog-marin --project hai-gcp-models --zone us-central1-a \
   --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
 ```
 
-Large `visibility_wait_ms` means the request waited for shared storage
-maintenance before it could query. Compare the timestamps with cache eviction
-and object cleanup. Cache removals release this lock between small batches so
-queued readers can proceed. Background warming uses only immediately available
-download slots; a broad query cannot leave an unbounded queue of cache fills
-after its deadline. Maintenance reads use cached files or read directly from
-object storage. A nonzero `required_fill_bytes` counter means a caller still
+Large `visibility_wait_ms` means the request waited for a structural storage
+change before it could query. Cache eviction pins and skips individual files
+used by active scans; it does not acquire the global visibility lock. Object
+compaction also updates its accounting view without queuing a visibility writer.
+Legacy file replacement and table deletion still require that lock.
+
+Query and FetchLogs RPCs have a ten-second default budget covering admission,
+visibility waits, snapshot/provider setup, execution, and response encoding. A
+shorter caller deadline wins. `FINELOG_QUERY_TIMEOUT_MS` changes the server
+ceiling; object snapshot retention can impose a tighter execution bound.
+Optional background warming uses immediately available download slots and is
+cancelled when the request fails or times out. After a successful response,
+admitted fills can finish within the original request deadline. The allowance
+is at most 256 MiB and 64 objects
+per query, shared across tables and repeated scans. An object larger than the
+remaining allowance is skipped; smaller later objects may still fit.
+`query_byte_limit` counts these skipped objects. This allowance covers optional
+full-object cache fills, including index bundles, rather than all remote query
+I/O. Uncached Parquet is scanned directly through GCS/S3 range reads.
+
+Index bundles that fit the allowance are fetched before index pruning, ahead of
+source warming. Same-column substring alternatives such as
+`contains(data, 'model cache') OR contains(data, 'download complete')` combine
+their trigram masks with OR. An alternative without a supported constraint
+keeps the source scan. An unavailable or oversized bundle also keeps that scan;
+indexes remain optional derived state.
+
+Maintenance reads pin cached files or read directly from object storage without
+filling misses. A nonzero `required_fill_bytes` counter means a caller still
 forces a local file; inspect the remaining `local_path` callers.
-`query_byte_limit` counts objects skipped after the query's byte allowance is
-exhausted. The last admitted object can cross the allowance.
 
 When cache eviction remains high despite little query traffic, check ingestion
 and compaction activity; both write through to the cache. Compare `write_bytes`
-with `query_fill_bytes` in the activity summaries. Match `max_lock_hold_us` in
-sweep logs and `cleanup_max_lock_hold_us` in activity summaries against slow
-requests' `visibility_wait_ms` to check whether cleanup blocks readers.
+with `query_fill_bytes` in the activity summaries. `cleanup_ms` and
+`max_batch_us` in sweep logs, and `cleanup_time_us` and `cleanup_max_batch_us`
+in activity summaries, measure file reclamation work. A nonzero
+`remaining_excess_bytes` can reflect files pinned by active scans or staged
+objects awaiting upload. These files remain candidates for a later sweep.
 
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a

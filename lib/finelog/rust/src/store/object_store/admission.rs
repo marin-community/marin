@@ -2,9 +2,13 @@
 //! bypass this policy because their local files are part of the storage contract.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use tokio::task::AbortHandle;
+
+use super::cached::CacheFilePin;
 use super::{ObjectId, ObjectReference};
 
 const QUERY_WARM_BYTES: u64 = 256 * 1024 * 1024;
@@ -24,12 +28,15 @@ pub(super) enum AdmissionDecision {
 /// Shared by every table and scan in one query's SessionConfig.
 pub struct QueryCacheAdmission {
     state: Mutex<QueryBudget>,
+    pins: Mutex<HashMap<PathBuf, CacheFilePin>>,
+    fills: Mutex<Option<Vec<AbortHandle>>>,
 }
 
 struct QueryBudget {
     seen: HashSet<ObjectId>,
     remaining_bytes: u64,
     remaining_objects: usize,
+    fill_deadline: Option<tokio::time::Instant>,
 }
 
 impl Default for QueryCacheAdmission {
@@ -45,7 +52,10 @@ impl QueryCacheAdmission {
                 seen: HashSet::new(),
                 remaining_bytes: bytes,
                 remaining_objects: objects,
+                fill_deadline: None,
             }),
+            pins: Mutex::new(HashMap::new()),
+            fills: Mutex::new(Some(Vec::new())),
         }
     }
 
@@ -63,20 +73,73 @@ impl QueryCacheAdmission {
             .lock()
             .unwrap()
             .observe(&reference.id, Instant::now());
-        if !repeated {
+        // Indexes can exclude a cold source on the first scan. Source objects
+        // still need demonstrated reuse before an optional full-object fill.
+        if !repeated && !reference.id.relative_key().starts_with("indices/") {
             return AdmissionDecision::Cold;
         }
         if budget.remaining_objects == 0 {
             return AdmissionDecision::ObjectLimit;
         }
-        if budget.remaining_bytes == 0 {
+        if reference.version.byte_size > budget.remaining_bytes {
             return AdmissionDecision::ByteLimit;
         }
         budget.remaining_objects -= 1;
-        budget.remaining_bytes = budget
-            .remaining_bytes
-            .saturating_sub(reference.version.byte_size);
+        budget.remaining_bytes -= reference.version.byte_size;
         AdmissionDecision::Admitted
+    }
+
+    pub(super) fn pin_file(&self, path: PathBuf, pin: CacheFilePin) {
+        self.pins.lock().unwrap().entry(path).or_insert(pin);
+    }
+
+    pub(super) fn track_fill(&self, task: AbortHandle) {
+        match self.fills.lock().unwrap().as_mut() {
+            Some(tasks) => tasks.push(task),
+            None => task.abort(),
+        }
+    }
+
+    fn cancel_fills(&self) {
+        if let Some(tasks) = self.fills.lock().unwrap().take() {
+            for task in tasks {
+                task.abort();
+            }
+        }
+    }
+
+    pub(super) fn fill_deadline(&self) -> Option<tokio::time::Instant> {
+        self.state.lock().unwrap().fill_deadline
+    }
+
+    /// Abort fills if the request fails or is cancelled. Successful requests
+    /// may finish their admitted fills within the original request deadline.
+    pub fn cancel_on_drop(self: &Arc<Self>, remaining: Option<Duration>) -> QueryCacheFillGuard {
+        self.state.lock().unwrap().fill_deadline =
+            remaining.map(|duration| tokio::time::Instant::now() + duration);
+        QueryCacheFillGuard {
+            admission: Arc::clone(self),
+            cancel: true,
+        }
+    }
+}
+
+pub struct QueryCacheFillGuard {
+    admission: Arc<QueryCacheAdmission>,
+    cancel: bool,
+}
+
+impl QueryCacheFillGuard {
+    pub fn complete(mut self) {
+        self.cancel = false;
+    }
+}
+
+impl Drop for QueryCacheFillGuard {
+    fn drop(&mut self) {
+        if self.cancel {
+            self.admission.cancel_fills();
+        }
     }
 }
 

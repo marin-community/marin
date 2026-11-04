@@ -44,7 +44,7 @@ use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
 use crate::store::object_store::{
-    CacheMode, ObjectId, ObjectStore, QueryCacheAdmission, ScanSource,
+    CacheMode, ObjectId, ObjectReference, ObjectStore, QueryCacheAdmission, ScanSource,
 };
 use crate::store::table::query_view::SegmentObjectMap;
 
@@ -101,6 +101,30 @@ struct ObjectSources {
 }
 
 impl ObjectSources {
+    async fn prepare_indexes(
+        &self,
+        paths: &[String],
+        admission: &QueryCacheAdmission,
+    ) -> DFResult<()> {
+        for path in paths {
+            let Some(objects) = self.segments.get(path) else {
+                continue;
+            };
+            self.store
+                .pin_cached_path(&objects.source, admission)
+                .await
+                .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+            if let Some(bundle) = &objects.artifacts.bundle {
+                let reference = ObjectReference::try_from(bundle)
+                    .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+                self.store
+                    .query_index_path(&reference, admission)
+                    .await
+                    .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+            }
+        }
+        Ok(())
+    }
     /// Fetch exactly the objects `paths` names, plus the artifacts those
     /// segments advertise.
     ///
@@ -595,6 +619,20 @@ impl TableProvider for NamespaceProvider {
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
                 let integer_ranges = crate::query::predicate::int_column_ranges(filters);
+                let admission = state.config().get_extension::<QueryCacheAdmission>();
+                if self.segment_indexes_enabled
+                    && (!needles.is_empty()
+                        || !crate::query::exact_prune::values_by_column(filters).is_empty())
+                {
+                    if let Some(sources) = &self.object_sources {
+                        let admission = admission.as_ref().ok_or_else(|| {
+                            datafusion::error::DataFusionError::Internal(
+                                "query cache admission is missing from SessionConfig".into(),
+                            )
+                        })?;
+                        sources.prepare_indexes(&segment_paths, admission).await?;
+                    }
+                }
                 if self.segment_indexes_enabled && !needles.is_empty() && !integer_ranges.is_empty()
                 {
                     segment_paths = tokio::task::spawn_blocking(move || {
@@ -627,7 +665,9 @@ impl TableProvider for NamespaceProvider {
                     let artifacts = Arc::clone(&self.segment_artifacts);
                     let early_needles = needles.clone();
                     let early_key_ranges = key_ranges.clone();
+                    let pruning_admission = admission.clone();
                     let pruning = tokio::task::spawn_blocking(move || {
+                        let _pins = pruning_admission;
                         crate::query::trigram_prune::plan_segments(
                             &segment_paths,
                             &early_needles,
@@ -740,6 +780,7 @@ impl TableProvider for NamespaceProvider {
                 let indices = Arc::clone(&self.indices);
                 let artifacts = Arc::clone(&self.segment_artifacts);
                 tokio::task::spawn_blocking(move || {
+                    let _pins = admission;
                     let plan = match trigram_pruning {
                         Some(pruning) => crate::query::trigram_prune::apply_pruning(plan, &pruning),
                         None => plan,
@@ -1973,7 +2014,7 @@ mod tests {
         let paths = vec![path.clone()];
         let artifacts = crate::indices::sidecar_artifacts(&paths);
         let indices = crate::indices::test_index_registry();
-        let needles = HashMap::from([("data".to_string(), vec!["DEBUG".to_string()])]);
+        let needles = HashMap::from([("data".to_string(), vec!["DEBUG".to_string()].into())]);
         let pruning = crate::query::trigram_prune::plan_segments(
             &paths,
             &needles,
@@ -2057,6 +2098,144 @@ mod tests {
         let plan = probe.scan(&state, None, &[filter], None).await.unwrap();
         assert_prunes_to_span1(&plan, rg1_rows);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn inference_message_alternatives_prune_without_losing_either_branch() {
+        let dir = tempdir("inference_message_alternatives");
+        let path = write_two_span_log_segment(
+            &dir,
+            "data",
+            "idle heartbeat ok",
+            &["model cache hit", "download complete"],
+        );
+        let ctx = crate::query::make_ctx();
+        let provider =
+            NamespaceProvider::build_with_local_artifacts(log_arrow(), std::slice::from_ref(&path))
+                .unwrap();
+        ctx.register_table("logs", Arc::new(provider)).unwrap();
+        let frame = ctx.sql("SELECT data FROM logs WHERE contains(data, 'model cache') OR contains(data, 'download complete') ORDER BY seq").await.unwrap();
+        assert_eq!(
+            first_column_strings(&frame.collect().await.unwrap()),
+            vec!["model cache hit", "download complete"]
+        );
+        // A branch without a usable substring constraint must retain its rows.
+        let rows = ctx
+            .sql(
+                "SELECT data FROM logs WHERE contains(data, 'model cache') OR seq = 1 ORDER BY seq",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&rows),
+            vec!["idle heartbeat ok", "model cache hit"]
+        );
+        let udf = ctx.udf("contains").unwrap();
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf.clone(),
+            vec![col("data"), lit("model cache")],
+        ))
+        .or(Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf,
+            vec![col("data"), lit("download complete")],
+        )));
+        let probe = NamespaceProvider::build_with_local_artifacts(log_arrow(), &[path]).unwrap();
+        let plan = probe
+            .scan(&ctx.state(), None, &[filter], None)
+            .await
+            .unwrap();
+        assert_prunes_to_span1(&plan, 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cold_index_excludes_source_before_remote_parquet_planning() {
+        let dir = tempdir("cold_index_before_source");
+        let path =
+            write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["ordinary shutdown"]);
+        let artifacts = crate::indices::sidecar_artifacts(std::slice::from_ref(&path));
+        let binding = artifacts[&path].binding.clone();
+        let bundle_bytes =
+            bytes::Bytes::from(std::fs::read(artifacts[&path].bundle.as_ref().unwrap()).unwrap());
+        let remote = Arc::new(
+            crate::store::object_store::build_remote_object_store(
+                dir.join("remote").to_str().unwrap(),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        let bundle_id = ObjectId::table("logs", "indices/one.fidx").unwrap();
+        let bundle_version = remote
+            .write(&bundle_id, bundle_bytes.clone())
+            .await
+            .unwrap();
+        let bundle_ref = crate::proto::finelog::stats::ObjectRef::default()
+            .with_object_id(bundle_id.as_str())
+            .with_byte_size(bundle_version.byte_size);
+        let source = ObjectReference {
+            id: ObjectId::table("logs", "objects/one.parquet").unwrap(),
+            version: crate::store::object_store::ObjectVersion {
+                e_tag: None,
+                provider_version: None,
+                byte_size: std::fs::metadata(&path).unwrap().len(),
+                local_value: None,
+            },
+        };
+        // A missing remote source makes any attempt to plan it fail. Its index
+        // proves that this predicate needs none of its rows.
+        let store = Arc::new(
+            crate::store::object_store::CachedObjectStore::new(remote, dir.join("cache"), None)
+                .unwrap(),
+        );
+        let planned = store
+            .planned_local_path(&source.id)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let planned_bundle = store.planned_local_path(&bundle_id).unwrap();
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&planned),
+            crate::indices::test_index_registry(),
+        )
+        .unwrap()
+        .with_segment_artifacts(BTreeMap::from([(
+            planned.clone(),
+            crate::store::table_state::LocalArtifacts {
+                binding: binding.clone(),
+                bundle: Some(planned_bundle),
+                projections: BTreeMap::new(),
+            },
+        )]))
+        .with_object_sources(
+            store,
+            BTreeMap::from([(
+                planned,
+                crate::store::table::query_view::SegmentObjects {
+                    source,
+                    artifacts: crate::store::table_state::ArtifactReferences {
+                        binding,
+                        bundle: Some(bundle_ref),
+                        projections: BTreeMap::new(),
+                    },
+                },
+            )]),
+        );
+        let config = crate::query::make_ctx()
+            .copied_config()
+            .with_extension(Arc::new(QueryCacheAdmission::new(
+                bundle_bytes.len() as u64,
+                1,
+            )));
+        let ctx = datafusion::prelude::SessionContext::new_with_config(config);
+        crate::query::udf::register_scalar_udfs(&ctx);
+        ctx.register_table("logs", Arc::new(provider)).unwrap();
+        let rows = ctx.sql("SELECT * FROM logs WHERE contains(data, 'model cache') OR contains(data, 'download complete')").await.unwrap().collect().await.unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

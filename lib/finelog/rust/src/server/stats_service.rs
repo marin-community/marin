@@ -339,17 +339,25 @@ impl StatsService for StatsServiceImpl {
     ) -> ServiceResult<QueryResponse> {
         let request_started = Instant::now();
         let sql = request.sql.unwrap_or("").to_string();
+        let query_ctx = make_ctx();
+        let admission = query_ctx
+            .copied_config()
+            .get_extension::<crate::store::object_store::QueryCacheAdmission>()
+            .unwrap();
+        let fills = admission.cancel_on_drop(query_timeout(ctx.time_remaining(), None));
+        let names = query_namespaces(&query_ctx, &sql).map_err(map_query_error)?;
 
         // Hold the query-visibility READ guard across the WHOLE scan. DataFusion
         // opens the snapshotted parquet files LAZILY during collect(), so the
         // guard must outlive run_query_over (not just query_providers) to keep a
         // concurrent drop_table / compaction from unlinking a file mid-scan.
         let visibility_started = Instant::now();
-        let _read_guard = self.store.query_visibility().read().await;
+        let _read_guard = if names.is_empty() {
+            None
+        } else {
+            Some(self.store.query_visibility().read().await)
+        };
         let visibility_wait = visibility_started.elapsed();
-
-        let query_ctx = make_ctx();
-        let names = query_namespaces(&query_ctx, &sql).map_err(map_query_error)?;
 
         // Plan only referenced namespaces from their pinned state (schema, bounds,
         // partitions, exact object references) on the blocking pool. Objects are
@@ -419,6 +427,7 @@ impl StatsService for StatsServiceImpl {
                 "slow Query RPC stage breakdown",
             );
         }
+        fills.complete();
         connectrpc::Response::ok(
             QueryResponse::default()
                 .with_arrow_ipc(buf)
