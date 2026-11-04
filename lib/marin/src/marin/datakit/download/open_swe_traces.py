@@ -33,10 +33,8 @@ from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nvidia/Open-SWE-Traces"
 HF_REVISION = "f967cba3312573981a47fd7a7b80029b53909b5f"
-TRANSFORM_VERSION = "2026.11.03.chat-v2"
+TRANSFORM_VERSION = "2026.09.17.chat-v1"
 SOURCE_CHAT_SCHEMA = pa.schema([*CHAT_SCHEMA, pa.field("resolved", pa.int32())])
-QWEN38_SCALE_SWE = "open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe"
-QWEN38_SWE_REBENCH_V2 = "open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2"
 
 # Rough token weights use each release's uncompressed/compressed size ratio
 # and four bytes per token; token-store preparation measures rendered sizes.
@@ -80,14 +78,25 @@ OPEN_SWE_TRACES_PARTITIONS = MappingProxyType(
             "data/minisweagent/qwen36_27b/swe-rebench-v2/*.parquet",
             1.763,
         ),
-        QWEN38_SCALE_SWE: ("data/minisweagent/qwen38_27b/scale-swe/*.parquet", 3.397),
-        QWEN38_SWE_REBENCH_V2: ("data/minisweagent/qwen38_27b/swe-rebench-v2/*.parquet", 3.571),
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe": (
+            "data/minisweagent/qwen38_27b/scale-swe/*.parquet",
+            3.397,
+        ),
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2": (
+            "data/minisweagent/qwen38_27b/swe-rebench-v2/*.parquet",
+            3.571,
+        ),
     }
 )
 
 # The exclusion list holds the resolved Qwen3.8 traces with 8 or more assistant turns that reason about the
 # hidden tests, the grader or the upstream fix, and 4 traces that read the upstream fix from the environment.
-QWEN38_SOURCES = frozenset({QWEN38_SCALE_SWE, QWEN38_SWE_REBENCH_V2})
+QWEN38_SOURCES = frozenset(
+    {
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe",
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2",
+    }
+)
 EXCLUSION_DATASET_ID = "Min-Li/marin-sft-data-audit"
 EXCLUSION_REVISION = "5cc076cc822550f96287c861cf70c00c7ee8b4a6"
 EXCLUSION_FILE = "open_swe/pinned_f967cba3/exclusions.jsonl"
