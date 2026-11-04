@@ -62,7 +62,10 @@ def sources() -> list[RlDataSource]:
                 notes=(
                     "2,205 quality-admitted CalibForge tasks. Quality review accepted the task text; "
                     "oracle solution execution was explicitly skipped, so successful execution is not "
-                    "certified. See the campaign report: " + CAMPAIGN_ISSUE
+                    "certified. The pinned release manifest records this cohort as not published: "
+                    "source privacy, split and overlap checks remain. "
+                    "smartie-calibforge-shared-v2, repaired from these candidates, is the usable "
+                    "release. See the campaign report: " + CAMPAIGN_ISSUE
                 ),
                 dataset=_public_release(
                     "smartie-continuation-20261016/calibforge", "6a6429ccba098e11ea9f6297a70cb43a34670c0f"
@@ -95,9 +98,10 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "campaign-release"),
                 count=8045,
                 notes=(
-                    "8,045 quality-admitted SWE-Smith tasks. Quality review is not a model-solving "
-                    "accuracy claim; campaign-specific train and validation splits remain in the "
-                    "private archive. " + QUALIFICATION_IS_NOT_ADMISSION
+                    "8,045 quality-admitted SWE-Smith tasks. The release keeps only tasks that passed "
+                    "the Daytona oracle and a Good quality verdict; quality review is not a "
+                    "model-solving accuracy claim, and campaign-specific train and validation splits "
+                    "remain in the private archive."
                 ),
                 dataset=_public_release(
                     "smartie-continuation-20261016/swesmith", "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c"
@@ -116,7 +120,10 @@ def sources() -> list[RlDataSource]:
                     "1,683 setup-branch parents from qualified repositories, retained as 1,699 staged "
                     "variants. Stage 1 tests repository and workspace readiness, not issue repair. The "
                     "verifier inspects actual checkout state and rejects upstream defaults and wrong "
-                    "branches. Private: Open-Athena access required. " + STAGE3_IMAGE_CAVEAT
+                    "branches. Private: Open-Athena access required. "
+                    + QUALIFICATION_IS_NOT_ADMISSION
+                    + " "
+                    + STAGE3_IMAGE_CAVEAT
                 ),
                 dataset=_private_archive("swesmith-staged-v1-20261017.tar.gz"),
             )
@@ -134,7 +141,10 @@ def sources() -> list[RlDataSource]:
                     "762 train / 16 validation. Complete handoffs start from repaired code that passed "
                     "the original required tests; partials start from partially repaired code with a "
                     "witnessed remaining failure that the known repair clears. Stage 3 was not used in "
-                    "run 2026.10.19.57. Private: Open-Athena access required. " + STAGE3_IMAGE_CAVEAT
+                    "run 2026.10.19.57. Private: Open-Athena access required. "
+                    + QUALIFICATION_IS_NOT_ADMISSION
+                    + " "
+                    + STAGE3_IMAGE_CAVEAT
                 ),
                 dataset=_private_archive("swesmith-staged-v2-20261017.tar.gz"),
             )
