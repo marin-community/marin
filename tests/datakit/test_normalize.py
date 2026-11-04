@@ -13,7 +13,7 @@ import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.normalize import NORMALIZED_DATA_VERSION, NormalizedData, generate_id, normalize_to_parquet
-from marin.execution.artifact import ArtifactRecord, read_artifact, write_artifact, write_record
+from marin.execution.artifact import Artifact, ArtifactRecord, read_artifact, write_artifact, write_record
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +72,25 @@ def test_normalized_data_artifact_stores_relative_output_dirs(tmp_path: Path, mo
     loaded = read_artifact(str(artifact_dir), NormalizedData)
     assert loaded.main_output_dir == str(marin_root / "datakit/source/outputs/main")
     assert loaded.dup_output_dir == str(marin_root / "datakit/source/outputs/dups")
+
+
+class _NormalizedRef(Artifact):
+    normalized: NormalizedData
+
+
+def test_artifact_raw_load_resolves_nested_relative_output_dirs(tmp_path: Path, monkeypatch):
+    marin_root = tmp_path / "marin"
+    monkeypatch.setenv("MARIN_PREFIX", str(marin_root))
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    main_output_dir = str(marin_root / "datakit/source/outputs/main")
+    normalized = NormalizedData(main_output_dir=main_output_dir, dup_output_dir=main_output_dir, counters={})
+    write_artifact(_NormalizedRef(normalized=normalized), str(artifact_dir))
+
+    loaded = _NormalizedRef.raw_load(str(artifact_dir))
+
+    assert loaded.path == str(artifact_dir)
+    assert loaded.normalized.main_output_dir == main_output_dir
 
 
 def test_normalized_data_loads_v1_paths_from_another_region(tmp_path: Path, monkeypatch):
