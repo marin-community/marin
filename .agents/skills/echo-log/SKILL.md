@@ -48,7 +48,8 @@ The CLI uses the shared Marin IAP login (`iris login`) or ambient
 service-account credentials. See
 [Echo setup and access](../../../infra/marina/apps/echo/README.md).
 
-If Echo refuses a write because the caller has no credentials or no IAP access,
-`add` prints one warning and exits 0. In a Claude Code or Codex session, later
-`add` calls in that session do nothing. Do not retry the write, change
-credentials, or debug access for the work log. Continue the task.
+If the caller has no credentials or no IAP access, `recent`, `projects`, and
+`show` exit 1 with the error, and `add` prints one warning and exits 0. In a
+Claude Code or Codex session, later `add` calls in that session do nothing. Do
+not retry, change credentials, or debug access for the work log. Continue the
+task without it.

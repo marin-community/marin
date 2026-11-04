@@ -42,7 +42,8 @@ uv run infra/marina/apps/echo/cli.py work-log add --project <slug> --title "..."
 `work-log add` treats a refused write (no credentials, 401, or 403) as a warning and exits 0.
 Inside a Claude Code or Codex session (`CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`), it
 records the refusal in a marker file in the temporary directory, and later adds in that
-session exit without a request. Other errors still fail the command.
+session exit without a request. The warning names the marker; delete it after you fix
+access to write again in that session. Other errors still fail the command.
 
 Authentication reuses Marin's shared IAP login: run `iris login` once and the CLI mints
 Marina tokens from the same cached credential (`~/.config/marin/credentials`). Agents and CI

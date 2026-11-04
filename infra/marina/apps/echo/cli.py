@@ -521,7 +521,10 @@ def cmd_work_log_add(args: argparse.Namespace) -> None:
         print(f"Work-log entry not written: {error}", file=sys.stderr)
         if marker is not None:
             marker.touch()
-            print("Later work-log adds in this agent session are skipped.", file=sys.stderr)
+            print(
+                f"Later work-log adds in this agent session are skipped. Delete {marker} to write again.",
+                file=sys.stderr,
+            )
         return
     print(f"logged #{entry['id']}")
 
