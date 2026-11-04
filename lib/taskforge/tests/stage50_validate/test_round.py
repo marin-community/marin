@@ -300,7 +300,7 @@ class AdversaryScript:
     ``release`` before its reply numbered ``hold_at`` when that is given, and keeps every conversation it was sent.
     """
 
-    turns: tuple[Submit | SearchReport | str | Exception, ...]
+    turns: tuple[Submit | SearchReport | tuple[SearchReport, ...] | str | Exception, ...]
     hold_at: int | None = None
     release: asyncio.Event = field(default_factory=asyncio.Event)
     called: asyncio.Event = field(default_factory=asyncio.Event)
@@ -328,13 +328,17 @@ class AdversaryScript:
             call = ToolCall(f"call-{index}", "submit", json.dumps({"reply": turn.reply}))
             return Completion("", "", (call,), FinishReason.TOOL_CALLS, USAGE, 0.1, 0.01, 0.09, 0, ())
         self.answered.set()
-        if isinstance(turn, SearchReport):
-            call = ToolCall(
-                f"call-{index}",
-                "finish_search",
-                json.dumps({"defects": [asdict(defect) for defect in turn.defects], "summary": turn.summary}),
+        if isinstance(turn, SearchReport | tuple):
+            reports = turn if isinstance(turn, tuple) else (turn,)
+            calls = tuple(
+                ToolCall(
+                    f"call-{index}-{n}",
+                    "finish_search",
+                    json.dumps({"defects": [asdict(defect) for defect in report.defects], "summary": report.summary}),
+                )
+                for n, report in enumerate(reports)
             )
-            return Completion("", "", (call,), FinishReason.TOOL_CALLS, USAGE, 0.1, 0.01, 0.09, 0, ())
+            return Completion("", "", calls, FinishReason.TOOL_CALLS, USAGE, 0.1, 0.01, 0.09, 0, ())
         return Completion(turn, "", (), FinishReason.STOP, USAGE, 0.1, 0.01, 0.09, 0, ())
 
     async def complete_structured[T: BaseModel](
@@ -891,6 +895,45 @@ async def test_defects_use_same_contract(glm_client, fake_glm, ledger, tmp_path,
     )
     assert type(await default_review(resumed, band=ALL_SOLVE_RATES)) is type(verdict)
     assert (context.round_dir / trial.attempt_file).read_bytes() == saved_search
+
+
+async def test_a_repeated_candidate_is_refused_ungraded_so_min_probes_stays_reachable(
+    glm_client, fake_glm, ledger, tmp_path
+):
+    fake_glm.stream(content=controls_reply("41"))
+    policy = replace(adversary_policy(k=1, submissions=2), min_probes=2)
+    adversary = AdversaryScript((Submit("41"), Submit("41"), Submit("42"), SearchReport((), "No findings")))
+    checked = await validate_round(
+        built_draft(tmp_path / "store"),
+        round_context(tmp_path),
+        round_settings(ledger, adversary=policy),
+        SolverModel(),
+        glm_client,
+        adversary,
+    )
+    (trial,) = checked.adversary
+    assert (trial.status, trial.cause, trial.report) == (TrialStatus.GRADED, None, SearchReport((), "No findings"))
+    assert [submission.ordinal for submission in trial.submissions] == [1, 2]
+    replies = [json.loads(str(m["content"])) for m in adversary.requests[-1] if m["role"] == "tool"]
+    assert replies[1] == {"error": "submission 1 already graded this candidate"}
+    assert isinstance(await default_review(checked, band=ALL_SOLVE_RATES), Accept)
+
+
+async def test_a_second_report_in_the_same_turn_cannot_replace_the_first(glm_client, fake_glm, ledger, tmp_path):
+    fake_glm.stream(content=controls_reply("41"))
+    found = SearchReport((Defect((2,), "it accepts 42.", True),), "Found defect")
+    adversary = AdversaryScript((Submit("41"), Submit("42"), (found, SearchReport((), "No findings"))))
+    checked = await validate_round(
+        built_draft(tmp_path / "store"),
+        round_context(tmp_path),
+        round_settings(ledger, adversary=adversary_policy(k=1)),
+        SolverModel(),
+        glm_client,
+        adversary,
+    )
+    (trial,) = checked.adversary
+    assert trial.report == found
+    assert isinstance(await default_review(checked, band=ALL_SOLVE_RATES), Modify)
 
 
 @pytest.mark.parametrize("ending", ["No findings", SearchReport((Defect((99,), "unknown candidate", True),), "invalid")])
