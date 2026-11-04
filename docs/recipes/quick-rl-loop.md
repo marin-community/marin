@@ -97,7 +97,13 @@ entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
 The selected data stays cached; training does not curate or resample it.
 
 The launcher binds `train.parquet` and `validation.parquet` from that artifact.
-Evaluation attempts the fixed panel before training and after the last update,
+The panel holds the heldout sample plus every task of the recipe's
+`evaluation_sources`; SkyRL reports each source dataset under its own
+`eval/<dataset>/avg_score` next to `eval/all/avg_score`. The current recipe adds
+the `Marin:reasoning-span-hazard` and `Marin:reasoning-span-control` prefixes,
+one-turn tool-calling tasks scored on well-formed reasoning markup (#10400);
+their keys are the sanitized Hugging Face repository names of their rows.
+Evaluation attempts the panel before training and after the last update,
 and saves task-level verifier outcomes. Under the run artifact's `exports/`,
 `dumped_evals/global_step_0_evals/` holds the baseline and
 `dumped_evals/global_step_<steps>_evals/` holds the final evaluation. Each contains

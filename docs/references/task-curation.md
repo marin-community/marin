@@ -174,8 +174,13 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
 
 Omit `--run` to print the artifact and its dependencies. Source IDs in the recipe
 must all be present in the campaign or saved corpus. Optional `source_limits`
-must cover every source and sum to each family quota. Changing quotas, the seed,
-source artifacts, the source allowlist or the heldout input requires a new recipe version.
+must cover every source and sum to each family quota. Optional `evaluation_sources`
+maps admitted `eval` sources to a family: every admitted task of such a source
+joins `validation.parquet` and `full_validation.parquet` whole, counts toward
+`validation_family_counts`, and is excluded from training like the heldout set.
+A source cannot appear in both `sources` and `evaluation_sources`. Changing
+quotas, the seed, source artifacts, either source allowlist or the heldout input
+requires a new recipe version.
 The output lives under the active artifact root at
 `rl-data/task-selection/<name>/<version>`; `--cache-dir` selects a local root.
 

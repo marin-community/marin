@@ -237,6 +237,42 @@ def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
     assert not (Path(selection.path()) / TRAIN_FILENAME).exists()
 
 
+def test_evaluation_sources_join_the_validation_panel_whole_and_exclude_training_overlap(tmp_path):
+    settings = recipe(tmp_path).model_copy(
+        update={
+            "sources": {"fixture:first": "calendar"},
+            "family_limits": {"calendar": 1},
+            "evaluation_sources": {"fixture:eval": "reasoning_markup"},
+        }
+    )
+    shared = source_task("shared-prompt")
+    training = admitted_source(tmp_path / "first", [shared, source_task("training-b")])
+    evaluation = admitted_source(
+        tmp_path / "eval", [shared.model_copy(update={"id": "eval-shared"}), source_task("eval-only")], "eval"
+    )
+    artifact = run(task_selection_step({"fixture:first": training, "fixture:eval": evaluation}, settings))[0]
+    output = Path(artifact.path)
+
+    assert [task.id for task in read_tasks(output / TRAIN_FILENAME)] == ["training-b"]
+    sample = read_tasks(output / VALIDATION_FILENAME)
+    assert [task.id for task in sample[-2:]] == ["eval-shared", "eval-only"]
+    assert len(sample) == 20 * len(FAMILIES) + 2
+    assert [task.id for task in read_tasks(output / FULL_VALIDATION_FILENAME)][-2:] == ["eval-shared", "eval-only"]
+    summary = json.loads((output / "summary.json").read_text())
+    assert summary["source_counts"]["fixture:first"]["heldout_overlap"] == 1
+    assert summary["validation_family_counts"]["reasoning_markup"] == 2
+
+    with pytest.raises(ValueError, match="curation sources"):
+        task_selection_step({"fixture:first": training}, settings)
+    with pytest.raises(RuntimeError):
+        run(
+            task_selection_step(
+                {"fixture:first": training, "fixture:eval": training},
+                settings.model_copy(update={"version": "2026.10.23.3"}),
+            )
+        )
+
+
 @pytest.mark.parametrize("failure", ["shortfall", "evaluation-source"])
 def test_selection_does_not_publish_an_incomplete_or_evaluation_training_pool(tmp_path, failure):
     settings = recipe(tmp_path).model_copy(update={"sources": {"fixture:first": "calendar"}})

@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
-from pydantic import BaseModel, ConfigDict, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import SCHEMA_VERSION, Source, TaskSpec
@@ -54,7 +54,11 @@ class HeldoutSource(BaseModel):
 
 
 class SelectionRecipe(BaseModel):
-    """An explicit source allowlist, family quotas and fixed evaluation input."""
+    """An explicit source allowlist, family quotas and fixed evaluation input.
+
+    ``evaluation_sources`` maps admitted evaluation sources to a family; every task of such a source
+    joins the validation panel whole and is excluded from training like the heldout set.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -66,6 +70,7 @@ class SelectionRecipe(BaseModel):
     heldout: HeldoutSource
     validation_per_family: PositiveInt
     seed: int
+    evaluation_sources: dict[str, str] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,7 @@ class SelectionConfig:
     recipe: SelectionRecipe
     heldout: str
     output_path: str
+    evaluation_sources: tuple[SelectionInput, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,6 +172,30 @@ def task_records(tasks: Iterator[TaskSpec]) -> Iterator[dict[str, str]]:
         yield {TASK_SPEC_COLUMN: task.model_dump_json()}
 
 
+def admitted_task_json(source: SelectionInput, intended_use: IntendedUse) -> Iterator[str]:
+    """Yield the serialized admitted tasks of a FULL curation artifact with the expected population."""
+    root = StoragePath(source.root)
+    manifest = json.loads((root / "manifest.json").read_text())
+    if manifest["mode"] != "full":
+        raise ValueError(f"Selection requires FULL curation: {source.source_id}")
+    if manifest["intended_use"] != intended_use:
+        raise ValueError(f"Selection source is not a {intended_use} population: {source.source_id}")
+    for path in sorted((root / "final" / "*.parquet").glob(), key=str):
+        with path.open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(batch_size=256, columns=[TASK_JSON_COLUMN]):
+                for row in batch.to_pylist():
+                    yield row[TASK_JSON_COLUMN]
+
+
+def evaluation_tasks(config: SelectionConfig) -> tuple[tuple[str, TaskSpec], ...]:
+    """Every admitted task of the recipe's evaluation sources, with its family."""
+    return tuple(
+        (source.family, TaskSpec.model_validate_json(task_json))
+        for source in config.evaluation_sources
+        for task_json in admitted_task_json(source, IntendedUse.EVAL)
+    )
+
+
 def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destination: Path) -> dict[str, SourceCounts]:
     """Filter admitted tasks before seeded sampling without replacement."""
     heldout_ids = {task.id for task in full}
@@ -179,39 +209,30 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
         seen_ids: set[str] = set()
         seen_contracts: set[str] = set()
         for source in sources:
-            root = StoragePath(source.root)
-            manifest = json.loads((root / "manifest.json").read_text())
-            if manifest["mode"] != "full":
-                raise ValueError(f"Selection requires FULL curation: {source.source_id}")
-            if manifest["intended_use"] != IntendedUse.TRAIN:
-                raise ValueError(f"Selection source is not a training population: {source.source_id}")
-            for path in sorted((root / "final" / "*.parquet").glob(), key=str):
-                with path.open("rb") as stream:
-                    for batch in pq.ParquetFile(stream).iter_batches(batch_size=256, columns=[TASK_JSON_COLUMN]):
-                        for row in batch.to_pylist():
-                            task = TaskSpec.model_validate_json(row[TASK_JSON_COLUMN])
-                            source_counts = counts[source.source_id]
-                            source_counts.input += 1
-                            if (
-                                task.id in heldout_ids
-                                or semantic_digest(task, False) in heldout_public
-                                or task.context.model_dump_json() in heldout_contexts
-                            ):
-                                source_counts.heldout_overlap += 1
-                                continue
-                            contract = deduplication_key(task)
-                            if (
-                                task.id in selected_ids
-                                or contract in selected_contracts
-                                or task.id in seen_ids
-                                or contract in seen_contracts
-                            ):
-                                source_counts.duplicate += 1
-                                continue
-                            seen_ids.add(task.id)
-                            seen_contracts.add(contract)
-                            source_counts.eligible += 1
-                            yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id, contract)
+            for task_json in admitted_task_json(source, IntendedUse.TRAIN):
+                task = TaskSpec.model_validate_json(task_json)
+                source_counts = counts[source.source_id]
+                source_counts.input += 1
+                if (
+                    task.id in heldout_ids
+                    or semantic_digest(task, False) in heldout_public
+                    or task.context.model_dump_json() in heldout_contexts
+                ):
+                    source_counts.heldout_overlap += 1
+                    continue
+                contract = deduplication_key(task)
+                if (
+                    task.id in selected_ids
+                    or contract in selected_contracts
+                    or task.id in seen_ids
+                    or contract in seen_contracts
+                ):
+                    source_counts.duplicate += 1
+                    continue
+                seen_ids.add(task.id)
+                seen_contracts.add(contract)
+                source_counts.eligible += 1
+                yield Candidate(task.id, task_json, source.source_id, contract)
 
     def selected_records() -> Iterator[dict[str, str]]:
         groups = (
@@ -245,28 +266,29 @@ def prepare(config: SelectionConfig) -> None:
     if len(heldout) != config.recipe.heldout.rows:
         raise ValueError("Heldout source row count changed")
     selection = select_heldout(heldout, config.recipe)
+    evaluation = evaluation_tasks(config)
+    full = (*selection.full, *(task for _, task in evaluation))
+    sample = (*selection.sample, *(task for _, task in evaluation))
+    family_counts = Counter(selection.family_counts) + Counter(family for family, _ in evaluation)
     with TemporaryDirectory(prefix="task-selection-") as temporary:
         directory = Path(temporary)
-        counts = write_training(config, selection.full, directory / TRAIN_FILENAME)
-        write_parquet_file(
-            task_records(iter(selection.sample)), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA
-        )
-        write_parquet_file(
-            task_records(iter(selection.full)), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA
-        )
+        counts = write_training(config, full, directory / TRAIN_FILENAME)
+        write_parquet_file(task_records(iter(sample)), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA)
+        write_parquet_file(task_records(iter(full)), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA)
         summary = {
             "recipe": config.recipe.model_dump(mode="json"),
             "sources": [asdict(source) for source in config.sources],
+            "evaluation_sources": [asdict(source) for source in config.evaluation_sources],
             "source_counts": {source: asdict(count) for source, count in counts.items()},
             "training_rows": sum(count.selected for count in counts.values()),
             "training_family_counts": {
                 family: sum(counts[source.source_id].selected for source in config.sources if source.family == family)
                 for family in sorted(config.recipe.family_limits)
             },
-            "validation_rows": len(selection.sample),
-            "full_validation_rows": len(selection.full),
-            "validation_family_counts": selection.family_counts,
-            "validation_task_ids": [task.id for task in selection.sample],
+            "validation_rows": len(sample),
+            "full_validation_rows": len(full),
+            "validation_family_counts": dict(sorted(family_counts.items())),
+            "validation_task_ids": [task.id for task in sample],
         }
         destination = StoragePath(config.output_path)
         destination.mkdirs()
@@ -277,11 +299,14 @@ def prepare(config: SelectionConfig) -> None:
 
 def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecipe) -> ArtifactStep[Artifact]:
     """Bind a terminal selection to admitted source artifacts and a pinned heldout input."""
-    missing = recipe.sources.keys() - curated.keys()
+    missing = (recipe.sources.keys() | recipe.evaluation_sources.keys()) - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
     if not recipe.sources or set(recipe.sources.values()) != recipe.family_limits.keys():
         raise ValueError("Selection sources must cover exactly the families with quotas")
+    shared = recipe.sources.keys() & recipe.evaluation_sources.keys()
+    if shared:
+        raise ValueError(f"A source cannot be both training and evaluation: {', '.join(sorted(shared))}")
     if recipe.source_limits is not None:
         if recipe.source_limits.keys() != recipe.sources.keys():
             raise ValueError("Source quotas must cover exactly the selection sources")
@@ -294,6 +319,7 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
         f"rl-data/selection-inputs/{recipe.name}-heldout", recipe.heldout.version, recipe.heldout.uri
     )
     inputs = {source_id: curated[source_id] for source_id in sorted(recipe.sources)}
+    evaluation_inputs = {source_id: curated[source_id] for source_id in sorted(recipe.evaluation_sources)}
 
     def build_config(ctx: StepContext) -> SelectionConfig:
         return SelectionConfig(
@@ -304,13 +330,17 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
             recipe,
             ctx.artifact_path(heldout),
             ctx.output_path,
+            evaluation_sources=tuple(
+                SelectionInput(source_id, recipe.evaluation_sources[source_id], ctx.artifact_path(step))
+                for source_id, step in evaluation_inputs.items()
+            ),
         )
 
     return ArtifactStep(
         name=f"rl-data/task-selection/{recipe.name}",
         version=recipe.version,
         artifact_type=Artifact,
-        deps=(*inputs.values(), heldout),
+        deps=(*inputs.values(), *evaluation_inputs.values(), heldout),
         run=prepare,
         build_config=build_config,
     )
