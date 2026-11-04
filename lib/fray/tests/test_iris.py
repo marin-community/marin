@@ -333,6 +333,7 @@ class TestImagePlumbing:
 
         request = JobRequest(
             name="test-job",
+            ports=("ray-gcs", "ray-client"),
             entrypoint=Entrypoint.from_callable(_noop),
             resources=ResourceConfig(cpu=1, ram="2g", image="custom/swetrace:dev"),
             timeout=Duration.from_minutes(30),
@@ -344,6 +345,7 @@ class TestImagePlumbing:
         assert kwargs["task_image"] == "custom/swetrace:dev"
         assert kwargs["timeout"] == Duration.from_minutes(30)
         assert kwargs["termination_grace"] == Duration.from_seconds(60)
+        assert kwargs["ports"] == ["ray-gcs", "ray-client"]
 
 
 class TestActorGroupEnvironment:

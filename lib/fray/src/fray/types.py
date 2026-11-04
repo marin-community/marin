@@ -721,6 +721,7 @@ class JobRequest:
             the backend to use its default priority.
         timeout: Backend-enforced execution deadline, if supported.
         termination_grace: Time for graceful SIGTERM shutdown, if supported.
+        ports: Named listeners allocated per task by backends that support them.
     """
 
     name: str
@@ -735,6 +736,7 @@ class JobRequest:
     priority: int = 0
     timeout: Duration | None = None
     termination_grace: Duration | None = None
+    ports: tuple[str, ...] = ()
 
     def __post_init__(self):
         if " " in self.name:

@@ -140,7 +140,7 @@ def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding()
 
 def test_flash_attention_on_single_device_grug_mesh_matches_reference():
     # A one-device Grug mesh keeps its length-1 axes, so every spec names mesh axes that partition nothing.
-    names = ("replica_dcn", "data", "context", "expert", "model")
+    names = ("replica_dcn", "data", "expert", "context", "model")
     mesh = Mesh(np.asarray(jax.devices()[:1]).reshape((1,) * 5), names, axis_types=(AxisType.Explicit,) * 5)
     batch_axes = ("replica_dcn", "data", "expert")
     q, k, v = _qkv(jnp.bfloat16)

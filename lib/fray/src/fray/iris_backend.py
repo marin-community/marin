@@ -704,6 +704,7 @@ class FrayIrisClient:
                 constraints=iris_constraints if iris_constraints else None,
                 coscheduling=coscheduling,
                 replicas=replicas,
+                ports=list(request.ports),
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
                 max_task_failures=request.max_task_failures,
