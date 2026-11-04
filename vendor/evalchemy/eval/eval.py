@@ -1,6 +1,7 @@
 import asyncio
 from eval.execution.driver import source_plans, run_evaluations
 from eval.execution.run_spec import RunSpec
+from eval.graders.answer_equivalence import JudgeProtocol
 import argparse
 import difflib
 import json
@@ -133,6 +134,7 @@ def setup_custom_parser():
         default=AUTO_ANNOTATOR_MODEL,
         help="Judge model used to evaluate generations. Example: gpt-4o-mini-2024-07-18",
     )
+    parser.add_argument("--judge-protocol", type=JudgeProtocol, choices=list(JudgeProtocol), default=JudgeProtocol.DEFAULT)
     parser.add_argument(
         "--max_tokens",
         type=int,

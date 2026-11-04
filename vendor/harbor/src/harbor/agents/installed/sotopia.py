@@ -117,10 +117,10 @@ class SotopiaAgent(BaseInstalledAgent):
         context: AgentContext,
     ) -> None:
         del instruction, context
-        if not self.model_name:
+        if not self.model_alias:
             raise ValueError("model_name is required for SotopiaAgent")
 
-        target_model = self._custom_model(self.model_name, self._api_base)
+        target_model = self._custom_model(self.model_alias, self._api_base)
         partner_model = self._custom_model(
             self._partner_model, self._partner_api_base or self._api_base
         )
