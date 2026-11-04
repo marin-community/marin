@@ -85,15 +85,16 @@ def generation_code(problem: Mapping[str, Any], response: str, suite: str) -> st
 
 
 def crux_answer(response: str, direction: str) -> str:
-    """Extract the source's first answer block and shallow function-call match."""
+    """Extract the source's first answer block and read its answer by CRUXEval's harness rule."""
     answer = response
     if "[ANSWER]" in answer and "[/ANSWER]" in answer:
         answer = answer.split("[ANSWER]", 1)[1].split("[/ANSWER]", 1)[0].strip()
-    call = re.search(r"f\(.*?\)", answer)
-    if call is not None:
-        if direction == "input":
-            return call.group(0)
-        return answer.replace(call.group(0), "").replace("=", "").replace("assert", "").strip()
+    # Split at the first "==" as CRUXEval's harness does (inference/tasks/*_prediction.py): an input answer is the
+    # call before it, and an output answer is the text after it, including any later "==" where the harness stops.
+    if "==" in answer:
+        answer = answer.split("==", 1)[0 if direction == "input" else 1].strip()
+    if direction == "input" and "assert f" in answer:
+        answer = "f" + answer.split("assert f", 1)[1].strip()
     return answer
 
 
@@ -101,6 +102,12 @@ def test_program(problem: Mapping[str, Any], response: str, suite: str, directio
     """Compile a private test program for execution only inside a grading sandbox."""
     if suite == "cruxeval":
         answer = crux_answer(response, direction)
+        # Like CRUXEval's harness (evaluation/utils_general.py), fail an output answer containing f(<input>) and an
+        # input answer without "f(" without running them.
+        if (direction == "output" and f"f({problem['input']})" in answer) or (
+            direction == "input" and "f(" not in answer
+        ):
+            return "raise AssertionError"
         # The legacy output task compares literals; it does not recompute f(input).
         return f"{problem['code']}\nassert {problem['output']} == {answer}"
     generation = generation_code(problem, response, suite)
