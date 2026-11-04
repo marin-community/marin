@@ -13,7 +13,11 @@ Writes ``OUT_DIR/<eval>/eval.parquet`` with string columns ``id`` and ``text``, 
 record per item (id ``<eval>-<item_id>``) plus view records for separately
 meaningful parts (id ``<eval>-<item_id>-<view>``), and ``OUT_DIR/.manifest.json``.
 Paragraphs are separated by a blank line. Prompt templates and few-shot preambles
-that every item shares are not indexed.
+that every item shares are not indexed. ``OUT_DIR/.verbatim_items.json`` holds
+each item's question and answer, keyed by its full record id, for
+`verbatim_copies.py`: ``free`` items with long answers, ``near`` items whose short
+answer counts only after the question (``distractors`` are the wrong options), and
+``question`` items without a reference answer. MRCR and NUPA5K have none.
 
 Usage: uv run --with tiktoken python experiments/contam_report/targets_policy_qa.py OUT_DIR
 """
@@ -80,14 +84,17 @@ class EvalTargets:
     skipped: int = 0
     view_counts: Counter = field(default_factory=Counter)
     extra: dict = field(default_factory=dict)
+    verbatim_items: dict[str, dict] = field(default_factory=dict)
 
-    def add(self, item_id: str, parts: list[str], views: dict[str, str] | None = None) -> None:
-        """Add the full item record and the views long enough to stand alone."""
+    def add(self, item_id: str, parts: list[str], views: dict[str, str] | None = None, item: dict | None = None) -> None:
+        """Add the full item record and the views long enough to stand alone, and its verbatim ``item``."""
         text = paragraphs(parts)
         if letter_words(text) < MIN_RECORD_WORDS:
             self.skipped += 1
             return
         self.rows.append({"id": f"{self.name}-{item_id}", "text": text})
+        if item is not None:
+            self.verbatim_items[f"{self.name}-{item_id}"] = {"eval": self.name, **item}
         for view, view_text in (views or {}).items():
             view_text = view_text.strip()
             if view_text == text or letter_words(view_text) < MIN_VIEW_WORDS:
@@ -112,6 +119,14 @@ class EvalTargets:
             "notes": " ".join(notes),
             **self.extra,
         }
+
+
+def free(question: str, answer: str) -> dict:
+    return {"kind": "free", "question": question, "answers": [answer]}
+
+
+def near(question: str, answers: list[str], distractors: list[str] = ()) -> dict:
+    return {"kind": "near", "question": question, "answers": answers, "distractors": list(distractors)}
 
 
 def letter_words(text: str) -> int:
@@ -156,7 +171,12 @@ def math500() -> EvalTargets:
     out.items = len(rows)
     for row in rows:
         item_id = row["unique_id"].removeprefix("test/").removesuffix(".json")
-        out.add(item_id, [row["problem"], row["solution"]], {"prompt": row["problem"], "solution": row["solution"]})
+        out.add(
+            item_id,
+            [row["problem"], row["solution"]],
+            {"prompt": row["problem"], "solution": row["solution"]},
+            free(row["problem"], row["solution"]),
+        )
     out.notes.append(
         "Records hold problem and solution (the boxed answer is in the solution); the loader's 'Mark your solution "
         "with \\boxed' template is not indexed."
@@ -175,6 +195,7 @@ def humanevalplus() -> EvalTargets:
             item_id,
             [row["prompt"] + row["canonical_solution"]],
             {"prompt": row["prompt"], "solution": row["canonical_solution"], "tests": test},
+            free(row["prompt"], row["canonical_solution"]),
         )
     out.notes.append(
         "Records hold prompt plus canonical solution; the tests view holds the plus test inputs and results. "
@@ -191,7 +212,12 @@ def mbppplus() -> EvalTargets:
     tests, shared = strip_shared_lines([row["test"] for row in rows])
     for row, test in zip(rows, tests, strict=True):
         prompt = paragraphs([row["prompt"], "\n".join(row["test_list"])])
-        out.add(str(row["task_id"]), [prompt, row["code"]], {"prompt": prompt, "solution": row["code"], "tests": test})
+        out.add(
+            str(row["task_id"]),
+            [prompt, row["code"]],
+            {"prompt": prompt, "solution": row["code"], "tests": test},
+            free(row["prompt"], row["code"]),
+        )
     shots = ", ".join(str(rows[i]["task_id"]) for i in MBPPPLUS_SHOT_INDICES)
     out.notes.append(
         "Records hold problem, the three shown asserts and the reference code; the tests view holds the plus test "
@@ -213,7 +239,9 @@ def olympiadbench() -> EvalTargets:
     for row in pool:
         problem = (row["context"] + "\n\n" if row["context"] else "") + row["question"]
         by_id[row["question_id"]] = problem
-        out.add(row["question_id"], [problem, "\n".join(row["final_answer"] or [])])
+        answers = [a for a in row["final_answer"] or [] if a.strip()]
+        item = near(problem, answers) if answers else {"kind": "question", "question": problem}
+        out.add(row["question_id"], [problem, "\n".join(row["final_answer"] or [])], item=item)
     subset_ids = [row["id"] for row in subset]
     mismatched = [row["id"] for row in subset if by_id.get(row["id"]) != row["problem"]]
     if mismatched:
@@ -241,6 +269,7 @@ def aime24() -> EvalTargets:
             row["id"].removeprefix("aime24-"),
             [row["problem"], row["reference_solution"], str(row["expected_answer"])],
             {"prompt": row["problem"], "solution": row["reference_solution"]},
+            free(row["problem"], row["reference_solution"]),
         )
     out.notes.append("Records hold problem, reference solution and answer; the prompt template is not indexed.")
     return out
@@ -251,7 +280,12 @@ def cruxeval() -> EvalTargets:
     rows = read_jsonl(hf_file(CRUXEVAL, "test.jsonl"))
     out.items = len(rows)
     for row in rows:
-        out.add(row["id"], [row["code"], f"assert f({row['input']}) == {row['output']}"], {"prompt": row["code"]})
+        out.add(
+            row["id"],
+            [row["code"], f"assert f({row['input']}) == {row['output']}"],
+            {"prompt": row["code"]},
+            near(row["code"], [row["output"]]),
+        )
     out.notes.append(
         "Records hold the function and its completed assertion, which serve both the input and output directions. "
         "Not indexed: the shared CoT instruction and one-shot example."
@@ -269,6 +303,7 @@ def financebench() -> EvalTargets:
             row["id"].removeprefix("financebench_id_"),
             [row["evidence_text"], row["question"], row["answer"]],
             {"prompt": row["question"], "answer": row["answer"]},
+            near(row["question"], [row["answer"]]),
         )
     out.notes.append(
         "Vendored 50-item sample of PatronusAI/financebench. Records hold evidence page, question and answer; "
@@ -283,7 +318,7 @@ def ifbench() -> EvalTargets:
     rows = read_parquet(IFBENCH, "data/train-00000-of-00001.parquet", ["key", "prompt"])
     out.items = len(rows)
     for row in rows:
-        out.add(str(row["key"]), [row["prompt"]])
+        out.add(str(row["key"]), [row["prompt"]], item={"kind": "question", "question": row["prompt"]})
     out.notes.append("Records hold the prompt with its inline constraint; there is no reference answer.")
     return out
 
@@ -339,7 +374,7 @@ def mrcr() -> EvalTargets:
 
 
 def nupa5k_loose() -> EvalTargets:
-    manifest_path, _ = vendored("NUPA5K-Loose/data/nupa5k.manifest.jsonl")
+    manifest_path, _ = vendored("NUPA5K-Loose/data/nupa5k_manifest.jsonl")
     identities = read_jsonl(manifest_path)
     out = EvalTargets("nupa5k_loose", NUPA[0], NUPA[1], "test", len(identities))
     with open(hf_file(NUPA, "test.json")) as f:
@@ -374,7 +409,8 @@ def piqa() -> EvalTargets:
     rows = read_parquet(PIQA, "piqa_validation.parquet")
     out = EvalTargets("piqa", PIQA[0], PIQA[1], "validation", len(rows))
     for index, row in enumerate(rows):
-        out.add(str(index), [row["goal"], row["sol1"], row["sol2"]])
+        correct, wrong = (row["sol1"], row["sol2"]) if row["label"] == "0" else (row["sol2"], row["sol1"])
+        out.add(str(index), [row["goal"], row["sol1"], row["sol2"]], item=near(row["goal"], [correct], [wrong]))
     out.notes.append("lm-eval piqa scores validation. Records hold goal and both solutions; id is the row index.")
     return out
 
@@ -383,8 +419,10 @@ def winogrande() -> EvalTargets:
     rows = read_parquet(WINOGRANDE, "winogrande_xl/validation-00000-of-00001.parquet")
     out = EvalTargets("winogrande", WINOGRANDE[0], WINOGRANDE[1], "winogrande_xl/validation", len(rows))
     for index, row in enumerate(rows):
-        answer = row["option1"] if row["answer"] == "1" else row["option2"]
-        out.add(str(index), [row["sentence"].replace("_", answer, 1), row["sentence"]])
+        answer, wrong = (row["option1"], row["option2"]) if row["answer"] == "1" else (row["option2"], row["option1"])
+        filled = row["sentence"].replace("_", answer, 1)
+        item = near(row["sentence"], [answer], [wrong])
+        out.add(str(index), [filled, row["sentence"]], item=item)
     out.notes.append(
         "lm-eval winogrande scores winogrande_xl validation (5-shot from train, not indexed). Records hold the "
         "sentence with the blank filled by the correct option and the raw sentence; id is the row index."
@@ -396,7 +434,12 @@ def boolq() -> EvalTargets:
     rows = read_parquet(BOOLQ, "boolq/validation-00000-of-00001.parquet")
     out = EvalTargets("boolq", BOOLQ[0], BOOLQ[1], "boolq/validation", len(rows))
     for row in rows:
-        out.add(str(row["idx"]), [row["passage"], row["question"] + "?", "yes" if row["label"] == 1 else "no"])
+        answers, wrong = (["yes", "true"], ["no", "false"]) if row["label"] == 1 else (["no", "false"], ["yes", "true"])
+        out.add(
+            str(row["idx"]),
+            [row["passage"], row["question"] + "?", answers[0]],
+            item=near(row["question"], answers, wrong),
+        )
     passages = Counter(row["passage"] for row in rows)
     out.notes.append(
         "lm-eval boolq scores validation. Records hold passage, question and answer. "
@@ -409,7 +452,11 @@ def truthfulqa() -> EvalTargets:
     rows = read_parquet(TRUTHFULQA, "multiple_choice/validation-00000-of-00001.parquet")
     out = EvalTargets("truthfulqa", TRUTHFULQA[0], TRUTHFULQA[1], "multiple_choice/validation", len(rows))
     for index, row in enumerate(rows):
-        out.add(str(index), [row["question"], "\n".join(row["mc2_targets"]["choices"])])
+        mc1 = row["mc1_targets"]
+        best = [c for c, label in zip(mc1["choices"], mc1["labels"], strict=True) if label == 1]
+        wrong = [c for c, label in zip(mc1["choices"], mc1["labels"], strict=True) if label == 0]
+        item = near(row["question"], best, wrong)
+        out.add(str(index), [row["question"], "\n".join(row["mc2_targets"]["choices"])], item=item)
     out.notes.append(
         "lm-eval truthfulqa_mc2 scores validation. Records hold question and all MC2 choices; id is the row index. "
         "Not indexed: the shared 6-question QA preamble."
@@ -422,16 +469,15 @@ def triviaqa() -> EvalTargets:
         TRIVIAQA, "rc.nocontext/validation-00000-of-00001.parquet", ["question_id", "question", "answer"]
     )
     out = EvalTargets("triviaqa", TRIVIAQA[0], TRIVIAQA[1], "rc.nocontext/validation", len(rows))
-    texts_by_id = defaultdict(list)
+    texts_by_id = defaultdict(dict)
     for row in rows:
         text = paragraphs([row["question"], row["answer"]["value"]])
-        if text not in texts_by_id[row["question_id"]]:
-            texts_by_id[row["question_id"]].append(text)
+        texts_by_id[row["question_id"]].setdefault(text, near(row["question"], [row["answer"]["value"]]))
     variants = 0
     for question_id, texts in texts_by_id.items():
-        for n, text in enumerate(texts):
+        for n, (text, item) in enumerate(texts.items()):
             variants += n > 0
-            out.add(question_id if n == 0 else f"{question_id}_{n}", [text])
+            out.add(question_id if n == 0 else f"{question_id}_{n}", [text], item=item)
     out.notes.append(
         f"lm-eval triviaqa scores rc.nocontext validation: {len(rows)} rows, {len(texts_by_id)} question ids. Rows "
         f"repeating a question id with the same question and answer are indexed once; {variants} ids with a "
@@ -464,6 +510,7 @@ SCHEMA = pa.schema([("id", pa.string()), ("text", pa.string())])
 def main() -> None:
     out_dir = Path(sys.argv[1])
     manifest = []
+    verbatim_items = {}
     for build in EVALS:
         targets = build()
         ids = [row["id"] for row in targets.rows]
@@ -477,7 +524,9 @@ def main() -> None:
             pq.write_table(SCHEMA.empty_table(), path)
             print(f"{targets.name}: 0 records -> {path}")
         manifest.append(targets.manifest())
+        verbatim_items.update(targets.verbatim_items)
     (out_dir / ".manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (out_dir / ".verbatim_items.json").write_text(json.dumps(verbatim_items))
 
 
 if __name__ == "__main__":

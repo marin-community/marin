@@ -16,6 +16,11 @@ JSON lines.
   the distinctive choices (at least 3 words) in the window after it;
   ``a_found`` means an answer marker after the stem names the correct choice by
   letter or text (see `mmlu_copies.classify`).
+* ``near`` items: ``q_found`` is the question verbatim; ``a_found`` means an
+  answer occurs in the ``WINDOW`` characters after it. It must follow an answer
+  marker when it is at most ``SHORT_ANSWER_CHARS`` long or when a wrong option
+  (``distractors``) is also in the window, as in a copy that lists every option.
+* ``question`` items have no reference answer; only ``q_found`` is set.
 
 Writes one Parquet file per input file under OUT_PREFIX.
 
@@ -25,6 +30,7 @@ Usage: verbatim_copies.py ITEMS_JSON REQUESTS_JSON OUT_PREFIX [--max-workers N] 
 import argparse
 import hashlib
 import json
+import re
 from collections import defaultdict
 
 import pyarrow as pa
@@ -37,7 +43,9 @@ from zephyr.readers import load_file
 from zephyr.writers import write_parquet_file
 
 from experiments.contam_report.humaneval_copies import collapse, found_ngrams, ngrams, unescape
-from experiments.contam_report.mmlu_copies import classify_flat
+from experiments.contam_report.mmlu_copies import WINDOW, classify_flat
+
+SHORT_ANSWER_CHARS = 3
 
 SCHEMA = pa.schema(
     [
@@ -97,8 +105,48 @@ def add_answer_coverage(doc: DocViews, rows: list[dict], items: dict) -> None:
         r["a_ngram_coverage"] = max(covered, default=None)
 
 
+def answer_marked(answer: str) -> re.Pattern:
+    return re.compile(rf"(?:answer|correct|ans)\b[^\n]{{0,40}}{re.escape(answer)}", re.IGNORECASE)
+
+
+def check_near(doc: DocViews, question: str, answers: list[str], distractors: list[str]) -> dict:
+    q_flat = collapse(question)
+    a_flats = [collapse(a) for a in answers if a.strip()]
+    d_flats = [collapse(d) for d in distractors if d.strip()]
+    q_found = a_found = False
+    for flat in doc.flats:
+        pos = flat.find(q_flat)
+        if pos < 0:
+            continue
+        q_found = True
+        window = flat[pos + len(q_flat) : pos + len(q_flat) + WINDOW]
+        listed = any(d in window for d in d_flats)
+        for a in a_flats:
+            needs_marker = listed or len(a) <= SHORT_ANSWER_CHARS
+            a_found = a_found or bool(answer_marked(a).search(window) if needs_marker else a in window)
+    return {
+        "q_found": q_found,
+        "choices_total": None,
+        "choices_found": None,
+        "a_found": a_found,
+        "a_ngram_coverage": None,
+    }
+
+
 def check(doc: DocViews, item: dict) -> dict:
     words = len(item["question"].split())
+    if item["kind"] == "near":
+        return {"q_words": words, **check_near(doc, item["question"], item["answers"], item.get("distractors", []))}
+    if item["kind"] == "question":
+        q_found = any(collapse(item["question"]) in flat for flat in doc.flats)
+        return {
+            "q_found": q_found,
+            "q_words": words,
+            "choices_total": None,
+            "choices_found": None,
+            "a_found": False,
+            "a_ngram_coverage": None,
+        }
     if item["kind"] == "free":
         return {"q_words": words, **check_free(doc, item["question"], item["answers"])}
     result = classify_flat(doc.flats, item["question"], item["choices"], item["answer"])

@@ -33,7 +33,13 @@ import pyarrow as pa
 
 from experiments.contam_report.humaneval_copies import NGRAM_LENGTH
 
-ITEM_BARS = {"gsm8k": 0.3, "humaneval": 0.3, "mmlu": 0.5, "mmlu_pro": 0.5}
+# AAII v5 and eval-policy QA evals share one bar; the hero filter has none of its own for them.
+V5_ITEM_BAR = 0.5
+V5_QA_EVALS = (
+    "hle_diamond", "aa_omniscience_v1_1", "math500", "humanevalplus", "mbppplus", "olympiadbench", "aime24",
+    "cruxeval", "financebench", "ifbench", "piqa", "winogrande", "boolq", "truthfulqa", "triviaqa",
+)  # fmt: skip
+ITEM_BARS = {"gsm8k": 0.3, "humaneval": 0.3, "mmlu": 0.5, "mmlu_pro": 0.5, **dict.fromkeys(V5_QA_EVALS, V5_ITEM_BAR)}
 QUESTION_SHARE = 0.6
 QUESTION_MIN_NGRAMS = 10
 PARAGRAPH = "\n\n"

@@ -13,7 +13,7 @@ verbatim question: the training source (the ``normalized/<source>`` directory),
 file, document id, and whether the answer is there too. It prints per eval how
 many items each source copies.
 
-A ``choice`` question counts as verbatim when its stem is found and is at least
+A ``choice`` or ``near`` question counts as verbatim when its stem is found and is at least
 ``MIN_STEM_WORDS`` long, or is followed by at least half its distinctive choices,
 since a short stem can occur by chance. ``qa_ngram`` also accepts a ``free``
 answer at ``ANSWER_NGRAM_SHARE`` 13-gram coverage, for copies that reformat the
@@ -43,7 +43,7 @@ def main() -> None:
         pa.table(
             {
                 "eval_id": list(items),
-                "eval": [eval_id.split("-test-")[0] for eval_id in items],
+                "eval": [item["eval"] for item in items.values()],
                 "kind": [item["kind"] for item in items.values()],
             }
         ),
