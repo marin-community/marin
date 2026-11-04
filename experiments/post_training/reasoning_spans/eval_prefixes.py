@@ -23,7 +23,7 @@ import logging
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,8 @@ from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import load_model_config
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.inference.config import RemoteInferenceConfig, ServedModelConfig
+from marin.inference.model_preparation import resolve_model_path
 from marin.inference.serve import local_inference
 from openai import OpenAI
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -161,6 +163,24 @@ def evaluation_summary(samples: Sequence[GradedSample]) -> dict[str, Any]:
     }
 
 
+def regional_weights(inference: RemoteInferenceConfig) -> ServedModelConfig:
+    """Serve from the region-local weight mirror, as Iris inference workers do.
+
+    vLLM streams object-store weights with the runai loader, which the catalog's
+    ``--model-loader-extra-config`` targets; the tokenizer stays on the pinned repository.
+    """
+    model = inference.model
+    weights = resolve_model_path(model.weights, inference.iris.cache_ttl_days, model.revision)
+    return replace(
+        model,
+        weights=weights,
+        api_model=model.model_id,
+        tokenizer=model.tokenizer or model.weights,
+        revision=model.revision if weights == model.weights else None,
+        tokenizer_revision=model.effective_tokenizer_revision,
+    )
+
+
 def sample_rows(
     client: OpenAI, model: str, rows: Sequence[dict[str, Any]], samples: int, max_tokens: int
 ) -> list[GradedSample]:
@@ -200,7 +220,7 @@ def main(model_config: Path, output_prefix: str, samples: int, max_tokens: int, 
         priority=priority_band_value("interactive"),
         api_model=model.location,
     )
-    with local_inference(inference.model, inference.engine, num_chips=GPU_COUNT) as session:
+    with local_inference(regional_weights(inference), inference.engine, num_chips=GPU_COUNT) as session:
         endpoint = session.model.endpoint
         client = OpenAI(base_url=endpoint.base_url, api_key="unused", timeout=REQUEST_TIMEOUT)
         graded = sample_rows(client, endpoint.model, rows, samples, max_tokens)
