@@ -1,13 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
 import threading
+from dataclasses import replace
 
 import pytest
+from marin.inference.backend import ModelSpec
+from marin.inference.config import VllmCompilationCacheMode
+from marin.inference.vllm_backend import VllmBackend
 from marin.testing.inference.backend_parity import TokenScore
 from marin.testing.inference.snowball import PromptBatch, RepresentativeCase, RepresentativePromptFixture
-from marin.testing.inference.snowball_backend_parity_jobs import score_vllm_endpoint
+from marin.testing.inference.snowball_backend_parity_jobs import score_vllm_endpoint, tpu_vllm_engine_config
+
+from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 def fixture():
@@ -75,3 +82,25 @@ def test_endpoint_checks_wire_distributions_and_repeats(monkeypatch, ranks, fail
     assert all(r["json"]["max_tokens"] == 1 and r["json"]["add_special_tokens"] is False for r in requests)
     assert all(r["json"]["logprobs"] == 50 and "echo" not in r["json"] for r in requests)
     assert len(requests) == 8 + 2 * ranks
+
+
+def test_tpu_arm_engine_timeout_is_an_integer_in_the_server_process(monkeypatch, tmp_path):
+    record = tmp_path / "timeout.json"
+    monkeypatch.setattr(
+        "marin.inference.vllm_backend.vllm_launcher",
+        lambda config: FakeVllmLauncher("record-engine-timeout", str(record)),
+    )
+    config = replace(tpu_vllm_engine_config(), compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED)
+    spec = ModelSpec(
+        weights="fake-model",
+        api_model="model",
+        num_chips=16,
+        tensor_parallel_size=16,
+        dtype="bfloat16",
+        max_model_len=32768,
+        chat_template_content="",
+    )
+    with VllmBackend(config).start(spec) as environment:
+        environment.wait_until_ready()
+        value = json.loads(record.read_text())["engine_ready_timeout"]
+        assert int(value) == config.startup_timeout_seconds

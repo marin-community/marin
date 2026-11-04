@@ -62,7 +62,7 @@ from marin.testing.inference.snowball import (
 
 logger = logging.getLogger(__name__)
 
-RUNTIME_TIMEOUT = 30 * 60.0
+RUNTIME_TIMEOUT = 30 * 60
 HTTP_CONNECT_TIMEOUT = 30.0
 HTTP_READ_TIMEOUT = 5 * 60.0
 GPU_COUNT = 8
@@ -443,6 +443,17 @@ def score_vllm_endpoint(
     return parities
 
 
+def tpu_vllm_engine_config() -> VllmEngineConfig:
+    """Return the TPU arm configuration, including its integer vLLM timeout."""
+    return VllmEngineConfig(
+        launcher=VllmLauncherType.TPU,
+        max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
+        max_num_seqs=BATCH_SIZE,
+        startup_timeout_seconds=RUNTIME_TIMEOUT,
+        extra_args=("--max-logprobs", str(RETURNED_LOGPROBS), "--no-enable-prefix-caching"),
+    )
+
+
 def score_tpu_vllm_against_goldens(
     goldens: tuple[RepresentativeGolden, ...],
     weights: str,
@@ -450,13 +461,7 @@ def score_tpu_vllm_against_goldens(
 ) -> list[NextTokenParity] | None:
     """Run the same vLLM contract on one four-host v4 slice at TP16."""
     fixture = read_prompt_fixture(goldens)
-    engine = VllmEngineConfig(
-        launcher=VllmLauncherType.TPU,
-        max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
-        max_num_seqs=BATCH_SIZE,
-        startup_timeout_seconds=RUNTIME_TIMEOUT,
-        extra_args=("--max-logprobs", str(RETURNED_LOGPROBS), "--no-enable-prefix-caching"),
-    )
+    engine = tpu_vllm_engine_config()
     launcher = vllm_launcher(engine)
     assert isinstance(launcher, IsolatedTpuVllm)
     spec = ModelSpec(
