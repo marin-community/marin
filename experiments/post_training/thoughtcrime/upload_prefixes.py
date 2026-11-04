@@ -34,8 +34,7 @@ def main(rows_root: str, repo: str) -> None:
     configure_coreweave_s3()
     api = HfApi()
     root = StoragePath(rows_root)
-    # The rows republish benchmark prompts and tool outputs, so the repository stays private.
-    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
+    api.create_repo(repo, repo_type="dataset", exist_ok=True)
     commit = api.create_commit(
         repo_id=repo,
         repo_type="dataset",
