@@ -608,32 +608,26 @@ def select_test_panel(
     rates: Mapping[str, PanelRate],
 ) -> PanelSelection:
     """Select canonical tasks from source iterators; named-part order gives duplicates to the first part."""
-    excluded_ids, excluded_digests, excluded_contexts, excluded_statements = set(), set(), set(), set()
+    excluded_ids, excluded_contexts, excluded_statements = set(), set(), set()
     for task in excluded:
         excluded_ids.add(task.id)
-        excluded_digests.add(semantic_digest(task, False))
-        excluded_contexts.add(task.context.model_dump_json())
+        excluded_contexts.add(canonical_sha256(task.context.model_dump(mode="json")))
         statement = _statement_digest(task)
         if statement is not None:
             excluded_statements.add(statement)
     selected: list[tuple[TaskSpec, PanelSource]] = []
-    selected_ids, selected_digests, selected_contexts = set(), set(), set()
+    selected_ids, selected_contexts = set(), set()
     source_counts: dict[str, Counter[str]] = {}
 
     def candidates(part: PanelSource, counts: Counter[str]) -> Iterator[TaskSpec]:
-        seen_ids, seen_digests, seen_contexts = set(), set(), set()
+        seen_ids, seen_contexts = set(), set()
         for task in sources[part.name]:
-            digest, context = semantic_digest(task, False), task.context.model_dump_json()
+            context = canonical_sha256(task.context.model_dump(mode="json"))
             counts["input"] += 1
             if not set(part.required_tags).issubset(task.tags):
                 counts["filtered"] += 1
                 continue
-            if (
-                task.id in excluded_ids
-                or digest in excluded_digests
-                or context in excluded_contexts
-                or _statement_digest(task) in excluded_statements
-            ):
+            if task.id in excluded_ids or context in excluded_contexts or _statement_digest(task) in excluded_statements:
                 counts["overlap"] += 1
                 continue
             if "eval" not in task.tags:
@@ -643,15 +637,12 @@ def select_test_panel(
             if (
                 task.id in selected_ids
                 or task.id in seen_ids
-                or digest in selected_digests
-                or digest in seen_digests
                 or context in selected_contexts
                 or context in seen_contexts
             ):
                 counts["duplicate"] += 1
                 continue
             seen_ids.add(task.id)
-            seen_digests.add(digest)
             seen_contexts.add(context)
             yield task
 
@@ -665,8 +656,7 @@ def select_test_panel(
         for task in tasks:
             selected.append((task, part))
             selected_ids.add(task.id)
-            selected_digests.add(semantic_digest(task, False))
-            selected_contexts.add(task.context.model_dump_json())
+            selected_contexts.add(canonical_sha256(task.context.model_dump(mode="json")))
         counts.update(eligible=count, selected=len(tasks))
         source_counts[part.name] = counts
     selected.sort(key=lambda entry: entry[0].id)

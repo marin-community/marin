@@ -228,7 +228,7 @@ verified Evalchemy corpus and `normalized` for evaluation-only curation output.
 Normalized populations count converted tasks; rejections stay in the source ledger.
 The recipe lists the immutable training files and development panel separately.
 
-The producer skips overlap by task ID, public digest, full conversation or the
+The producer skips overlap by task ID, canonical full conversation or the
 whitespace-normalized final user statement, when present. It records overlap
 counts before seeded sampling. Tasks must carry the `eval` tag and use an
 in-process or package grader. Image graders and judge services are refused.
