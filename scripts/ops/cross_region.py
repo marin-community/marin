@@ -26,6 +26,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
@@ -36,7 +37,7 @@ import click
 import duckdb
 import google.auth
 import google.auth.transport.requests
-from finelog.client import DirectQuerySegment, ObjectQueryClient
+from finelog.client import DirectQuerySegment, ObjectQueryClient, QueryTimeoutError
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
@@ -338,6 +339,36 @@ def iter_log_rows(
     )
     while batch := cursor.fetchmany(ROW_BATCH_SIZE):
         yield from batch
+
+
+@contextlib.contextmanager
+def interrupt_at_pin_deadline(con: duckdb.DuckDBPyConnection, lifetime_ms: int, pinned_at: float) -> Iterator[None]:
+    """Interrupt ``con`` when a catalog pin taken at monotonic time ``pinned_at`` expires.
+
+    Finelog keeps a pinned catalog's objects readable for ``lifetime_ms``
+    (``CatalogPin.max_query_time_ms``); after that, a compaction can delete
+    them mid-scan. ``ObjectQueryClient.query`` enforces the same deadline.
+    """
+    remaining = pinned_at + lifetime_ms / 1000 - time.monotonic()
+    if remaining <= 0:
+        raise QueryTimeoutError(f"catalog pin lifetime of {lifetime_ms} ms expired before the scan")
+    timed_out = threading.Event()
+
+    def interrupt() -> None:
+        timed_out.set()
+        con.interrupt()
+
+    watchdog = threading.Timer(remaining, interrupt)
+    watchdog.start()
+    try:
+        yield
+    except duckdb.Error as error:
+        if timed_out.is_set():
+            raise QueryTimeoutError(f"log scan exceeded the catalog pin lifetime of {lifetime_ms} ms") from error
+        raise
+    finally:
+        watchdog.cancel()
+        watchdog.join()
 
 
 @contextlib.contextmanager
@@ -899,19 +930,23 @@ def run_analysis(
         raise ValueError(f"finelog config {cfg.finelog.config!r} has no remote_log_dir.")
     remote_log_dir = finelog_cfg.remote_log_dir.rstrip("/")
 
-    # The pin is an immutable catalog snapshot; its objects stay readable for at
-    # least the catalog's query lifetime, which comfortably covers the scan.
+    db_path = download_checkpoint(cfg, workdir, checkpoint_dir)
+
+    # Pin after the checkpoint download so the scan has the pin's full lifetime.
+    pinned_at = time.monotonic()
     pin = ObjectQueryClient(remote_log_dir).pin_catalog(LOG_NAMESPACE)
     logging.info(
         f"Pinned {LOG_NAMESPACE!r} catalog generation {pin.catalog_generation} "
         f"under {remote_log_dir}: {len(pin.segments)} stable segments"
     )
     log_segments = choose_log_segments(pin.segments, window, lookback_hours)
-    db_path = download_checkpoint(cfg, workdir, checkpoint_dir)
 
     sources = [gcs_https_url(segment.object_uri) for segment in log_segments]
     started = time.monotonic()
-    with gcs_scan_connection(TaskResources.from_environment()) as con:
+    with (
+        gcs_scan_connection(TaskResources.from_environment()) as con,
+        interrupt_at_pin_deadline(con, pin.max_query_time_ms, pinned_at),
+    ):
         summary = analyze(iter_log_rows(con, sources, window), db_path, window)
     logging.info(f"Scanned {len(sources)} segments in {time.monotonic() - started:.1f}s")
     summary["local_db_path"] = str(db_path)
