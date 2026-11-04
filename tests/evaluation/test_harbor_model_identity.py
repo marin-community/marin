@@ -10,7 +10,8 @@ from pathlib import Path
 from marin.evaluation.harbor.driver_config import preflight_harbor_configs
 
 
-def test_preflight_policy_identity_ignores_model_and_serving_names():
+def test_preflight_policy_identity_ignores_model_and_serving_names(monkeypatch):
+    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     with tempfile.TemporaryDirectory(prefix=".harbor-identity-", dir=Path(__file__).parents[2]) as directory:
         tmp_path = Path(directory)
         task = tmp_path / "dataset/task"

@@ -4,10 +4,39 @@
 """Prepared tasks retain their source inputs and use the digest of their own build."""
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
+from experiments.evaluation.images.tau3 import build
 from experiments.evaluation.images.tau3.build import prepare_tau3_task
+
+
+def test_dockerfile_edits_build_a_new_image_instead_of_reusing_the_published_recipe(tmp_path, monkeypatch):
+    for name in build.BUILD_INPUTS:
+        shutil.copyfile(build.RECIPE / name, tmp_path / name)
+    monkeypatch.setattr(build, "RECIPE", tmp_path)
+    images: dict[str, str] = {}
+
+    def docker(argv, **kwargs):
+        if argv[1:4] == ["buildx", "imagetools", "inspect"]:
+            image = argv[4]
+            if image not in images:
+                return subprocess.CompletedProcess(argv, 1, "", "manifest unknown")
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"digest": images[image]}), "")
+        assert argv[1:3] == ["buildx", "build"]
+        tag = next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--tag="))
+        images[tag] = "sha256:" + str(len(images) + 1) * 64
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(subprocess, "run", docker)
+    first = build.tau3_image()
+    assert build.tau3_image() == first
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(dockerfile.read_text() + '\nENV RECIPE_REGRESSION="updated"\n')
+    updated = build.tau3_image()
+    assert first == f"{build.DEFAULT_REPOSITORY}@sha256:{'1' * 64}"
+    assert updated == f"{build.DEFAULT_REPOSITORY}@sha256:{'2' * 64}"
 
 
 def test_prepare_tau3_task_reuses_main_and_pins_runtime_build_result(tmp_path, monkeypatch):

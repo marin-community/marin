@@ -585,12 +585,13 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(
         judge_config=ModelConfigRef.model_validate(
             asdict(ModelConfig(name="qwen-judge", location="org/judge@revision"))
         ),
-        secret_env_keys=("DAYTONA_API_KEY",),
+        secret_env_keys=("DAYTONA_API_KEY", "OPENAI_API_KEY"),
     )
     env_vars = {
         "DAYTONA_API_KEY": "daytona-key",
         "DAYTONA_TARGET": "test-target",
         "DAYTONA_API_URL": "https://daytona.example/api",
+        "OPENAI_API_KEY": "policy-judge-private",
     }
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         env_vars["HF_TOKEN"] = "hf-key"
@@ -620,7 +621,8 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(
     assert captured["env"]["DAYTONA_API_URL"] == "https://daytona.example/api"
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         assert captured["env"]["HF_TOKEN"] == "hf-key"
-    assert captured["env"]["OPENAI_API_KEY"] == (model.endpoint.api_key or "EMPTY")
+    assert captured["env"]["OPENAI_API_KEY"] == "policy-judge-private"
+    assert captured["env"]["HARBOR_CANDIDATE_API_KEY"] == (model.endpoint.api_key or "EMPTY")
     if api_key:
         assert api_key not in json.dumps(asdict(captured["overlay"]))
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0

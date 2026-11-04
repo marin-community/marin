@@ -92,10 +92,9 @@ def model_guest_environment(values: Mapping[str, str], model: str) -> dict[str, 
     result = model_guest_credentials(values)
     result.update(
         OPENAI_BASE_URL=f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1",
+        OPENAI_API_BASE=f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1",
         OPENAI_API_KEY="EMPTY",
     )
-    if any(name != "MODEL_NAME" and name in values for name in VERIFIER_MODEL_ROLES):
-        result["OPENAI_API_BASE"] = result["OPENAI_BASE_URL"]
     for name in _MODEL_ROLES:
         if name in result:
             result[name] = model if name == "MODEL_NAME" else "openai/" + model

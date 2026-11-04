@@ -123,7 +123,8 @@ def _environment(
     return resolve_env_vars(values, source=source, protected_values=protected_values)
 
 
-def _prepared_images(environment_dir: Path) -> dict[str, PreparedImageConfig]:
+def prepared_images(environment_dir: Path) -> dict[str, PreparedImageConfig]:
+    """Read the task's explicit prepared-image declarations."""
     path = environment_dir / PREPARED_IMAGES_FILE
     if not path.exists():
         return {}
@@ -257,7 +258,7 @@ def import_prepared_task(
     ]
     if len(compose_paths) > 1:
         raise ValueError("Prepared tasks accept one Compose file per task")
-    prepared = _prepared_images(environment_dir)
+    prepared = prepared_images(environment_dir)
     content = yaml.safe_load(compose_paths[0].read_text()) if compose_paths else {}
     document = ComposeDocument.model_validate({} if content is None else content)
     if "main" not in document.services:

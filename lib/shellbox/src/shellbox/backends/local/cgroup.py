@@ -41,27 +41,26 @@ def check_cgroup_parent(parent: Path) -> None:
 
 
 def delegated_cgroup_parent() -> Path | None:
-    """Find the worker's writable delegation, preferring an empty parent for controllers."""
+    """Find writable delegation within the worker's own cgroup or systemd unit."""
     if not (CGROUP_ROOT / "cgroup.controllers").is_file():
         return None
     current = _current_cgroup()
     if not current.is_relative_to(CGROUP_ROOT):
         return None
-    fallback = None
-    for parent in (current, *current.parents):
-        if not parent.is_relative_to(CGROUP_ROOT):
-            break
+    candidates = [current]
+    # DelegateSubgroup moves the worker below its unit. Do not cross a unit
+    # boundary into a shared systemd slice, even when that slice is writable.
+    unit_suffixes = (".service", ".scope")
+    if not current.name.endswith(unit_suffixes) and current.parent.name.endswith(unit_suffixes):
+        if not (current.parent / "cgroup.procs").read_text().strip():
+            candidates.insert(0, current.parent)
+    for parent in candidates:
         try:
             check_cgroup_parent(parent)
         except UnsupportedMachineSpec:
             continue
-        if fallback is None:
-            fallback = parent
-        # systemd's DelegateSubgroup keeps the service parent empty; controllers
-        # cannot be enabled in a non-root cgroup that contains worker processes.
-        if not (parent / "cgroup.procs").read_text().strip():
-            return parent
-    return fallback
+        return parent
+    return None
 
 
 def _apply_resource_limits(parent: Path, path: Path, *, cpus: int | None, memory_mb: int | None) -> None:

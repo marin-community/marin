@@ -24,6 +24,7 @@ from marin.evaluation.harbor.trial_driver import (
     _preflight_one,
     effective_job_config,
 )
+from marin.evaluation.harbor.agent_context import CANDIDATE_API_KEY_ENV
 from openai import AsyncOpenAI
 from shellbox.http_service import HttpRequest
 
@@ -237,8 +238,8 @@ def test_candidate_routing_agrees_with_factory_precedence(
 def test_host_authentication_uses_owned_snapshot_and_rejects_endpoint_credential_conflict(
     policy, overlay, monkeypatch
 ):
-    source = {"OPENAI_API_KEY": "candidate-private"}
-    monkeypatch.setenv("OPENAI_API_KEY", "later-ambient-private")
+    source = {CANDIDATE_API_KEY_ENV: "candidate-private"}
+    monkeypatch.setenv(CANDIDATE_API_KEY_ENV, "later-ambient-private")
     assert _model_authentication(policy, overlay, host_environment=source) == {
         _CANDIDATE_ENDPOINT: "candidate-private",
         _JUDGE_ENDPOINT: "judge-private",
@@ -252,8 +253,8 @@ def test_host_authentication_uses_owned_snapshot_and_rejects_endpoint_credential
     assert "private" not in str(error.value)
 
 
-def test_candidate_declarations_do_not_supply_or_conflict_with_judge_credentials(
-    policy, overlay
+async def test_candidate_transport_keeps_the_policy_openai_key_for_its_judge(
+    policy, overlay, monkeypatch
 ):
     candidate = policy.agents[0].model_copy(
         update={"env": {"OPENAI_API_KEY": "${OPENAI_API_KEY}"}}
@@ -262,7 +263,7 @@ def test_candidate_declarations_do_not_supply_or_conflict_with_judge_credentials
         update={
             "env": {
                 "OPENAI_BASE_URL": _JUDGE_ENDPOINT,
-                "TOGETHER_API_KEY": "${TOGETHER_API_KEY}",
+                "OPENAI_API_KEY": "${OPENAI_API_KEY}",
                 "MODEL_NAME": "judge-alias",
             }
         }
@@ -272,13 +273,33 @@ def test_candidate_declarations_do_not_supply_or_conflict_with_judge_credentials
         policy,
         overlay.model_copy(update={"verifier_env": {}}),
         host_environment={
-            "OPENAI_API_KEY": "candidate-private",
-            "TOGETHER_API_KEY": "judge-private",
+            CANDIDATE_API_KEY_ENV: "candidate-private",
+            "OPENAI_API_KEY": "judge-private",
         },
     )
-    assert authentication == {
-        _CANDIDATE_ENDPOINT: "candidate-private",
-        _JUDGE_ENDPOINT: "judge-private",
+    observed = {}
+
+    def provider(request):
+        observed[str(request.url)] = request.headers["authorization"]
+        return httpx.Response(200, json={"choices": []})
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        model_relay.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(provider), **kwargs),
+    )
+    for endpoint in (_CANDIDATE_ENDPOINT, _JUDGE_ENDPOINT):
+        relay = ModelRelay.from_endpoint(
+            endpoint, "model", authentication=authentication
+        )
+        response = await relay.handle(
+            HttpRequest("POST", "/v1/chat/completions", b'{"messages": []}')
+        )
+        assert response.status == 200
+    assert observed == {
+        _CANDIDATE_ENDPOINT + "/chat/completions": "Bearer candidate-private",
+        _JUDGE_ENDPOINT + "/chat/completions": "Bearer judge-private",
     }
 
 
@@ -365,28 +386,41 @@ def test_tau2_compose_and_verifier_models_use_hosted_judge_without_parent_secret
 
 
 @pytest.mark.parametrize(
-    "roles", [("JUDGE_MODEL", "EXPANSION_MODEL"), ("EXPANSION_MODEL",)]
+    "roles", [("JUDGE_MODEL", "EXPANSION_MODEL"), ("EXPANSION_MODEL",), ("MODEL_NAME",)]
 )
+@pytest.mark.parametrize("hosted_judge_key", ["EMPTY", "judge-private"])
 async def test_verifier_roles_reach_fixed_provider_with_host_authentication(
-    policy, overlay, roles, monkeypatch
+    policy, overlay, roles, hosted_judge_key, monkeypatch
 ):
     verifier = policy.verifier.model_copy(
         update={
             "env": {
-                "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+                "OPENAI_API_BASE": (
+                    "https://api.together.xyz/proxy/t/policy-capability/v1"
+                ),
                 "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
+                "TOGETHER_API_KEY": "${TOGETHER_API_KEY}",
                 **dict.fromkeys(roles, "together_ai/openai/gpt-oss-120b"),
             }
         }
     )
     policy = policy.model_copy(update={"verifier": verifier})
+    overlay = overlay.model_copy(
+        update={
+            "verifier_env": {**overlay.verifier_env, "OPENAI_API_KEY": hosted_judge_key}
+        }
+    )
     config = effective_job_config(policy, overlay)
-    authentication = _model_authentication(policy, overlay, host_environment={})
+    authentication = _model_authentication(
+        policy,
+        overlay,
+        host_environment={"TOGETHER_API_KEY": "policy-together-private"},
+    )
     provider_models = []
 
     def provider(request):
         assert str(request.url) == _JUDGE_ENDPOINT + "/chat/completions"
-        assert request.headers["authorization"] == "Bearer judge-private"
+        assert request.headers["authorization"] == "Bearer " + hosted_judge_key
         payload = json.loads(request.content)
         provider_models.append(payload["model"])
         return httpx.Response(
@@ -437,8 +471,10 @@ async def test_verifier_roles_reach_fixed_provider_with_host_authentication(
         http_client=WireClient(transport=httpx.MockTransport(loopback)),
     ) as client:
         for role in roles:
-            transport, model = config.verifier.env[role].split("/", 1)
-            assert transport == "openai"
+            model = config.verifier.env[role]
+            if role != "MODEL_NAME":
+                transport, model = model.split("/", 1)
+                assert transport == "openai"
             response = await client.chat.completions.create(
                 model=model, messages=[{"role": "user", "content": role}]
             )
@@ -509,8 +545,122 @@ def test_preflight_requires_runtime_judge_for_primary_and_peer_model_access(
     )
     judge = None if authority == "missing-judge" else "judge-alias"
     if authority == "runtime":
-        report = _preflight_one(path, {}, judge, host_environment={})
+        report = _preflight_one(
+            path, {}, judge, host_environment={"DAYTONA_TARGET": "test-target"}
+        )
         assert report["benchmark_metadata"]["n_benchmark"] == 1
     else:
-        with pytest.raises(ValueError):
-            _preflight_one(path, {}, judge, host_environment={})
+        diagnostic = (
+            "host judge" if authority == "missing-judge" else "judge_access='runtime'"
+        )
+        with pytest.raises(ValueError, match=diagnostic):
+            _preflight_one(
+                path, {}, judge, host_environment={"DAYTONA_TARGET": "test-target"}
+            )
+
+
+def test_preflight_validates_later_peer_aliases_after_primary_model_endpoint(
+    tmp_path, prepared_task
+):
+    task_config = prepared_task / "task.toml"
+    task_config.write_text(
+        task_config.read_text()
+        + '\n[environment.env]\nOPENAI_BASE_URL="http://127.0.0.1:8787/v1"\n'
+    )
+    (prepared_task / "environment/compose.yaml").write_text(
+        json.dumps(
+            {
+                "services": {
+                    "main": {},
+                    "runtime": {
+                        "image": "example.test/runtime@sha256:" + "b" * 64,
+                        "working_dir": "/runtime",
+                        "environment": {
+                            "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
+                            "OPENAI_API_BASE": "http://different/v1",
+                        },
+                    },
+                },
+            }
+        )
+    )
+    path = tmp_path / "policy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "local", "kwargs": {"judge_access": "runtime"}},
+                "agents": [{"name": "terminus-2"}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="Conflicting OpenAI model endpoint aliases"):
+        _preflight_one(path, {}, "judge-alias", host_environment={})
+
+
+def test_preflight_daytona_requires_target_before_resolving_tasks(
+    tmp_path, prepared_task
+):
+    path = tmp_path / "policy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [{"name": "terminus-2"}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="DAYTONA_TARGET"):
+        _preflight_one(path, {}, None, host_environment={})
+    report = _preflight_one(
+        path, {}, None, host_environment={"DAYTONA_TARGET": "test-target"}
+    )
+    assert report["benchmark_metadata"]["n_benchmark"] == 1
+
+
+@pytest.mark.parametrize("backend", ["local", "daytona"])
+def test_preflight_standalone_pi_requires_matching_prepared_main_image(
+    tmp_path, prepared_task, backend
+):
+    path = tmp_path / "policy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": backend},
+                "agents": [{"name": "pi"}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    kwargs = {"thinking_format": "chat-template"}
+    host = {"DAYTONA_TARGET": "test-target"}
+    with pytest.raises(
+        ValueError, match="Standalone Pi requires a prepared main image"
+    ):
+        _preflight_one(path, kwargs, None, host_environment=host)
+    manifest = prepared_task / "environment/shellbox-images.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "main": {
+                    "image": "example.test/task@sha256:" + "b" * 64,
+                    "workdir": "/workspace",
+                }
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="(must match|conflicts with).*prepared"):
+        _preflight_one(path, kwargs, None, host_environment=host)
+    manifest.write_text(
+        json.dumps(
+            {
+                "main": {
+                    "image": "example.test/task@sha256:" + "a" * 64,
+                    "workdir": "/workspace",
+                }
+            }
+        )
+    )
+    report = _preflight_one(path, kwargs, None, host_environment=host)
+    assert report["benchmark_metadata"]["n_benchmark"] == 1

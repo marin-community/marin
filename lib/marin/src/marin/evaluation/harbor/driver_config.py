@@ -75,7 +75,10 @@ HARBOR_RUNTIME_PROJECT = "vendor/harbor"
 
 
 def harbor_runtime_descriptor() -> str:
-    return f"harbor @ {HARBOR_RUNTIME_PROJECT}#tree={launch_provenance().dedup_key}"
+    tree = launch_provenance().dedup_key
+    if not tree:
+        raise RuntimeError("Harbor evaluation requires Git provenance or MARIN_PROVENANCE for cache and resume identity")
+    return f"harbor @ {HARBOR_RUNTIME_PROJECT}#tree={tree}"
 
 
 def _harbor_env_dir() -> Path:

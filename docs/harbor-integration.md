@@ -522,6 +522,14 @@ does not replace it with a separate version pin. Pi setup does not install Node 
 npm packages. Historical tasks that relied on runtime installation need a prepared
 harness image.
 
+Marin preflight requires standalone Pi tasks to declare a digest-pinned `main`
+image in `environment/shellbox-images.json`. Build that image from the task's
+canonical image with Pi installed, preserving its benchmark dependencies. On
+Daytona, `task.toml`'s `environment.docker_image` must match the declared image.
+The declaration records the preparation contract; Pi setup checks the installed
+binary. This applies to the BixBench and BFCL standalone Pi campaign policies,
+including the one-task onboarding ablation.
+
 ACP Pi uses its own companion pin, `@earendil-works/pi-coding-agent@0.80.5`, with
 `pi-acp@0.0.33`. Its image must expose `node`, `pi`, and `pi-acp` on `PATH` and provide
 `/opt/harbor-acp-venv/bin/python` with `agent-client-protocol`. Every ACP bridge target,

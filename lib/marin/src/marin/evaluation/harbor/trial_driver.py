@@ -28,7 +28,9 @@ from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[m
 from harbor.agents.tau3_acp_relay.harbor_agent import candidate_agent_config  # pyrefly: ignore[missing-import]
 from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
     COMPOSE_FILENAMES,
+    PINNED_IMAGE,
     import_prepared_task,
+    prepared_images,
 )
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
@@ -67,6 +69,7 @@ from rigging.filesystem.s3_compat import s3_credential_options
 from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.harbor.agent_context import (
+    CANDIDATE_API_KEY_ENV,
     MAX_INPUT_TOKENS_KEY,
     MAX_OUTPUT_TOKENS_KEY,
     MODEL_INFO_KEY,
@@ -300,6 +303,18 @@ def _validate_job_tasks(job: Job) -> None:
             else task_config.path
         )
         task = Task(task_path, disable_verification=job.config.verifier.disable)
+        if job.config.agents[0].name == AgentName.PI:
+            main_image = prepared_images(task.paths.environment_dir).get("main")
+            if main_image is None or PINNED_IMAGE.fullmatch(main_image.image) is None:
+                raise ValueError(
+                    "Standalone Pi requires a prepared main image declared by digest in "
+                    "environment/shellbox-images.json; build the task image with Pi before launching"
+                )
+            if (
+                job.config.environment.type == EnvironmentType.DAYTONA
+                and task.config.environment.docker_image != main_image.image
+            ):
+                raise ValueError("Daytona Pi task docker_image must match its prepared main image declaration")
         task_environment, verifier_environment, solution_environment = (
             resolve_env_vars(
                 values,
@@ -647,11 +662,10 @@ def _environment_declarations(config: JobConfig) -> tuple[dict[str, str], ...]:
 
 
 def _judge_settings(config: JobConfig, overlay: RuntimeOverlay) -> tuple[str, str] | None:
-    values = {**config.verifier.env, **overlay.verifier_env}
+    values = overlay.verifier_env or config.verifier.env
     endpoint = model_api_url(values)
     if endpoint:
-        configured_model = judge_model(config.verifier.env)
-        model = judge_model(overlay.verifier_env) or configured_model
+        model = judge_model(values)
         if not model:
             raise ValueError("A judge endpoint requires an explicit verifier model role")
         return endpoint, model
@@ -675,7 +689,7 @@ def _judge_authentication(config: JobConfig, overlay: RuntimeOverlay, *, source:
     judge = _judge_settings(config, overlay)
     if judge is None:
         return {}
-    declarations = {**config.verifier.env, **overlay.verifier_env}
+    declarations = overlay.verifier_env or config.verifier.env
     if config.agents[0].name == "sotopia" and model_api_url(declarations) is None:
         declarations = {**config.agents[0].env, **declarations}
     return endpoint_authentication(judge[0], declarations, source=source)
@@ -685,7 +699,7 @@ def _model_authentication(
     config: JobConfig, overlay: RuntimeOverlay, *, host_environment: Mapping[str, str]
 ) -> dict[str, str]:
     authentication = _judge_authentication(config, overlay, source=host_environment)
-    candidate_api_key = host_environment.get("OPENAI_API_KEY", "EMPTY")
+    candidate_api_key = host_environment.get(CANDIDATE_API_KEY_ENV, "EMPTY")
     if overlay.endpoint_url in authentication and authentication[overlay.endpoint_url] != candidate_api_key:
         raise ValueError("Candidate and judge credentials conflict for the same host endpoint")
     authentication[overlay.endpoint_url] = candidate_api_key
@@ -748,6 +762,8 @@ def _preflight_one(
     assert isinstance(dataset, DatasetConfig)
     agent_name = _validate_agent(agent)
     environment_name = _validate_environment(config)
+    if config.environment.type == EnvironmentType.DAYTONA and not host_environment.get("DAYTONA_TARGET"):
+        raise ValueError("Harbor Daytona policies require DAYTONA_TARGET before model allocation")
     dataset_metadata = _dataset_metadata(dataset, _raw_dataset_path(document))
 
     stable_config = _stable_config(config)

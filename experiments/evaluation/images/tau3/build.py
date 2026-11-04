@@ -13,12 +13,11 @@ from tempfile import TemporaryDirectory
 
 RECIPE = Path(__file__).parent
 DEFAULT_REPOSITORY = "ghcr.io/marin-community/rollout-images"
-LOCKS = ("package-lock.json", "requirements.lock")
+BUILD_INPUTS = ("Dockerfile", "package.json", "package-lock.json", "requirements.lock")
 
 
 @dataclass(frozen=True)
 class Tau3Dependencies:
-    recipe_revision: int
     platform: str
     base_image: str
     tau2_bench_commit: str
@@ -28,7 +27,6 @@ class Tau3Dependencies:
 
 
 DEPENDENCIES = Tau3Dependencies(
-    recipe_revision=5,
     platform="linux/amd64",
     base_image=(
         "ghcr.io/marin-community/rollout-images@sha256:17a0f60def260b484134ca7f137970735cd9d0a30900aeb1a037f59acac9484a"
@@ -48,13 +46,13 @@ DEPENDENCIES = Tau3Dependencies(
 
 
 def dependency_identity(base_image: str | None = None) -> tuple[Tau3Dependencies, str]:
-    """Hash dependency locks and declared build configuration, without reading source code."""
+    """Hash the image recipe, dependency locks, and declared build configuration."""
     dependencies = replace(DEPENDENCIES, base_image=base_image) if base_image is not None else DEPENDENCIES
     if "@sha256:" not in dependencies.base_image:
         raise ValueError("The parent image must be pinned by digest")
     identity = {
         "dependencies": asdict(dependencies),
-        "locks": {name: (RECIPE / name).read_text() for name in LOCKS},
+        "inputs": {name: (RECIPE / name).read_text() for name in BUILD_INPUTS},
     }
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return dependencies, digest

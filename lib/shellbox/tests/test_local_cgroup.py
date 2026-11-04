@@ -12,7 +12,7 @@ from typing import cast
 
 import pytest
 import pytest_asyncio
-from shellbox.backends.local.cgroup import delegated_cgroup_parent
+from shellbox.backends.local.cgroup import CGROUP_ROOT, delegated_cgroup_parent
 from shellbox.backends.local.machine import LocalMachine, LocalMachineFactory
 from shellbox.http_service import HttpResponse, serve_http
 from shellbox.machine import Command, ExitReason, HostImage, MachineSpec, MachineTerminated
@@ -67,6 +67,19 @@ def unavailable_limit(request, monkeypatch):
         return write_text(path, data, *args, **kwargs)
 
     monkeypatch.setattr(Path, "write_text", write)
+
+
+async def test_local_discovery_keeps_allocations_inside_the_worker_unit(create_machine):
+    membership = Path("/proc/self/cgroup").read_text().strip().removeprefix("0::/")
+    current = CGROUP_ROOT / membership
+    boundary = next(
+        (path for path in (current, *current.parents) if path.name.endswith((".service", ".scope"))), current
+    )
+    before = set(boundary.rglob("shellbox-*"))
+    machine = await create_machine(MachineSpec(HostImage(), workdir="/app"))
+    assert len(set(boundary.rglob("shellbox-*")) - before) == 1
+    result = await machine.run(Command(("sh", "-c", "printf answer > answer; cat answer")))
+    assert (result.exit_code, result.stdout) == (0, b"answer")
 
 
 @pytest.mark.parametrize("unavailable_limit", [None, "memory.max"], indirect=True)

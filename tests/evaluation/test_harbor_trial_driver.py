@@ -20,6 +20,11 @@ _ROOT = Path(__file__).parents[2]
 _POLICIES = _ROOT / "experiments/evaluation/configs/harbor"
 
 
+@pytest.fixture(autouse=True)
+def daytona_target(monkeypatch):
+    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
+
+
 @pytest.fixture(scope="module")
 def checked_policies(tmp_path_factory):
     paths = sorted(_POLICIES.glob("*.yaml"))

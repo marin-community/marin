@@ -193,7 +193,8 @@ def task_model_relays(
     candidate = ModelRelay.from_endpoint(
         candidate_model_endpoint, candidate_model_name, authentication=authentication
     )
-    if any(model_api_url(values) is not None for values in environments):
+    endpoints = tuple(model_api_url(values) for values in environments)
+    if any(endpoint is not None for endpoint in endpoints):
         if judge is None:
             raise ValueError(
                 "Task model calls require an explicit host judge endpoint and model"

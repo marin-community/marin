@@ -60,54 +60,113 @@ def test_runtime_failures_use_published_infrastructure_taxonomy_in_marin(tmp_pat
 
 
 @pytest.mark.parametrize(
-    ("section", "replacement"),
+    ("section", "replacement", "diagnostic"),
     [
-        ("environment", {"type": "docker"}),
-        ("environment", {"import_path": "harbor.environments.docker.docker:DockerEnvironment"}),
-        ("agents", [{"name": "mini-swe-agent"}]),
-        ("agents", [{"name": "pi", "env": {"STOLEN": "${HF_TOKEN}"}}]),
-        ("agents", [{"name": "acp", "kwargs": {"registry_entry": {"id": "another-agent"}}}]),
-        ("agents", [{"name": "terminus-2", "env": {"STOLEN": "${AWS_SECRET_ACCESS_KEY}"}}]),
-        ("agents", [{"name": "terminus-2", "kwargs": {"extra_env": {"STOLEN": "${HF_TOKEN}"}}}]),
-        ("agents", [{"name": "terminus-2", "mcp_servers": [{"name": "host", "url": "http://host"}]}]),
-        ("verifier", {"env": {"OPENAI_API_KEY": "${AWS_SECRET_ACCESS_KEY}"}}),
-        ("verifier", {"import_path": "host.verifier:Verifier"}),
-        ("user_agent", {"import_path": "harbor.agents.terminus_2:Terminus2", "bridge": {"kind": "acp"}}),
+        ("agents", [{"name": "mini-swe-agent"}], "requires terminus-2, oracle, Pi, or pi-acp"),
+        (
+            "agents",
+            [{"name": "pi", "kwargs": {"thinking_format": "chat-template"}, "env": {"STOLEN": "${HF_TOKEN}"}}],
+            "environment forwarding",
+        ),
+        (
+            "agents",
+            [
+                {
+                    "name": "acp",
+                    "kwargs": {
+                        "registry_entry": {
+                            "id": "another-agent",
+                            "name": "Another agent",
+                            "version": "1.0.0",
+                            "description": "An alternate ACP agent",
+                            "distribution": {"npx": {"package": "another-agent@1.0.0"}},
+                        }
+                    },
+                }
+            ],
+            "requires terminus-2, oracle, Pi, or pi-acp",
+        ),
+        ("agents", [{"name": "terminus-2", "env": {"STOLEN": "${AWS_SECRET_ACCESS_KEY}"}}], "environment forwarding"),
+        (
+            "agents",
+            [{"name": "terminus-2", "kwargs": {"extra_env": {"STOLEN": "${HF_TOKEN}"}}}],
+            "alternate agent environment",
+        ),
+        ("agents", [{"name": "terminus-2", "mcp_servers": [{"name": "host", "url": "http://host"}]}], "MCP servers"),
+        ("verifier", {"env": {"OPENAI_API_KEY": "${AWS_SECRET_ACCESS_KEY}"}}, "AWS_SECRET_ACCESS_KEY"),
+        ("verifier", {"import_path": "host.verifier:Verifier"}, "without a custom import"),
+        (
+            "user_agent",
+            {"import_path": "harbor.agents.terminus_2:Terminus2", "bridge": {"kind": "acp"}},
+            "sandboxed Tau3 ACP simulated user",
+        ),
     ],
 )
-def test_preflight_rejects_host_escape_routes_before_submission(tmp_path, prepared_policy, section, replacement):
+def test_preflight_rejects_host_escape_routes_before_submission(
+    tmp_path, prepared_policy, section, replacement, diagnostic
+):
     document = json.loads(prepared_policy.read_text())
     document[section] = replacement
     prepared_policy.write_text(json.dumps(document))
     completed = preflight(tmp_path, [(prepared_policy, {})], check=False)
     assert completed.returncode == 2
     assert completed.stdout == ""
+    assert diagnostic in completed.stderr
 
 
 @pytest.mark.parametrize(
-    "unsafe_configuration",
+    ("environment", "location"),
     [
-        'docker_image = "example.test/task:latest"\nallow_internet = false\n',
-        f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = true\n',
-        f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = false\n'
-        '[environment.env]\nSTOLEN = "${AWS_SECRET_ACCESS_KEY}"\n',
-        f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = false\n'
-        '[verifier.env]\nSTOLEN = "${HF_TOKEN}"\n',
-        f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = false\n'
-        '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n',
+        ({"type": "docker"}, ["environment", "type"]),
+        ({"import_path": "harbor.environments.docker.docker:DockerEnvironment"}, ["environment", "import_path"]),
     ],
 )
-def test_preflight_checks_each_resolved_task_before_submission(tmp_path, prepared_policy, unsafe_configuration):
+def test_preflight_reports_rejected_legacy_environment_field(tmp_path, prepared_policy, environment, location):
+    document = json.loads(prepared_policy.read_text())
+    document["environment"] = environment
+    prepared_policy.write_text(json.dumps(document))
+    completed = preflight(tmp_path, [(prepared_policy, {})], check=False)
+    assert completed.returncode == 2
+    assert any(error["loc"] == location for error in json.loads(completed.stderr.strip().splitlines()[-1]))
+
+
+@pytest.mark.parametrize(
+    ("unsafe_configuration", "diagnostic"),
+    [
+        ('docker_image = "example.test/task:latest"\nallow_internet = false\n', "pinned with @sha256"),
+        (f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = true\n', "allow_internet=false"),
+        (
+            f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = false\n'
+            '[environment.env]\nSTOLEN = "${AWS_SECRET_ACCESS_KEY}"\n',
+            "AWS_SECRET_ACCESS_KEY",
+        ),
+        (
+            f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = false\n'
+            '[verifier.env]\nSTOLEN = "${HF_TOKEN}"\n',
+            "HF_TOKEN",
+        ),
+        (
+            f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = false\n'
+            '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n',
+            "OPENAI_API_KEY",
+        ),
+    ],
+)
+def test_preflight_checks_each_resolved_task_before_submission(
+    tmp_path, prepared_policy, unsafe_configuration, diagnostic
+):
     invalid_task = tmp_path / "dataset" / "z-invalid-task"
     shutil.copytree(tmp_path / "dataset/task", invalid_task)
     (invalid_task / "task.toml").write_text('[environment]\nworkdir = "/workspace"\n' + unsafe_configuration)
     completed = preflight(tmp_path, [(prepared_policy, {})], check=False)
     assert completed.returncode == 2
     assert completed.stdout == ""
+    assert diagnostic in completed.stderr
 
 
 @pytest.mark.parametrize("other_role", ["REFUSAL_JUDGE_MODEL", "EXPANSION_MODEL"])
-def test_preflight_rejects_distinct_judge_roles_before_allocation(tmp_path, prepared_policy, other_role):
+def test_preflight_rejects_distinct_judge_roles_before_allocation(tmp_path, prepared_policy, other_role, monkeypatch):
+    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     document = json.loads(prepared_policy.read_text())
     document["environment"] = {"type": "daytona"}
     document["verifier"] = {
@@ -122,3 +181,4 @@ def test_preflight_rejects_distinct_judge_roles_before_allocation(tmp_path, prep
     completed = preflight(tmp_path, [(prepared_policy, {})], check=False)
     assert completed.returncode == 2
     assert completed.stdout == ""
+    assert "Distinct verifier model roles" in completed.stderr
