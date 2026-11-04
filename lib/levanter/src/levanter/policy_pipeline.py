@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
-from typing import Any, NamedTuple, Protocol
+from typing import NamedTuple, Protocol
 
 import equinox as eqx
 import haliax as hax
@@ -23,7 +23,7 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 from haliax import NamedArray
-from jaxtyping import Array, Float, Int, Shaped
+from jaxtyping import Array, Float, Int, PyTree, Shaped
 import optax
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -623,7 +623,7 @@ def _scorer_repeatability_details(first_logprobs, repeated_logprobs, policy_weig
 @dataclass(frozen=True)
 class _PreparedPipelineScorer:
     execute: Callable
-    batch_specs: Any
+    batch_specs: PyTree  # Compiled batch structure with JaxPP sharding leaves.
     trainable: tuple[PipelineStage, ...]
     frozen: tuple[PipelineStage, ...]
     report_routing: bool
