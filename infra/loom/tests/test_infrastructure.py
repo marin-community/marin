@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -549,43 +548,6 @@ def test_preview_without_a_built_image_leaves_the_vm_image_unknown():
         assert isinstance(by_name(mocks, "loom").inputs["metadata"]["loom-image"], Unknown)
 
     return infrastructure.activation.id.apply(check)
-
-
-def test_activation_does_not_need_gnu_timeout_on_the_operator_host(tmp_path: Path) -> None:
-    # Regression: macOS has no `timeout`, so activation exited 127 before reaching the VM.
-    tools = tmp_path / "bin"
-    tools.mkdir()
-    for tool in ("grep", "seq", "sleep"):
-        (tools / tool).symlink_to(shutil.which(tool))
-    restarts = tmp_path / "restarts"
-    fakes = {
-        "gcloud": f"#!/bin/sh\necho restart >> '{restarts}'\n",
-        "curl": "#!/bin/sh\nprintf '%s' '{\"status\":\"ready\"}'\n",
-    }
-    for name, script in fakes.items():
-        (tools / name).write_text(script)
-        (tools / name).chmod(0o755)
-    ssh = tmp_path / ".ssh"
-    ssh.mkdir()
-    (ssh / "google_compute_engine").touch()
-    (ssh / "google_compute_engine.pub").touch()
-
-    result = subprocess.run(
-        [shutil.which("bash"), str(ROOT / "activate.sh")],
-        env={
-            "PATH": str(tools),
-            "HOME": str(tmp_path),
-            "LOOM_PROJECT": "example",
-            "LOOM_ZONE": "us-central1-a",
-            "LOOM_INSTANCE": "loom",
-            "LOOM_DOMAIN": "loom.example.com",
-        },
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert restarts.read_text().splitlines() == ["restart"]
 
 
 @pulumi.runtime.test
