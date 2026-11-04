@@ -51,5 +51,7 @@ is explicitly `"false"`. Missing records or settings require fresh generations.
 Run [update_tracker](update_tracker.py) locally with `--tracker`, `--output-prefix`,
 `--summary`, and `--lock` set to the campaign's `artifacts/.auto-refill.lock`;
 the updater acquires the [refill tracker lock](../../analysis/harbor_verifier_audit/README.md).
+The summary records both replaced cells in `updates` and models requiring fresh
+generations in `regenerate`.
 Each replacement cell links to its per-trial replay JSON, retaining binary
 rewards and the immutable raw-response source.

@@ -9,6 +9,7 @@ import fcntl
 import json
 import logging
 import re
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from rigging.filesystem.buckets import filesystem_for
@@ -18,6 +19,14 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 LOGGER = logging.getLogger(__name__)
 BENCHMARK = "NUPA"
 SCORE_CELL = re.compile(r"^([01](?:\.\d+)?)\s+\((s3://[^)]+)\)$")
+
+
+@dataclass(frozen=True)
+class PromotionSummary:
+    """Tracker replacements and models that need fresh NUPA generations."""
+
+    updates: list[dict]
+    regenerate: list[str]
 
 
 def read_json(uri: str) -> dict:
@@ -42,11 +51,12 @@ def thinking_boundaries_preserved(model: str, raw_source: str) -> bool:
     return config is not None and config["generation"]["extra_gen_kwargs"].get("skip_special_tokens") == "false"
 
 
-def update_tracker(tracker: Path, output_prefix: str) -> list[dict]:
+def update_tracker(tracker: Path, output_prefix: str) -> PromotionSummary:
     lines = tracker.read_text().splitlines()
     header = [cell.strip() for cell in lines[0].strip("|").split("|")]
     nupa_index = header.index(BENCHMARK)
     updates = []
+    regenerate = []
     sealed_cells = 0
     for line_index, line in enumerate(lines[2:], start=2):
         if not line.startswith("| "):
@@ -64,6 +74,7 @@ def update_tracker(tracker: Path, output_prefix: str) -> list[dict]:
         result = read_json(uri)
         if not thinking_boundaries_preserved(row[0], result["raw_source"]):
             LOGGER.warning("Leave %s unchanged: thinking boundaries are unverified; regenerate NUPA", row[0])
+            regenerate.append(row[0])
             continue
         trials = result["trials"]
         corrected_score = sum(float(trial["corrected_correct"]) for trial in trials) / len(trials)
@@ -98,7 +109,7 @@ def update_tracker(tracker: Path, output_prefix: str) -> list[dict]:
         temporary = tracker.with_suffix(".md.tmp")
         temporary.write_text("\n".join(lines) + "\n")
         temporary.replace(tracker)
-    return updates
+    return PromotionSummary(updates=updates, regenerate=regenerate)
 
 
 def main() -> None:
@@ -111,8 +122,8 @@ def main() -> None:
     configure_coreweave_s3()
     with args.lock.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        updates = update_tracker(args.tracker, args.output_prefix)
-    args.summary.write_text(json.dumps({"updates": updates}, indent=2, sort_keys=True) + "\n")
+        summary = update_tracker(args.tracker, args.output_prefix)
+    args.summary.write_text(json.dumps(asdict(summary), indent=2, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":

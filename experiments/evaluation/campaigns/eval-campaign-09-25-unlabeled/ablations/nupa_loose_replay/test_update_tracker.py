@@ -3,6 +3,7 @@
 
 import importlib
 import json
+import sys
 
 import fsspec
 import pytest
@@ -48,10 +49,29 @@ def test_promotion_preserves_unverified_thinking_cells_and_updates_other_models(
             ).encode(),
         )
 
-    changes = updater.update_tracker(tracker, "s3://replay")
+    summary_path = tmp_path / "summary.json"
+    monkeypatch.setattr(updater, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "update_tracker",
+            "--tracker",
+            str(tracker),
+            "--output-prefix",
+            "s3://replay",
+            "--lock",
+            str(tmp_path / "promotion.lock"),
+            "--summary",
+            str(summary_path),
+        ],
+    )
+    updater.main()
+    summary = json.loads(summary_path.read_text())
 
     expected = {"org/other", "org/Grug-Snowball"} if promoted else {"org/other"}
-    assert {change["model"] for change in changes} == expected
+    assert {change["model"] for change in summary["updates"]} == expected
+    assert summary["regenerate"] == ([] if promoted else ["org/Grug-Snowball"])
     text = tracker.read_text()
     assert "| org/other | 0.500 (s3://replay/results/nupa/org--other.json) |" in text
     if promoted:
