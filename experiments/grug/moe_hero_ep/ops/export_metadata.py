@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Immutable request, shard naming, and completion metadata for Hero exports."""
+"""Request, shard naming, and completion metadata for Hero exports."""
 
 import re
 from dataclasses import asdict
@@ -34,7 +34,7 @@ def split_expert_names(name: str, num_experts: int) -> tuple[str, ...]:
 
 
 def prepare_export(destination: str, request: dict) -> HFShardResume:
-    """Pin a request before writing shards, refusing changed or completed destinations."""
+    """Write the request and reject completed or occupied destinations."""
     if re.fullmatch(r"[0-9a-f]{40}", request["config"]["source_revision"]) is None:
         raise ValueError("source_revision must be a 40-character lowercase hexadecimal Marin commit")
     root = StoragePath(destination)
