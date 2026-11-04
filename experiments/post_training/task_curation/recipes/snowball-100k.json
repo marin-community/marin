@@ -46,6 +46,6 @@
   "validation_per_family": 20,
   "seed": 20261019,
   "evaluation_sources": {
-    "Marin:double-think": "reasoning_markup"
+    "Marin:thoughtcrime": "reasoning_markup"
   }
 }
