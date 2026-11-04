@@ -167,6 +167,12 @@ and append-only ledger entries. Ordinary solver trials are labeled separately
 from future adversarial searches. These records support immediate CTT difficulty
 and discrimination summaries and preserve the response matrix for later IRT.
 
+When the Iris host cannot start gVisor sandboxes, `--shellsim` runs the same
+frozen task resources and objective grader through ShellSim's isolated shell and
+CPython emulator. Results record `execution_backend=shellsim` and both the frozen
+TaskSpec digest and the execution-lowering digest; do not mix them with gVisor
+trials without stratifying by backend.
+
 ## Current limits
 
 - The gene panel is intentionally small and predefined.

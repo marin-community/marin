@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fray.types import ResourceConfig
 from rolloutengine.models import RolloutLimits
-from shellbox.machine import Backend
+from shellbox.machine import Backend, CommandSemantics
 from taskcompendium.models import TaskSpec
 from taskforge.content_hash import digest
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
@@ -24,6 +24,7 @@ from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, ReasoningEffort
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.sandbox.factories import MachineHost
+from taskforge.spec.draft import SHELLSIM_CPYTHON
 from taskforge.stage50_validate.evidence import Evidence
 from taskforge.stage50_validate.outcome import Graded, TrialKind
 from taskforge.stage50_validate.preflight import preflight
@@ -87,6 +88,20 @@ class CTTConfig:
     model: str = GLM_MODEL
     k: int = 3
     max_retries: int = 1
+    shellsim: bool = False
+
+
+def _execution_task(task: TaskSpec, shellsim: bool) -> TaskSpec:
+    if not shellsim:
+        return task
+    requirements = task.environment_requirements.model_copy(
+        update={
+            "command_semantics": CommandSemantics.SHELL_SIMULATOR,
+            "docker_image": None,
+            "package_spec": SHELLSIM_CPYTHON,
+        }
+    )
+    return task.model_copy(update={"environment_requirements": requirements})
 
 
 def _tokens(outcome: object) -> tuple[int, int]:
@@ -135,9 +150,12 @@ async def _calibrate(task: TaskSpec, config: CTTConfig, root: Path) -> dict[str,
     if config.model != GLM_MODEL:
         raise ValueError(f"relay supports {GLM_MODEL}, not {config.model}")
 
-    factories = machine_factories((Backend.GVISOR,), controller_url)
+    frozen_task_digest = digest(task)
+    execution_task = _execution_task(task, config.shellsim)
+    backend = Backend.SHELLSIM if config.shellsim else Backend.GVISOR
+    factories = machine_factories((backend,), controller_url)
     settings = EngineSettings(factories, COMMAND_TIMEOUT, LIMITS)
-    lowered = await preflight(task, MachineHost.IRIS, settings)
+    lowered = await preflight(execution_task, MachineHost.IRIS, settings)
     ledger_root = root / "ledger"
     ledger = JsonlLedger(ledger_root)
     plan = TrialPlan(
@@ -172,7 +190,9 @@ async def _calibrate(task: TaskSpec, config: CTTConfig, root: Path) -> dict[str,
         "campaign_id": "kang-ifnb-demo-ctt-glm53-k3",
         "trial_type": "ordinary_solver",
         "task_id": task.id,
+        "frozen_task_digest": frozen_task_digest,
         "task_digest": task_digest(lowered.spec, COMMAND_TIMEOUT),
+        "execution_backend": backend.value,
         "task_source": task.source.model_dump(mode="json"),
         "task_family": task.tags[-1],
         "model": config.model,
@@ -230,6 +250,11 @@ def main() -> None:
         "--relay-base-url",
         help="Optional OpenAI-compatible /v1 URL, for example an Iris capability bridge to a cross-cluster relay",
     )
+    parser.add_argument(
+        "--shellsim",
+        action="store_true",
+        help="Run solver tools in ShellSim instead of launching gVisor sandboxes",
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if min(args.count, args.k, args.max_workers) < 1:
@@ -240,6 +265,7 @@ def main() -> None:
         relay_service=args.relay_service,
         relay_base_url=args.relay_base_url,
         k=args.k,
+        shellsim=args.shellsim,
     )
     result = run_zephyr(tasks, config, args.output, args.max_workers)
     print(f"output={args.output}")
