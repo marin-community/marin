@@ -374,7 +374,7 @@ def test_snowball_load_path_multidevice_sharding():
         Vocab = Axis("vocab", cfg.vocab_size)
         mesh = Mesh(
             np.asarray(devices).reshape(1, 4, 1, 1, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         Batch = Axis("batch", len(devices))
@@ -466,7 +466,7 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
             jnp.arange(32, dtype=jnp.int32).reshape(4, 8),
             (Axis("batch", 4), Axis("position", 8)),
         )
-        axes = ("replica_dcn", "data", "context", "expert", "model")
+        axes = ("replica_dcn", "data", "expert", "context", "model")
 
         def run(shape):
             mesh = Mesh(
@@ -488,10 +488,10 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
                 np.asarray(grad.transformer.output_proj),
             )
 
-        data_axis, reference = run((1, 2, 1, 2, 1))
+        data_axis, reference = run((1, 2, 2, 1, 1))
         assert data_axis is None
         # Four context shards make the flattened token sharding larger than the batch.
-        for shape in [(1, 1, 2, 2, 1), (1, 1, 4, 2, 1)]:
+        for shape in [(1, 1, 2, 2, 1), (1, 1, 2, 4, 1)]:
             context_axis, sharded = run(shape)
             assert context_axis == "context"
             for expected, actual in zip(reference, sharded, strict=True):

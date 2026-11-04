@@ -48,8 +48,8 @@ def test_ce_grad_in_forward_matches_default_loss_and_parameter_grads():
         tokens = jnp.asarray(rng.integers(0, config.vocab_size, size=(4, 8), dtype=np.int32))
         loss_weight = jnp.asarray(rng.uniform(0.0, 2.0, size=(4, 8)).astype(np.float32)).at[:, -1].set(0.0)
         mesh = Mesh(
-            np.asarray(devices).reshape(1, 1, 1, 4, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            np.asarray(devices).reshape(1, 1, 4, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
 

@@ -326,7 +326,7 @@ def test_synthetic_training_data_builds_a_reusable_global_batch():
     device_count = len(jax.devices())
     mesh = Mesh(
         np.asarray(jax.devices()).reshape(1, device_count, 1, 1, 1),
-        ("replica_dcn", "data", "context", "expert", "model"),
+        ("replica_dcn", "data", "expert", "context", "model"),
     )
     batch = train._make_synthetic_batch(
         batch_size=device_count,
@@ -353,8 +353,8 @@ def test_balance_attention_rows_spreads_long_documents_across_shards(context_siz
     with use_test_devices(4 * context_size) as devices:
         rows, seq_len, shards, context = 8, 16, 4, context_size
         mesh = Mesh(
-            np.asarray(devices).reshape(1, 1, context, shards, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            np.asarray(devices).reshape(1, 1, shards, context, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         segment_ids = np.repeat(np.arange(seq_len // 2)[None, :], rows, axis=0).repeat(2, axis=1)
@@ -728,8 +728,8 @@ def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
     mesh = AbstractMesh(
-        axis_sizes=(1, 1, 1, 64, 1),
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_sizes=(1, 1, 64, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     input_sharding = NamedSharding(mesh, P(None, "expert", None, None))
@@ -757,8 +757,8 @@ def test_ep_newton_schulz_preserves_context_bank_sharding():
     # "expert" alone would drag the parameter, its fp32 master and the momentum buffer back to a
     # context-replicated layout -- the memory this sharding exists to avoid.
     mesh = AbstractMesh(
-        axis_sizes=(1, 1, 4, 16, 1),
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_sizes=(1, 1, 16, 4, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     param_spec = P(None, ("expert", "context"), None, None)
@@ -785,8 +785,8 @@ def test_ep_newton_schulz_preserves_context_bank_sharding():
 def test_ep_newton_schulz_matches_replicated_path():
     with use_test_devices(2) as devices:
         mesh = Mesh(
-            np.asarray(devices).reshape(1, 1, 1, 2, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            np.asarray(devices).reshape(1, 1, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         x = jax.random.normal(jax.random.key(0), (1, 2, 4, 2), dtype=jnp.float32)
@@ -821,8 +821,8 @@ def test_ep_newton_schulz_context_bank_avoids_gather():
     # Output placement alone cannot detect an intermediate gather of the full bank.
     with use_test_devices(4) as devices:
         mesh = Mesh(
-            np.asarray(devices).reshape(1, 1, 4, 1, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            np.asarray(devices).reshape(1, 1, 1, 4, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         spec = P(None, ("expert", "context"), "data", "model")
@@ -849,8 +849,8 @@ def test_ep_newton_schulz_context_bank_avoids_gather():
 
 def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
     mesh = AbstractMesh(
-        axis_sizes=(1, 1, 1, 64, 1),
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_sizes=(1, 1, 64, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     parameter_sharding = NamedSharding(mesh, P(None, "expert", None))
@@ -876,7 +876,7 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
     # weight leaf shared by identity, so the eval scores the trained weights with no capacity drops.
     mesh = Mesh(
         np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
-        ("replica_dcn", "data", "context", "expert", "model"),
+        ("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     cfg = model.GrugModelConfig(
@@ -988,8 +988,8 @@ def test_odd_depth_config_is_not_silently_rounded():
 def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
     with use_test_devices(4) as devices:
         mesh = Mesh(
-            np.asarray(devices).reshape(1, 1, 1, 2, 2),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            np.asarray(devices).reshape(1, 1, 2, 1, 2),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         cfg = model.GrugModelConfig(
@@ -1028,7 +1028,7 @@ def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
 def _explicit_mesh(*axis_sizes):
     return Mesh(
         np.asarray(jax.devices()).reshape(*axis_sizes),
-        ("replica_dcn", "data", "context", "expert", "model"),
+        ("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
 
@@ -1064,8 +1064,8 @@ def _latent_config(latent_dim=None):
 @pytest.mark.parametrize("context_size", [1, 2])
 def test_logits_preserves_context_sharding(context_size):
     mesh = AbstractMesh(
-        axis_sizes=(1, 1, context_size, 2, 1),
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_sizes=(1, 1, 2, context_size, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     config = _latent_config()
@@ -1305,14 +1305,14 @@ def _fake_fa4_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, 
 
 
 # The hero mesh (11 racks x EP64) leaves `data` at length 1; the second shape partitions every batch axis.
-@pytest.mark.parametrize("axis_sizes", [(2, 1, 1, 2, 1), (1, 2, 1, 2, 1)])
+@pytest.mark.parametrize("axis_sizes", [(2, 1, 2, 1, 1), (1, 2, 2, 1, 1)])
 def test_fa4_attention_traces_through_hero_loss_and_gradient(monkeypatch, axis_sizes):
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_fa4_forward)
     mesh = AbstractMesh(
         axis_sizes=axis_sizes,
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     config = dataclasses.replace(_latent_config(), attention_implementation="gpu_fa4_cute")
@@ -1336,7 +1336,7 @@ def test_fa4_attention_traces_through_hero_loss_and_gradient(monkeypatch, axis_s
 def test_scalar_state_uses_the_active_mesh():
     mesh = AbstractMesh(
         axis_sizes=(1, 1, 1, 1, 1),
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
 
