@@ -82,14 +82,15 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
         # Exercise the actual constructed script invocation through argparse.
         # Without safe-path mode, sibling types.py shadows stdlib types before
         # the supervisor can start. Stop at --help so no Ray/model runs locally.
-        subprocess.run(
+        with real_popen(
             [sys.executable, *command[command.index("python") + 1 : -2], "--help"],
             env=kwargs["env"],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=10,
-            check=True,
-        )
+        ) as probe:
+            _, error = probe.communicate(timeout=10)
+            assert probe.returncode == 0, error
         launch = json.loads(Path(command[-1]).read_text())
         commands.append(launch)
         Path(launch["ready_path"]).write_text("{}")
