@@ -3,9 +3,11 @@
 
 import asyncio
 from dataclasses import replace
+from enum import StrEnum
+from typing import Annotated, Literal
 
 import pytest
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from taskforge.llm.client import StructuredResult
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
@@ -144,4 +146,103 @@ def test_schema_instruction_renders_nested_models_and_lists():
         "  name (string, required): What to buy.\n"
         "  grams (number or null, optional): Grams\n"
         "steps (list of string, required): Steps"
+    )
+
+
+class Severity(StrEnum):
+    LOW = "low"
+    HIGH = "high"
+
+
+class Review(BaseModel):
+    notes: str = Field(max_length=1000, description="Free-form notes.")
+    score: int = Field(ge=1, le=5, description="The overall score.")
+    confidence: float = Field(gt=0, lt=1)
+    tags: list[Annotated[str, StringConstraints(max_length=20)]] = Field(min_length=1, max_length=5)
+    verdict: Literal["accept", "reject"]
+    severity: Severity | None = None
+    ticket: str = Field(pattern=r"^[A-Z]+-[0-9]+$")
+
+
+def test_schema_instruction_renders_each_field_constraint():
+    assert schema_instruction(Review) == (
+        "Reply with one JSON object with these fields:\n"
+        "notes (string, at most 1000 characters, required): Free-form notes.\n"
+        "score (integer, at least 1, at most 5, required): The overall score.\n"
+        "confidence (number, greater than 0, less than 1, required): Confidence\n"
+        "tags (list of string, at least 1 item, at most 5 items, each at most 20 characters, required): Tags\n"
+        'verdict (string, one of: "accept", "reject", required): Verdict\n'
+        'severity (string or null, one of: "low", "high", optional)\n'
+        "ticket (string, matching ^[A-Z]+-[0-9]+$, required): Ticket"
+    )
+
+
+class Alternatives(BaseModel):
+    status: Literal["ready"] | Literal["pending"]
+    tags: list[Annotated[str, StringConstraints(max_length=3)] | None]
+    score: Annotated[int, Field(ge=0, le=10)] | Annotated[int, Field(ge=20, le=30)]
+    note: str | None = Field(default=None, max_length=5)
+
+
+def test_schema_instruction_keeps_union_members_apart():
+    assert schema_instruction(Alternatives) == (
+        "Reply with one JSON object with these fields:\n"
+        'status (string, exactly "ready" or exactly "pending", required): Status\n'
+        "tags (list of string or null, each at most 3 characters, required): Tags\n"
+        "score (integer, at least 0 and at most 10 or at least 20 and at most 30, required): Score\n"
+        "note (string or null, at most 5 characters, optional): Note"
+    )
+
+
+class Location(BaseModel):
+    """Where the file goes."""
+
+    path: str = Field(description="One of the task's output paths, spelled absolutely.")
+
+
+class OutputFile(BaseModel):
+    """A file the draft writes."""
+
+    location: Location
+    text: str = Field(max_length=500, description="The file's contents.")
+
+
+class Draft(BaseModel):
+    """A draft of the change."""
+
+    summary: str = Field(description="What the draft changes.")
+    files: list[OutputFile] = Field(min_length=1, description="The files to write.")
+
+
+def test_schema_instruction_renders_models_nested_two_levels():
+    assert schema_instruction(Draft) == (
+        "Reply with one JSON object with these fields:\n"
+        "A draft of the change.\n"
+        "summary (string, required): What the draft changes.\n"
+        "files (list of object, at least 1 item, required): The files to write.\n"
+        "  A file the draft writes.\n"
+        "  location (object, required)\n"
+        "    Where the file goes.\n"
+        "    path (string, required): One of the task's output paths, spelled absolutely.\n"
+        "  text (string, at most 500 characters, required): The file's contents."
+    )
+
+
+class Section(BaseModel):
+    """A section of the outline."""
+
+    heading: str
+    parent: "Section | None" = None
+    subsections: list["Section"] = Field(default_factory=list)
+
+
+def test_schema_instruction_renders_a_self_referential_model_once():
+    assert schema_instruction(Section) == (
+        "Reply with one JSON object with these fields:\n"
+        "A section of the outline.\n"
+        "heading (string, required): Heading\n"
+        "parent (object or null, optional)\n"
+        "  Section (same fields as above)\n"
+        "subsections (list of object, optional): Subsections\n"
+        "  Section (same fields as above)"
     )
