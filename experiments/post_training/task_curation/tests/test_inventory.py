@@ -769,6 +769,7 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
         ("development-context", "Test panel part shortfall: tool-calls"),
         ("train-manifest", "Panel source is not reserved for evaluation"),
         ("eval-tag", "Test panel source must reserve its tasks for evaluation"),
+        ("source-count", "Panel source row count changed"),
         ("part-shortfall", "Test panel part shortfall: tool-calls"),
         ("fast-shortfall", "Fast-panel source shortfall for general"),
         ("fast-coverage", "Fast-panel quotas must cover every selected family"),
@@ -800,6 +801,15 @@ def test_panel_publication_refuses_remote_graders_and_training_or_development_ov
             settings = settings.model_copy(
                 update={"pass_rates": settings.pass_rates.model_copy(update={"rows": len(rows) + 1})}
             )
+    elif failure == "source-count":
+        settings = settings.model_copy(
+            update={
+                "sources": (
+                    settings.sources[0],
+                    settings.sources[1].model_copy(update={"rows": settings.sources[1].rows + 1}),
+                )
+            }
+        )
     elif failure in ("part-shortfall", "fast-shortfall", "fast-coverage"):
         if failure == "part-shortfall":
             settings = settings.model_copy(
