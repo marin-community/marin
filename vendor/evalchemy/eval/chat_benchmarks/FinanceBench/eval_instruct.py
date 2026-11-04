@@ -91,9 +91,9 @@ class FinanceBenchBenchmark(BaseBenchmark):
 
         The shipped ``data/financebench.jsonl`` is a 50-item deterministic sample of the
         open-source slice of ``patronus-ai/financebench``
-        (``data/financebench_open_source.jsonl``, 150 rows). Each item carries the
-        ``evidence_text`` -- the full page of the source filing the question is grounded
-        in -- so the benchmark runs offline the same way MATH500 / AIME24 do.
+        (``data/financebench_open_source.jsonl``, 150 rows). Each item's ``evidence_text``
+        holds every full page of the source filing that its evidence cites, in evidence
+        order, so the benchmark runs offline the same way MATH500 / AIME24 do.
         """
         with open(self.data_file, "r") as f:
             questions = [json.loads(line) for line in f if line.strip()]

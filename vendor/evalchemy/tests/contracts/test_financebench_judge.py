@@ -32,6 +32,28 @@ def test_financebench_preserves_document_prompt_and_equivalence_judge_plan(tmp_p
     assert 'Reference answer(s):\n["$10"]' in judge.requests[0].prompt
 
 
+@pytest.mark.parametrize(
+    ("item_id", "line_items"),
+    [
+        # FY2019 revenue / average PP&E: revenue is on the statement of operations, PP&E on the balance sheet.
+        ("financebench_id_02987", ("total net revenues", "property and equipment, net")),
+        # Cash from operations / current liabilities: the cash flow statement and the balance sheet.
+        ("financebench_id_03856", ("net cash provided by operating activities", "total current liabilities")),
+    ],
+)
+def test_financebench_prompt_holds_every_line_item_the_question_uses(item_id, line_items):
+    benchmark = FinanceBenchBenchmark()
+    [spec] = [
+        spec
+        for spec in benchmark.iter_specs(SourceOptions("FinanceBench", benchmark.SOURCE))
+        if spec.source_id == item_id
+    ]
+    document = " ".join(spec.requests[0].prompt[0]["content"].lower().split())
+
+    for line_item in line_items:
+        assert line_item in document
+
+
 @pytest.mark.parametrize("available", [0, 1])
 def test_financebench_excludes_unavailable_judges_from_accuracy(tmp_path, available):
     rows = [

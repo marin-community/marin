@@ -53,9 +53,9 @@
     },
     "FinanceBench": {
       "distinct_prompt_count": 50,
-      "longest_prompt_chars": 6313,
-      "longest_prompt_tokens": 1589,
-      "sha256": "dba0c3f81b8554123a20190844602077d6578d58a68c41132333b9a308e04966"
+      "longest_prompt_chars": 12678,
+      "longest_prompt_tokens": 2657,
+      "sha256": "37dc0f92f7e0788344d40a06b7dbd9a66b9bf0b918f0154d38b5b2821618e16c"
     },
     "GPQADiamond": {
       "distinct_prompt_count": 198,
