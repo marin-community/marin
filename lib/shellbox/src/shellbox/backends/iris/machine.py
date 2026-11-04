@@ -331,6 +331,11 @@ class IrisMachineFactory:
             raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
         if not isinstance(spec.source, RegistryImage):
             raise UnsupportedMachineSpec("Iris requires a registry image reference")
+        if not spec.workdir:
+            # Iris starts every task container in its own /app, so the image's WORKDIR is out of reach.
+            raise UnsupportedMachineSpec(
+                f"Iris cannot start {spec.source.reference} in the image's own working directory; name a workdir"
+            )
         return spec.source
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
