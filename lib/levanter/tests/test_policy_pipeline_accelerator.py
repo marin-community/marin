@@ -24,7 +24,7 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from iris.jax.init import initialize_jax
 
-from levanter.checkpoint import discover_latest_checkpoint, save_checkpoint
+from levanter.checkpoint import discover_checkpoint_candidates, save_checkpoint
 from levanter.grpo import grpo_objective_weights
 from levanter.mpmd_checkpoint import checkpoint_arrays, restore_checkpoint
 from levanter.policy import ClippedPolicyConfig
@@ -233,10 +233,15 @@ def test_compiled_pipeline_updates_and_checkpoint_match_spmd(
     ), "This bounded acceptance requires one four-GPU process"
     config = PipelinePolicyConfig(stages=2, microbatches=microbatches, max_grad_norm=_MAX_GRAD_NORM)
     mesh, mpmd_mesh = make_pipeline_mesh(config)
+    # BF16 rounds local gradient contractions before spatial reduction, so
+    # numerical parity requires the pipeline stage's data-parallel size.
+    # The unused pipeline axis replicates the dense SPMD model. FP32 also
+    # checks PP2/data2 against data4, including full-batch update invariance.
+    reference_data_parallel_size = 4 if compute_dtype == "float32" else mesh.shape["data"]
     reference_mesh = Mesh(
-        np.asarray(jax.devices()).reshape(1, 4, 1, 1),
-        (*BATCH_AXES, "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        np.asarray(jax.devices()).reshape(4 // reference_data_parallel_size, 1, reference_data_parallel_size, 1, 1),
+        ("pipeline", *BATCH_AXES, "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
     policy = jmp.get_policy(f"params=float32,compute={compute_dtype},output=float32")
     optimizer = optax.adamw(3e-3, b1=0.9, b2=0.95, weight_decay=0.05)
@@ -310,8 +315,8 @@ def test_compiled_pipeline_updates_and_checkpoint_match_spmd(
         )
         path = str(tmp_path / "step-1")
         save_checkpoint(checkpoint_arrays(payload), 1, path, metadata={"completed_steps": 1})
-        candidate = discover_latest_checkpoint(str(tmp_path))
-        assert candidate is not None and candidate.step == 1
+        candidates = discover_checkpoint_candidates(str(tmp_path))
+        assert candidates and candidates[-1].step == 1
         shardings = jax.tree.map(lambda value: value.sharding, payload)
         before = _host_leaves(payload)
         with jax.set_mesh(mesh):
@@ -350,6 +355,7 @@ def test_compiled_pipeline_updates_and_checkpoint_match_spmd(
         record_property("microbatches", microbatches)
         record_property("device_count", jax.device_count())
         record_property("process_count", jax.process_count())
+        record_property("reference_data_parallel_size", reference_data_parallel_size)
         record_property("preclip_norm", actual_norm)
         record_property("reference_preclip_norm", float(expected_norm))
         record_property("maximum_state_absolute_error", maximum_error)
