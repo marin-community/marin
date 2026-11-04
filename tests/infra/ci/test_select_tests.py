@@ -17,6 +17,7 @@ import yaml
 
 from infra.ci import run_tests
 from infra.ci.select_tests import (
+    EXTERNAL_TEST_INPUTS,
     SCOPES,
     UV_PACKAGE,
     MatrixLeg,
@@ -27,6 +28,8 @@ from infra.ci.select_tests import (
     select_changed_tests,
     select_local_tests,
 )
+
+GITHUB_FILE = re.compile(r"\.github/[\w./-]+\.yaml")
 
 
 def select_matrix(changed_files: list[str], repo_root: Path) -> list[MatrixLeg]:
@@ -247,6 +250,24 @@ def test_changed_helper_module_forces_full_scope(tmp_path: Path) -> None:
 
     assert result.forced == {"iris"}
     assert result.direct_tests == {}
+
+
+@pytest.mark.parametrize(
+    "path", [".github/workflows/ops-loom-review.yaml", ".github/actions/launch-loom-run/action.yaml"]
+)
+def test_loom_workflow_change_runs_the_iac_suite(tmp_path: Path, path: str) -> None:
+    write(tmp_path, "infra/loom/tests/test_infrastructure.py", "def test_workflow():\n    assert True\n")
+    write(tmp_path, "infra/pulumi/tests/test_stack.py", "def test_stack():\n    assert True\n")
+
+    assert scopes_in(select_matrix([path], tmp_path)) == {"iac"}
+
+
+def test_every_github_file_read_by_loom_tests_selects_the_iac_suite() -> None:
+    loom_tests = Path(__file__).resolve().parents[3] / "infra/loom/tests"
+    read_paths = {match for test_file in loom_tests.glob("*.py") for match in GITHUB_FILE.findall(test_file.read_text())}
+
+    assert read_paths
+    assert read_paths <= EXTERNAL_TEST_INPUTS["iac"]
 
 
 def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
