@@ -5,8 +5,9 @@
 
 Each Harrier bucket concatenates its partition of short documents with ``LONG_CONTEXT_SKEW`` copies of its
 partition of documents around 64K tokens and longer (the store sets the boundary), so the long documents gain
-mass inside the bucket while the bucket keeps its cooldown weight. Sources differ from the Harrier store, so the Harrier context history cannot
-replay here. The mixture instead starts at a chosen training step (``LmDataConfig.mixture_start_step``).
+mass inside the bucket while the bucket keeps its cooldown weight. Sources differ from the Harrier store, so the
+Harrier context history cannot replay here. The mixture instead starts at a chosen training step
+(``LmDataConfig.mixture_start_step``).
 
 Run this module to read the store's token counts into ``harrier_long_context_mix.json`` and print the skewed
 token share and the passes over the long partition.
@@ -142,23 +143,26 @@ def overall_long_partition_passes(length_tokens: LengthTokens, skew: int, traini
     return long_document_share(length_tokens, skew) * training_tokens / long_tokens
 
 
+def _partition_tokens(store: str, cell: str, partition: str) -> int:
+    ledger = CacheLedger.load(_partition_cache_dir(store, cell, partition))
+    if not ledger.is_finished:
+        raise ValueError(f"Unfinished partition {partition} of bucket {cell}")
+    return ledger.field_counts["input_ids"]
+
+
 def read_length_tokens(store: str, cells: Sequence[str]) -> dict[str, tuple[int, int]]:
-    """Read each bucket's partition token counts from the store's ledgers. A missing partition counts as empty."""
+    """Read each bucket's token counts from the store's ledgers. Only a long partition may be absent."""
 
-    def partition_tokens(cell_partition: tuple[str, str]) -> int:
+    def counts(cell: str) -> tuple[int, int]:
+        short_tokens = _partition_tokens(store, cell, SHORT_PARTITION)
         try:
-            ledger = CacheLedger.load(_partition_cache_dir(store, *cell_partition))
+            return short_tokens, _partition_tokens(store, cell, LONG_PARTITION)
         except FileNotFoundError:
-            click.echo(f"no {cell_partition[1]} partition for {cell_partition[0]}; counting it as empty")
-            return 0
-        if not ledger.is_finished:
-            raise ValueError(f"Unfinished partition: {cell_partition}")
-        return ledger.field_counts["input_ids"]
+            click.echo(f"{cell} has no {LONG_PARTITION} partition; counting it as empty")
+            return short_tokens, 0
 
-    keys = [(cell, partition) for cell in cells for partition in (SHORT_PARTITION, LONG_PARTITION)]
     with ThreadPoolExecutor(max_workers=32) as pool:
-        counts = dict(zip(keys, pool.map(partition_tokens, keys), strict=True))
-    return {cell: (counts[cell, SHORT_PARTITION], counts[cell, LONG_PARTITION]) for cell in cells}
+        return dict(zip(cells, pool.map(counts, cells), strict=True))
 
 
 def _print_report(length_tokens: LengthTokens) -> None:
