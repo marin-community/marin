@@ -669,7 +669,7 @@ fn scan_cache_files(root: &Path) -> Result<Vec<CacheFile>, StatsError> {
                     .ok()
                     .and_then(|modified| modified.elapsed().ok());
                 if age.is_some_and(|age| age >= STALE_STAGING_GRACE) {
-                    match std::fs::remove_file(path) {
+                    match std::fs::remove_file(&path) {
                         Ok(()) => {
                             tracing::info!(
                                 path = %path.display(),
