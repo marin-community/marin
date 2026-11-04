@@ -191,12 +191,6 @@ pub enum SubstringPredicate {
     Or(Vec<Self>),
 }
 
-impl From<Vec<String>> for SubstringPredicate {
-    fn from(needles: Vec<String>) -> Self {
-        Self::Contains(needles)
-    }
-}
-
 impl SubstringPredicate {
     fn keep_mask(&self, index: &crate::indices::trigram::ColumnIndex, spans: usize) -> Vec<bool> {
         match self {
@@ -907,7 +901,7 @@ mod tests {
         let paths = vec![path];
         let needles = HashMap::from([(
             "data".to_string(),
-            vec!["Bootstrap completed for TPU".to_string()].into(),
+            SubstringPredicate::Contains(vec!["Bootstrap completed for TPU".to_string()]),
         )]);
         let indices = crate::indices::test_index_registry();
         let artifacts = crate::indices::sidecar_artifacts(&paths);
@@ -973,8 +967,14 @@ mod tests {
         file.write_all_at(&[0xff], offset).unwrap();
 
         let needles = HashMap::from([
-            ("key".to_string(), vec!["/middle".to_string()].into()),
-            ("data".to_string(), vec!["Model".to_string()].into()),
+            (
+                "key".to_string(),
+                SubstringPredicate::Contains(vec!["/middle".to_string()]),
+            ),
+            (
+                "data".to_string(),
+                SubstringPredicate::Contains(vec!["Model".to_string()]),
+            ),
         ]);
         let ranges = HashMap::from([(
             "key".to_string(),
@@ -1025,7 +1025,7 @@ mod tests {
         let paths = vec![path];
         let needles = HashMap::from([(
             "data".to_string(),
-            vec!["Bootstrap completed for TPU".to_string()].into(),
+            SubstringPredicate::Contains(vec!["Bootstrap completed for TPU".to_string()]),
         )]);
         let indices = crate::indices::test_index_registry();
 

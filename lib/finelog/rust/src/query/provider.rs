@@ -2014,7 +2014,10 @@ mod tests {
         let paths = vec![path.clone()];
         let artifacts = crate::indices::sidecar_artifacts(&paths);
         let indices = crate::indices::test_index_registry();
-        let needles = HashMap::from([("data".to_string(), vec!["DEBUG".to_string()].into())]);
+        let needles = HashMap::from([(
+            "data".to_string(),
+            crate::query::trigram_prune::SubstringPredicate::Contains(vec!["DEBUG".to_string()]),
+        )]);
         let pruning = crate::query::trigram_prune::plan_segments(
             &paths,
             &needles,
