@@ -25,7 +25,7 @@ from marin.rollouts.evaluation import (
 )
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
-from rolloutengine.likelihood import VllmLikelihood
+from rolloutengine.likelihood import VllmLikelihood, special_prefix
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -831,7 +831,9 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
             machine_factories={"shellsim": ShellSimMachineFactory()},
             tokenizer=tokenizer,
             completion_model=CompletionModel(client, "fixture"),
-            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
+            likelihood=VllmLikelihood(
+                client, "fixture", tokenizer, 64, prefix_token_id=0, context_prefix=special_prefix(tokenizer)
+            ),
         )
         model = ChatModel(client, "fixture", 16, extra_body={"skip_special_tokens": True})
         with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
