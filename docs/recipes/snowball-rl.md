@@ -36,7 +36,7 @@ uv run python -m experiments.post_training.snowball_rl --preset learning-medium 
   --set trainer.algorithm.advantage_estimator=grpo \
   --set trainer.algorithm.group_advantage_min_size=null --version dev
 uv run python -m experiments.post_training.snowball_rl --preset data-short \
-  --tasks snowball-100k@2026.10.26 --version dev
+  --tasks snowball-100k@2026.11.04 --version dev
 uv run python -m experiments.post_training.snowball_rl --preset train-long \
   --layout p40 --set trainer.max_steps=100 --version dev
 ```
@@ -64,7 +64,7 @@ Calibration and comparison verdicts are pending.
 
 ## Tasks and evaluation
 
-The pinned `snowball-100k@2026.10.26` selection contains 100,000 training tasks,
+The pinned `snowball-100k@2026.11.04` selection contains 100,000 training tasks,
 100 validation tasks and 910 full-validation tasks. Its local panel graders share
 the training package environments. All 910 heldout tasks are excluded from training.
 Create candidates through [task curation](../references/task-curation.md), using

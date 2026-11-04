@@ -169,10 +169,10 @@ def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch
         StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
     expected = {
-        "speed-short": "0a802f65",
-        "data-short": "da5caf50",
-        "speed-medium": "df6f463e",
-        "learning-medium": "a73293d8",
+        "speed-short": "9d57955c",
+        "data-short": "197e2bb5",
+        "speed-medium": "a6f6a4c9",
+        "learning-medium": "db178fe3",
     }
     paths = []
     for name in expected:
