@@ -48,6 +48,7 @@ INTERMEDIATE = 64
 EXPERTS = 4
 VOCAB = 66
 TOKENS = (3, 5)
+SYNC_TIMEOUT = 180
 
 
 class TinyExpertModel(nn.Module):
@@ -274,7 +275,7 @@ def transfer_worker(rank, rendezvous_values, directory, quantization, dp_port):
     torch.set_num_threads(1)
     rendezvous = Rendezvous(**rendezvous_values)
     store = dist.TCPStore(
-        rendezvous.address, rendezvous.port, world_size=None, is_master=False, timeout=timedelta(seconds=180)
+        rendezvous.address, rendezvous.port, world_size=None, is_master=False, timeout=timedelta(seconds=SYNC_TIMEOUT)
     )
     if rank:
         receiver_worker(rank, store, directory, quantization, dp_port)
@@ -311,7 +312,7 @@ def transfer_worker(rank, rendezvous_values, directory, quantization, dp_port):
         "rendezvous": rendezvous_values,
     }
     store.set("plan", json.dumps(plan))
-    groups, stream, _ = bind(
+    bound = bind(
         0,
         schedule,
         rendezvous,
@@ -320,6 +321,7 @@ def transfer_worker(rank, rendezvous_values, directory, quantization, dp_port):
             0, schedule, groups, device=torch.device("cuda", rank), sources=sources, expert_sources=expert_sources
         ),
     )
+    stream = bound.stream
     for version in range(2):
         dense, experts = checkpoint(version)
         for name, value in {**dense, **experts}.items():
@@ -330,7 +332,7 @@ def transfer_worker(rank, rendezvous_values, directory, quantization, dp_port):
         stream.verify(1)
         stream.run(1)
         stream.verify(1)
-    destroy_groups(groups)
+    destroy_groups(bound.groups)
 
 
 @pytest.mark.vllm
@@ -338,9 +340,9 @@ def transfer_worker(rank, rendezvous_values, directory, quantization, dp_port):
 @pytest.mark.parametrize("quantization", [None, "fp8"], ids=["bf16", "online-fp8"])
 def test_expert_block_repeated_updates_match_fresh_model(tmp_path, quantization):
     store = dist.TCPStore(
-        "127.0.0.1", 0, world_size=None, is_master=True, timeout=timedelta(seconds=180), wait_for_workers=False
+        "127.0.0.1", 0, world_size=None, is_master=True, timeout=timedelta(seconds=SYNC_TIMEOUT), wait_for_workers=False
     )
-    rendezvous = Rendezvous("127.0.0.1", store.port, uuid4().hex, 180)
+    rendezvous = Rendezvous("127.0.0.1", store.port, uuid4().hex, SYNC_TIMEOUT)
     torch.multiprocessing.spawn(
         transfer_worker, args=(asdict(rendezvous), str(tmp_path), quantization, get_open_port()), nprocs=3, join=True
     )

@@ -79,7 +79,7 @@ class ExpertBlockSender:
             raise RuntimeError("Expert-block sender is already initialised")
         plan = from_wire(Schedule, init_info["schedule"])
         device = next(iter(self.sources.values())).device
-        self.groups, self.stream, warm = bind(
+        bound = bind(
             self.trainer.rank,
             plan,
             Rendezvous(**init_info["rendezvous"]),
@@ -88,7 +88,8 @@ class ExpertBlockSender:
                 self.trainer.rank, plan, groups, device=device, sources=self.sources, expert_sources=self.expert_sources
             ),
         )
-        return {"participant": self.trainer.rank, "warmup_seconds": warm}
+        self.groups, self.stream = bound.groups, bound.stream
+        return {"participant": self.trainer.rank, "warmup_seconds": bound.warmup_seconds}
 
     def send_weights(self, update_info: dict) -> dict:
         """Send this rank's weights for one update. Refuses if the rank has not finished that update."""

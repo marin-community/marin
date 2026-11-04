@@ -183,7 +183,7 @@ class ExpertBlockReceiver:
         prepared = self.prepared
         plan = from_wire(Schedule, init_info["schedule"])
         participant = self.participant = participants[self.gpu_uuid]
-        self.groups, self.stream, warm = bind(
+        bound = bind(
             participant,
             plan,
             Rendezvous(**init_info["rendezvous"]),
@@ -192,7 +192,8 @@ class ExpertBlockReceiver:
                 participant, plan, groups, expert_maps=self.expert_maps, device=self.device
             ),
         )
-        return {"participant": participant, "warmup_seconds": warm}
+        self.groups, self.stream = bound.groups, bound.stream
+        return {"participant": participant, "warmup_seconds": bound.warmup_seconds}
 
     def receive_weights(self, update_info: dict) -> dict:
         """Receive this sync's weights into the live parameters. Returns the install report."""

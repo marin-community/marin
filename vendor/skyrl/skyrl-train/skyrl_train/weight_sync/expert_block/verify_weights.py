@@ -29,12 +29,13 @@ REPLAY_COMPARE_CHUNK_BYTES = 16 << 20
 
 
 def mismatched_bytes(actual: torch.Tensor, expected: torch.Tensor, chunk_bytes: int) -> torch.Tensor:
-    """Count differing bytes without expanding a whole tensor to int64."""
+    """Count byte differences between tensors of the same shape and dtype."""
     if actual.shape != expected.shape or actual.dtype != expected.dtype:
         raise ValueError("Replay tensors differ in shape or dtype")
     actual_bytes = actual.detach().contiguous().view(-1).view(torch.uint8)
     expected_bytes = expected.detach().contiguous().view(-1).view(torch.uint8)
     mismatched = torch.zeros((), dtype=torch.int64, device=actual.device)
+    # Bound the int64 reduction temporary for large parameter tensors.
     for start in range(0, actual_bytes.numel(), chunk_bytes):
         count = min(chunk_bytes, actual_bytes.numel() - start)
         mismatched.add_(actual_bytes.narrow(0, start, count).ne(expected_bytes.narrow(0, start, count)).sum())

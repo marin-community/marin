@@ -252,6 +252,13 @@ class Stream:
         return None
 
 
+@dataclass(frozen=True)
+class BoundStream:
+    groups: dict[str, dist.ProcessGroup]
+    stream: Stream
+    warmup_seconds: dict[str, float]
+
+
 def bind(
     participant: int,
     plan: Schedule,
@@ -259,11 +266,11 @@ def bind(
     device: torch.device,
     *,
     make_stream: Callable[[dict[str, dist.ProcessGroup]], Stream],
-) -> tuple[dict[str, dist.ProcessGroup], Stream, dict[str, float]]:
+) -> BoundStream:
     """Create and warm this participant's groups and build its ``Stream``.
 
     ``make_stream`` binds the created groups to the prepared tensors. Construction
-    failures destroy the groups. Returns ``(groups, stream, warm-up seconds)``.
+    failures destroy the groups. The result owns the groups until explicit shutdown.
     """
     groups = create_groups(participant, plan.groups, rendezvous)
     try:
@@ -272,4 +279,4 @@ def bind(
     except BaseException:
         destroy_groups(groups)
         raise
-    return groups, stream, warm
+    return BoundStream(groups, stream, warm)
