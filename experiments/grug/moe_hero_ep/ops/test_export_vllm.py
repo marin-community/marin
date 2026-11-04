@@ -4,6 +4,7 @@
 import dataclasses
 import json
 from pathlib import Path
+from threading import Lock
 
 import equinox as eqx
 import jax
@@ -147,13 +148,80 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
     completed_shard.write_bytes(original)
     committed_mtime = completed_shard.stat().st_mtime_ns
 
-    export(request)
+    resumed = dataclasses.replace(request, export_host_budget_bytes=1024**2, max_concurrent_shards=1)
+    export(resumed)
     reload_export(root)
     assert completed_shard.stat().st_mtime_ns == committed_mtime
     before = {path.name: path.read_bytes() for path in root.iterdir()}
     with pytest.raises(FileExistsError):
         export(request)
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+def test_cpu_export_resumes_completed_shards_after_lowering_execution_limits(tmp_path, monkeypatch):
+    monkeypatch.setattr(cpu_export, "DEFAULT_MAX_SHARD_SIZE", 4096)
+    monkeypatch.setattr(hero_export, "DEFAULT_MAX_SHARD_SIZE", 4096)
+    native, _ = native_fixture(str(tmp_path / "checkpoint"), master=True)
+    config = cpu_export.CpuExportConfig(
+        checkpoint=native.checkpoint,
+        metadata_digest=native.metadata_digest,
+        model=native.model,
+        destination=str(tmp_path / "cpu-export"),
+        source_revision=native.source_revision,
+        read_host_budget_bytes=2 * 1024**2,
+        export_host_budget_bytes=2 * 1024**2,
+        max_concurrent_shards=2,
+        request_concurrency=4,
+    )
+    original_save = hf_export.save_file
+    lock = Lock()
+    write_count = 0
+
+    def interrupt_second_write(tensors, path, **kwargs):
+        nonlocal write_count
+        with lock:
+            write_count += 1
+            number = write_count
+        if number == 2:
+            path.write_bytes(b"interrupted")
+            raise OSError("write interrupted")
+        original_save(tensors, path, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(hf_export, "save_file", interrupt_second_write)
+        with pytest.raises(OSError, match="write interrupted"):
+            cpu_export.export(config)
+    root = Path(config.destination)
+    assert not (root / "export-manifest.json").exists()
+    request = (root / "export-request.json").read_bytes()
+    completed = {}
+    for receipt in root.glob(".export-progress-*.json"):
+        filename = json.loads(receipt.read_text())["filename"]
+        shard = root / filename
+        completed[filename] = (shard.read_bytes(), shard.stat().st_mtime_ns)
+    assert completed
+
+    with pytest.raises(FileExistsError):
+        cpu_export.export(dataclasses.replace(config, model=dataclasses.replace(config.model, qk_mult=1.5)))
+    retry = dataclasses.replace(
+        config,
+        read_host_budget_bytes=1024**2,
+        export_host_budget_bytes=1024**2,
+        max_concurrent_shards=1,
+        request_concurrency=2,
+    )
+    cpu_export.export(retry)
+    assert (root / "export-request.json").read_bytes() == request
+    for filename, (contents, mtime) in completed.items():
+        assert (root / filename).read_bytes() == contents
+        assert (root / filename).stat().st_mtime_ns == mtime
+    manifest = json.loads((root / "export-manifest.json").read_text())
+    assert manifest["request"] == json.loads(request)
+    assert manifest["execution"]["max_concurrent_shards"] == 1
+    export(native)
+    assert {path.name: path.read_bytes() for path in root.glob("*.safetensors")} == {
+        path.name: path.read_bytes() for path in Path(native.destination).glob("*.safetensors")
+    }
 
 
 @pytest.mark.parametrize("master,manifest", [(False, True), (True, True), (True, False)])

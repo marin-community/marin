@@ -135,11 +135,16 @@ Tokenizer files are not copied. Set vLLM's `--tokenizer` and
 
 ### Resume and completion
 
-After interruption, rerun the same YAML. Resume preserves shards only after
-checking their identity, names, size and freshly computed SHA-256. Uncommitted
-uploads may be rewritten. If corruption is reported, inspect the object;
-restore its original bytes or choose a fresh destination. Changed inputs also
-require a fresh destination.
+After interruption, keep the checkpoint, metadata digest, model, destination
+and source revision fixed. Memory budgets, request concurrency, writer count
+and device mesh sizes may change on retry. These execution settings are recorded
+in completion metadata separately from the artifact identity. Use the original
+exporter revision when resuming an older request schema.
+
+Resume preserves shards only after checking their identity, names, size and
+freshly computed SHA-256. Uncommitted uploads may be rewritten. If corruption is
+reported, inspect the object; restore its original bytes or choose a fresh
+destination. Changed artifact inputs require a fresh destination.
 
 Use the output only when `export-manifest.json` exists. It is written after
 all shards, `config.json` and `model.safetensors.index.json`. Completed

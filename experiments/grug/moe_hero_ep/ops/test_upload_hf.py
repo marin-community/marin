@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import hashlib
 import json
 from dataclasses import asdict
@@ -18,7 +19,7 @@ from safetensors.numpy import save_file
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.ops import upload_hf
 from experiments.grug.moe_hero_ep.ops.export_cpu import CpuExportConfig
-from experiments.grug.moe_hero_ep.ops.export_metadata import bf16_hf_config
+from experiments.grug.moe_hero_ep.ops.export_metadata import EXPORT_VERSION, artifact_config, bf16_hf_config
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
 LICENSE_TEXT = """OpenMDW License Agreement, version 1.1 (OpenMDW-1.1)
@@ -181,9 +182,9 @@ def upload_fixture(tmp_path, monkeypatch):
 
     def build(dtype=jnp.bfloat16):
         request = {
-            "export_version": 2,
+            "export_version": EXPORT_VERSION,
             "implementation": "cpu",
-            "config": draccus.encode(config),
+            "config": artifact_config(draccus.encode(config)),
             "hf_config": bf16_hf_config(model),
         }
         export_id = digest(request)
@@ -231,6 +232,16 @@ def test_upload_resumes_verified_shards_and_pins_complete_weights(upload_fixture
     assert hub.files(config.branch)["LICENSE"] == Path(config.license_file).read_bytes()
     first = hub.files(config.branch)["model-00001-of-00002.safetensors"]
     hub.fail_filename = None
+    config = dataclasses.replace(
+        config,
+        export=dataclasses.replace(
+            config.export,
+            read_host_budget_bytes=1024**2,
+            export_host_budget_bytes=1024**2,
+            max_concurrent_shards=1,
+            request_concurrency=2,
+        ),
+    )
     result = upload_hf.upload(config)
     pinned = hub.files(result["weights_commit"])
     for number in (1, 2):

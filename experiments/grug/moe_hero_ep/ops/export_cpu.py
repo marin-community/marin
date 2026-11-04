@@ -31,7 +31,9 @@ from experiments.grug.moe_hero_ep.model import (
 )
 from experiments.grug.moe_hero_ep.ops.export_metadata import (
     EXPORT_VERSION,
+    artifact_config,
     bf16_hf_config,
+    execution_config,
     prepare_export,
     split_expert_names,
     write_export_metadata,
@@ -223,10 +225,11 @@ class CpuCheckpointWeights:
 
 def export(config: CpuExportConfig) -> None:
     hf_config = bf16_hf_config(config.model)
+    encoded = draccus.encode(config)
     request = {
         "export_version": EXPORT_VERSION,
         "implementation": "cpu",
-        "config": draccus.encode(config),
+        "config": artifact_config(encoded),
         "hf_config": hf_config,
     }
     resume = prepare_export(config.destination, request)
@@ -249,7 +252,12 @@ def export(config: CpuExportConfig) -> None:
         request,
         [by_filename[name] for name in shards],
         sum(value.size * value.dtype.itemsize for value in shapes.values()),
-        {"executor": "cpu", "read_bytes": reader.read_bytes, "expert_blocks_read": reader.expert_blocks_read},
+        {
+            "executor": "cpu",
+            "execution": execution_config(encoded),
+            "read_bytes": reader.read_bytes,
+            "expert_blocks_read": reader.expert_blocks_read,
+        },
     )
 
 

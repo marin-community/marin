@@ -16,8 +16,28 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
 INDEX_FILENAME = "model.safetensors.index.json"
-EXPORT_VERSION = 2
+EXPORT_VERSION = 3
+EXECUTION_CONFIG_KEYS = frozenset(
+    {
+        "read_host_budget_bytes",
+        "request_concurrency",
+        "export_host_budget_bytes",
+        "max_concurrent_shards",
+        "expert_axis_size",
+        "replica_axis_size",
+    }
+)
 EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
+
+
+def artifact_config(config: dict) -> dict:
+    """Keep output-defining inputs in an encoded export configuration."""
+    return {key: value for key, value in config.items() if key not in EXECUTION_CONFIG_KEYS}
+
+
+def execution_config(config: dict) -> dict:
+    """Extract resource and concurrency settings for completion metadata."""
+    return {key: value for key, value in config.items() if key in EXECUTION_CONFIG_KEYS}
 
 
 def bf16_hf_config(model: GrugModelConfig) -> dict:
@@ -34,7 +54,7 @@ def split_expert_names(name: str, num_experts: int) -> tuple[str, ...]:
 
 
 def prepare_export(destination: str, request: dict) -> HFShardResume:
-    """Write the request and reject completed or occupied destinations."""
+    """Write or verify the artifact request, rejecting completed or unrelated output."""
     if re.fullmatch(r"[0-9a-f]{40}", request["config"]["source_revision"]) is None:
         raise ValueError("source_revision must be a 40-character lowercase hexadecimal Marin commit")
     root = StoragePath(destination)

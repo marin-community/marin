@@ -26,6 +26,7 @@ from experiments.grug.moe_hero_ep.ops.export_metadata import (
     EXPORT_VERSION,
     INDEX_FILENAME,
     MANIFEST_FILENAME,
+    artifact_config,
     bf16_hf_config,
 )
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
@@ -151,7 +152,8 @@ def _upload_plan(config: UploadConfig) -> _UploadPlan:
     root = StoragePath(config.export.destination)
     manifest = json.loads((root / MANIFEST_FILENAME).read_text())
     request = manifest["request"]
-    if request["export_version"] != EXPORT_VERSION or request["config"] != draccus.encode(config.export):
+    expected_config = artifact_config(draccus.encode(config.export))
+    if request["export_version"] != EXPORT_VERSION or request["config"] != expected_config:
         raise ValueError("Completed export differs from the pinned export configuration")
     expected_hf_config = bf16_hf_config(config.export.model)
     if request["hf_config"] != json.loads(json.dumps(expected_hf_config)):

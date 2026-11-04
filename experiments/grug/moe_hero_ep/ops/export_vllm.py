@@ -22,7 +22,9 @@ from rigging.log_setup import configure_logging
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, grugmoe_inference_state_dict
 from experiments.grug.moe_hero_ep.ops.export_metadata import (
     EXPORT_VERSION,
+    artifact_config,
     bf16_hf_config,
+    execution_config,
     prepare_export,
     split_expert_names,
     write_export_metadata,
@@ -53,7 +55,13 @@ def export(config: ExportConfig) -> None:
     A destination belongs to exactly one exporting gang at a time.
     """
     hf_config = bf16_hf_config(config.model)
-    request = {"export_version": EXPORT_VERSION, "config": draccus.encode(config), "hf_config": hf_config}
+    encoded = draccus.encode(config)
+    request = {
+        "export_version": EXPORT_VERSION,
+        "implementation": "device",
+        "config": artifact_config(encoded),
+        "hf_config": hf_config,
+    }
     export_id = digest(request)
 
     run_on_export_writer(lambda: prepare_export(config.destination, request))
@@ -80,7 +88,16 @@ def export(config: ExportConfig) -> None:
         payload_size = sum(x.size * x.dtype.itemsize for x in state_dict.values())
         run_on_export_writer(
             lambda: write_export_metadata(
-                resume, request, records, payload_size, {"mesh": dict(mesh.shape), "process_count": jax.process_count()}
+                resume,
+                request,
+                records,
+                payload_size,
+                {
+                    "executor": "device",
+                    "execution": execution_config(encoded),
+                    "mesh": dict(mesh.shape),
+                    "process_count": jax.process_count(),
+                },
             )
         )
 
