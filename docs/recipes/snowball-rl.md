@@ -150,6 +150,13 @@ task IDs, family, AAII category, agentic flag and grader kind.
 
 Reports join evaluation answers to the run's task manifest by TaskSpec ID and keep attempts and weight steps separate. Verifier scores are normalized by their declared bounds. The equal-family mean first averages each task's scored answers, then tasks within a family, then families. Scored coverage is reported separately.
 
+Each update records `timing/grading/{mean,p50,p95,max}` and
+`timing/setup/{mean,p50,p95,max}` in seconds over its retained, scored TaskSpec answers.
+Setup includes task and verifier startup, package environments and verifier staging.
+Grading measures wall time excluding verifier setup; both timers exclude cleanup.
+The gate reports the mean of each statistic over the measured updates, so its p95 row is
+the average of the update p95 values.
+
 Learning/data medium evaluates all 910 tasks at the end; `--init` adds
 update 0. Train-long evaluates the fixed 100-task panel before training and every 10 updates.
 Metrics are in `exports/metrics/step-*.json`; per-answer JSONL is under
@@ -183,7 +190,6 @@ the submitting environment; every run forwards its required keys through Iris.
 | AAII coverage; no-agentic-tasks | current tasks cover only part of AAII; add missing task families and agentic tasks |
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
-| no-grading-timer | generation includes grader tails; add separate grader timings |
 | eval-uses-training-sampling | Panel answers use the training temperature because the engine applies `generator.sampling_params` to native requests. Separate evaluation sampling needs a new panel and new controls. |
 | mismatch-is-agreement | agreement can miss shared errors; learning remains a separate check |
 

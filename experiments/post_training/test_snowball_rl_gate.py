@@ -629,6 +629,11 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         argv = ["--require", REQUIREMENT, "--tasks", f"unused@{presets.DEFAULT_SELECTION_VERSION}", "--tasks", tasks]
         expected = ({}, tasks, None, [])
     initial = 0.2 if preset == "learning-medium" else None
+    timers = {
+        f"timing/{phase}/{stat}": float(index)
+        for phase in ("grading", "setup")
+        for index, stat in enumerate(("mean", "p50", "p95", "max"), 1)
+    }
     source = recorded_runs(
         preset,
         built.runs[0].name,
@@ -636,8 +641,14 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         initial_score=initial,
         argv=["snowball_rl", *argv],
         fingerprint=built.runs[0].fingerprint(),
+        metrics=timers,
     )
     report = run(built.gate)[0].model_dump(mode="json", exclude={"path"})
+    timer_rows = {row["metric"]: row for row in report["reported"] if row["metric"] in timers}
+    assert {key: row["run"] for key, row in timer_rows.items()} == timers
+    assert all(row["control"] is None and row["change"] == "unavailable" for row in timer_rows.values())
+    markdown = (Path(built.gate.path()) / gate.GATE_REPORT_FILENAME).with_suffix(".md").read_text()
+    assert all(key in markdown for key in timers)
     assert rescore(preset, "--candidate", built.runs[0].name)["run"] == report["run"]
     settings = {key: json.loads(value) for key, _, value in (item.partition("=") for item in report["run"]["settings"])}
     gains = [row["run"] for row in report["reported"] if row["metric"] == "panel-910/mean/gain"]
@@ -646,6 +657,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         ("require/" + REQUIREMENT.split("<=")[0], True)
     ]
     printed = status(preset, argv)
+    assert timers.keys() <= {row["key"] for row in printed["reported_metrics"]}
     assert (printed["verdict"], printed["label"]) == (report["verdict"], report["label"])
     assert printed["report"].endswith("gate_report.json") and "rl_path_changes_since_control" in printed
     if preset == "learning-medium":
