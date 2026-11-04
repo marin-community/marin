@@ -180,15 +180,17 @@ def _request(
 def _records(
     output: str, packets: dict[str, dict[str, Any]], *, coerced: set[str] | None = None
 ) -> list[TypedBatchRecord[TaskJudgment]]:
-    def validate(value: str) -> TaskJudgment:
+    def validate(value: str, task_id: str) -> TaskJudgment:
         arguments, repaired = _coerce_evidence_ids(json.loads(value))
         judgment = TaskJudgment.model_validate(arguments)
+        if repaired and coerced is not None and judgment.task_id == task_id:
+            # Identity holds until typed_batch_records re-checks it; mark only the request this
+            # judgment answers, so a mismatched claim cannot poison another task's provenance.
+            coerced.add(task_id)
         packet = packets[judgment.task_id]
         allowed = {*json.loads(packet["packet_json"]), "curation"}
         if not set(judgment.evidence_ids).issubset(allowed):
             raise ValueError("Judgment cites unknown evidence sections")
-        if repaired and coerced is not None:
-            coerced.add(judgment.task_id)
         return judgment
 
     return typed_batch_records(
@@ -219,11 +221,13 @@ def _grade_shard(
     packets = {row["task_id"]: row for row in rows}
     pending = dict(packets)
     budgets = {task_id: model.max_tokens for task_id in packets}
-    coerced: set[str] = set()
     grades = {}
     for attempt in range(1, model.max_attempts + 1):
         if not pending:
             break
+        # Scoped per attempt: a repaired-but-rejected response never outlives the record that
+        # produced it, so a later clean answer cannot inherit the coercion mark.
+        coerced: set[str] = set()
         requests = [
             _request(packet, curation=curation, rubric=rubric, model=model.model, max_tokens=budgets[packet["task_id"]])
             for packet in pending.values()
