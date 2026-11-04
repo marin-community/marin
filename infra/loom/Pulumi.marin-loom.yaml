@@ -273,7 +273,7 @@ config:
       mcpAccess: *builtinMcpAccess
     prose-cleanup:
       agent: codex
-      description: Rewrite agent-authored issue and PR descriptions in house style
+      description: Fix egregious prose and remove agent attribution from issue and PR descriptions
       model: *codexModel
       effort: low
       protocol: acp
@@ -464,6 +464,12 @@ config:
     - name: canary-grug-multislice
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/marin-canary-grug-multislice.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: canary-hero-gb200
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-hero-gb200.yaml@refs/heads/main
       profile: *githubAutomationProfile
       serviceTag: *githubAutomationProfile
       ref: refs/heads/main

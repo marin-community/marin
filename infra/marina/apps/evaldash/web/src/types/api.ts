@@ -500,8 +500,8 @@ export interface Trajectory {
 // Unpaginated per-task outcome counts; `ungraded` is its own bucket, apart from `incorrect`.
 export interface SampleCounts {
   all: number
-  correct: number
-  incorrect: number
+  correct: number | null
+  incorrect: number | null
   ungraded: number
 }
 

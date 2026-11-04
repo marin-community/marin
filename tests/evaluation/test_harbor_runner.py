@@ -513,6 +513,7 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
                 dataset_path=None,
                 endpoint_url="https://iris.example/capability/v1",
                 served_model="model",
+                model_identity="model",
                 task_limit=1,
                 model_agent_kwargs={},
                 verifier_env={},
@@ -578,6 +579,7 @@ def test_harbor_driver_classifies_fast_exit_from_unavailable_dependency(tmp_path
                 dataset_path=None,
                 endpoint_url="https://iris.example/capability/v1",
                 served_model="model",
+                model_identity="model",
                 task_limit=1,
                 model_agent_kwargs={},
                 verifier_env={},
@@ -1038,3 +1040,39 @@ def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_
     with pytest.raises(EvaluationError, match="different dataset, model, policy"):
         changed(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
     assert {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.parametrize("metric_present", [True, False])
+def test_harbor_executor_reads_native_correction_without_recomputing_rewards(tmp_path, monkeypatch, metric_present):
+    executor = _harbor_executor("sotopia-hard")
+    benchmark = executor.config.benchmark
+    corrected = benchmark.metrics[0].model_copy(
+        update={"name": "length_controlled_overall", "source_name": "length_controlled_overall"}
+    )
+    benchmark = benchmark.model_copy(
+        update={"primary_metric": corrected.name, "metrics": (*benchmark.metrics, corrected)}
+    )
+    executor = replace(executor, config=replace(executor.config, benchmark=benchmark))
+
+    def run_driver(config, overlay, _env, _state):
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 1, config)
+        document = json.loads((job_dir / "result.json").read_text())
+        if metric_present:
+            document["canonical_metrics"] = {benchmark.task: {corrected.name: 0.25}}
+        (job_dir / "result.json").write_text(json.dumps(document))
+        trial = job_dir / "trial"
+        trial.mkdir()
+        (trial / "result.json").write_text(
+            json.dumps({"task_name": "task", "verifier_result": {"rewards": {"reward": 0.75}}})
+        )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    if not metric_present:
+        with pytest.raises(EvaluationError, match="Harbor did not produce length_controlled_overall"):
+            executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
+        return
+    result = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
+    assert result.canonical_metrics["sotopia-hard"][corrected.name] == 0.25
+    assert result.canonical_metrics["sotopia-hard"]["reward"] == 0.75
+    assert result.tasks[0].benchmark.primary_metric == corrected.name

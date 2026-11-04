@@ -11,6 +11,10 @@ Tests cover:
 
 import json
 import os
+import shlex
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -798,3 +802,50 @@ class TestInstallMethod:
         install_command = environment.exec.call_args_list[1].kwargs["command"]
         assert "uv tool install mini-swe-agent --with mcp==2.3.0" in install_command
         assert "from mcp.types import CacheableResult" in install_command
+
+
+@pytest.mark.asyncio
+async def test_install_model_import_ignores_task_repository_packages(tmp_path):
+    agent = MiniSweAgent(logs_dir=tmp_path / "logs")
+    environment = AsyncMock()
+    environment.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+    await agent.install(environment)
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    for upload in environment.upload_file.call_args_list:
+        source, destination = upload.args
+        shutil.copyfile(source, model_dir / Path(destination).name)
+
+    task_dir = tmp_path / "testbed"
+    task_dir.mkdir()
+    (task_dir / "requests.py").write_text(
+        "raise RuntimeError('task repository shadowed the agent dependency')\n"
+    )
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "env").write_text("")
+    tool_bin = tmp_path / "tools" / "mini-swe-agent" / "bin"
+    tool_bin.mkdir(parents=True)
+    python = tool_bin / "python"
+    python.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    python.chmod(0o755)
+    uv = bin_dir / "uv"
+    uv.write_text(f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(str(tmp_path / 'tools'))}\n")
+    uv.chmod(0o755)
+
+    result = subprocess.run(
+        environment.exec.call_args_list[-1].kwargs["command"],
+        shell=True,
+        executable="/bin/bash",
+        cwd=task_dir,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "PYTHONPATH": str(model_dir),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

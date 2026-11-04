@@ -11,8 +11,9 @@ actually improved steady-state performance.
 For generic profiling setup and UI usage, start with:
 - `lib/levanter/docs/Performance-Guide.md`
 
-For an explicitly requested long-running research program, use:
-- `docs/dev-guide/experiment-records.md`
+For repeated tuning launches or controlled comparisons expected to produce
+reusable evidence, use `research-engineering`. Shared evidence standards live
+in `docs/dev-guide/experiment-records.md`.
 
 ## What to report
 
