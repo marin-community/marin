@@ -74,14 +74,12 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
             run = snowball.build_run(
                 preset, tasks=selection if preset.focus == presets.Focus.DATA else None, layout=layout
             )
-            for index, step in enumerate((*run.runs, *run.post_run_evaluations)):
+            for index, step in enumerate(run.runs):
                 path = tmp_path / f"{name}-{layout.name if layout else 'default'}-{index}.yaml"
                 document = _render(step, path)
                 paths.append(str(path))
                 if index == 0:
                     launches[name] = document
-            if name == "train-long":
-                assert run.runs[0] in run.post_run_evaluations[0].deps
     off_boundary = snowball.build_run(
         presets.PRESETS["train-long"], layout=presets.P40, settings=(presets.parse_setting("trainer.max_steps=2"),)
     ).runs[0]
@@ -133,15 +131,13 @@ print(json.dumps([{
     assert len(rows) == len(paths)
     for row in rows:
         name = row["name"]
-        if "speed-short-" in name or "data-short-" in name or "/eval/panel-910" in name:
+        if "speed-short-" in name or "data-short-" in name:
             assert row["entrypoint"] == "skyrl_train.entrypoints.main_generate", row
             assert row["nodes"] == 1, row
             assert row["eval_interval"] > 0 and row["validation"], row
-            expected = 2048 if "speed-short-" in name else 1024 if "data-short-" in name else 910
+            expected = 2048 if "speed-short-" in name else 1024
             assert row["admission"] == expected, row
-        if "/eval/panel-910" in name:
-            assert row["window"] == (65536 if row["tools"] == "hermes" else 24576), row
-        if "train-long-" in name and "/eval/" not in name:
+        if "train-long-" in name:
             assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
         if row["fixed"]:
             assert not row["overlong_filtering"], row

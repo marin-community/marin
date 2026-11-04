@@ -112,7 +112,6 @@ class Evaluation:
     every: int | None = None
     at_start: bool = False
     local_only: bool = False
-    post_run: bool = False
 
     def tasks(self, selection: ArtifactStep, default: ArtifactStep) -> ArtifactStep:
         return default if self.source == "default" else selection
@@ -520,7 +519,7 @@ PRESETS = MappingProxyType(
                 ),
                 updates=100,
                 measured=range(1, 101),
-                evaluations=(replace(_PANEL, every=10, at_start=True), replace(EVALUATIONS["panel-910"], post_run=True)),
+                evaluations=(replace(_PANEL, every=10, at_start=True),),
                 checkpoint_every=10,
                 gaps=(*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
             ),
