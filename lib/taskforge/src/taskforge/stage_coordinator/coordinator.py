@@ -43,7 +43,6 @@ from taskforge.stage30_author.author import (
     PROGRAM_MANIFEST_FILE,
     ROUNDS_DIR,
     AuthorContext,
-    AuthorFailure,
     Revision,
     RevisionKind,
     program_manifest,
@@ -355,8 +354,7 @@ async def _author(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
     """Ask the author for the program and write its manifest and any source to ``authored/<k>/``.
 
     An author raising ``StructuredOutputError`` returned no valid reply even after its repairs, as
-    when the output limit cut the reply, and one raising ``AuthorFailure`` ended without a program
-    to hand in. For either, the adapter writes the failure to ``build-failures/`` and
+    when the output limit cut the reply. The adapter then writes the failure to ``build-failures/`` and
     returns ``AUTHOR_FAILED``, so the next author call samples again with the failure as its
     revision. Every other exception passes through unchanged, and ``run_workpiece`` fails the workpiece in
     place at the author stage.
@@ -368,7 +366,7 @@ async def _author(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
             _revision(workpiece, state),
             state.author_state,
         )
-    except (StructuredOutputError, AuthorFailure) as error:
+    except StructuredOutputError as error:
         attrs = _failure_attrs(workpiece, state, error, error_line(error))
         return WorkpieceEvent(EventKind.AUTHOR_FAILED, state.round, state.proposal_digest, attrs)
     directory = workpiece.authored_dir(state)
