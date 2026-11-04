@@ -118,6 +118,7 @@ from dataclasses import dataclass, field, replace
 
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
+from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
 from marin.datakit.decon import (
     DeconAttributes,
     DropSetSource,
@@ -476,7 +477,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale,
                 max_workers=scale.pool.n_workers,
             ),
             resources=DRIVER_RESOURCES,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
         ),
     )
 
@@ -526,7 +527,7 @@ def build_train_centroids_step(
                 parallel_sources=scale.sample_parallel_sources,
             ),
             resources=DRIVER_RESOURCES,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
         ),
     )
     # Pin the K-means/BLAS thread count to the allocated CPUs so centroid training
@@ -558,7 +559,7 @@ def build_train_centroids_step(
                 seed=cluster.train_seed,
             ),
             resources=scale.train_centroids_resources,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
         ),
     )
 
@@ -968,7 +969,7 @@ def reference_datakit_steps(
                     scale=scale,
                 ),
                 resources=DRIVER_RESOURCES,
-                pip_dependency_groups=["datakit"],
+                pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
             ),
         )
 
