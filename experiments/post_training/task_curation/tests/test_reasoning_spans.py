@@ -23,7 +23,9 @@ MESSAGES = [
     {
         "role": "assistant",
         "content": "<|start_think|>Look first.<|end_think|>",
-        "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": '{"command":"ls"}'}}],
+        "tool_calls": [
+            {"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": '{"command":"ls"}'}}
+        ],
     },
     {"role": "tool", "tool_call_id": "call-1", "content": "a.txt\n"},
 ]
@@ -54,6 +56,11 @@ def test_hazard_rows_become_tool_calling_tasks_whose_golden_reply_scores_one():
     assert [tool.name for tool in task.final_tools] == ["bash"]
     assert isinstance(task.context.events[2], AssistantToolCalls)
     assert task.context.events[3] == ToolResult(call_id="call-1", content="a.txt\n")
-    assert task.tags == ("hazard", "bixbench-cli-marin-corrections", "Grug-67B-A2B-Datakit-SFT-262K-2026.09.21", "stray_end")
+    assert task.tags == (
+        "hazard",
+        "bixbench-cli-marin-corrections",
+        "Grug-67B-A2B-Datakit-SFT-262K-2026.09.21",
+        "stray_end",
+    )
     verification = run_controls(task, controls=config.controls, machines=None)
     assert verification.checks and all(check.status == CheckStatus.PASS for check in verification.checks)
