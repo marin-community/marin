@@ -21,7 +21,14 @@ src/taskforge/
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
                                output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
-  stage20_triage/              verdict.py: TriageDecision and `accept`
+  sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
+                               the host-failure messages build and validation both classify
+  spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
+  stage10_proposal/            model.py: the TaskProposal JSON document and generation schema;
+                               source.py: Portfolio, SlotProposal, SlotFailure, the ProposalSource
+                               protocol, `proposal_batch`, `propose_all`
+  stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
+                               verdict.py: Verdict, TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
@@ -35,11 +42,137 @@ src/taskforge/
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
-modules (`capability`, `content_hash`, `ledger`, `llm`), and the shared modules import no stage.
-The coordinator package, `stage_coordinator`, runs the stages in order and is unnumbered. It may
-import any stage and shared module, and `tests/test_imports.py` refuses an import of it from any
-other package, along with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
-and step over JSONL ledgers.
+modules (`capability`, `child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and
+the shared modules import no stage. The coordinator package, `stage_coordinator`, runs the stages in order and
+is unnumbered. It may import any stage and shared module, and `tests/test_imports.py` refuses an
+import of it from any other package, along with the other wrong-way imports.
+`scripts/ledger_summary.py` totals wall time and tokens per kind and step over JSONL ledgers.
+`scripts/build_image_job.py` runs on Iris and documents its submit command in its docstring: it
+builds a directory's `DockerBuild` context with `taskforge.sandbox.image_builder` and prints the
+pinned registry digest.
+
+## Proposals
+
+A proposal source implements `stage10_proposal.source.ProposalSource[IdeaT, PlanT]` in two phases:
+
+- `async plan(idea, n) -> Portfolio[PlanT]` plans the slots once. A `Portfolio` holds the planning
+  request and completions, the source's own plan record (`plan`, which the document prompts quote),
+  and a `PlannedSlot` per slot, numbered 1 through `n`, that either proposes or carries the
+  `null_reason` the plan gave it. With a dataclass or pydantic plan record it is plain data:
+  `content_hash.pretty_json` writes it and pydantic's `TypeAdapter(Portfolio[PlanT])` reads it back.
+- `async write(idea, portfolio, slot) -> SlotOutcome` writes one slot's document, a `SlotProposal` or
+  a `SlotFailure`, from the idea and the portfolio alone. A slot planned null becomes a proposal with
+  `null_reason` set and makes no model call.
+
+Because no slot waits for another, a scheduler can run each slot's `write` as its own unit and start
+that slot's workpiece as soon as its proposal exists, and a relaunch with a persisted portfolio writes only
+the slots it lacks. `proposal_batch(portfolio, outcomes)` assembles a portfolio and an outcome for
+each of its slots, given in any order, into a `ProposalBatch`: the planning request and completions
+and one outcome per slot, in slot order, so a failed slot does not drop its siblings.
+`propose_all(source, idea, n)` plans, writes every slot concurrently and returns that batch, for a
+caller that wants everything at once.
+
+`stage10_proposal.model.TaskProposal` is a JSON object with a typed `header` (`ProposalHeader`)
+and a Markdown `body` with required section headings. `parse` and `render`
+round-trip it and `digest` is the sha256 of the canonical form. `parse` also checks the research
+decision: `research_need: needed` lists at least one `research` item and `not_needed` none, and a
+non-null body cites every item, and only listed items, as `research[i]`. `solver_machine` pins the
+solver's machine: `null` for a container proposal, which runs in the image its build publishes, and
+`none`, `shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one, where
+`none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
+The proposer writes it, and the build keeps it. `parse` also refuses a `resources` entry that is
+not a relative path inside the build root and a `build` name that repeats.
+`document_request_fields(proposal_id, source)` returns the `response_format` JSON-schema request
+field that constrains a completion to the typed object for that id and source. A reply cut off
+by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
+built from `DOCUMENT_REPAIR_PROMPT`.
+
+## Triage
+
+The default triage is `stage20_triage.preflight.preflight(proposal) -> Verdict`, a deterministic
+preflight that makes no model call. Header validity is `parse`'s job, which runs before triage, so
+the checks in `stage20_triage.checks.CHECKS` read the body and what the header promises. One is
+fatal: the required sections have content. Three are advisory: the grader section is consistent with
+the declared verification, every research item states a purpose, and the build plan names every
+declared resource. A fatal failure rejects the proposal with the failing check as the reason, and a
+null proposal is rejected with its `null_reason`. Anything else is accepted and goes to build.
+Advisory failures are recorded on the verdict and decide nothing. Whether the host can provide the
+declared machine is checked by the build before any model call, and a host that cannot ends the
+workpiece as the host's failure.
+
+A consumer could add a model review to triage in one of two designs:
+
+- A panel with repair: several independent model reviews of the proposal, a majority vote that
+  accepts, rejects or asks for repair, one model rewrite of a repair proposal within a budget, and
+  a repair exit on the stage coordinator that sends the rewrite back to triage.
+- A bounded review with obligations: one model review that accepts the proposal and attaches
+  obligations its author must honour, carried to build as state on the accept event.
+
+Neither is implemented by default, because experiments found them not to be meaningful predictors
+of downstream quality.
+
+## Task specs
+
+A built task is a TaskCompendium `TaskSpec` and the RolloutEngine `TaskRolloutSpec` that says how it
+runs. `spec.draft.assemble` builds the semantic task and `spec.draft.lower` alone builds the rollout
+spec, so a move of either is a single-site change.
+
+- `spec.draft.assemble(task_id, instruction, answer_type, answer_format, grader, source, *,
+  environment, files, output_paths, system, final_tools, tags) -> TaskSpec`. `environment` is
+  `requirements(image=, packages=, setup=, workdir=, env=)`, whose commands run as Linux processes
+  in the image or with CPython 3.12 and the PyPI `packages`, or, with neither, in ShellSim's
+  simulated shell, or `None` for a task without a machine.
+  `files` are agent-visible `file("workspace/x", ...)` resources relative to the machine root.
+  `grader` is a `GraderPackage` from `answer_grader(spec)` (a verifyit mode graded in process, or
+  in a verifier machine given `environment=`), `python_grader(script, config, environment=,
+  answer_path=, timeout=)` (`python3 /tests/grade.py` in a verifier machine) or
+  `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`. RolloutEngine grades an
+  LLM judge (a verifyit `JudgeSpec`) on the host through the judge service of `TaskRolloutSpec.judge_connection`
+  or `VERIFYIT_JUDGE_BASE_URL`, with no verifier machine, so its `RolloutEngine.check` fails on a host
+  that has neither.
+  `grader_environment(task_image)` is the verifier machine's environment: the task image, or
+  `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
+- `spec.draft.lower(task, *, task_machine, verifier_machine, limits, factories)` runs
+  each machine on `host_requirements` for `factories`: with the local backend, the grader base image
+  runs there. A package machine always lowers onto the local backend, so on a host without one
+  `lower` refuses it: `RolloutEngine.check` finds no factory for it. It
+  picks the one container backend (`GVISOR` or `DOCKER`) among `factories` for an image, the local
+  backend for Linux processes without one, and ShellSim otherwise, so a lowered spec is bound to its
+  host's factories. A grader with an environment,
+  other than a judge, takes a verifier machine; no other grader does. `limits` is a `RolloutLimits`
+  from `rollout_limits(...)`, which sets no token budget. The spec names the harness `TOOL_HARNESS`,
+  and `lower` rejects what `RolloutEngine.check` rejects (`draft.check`).
+- `spec.draft.rollout_engine(factories, *, command_timeout)` is the `RolloutEngine` every Taskforge
+  rollout runs on: the factories and RolloutEngine's `ShellHarness(command_timeout=...)` registered as
+  `TOOL_HARNESS`. The shell command timeout belongs to the harness registration, not to the spec, and
+  each run passes its model: `engine.run_task(spec, model)` returns a `GradedRollout`.
+- `spec.controls.Control` is one labeled candidate submission (`kind`, `category`, `concern`,
+  `author`, a `Transcript` or `Workspace` payload, an `Expectation`). `concern` is `reference`,
+  `acceptance`, `extraction` or `shortcut`, and the concern a control may carry follows its
+  category (`spec.controls.CONCERNS`). A task's control set needs a `reference`, an `acceptance`
+  and a `shortcut` control, so its coverage never rests on extraction controls, which pin today's
+  answer parser. `validate_controls(task, controls)` checks a set against its task.
+- `sandbox.factories.machine_factories(backends, controller_url)` returns exactly the requested
+  factories, keyed by shellbox `Backend` value, and raises if one is unavailable. `spec.draft.lower`
+  checks a spec's machines against them through `RolloutEngine.check` before any machine starts.
+
+Task-specific grading is the task's own code, private in `resources.verifier`, run by a
+`ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
+the task's image or, for a ShellSim task or a task without a machine, from the grader base
+(CPython 3.12, `sh`, `setsid`, root), and receives the captured `output_paths` at their own paths
+and the extracted answer at `/app/answer.txt`. A grader program writes its verdict, the reward and
+one result per check, as `spec.verdict.verdict_json`. Generic modes that verifyit grades in
+process are preferred whenever a task fits one.
+
+## Machine backends
+
+Call `sandbox.factories.machine_factories(backends, controller_url)` with the exact shellbox
+`Backend` values the run uses. A requested backend that cannot start on the host raises during
+factory construction; the selection never silently shrinks. Supply a controller URL when
+selecting `Backend.GVISOR`. A ShellSim-only run does not probe Docker or the local sandbox.
+
+Custom-image builds remain available through `sandbox.image_builder`; selecting a backend and
+choosing or building its image are separate caller decisions.
 
 ## Model calls
 
@@ -88,7 +221,8 @@ and no network: a bubblewrap `LocalMachineFactory`, which needs the privileged c
 Iris. Its tools do only what the shell cannot:
 
 - `grade`: grade a control answer with the task's grader.
-- `rollout`: run solver or adversary rollouts on ShellSim machines.
+- `rollout`: run solver or adversary rollouts on machines of `AgenticConfig.solver_factory`: ShellSim, or
+  bubblewrap (`--solver-backend local`), where a task sets `command_semantics` to `linux_process`.
 - `web_search`, `web_fetch`: search and read the web with Parallel.
 - `submit`: accept a task when its evidence satisfies the `Gate` and a blind review accepts it.
 - `finish`: end the session with a report.

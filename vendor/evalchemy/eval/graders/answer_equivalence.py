@@ -43,6 +43,11 @@ class JudgeLabel(StrEnum):
     NOT_ATTEMPTED = "not_attempted"
 
 
+class JudgeProtocol(StrEnum):
+    DEFAULT = "default"
+    MARIN_POLICY = "marin-10197"
+
+
 @dataclass(frozen=True)
 class JudgeConfig:
     """Resolved OpenAI-compatible judge endpoint configuration."""
@@ -50,6 +55,7 @@ class JudgeConfig:
     model: str
     base_url: str
     api_key: str = field(repr=False)
+    protocol: JudgeProtocol = JudgeProtocol.DEFAULT
 
     def __post_init__(self) -> None:
         if not self.model.strip():
@@ -68,6 +74,7 @@ class JudgeConfig:
         judge_model: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
+        protocol: JudgeProtocol = JudgeProtocol.DEFAULT,
     ) -> "JudgeConfig":
         """Resolve explicit judge settings before the normalized environment."""
         explicit_model = judge_model if judge_model not in (None, "auto") else None
@@ -78,6 +85,7 @@ class JudgeConfig:
             model=explicit_model or os.environ.get("JUDGE_MODEL") or DEFAULT_JUDGE_MODEL,
             base_url=base_url or os.environ.get("JUDGE_BASE_URL") or DEFAULT_JUDGE_BASE_URL,
             api_key=resolved_key,
+            protocol=protocol,
         )
 
 

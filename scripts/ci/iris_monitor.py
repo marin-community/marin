@@ -210,11 +210,13 @@ def wait_for_child_job(
     child_wait_timeout: float,
     repo_root: Path,
     resource_exhaustion_policy: ResourceExhaustionPolicy,
+    child_wait_timeout_policy: ResourceExhaustionPolicy,
 ) -> WaitResult:
     """Wait for a parent job to terminate or shut it down after resource exhaustion.
 
-    Fail fast with ``TimeoutError`` if no child reaches ``JOB_STATE_RUNNING`` within
-    ``child_wait_timeout`` — this catches a parent stuck in the queue before it ever launches work.
+    If no child reaches ``JOB_STATE_RUNNING`` within ``child_wait_timeout``, the escalate policy
+    raises ``TimeoutError`` — this catches a parent stuck in the queue before it ever launches work —
+    and the shutdown policy cancels the parent and reports the wait as resource exhaustion.
     Once a child has started, the child wait timeout is dropped — total runtime is bounded by the
     caller's wall clock (e.g. GitHub ``timeout-minutes``).
     """
@@ -248,10 +250,14 @@ def wait_for_child_job(
             click.echo(f"parent={_row(parent)} child={_row(child)}", err=True)
 
             if not child_running and time.monotonic() >= deadline:
-                raise TimeoutError(
+                reason = (
                     f"No child reached RUNNING within {child_wait_timeout:.0f}s. "
                     f"parent={_row(parent)} child={_row(child)}"
                 )
+                if child_wait_timeout_policy is ResourceExhaustionPolicy.SHUTDOWN:
+                    client.cancel_job(parent.job_id)
+                    return WaitResult(status=parent, resource_exhaustion_reason=reason)
+                raise TimeoutError(reason)
 
             time.sleep(backoff.next_interval())
 
@@ -714,6 +720,13 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     type=click.Choice([policy.value for policy in ResourceExhaustionPolicy]),
     help="Escalate resource exhaustion as a failure, or shut down the job and emit a warning.",
 )
+@click.option(
+    "--child-wait-timeout-policy",
+    default=ResourceExhaustionPolicy.ESCALATE.value,
+    show_default=True,
+    type=click.Choice([policy.value for policy in ResourceExhaustionPolicy]),
+    help="When --child-wait-timeout expires: fail, or shut down the job and report resource exhaustion.",
+)
 def wait(
     job_id: str,
     iris_config: Path | None,
@@ -723,6 +736,7 @@ def wait(
     github_output: bool,
     child_wait_timeout: float | None,
     resource_exhaustion_policy: str,
+    child_wait_timeout_policy: str,
 ) -> None:
     """Poll an Iris job and exit non-zero for failures that require escalation."""
     if child_wait_timeout is not None and timeout is not None:
@@ -741,6 +755,7 @@ def wait(
             child_wait_timeout=child_wait_timeout,
             repo_root=_REPO_ROOT,
             resource_exhaustion_policy=ResourceExhaustionPolicy(resource_exhaustion_policy),
+            child_wait_timeout_policy=ResourceExhaustionPolicy(child_wait_timeout_policy),
         )
     else:
         click.echo(f"Waiting for {job_id!r} every {poll_interval}s ...", err=True)
