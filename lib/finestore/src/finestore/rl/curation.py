@@ -52,12 +52,7 @@ class CatalogRecord(BaseModel):
 
 
 class IndependentQC(CatalogRecord):
-    """Quality control performed inside a pinned release, outside the curation pipeline.
-
-    Inventory-only pointers use this to make their release's own admission evidence
-    visible in the Atlas. ``verdict`` describes the inspected population; the curation
-    pipeline never re-litigates it.
-    """
+    """Quality checks reported by a pinned source release."""
 
     verdict: Verdict
     method: str = Field(min_length=1)

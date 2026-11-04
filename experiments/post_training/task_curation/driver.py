@@ -635,8 +635,7 @@ def main(
     if corpus is not None:
         restored = _corpus_sources(corpus)
         assert embedding is not None
-        # Refreshed declarations (counts, notes, independent QC) reach a re-published
-        # release; the corpus pins only which roots were curated, not how they read.
+        # Refresh recorded inventory entries by ID while retaining entries no longer in the catalog.
         corpus_inventory = {row.id: row for row in restored.inventory}
         corpus_inventory.update({row.id: row for row in inventory})
         embedding(

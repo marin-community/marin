@@ -29,12 +29,9 @@ class EmbeddingSpec(_Record):
 
 
 class AlignmentSource(_Record):
-    """One source in a curriculum release.
+    """A matched source or an inventory-only declaration in a curriculum release.
 
-    ``basis`` separates sources the pipeline embedded and matched ("matched")
-    from inventory-only declarations carried at their pinned count without
-    curriculum placement ("declared"). Declared sources have no placement
-    statistics and a null ``intended_use``.
+    Declared sources have no placement statistics or intended use.
     """
 
     source_id: str

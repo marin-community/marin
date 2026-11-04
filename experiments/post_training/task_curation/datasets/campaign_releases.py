@@ -13,10 +13,6 @@ Container-backed cohorts additionally carry host-local Docker image locators.
 Their archives record image IDs but not image bytes, so no machine can execute
 these tasks until the images are rebuilt or separately distributed. Treat every
 entry as a data pointer, not a runnable pipeline.
-
-Each entry's ``independent_qc`` block states what quality control the pinned
-release performed on itself, so the Atlas can show that evidence beside — and
-distinct from — any sampled curation assessment.
 """
 
 from finestore.rl.curation import IndependentQC, Verdict

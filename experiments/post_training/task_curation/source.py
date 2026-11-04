@@ -62,10 +62,6 @@ class SourceInfo:
     ``dataset`` identifies inventory entries without a configuration. Runnable
     sources expose their configured pinned input directly. Tags describe task type,
     interaction, benchmark status, and source-specific search terms.
-
-    ``independent_qc`` records quality control the pinned release performed itself.
-    Inventory-only pointers use it to surface that evidence in the Atlas, separate
-    from any sampled curation assessment.
     """
 
     id: str

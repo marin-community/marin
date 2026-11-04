@@ -361,8 +361,6 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
 
 
 def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path, monkeypatch, description_server):
-    """A corpus written without today's declarations still yields a release carrying them:
-    the merge restores curated sources and joins inventory-only counts as declared rows."""
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.load_harrier",
         lambda config: EmbeddingEndpoint(str(tmp_path / "embeddings.jsonl"), config.dimensions),
