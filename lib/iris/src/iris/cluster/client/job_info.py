@@ -122,11 +122,15 @@ def get_job_info() -> JobInfo | None:
         if constraints_json:
             for item in json.loads(constraints_json):
                 constraints.append(Constraint.from_proto(json_format.ParseDict(item, job_pb2.Constraint())))
+        # Workers deployed before the grace was added do not set it; they run tasks
+        # under the controller default.
+        raw_grace = os.environ.get(TERMINATION_GRACE_ENV)
+        termination_grace = resolve_termination_grace(Duration.from_ms(int(raw_grace)) if raw_grace else None)
 
         info = JobInfo(
             task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
-            termination_grace=resolve_termination_grace(Duration.from_ms(int(os.environ[TERMINATION_GRACE_ENV]))),
+            termination_grace=termination_grace,
             attempt_id=attempt_id,
             attempt_uid=os.environ.get(IRIS_ATTEMPT_UID_ENV),
             worker_id=os.environ.get("IRIS_WORKER_ID"),

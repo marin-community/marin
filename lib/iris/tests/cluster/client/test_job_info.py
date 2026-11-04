@@ -5,6 +5,7 @@ import pytest
 from iris.cluster.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.types import JobName
+from iris.preemption import DEFAULT_TERMINATION_GRACE, TERMINATION_GRACE_ENV
 from iris.rpc import job_pb2
 from rigging.timing import Duration
 
@@ -69,3 +70,15 @@ def test_runtime_metadata_round_trip_preserves_resolved_termination_grace(monkey
     assert info.termination_grace == Duration.from_ms(60123)
     assert info.task_id == JobName.from_wire("/alice/train/0")
     assert info.attempt_id == 2
+
+
+def test_task_on_worker_without_termination_grace_uses_default(monkeypatch):
+    # Workers deployed before the grace existed do not set IRIS_TERMINATION_GRACE_MS.
+    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0:1")
+    monkeypatch.delenv(TERMINATION_GRACE_ENV, raising=False)
+
+    info = get_job_info()
+
+    assert info is not None
+    assert info.termination_grace == DEFAULT_TERMINATION_GRACE
+    assert info.attempt_id == 1
