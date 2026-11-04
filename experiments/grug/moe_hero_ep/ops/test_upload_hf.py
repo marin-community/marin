@@ -14,10 +14,8 @@ import numpy as np
 import pytest
 from huggingface_hub import RepoFile
 from levanter.compat.hf_export import HFShardRecord
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from safetensors.numpy import save_file
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from transformers import PreTrainedTokenizerFast
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.ops import upload_hf
@@ -178,15 +176,7 @@ def upload_fixture(tmp_path, monkeypatch):
         return str(path)
 
     def tokenizer_download(repo_id, *, local_dir, **kwargs):
-        vocab = {"[UNK]": 0, "<|begin_of_text|>": 1, "<|end_of_text|>": 2, "<|eot_id|>": 3}
-        tokenizer = PreTrainedTokenizerFast(
-            tokenizer_object=Tokenizer(WordLevel(vocab=vocab, unk_token="[UNK]")),
-            unk_token="[UNK]",
-            bos_token="<|begin_of_text|>",
-            eos_token="<|end_of_text|>",
-        )
-        tokenizer.chat_template = "{% for message in messages %}{{ message['content'] }}<|eot_id|>{% endfor %}"
-        tokenizer.save_pretrained(local_dir)
+        llama3_style_chat_tokenizer().save_pretrained(local_dir)
 
     monkeypatch.setattr(upload_hf, "hf_hub_download", hub_download)
     monkeypatch.setattr(upload_hf, "snapshot_download", tokenizer_download)

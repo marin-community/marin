@@ -7,8 +7,8 @@ Serving stacks such as vLLM read sampling defaults and stop tokens from
 ``generation_config.json``. Without sampling fields they sample at temperature
 1.0 with no nucleus cutoff, and without the chat template's end-of-turn token
 they stop only at the document boundary and continue into invented turns.
-Every Marin HF export (Levanter, SkyRL, Grug) writes this file through
-:func:`export_generation_config`, so the defaults live here and nowhere else.
+Marin HF exports write this file through :func:`export_generation_config`, so
+the defaults live here and nowhere else.
 
 This module is pure Python so that both the JAX (Levanter) and Torch (SkyRL)
 stacks can share it.
@@ -35,6 +35,7 @@ class SamplingDefaults:
 EXPORT_SAMPLING_DEFAULTS = SamplingDefaults(temperature=0.6, top_p=0.95)
 """Sampling written into every export. Matches Marin's eval-policy reasoning-model defaults."""
 
+# Values are JSON scalars or token-id lists; preserved source configs may carry any HF generation field.
 GenerationConfigDict = dict[str, Any]
 
 

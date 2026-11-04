@@ -140,10 +140,6 @@ def build_generation_config(
     ``bos_token_id``, and sampling defaults) with
     :func:`rigging.hf_generation_config.export_generation_config`.
 
-    Normalization guarantees:
-    - Output ``eos_token_id`` is always sorted and deduplicated.
-    - The tokenizer's own ``eos_token_id`` is auto-added if not already present.
-
     Args:
         tokenizer: The tokenizer that will be saved with the checkpoint.
         eos_token_ids: Explicit list of EOS token IDs, or ``None`` to skip.
@@ -168,19 +164,7 @@ def build_generation_config(
         if not (0 <= tid < vocab_size):
             raise ValueError(f"Token ID {tid} out of range [0, {vocab_size})")
 
-    ids = set(eos_token_ids)
-
-    tok_eos = tokenizer.eos_token_id
-    if tok_eos is None:
-        logger.warning("Tokenizer has no eos_token_id; generation config will use only the provided IDs")
-    elif tok_eos not in ids:
-        logger.info("Auto-adding tokenizer eos_token_id=%d to generation config", tok_eos)
-        ids.add(tok_eos)
-
-    gen_config: GenerationConfigDict = {"eos_token_id": sorted(ids)}
-    if tokenizer.bos_token_id is not None:
-        gen_config["bos_token_id"] = tokenizer.bos_token_id
-    return gen_config
+    return {"eos_token_id": sorted(set(eos_token_ids))}
 
 
 def _coerce_to_hf_tokenizer(tokenizer: PreTrainedTokenizerBase | MarinTokenizer) -> PreTrainedTokenizerBase:
@@ -1117,8 +1101,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         If None, will save code for models that aren't in the HF repo.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
-        :param generation_config: explicit generation_config.json fields to preserve. The written file is always
-        completed from the tokenizer and shipped chat template by ``rigging.hf_generation_config``.
+        :param generation_config: explicit generation_config.json fields to preserve. When the converter has a
+        tokenizer, the written file is completed from it and the shipped chat template by
+        ``rigging.hf_generation_config``; without a tokenizer no generation_config.json is written.
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
         :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.

@@ -35,10 +35,7 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
 from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
 from transformers import GPT2Config as HfGpt2Config
-from transformers import PreTrainedTokenizerFast
 
 import levanter.compat.hf_export as hf_export
 import levanter.compat.hf_checkpoints as hf_checkpoints
@@ -53,6 +50,7 @@ from levanter.compat.hf_checkpoints import (
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.helpers import use_test_mesh
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from levanter.utils.byte_budget import HostByteBudget
 
 
@@ -581,18 +579,6 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
     fs.rm(base_path, recursive=True)
 
 
-def _chat_tokenizer() -> PreTrainedTokenizerFast:
-    vocab = {"[UNK]": 0, "<|begin_of_text|>": 1, "<|end_of_text|>": 2, "<|eot_id|>": 3, "hello": 4}
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=Tokenizer(WordLevel(vocab=vocab, unk_token="[UNK]")),
-        unk_token="[UNK]",
-        bos_token="<|begin_of_text|>",
-        eos_token="<|end_of_text|>",
-    )
-    tokenizer.chat_template = "{% for message in messages %}{{ message['content'] }}<|eot_id|>{% endfor %}"
-    return tokenizer
-
-
 @pytest.mark.parametrize(
     ("explicit", "expected"),
     [
@@ -607,7 +593,7 @@ def test_save_pretrained_writes_complete_generation_config(local_gpt2_tokenizer_
     gpt2_config = Gpt2Config(
         num_layers=1, num_heads=1, hidden_dim=8, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
-    converter = gpt2_config.hf_checkpoint_converter().replaced(tokenizer=_chat_tokenizer())
+    converter = gpt2_config.hf_checkpoint_converter().replaced(tokenizer=llama3_style_chat_tokenizer())
 
     with use_test_mesh():
         model = Gpt2LMHeadModel.init(converter.Vocab, gpt2_config, key=PRNGKey(0))
