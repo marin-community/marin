@@ -148,6 +148,30 @@ CASES = [
         "An apple boat.",
     ),
     (
+        "keywords:start_end",
+        {},
+        "Hello there, hello",
+        "Hello there, hello.",
+    ),
+    (
+        "startend:quotation",
+        {},
+        '"A quoted answer."',
+        "'A quoted answer.'",
+    ),
+    (
+        "detectable_format:square_brackets",
+        {},
+        "[Hello], [world].",
+        "[Hello] world",
+    ),
+    (
+        "detectable_format:bigram_wrapping",
+        {},
+        '<<She said>> <<"Stop.">> <<I am>> <<at home>>',
+        "<<I am>> at home",
+    ),
+    (
         "detectable_format:multiple_sections",
         {"num_sections": 2, "section_spliter": "Section"},
         "Section 1\nSetup steps.\nSection 2\nTest steps.",
@@ -203,6 +227,18 @@ CASES = [
         "The pen is mightier than sword. The pen is mightier than sword.",
     ),
     (
+        "punctuation:punctuation_dot",
+        {},
+        "No dots appear here",
+        "Wait for it…",
+    ),
+    (
+        "detectable_format:constrained_response",
+        {},
+        "**My answer is yes.**",
+        "My answer is yes. It works.",
+    ),
+    (
         "detectable_content:postscript",
         {"postscript_marker": "P.S."},
         "Main text.\n**P.S.** Bring water.",
@@ -227,6 +263,12 @@ CASES = [
         "ಮತ್ತು ಪ್ರಪಂಚ",
     ),
     (
+        "detectable_format:number_highlighted_sections",
+        {"num_highlights": 1},
+        "Use *this* one.",
+        "int *a, *b;",
+    ),
+    (
         "paragraphs:paragraphs2",
         {},
         "First paragraph.\n\n***\n\nSecond paragraph.",
@@ -248,6 +290,12 @@ CASES = [
         "Read books. Write notes. Think deeply.",
     ),
     (
+        "detectable_format:bigram_wrapping",
+        {},
+        "<<I am>> <<at home>>",
+        "<<I am at>> <<home>>",
+    ),
+    (
         "copy:repeat_phrase",
         {"phrase": "The pen is mightier than sword", "small_n": 2},
         "The pen is stronger than sword. The pen is sharper than sword.",
@@ -258,6 +306,18 @@ CASES = [
         {"phrase": "The pen is mightier than sword", "small_n": 2},
         "The pen is stronger than sword. The pen is sharper than sword.",
         "The pen is stronger than sword. The pen is sharper than sword. The pen is greater than sword.",
+    ),
+    (
+        "detectable_format:square_brackets",
+        {},
+        "[Hello], [world].",
+        "[Hello world]",
+    ),
+    (
+        "keywords:start_end",
+        {},
+        "Love is all you need, love",
+        "Love is all you need, love ❤️",
     ),
     (
         "last_word:last_word_sent",
@@ -308,10 +368,34 @@ CASES = [
         "* One\n* * *",
     ),
     (
+        "detectable_format:title",
+        {},
+        "<<A Title>>\nText.",
+        "Here: << >>",
+    ),
+    (
+        "detectable_content:number_placeholders",
+        {"num_placeholders": 1},
+        "Fill in [name] later.",
+        "Fill in [ ] later.",
+    ),
+    (
         "count:count_unique",
         {},
         "One cat saw a dog.",
         "The cat saw the dog.",
+    ),
+    (
+        "punctuation:punctuation_dot",
+        {},
+        "No dots here",
+        "Done．",  # noqa: RUF001 - fullwidth full stop.
+    ),
+    (
+        "detectable_format:bigram_wrapping",
+        {},
+        "<<I am>> <<home>>. <<You are>> <<out>>.",
+        "<<I am>> <<home>>, <<you are>> <<out>>.",
     ),
     (
         "length_constraints:number_words",
@@ -336,6 +420,12 @@ CASES = [
         {"keyword": "chicken", "frequency": 2, "relation": "at least"},
         "The chicken ate. The chicken slept.",
         "The chicken ate. The chicken slept. The chicken woke.",
+    ),
+    (
+        "punctuation:punctuation_dot",
+        {},
+        "No dots here",
+        "Wait\u2025",
     ),
     (
         "length_constraints:number_words",
@@ -450,6 +540,48 @@ CASES = [
         {"postscript_marker": "P.S."},
         "Main text.\n- P.S. Bring water.",
         "Main text.\n- Bring water.",
+    ),
+    (
+        "detectable_format:bigram_wrapping",
+        {},
+        "<<I am>> <<at home>>",
+        "<<I>> <<am>> <<at>> <<home>>",
+    ),
+    (
+        "detectable_format:bigram_wrapping",
+        {},
+        "<<I am>>\n<<at home>>",
+        "<<I>>\n<<am>>\n<<at>>\n<<home>>",
+    ),
+    (
+        "detectable_format:bigram_wrapping",
+        {},
+        "<<I am>> <<home>>. <<You are>> <<out>>.",
+        "<<I>>. <<am>>. <<at>>. <<home>>.",
+    ),
+    (
+        "detectable_format:bigram_wrapping",
+        {},
+        "<<I am>> <<home.>> <<You are>> <<out.>>",
+        "<<I.>> <<am.>> <<at.>> <<home.>>",
+    ),
+    (
+        "punctuation:no_comma",
+        {},
+        "First then second.",
+        "First\uff0c then second.",
+    ),
+    (
+        "punctuation:no_comma",
+        {},
+        "First then second.",
+        "First\u3001 then second.",
+    ),
+    (
+        "punctuation:no_comma",
+        {},
+        "First then second.",
+        "First\u060c then second.",
     ),
     (
         "length_constraints:number_words",
@@ -631,10 +763,35 @@ CASES = [
         "第一段。***第二段。",
         "第一段。第二段。",
     ),
+    (
+        "punctuation:punctuation_exclamation",
+        {},
+        "Great news.",
+        "Great news\uff01",
+    ),
+    (
+        "punctuation:punctuation_exclamation",
+        {},
+        "Great news.",
+        "\u00a1Great news",
+    ),
+    (
+        "detectable_format:bigram_wrapping",
+        {},
+        "<<well-known>> <<facts are>>",
+        "<<well-known fact>>",
+    ),
+    (
+        "detectable_format:bigram_wrapping",
+        {},
+        "<<你好>> <<世界>>",
+        "<<你好>> 世界",
+    ),
 ]
 
 
-# Degenerate output, such as a long run of marks, must stay linear in the text's length.
+# Degenerate output, such as a long run of marks or a bracket that never closes, must stay linear in the
+# text's length.
 @pytest.mark.parametrize(
     "name, params, text, passed",
     [
@@ -644,10 +801,18 @@ CASES = [
             "Wait" + "." * 40_000,
             False,
         ),
+        ("detectable_content:number_placeholders", {"num_placeholders": 1}, "See [" + "a" * 100_000, False),
+        ("detectable_format:title", {}, "<<" + "a" * 100_000, False),
+        ("detectable_format:square_brackets", {}, " ".join(["[word]"] * 20_000), True),
+        ("detectable_format:json_format", {}, "```" + "\n" * 100_000 + "x", False),
         ("keywords:existence", {"keywords": ["b"]}, "a" + "\u0301" * 100_000 + "b", False),
     ],
     ids=[
         "sentence_marks",
+        "open_bracket",
+        "open_title",
+        "many_brackets",
+        "fence_newlines",
         "keyword_after_marks",
     ],
 )

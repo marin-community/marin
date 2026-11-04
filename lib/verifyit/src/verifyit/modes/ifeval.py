@@ -7,9 +7,10 @@ Each check takes the candidate text and the constraint's params and returns ``(p
 The detail is a short human-readable string that lands in the reward's ``detail`` field. Checks are
 pure stdlib: this module has to run inside every task image without an extra.
 
-Several IFEval instruction ids describe an instruction the model was given rather than a property
-that can be measured exactly (``language:response_language``, ``detectable_format:bigram_wrapping``).
-Those are approximations, and the docstring on each says so.
+``language:response_language`` describes an instruction the model was given rather than a property
+that can be measured exactly, so its check is an approximation, and its docstring says so. The
+prompts of ``change_case:english_capital`` and ``change_case:english_lowercase`` also ask for
+English; those checks look only at letter case.
 
 A word is a letter or digit followed by any letters, digits and combining marks in any script,
 with apostrophes and zero-width joiners or non-joiners inside it, so ``don't`` is one word,
@@ -87,11 +88,14 @@ COMPARED_WORD = re.compile(
 )
 BULLET = re.compile(r"^\s*[\*\-]\s+\S")
 BULLET_ONLY_LINE = re.compile(r"^[\s*\-+]*$")
-SQUARE_BRACKETS = re.compile(r"\[[^\[\]\n]+\]")
-TITLE_MARKER = re.compile(r"<<[^<>\n]+>>")
-JSON_FENCE = re.compile(r"^```(?:json)?\s*\n(.*)\n```\s*$", re.DOTALL)
-MARKDOWN_HIGHLIGHT = re.compile(r"\*{1,2}[^*\n]+\*{1,2}")
-BOLD_BIGRAM = re.compile(r"\*\*\s*\w+\s+\w+\s*\*\*")
+# A span that holds a non-space character; the lookahead keeps matching linear in the span's length.
+SQUARE_BRACKETS = re.compile(r"\[(?=[^\[\]\n]*[^\[\]\s])[^\[\]\n]*\]")
+ONE_WORD_BRACKETS = re.compile(r"\[[^\[\]\s]*\]")
+TITLE_MARKER = re.compile(r"<<(?=[^<>\n]*[^<>\s])[^<>\n]*>>")
+DOUBLE_ANGLE_SPAN = re.compile(r"<<((?:(?!<<|>>)[^\n])*)>>")
+JSON_FENCE = re.compile(r"^```(?:json)?[ \t]*\r?\n(.*)\n```\s*$", re.DOTALL)
+# One to three asterisks on each side; as in CommonMark, the span does not start or end with whitespace.
+MARKDOWN_HIGHLIGHT = re.compile(r"(?<!\*)(\*{1,3})(?![\s*])([^*\n]*?[^\s*])\1(?!\*)")
 # Exactly three asterisks; a longer run is not the divider.
 DIVIDER = r"(?<!\*)\*\*\*(?!\*)"
 DIVIDER_SPLIT = re.compile(rf"\s?{DIVIDER}\s?")
@@ -113,6 +117,10 @@ SECTION_MARKER_LEAD = MARKDOWN_LEAD + "\"'\u201c\u2018([{\u00ab\u300c\u300e\uff0
 CONSTRAINED_RESPONSES = ("My answer is yes.", "My answer is no.", "My answer is maybe.")
 # Exactly six asterisks; a longer run is not the separator.
 TWO_RESPONSE_SEPARATOR = re.compile(r"(?<!\*)\*{6}(?!\*)")
+# Full stop, fullwidth and small full stops, one- and two-dot leaders, and the ellipsis "…".
+DOTS = ".\uff0e\ufe52\u2024\u2025\u2026"
+# Markdown emphasis or straight double quotes around the whole answer, as in "**My answer is yes.**".
+ANSWER_WRAPPING = re.compile(r'^(\*{1,2}|")(.*)\1$', re.DOTALL)
 
 # Closed-class words that are cheap evidence a response is in the requested language. Scripts with
 # no entry (zh, ja, ko, ar, th) are checked by their share of non-ASCII characters instead.
@@ -415,11 +423,15 @@ def no_adjacent_consecutive(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("keywords:start_end")
 def start_end(text: str, params: dict) -> tuple[bool, str]:
-    """The response must start and end with the same word."""
-    found = compared_words(text)
+    """The response must start and end with the same word, with nothing after the last word."""
+    stripped = text.strip()
+    found = list(COMPARED_WORD.finditer(stripped))
     if not found:
         return False, "empty"
-    return found[0].lower() == found[-1].lower(), f"start={found[0]!r} end={found[-1]!r}"
+    first, last = found[0].group(), found[-1]
+    if last.end() != len(stripped):
+        return False, f"text ends with {stripped[last.end() :][:20]!r} after the last word"
+    return first.lower() == last.group().lower(), f"start={first!r} end={last.group()!r}"
 
 
 # === change_case ============================================================
@@ -455,20 +467,30 @@ def capital_word_frequency(text: str, params: dict) -> tuple[bool, str]:
 # === punctuation ============================================================
 
 
+def named_punctuation(text: str, name: str) -> list[str]:
+    """The different punctuation characters of the text whose Unicode name holds ``name``."""
+    return sorted({c for c in text if unicodedata.category(c)[0] == "P" and name in unicodedata.name(c, "")})
+
+
 @constraint("punctuation:no_comma")
 def no_comma(text: str, params: dict) -> tuple[bool, str]:
-    return "," not in text, f"has_comma={',' in text}"
+    """The prompt forbids any commas, so the fullwidth, ideographic and Arabic ones count too."""
+    found = named_punctuation(text, "COMMA")
+    return not found, f"commas={found}"
 
 
 @constraint("punctuation:punctuation_dot")
 def no_dot(text: str, params: dict) -> tuple[bool, str]:
-    """IFEval semantics: the response must contain no periods at all."""
-    return "." not in text, f"has_dot={'.' in text}"
+    """IFEval semantics: the response must contain no dots at all, an ellipsis "…" included."""
+    found = sorted({c for c in text if c in DOTS})
+    return not found, f"dots={found}"
 
 
 @constraint("punctuation:punctuation_exclamation")
 def no_exclamation(text: str, params: dict) -> tuple[bool, str]:
-    return "!" not in text, f"has_exclam={'!' in text}"
+    """The prompt forbids exclamation marks, so the fullwidth and inverted ones count too."""
+    found = named_punctuation(text, "EXCLAMATION")
+    return not found, f"exclamation_marks={found}"
 
 
 # === startend ===============================================================
@@ -484,12 +506,10 @@ def end_checker(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("startend:quotation")
 def quotation(text: str, params: dict) -> tuple[bool, str]:
-    """The whole response must be wrapped in quotes, straight or typographic."""
+    """The whole response must be wrapped in double quotation marks, straight or typographic."""
     stripped = text.strip()
-    passed = (
-        (stripped.startswith('"') and stripped.endswith('"'))
-        or (stripped.startswith("“") and stripped.endswith("”"))
-        or (stripped.startswith("'") and stripped.endswith("'"))
+    passed = len(stripped) > 1 and (
+        (stripped.startswith('"') and stripped.endswith('"')) or (stripped.startswith("“") and stripped.endswith("”"))
     )
     return passed, f"quoted={passed}"
 
@@ -550,14 +570,28 @@ def number_highlighted_sections(text: str, params: dict) -> tuple[bool, str]:
     expected = params.get("num_highlights")
     if not isinstance(expected, int):
         return False, "missing num_highlights"
-    actual = len(MARKDOWN_HIGHLIGHT.findall(text))
+    actual = sum(1 for match in MARKDOWN_HIGHLIGHT.finditer(text) if WORD.search(match.group(2)))
     return actual >= expected, f"highlights={actual} need>={expected}"
+
+
+def outside_spans(text: str, spans: list[re.Match]) -> str | None:
+    """The first word of ``text`` that no span covers; ``spans`` are in text order and do not overlap."""
+    index = 0
+    for word in WORD.finditer(text):
+        while index < len(spans) and spans[index].end() <= word.start():
+            index += 1
+        if index == len(spans) or not spans[index].start() < word.start() < word.end() < spans[index].end():
+            return word.group()[:20]
+    return None
 
 
 @constraint("detectable_format:square_brackets")
 def square_brackets(text: str, params: dict) -> tuple[bool, str]:
-    found = bool(SQUARE_BRACKETS.search(text))
-    return found, f"has_square_brackets={found}"
+    """Every word must sit in a bracket span with no whitespace; punctuation may stay outside: "[Hello], [world]"."""
+    if not WORD.search(text):
+        return False, "no words"
+    uncovered = outside_spans(text, list(ONE_WORD_BRACKETS.finditer(text)))
+    return uncovered is None, f"word outside one-word brackets: {uncovered!r}" if uncovered else "every word bracketed"
 
 
 @constraint("detectable_format:sentence_hyphens")
@@ -577,14 +611,39 @@ def sentence_hyphens(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("detectable_format:bigram_wrapping")
 def bigram_wrapping(text: str, params: dict) -> tuple[bool, str]:
-    """Approximate: at least one word pair is wrapped in markdown bold."""
-    found = bool(BOLD_BIGRAM.search(text))
-    return found, f"bigram_bold={found}"
+    """Every word must sit in a <<...>> span of two words. The last span of a line or a sentence may hold one, but
+    spans of one word may not outnumber spans of two, so a reply with every word in its own span fails. Each Han or
+    kana letter counts as a word here."""
+    if not WORD.search(text):
+        return False, "no words"
+    sizes = Counter()
+    for line in text.splitlines():
+        spans = list(DOUBLE_ANGLE_SPAN.finditer(line))
+        uncovered = outside_spans(line, spans)
+        if uncovered is not None:
+            return False, f"word outside <<...>>: {uncovered!r}"
+        for index, span in enumerate(spans):
+            count = len(compared_words(span.group(1)))
+            # The sentence's final mark sits inside the span, before any closing quote, or right after it.
+            closes = (
+                index == len(spans) - 1
+                or span.group(1).rstrip().rstrip(CLOSERS).endswith(SENTENCE_ENDING_MARKS)
+                or line.startswith(SENTENCE_ENDING_MARKS, span.end())
+            )
+            if count != 2 and not (count == 1 and closes):
+                return False, f"span {span.group(0)[:20]!r} holds {count} words"
+            sizes[count] += 1
+    if sizes[1] > sizes[2]:
+        return False, f"{sizes[1]} spans of one word against {sizes[2]} of two"
+    return True, "every bigram wrapped"
 
 
 @constraint("detectable_format:constrained_response")
 def constrained_response(text: str, params: dict) -> tuple[bool, str]:
     stripped = text.strip()
+    wrapped = ANSWER_WRAPPING.match(stripped)
+    if wrapped:
+        stripped = wrapped.group(2).strip()
     passed = stripped in CONSTRAINED_RESPONSES
     return passed, f"matched_constrained={passed}"
 
