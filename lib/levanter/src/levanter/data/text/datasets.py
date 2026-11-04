@@ -796,6 +796,11 @@ class LmDataConfig:
     and the mixture) and listed its sources in the same order (which assigns each source's shuffle key and mixture
     slots), and the current launch restores the checkpoint at the last ``end_step``. Restoring an earlier step
     re-reads data."""
+    mixture_start_step: int | None = None
+    """The training step that reads the mixture's first sequence, for a run that continues on a new data store.
+    Each source then starts at the beginning of its shuffled order at this step, whatever the batch size, and a
+    restore at a later step continues in place. A restore before this step raises. Requires one mixture stage and
+    the restart stop strategy, and excludes ``prior_context_phases``."""
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
@@ -832,6 +837,14 @@ class LmDataConfig:
             end_steps = [phase.end_step for phase in self.prior_context_phases]
             if end_steps != sorted(set(end_steps)) or end_steps[0] <= 0:
                 raise ValueError(f"prior_context_phases must end at increasing positive steps, got {end_steps}")
+
+        if self.mixture_start_step is not None:
+            if self.prior_context_phases:
+                raise ValueError(
+                    "mixture_start_step excludes prior_context_phases, which replay this config's sources"
+                )
+            if isinstance(weights, list) and len(weights) != 1:
+                raise ValueError("mixture_start_step requires one mixture stage")
 
     @cached_property
     def the_tokenizer(self) -> MarinTokenizer:
@@ -946,6 +959,11 @@ class LmDataConfig:
             key=mix_key,
             block_size=self.mixture_block_size,
             start_offsets=start_offsets,
+            first_index=(
+                0
+                if self.mixture_start_step is None
+                else batch_schedule.global_data_offset_by_step(self.mixture_start_step)
+            ),
         )
 
     def _prior_context_phase_offsets(

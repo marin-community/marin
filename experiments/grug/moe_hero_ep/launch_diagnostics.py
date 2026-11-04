@@ -19,6 +19,10 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
+    LONG_CONTEXT_TAG,
+    harrier_long_context_data_config,
+)
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
@@ -87,6 +91,7 @@ def build_diagnostic_run(
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
+    long_context_start_step: int | None = None,
     moe_implementation: str | None = None,
     ce_grad_in_forward_token_block_size: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
@@ -264,6 +269,7 @@ def build_diagnostic_run(
                     size_tag,
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
+                    *([LONG_CONTEXT_TAG] if long_context_start_step is not None else []),
                     "MHEP",
                 ],
                 group="moe-hero-ep",
@@ -285,13 +291,22 @@ def build_diagnostic_run(
             ),
             context_axis_size=context_axis_size,
         )
-        data = harrier_mix_2026_08_18_data_config(
-            ctx=ctx,
-            total_steps=total_schedule_steps,
-            batch_size=batch_size,
-            max_seq_len=model.max_seq_len,
-            enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
-            validation=validation,
+        data = (
+            harrier_mix_2026_08_18_data_config(
+                ctx=ctx,
+                total_steps=total_schedule_steps,
+                batch_size=batch_size,
+                max_seq_len=model.max_seq_len,
+                enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
+                validation=validation,
+            )
+            if long_context_start_step is None
+            else harrier_long_context_data_config(
+                ctx=ctx,
+                start_step=long_context_start_step,
+                max_seq_len=model.max_seq_len,
+                validation=validation,
+            )
         )
         return GrugRunConfig(
             model=model,
@@ -547,6 +562,15 @@ def build_diagnostic_run(
     help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
+@click.option(
+    "--long-context-start-step",
+    type=click.IntRange(min=0),
+    default=None,
+    help=(
+        "Train on the long-context mix, starting each bucket at this step. Pass the --restore-from step so arms "
+        "on any rack count read the same sequence stream. Defaults to the Harrier mix."
+    ),
+)
 @build_options
 def main(
     run_id: str,
@@ -582,6 +606,7 @@ def main(
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
     restore_from: str | None,
+    long_context_start_step: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -602,6 +627,7 @@ def main(
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,
+        long_context_start_step=long_context_start_step,
         moe_implementation=moe_implementation,
         ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
         master_param_mode=MasterParamMode(master_params),

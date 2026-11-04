@@ -66,6 +66,10 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
+from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
+    LONG_CONTEXT_TAG,
+    harrier_long_context_data_config,
+)
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
@@ -136,6 +140,9 @@ HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (
 )
 # The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
 HERO_FLOPS_BASELINE_TOTAL: float | None = 2.6276788418873884e24
+# Train the hero on the long-context store from the end of HERO_CONTEXT_PHASES instead of replaying the
+# Harrier history; see harrier_long_context_mix.py. The FLOPs baseline and context checks still use the history.
+HERO_USES_LONG_CONTEXT_MIX = False
 
 
 def _hero_flops_baseline(
@@ -271,6 +278,7 @@ def build_ladder_run(
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
     hero = size == "d6144"
+    use_long_context_mix = hero and HERO_USES_LONG_CONTEXT_MIX
     if context_phases is None:
         if flops_baseline_total is not None:
             raise ValueError("flops_baseline_total requires an explicit context_phases")
@@ -402,6 +410,7 @@ def build_ladder_run(
                     f"racks-{dp_racks}",
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
+                    *([LONG_CONTEXT_TAG] if use_long_context_mix else []),
                 ],
                 group="moe-hero-ep-scaling-ladder",
                 name=run_id,
@@ -434,14 +443,23 @@ def build_ladder_run(
         return GrugRunConfig(
             model=model,
             flops_baseline=flops_baseline,
-            data=harrier_mix_2026_08_18_data_config(
-                ctx=ctx,
-                total_steps=num_steps,
-                batch_size=batch_size,
-                max_seq_len=model.max_seq_len,
-                enable_simulated_epoching=run_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
-                validation=validation,
-                prior_context_phases=context_phases,
+            data=(
+                harrier_long_context_data_config(
+                    ctx=ctx,
+                    start_step=context_phases[-1].end_step,
+                    max_seq_len=model.max_seq_len,
+                    validation=validation,
+                )
+                if use_long_context_mix
+                else harrier_mix_2026_08_18_data_config(
+                    ctx=ctx,
+                    total_steps=num_steps,
+                    batch_size=batch_size,
+                    max_seq_len=model.max_seq_len,
+                    enable_simulated_epoching=run_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
+                    validation=validation,
+                    prior_context_phases=context_phases,
+                )
             ),
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
