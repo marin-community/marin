@@ -11,10 +11,9 @@ from marin.inference.backend import ModelSpec
 from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_backend import VllmBackend
 from marin.testing.inference.backend_parity import TokenScore
+from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from marin.testing.inference.snowball import PromptBatch, RepresentativeCase, RepresentativePromptFixture
 from marin.testing.inference.snowball_backend_parity_jobs import score_vllm_endpoint, tpu_vllm_engine_config
-
-from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 def fixture():

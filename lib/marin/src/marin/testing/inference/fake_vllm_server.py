@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fake ``vllm serve`` child for test_vllm_server.py.
+"""Fake ``vllm serve`` child for inference and serving-parity tests.
 
 ``VllmEnvironment`` appends ``serve <model> ... --port <p>``, so ``--port`` is read from argv.
 
@@ -57,7 +57,7 @@ def _serve() -> None:
             self.end_headers()
             self.wfile.write(b'{"data": [{"id": "fake-model"}]}')
 
-        def log_message(self, *args) -> None:
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             pass
 
     HTTPServer(("127.0.0.1", port), Handler).serve_forever()
