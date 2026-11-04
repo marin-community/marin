@@ -1,8 +1,9 @@
 # Performance Workflow
 
 Read this file before benchmarking, profiling, roofline analysis, or
-autotuning. Use `docs/dev-guide/experiment-records.md` when the user requests a
-long-running research program. For profiling capture and comparison details, read
+autotuning. Use `research-engineering` for repeated tuning launches or
+controlled comparisons expected to produce reusable evidence. For profiling
+capture and comparison details, read
 `reference/profiling.md`.
 
 ## Iteration Loop

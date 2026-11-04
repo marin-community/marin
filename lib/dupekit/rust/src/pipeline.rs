@@ -126,7 +126,7 @@ fn apply_transformation(batch: RecordBatch, step: &Transformation) -> PyResult<R
             algo,
         } => {
             let input_arr = ops::get_string_array(&batch, input_col)?;
-            let hashed_arr = ops::hash_array(&input_arr, *algo)?;
+            let hashed_arr = ops::hash_array(&input_arr, algo)?;
             ops::add_column(&batch, output_col, hashed_arr)
         }
 
