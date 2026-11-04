@@ -1,9 +1,9 @@
 # Snowball model family tree
 
 [Open the Snowball model family tree](https://public.applets.marina.oa.dev/a/d3b5517a-c119-4fd9-999d-362183422bf3/)
-to explore 140 model and run nodes across the 2.7T, 5.7T and 10T cooldown families
+to explore 144 model and run nodes across the 2.7T, 5.7T and 10T cooldown families
 without signing in. This is a curated snapshot of the evidence available on
-October 23, 2026. The stable URL opens the current app revision.
+November 4, 2026. The stable URL opens the current app revision.
 
 The lineage map opens with the whole tree visible and its shared pretrain centered.
 Click a node to expand its summary, algorithms, compute estimate and evidence.
@@ -60,6 +60,13 @@ on-policy distillation arms, and the task-arithmetic (a = b = 0.5) and TIES
 teachers appear in node summaries, not as weight parents. Each node pins the
 weight revision named in its experiment record; later Hub commits changed only
 model cards.
+
+The November 4 update adds the [identity SFT candidates](https://github.com/marin-community/marin/issues/10695)
+trained from `.32` step 14 (Marin Snowball v0.1) on identity data mixed with replay
+of v0.1's own answers: the lead candidate A13, the A8a recipe it builds on, the
+fallback A3, and the merge M25 (0.75 A3 + 0.25 A8a), which has an arrow from each
+of its two parents. Each node pins its Hugging Face weight revision; these are
+research checkpoints, not releases.
 
 ## Maintain the app
 
