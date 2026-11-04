@@ -175,15 +175,16 @@ def exception_chain(error: BaseException) -> list[BaseException]:
 def authored_failure(error: BaseException, program_files: Collection[str]) -> bool:
     """Require an explicit contract failure or a known programming error owned by authored code.
 
-    Unknown runtime/host errors hold. An authored wrapper cannot hide an unknown cause or a failed sibling.
+    A ``BuildFailure`` is authored, whatever it was raised from: the callers have already searched the
+    chain for a typed host failure (``infrastructure_failure``). Unknown runtime/host errors hold.
     """
     contract_files = {str(Path(__file__).parents[1] / "stage30_author" / name) for name in ("loader.py", "program.py")}
     for link in exception_chain(error):
+        if isinstance(link, BuildFailure):
+            return True
         if isinstance(link, BaseExceptionGroup) or link.__cause__ is not None:
             continue
         if not link.__suppress_context__ and link.__context__ is not None:
-            continue
-        if isinstance(link, BuildFailure):
             continue
         if not isinstance(
             link,

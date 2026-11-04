@@ -36,6 +36,7 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
+from taskforge.spec import draft
 from taskforge.stage10_proposal.model import ResearchNeed, SolverMachine, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program import run as run_module
@@ -56,6 +57,7 @@ from taskforge.stage40_build_with_program.run import (
     run_program,
     step_output,
 )
+from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate
 from taskforge.stage40_build_with_program.sdk import research, structured
 from taskforge.stage40_build_with_program.services import AgentLimits
 from taskforge.stage40_build_with_program.step_store import CacheStatus, RLEnvBuildStepStore
@@ -304,6 +306,40 @@ async def test_a_failing_sink_raises_a_build_failure_carrying_its_step_name(tmp_
     assert failure.value.step == "task"
     assert str(failure.value) == "task: the numbers do not multiply to the answer"
     assert not (tmp_path / "round" / DRAFT_DIR).exists()
+
+
+async def test_a_build_failure_raised_from_a_library_error_keeps_its_step(tmp_path, proposal, services):
+    @rl_env_build_step
+    async def numbers(context: RLEnvBuildContext) -> TaskResource:
+        try:
+            json.loads("{bad")
+        except ValueError as error:
+            raise BuildFailure(f"the numbers file is not JSON: {error}") from error
+        return NUMBERS
+
+    with pytest.raises(BuildFailure) as failure:
+        await build(tmp_path, proposal, services, rl_env_build_program(numbers, grader, sink=task))
+
+    assert failure.value.step == "numbers"
+    assert failure.value.message.startswith("the numbers file is not JSON: ")
+
+
+async def test_a_candidate_the_sdk_cannot_assemble_fails_the_build_as_the_programs(tmp_path, proposal, services):
+    """``grade_candidate`` raises ``BuildFailure`` from the ``ValueError`` of ``spec.draft.assemble``."""
+
+    @rl_env_build_step
+    async def grader(context: RLEnvBuildContext) -> GraderPackage:
+        package = verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0))
+        await grade_candidate(
+            context, draft.NO_MACHINE, package, AnswerType.TEXT, PlainText(), "question", "42", output_paths=("/out",)
+        )
+        return package
+
+    with pytest.raises(BuildFailure) as failure:
+        await build(tmp_path, proposal, services, rl_env_build_program(numbers, grader, sink=task))
+
+    assert failure.value.step == "grader"
+    assert failure.value.message == "grade_candidate: Files and output paths require a task machine"
 
 
 @pytest.mark.parametrize(
