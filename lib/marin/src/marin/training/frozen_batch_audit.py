@@ -99,7 +99,11 @@ def _summary(
 
 
 def _fingerprint(array: np.ndarray) -> str:
-    return hashlib.sha256(np.asarray(array, dtype="<i4").tobytes()).hexdigest()
+    original = np.asarray(array)
+    canonical = original.astype("<i4")
+    if not np.array_equal(original, canonical):
+        raise ValueError("Native values cannot be fingerprinted losslessly as int32")
+    return hashlib.sha256(canonical.tobytes()).hexdigest()
 
 
 def checked_update(batch: LmExample, update: int, frozen: FrozenBatchAudit) -> dict:
@@ -119,6 +123,8 @@ def check_update(batch: LmExample, update: int, frozen: FrozenBatchAudit) -> dic
     """Gather a batch and compute its receipt; use checked_update for failure synchronization."""
     tokens = gather_global(batch.tokens.array)
     weights = gather_global(batch.loss_weight.array)
+    if not 0 <= update < len(frozen.freeze["updates"]):
+        raise ValueError("Consumed update is outside the frozen horizon")
     if tokens.shape != (frozen.batch_size, frozen.sequence_length) or weights.shape != tokens.shape:
         raise ValueError("Unexpected global batch geometry")
     if not np.issubdtype(tokens.dtype, np.integer):

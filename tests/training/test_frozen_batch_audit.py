@@ -111,6 +111,8 @@ def test_actual_prefix_replays_same_loader_batches_and_distinguishes_ce_mass(tmp
         consumed = next(replay)
         assert consumed is expected
         assert checked_update(consumed, index, frozen)["ids"] == (["0", "1"] if index == 0 else ["0", "0"])
+    with pytest.raises(ValueError, match="Dataset audit failed"):
+        checked_update(second, -1, frozen)
     assert next(replay) is sentinel
     with pytest.raises(StopIteration):
         next(replay)
@@ -121,7 +123,7 @@ def test_actual_prefix_replays_same_loader_batches_and_distinguishes_ce_mass(tmp
     assert report["same_iterator_batches_buffered"] == 2 and report["global_batch_size"] == 2
 
 
-@pytest.mark.parametrize("change", ["order", "mask", "family"])
+@pytest.mark.parametrize("change", ["order", "mask", "family", "overflow"])
 def test_corrupted_native_batch_or_frozen_accounting_fails_before_receipt(tmp_path, change):
     config, frozen, first, second = fixture_stream()
     if change == "order":
@@ -132,6 +134,10 @@ def test_corrupted_native_batch_or_frozen_accounting_fails_before_receipt(tmp_pa
         )
     elif change == "mask":
         first = dataclasses.replace(first, loss_weight=hax.named(jnp.zeros((2, 4)), ("batch", "position")))
+    elif change == "overflow":
+        with jax.enable_x64(True):
+            changed = first.tokens.array.astype(jnp.int64) + 2**32
+        first = dataclasses.replace(first, tokens=hax.named(changed, ("batch", "position")))
     else:
         frozen.freeze["updates"][0]["family_tokens"]["selected"] = 2
     path = tmp_path / "audit.json"
