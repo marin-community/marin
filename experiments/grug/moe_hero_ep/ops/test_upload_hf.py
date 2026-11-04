@@ -110,9 +110,10 @@ class FakeHub:
         self.attempts = []
         self.batches = []
         self.errors = []
+        self.private = True
 
     def model_info(self, repo_id):
-        return SimpleNamespace(private=True)
+        return SimpleNamespace(private=self.private)
 
     def create_branch(self, repo_id, *, branch, revision, **kwargs):
         if branch not in self.branches:
@@ -361,6 +362,8 @@ def test_upload_resumes_an_interrupted_second_batch_without_rewriting_identity(u
         with pytest.raises(ValueError, match="pinned export configuration"):
             upload_hf.upload(changed, clock=hub.clock.time, wait=hub.clock.wait)
     hub.fail_filename = None
+    hub.private = False
+    config = dataclasses.replace(config, expected_visibility=upload_hf.RepositoryVisibility.PUBLIC)
     result = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
     assert hub.files(config.branch)["hf-upload-request.json"] == remote_request
     assert (root / "export-manifest.json").read_bytes() == source_manifest
@@ -368,6 +371,38 @@ def test_upload_resumes_an_interrupted_second_batch_without_rewriting_identity(u
     for name, data in first_batch.items():
         assert hub.files(result["weights_commit"])[name] == data
         assert hub.uploads.count(name) == 1
+    commits = len(hub.snapshots)
+    reused = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert reused["weights_commit"] == result["weights_commit"] and len(hub.snapshots) == commits
+
+
+@pytest.mark.parametrize("expected", list(upload_hf.RepositoryVisibility))
+def test_upload_refuses_unexpected_visibility_before_branch_setup(upload_fixture, expected):
+    build, hub = upload_fixture
+    config = dataclasses.replace(build(), expected_visibility=expected)
+    hub.private = expected != upload_hf.RepositoryVisibility.PRIVATE
+    with pytest.raises(ValueError):
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert not hub.branches and not hub.attempts
+
+
+@pytest.mark.parametrize("expected", list(upload_hf.RepositoryVisibility))
+def test_upload_stops_if_visibility_changes_before_a_weight_commit(upload_fixture, expected):
+    build, hub = upload_fixture
+    config = dataclasses.replace(build(), expected_visibility=expected)
+    hub.private = expected == upload_hf.RepositoryVisibility.PRIVATE
+
+    def change_visibility_during_wait(seconds):
+        hub.clock.wait(seconds)
+        if hub.batches:
+            hub.private = expected != upload_hf.RepositoryVisibility.PRIVATE
+
+    with pytest.raises(ValueError):
+        upload_hf.upload(config, clock=hub.clock.time, wait=change_visibility_during_wait)
+    assert len(hub.attempts) == 1
+    assert "hf-upload-request.json" in hub.files(config.branch)
+    assert not any(name.endswith(".safetensors") for name in hub.files(config.branch))
+    assert "hf-upload-manifest.json" not in hub.files(config.branch)
 
 
 def hub_error(status, message, headers=None):

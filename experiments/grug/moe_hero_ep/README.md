@@ -154,7 +154,7 @@ Use the output only when `export-manifest.json` exists. It is written after
 all shards, `config.json` and `model.safetensors.index.json`. Completed
 destinations are refused on subsequent runs.
 
-### Private Hugging Face upload
+### Hugging Face upload
 
 After CPU export completes, upload it to a checkpoint-specific branch:
 
@@ -162,6 +162,7 @@ After CPU export completes, upload it to a checkpoint-specific branch:
 export: <the complete CpuExportConfig mapping used for conversion>
 expected_payload_bytes: <BF16 tensor payload from the export index>
 repo_id: open-athena/Marin-Mochi-535B-A23B
+expected_visibility: private
 branch: step-378000
 base_revision: <immutable HF main commit containing only repository metadata>
 model_card: README.md
@@ -179,9 +180,13 @@ uv run --package marin-levanter python -m \
   experiments.grug.moe_hero_ep.ops.upload_hf --config_path upload.yaml
 ```
 
-The repository must already exist and remain private. New branches start from
-the pinned metadata-only commit. The uploader binds each branch to its export,
-card, license and tokenizer through `hf-upload-request.json`, then stages at most
+The repository must already exist. `expected_visibility` defaults to `private`;
+set it to `public` when uploading to an existing public repository. The uploader
+checks visibility before branch setup and every commit, and stops on a mismatch.
+It does not change repository visibility. This delivery setting may change when
+resuming the same artifact inputs; it is outside the pinned upload identity.
+New branches start from the pinned metadata-only commit. The uploader binds each
+branch to its export, card, license and tokenizer through `hf-upload-request.json`, then stages at most
 eight missing shards per commit. It validates source BF16 headers and hashes and
 checks Hub sizes and hashes before reusing uploaded files. Eight largest Hero
 shards need about 58 GB of staging disk per worker; use a 128 GB disk-backed

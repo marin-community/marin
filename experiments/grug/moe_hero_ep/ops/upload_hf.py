@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Upload a completed Hero export to a private, checkpoint-specific HF branch."""
+"""Upload a completed Hero export to a checkpoint-specific HF branch."""
 
 import hashlib
 import json
@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import BinaryIO
@@ -56,6 +57,11 @@ RESPONSIBLE_USE = (
 )
 
 
+class RepositoryVisibility(StrEnum):
+    PRIVATE = "private"
+    PUBLIC = "public"
+
+
 @dataclass(frozen=True)
 class UploadConfig:
     export: CpuExportConfig
@@ -71,6 +77,7 @@ class UploadConfig:
     max_files_per_commit: int = MAX_FILES_PER_COMMIT
     min_commit_interval: float = MIN_COMMIT_INTERVAL
     max_rate_limit_retries: int = MAX_RATE_LIMIT_RETRIES
+    expected_visibility: RepositoryVisibility = RepositoryVisibility.PRIVATE
 
 
 @dataclass(frozen=True)
@@ -143,8 +150,7 @@ class _HubCommitter:
             if delay > 0:
                 self.wait(delay)
             try:
-                if not self.api.model_info(self.config.repo_id).private:
-                    raise ValueError("Model repository must remain private")
+                _verify_visibility(self.api, self.config)
                 result = self.api.create_commit(
                     repo_id=self.config.repo_id,
                     repo_type="model",
@@ -186,6 +192,12 @@ class _HubCommitter:
 
 def _json_bytes(value: dict) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _verify_visibility(api: HfApi, config: UploadConfig) -> None:
+    actual = RepositoryVisibility.PRIVATE if api.model_info(config.repo_id).private else RepositoryVisibility.PUBLIC
+    if actual != config.expected_visibility:
+        raise ValueError(f"Model repository visibility differs: expected {config.expected_visibility}, found {actual}")
 
 
 def _status(config: UploadConfig, phase: str, **fields) -> None:
@@ -313,8 +325,7 @@ def _prepare_branch(
     records = plan.records
     request = plan.manifest["request"]
     card, license_text = plan.card, plan.license_text
-    if not api.model_info(config.repo_id).private:
-        raise ValueError("Model repository must remain private")
+    _verify_visibility(api, config)
     baseline = _repo_files(api, config, config.base_revision)
     if baseline.keys() - {"README.md", "LICENSE", ".gitattributes"}:
         raise ValueError("New checkpoint branches require a metadata-only baseline")
@@ -493,7 +504,7 @@ def _complete_upload(
 def upload(
     config: UploadConfig, *, clock: Callable[[], float] = time.monotonic, wait: Callable[[float], None] = time.sleep
 ) -> dict:
-    """Verify, resume and complete one private checkpoint upload using bounded disk staging."""
+    """Verify, resume and complete one checkpoint upload using bounded disk staging."""
     plan = _upload_plan(config)
     api = HfApi(token=require_secret("HF_TOKEN"))
     committer = _HubCommitter(api, config, clock, wait)
