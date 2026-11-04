@@ -46,7 +46,6 @@
   "validation_per_family": 20,
   "seed": 20261019,
   "evaluation_sources": {
-    "Marin:reasoning-span-hazard": "reasoning_markup",
-    "Marin:reasoning-span-control": "reasoning_markup"
+    "Marin:double-think": "reasoning_markup"
   }
 }
