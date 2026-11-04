@@ -31,6 +31,7 @@ import click
 from iris.cli.connect import open_iris_client
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
@@ -53,8 +54,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # us-central2; the job runs there and stages its outputs there so every large
 # read is same-region.
 LOG_REGION = "us-central2"
-# Iris discards a callable's return value, so the job stages its reports for the runner.
-STAGING_DIR = "gs://marin-us-central2/tmp/egress-report"
+# Iris discards a callable's return value, so the job stages its reports for the
+# runner under a tmp/ttl=1d/ prefix: the bucket deletes them after a day, and the
+# runner only needs them until it copies them.
+STAGING_TTL_DAYS = 1
 # Leaves the runner's 30-minute workflow timeout room to submit, fetch and publish.
 JOB_TIMEOUT = Duration.from_seconds(20 * 60)
 REPORT_FILES = (SUMMARY_JSON, REPORT_MD, APPENDIX_CSV)
@@ -177,7 +180,10 @@ def main(hours: float, channel: str, dry_run: bool) -> None:
 
     now = dt.datetime.now(dt.UTC)
     run_id = now.strftime("%Y%m%d-%H%M%S")
-    output_dir = str(StoragePath(STAGING_DIR) / run_id)
+    staging_dir = marin_temp_bucket(
+        ttl_days=STAGING_TTL_DAYS, prefix="egress-report", source_prefix=f"gs://marin-{LOG_REGION}"
+    )
+    output_dir = str(StoragePath(staging_dir) / run_id)
     _run_cross_region_on_iris(hours, now.isoformat(), output_dir, run_id)
     summary = _fetch_outputs(output_dir, outdir)
 
