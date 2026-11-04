@@ -2,6 +2,7 @@ import json
 import shlex
 import tempfile
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,21 @@ class Pi(BaseInstalledAgent):
     _ENDPOINT_ENV_PATH = "/tmp/harbor-pi-endpoint.env"
     _CONTEXT_BUDGET_EXTENSION_PATH = "/tmp/harbor-pi-context-budget.js"
     _MCP_EXTENSION_PATH = "/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"
+    _MCP_FILTER_EXTENSION = """
+import mcp from __MCP_EXTENSION_PATH__;
+const excluded = new Set(__EXCLUDED_TOOL_NAMES__);
+export default async function (pi) {
+  await mcp({
+    ...pi,
+    registerTool(tool) {
+      if (!excluded.has(tool.name)) pi.registerTool(tool);
+    },
+    setActiveTools(names) {
+      pi.setActiveTools(names.filter(name => !excluded.has(name)));
+    },
+  });
+}
+""".strip()
     _PROVIDER_CONFIG_RELATIVE_PATH = ".pi/agent/models.json"
     _SETTINGS_CONFIG_RELATIVE_PATH = ".pi/agent/settings.json"
     _AUTHENTICATION_FAILURE_MARKER = "HARBOR_PI_MODEL_AUTHENTICATION_ERROR"
@@ -295,6 +311,7 @@ export default function (pi) {
         compaction_reserve_tokens: int | None = None,
         model_info: dict[str, Any] | None = None,
         thinking_format: str | None = None,
+        mcp_excluded_tools: Sequence[str] = (),
         **kwargs,
     ) -> None:
         if api_base is not None and (not isinstance(api_base, str) or not api_base):
@@ -327,6 +344,7 @@ export default function (pi) {
             uuid.uuid4().hex if collect_rollout_details else None
         )
         self._thinking_format = thinking_format
+        self._mcp_excluded_tools = tuple(mcp_excluded_tools)
         model_info = model_info or {}
         self._configure_compaction = (
             api_base is not None
@@ -410,7 +428,7 @@ export default function (pi) {
 
     async def configure_mcp_servers(self, environment: BaseEnvironment) -> None:
         """Configure the image-provided pi-mcp-extension before Pi starts."""
-        if not self.mcp_servers:
+        if not self.mcp_servers and not self._mcp_excluded_tools:
             return
         servers: dict[str, dict[str, Any]] = {}
         for server in self.mcp_servers:
@@ -425,13 +443,29 @@ export default function (pi) {
             servers[server.name] = config
         content = shlex.quote(json.dumps({"mcpServers": servers}))
         extension_path = shlex.quote(self._MCP_EXTENSION_PATH)
+        filtered_extension = (
+            self._MCP_FILTER_EXTENSION.replace(
+                "__MCP_EXTENSION_PATH__", json.dumps(self._MCP_EXTENSION_PATH)
+            ).replace("__EXCLUDED_TOOL_NAMES__", json.dumps(self._mcp_excluded_tools))
+            if self._mcp_excluded_tools
+            else ""
+        )
         register_script = """
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const directory = path.join(os.homedir(), '.pi/agent');
 fs.mkdirSync(directory, {recursive: true});
 const settingsPath = path.join(directory, 'settings.json');
 const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
-settings.extensions = [...new Set([...(settings.extensions ?? []), process.argv[2]])];
+const wrapperPath = path.join(directory, 'harbor-mcp-filter.js');
+const wrapper = process.argv[3];
+if (wrapper) fs.writeFileSync(wrapperPath, wrapper);
+else fs.rmSync(wrapperPath, {force: true});
+// The prepared image already registers the unfiltered extension. Replace it,
+// including profiles reused after a previous filtered run, without double-loading.
+settings.extensions = [...new Set([
+  ...(settings.extensions ?? []).filter(entry => entry !== process.argv[2] && entry !== wrapperPath),
+  wrapper ? wrapperPath : process.argv[2],
+])];
 fs.writeFileSync(settingsPath, JSON.stringify(settings));
 fs.writeFileSync(path.join(directory, 'mcp.json'), process.argv[1]);
 """.strip()
@@ -440,7 +474,8 @@ fs.writeFileSync(path.join(directory, 'mcp.json'), process.argv[1]);
             command=(
                 f"test -r {extension_path} || "
                 "{ echo 'Image does not provide pi-mcp-extension' >&2; exit 1; }; "
-                f"node -e {shlex.quote(register_script)} {content} {extension_path}"
+                f"node -e {shlex.quote(register_script)} {content} {extension_path} "
+                f"{shlex.quote(filtered_extension)}"
             ),
         )
 

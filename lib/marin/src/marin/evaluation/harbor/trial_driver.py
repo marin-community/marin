@@ -25,6 +25,7 @@ from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-im
     parse_registry_spec,
 )
 from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
+from harbor.agents.tau3_acp_relay.relay import ORCHESTRATION_TOOLS  # pyrefly: ignore[missing-import]
 from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
     COMPOSE_FILENAMES,
     validate_prepared_task,
@@ -587,6 +588,16 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
     )
     environment = config.environment
     user_agent = _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None
+    if (
+        user_agent is not None
+        and user_agent.import_path == _TAU3_USER_AGENT
+        and agent.name is not None
+        and (agent.name in {AgentName.PI, AgentName.ACP} or is_acp_registry_shorthand(agent.name))
+    ):
+        # The relay advances Tau3's conversation; Pi receives only task tools.
+        excluded_tools = set(agent.kwargs.get("mcp_excluded_tools", ()))
+        excluded_tools.update(f"mcp_tau3_runtime_{name}" for name in ORCHESTRATION_TOOLS)
+        agent = agent.model_copy(update={"kwargs": {**agent.kwargs, "mcp_excluded_tools": sorted(excluded_tools)}})
     permitted_user_environment = None
     if _installed_agent(config.agents[0]):
         if environment.type not in _MODEL_RELAY_ENVIRONMENTS:

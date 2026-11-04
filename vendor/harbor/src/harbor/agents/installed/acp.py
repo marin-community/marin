@@ -1,6 +1,7 @@
 import json
 import re
 import shlex
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -329,6 +330,7 @@ class AcpAgent(BaseInstalledAgent, ACPAgentMixin):
         api_key: str | None = None,
         model_info: dict[str, Any] | None = None,
         thinking_format: str | None = None,
+        mcp_excluded_tools: Sequence[str] = (),
         *args,
         **kwargs,
     ):
@@ -368,6 +370,7 @@ class AcpAgent(BaseInstalledAgent, ACPAgentMixin):
         self._api_key = api_key
         self._model_info = model_info
         self._thinking_format = thinking_format
+        self._mcp_excluded_tools = tuple(mcp_excluded_tools)
         self._version = self._registry_entry.version if self._registry_entry else None
         self._selected_distribution_kind: DistributionKind | None = None
         self._last_instruction: str | None = None
@@ -376,7 +379,7 @@ class AcpAgent(BaseInstalledAgent, ACPAgentMixin):
     def _pi_companion(self) -> Pi | None:
         registry_entry = self._require_registry_entry()
         if registry_entry.id != _PI_ACP_REGISTRY_ID:
-            if any(
+            if self._mcp_excluded_tools or any(
                 value is not None
                 for value in (
                     self._api_base,
@@ -386,7 +389,7 @@ class AcpAgent(BaseInstalledAgent, ACPAgentMixin):
                 )
             ):
                 raise ValueError(
-                    "api_base, api_key, model_info, and thinking_format are only "
+                    "api_base, api_key, model_info, thinking_format, and mcp_excluded_tools are only "
                     "supported for the pi-acp registry target"
                 )
             return None
@@ -401,6 +404,7 @@ class AcpAgent(BaseInstalledAgent, ACPAgentMixin):
                 model_info=self._model_info,
                 thinking_format=self._thinking_format,
                 mcp_servers=self.mcp_servers,
+                mcp_excluded_tools=self._mcp_excluded_tools,
             )
         return self._pi
 
@@ -1029,12 +1033,16 @@ rm -f "$tmp_archive"
                     output_tokens, int | float
                 ):
                     metrics = Metrics(
-                        prompt_tokens=int(input_tokens)
-                        if isinstance(input_tokens, int | float)
-                        else None,
-                        completion_tokens=int(output_tokens)
-                        if isinstance(output_tokens, int | float)
-                        else None,
+                        prompt_tokens=(
+                            int(input_tokens)
+                            if isinstance(input_tokens, int | float)
+                            else None
+                        ),
+                        completion_tokens=(
+                            int(output_tokens)
+                            if isinstance(output_tokens, int | float)
+                            else None
+                        ),
                         cost_usd=latest_cost_usd,
                     )
 
@@ -1140,9 +1148,11 @@ rm -f "$tmp_archive"
                 "Step boundaries are inferred best-effort from chunked ACP events."
             ),
             final_metrics=final_metrics,
-            extra={"orphan_usage_updates": orphan_usage_updates}
-            if orphan_usage_updates
-            else None,
+            extra=(
+                {"orphan_usage_updates": orphan_usage_updates}
+                if orphan_usage_updates
+                else None
+            ),
         )
 
     def populate_context_post_run(self, context: AgentContext) -> None:

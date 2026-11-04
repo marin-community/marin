@@ -24,6 +24,7 @@ from .relay import (
     DEFAULT_SEED,
     DEFAULT_TOOL_TIMEOUT_SEC,
     TURN_TIMEOUT_ERROR_PREFIX,
+    Tau3RuntimeInfrastructureError,
 )
 
 PACKAGE_NAME = "tau3_harbor_acp_relay"
@@ -33,10 +34,6 @@ SUMMARY_FILENAME = "tau3-harbor-acp-relay.json"
 POLICY_PATTERN = re.compile(
     r"^[ \t]*<policy>\s*(.*?)\s*</policy>", re.DOTALL | re.MULTILINE
 )
-
-
-class Tau3RuntimeInfrastructureError(RuntimeError):
-    """The benchmark-owned tau3 relay failed during setup or a runtime turn."""
 
 
 class Tau3HarborACPRelay(BaseAgent):
@@ -90,7 +87,13 @@ class Tau3HarborACPRelay(BaseAgent):
             )
 
         package_dir = Path(__file__).parent
-        for filename in ("__init__.py", "acpx.py", "relay.py", "runner.py"):
+        for filename in (
+            "__init__.py",
+            "acpx.py",
+            "relay.py",
+            "runner.py",
+            "runtime_client.py",
+        ):
             await environment.upload_file(
                 package_dir / filename, str(REMOTE_PACKAGE_ROOT / filename)
             )
