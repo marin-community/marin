@@ -431,14 +431,25 @@ class Trial(ABC):
         self.result.agent_info = self.agent.to_agent_info()
 
     async def _finalize(self) -> None:
-        await self._enforce_verifier_result_invariant()
         writer = get_artifact_writer()
+        # Done tasks stay gated until their callbacks retain any persistence failure.
         if (
             self._artifact_persistence_failure is not None
-            or self.pending_cleanup_tasks()
+            or self._pending_cleanup_tasks
         ):
             self.result.completion = None
             self.result.verifier_result = None
+            prior = self.result.exception_info
+            if prior is None or error_category(prior.exception_type) in (
+                ErrorCategory.AGENT,
+                ErrorCategory.PASSTHROUGH,
+            ):
+                await self._record_exception(
+                    self._artifact_persistence_failure
+                    or PhaseCancellationError(
+                        "A cancelled trial phase did not finish before finalization"
+                    )
+                )
         elif (
             self._is_agent_environment_stopped and not self._environment_cleanup_failed
         ):
@@ -463,6 +474,7 @@ class Trial(ABC):
                         (self.paths.agent_dir / "trajectory.json").exists
                     )
                 )
+        await self._enforce_verifier_result_invariant()
         self.result.finished_at = self._now()
         # The lifecycle result is written to the (remote, s3://) trials_dir. Route it
         # through the required artifact lane (NOT asyncio.to_thread: the

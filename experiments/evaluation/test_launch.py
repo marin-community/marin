@@ -106,7 +106,7 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     policy.write_text(
         json.dumps(
             {
-                "environment": {"type": "local"},
+                "environment": {"type": "local", "kwargs": {"judge_access": "runtime"}},
                 "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
                 "datasets": [{"path": "dataset"}],
             }
@@ -140,7 +140,7 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     config = batch.evaluations[0].executor.config
     assert config.benchmark.n_benchmark == 1
     assert config.verifier_env_keys == ()
-    assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {}
+    assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {"judge_access": "runtime"}
     assert batch.judge.api_model == "qwen3-0.6b"
 
 
