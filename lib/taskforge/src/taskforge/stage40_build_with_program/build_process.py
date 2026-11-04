@@ -13,12 +13,11 @@ Everything a step uses is a network or file service already: the GLM router over
 controller for sandboxes, the step store on S3 or local disk, and the JSONL ledger. The child
 therefore receives no objects, only a ``BuildRequest`` written as JSON to
 ``<round_dir>/build-request.json``, and constructs its own model client and ``RLEnvBuildServices``
-from it. Secrets stay out of that file: ``BuildModelConfig.token_env``,
-``BuildServiceConfig.parallel_key_env`` and ``BuildServiceConfig.registry_credential_env`` name the
-variables of the inherited environment that hold the GLM token, the Parallel key and the registry
-credential. The child calls ``run_build``, which writes the draft under
-``round_dir`` as it does in process, writes a ``BuildResult`` to ``<round_dir>/build-result.json``
-and exits 0. Its log goes to ``<round_dir>/build-process.log``.
+from it. Secrets stay out of that file: ``BuildModelConfig.token_env`` and
+``BuildServiceConfig.parallel_key_env`` name the variables of the inherited environment that hold the
+GLM token and the Parallel key, and the registry credential is the host's Iris secret. The child calls
+``run_build``, which writes the draft under ``round_dir`` as it does in process, writes a ``BuildResult``
+to ``<round_dir>/build-result.json`` and exits 0. Its log goes to ``<round_dir>/build-process.log``.
 
 Two deadlines bound a build, and neither presumes whose fault an expiry is: each raises
 ``BuildExpired``, which a driver holds for further evaluation. ``STEP_TIMEOUT`` is the
@@ -41,9 +40,11 @@ The child calls the model at the fixed ``BuildModelConfig.base_url``. A driver b
 resolves the relay's endpoint for each request, so every build starts wherever the relay is now.
 With ``BuildServiceConfig.image_cluster`` set, the child publishes images with an
 ``IrisImageBuilder`` that submits its jobs to ``controller_url`` and pushes with the credential it
-parses from ``registry_credential_env`` when it starts. The child reads no secret store, so the host
-needs neither ``gcloud`` nor Google credentials; whoever launches the host's job reads the secret
-with ``image_builder.registry_credential_json`` at submit time and puts the JSON in that variable.
+reads with ``rigging.secrets.get_secret`` as the Iris secret ``image_builder.REGISTRY_CREDENTIAL_ENV``
+when it starts: a file under ``rigging.secrets.SECRETS_DIR``, which the child shares with its host
+task. The child reads no secret store, so the host needs neither ``gcloud`` nor Google credentials;
+whoever launches the host's job passes ``iris job run --secret TASKFORGE_REGISTRY_CREDENTIAL
+REGISTRY_CREDENTIAL_SOURCE``, which the submitting client resolves.
 Without an image cluster, as on a laptop, ``RLEnvBuildServices.images`` is ``None`` and a program
 that publishes an image fails with ``NO_IMAGE_BUILDER``.
 """
@@ -64,6 +65,7 @@ import httpx
 from pydantic import Field, TypeAdapter
 from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.log_setup import configure_logging
+from rigging.secrets import get_secret
 from shellbox.machine import Backend
 
 from taskforge.child_process import stop_process_group
@@ -74,8 +76,8 @@ from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.web import web_tools
-from taskforge.sandbox.factories import MachineHost, machine_factories
-from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
+from taskforge.sandbox.factories import machine_factories
+from taskforge.sandbox.image_builder import REGISTRY_CREDENTIAL_ENV, IrisImageBuilder, RegistryCredential
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import program_file
 from taskforge.stage40_build_with_program.context import (
@@ -126,8 +128,8 @@ class BuildServiceConfig:
     """What the child builds its ``RLEnvBuildServices`` from.
 
     Attributes:
-        host: Where build machines run.
-        backends: The exact machine backends the child must construct; unavailable selections fail.
+        backends: The exact machine backends the child must construct; unavailable selections fail. Machine
+            backends are chosen from them.
         controller_url: The Iris controller for requested gVisor machines and image-build jobs;
             ``None`` when neither is used.
         parallel_key_env: The environment variable holding the Parallel API key for the web
@@ -137,15 +139,11 @@ class BuildServiceConfig:
         agent_limits: The bounds of every agent loop.
         image_cluster: The Iris cluster the image builder's build and push jobs run on, submitted
             through ``controller_url``, or ``None`` for a build without an image builder. The
-            registry is the credential's; ``sandbox_effects.image_repository`` names the repository.
-        registry_credential_env: The environment variable holding the registry credential's JSON
-            (``registry``, ``user``, ``password``), required with ``image_cluster``. The host's
-            launcher reads it from Secret Manager with ``image_builder.registry_credential_json``
-            at submit time and sets it, conventionally as ``image_builder.REGISTRY_CREDENTIAL_ENV``;
-            the host itself never reads Secret Manager.
+            registry is the credential's, the Iris secret ``image_builder.REGISTRY_CREDENTIAL_ENV``
+            (``registry``, ``user``, ``password``), which an image cluster requires;
+            ``sandbox_effects.image_repository`` names the repository.
     """
 
-    host: MachineHost
     backends: tuple[Backend, ...]
     controller_url: str | None
     parallel_key_env: str | None
@@ -153,7 +151,6 @@ class BuildServiceConfig:
     reasoning_replay: ReasoningReplay
     agent_limits: AgentLimits
     image_cluster: str | None
-    registry_credential_env: str | None
 
 
 @dataclass(frozen=True)
@@ -304,14 +301,17 @@ def image_builder(config: BuildServiceConfig) -> IrisImageBuilder | None:
     """The child's image builder, or ``None`` when ``config`` names no image cluster.
 
     Raises:
-        ValueError: ``config`` names an image cluster but no controller URL or no credential
-            variable, or the variable is unset or does not hold a registry credential.
+        ValueError: ``config`` names an image cluster but no controller URL, or the secret
+            ``REGISTRY_CREDENTIAL_ENV`` is unset or does not hold a registry credential.
     """
     if config.image_cluster is None:
         return None
-    if config.registry_credential_env is None:
-        raise ValueError("an image cluster needs registry_credential_env, the variable holding the registry credential")
-    credential = RegistryCredential.from_json(_secret(config.registry_credential_env))
+    text = get_secret(REGISTRY_CREDENTIAL_ENV)
+    if not text:
+        raise ValueError(
+            f"an image cluster needs the registry credential, the secret {REGISTRY_CREDENTIAL_ENV}, which is not set"
+        )
+    credential = RegistryCredential.from_json(text)
     return IrisImageBuilder(
         controller_url=config.controller_url, target_cluster=config.image_cluster, credential=credential
     )
@@ -332,7 +332,6 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
         httpx.AsyncClient() as http,
     ):
         yield client, RLEnvBuildServices(
-            host=config.host,
             factories=machine_factories(config.backends, config.controller_url),
             images=image_builder(config),
             web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),

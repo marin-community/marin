@@ -8,9 +8,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from finestore.commit import write_schema
+from finestore.commit import initialize_archive, write_schema
 from finestore.compaction import CompactionResult, compact_table
-from finestore.layout import BlobTables, FineStoreLayout, TableMetadata
+from finestore.layout import ArchiveMetadata, BlobTables, FineStoreLayout, TableMetadata
 from finestore.reader import ReadView
 from finestore.store import DataStore, OnConflict
 from finestore.testing.simulated_s3 import Request, SimulatedConditionalObject, simulated_s3
@@ -19,6 +19,16 @@ from rigging.filesystem.storage_path import StoragePath
 
 ROOT = "s3://finestore-tests/run"
 CONCURRENCY_TIMEOUT = 5
+SCHEMA = TableMetadata(primary_key=("id",))
+
+
+def publish_schema(layout: FineStoreLayout) -> tuple[str, bytes]:
+    return write_schema(layout, SCHEMA), SCHEMA.model_dump_json(indent=2).encode()
+
+
+def publish_archive_marker(layout: FineStoreLayout) -> tuple[str, bytes]:
+    initialize_archive(layout)
+    return layout.archive_path, ArchiveMetadata().model_dump_json(indent=2).encode()
 
 
 def test_overlapping_conditional_writes_let_exactly_one_writer_win():
@@ -45,11 +55,11 @@ def test_overlapping_conditional_writes_let_exactly_one_writer_win():
         head.write(b"c", expected_version=version)
 
 
-def test_concurrent_schema_writers_wait_for_in_flight_publish(monkeypatch):
+@pytest.mark.parametrize("publish", [publish_schema, publish_archive_marker], ids=["schema", "archive"])
+def test_concurrent_creators_wait_for_in_flight_publish(monkeypatch, publish):
     layout = FineStoreLayout(ROOT)
-    metadata = TableMetadata(primary_key=("id",))
     winner_in_flight = threading.Event()
-    loser_read_missing_schema = threading.Event()
+    loser_read_missing_object = threading.Event()
     release_winner = threading.Event()
 
     with simulated_s3(latency=0.0) as fs:
@@ -62,27 +72,27 @@ def test_concurrent_schema_writers_wait_for_in_flight_publish(monkeypatch):
                 assert release_winner.wait(timeout=CONCURRENCY_TIMEOUT)
             charge(request, nbytes=nbytes)
 
-        def observe_missing_schema(path):
+        def observe_missing_object(path):
             result = conditional_read(path)
             if result is None and fs.log.cas_conflicts:
-                loser_read_missing_schema.set()
+                loser_read_missing_object.set()
             return result
 
         monkeypatch.setattr(fs, "charge", hold_first_conditional_write)
-        monkeypatch.setattr(fs, "conditional_read", observe_missing_schema)
+        monkeypatch.setattr(fs, "conditional_read", observe_missing_object)
         with ThreadPoolExecutor(max_workers=2) as pool:
             try:
-                winner = pool.submit(write_schema, layout, metadata)
+                winner = pool.submit(publish, layout)
                 assert winner_in_flight.wait(timeout=CONCURRENCY_TIMEOUT)
-                loser = pool.submit(write_schema, layout, metadata)
-                assert loser_read_missing_schema.wait(timeout=CONCURRENCY_TIMEOUT)
+                loser = pool.submit(publish, layout)
+                assert loser_read_missing_object.wait(timeout=CONCURRENCY_TIMEOUT)
                 release_winner.set()
-                path = winner.result(timeout=CONCURRENCY_TIMEOUT)
-                assert loser.result(timeout=CONCURRENCY_TIMEOUT) == path
+                path, data = winner.result(timeout=CONCURRENCY_TIMEOUT)
+                assert loser.result(timeout=CONCURRENCY_TIMEOUT) == (path, data)
             finally:
                 release_winner.set()
 
-        assert StoragePath(path).read_bytes() == metadata.model_dump_json(indent=2).encode()
+        assert StoragePath(path).read_bytes() == data
 
 
 def test_single_row_flush_fits_the_request_budget(simulated_bucket):
