@@ -13,7 +13,7 @@ import base64
 import json
 import re
 
-from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
+from rigging.redaction import JWT_PATTERN, REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from iris.cluster.controller.auth import PROXY_PLANE_AUDIENCE
 from iris.rpc import controller_pb2
@@ -24,7 +24,7 @@ _BREAK = r"(?:\s|\\+[nrt])"
 _BREAKS_RE = re.compile(rf"{_BREAK}+")
 _SEGMENT = rf"[A-Za-z0-9_\-](?:[A-Za-z0-9_\-]|{_BREAK})*"
 _BROKEN_JWT_RE = re.compile(rf"e{_BREAK}*y{_BREAK}*J{_SEGMENT}\.{_BREAK}*{_SEGMENT}\.{_BREAK}*{_SEGMENT}")
-_JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_JWT_RE = re.compile(JWT_PATTERN)
 
 # CLI flags on `iris job run` that take a (KEY, VALUE) pair via Click's
 # type=(str, str). Keep in sync with the Click option definition in
