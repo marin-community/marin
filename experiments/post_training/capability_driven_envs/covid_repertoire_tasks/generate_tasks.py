@@ -38,6 +38,28 @@ from verifyit.spec import StructuredExactSpec
 
 GENERATOR_VERSION = "covid-repertoire-objective-v1"
 DATA_PATH = "workspace/data/repertoire_counts.csv"
+DATA_DICTIONARY_PATH = "workspace/reference/data_dictionary.md"
+BIOLOGY_CARD_PATH = "workspace/reference/mait_background.md"
+DATA_DICTIONARY = b"""# Data dictionary
+
+Each row is one pseudonymous donor and coarse T-cell state. `n_cells` is the number of post-QC cells,
+`n_primary_vj_called` is the number with a callable primary VJ chain, and `n_trav1_2` is the called subset whose
+primary V-alpha gene is TRAV1-2. Donors, rather than individual cells, are the biological replicate.
+"""
+BIOLOGY_CARD = b"""# MAIT receptor-usage background
+
+Mucosal-associated invariant T (MAIT) cells commonly use a semi-invariant T-cell receptor containing TRAV1-2.
+Strong TRAV1-2 enrichment that is consistent across donors therefore provides evidence supporting a proposed MAIT
+annotation. TRAV1-2 is not exclusive to MAIT cells, so receptor usage alone does not prove the annotation or antigen
+specificity. Orthogonal transcriptomic markers, MR1-tetramer binding, or functional evidence can strengthen it.
+
+For the annotation-assessment tasks in this pilot, classify the evidence as `supported_not_proven` exactly when the
+candidate median is at least 0.5, the comparator median is at most 0.1, at least five candidate donors pass the
+support filter, and candidate enrichment is at least five-fold. Otherwise use `inconclusive`. The required limitation
+code is `receptor_usage_not_annotation_proof`.
+
+Source context: Stephenson et al., Nature Medicine (2021), DOI 10.1038/s41591-021-01329-2.
+"""
 REQUIRED_COLUMNS = (
     "donor_id",
     "cell_type_coarse",
@@ -229,6 +251,77 @@ places; absolute_difference is the absolute difference between the unrounded med
     return candidates
 
 
+def triangulation_candidates(rows: list[CountRow]) -> list[Candidate]:
+    candidates = []
+    minimum_called = 10
+    mait_rows = eligible(rows, "MAIT", minimum_called)
+    if len(mait_rows) < 5:
+        return candidates
+    mait_median = statistics.median(row.called_fraction for row in mait_rows)
+    for comparator in sorted({row.cell_type for row in rows} - {"MAIT"}):
+        comparator_rows = eligible(rows, comparator, minimum_called)
+        if len(comparator_rows) < 5:
+            continue
+        comparator_median = statistics.median(row.called_fraction for row in comparator_rows)
+        if comparator_median == 0:
+            continue
+        fold_enrichment = mait_median / comparator_median
+        assessment = (
+            "supported_not_proven"
+            if mait_median >= 0.5 and comparator_median <= 0.1 and len(mait_rows) >= 5 and fold_enrichment >= 5
+            else "inconclusive"
+        )
+        expected = {
+            "candidate_cell_type": "MAIT",
+            "comparator_cell_type": comparator,
+            "minimum_called": minimum_called,
+            "candidate_n_donors": len(mait_rows),
+            "comparator_n_donors": len(comparator_rows),
+            "candidate_median": rounded(mait_median),
+            "comparator_median": rounded(comparator_median),
+            "fold_enrichment": rounded(fold_enrichment),
+            "annotation_assessment": assessment,
+            "limitation_code": "receptor_usage_not_annotation_proof",
+        }
+        instruction = f"""Read /{DATA_PATH}, /{DATA_DICTIONARY_PATH}, and /{BIOLOGY_CARD_PATH}. Evaluate whether
+TRAV1-2 usage supports the proposed MAIT annotation relative to {comparator!r}. Retain rows with
+n_primary_vj_called >= {minimum_called}; compute ordinary donor-level medians and their candidate/comparator fold
+enrichment. Apply the background card's decision policy. Return exactly one JSON object with keys
+candidate_cell_type, comparator_cell_type, minimum_called, candidate_n_donors, comparator_n_donors,
+candidate_median, comparator_median, fold_enrichment, annotation_assessment, and limitation_code. Round numeric
+results to six decimal places."""
+        candidates.append(Candidate("annotation_triangulation", {"comparator": comparator}, instruction, expected))
+    return candidates
+
+
+def analysis_unit_candidates(rows: list[CountRow]) -> list[Candidate]:
+    candidates = []
+    minimum_called = 10
+    for cell_type in sorted({row.cell_type for row in rows}):
+        selected = eligible(rows, cell_type, minimum_called)
+        if len(selected) < 5:
+            continue
+        pooled = sum(row.n_trav1_2 for row in selected) / sum(row.n_called for row in selected)
+        donor_median = statistics.median(row.called_fraction for row in selected)
+        expected = {
+            "cell_type": cell_type,
+            "minimum_called": minimum_called,
+            "n_donors": len(selected),
+            "pooled_fraction": rounded(pooled),
+            "donor_median_fraction": rounded(donor_median),
+            "preferred_biological_unit": "donor",
+            "reason_code": "avoid_cell_level_pseudoreplication",
+        }
+        instruction = f"""Read /{DATA_PATH} and /{DATA_DICTIONARY_PATH}. For {cell_type!r}, retain rows with
+n_primary_vj_called >= {minimum_called}. Compute (1) the pooled fraction obtained by summing counts before division
+and (2) the ordinary median of donor-level fractions. Then identify the preferred biological replicate for a cohort
+claim. Return exactly one JSON object with keys cell_type, minimum_called, n_donors, pooled_fraction,
+donor_median_fraction, preferred_biological_unit, and reason_code. Round fractions to six decimal places; use the
+reason code stated by the data dictionary's replicate warning."""
+        candidates.append(Candidate("analysis_unit", {"cell_type": cell_type}, instruction, expected))
+    return candidates
+
+
 def ranking_candidates(rows: list[CountRow]) -> list[Candidate]:
     candidates = []
     for minimum_called in (5, 10, 25, 50):
@@ -266,6 +359,8 @@ def candidates(rows: list[CountRow]) -> list[Candidate]:
         prevalence_candidates(rows),
         comparison_candidates(rows),
         ranking_candidates(rows),
+        triangulation_candidates(rows),
+        analysis_unit_candidates(rows),
     ]
     ordered: list[Candidate] = []
     for position in range(max(map(len, families))):
@@ -277,9 +372,13 @@ def task_spec(candidate: Candidate, data: bytes, source_revision: str) -> TaskSp
     """Package one candidate as an ordinary in-process VerifyIt TaskSpec."""
     task_id = f"covid-repertoire-{candidate.family}-{candidate.identity}"
     package = verifyit_package(StructuredExactSpec(expected=candidate.expected))
-    resource = TaskResource(
-        path=DATA_PATH,
-        source=InlineFile(content_base64=base64.b64encode(data).decode()),
+    resources = tuple(
+        TaskResource(path=path, source=InlineFile(content_base64=base64.b64encode(content).decode()))
+        for path, content in (
+            (DATA_PATH, data),
+            (DATA_DICTIONARY_PATH, DATA_DICTIONARY),
+            (BIOLOGY_CARD_PATH, BIOLOGY_CARD),
+        )
     )
     return TaskSpec(
         id=task_id,
@@ -298,7 +397,7 @@ def task_spec(candidate: Candidate, data: bytes, source_revision: str) -> TaskSp
             row=task_id,
             importer_revision=GENERATOR_VERSION,
         ),
-        resources=ResourceGroups(worker=(resource,), verifier=package.resources),
+        resources=ResourceGroups(worker=resources, verifier=package.resources),
         tags=("biology", "immune-repertoire", "objective-verifier", candidate.family),
     )
 

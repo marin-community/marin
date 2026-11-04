@@ -22,6 +22,7 @@ from experiments.post_training.capability_driven_envs.covid_repertoire_tasks.gen
     generate,
     read_counts,
 )
+from experiments.post_training.capability_driven_envs.covid_repertoire_tasks.render_review import render
 
 
 def fixture_counts() -> bytes:
@@ -43,14 +44,17 @@ def test_generates_a_balanced_reproducible_25_task_release():
 
     assert [task.model_dump_json() for task in first] == [task.model_dump_json() for task in second]
     assert len({task.id for task in first}) == 25
-    assert len({task.tags[-1] for task in first}) == 5
+    assert len({task.tags[-1] for task in first}) == 7
     for task in first:
         assert isinstance(task.grader, VerifyitGrader)
         spec = verifyit_spec(task.grader)
         assert isinstance(spec, StructuredExactSpec)
         assert task.resources.verifier == ()
-        assert len(task.resources.worker) == 1
-        resource = task.resources.worker[0].source
+        assert len(task.resources.worker) == 3
+        data_resource = next(
+            resource for resource in task.resources.worker if resource.path.endswith("repertoire_counts.csv")
+        )
+        resource = data_resource.source
         assert isinstance(resource, InlineFile)
         assert base64.b64decode(resource.content_base64) == data
         json.dumps(spec.expected, allow_nan=False)
@@ -70,6 +74,19 @@ def test_generates_a_balanced_reproducible_25_task_release():
     wrong_result = grade_answer(task, wrong)
     assert (correct_result.status, correct_result.reward) == (Outcome.GRADED, 1.0)
     assert (wrong_result.status, wrong_result.reward) == (Outcome.GRADED, 0.0)
+
+
+def test_private_review_sheet_contains_prompts_answers_and_checklist(tmp_path):
+    tasks = generate(fixture_counts(), source_revision="sha256:fixture", count=2)
+    path = tmp_path / "tasks.jsonl"
+    path.write_text("\n".join(task.model_dump_json() for task in tasks) + "\n")
+
+    review = render(path)
+
+    assert tasks[0].id in review
+    assert "Hidden expected answer" in review
+    assert "Uses biological knowledge or reference material: TODO" in review
+    assert "Do not expose this file to solvers" in review
 
 
 def test_rejects_inconsistent_counts():

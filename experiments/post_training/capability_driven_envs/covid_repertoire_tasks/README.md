@@ -6,8 +6,12 @@ model-authored open-ended Taskforge: deterministic code chooses the question,
 computes the hidden answer, and packages an in-process VerifyIt grader.
 
 The first slice covers TRAV1-2 usage in the T-cell repertoire. It is a plumbing
-and task-design pilot, not yet a publishable dataset. Every generated manifest is
-marked `unreviewed_do_not_publish` until the source-data rights audit is complete.
+and task-design pilot, not yet a publishable dataset. After reviewing the first
+25 generated tasks, we retained the arithmetic families as controls and refocused
+the showcase on tasks that combine quantitative evidence, biological knowledge,
+and calibrated interpretation. [`DESIGN_REVIEW.md`](DESIGN_REVIEW.md) records
+that review and the 50-task target. Every generated manifest is marked
+`unreviewed_do_not_publish` until the source-data rights audit is complete.
 
 ## Source
 
@@ -80,7 +84,7 @@ The output contains `repertoire_counts.csv` and `provenance.json`.
 
 ### 4–6. Generate objectively graded tasks
 
-The initial generator has five families:
+The generator currently has seven families:
 
 | Family | Objective result |
 | --- | --- |
@@ -89,8 +93,12 @@ The initial generator has five families:
 | `donor_prevalence` | donors exceeding an explicit usage threshold |
 | `median_comparison` | donor-level comparison between two cell states |
 | `rank_cell_types` | highest median among sufficiently supported states |
+| `annotation_triangulation` | combine receptor enrichment, donor consistency, and a biological limitation |
+| `analysis_unit` | contrast pooled and donor-level estimates and identify the biological replicate |
 
-Every instruction fixes the denominator, inclusion rule, aggregation, tie rule,
+Every task also mounts a data dictionary and a cited MAIT biology card. The two
+showcase families require applying those materials rather than treating cell
+labels as arbitrary strings. Every instruction fixes the denominator, inclusion rule, aggregation, tie rule,
 rounding, and JSON schema. The hidden `StructuredExactSpec` answer is recomputed
 from the solver-visible CSV; it is not copied from a notebook conclusion.
 
@@ -101,7 +109,7 @@ PYTHONPATH=. uv run --project lib/taskforge python \
   experiments/post_training/capability_driven_envs/covid_repertoire_tasks/generate_tasks.py \
   --counts "$OUT/repertoire_counts.csv" \
   --source-revision sha256:9247763b3be7c89b6f765ed3f4d1c4a0abd68ad7ee06f4cdc78b7882d9660d61 \
-  --count 25 \
+  --count 50 \
   --output "$RELEASE"
 ```
 
@@ -112,7 +120,7 @@ tasks.jsonl     ordinary TaskCompendium TaskSpecs
 manifest.json   input/output digests, task IDs, generator version, release status
 ```
 
-### 7. Validate and inspect
+### 7. Validate, inspect, and refocus
 
 Run the focused tests:
 
@@ -121,14 +129,26 @@ PYTHONPATH=. uv run --project lib/taskforge pytest \
   experiments/post_training/capability_driven_envs/covid_repertoire_tasks/tests -q
 ```
 
-Before increasing the count, manually inspect every instruction/answer pair and
-run solver canaries. Generation should reject degenerate candidates rather than
+Render a private sheet containing prompts, hidden answers, and the review checklist:
+
+```bash
+PYTHONPATH=. uv run --project lib/taskforge python \
+  experiments/post_training/capability_driven_envs/covid_repertoire_tasks/render_review.py \
+  --tasks "$RELEASE/tasks.jsonl" \
+  --output "$RELEASE/private-review.md"
+```
+
+Manually inspect every instruction/answer pair and run solver canaries. The first
+such review found that biologically named arithmetic did not actually require
+biological reasoning; that finding and the resulting refocus are preserved in
+`DESIGN_REVIEW.md`. Generation should reject degenerate candidates rather than
 fill a requested quota with meaningless variants.
 
-## Scaling beyond the first 25
+## Scaling to the first 50
 
-The current table supports useful arithmetic and donor-aware aggregation tasks,
-but not a scientifically diverse library of several hundred. Scale by adding
+The current table supports useful arithmetic, donor-aware aggregation, and a
+first annotation-triangulation lesson, but not 50 scientifically diverse showcase
+tasks by itself. Scale by adding
 new **data products and generator families**, not by paraphrasing these prompts:
 
 - clonotype expansion and clone-size distributions;
