@@ -7,23 +7,36 @@ import argparse
 import hashlib
 import json
 import subprocess
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
 
 RECIPE = Path(__file__).parent
 DEFAULT_REPOSITORY = "ghcr.io/marin-community/rollout-images"
 LOCKS = ("package-lock.json", "requirements.lock")
-DEPENDENCIES: dict[str, Any] = {
-    "recipe_revision": 5,
-    "platform": "linux/amd64",
-    "base_image": (
+
+
+@dataclass(frozen=True)
+class Tau3Dependencies:
+    recipe_revision: int
+    platform: str
+    base_image: str
+    tau2_bench_commit: str
+    node_version: str
+    node_sha256: str
+    runtime_images: dict[str, str]
+
+
+DEPENDENCIES = Tau3Dependencies(
+    recipe_revision=5,
+    platform="linux/amd64",
+    base_image=(
         "ghcr.io/marin-community/rollout-images@sha256:17a0f60def260b484134ca7f137970735cd9d0a30900aeb1a037f59acac9484a"
     ),
-    "tau2_bench_commit": "fc0055dc4e0a316c3f83133267fbd6faaa770992",
-    "node_version": "22.23.4",
-    "node_sha256": "b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406",
-    "runtime_images": {
+    tau2_bench_commit="fc0055dc4e0a316c3f83133267fbd6faaa770992",
+    node_version="22.23.4",
+    node_sha256="b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406",
+    runtime_images={
         "retail": (
             "ghcr.io/marin-community/rollout-images@sha256:25899b6e12e657f7850108b70dbae6ceb82dc9c988bd912355b22d7cdbdec24a"
         ),
@@ -31,18 +44,16 @@ DEPENDENCIES: dict[str, Any] = {
             "ghcr.io/marin-community/rollout-images@sha256:97798a165494fb42564dadae0eaa3b645c728d98004709e4e68c0cde2c8e6c98"
         ),
     },
-}
+)
 
 
-def dependency_identity(base_image: str | None = None) -> tuple[dict[str, Any], str]:
+def dependency_identity(base_image: str | None = None) -> tuple[Tau3Dependencies, str]:
     """Hash dependency locks and declared build configuration, without reading source code."""
-    dependencies = dict(DEPENDENCIES)
-    if base_image is not None:
-        dependencies["base_image"] = base_image
-    if "@sha256:" not in dependencies["base_image"]:
+    dependencies = replace(DEPENDENCIES, base_image=base_image) if base_image is not None else DEPENDENCIES
+    if "@sha256:" not in dependencies.base_image:
         raise ValueError("The parent image must be pinned by digest")
     identity = {
-        "dependencies": dependencies,
+        "dependencies": asdict(dependencies),
         "locks": {name: (RECIPE / name).read_text() for name in LOCKS},
     }
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -74,13 +85,13 @@ def tau3_image(repository: str = DEFAULT_REPOSITORY, base_image: str | None = No
                 "docker",
                 "buildx",
                 "build",
-                f"--platform={dependencies['platform']}",
+                f"--platform={dependencies.platform}",
                 "--provenance=false",
                 "--output=type=registry,compression=gzip,force-compression=true",
                 f"--tag={tag}",
-                f"--build-arg=BASE_IMAGE={dependencies['base_image']}",
-                f"--build-arg=NODE_VERSION={dependencies['node_version']}",
-                f"--build-arg=NODE_SHA256={dependencies['node_sha256']}",
+                f"--build-arg=BASE_IMAGE={dependencies.base_image}",
+                f"--build-arg=NODE_VERSION={dependencies.node_version}",
+                f"--build-arg=NODE_SHA256={dependencies.node_sha256}",
                 str(RECIPE),
             ],
             check=True,
@@ -92,14 +103,10 @@ def tau3_image(repository: str = DEFAULT_REPOSITORY, base_image: str | None = No
 
 
 def prepare_tau3_task(task: Path, repository: str = DEFAULT_REPOSITORY) -> None:
-    """Pin a reviewed Tau3 task's main and task-specific runtime images for Shellbox.
-
-    The pinned runtime supplies dependencies; the task supplies its server and
-    configuration. Docker's layer cache handles their rebuilds.
-    """
+    """Pin a reviewed Tau3 task's images, preserving its server and configuration."""
     runtime = task / "environment/runtime-server"
     config = json.loads((runtime / "task_config.json").read_text())
-    runtime_base = DEPENDENCIES["runtime_images"][config["domain"]]
+    runtime_base = DEPENDENCIES.runtime_images[config["domain"]]
     main_image = tau3_image(repository)
     with TemporaryDirectory(prefix="tau3-image-") as directory:
         scratch = Path(directory)
@@ -144,7 +151,8 @@ def main() -> None:
         dependencies, identity = dependency_identity(args.base_image)
         print(
             json.dumps(
-                {"identity": identity, "tag": f"{args.repository}:tau3-pi-{identity[:16]}", **dependencies}, indent=2
+                {"identity": identity, "tag": f"{args.repository}:tau3-pi-{identity[:16]}", **asdict(dependencies)},
+                indent=2,
             )
         )
         return

@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
-from harbor.host_capabilities import model_api_url
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.base import (
     BASE_ENVIRONMENT_ARGUMENTS,
@@ -26,6 +25,7 @@ from harbor.environments.model_relay import (
     JudgeAccess,
     ModelRelay,
     start_model_relays,
+    task_model_relays,
     verifier_model_access,
 )
 from harbor.environments.docker_translate import import_prepared_task
@@ -180,26 +180,15 @@ class LocalEnvironment(BaseEnvironment):
                 for container in plan.task.containers
             ),
         )
-        needs_model = any(
-            model_api_url(container.machine.env) is not None
-            for container in task_spec.containers
-        )
-        judge = ModelRelay.from_endpoint(
-            self.model_endpoint,
-            self.model_name,
+        judge, candidate = task_model_relays(
+            model_endpoint=self.model_endpoint,
+            model_name=self.model_name,
+            candidate_model_endpoint=self.candidate_model_endpoint,
+            candidate_model_name=self.candidate_model_name,
             authentication=self.host_capabilities.model_authentication,
+            judge_access=self.judge_access,
+            environments=(container.machine.env for container in task_spec.containers),
         )
-        candidate = ModelRelay.from_endpoint(
-            self.candidate_model_endpoint,
-            self.candidate_model_name,
-            authentication=self.host_capabilities.model_authentication,
-        )
-        if needs_model and judge is None:
-            raise ValueError(
-                "Task model calls require an explicit hosted judge (--judge-model) or standalone host model endpoint"
-            )
-        if needs_model and self.judge_access is not JudgeAccess.RUNTIME:
-            raise ValueError("Task model calls require explicit judge_access='runtime'")
         self._judge = judge
         self._stopping = None
         self.factory.check_environment(

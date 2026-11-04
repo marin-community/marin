@@ -384,19 +384,3 @@ def import_prepared_task(
         ),
         service_log_paths=tuple(log_paths),
     )
-
-
-def validate_prepared_task(
-    task_env_config: EnvironmentConfig,
-    environment_dir: Path,
-    *,
-    guest_environment: Mapping[str, str] = {},
-    protected_values: frozenset[str] = frozenset(),
-) -> None:
-    """Validate prepared images and task services without acquiring a sandbox."""
-    import_prepared_task(
-        task_env_config,
-        environment_dir,
-        guest_environment=guest_environment,
-        protected_values=protected_values,
-    )

@@ -5,14 +5,18 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from enum import StrEnum
 
 import httpx
 
 from harbor.llms.vllm_tokenization import tokenize_url
-from harbor.host_capabilities import CANDIDATE_MODEL_RELAY_PORT, MODEL_RELAY_PORT
+from harbor.host_capabilities import (
+    CANDIDATE_MODEL_RELAY_PORT,
+    MODEL_RELAY_PORT,
+    model_api_url,
+)
 from harbor.models.agent.model_api import ModelAPI
 from harbor.trial.errors import RuntimeServiceError
 from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
@@ -170,6 +174,33 @@ class ModelRelay:
                     return HttpResponse(response.status_code, bytes(body))
         except httpx.HTTPError:
             return HttpResponse(502, b'{"error":"model request failed"}')
+
+
+def task_model_relays(
+    *,
+    model_endpoint: str | None,
+    model_name: str | None,
+    candidate_model_endpoint: str | None,
+    candidate_model_name: str | None,
+    authentication: Mapping[str, str],
+    judge_access: JudgeAccess,
+    environments: Iterable[Mapping[str, str]],
+) -> tuple[ModelRelay | None, ModelRelay | None]:
+    """Resolve role relays and require runtime authority for task model callers."""
+    judge = ModelRelay.from_endpoint(
+        model_endpoint, model_name, authentication=authentication
+    )
+    candidate = ModelRelay.from_endpoint(
+        candidate_model_endpoint, candidate_model_name, authentication=authentication
+    )
+    if any(model_api_url(values) is not None for values in environments):
+        if judge is None:
+            raise ValueError(
+                "Task model calls require an explicit host judge endpoint and model"
+            )
+        if judge_access is not JudgeAccess.RUNTIME:
+            raise ValueError("Task model calls require explicit judge_access='runtime'")
+    return judge, candidate
 
 
 def _upstream_error(status: int, body: bytes) -> HttpResponse:

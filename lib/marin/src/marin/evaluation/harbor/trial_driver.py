@@ -28,12 +28,13 @@ from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[m
 from harbor.agents.tau3_acp_relay.harbor_agent import candidate_agent_config  # pyrefly: ignore[missing-import]
 from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
     COMPOSE_FILENAMES,
-    validate_prepared_task,
+    import_prepared_task,
 )
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
     SUPPORTED_MODEL_APIS,
     JudgeAccess,
+    task_model_relays,
 )
 from harbor.environments.resource_policies import validate_local_resources  # pyrefly: ignore[missing-import]
 from harbor.host_capabilities import (  # pyrefly: ignore[missing-import]
@@ -299,25 +300,26 @@ def _validate_job_tasks(job: Job) -> None:
             else task_config.path
         )
         task = Task(task_path, disable_verification=job.config.verifier.disable)
-        task_environments = (
-            task.config.environment.env,
-            {**task.config.verifier.env, **job.config.verifier.env},
-            task.config.solution.env,
+        task_environment, verifier_environment, solution_environment = (
+            resolve_env_vars(
+                values,
+                source=job.guest_environment,
+                protected_values=job.host_capabilities.protected_values,
+            )
+            for values in (
+                task.config.environment.env,
+                {**task.config.verifier.env, **job.config.verifier.env},
+                task.config.solution.env,
+            )
         )
         if not job.config.environment.kwargs.get("model_endpoint") and any(
-            {"OPENAI_API_KEY", "OPENAI_BASE_URL", "TOGETHER_API_KEY", "CUSTOM_API_KEY"} & values.keys()
-            for values in task_environments
+            model_api_url(values) is not None or {"OPENAI_API_KEY", "TOGETHER_API_KEY", "CUSTOM_API_KEY"} & values.keys()
+            for values in (task_environment, verifier_environment, solution_environment)
         ):
             raise ValueError("Task model inputs require an explicit host judge capability before allocation")
-        if {
-            "OPENAI_BASE_URL",
-            "OPENAI_API_KEY",
-        } & task.config.environment.env.keys() and job.config.environment.kwargs.get(
-            "judge_access", JudgeAccess.VERIFIER
-        ) != JudgeAccess.RUNTIME:
-            raise ValueError("Task model inputs require explicit runtime judge access")
         if task.config.environment.os != TaskOS.LINUX:
             raise ValueError("Shellbox Harbor adapters currently require Linux tasks")
+        runtime_environments = (task_environment,)
         if job.config.environment.type == EnvironmentType.LOCAL:
             environment = job.config.environment
             task_environment_config = task.config.environment.model_copy(
@@ -327,12 +329,13 @@ def _validate_job_tasks(job: Job) -> None:
                     if (value := getattr(environment, f"override_{name}")) is not None
                 }
             )
-            validate_prepared_task(
+            prepared = import_prepared_task(
                 task_environment_config,
                 task.paths.environment_dir,
                 guest_environment=job.guest_environment,
                 protected_values=job.host_capabilities.protected_values,
             )
+            runtime_environments = tuple(container.machine.env for container in prepared.task.containers)
             validate_local_resources(
                 task_environment_config,
                 cpu_enforcement_policy=environment.cpu_enforcement_policy,
@@ -342,20 +345,15 @@ def _validate_job_tasks(job: Job) -> None:
                 raise ValueError("Prepared Shellbox environments do not yet support multi-step tasks")
         elif any((task.paths.environment_dir / name).exists() for name in COMPOSE_FILENAMES):
             raise ValueError("Compose service groups require the Shellbox local backend")
-        resolve_env_vars(
-            task.config.environment.env,
-            source=job.guest_environment,
-            protected_values=job.host_capabilities.protected_values,
-        )
-        resolve_env_vars(
-            {**task.config.verifier.env, **job.config.verifier.env},
-            source=job.guest_environment,
-            protected_values=job.host_capabilities.protected_values,
-        )
-        resolve_env_vars(
-            task.config.solution.env,
-            source=job.guest_environment,
-            protected_values=job.host_capabilities.protected_values,
+        kwargs = job.config.environment.kwargs
+        task_model_relays(
+            model_endpoint=kwargs.get("model_endpoint"),
+            model_name=kwargs.get("model_name"),
+            candidate_model_endpoint=kwargs.get("candidate_model_endpoint"),
+            candidate_model_name=kwargs.get("candidate_model_name"),
+            authentication=job.host_capabilities.model_authentication,
+            judge_access=JudgeAccess(kwargs.get("judge_access", JudgeAccess.VERIFIER)),
+            environments=runtime_environments,
         )
         if task.config.verifier.environment is not None or task.config.verifier.environment_mode == "separate":
             raise ValueError("Shellbox model capabilities currently require a shared verifier environment")

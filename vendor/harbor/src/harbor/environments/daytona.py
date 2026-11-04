@@ -23,11 +23,12 @@ from harbor.environments.capabilities import (
 from harbor.environments.docker_translate import COMPOSE_FILENAMES
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.execution import execute_shellbox_command
-from harbor.host_capabilities import HostCapabilities, model_api_url
+from harbor.host_capabilities import HostCapabilities
 from harbor.environments.model_relay import (
     JudgeAccess,
     ModelRelay,
     start_model_relays,
+    task_model_relays,
     verifier_model_access,
 )
 from harbor.models.environment_type import EnvironmentType
@@ -178,23 +179,15 @@ class DaytonaEnvironment(BaseEnvironment):
             memory_mb=self._effective_memory_mb,
             storage_mb=self._effective_storage_mb,
         )
-        judge = ModelRelay.from_endpoint(
-            self.model_endpoint,
-            self.model_name,
+        judge, candidate = task_model_relays(
+            model_endpoint=self.model_endpoint,
+            model_name=self.model_name,
+            candidate_model_endpoint=self.candidate_model_endpoint,
+            candidate_model_name=self.candidate_model_name,
             authentication=self.host_capabilities.model_authentication,
+            judge_access=self.judge_access,
+            environments=(spec.env,),
         )
-        candidate = ModelRelay.from_endpoint(
-            self.candidate_model_endpoint,
-            self.candidate_model_name,
-            authentication=self.host_capabilities.model_authentication,
-        )
-        needs_model = model_api_url(spec.env) is not None
-        if needs_model and judge is None:
-            raise ValueError(
-                "Task model calls require an explicit host judge endpoint and model"
-            )
-        if needs_model and self.judge_access is not JudgeAccess.RUNTIME:
-            raise ValueError("Task model calls require explicit judge_access='runtime'")
         self._judge = judge
         self._stopping = None
         self.machine = await acquire_owned(

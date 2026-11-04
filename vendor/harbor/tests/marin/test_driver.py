@@ -459,3 +459,58 @@ def test_local_acp_shorthand_survives_preflight_normalization(tmp_path, prepared
     )
     report = _preflight_one(path, {}, None, host_environment={})
     assert report["benchmark_metadata"]["n_benchmark"] == 1
+
+
+@pytest.mark.parametrize(
+    ("backend", "location"),
+    [("local", "primary"), ("daytona", "primary"), ("local", "peer")],
+)
+@pytest.mark.parametrize("endpoint_name", ["OPENAI_API_BASE", "OPENAI_BASE_URL"])
+@pytest.mark.parametrize("authority", ["missing-judge", "verifier-only", "runtime"])
+def test_preflight_requires_runtime_judge_for_primary_and_peer_model_access(
+    tmp_path, prepared_task, backend, location, endpoint_name, authority
+):
+    values = {endpoint_name: "http://127.0.0.1:8787/v1"}
+    if location == "primary":
+        task_config = prepared_task / "task.toml"
+        task_config.write_text(
+            task_config.read_text()
+            + f'\n[environment.env]\n{endpoint_name} = "{values[endpoint_name]}"\n'
+        )
+    else:
+        (prepared_task / "environment/compose.yaml").write_text(
+            json.dumps(
+                {
+                    "services": {
+                        "main": {},
+                        "runtime": {
+                            "image": "example.test/runtime@sha256:" + "b" * 64,
+                            "working_dir": "/runtime",
+                            "environment": values,
+                        },
+                    }
+                }
+            )
+        )
+    path = tmp_path / "policy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "environment": {
+                    "type": backend,
+                    "kwargs": (
+                        {"judge_access": "runtime"} if authority == "runtime" else {}
+                    ),
+                },
+                "agents": [{"name": "terminus-2"}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    judge = None if authority == "missing-judge" else "judge-alias"
+    if authority == "runtime":
+        report = _preflight_one(path, {}, judge, host_environment={})
+        assert report["benchmark_metadata"]["n_benchmark"] == 1
+    else:
+        with pytest.raises(ValueError):
+            _preflight_one(path, {}, judge, host_environment={})
