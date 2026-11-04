@@ -17,6 +17,7 @@ Usage: humaneval_copies.py REQUESTS_JSON OUT_PREFIX [--max-workers N] [--worker-
 import argparse
 import hashlib
 import json
+import re
 from collections import defaultdict
 
 import pyarrow as pa
@@ -29,6 +30,7 @@ from zephyr.readers import load_file
 from zephyr.writers import write_parquet_file
 
 NGRAM_LENGTH = 13
+UNICODE_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
 JSON_ESCAPES = (("\\n", "\n"), ("\\t", "\t"), ('\\"', '"'), ("\\'", "'"), ("\\\\", "\\"))
 SCHEMA = pa.schema(
     [
@@ -51,6 +53,8 @@ def collapse(text: str) -> str:
 
 
 def unescape(text: str) -> str:
+    """Undo common JSON string escapes, including ``\\uXXXX`` (non-ASCII text dumped with ``ensure_ascii``)."""
+    text = UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), text)
     for escaped, plain in JSON_ESCAPES:
         text = text.replace(escaped, plain)
     return text
