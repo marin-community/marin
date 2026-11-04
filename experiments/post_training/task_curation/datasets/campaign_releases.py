@@ -55,18 +55,18 @@ def _private_archive(archive: str) -> SourceReference:
     )
 
 
-def _public_manifest(release: str, revision: str) -> str:
-    return f"https://huggingface.co/datasets/{TASK_TROVE_PUBLIC}/blob/{revision}/releases/{release}/manifest.json"
-
-
-def _archive_evidence(archive: str) -> str:
-    return (
-        f"https://huggingface.co/datasets/{TASK_TROVE_PRIVATE}/blob/{PRIVATE_ARCHIVE_REVISION}"
-        f"/{CAMPAIGN_ARCHIVE}/{archive}"
-    )
+def _pinned_blob(reference: SourceReference, member: str = "") -> str:
+    """Blob URL for a pinned tree reference itself or one of its members."""
+    url = reference.url.replace("/tree/", "/blob/", 1)
+    return f"{url}/{member}" if member else url
 
 
 def sources() -> list[RlDataSource]:
+    calibforge = _public_release("smartie-continuation-20261016/calibforge", "6a6429ccba098e11ea9f6297a70cb43a34670c0f")
+    shared_v2 = _public_release("calibforge-shared-20261017-v2", "3b6c5b5533f1b702163f365b7ce869b834cb2994")
+    swesmith = _public_release("smartie-continuation-20261016/swesmith", "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c")
+    staged_v1 = _private_archive("swesmith-staged-v1-20261017.tar.gz")
+    staged_v2 = _private_archive("swesmith-staged-v2-20261017.tar.gz")
     return [
         RlDataSource(
             info=SourceInfo(
@@ -84,18 +84,14 @@ def sources() -> list[RlDataSource]:
                     "smartie-calibforge-shared-v2, repaired from these candidates, is the usable "
                     "release. See the campaign report: " + CAMPAIGN_ISSUE
                 ),
-                dataset=_public_release(
-                    "smartie-continuation-20261016/calibforge", "6a6429ccba098e11ea9f6297a70cb43a34670c0f"
-                ),
+                dataset=calibforge,
                 independent_qc=IndependentQC(
                     verdict=Verdict.SOME_ISSUES,
                     method="release quality review accepted the task text; oracle execution skipped and "
                     "privacy, split and overlap checks remain before publication",
                     reviewed=2205,
                     admitted=2205,
-                    evidence_url=_public_manifest(
-                        "smartie-continuation-20261016/calibforge", "6a6429ccba098e11ea9f6297a70cb43a34670c0f"
-                    ),
+                    evidence_url=_pinned_blob(calibforge, "manifest.json"),
                 ),
             )
         ),
@@ -113,16 +109,14 @@ def sources() -> list[RlDataSource]:
                     "Admission checks cover fixture equivalence and setup and verifier execution; "
                     "oracle solution execution was waived."
                 ),
-                dataset=_public_release("calibforge-shared-20261017-v2", "3b6c5b5533f1b702163f365b7ce869b834cb2994"),
+                dataset=shared_v2,
                 independent_qc=IndependentQC(
                     verdict=Verdict.GOOD,
                     method="fixture equivalence plus setup and verifier execution admission checks; "
                     "oracle solution execution waived",
                     reviewed=2205,
                     admitted=324,
-                    evidence_url=_public_manifest(
-                        "calibforge-shared-20261017-v2", "3b6c5b5533f1b702163f365b7ce869b834cb2994"
-                    ),
+                    evidence_url=_pinned_blob(shared_v2, "manifest.json"),
                 ),
             )
         ),
@@ -140,17 +134,13 @@ def sources() -> list[RlDataSource]:
                     "model-solving accuracy claim, and campaign-specific train and validation splits "
                     "remain in the private archive."
                 ),
-                dataset=_public_release(
-                    "smartie-continuation-20261016/swesmith", "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c"
-                ),
+                dataset=swesmith,
                 independent_qc=IndependentQC(
                     verdict=Verdict.GOOD,
                     method="every retained task passed Daytona oracle execution and a Good quality verdict",
                     reviewed=8045,
                     admitted=8045,
-                    evidence_url=_public_manifest(
-                        "smartie-continuation-20261016/swesmith", "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c"
-                    ),
+                    evidence_url=_pinned_blob(swesmith, "manifest.json"),
                 ),
             )
         ),
@@ -171,13 +161,13 @@ def sources() -> list[RlDataSource]:
                     + " "
                     + STAGE3_IMAGE_CAVEAT
                 ),
-                dataset=_private_archive("swesmith-staged-v1-20261017.tar.gz"),
+                dataset=staged_v1,
                 independent_qc=IndependentQC(
                     verdict=Verdict.UNKNOWN,
                     method="Stage 1 workspace-readiness verifier only; the release makes no task-quality claim",
                     reviewed=1699,
                     admitted=1699,
-                    evidence_url=_archive_evidence("swesmith-staged-v1-20261017.tar.gz"),
+                    evidence_url=_pinned_blob(staged_v1),
                 ),
             )
         ),
@@ -199,14 +189,14 @@ def sources() -> list[RlDataSource]:
                     + " "
                     + STAGE3_IMAGE_CAVEAT
                 ),
-                dataset=_private_archive("swesmith-staged-v2-20261017.tar.gz"),
+                dataset=staged_v2,
                 independent_qc=IndependentQC(
                     verdict=Verdict.SOME_ISSUES,
                     method="Stage 3 handoff verification against required tests; 178 of 778 handoffs are partial "
                     "and none were used in run 2026.10.19.57",
                     reviewed=778,
                     admitted=778,
-                    evidence_url=_archive_evidence("swesmith-staged-v2-20261017.tar.gz"),
+                    evidence_url=_pinned_blob(staged_v2),
                 ),
             )
         ),
