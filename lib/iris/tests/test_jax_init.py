@@ -28,6 +28,7 @@ from iris.jax.init import initialize_jax, resolve_coordinator_port
 
 INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
 RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
+COORDINATOR_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-5"
 
 
 @dataclass
@@ -63,6 +64,23 @@ class FakeResolver:
 class FakeContext:
     registry: FakeRegistry = field(default_factory=FakeRegistry)
     resolver: FakeResolver = field(default_factory=FakeResolver)
+    coordinator_attempts: list[int] = field(default_factory=lambda: [0])
+
+    @property
+    def client(self) -> FakeContext:
+        return self
+
+    def task_status(self, task_id: JobName) -> FakeTaskStatus:
+        assert task_id == JobName.from_string("/testuser/testjob/0")
+        attempt = (
+            self.coordinator_attempts.pop(0) if len(self.coordinator_attempts) > 1 else self.coordinator_attempts[0]
+        )
+        return FakeTaskStatus(current_attempt_number=attempt)
+
+
+@dataclass
+class FakeTaskStatus:
+    current_attempt_number: int
 
 
 class FakeClock:
@@ -222,16 +240,17 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
         endpoints=[ResolvedEndpoint(url="10.0.0.1:27055", actor_id="attempt-2")],
     )
     current = ResolveResult(
-        name=RETRY_ATTEMPT_ENDPOINT_NAME,
-        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="attempt-3")],
+        name=COORDINATOR_ATTEMPT_ENDPOINT_NAME,
+        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="attempt-5")],
     )
     fake_ctx = FakeContext(
+        coordinator_attempts=[5],
         resolver=FakeResolver(
             results_by_name={
                 "jax_coordinator": stale,
-                RETRY_ATTEMPT_ENDPOINT_NAME: current,
+                COORDINATOR_ATTEMPT_ENDPOINT_NAME: current,
             }
-        )
+        ),
     )
     mock_iris_ctx.return_value = fake_ctx
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
@@ -244,6 +263,32 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     assert jax_args == ("10.0.0.9:8476", 16, 9)
     assert jax_options["local_device_ids"] == [1]
     assert fake_ctx.registry.registered == []
+
+
+@patch("jax.distributed.initialize")
+@patch("iris.jax.init.iris_ctx")
+@patch("iris.jax.init.get_job_info")
+def test_initialize_jax_peer_tracks_coordinator_retry(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    fake_clock: FakeClock,
+) -> None:
+    mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2, attempt_id=3)
+    current = ResolveResult(
+        name=COORDINATOR_ATTEMPT_ENDPOINT_NAME,
+        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="attempt-5")],
+    )
+    fake_ctx = FakeContext(
+        coordinator_attempts=[4, 5],
+        resolver=FakeResolver(results_by_name={COORDINATOR_ATTEMPT_ENDPOINT_NAME: current}),
+    )
+    mock_iris_ctx.return_value = fake_ctx
+
+    initialize_jax(poll_timeout=1, poll_interval=0.01)
+
+    assert mock_jax_init.call_args.args == ("10.0.0.9:8476", 2, 1)
+    assert fake_clock.current > 0
 
 
 @pytest.mark.parametrize("assigned", [{}, {"jax": 0}], ids=["unassigned", "k8s-placeholder"])

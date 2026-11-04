@@ -20,7 +20,7 @@ from skyrl_train.distributed.megatron.model_utils import (
 )
 from skyrl_train.distributed.megatron.megatron_utils import get_model_config
 from skyrl_train.ftpo import FTPOTargets, FTPOInputs, boundary_values, compact_boundary_logits, ftpo_counts
-from skyrl_train.distillation import TopKEvidence, student_topk_logprobs
+from skyrl_train.distillation import TopKEvidence, compact_student_topk_logprobs
 from skyrl_train.models.megatron_router_replay import MegatronRouterReplay
 from skyrl_train.config.objective_spec import topk_loss_params
 from skyrl_train.config.ftpo import ftpo_config
@@ -287,7 +287,9 @@ class MegatronModelWrapper:
             prediction_mask = slice_sequence_parallel(prediction_mask, **slice_kwargs)
             if probe_positions is not None:
                 probe_positions = slice_sequence_parallel(probe_positions, **slice_kwargs)
-        per_layer = {idx: flat[:, idx, :].to(device) for idx in layer_indices}
+        # Backward replay retains these targets; do not keep the all-layer canvas alive through views.
+        copy_local_targets = len(layer_indices) < flat.shape[1] or tp_size > 1
+        per_layer = {idx: flat[:, idx, :].to(device=device, copy=copy_local_targets) for idx in layer_indices}
         return RouterReplayTargets(per_layer, mask.to(device), prediction_mask.to(device), probe_positions)
 
     def _forward_micro_batch(
@@ -469,8 +471,7 @@ class MegatronModelWrapper:
             )
         if mpu.get_tensor_model_parallel_world_size() != 1:
             raise ValueError("selected-ID distillation on Megatron requires a tensor-parallel top-K gather")
-        response_logits = logits[:, -data.num_actions - 1 : -1]
-        return student_topk_logprobs(response_logits, token_ids)
+        return compact_student_topk_logprobs(logits, token_ids, data.attention_mask)
 
     def forward_backward_mini_batch(
         self,
