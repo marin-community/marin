@@ -4,6 +4,8 @@
 """CoreWeave AI Object Storage data buckets."""
 
 import json
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 import pulumi
 import pulumi_coreweave as coreweave
@@ -19,13 +21,24 @@ COREWEAVE_MULTIPART_ABORT_RULE_ID = "marin-abort-incomplete-mpu"
 COREWEAVE_MULTIPART_EXPIRATION = 7
 
 # Marin Belay's dedicated CoreWeave user. Iris attaches the submitter's keys to every CoreWeave job, so this
-# principal's grants bound what Belay runs (including agent-written code) can read and write. A request needs both
-# the bucket policy (which admits every principal in the organization) and an organization access policy; the user is
-# in no groups, so the organization access policy below is its only grant.
-BELAY_PRINCIPAL = "coreweave/unAfPLe6TaiRmJsewaUog"
+# principal's access bounds what Belay runs (including agent-written code) can read and write. The organization
+# access policy below grants that access, but other organization grants also reach the user, so the bounds are
+# enforced by explicit denies in every bucket policy; an explicit deny overrides any allow.
+BELAY_USER_ID = "unAfPLe6TaiRmJsewaUog"
+BELAY_PRINCIPAL = f"coreweave/{BELAY_USER_ID}"
+BELAY_BUCKET_POLICY_PRINCIPAL = f"arn:aws:iam::{COREWEAVE_ORGANIZATION_ID}:coreweave/{BELAY_USER_ID}"
 BELAY_BUCKET = "marin-us-east-02a"
 BELAY_RUN_ROOT = "marin/tmp/ttl=30d/belay"
 BELAY_RUN_PREFIX = f"{BELAY_BUCKET}/{BELAY_RUN_ROOT}/*"
+BELAY_WRITE_ACTIONS = (
+    "s3:PutObject",
+    "s3:DeleteObject",
+    "s3:AbortMultipartUpload",
+    "s3:ListMultipartUploadParts",
+)
+BELAY_READ_ACTION = "s3:GetObject"
+BELAY_LIST_ACTION = "s3:ListBucket"
+BELAY_OBJECT_ACTIONS = (BELAY_READ_ACTION, *BELAY_WRITE_ACTIONS)
 BELAY_READ_PREFIXES = (
     f"{BELAY_BUCKET}/marin/datakit/hero_tok/*",
     f"{BELAY_BUCKET}/marin/paloma/*",
@@ -33,8 +46,8 @@ BELAY_READ_PREFIXES = (
 )
 
 
-def coreweave_bucket_policy(bucket_name: str) -> str:
-    """Return organization access, protecting hero checkpoints in the 02a bucket."""
+def coreweave_bucket_policy(bucket_name: str, temp_bucket: str) -> str:
+    """Return organization access, protecting hero checkpoints in the 02a bucket and bounding Belay."""
     statements = [
         {
             "Sid": "AllowOrganizationS3Access",
@@ -62,6 +75,7 @@ def coreweave_bucket_policy(bucket_name: str) -> str:
                 "Resource": f"arn:aws:s3:::{bucket_name}/{HERO_CHECKPOINT_PREFIX}*",
             }
         )
+    statements.extend(belay_bucket_denies(bucket_name, temp_bucket))
     return json.dumps(
         {
             "Version": "2012-10-17",
@@ -87,35 +101,84 @@ def belay_temp_checkpoint_prefixes(temp_bucket: str) -> list[str]:
     ]
 
 
-def belay_policy_statements(temp_bucket: str) -> list[coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs]:
+@dataclass(frozen=True)
+class BelayGrants:
+    """Everything Belay may do, as bucket names and `bucket/prefix*` object patterns."""
+
+    list_buckets: tuple[str, ...]
+    read_prefixes: tuple[str, ...]
+    write_prefixes: tuple[str, ...]
+
+
+def belay_grants(temp_bucket: str) -> BelayGrants:
     """Belay may list its buckets, read training and eval data and profiles, and write only its own runs."""
+    return BelayGrants(
+        list_buckets=tuple(dict.fromkeys((BELAY_BUCKET, temp_bucket))),
+        read_prefixes=(*BELAY_READ_PREFIXES, f"{temp_bucket}/tmp/ttl=30d/xprof/*"),
+        write_prefixes=(BELAY_RUN_PREFIX, *belay_temp_checkpoint_prefixes(temp_bucket)),
+    )
+
+
+def belay_policy_statements(temp_bucket: str) -> list[coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs]:
+    grants = belay_grants(temp_bucket)
     return [
         coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs(
             name="belay-list-buckets",
             effect="Allow",
-            actions=["s3:ListBucket"],
-            resources=list(dict.fromkeys((BELAY_BUCKET, temp_bucket))),
+            actions=[BELAY_LIST_ACTION],
+            resources=list(grants.list_buckets),
             principals=[BELAY_PRINCIPAL],
         ),
         coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs(
             name="belay-read-data",
             effect="Allow",
-            actions=["s3:GetObject"],
-            resources=[*BELAY_READ_PREFIXES, f"{temp_bucket}/tmp/ttl=30d/xprof/*"],
+            actions=[BELAY_READ_ACTION],
+            resources=list(grants.read_prefixes),
             principals=[BELAY_PRINCIPAL],
         ),
         coreweave.ObjectStorageOrganizationAccessPolicyStatementArgs(
             name="belay-write-runs",
             effect="Allow",
-            actions=[
-                "s3:GetObject",
-                "s3:PutObject",
-                "s3:DeleteObject",
-                "s3:AbortMultipartUpload",
-                "s3:ListMultipartUploadParts",
-            ],
-            resources=[BELAY_RUN_PREFIX, *belay_temp_checkpoint_prefixes(temp_bucket)],
+            actions=list(BELAY_OBJECT_ACTIONS),
+            resources=list(grants.write_prefixes),
             principals=[BELAY_PRINCIPAL],
+        ),
+    ]
+
+
+def _object_arns_in(bucket_name: str, prefixes: Iterable[str]) -> list[str]:
+    return [f"arn:aws:s3:::{p}" for p in prefixes if p.split("/", 1)[0] == bucket_name]
+
+
+def _belay_deny(sid: str, **fields: list[str] | str) -> dict:
+    return {"Sid": sid, "Effect": "Deny", "Principal": {"CW": [BELAY_BUCKET_POLICY_PRINCIPAL]}, **fields}
+
+
+def belay_bucket_denies(bucket_name: str, temp_bucket: str) -> list[dict]:
+    """Deny Belay everything in `bucket_name` beyond its grants: other actions, writes outside its runs, reads outside
+    its data, and listing buckets it has no reason to list."""
+    grants = belay_grants(temp_bucket)
+    bucket_arn = f"arn:aws:s3:::{bucket_name}"
+    objects_arn = f"{bucket_arn}/*"
+    writable = _object_arns_in(bucket_name, grants.write_prefixes)
+    readable = _object_arns_in(bucket_name, (*grants.read_prefixes, *grants.write_prefixes))
+    allowed_actions = [BELAY_LIST_ACTION] if bucket_name in grants.list_buckets else []
+    allowed_actions.extend(BELAY_OBJECT_ACTIONS)
+    return [
+        _belay_deny(
+            "BelayDenyOtherActions",
+            NotAction=allowed_actions,
+            Resource=[bucket_arn, objects_arn],
+        ),
+        _belay_deny(
+            "BelayDenyWritesOutsideRuns",
+            Action=list(BELAY_WRITE_ACTIONS),
+            **({"NotResource": writable} if writable else {"Resource": objects_arn}),
+        ),
+        _belay_deny(
+            "BelayDenyReadsOutsideData",
+            Action=[BELAY_READ_ACTION],
+            **({"NotResource": readable} if readable else {"Resource": objects_arn}),
         ),
     ]
 
@@ -154,6 +217,7 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
             )
             for rule in expiration_rules(lifecycle_config)
         )
+        temp_bucket = coreweave_temp_bucket(data_config)
         for bucket in sorted(data_config.buckets.values(), key=lambda spec: spec.name):
             if bucket.store is not StoreType.COREWEAVE:
                 continue
@@ -187,7 +251,7 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
             coreweave.ObjectStorageBucketPolicy(
                 f"policy-{bucket.name}",
                 bucket=resource.name,
-                policy=resource.name.apply(coreweave_bucket_policy),
+                policy=resource.name.apply(lambda name: coreweave_bucket_policy(name, temp_bucket)),
                 opts=pulumi.ResourceOptions(
                     parent=self,
                     provider=coreweave_provider,
@@ -198,7 +262,7 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
         coreweave.ObjectStorageOrganizationAccessPolicy(
             "policy-belay",
             name="marin-belay",
-            statements=belay_policy_statements(coreweave_temp_bucket(data_config)),
+            statements=belay_policy_statements(temp_bucket),
             opts=pulumi.ResourceOptions(parent=self, provider=coreweave_provider),
         )
         self.register_outputs({})
