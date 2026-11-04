@@ -62,6 +62,7 @@ from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
     REASONING_VIOLATION_TOKENS_KEY,
+    RAW_RESPONSES_KEY,
     REASONING_VIOLATIONS_KEY,
     DirectModelClient,
     GenerationBudgetExceededError,
@@ -109,6 +110,9 @@ DAYTONA_RATE_LIMIT_HEADERS = frozenset(
     for prefix in ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after")
     for throttler in ("anonymous", "authenticated", "sandbox-create", "sandbox-lifecycle")
 ) | {"retry-after"}
+
+SERVER_ERROR_MESSAGE_CHARS = 500
+"""How much of a model server's error message a failed rollout keeps."""
 
 
 class InstalledAgentWorker(Protocol):
@@ -215,6 +219,8 @@ async def _model_turn(
             REASONING_VIOLATION_TOKEN_METADATA_KEY: (output.get(REASONING_VIOLATION_TOKENS_KEY) or [None])[0],
         },
         reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
+        raw_response=(output.get(RAW_RESPONSES_KEY) or [None])[0],
+        request_settings=options,
     )
 
 
@@ -286,6 +292,8 @@ def _failed_rollout(
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
         diagnostics.update(error_category=error.category, request_id=error.request_id, status_code=error.status_code)
+        if error.message is not None:
+            diagnostics["error_message"] = error.message[:SERVER_ERROR_MESSAGE_CHARS]
     if interruption.grade.failure == GradingFailure.TIMEOUT:
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.

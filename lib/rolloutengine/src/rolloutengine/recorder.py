@@ -200,12 +200,12 @@ class _Recorder:
         conversation = self.conversation
         return (conversation is not None and conversation.has_turn) or any(record.steps for record in self.earlier)
 
-    def graded_messages(self) -> tuple[dict[str, Any], ...] | None:
-        """The chat of the last conversation that has a model turn, or ``None``."""
+    def graded_conversation(self) -> ConversationRecord | None:
+        """The last conversation that has a model turn, or ``None``."""
         conversation = self.conversation
         if conversation is not None and conversation.has_turn:
-            return tuple(conversation.messages)
-        return next((record.messages for record in reversed(self.earlier) if record.steps), None)
+            return conversation.record(self._incomplete())
+        return next((record for record in reversed(self.earlier) if record.steps), None)
 
     async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()

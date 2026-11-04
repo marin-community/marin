@@ -70,6 +70,12 @@ class ReasoningMarkupPolicy(StrEnum):
     REJECT = "reject"
 
 
+CHAT_TEMPLATE_KWARGS = "chat_template_kwargs"
+"""The request option that carries chat-template arguments."""
+ENABLE_THINKING = "enable_thinking"
+"""The chat-template argument that turns reasoning on or off."""
+
+
 class Source(BaseModel):
     """Pinned provenance for the source row and the importer that converted it."""
 
@@ -725,12 +731,19 @@ class SubmissionFailure(ValueError):
 
 @dataclass(frozen=True)
 class GradingAttempt:
-    """Captured trial evidence; state absence is distinct from captured JSON null."""
+    """Captured trial evidence; state absence is distinct from captured JSON null.
+
+    ``raw_responses`` holds each model turn's response decoded with its special tokens, when the
+    runtime recorded every one. ``request_settings`` are the request options the runtime sent with
+    the graded conversation, such as its ``chat_template_kwargs``.
+    """
 
     conversation: ConversationTrace
     files: Mapping[str, bytes] = field(default_factory=dict)
     state: StateSubmission | None = None
     stop_reason: str | None = None
+    raw_responses: tuple[str, ...] = ()
+    request_settings: Mapping[str, JsonValue] = field(default_factory=dict)
 
 
 JSON_VALUE = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))

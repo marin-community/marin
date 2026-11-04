@@ -91,6 +91,35 @@ An **answer** is the task’s semantic result, identified by `answer_type`. A **
 
 For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a `numeric` grader that expects `12`. The `PlainText`, `JsonAnswer`, and `AnswerCall` formats carry that answer as `12`, `{"answer":"12"}`, and a final `submit_answer({"answer":"12"})` call, respectively. Each extracts the string `12` for the same grader, which accepts both `12` and `12.0`. A task asking for a function call has `answer_type=native_action`; its context retains the conversation and its `final_tools` field describes the source functions. The grader and expected answer are never added to the model-visible input. Importers must make source output instructions agree with the task's answer format, or reject rows they cannot safely rewrite. A raw-output requirement in a source message would conflict with `JsonAnswer` or `AnswerCall`; `answer_type=text` alone cannot detect that conflict in prose.
 
+## Protocol checks
+
+Grading also asks whether an attempt followed the agent protocols its task implies, separately
+from whether its answer is right. `grade_task` and RolloutEngine add the result to
+`GradeResult.diagnostics["protocol"]`, keyed by check, without changing the reward. Each check
+reports `protocol_compliance`, `submission_completeness` and `answer_correctness` separately, plus
+a `label` naming what happened. A result the check does not assess is omitted. When the evidence
+cannot decide the check, the result carries `not_evaluable` with the reason instead.
+
+| Check | Applies when | Labels |
+| --- | --- | --- |
+| `required_file` | The task has a `file` answer with `output_paths` | `submitted`, `missing_file`, `empty_file` |
+| `tool_execution` | The task has `tool_bindings` | `executed`, `command_failed`, `no_invocation`, `markup_in_text`, `invalid_invocation`, `not_executed`, `executor_timeout`, `executor_failure` |
+| `thinking_disabled` | The request's `chat_template_kwargs` set `enable_thinking` to false | `respected`, `reasoning_emitted` |
+| `url_loading` | The task declares `fetch-v1` pages in `tool_providers` | `retrieved`, `http_error`, `network_error`, `not_attempted` |
+
+The required-file check reports only submission completeness, because writing the file is the
+protocol under test. A URL attempt that fails with an HTTP or network error still complies; the
+label records the failure. The thinking check searches each turn's response, decoded with its
+special tokens (`GradingAttempt.raw_responses`), for a reasoning delimiter, and is not evaluable
+when the runtime recorded none. `GradingAttempt.request_settings` holds the request options the
+runtime sent, which is how the check knows thinking was off.
+
+`taskcompendium.examples.protocol_probes` builds one minimal task per check, with nonce answers a
+model cannot guess, so on a probe `no_invocation` with a correct answer is a protocol failure by
+construction. On other tasks the labels describe tool and fetch usage. The dumped SkyRL evaluation
+rows keep each assessment under `verification.diagnostics.protocol`; aggregate rates from them.
+The [quick RL loop](../../docs/recipes/quick-rl-loop.md#train-and-evaluate) evaluates the probes.
+
 ## What can a task represent?
 
 ### Text answers
