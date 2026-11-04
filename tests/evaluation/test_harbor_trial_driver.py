@@ -409,6 +409,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
             "model_info": {"max_input_tokens": 64512, "max_output_tokens": 16384},
             "trajectory_config": {"raw_content": True},
         },
+        judge_model_identity="org/judge@revision",
         verifier_env={
             "OPENAI_API_KEY": "EMPTY",
             "OPENAI_BASE_URL": "https://judge.example/capability/v1",
@@ -420,8 +421,11 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
         "import json; "
         "from pathlib import Path; "
         "from pydantic import SecretStr; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        "from harbor_config import JobConfig; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay; "
+        f"policy=JobConfig.model_validate_json(Path({str(policy_path)!r}).read_text()); "
+        f"overlay=RuntimeOverlay.model_validate_json(Path({str(overlay_path)!r}).read_text()); "
+        "config=effective_job_config(policy, overlay); "
         "payload=config.model_dump(mode='json'); "
         "payload['verifier']['env']={key: (value.get_secret_value() if isinstance(value, SecretStr) else value) "
         "for key, value in config.verifier.env.items()}; "
@@ -453,7 +457,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     assert effective["verifier"]["env"] == {
         "OPENAI_API_KEY": "EMPTY",
         "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
-        "MODEL_NAME": "judge-model",
+        "MODEL_NAME": "org/judge@revision",
     }
 
 
@@ -497,8 +501,11 @@ def test_effective_acp_job_routes_model_requests_to_served_endpoint(tmp_path):
     )
     script = (
         "from pathlib import Path; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        "from harbor_config import JobConfig; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay; "
+        f"policy=JobConfig.model_validate_json(Path({str(policy_path)!r}).read_text()); "
+        f"overlay=RuntimeOverlay.model_validate_json(Path({str(overlay_path)!r}).read_text()); "
+        "config=effective_job_config(policy, overlay); "
         "print(config.model_dump_json())"
     )
     effective = json.loads(external_python("-c", script).stdout)
@@ -602,7 +609,8 @@ def test_agent_version_survives_preflight_and_runtime_overlay(
         from pathlib import Path
 
         from harbor.trial.simulated_user import validate_user_agent_version_pin
-        from marin.evaluation.harbor.trial_driver import effective_job_config, main
+        from harbor_config import JobConfig
+        from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay, main
 
         driver, requests, source, policy, overlay = sys.argv[1:]
         sys.argv = [driver, "preflight", requests]
@@ -611,8 +619,9 @@ def test_agent_version_survives_preflight_and_runtime_overlay(
             main()
         (validated,) = json.loads(output.getvalue())
         Path(policy).write_text(validated["stable_policy_json"])
-        effective = effective_job_config(Path(policy), Path(overlay))
-        raw_effective = effective_job_config(Path(source), Path(overlay))
+        parsed_overlay = RuntimeOverlay.model_validate_json(Path(overlay).read_text())
+        effective = effective_job_config(JobConfig.model_validate_json(Path(policy).read_text()), parsed_overlay)
+        raw_effective = effective_job_config(JobConfig.model_validate_json(Path(source).read_text()), parsed_overlay)
         # Exercise the same shared-container version check as trial startup.
         for config in (effective, raw_effective):
             if config.user_agent is not None:
@@ -683,9 +692,13 @@ def test_hosted_pi_accepts_effective_thinking_format(tmp_path, model_kwargs, pol
         from pathlib import Path
         from harbor.agents.factory import AgentFactory
         from harbor_config.models.agent.name import AgentName
-        from marin.evaluation.harbor.trial_driver import effective_job_config
+        from harbor_config import JobConfig
+        from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay
 
-        config = effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r}))
+        config = effective_job_config(
+            JobConfig.model_validate_json(Path({str(policy_path)!r}).read_text()),
+            RuntimeOverlay.model_validate_json(Path({str(overlay_path)!r}).read_text()),
+        )
         agent = config.agents[0]
         AgentFactory.create_agent_from_name(
             AgentName.PI,
@@ -749,8 +762,11 @@ def test_effective_terminus_job_applies_output_limit_to_llm_requests(tmp_path, p
     )
     script = (
         "from pathlib import Path; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        "from harbor_config import JobConfig; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay; "
+        f"policy=JobConfig.model_validate_json(Path({str(policy_path)!r}).read_text()); "
+        f"overlay=RuntimeOverlay.model_validate_json(Path({str(overlay_path)!r}).read_text()); "
+        "config=effective_job_config(policy, overlay); "
         "print(config.model_dump_json())"
     )
 
@@ -777,8 +793,11 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
     script = (
         "import json; "
         "from pathlib import Path; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        "from harbor_config import JobConfig; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay; "
+        f"policy=JobConfig.model_validate_json(Path({str(policy_path)!r}).read_text()); "
+        f"overlay=RuntimeOverlay.model_validate_json(Path({str(overlay_path)!r}).read_text()); "
+        "config=effective_job_config(policy, overlay); "
         'print(json.dumps({"api_base": config.agents[0].kwargs["api_base"], '
         '"job_dir": str(config.jobs_dir / config.job_name), '
         '"serialized": config.model_dump(mode="json")}))'
@@ -837,8 +856,11 @@ def test_effective_candidate_endpoint_stays_on_host_for_installed_agents(tmp_pat
         """
         import json, sys
         from pathlib import Path
-        from marin.evaluation.harbor.trial_driver import effective_job_config
-        config = effective_job_config(Path(sys.argv[1]), Path(sys.argv[2]))
+        from harbor_config import JobConfig
+        from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay
+        policy = JobConfig.model_validate_json(Path(sys.argv[1]).read_text())
+        overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[2]).read_text())
+        config = effective_job_config(policy, overlay)
         agent = config.agents[0].model_dump(mode='python')
         agent['env'] = dict(config.agents[0].env)
         print(json.dumps({
@@ -896,8 +918,11 @@ def test_candidate_routing_matches_factory_when_name_and_import_path_are_both_se
         import json, sys
         from pathlib import Path
         from harbor.agents.factory import AgentFactory
-        from marin.evaluation.harbor.trial_driver import effective_job_config
-        config = effective_job_config(Path(sys.argv[1]), Path(sys.argv[2]))
+        from harbor_config import JobConfig
+        from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay
+        policy = JobConfig.model_validate_json(Path(sys.argv[1]).read_text())
+        overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[2]).read_text())
+        config = effective_job_config(policy, overlay)
         agent = AgentFactory.create_agent_from_config(config.agents[0], logs_dir=Path(sys.argv[3]))
         print(json.dumps({'selected_class': type(agent).__name__, 'endpoint': config.agents[0].kwargs['api_base']}))
     """

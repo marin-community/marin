@@ -127,12 +127,12 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
         api_base: str | None = None,
         model_info: dict[str, Any] | None = None,
         collect_rollout_details: bool = False,
+        extra_env: dict[str, str] | None = None,
         **kwargs,
     ):
-        if (
-            os.environ.get("CLAUDE_CODE_USE_BEDROCK", "").strip() == "1"
-            or os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "").strip()
-        ):
+        if (extra_env or {}).get("CLAUDE_CODE_USE_BEDROCK", "").strip() == "1" or (
+            extra_env or {}
+        ).get("AWS_BEARER_TOKEN_BEDROCK", "").strip():
             raise ValueError(
                 "Installed Claude cannot receive AWS credentials; use a host-side model proxy"
             )
@@ -148,7 +148,7 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
         )
         self.memory_dir = memory_dir
         self._acp_claude_executable: str | None = None
-        super().__init__(logs_dir, *args, **kwargs)
+        super().__init__(logs_dir, *args, extra_env=extra_env, **kwargs)
 
     def get_version_command(self) -> str | None:
         return 'export PATH="$HOME/.local/bin:$PATH"; claude --version'

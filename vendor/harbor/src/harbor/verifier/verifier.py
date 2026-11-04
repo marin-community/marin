@@ -12,7 +12,6 @@ from harbor.models.task.task import Task
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
-from harbor.utils.env import resolve_env_vars
 from harbor.utils.scripts import (
     build_execution_command,
     needs_chmod,

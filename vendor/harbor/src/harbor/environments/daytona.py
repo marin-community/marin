@@ -24,11 +24,7 @@ from harbor.environments.docker_translate import COMPOSE_FILENAMES
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.runtime import HostCapabilities
-from harbor.environments.model_relay import (
-    CANDIDATE_MODEL_RELAY_PORT,
-    MODEL_RELAY_PORT,
-    ModelRelay,
-)
+from harbor.environments.model_relay import ModelRelay, start_model_relays
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
@@ -38,7 +34,6 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
 )
-from shellbox.http_service import serve_http
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import MachineSpec, NetworkPolicy
 from shellbox.process_session import (
@@ -175,53 +170,28 @@ class DaytonaEnvironment(BaseEnvironment):
             memory_mb=self._effective_memory_mb,
             storage_mb=self._effective_storage_mb,
         )
-        if (self.model_endpoint is None) != (self.model_name is None):
-            raise ValueError(
-                "Daytona model capability requires a host endpoint and model"
-            )
-        if (self.candidate_model_endpoint is None) != (
-            self.candidate_model_name is None
-        ):
-            raise ValueError(
-                "Daytona candidate capability requires a host endpoint and model"
-            )
+        judge = ModelRelay.from_endpoint(
+            self.model_endpoint,
+            self.model_name,
+            authentication=self.host_capabilities.model_authentication,
+        )
+        candidate = ModelRelay.from_endpoint(
+            self.candidate_model_endpoint,
+            self.candidate_model_name,
+            authentication=self.host_capabilities.model_authentication,
+        )
         self._stopping = None
         self.machine = await acquire_owned(
             asyncio.create_task(self.factory.create(spec))
         )
         try:
-            if self.model_endpoint is not None:
-                assert self.model_name is not None
-                await self._relay.enter_async_context(
-                    serve_http(
-                        self.machine,
-                        ModelRelay(
-                            self.model_endpoint,
-                            self.model_name,
-                            api_key=self.host_capabilities.model_authentication.get(
-                                self.model_endpoint, "EMPTY"
-                            ),
-                        ).handle,
-                        port=MODEL_RELAY_PORT,
-                        task_group=service_tasks,
-                    )
-                )
-            if self.candidate_model_endpoint is not None:
-                assert self.candidate_model_name is not None
-                await self._relay.enter_async_context(
-                    serve_http(
-                        self.machine,
-                        ModelRelay(
-                            self.candidate_model_endpoint,
-                            self.candidate_model_name,
-                            api_key=self.host_capabilities.model_authentication.get(
-                                self.candidate_model_endpoint, "EMPTY"
-                            ),
-                        ).handle,
-                        port=CANDIDATE_MODEL_RELAY_PORT,
-                        task_group=service_tasks,
-                    )
-                )
+            await start_model_relays(
+                self.machine,
+                self._relay,
+                service_tasks,
+                judge=judge,
+                candidate=candidate,
+            )
             targets = self._mount_targets(writable_only=True)
             if targets:
                 result = await self.exec(

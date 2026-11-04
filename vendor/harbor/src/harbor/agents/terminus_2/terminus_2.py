@@ -703,6 +703,7 @@ class Terminus2(BaseAgent):
     async def cleanup(self, environment: BaseEnvironment) -> None:
         if self._session is not None:
             await self._session.close()
+            self._session = None
 
     def _get_parser(self) -> TerminusResponseParser:
         """Return the appropriate parser instance for this format."""
@@ -2596,7 +2597,7 @@ so ask everything you need to know."""
         self._context = context
 
         if self._session is None:
-            raise RuntimeError("Session is not set")
+            await self.setup(environment)
 
         # Get the terminal state for the initial prompt
         terminal_state = self._limit_output_length(

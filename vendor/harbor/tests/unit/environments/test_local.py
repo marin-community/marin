@@ -305,8 +305,8 @@ async def test_local_candidate_and_judge_relays_route_independently_without_gues
     async with asyncio.TaskGroup() as service_tasks:
         (tmp_path / "environment").mkdir()
         candidate_port, judge_port = available_port(), available_port()
-        monkeypatch.setattr(local, "CANDIDATE_MODEL_RELAY_PORT", candidate_port)
-        monkeypatch.setattr(local, "MODEL_RELAY_PORT", judge_port)
+        monkeypatch.setattr(model_relay, "CANDIDATE_MODEL_RELAY_PORT", candidate_port)
+        monkeypatch.setattr(model_relay, "MODEL_RELAY_PORT", judge_port)
         monkeypatch.setenv("OPENAI_API_KEY", "unforwarded-host-secret")
         original_client = httpx.AsyncClient
 
@@ -384,7 +384,7 @@ async def test_local_interrupted_command_preserves_task_until_trial_cleanup(
 ):
     async with asyncio.TaskGroup() as service_tasks:
         (tmp_path / "environment").mkdir()
-        monkeypatch.setattr(local, "CANDIDATE_MODEL_RELAY_PORT", available_port())
+        monkeypatch.setattr(model_relay, "CANDIDATE_MODEL_RELAY_PORT", available_port())
         io_started = asyncio.Event()
         blocked_command = Command(
             (sys.executable, "-c", "import signal; signal.pause()")

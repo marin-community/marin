@@ -3,17 +3,40 @@
 
 """Relay task-local model requests to a fixed, host-authenticated endpoint."""
 
+import asyncio
 import json
+from collections.abc import Mapping
+from contextlib import AsyncExitStack
 
 import httpx
 
 from harbor.llms.vllm_tokenization import tokenize_url
 from harbor.models.agent.model_api import ModelAPI
-from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse
+from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
+from shellbox.machine import Machine
 
 MODEL_RELAY_PORT = 8787
 CANDIDATE_MODEL_RELAY_PORT = 8788
 SUPPORTED_MODEL_APIS = frozenset({ModelAPI.OPENAI_CHAT})
+
+
+async def start_model_relays(
+    machine: Machine,
+    stack: AsyncExitStack,
+    service_tasks: asyncio.TaskGroup,
+    *,
+    judge: "ModelRelay | None",
+    candidate: "ModelRelay | None",
+) -> None:
+    """Enter role relays whose contexts and service tasks belong to the caller."""
+    for relay, port in (
+        (judge, MODEL_RELAY_PORT),
+        (candidate, CANDIDATE_MODEL_RELAY_PORT),
+    ):
+        if relay is not None:
+            await stack.enter_async_context(
+                serve_http(machine, relay.handle, port=port, task_group=service_tasks)
+            )
 
 
 class ModelRelay:
@@ -26,6 +49,21 @@ class ModelRelay:
         self.endpoint = endpoint
         self.model = model.removeprefix("together_ai/")
         self._api_key = api_key
+
+    @classmethod
+    def from_endpoint(
+        cls,
+        endpoint: str | None,
+        model: str | None,
+        *,
+        authentication: Mapping[str, str],
+    ) -> "ModelRelay | None":
+        """Resolve an optional relay before allocating its guest environment."""
+        if endpoint is None and model is None:
+            return None
+        if endpoint is None or model is None:
+            raise ValueError("Model relay requires a host endpoint and model")
+        return cls(endpoint, model, api_key=authentication.get(endpoint, "EMPTY"))
 
     async def handle(self, request: HttpRequest) -> HttpResponse:
         if request.method != "POST" or request.path not in {

@@ -12,7 +12,6 @@ from pathlib import Path
 import httpx
 
 from harbor.environments.runtime import HostCapabilities
-from harbor.environments import local
 from harbor.environments.local import LocalEnvironment
 from harbor.environments import model_relay
 from tests.unit.environments.transport import ProcessMachine, available_port
@@ -87,7 +86,7 @@ class ProcessTaskFactory:
 
 def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypatch):
     runtime_port, relay_port = available_port(), available_port()
-    monkeypatch.setattr(local, "MODEL_RELAY_PORT", relay_port)
+    monkeypatch.setattr(model_relay, "MODEL_RELAY_PORT", relay_port)
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "storage-private-canary")
     monkeypatch.setenv("OPENAI_API_KEY", "wrong-ambient-provider-key")
     environment_dir = tmp_path / "environment"

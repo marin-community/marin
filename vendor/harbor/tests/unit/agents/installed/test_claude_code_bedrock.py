@@ -17,4 +17,22 @@ def test_installed_claude_refuses_cloud_credentials_before_agent_setup(
     monkeypatch.setenv(selector, "1")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "storage-private-canary")
     with pytest.raises(ValueError, match="host-side model proxy"):
-        ClaudeCode(logs_dir=tmp_path, model_name="bedrock/model")
+        ClaudeCode(
+            logs_dir=tmp_path, model_name="bedrock/model", extra_env={selector: "1"}
+        )
+
+
+@pytest.mark.parametrize(
+    "selector", ["CLAUDE_CODE_USE_BEDROCK", "AWS_BEARER_TOKEN_BEDROCK"]
+)
+def test_host_bedrock_settings_do_not_reject_an_explicit_proxy(
+    tmp_path, monkeypatch, selector
+):
+    monkeypatch.setenv(selector, "host-only-value")
+    monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+    ClaudeCode(
+        logs_dir=tmp_path,
+        model_name="hosted_vllm/model",
+        api_base="http://127.0.0.1:8788/v1",
+        extra_env={"ANTHROPIC_API_KEY": "EMPTY"},
+    )

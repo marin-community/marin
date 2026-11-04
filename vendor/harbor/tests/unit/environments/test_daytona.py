@@ -29,7 +29,7 @@ from harbor.agents.terminus_2.tmux_session import (
     TmuxKeystrokeBatch,
     TmuxSession,
 )
-from harbor.environments import daytona, model_relay
+from harbor.environments import model_relay
 from harbor.environments.daytona import DaytonaEnvironment
 from harbor.environments.local import LocalEnvironment
 from harbor.environments.model_relay import ModelRelay
@@ -158,7 +158,7 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
     tmp_path, monkeypatch
 ):
     port = available_port()
-    monkeypatch.setattr(daytona, "MODEL_RELAY_PORT", port)
+    monkeypatch.setattr(model_relay, "MODEL_RELAY_PORT", port)
     monkeypatch.setenv("TOGETHER_API_KEY", "host-provider-private")
     task_dir = tmp_path / "task"
     (task_dir / "environment").mkdir(parents=True)
@@ -277,8 +277,8 @@ async def test_installed_candidate_relay_buffers_sdk_events_and_keeps_judge_sepa
         environment_dir = tmp_path / "environment"
         environment_dir.mkdir()
         candidate_port, judge_port = available_port(), available_port()
-        monkeypatch.setattr(daytona, "CANDIDATE_MODEL_RELAY_PORT", candidate_port)
-        monkeypatch.setattr(daytona, "MODEL_RELAY_PORT", judge_port)
+        monkeypatch.setattr(model_relay, "CANDIDATE_MODEL_RELAY_PORT", candidate_port)
+        monkeypatch.setattr(model_relay, "MODEL_RELAY_PORT", judge_port)
         original_client = httpx.AsyncClient
         completion = {
             "id": "completion-one",

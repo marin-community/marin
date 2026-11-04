@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from harbor.agents.base import BaseAgent
-from harbor.environments import local
+from harbor.environments import local, model_relay
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
@@ -140,7 +140,7 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
         ]
     )
     monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: next(factories))
-    monkeypatch.setattr(local, "CANDIDATE_MODEL_RELAY_PORT", available_port())
+    monkeypatch.setattr(model_relay, "CANDIDATE_MODEL_RELAY_PORT", available_port())
     victim = await Trial.create(
         trial_config(
             tmp_path, "relay-victim", guest_root=tmp_path / "victim", waiting=True

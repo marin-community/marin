@@ -11,7 +11,6 @@ from harbor.utils.scripts import (
 )
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
-from harbor.utils.env import resolve_env_vars
 
 
 class OracleAgent(BaseAgent):

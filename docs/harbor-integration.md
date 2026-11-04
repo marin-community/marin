@@ -614,3 +614,8 @@ Each attempt commits its native result, trajectory, and trajectory-presence meta
 FineStore transaction. A result is terminal only after the trial's service task group and
 environment cleanup finish. Resume can repair a partial archive from terminal native files;
 missing required evidence fails the run and leaves the archive unsealed.
+
+Tau3's ACP bridge retains `agent/bridge-trajectory.json` as a raw ACPX export in the trial
+directory. It does not currently convert that export to Harbor's ATIF `agent/trajectory.json`.
+Those trials have scored samples and explicit trajectory absence in FineStore, with no derived
+step or rollout rows. This is separate from recovering a missing declared ATIF trajectory.

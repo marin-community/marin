@@ -93,10 +93,15 @@ def test_runtime_alias_change_preserves_identity_and_rejects_different_model(tmp
         from harbor.agents.factory import AgentFactory
         from harbor.models.trial.config import TrialConfig, TaskConfig
         from harbor.models.job.reconciliation import trial_identity_key, classify_trial_plan_mismatches
-        from marin.evaluation.harbor.trial_driver import effective_job_config
+        from harbor_config import JobConfig
+        from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay
 
         policy, *overlays = map(Path, sys.argv[1:])
-        configs = [effective_job_config(policy, overlay) for overlay in overlays]
+        parsed_policy = JobConfig.model_validate_json(policy.read_text())
+        configs = [
+            effective_job_config(parsed_policy, RuntimeOverlay.model_validate_json(overlay.read_text()))
+            for overlay in overlays
+        ]
         trials = [
             TrialConfig(task=TaskConfig(path=Path('/tasks/problem')), agent=config.agents[0]) for config in configs
         ]

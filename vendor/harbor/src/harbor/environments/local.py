@@ -21,18 +21,13 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.execution import execute_shellbox_command
-from harbor.environments.model_relay import (
-    CANDIDATE_MODEL_RELAY_PORT,
-    MODEL_RELAY_PORT,
-    ModelRelay,
-)
+from harbor.environments.model_relay import ModelRelay, start_model_relays
 from harbor.environments.docker_translate import import_prepared_task
 from harbor.environments.resource_policies import validate_local_resources
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.config import ResourceMode
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.local.machine import LocalMachine, LocalMachineFactory
-from shellbox.http_service import serve_http
 from shellbox.machine import Command, CommandSemantics
 from shellbox.process_session import (
     acquire_owned,
@@ -181,17 +176,19 @@ class LocalEnvironment(BaseEnvironment):
             "OPENAI_BASE_URL" in container.machine.env
             for container in task_spec.containers
         )
-        if (self.model_endpoint is None) != (self.model_name is None):
-            raise ValueError("Task model capability requires a host endpoint and model")
-        if needs_model and self.model_endpoint is None:
+        judge = ModelRelay.from_endpoint(
+            self.model_endpoint,
+            self.model_name,
+            authentication=self.host_capabilities.model_authentication,
+        )
+        candidate = ModelRelay.from_endpoint(
+            self.candidate_model_endpoint,
+            self.candidate_model_name,
+            authentication=self.host_capabilities.model_authentication,
+        )
+        if needs_model and judge is None:
             raise ValueError(
                 "Task model calls require an explicit hosted judge (--judge-model) or standalone host model endpoint"
-            )
-        if (self.candidate_model_endpoint is None) != (
-            self.candidate_model_name is None
-        ):
-            raise ValueError(
-                "Prepared sandbox candidate capability requires a host endpoint and model"
             )
         self._stopping = None
         self.factory.check_environment(
@@ -203,38 +200,13 @@ class LocalEnvironment(BaseEnvironment):
         self.execution = execution
         self.machine = cast(LocalMachine, execution.primary)
         try:
-            if self.model_endpoint is not None:
-                assert self.model_name is not None
-                await self._relay.enter_async_context(
-                    serve_http(
-                        self.machine,
-                        ModelRelay(
-                            self.model_endpoint,
-                            self.model_name,
-                            api_key=self.host_capabilities.model_authentication.get(
-                                self.model_endpoint, "EMPTY"
-                            ),
-                        ).handle,
-                        port=MODEL_RELAY_PORT,
-                        task_group=service_tasks,
-                    )
-                )
-            if self.candidate_model_endpoint is not None:
-                assert self.candidate_model_name is not None
-                await self._relay.enter_async_context(
-                    serve_http(
-                        self.machine,
-                        ModelRelay(
-                            self.candidate_model_endpoint,
-                            self.candidate_model_name,
-                            api_key=self.host_capabilities.model_authentication.get(
-                                self.candidate_model_endpoint, "EMPTY"
-                            ),
-                        ).handle,
-                        port=CANDIDATE_MODEL_RELAY_PORT,
-                        task_group=service_tasks,
-                    )
-                )
+            await start_model_relays(
+                self.machine,
+                self._relay,
+                service_tasks,
+                judge=judge,
+                candidate=candidate,
+            )
             await execution.wait_ready()
             for name, path in plan.service_log_paths:
                 result = await execution.containers[name].run(
