@@ -24,6 +24,7 @@ import torch
 from megatron.bridge import AutoBridge
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.transformer.module import Float16Module
+from omegaconf import open_dict
 from ray.util.placement_group import placement_group
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from transformers import AutoTokenizer
@@ -32,6 +33,7 @@ import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Gr
 from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, _offloaded_muon_direction_in_grad_
 from skyrl_train.distributed.megatron.megatron_utils import load_megatron_optimizer, offload_megatron_optimizer
+from skyrl_train.distributed.megatron.optimizer import HybridDeviceOptimizer
 from skyrl_train.inference_engines.base import InferenceEngineInput
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
@@ -465,40 +467,48 @@ def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path):
     model_path = tmp_path / "model"
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
-    cfg = _config(str(model_path), world_size=world_size, pp=2, ep=1)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     batch = _padded_batch(tokenizer.pad_token_id)
-    export_dir = tmp_path / "export"
-    initialize_ray(cfg)
-    try:
-        policy = _init_policy(cfg, world_size)
-        names = [*PARAMETER_NAMES, *BIAS_NAMES]
-        original = GrugMoeForCausalLM.from_pretrained(model_path, dtype=torch.float32).state_dict()
-        before = rank0_validation_snapshot(policy, names)
-        for name in PARAMETER_NAMES:
-            # Megatron holds bf16 parameters; the fp32 checkpoint rounds once on load.
-            torch.testing.assert_close(before[name], original[name].to(torch.bfloat16).float(), rtol=0, atol=0)
-        for name in BIAS_NAMES:
-            torch.testing.assert_close(before[name], original[name].float(), rtol=0, atol=0)
+    names = [*PARAMETER_NAMES, *BIAS_NAMES]
+    original = GrugMoeForCausalLM.from_pretrained(model_path, dtype=torch.float32).state_dict()
+    results = []
+    for checkpoint_cpu_offload in (False, True):
+        cfg = _config(str(model_path), world_size=world_size, pp=2, ep=1)
+        with open_dict(cfg.trainer.policy.megatron_config.transformer_config_kwargs):
+            cfg.trainer.policy.megatron_config.transformer_config_kwargs.grug_checkpoint_cpu_offload = (
+                checkpoint_cpu_offload
+            )
+        export_dir = tmp_path / ("checkpoint_cpu" if checkpoint_cpu_offload else "device")
+        initialize_ray(cfg)
+        try:
+            policy = _init_policy(cfg, world_size)
+            before = rank0_validation_snapshot(policy, names)
+            for name in PARAMETER_NAMES:
+                # Megatron holds bf16 parameters; the fp32 checkpoint rounds once on load.
+                torch.testing.assert_close(before[name], original[name].to(torch.bfloat16).float(), rtol=0, atol=0)
+            for name in BIAS_NAMES:
+                torch.testing.assert_close(before[name], original[name].float(), rtol=0, atol=0)
 
-        _train_step(policy, batch)
-        after = rank0_validation_snapshot(policy, names)
-        for name in PARAMETER_NAMES:
-            assert not torch.equal(after[name], before[name]), f"{name} did not update"
-        for name in BIAS_NAMES:
-            torch.testing.assert_close(after[name], before[name], rtol=0, atol=0)
+            status = _train_step(policy, batch)
+            after = rank0_validation_snapshot(policy, names)
+            for name in PARAMETER_NAMES:
+                assert not torch.equal(after[name], before[name]), f"{name} did not update"
+            for name in BIAS_NAMES:
+                torch.testing.assert_close(after[name], before[name], rtol=0, atol=0)
 
-        post_update = _megatron_response_logprobs(policy, batch)
-        ray.get(policy.async_run_ray_method("pass_through", "save_hf_model", str(export_dir), tokenizer))
-        exported = GrugMoeForCausalLM.from_pretrained(export_dir, dtype=torch.float32).state_dict()
-        for name in names:
-            torch.testing.assert_close(exported[name].float(), after[name], rtol=0, atol=0)
-        assert all(exported[name].dtype == torch.float32 for name in BIAS_NAMES)
-        policy.kill_actors()
-        reloaded = _hf_response_logprobs_direct(str(export_dir), batch)
-        _assert_logprobs_close(post_update, reloaded, batch["response_mask"])
-    finally:
-        ray.shutdown()
+            post_update = _megatron_response_logprobs(policy, batch)
+            ray.get(policy.async_run_ray_method("pass_through", "save_hf_model", str(export_dir), tokenizer))
+            exported = GrugMoeForCausalLM.from_pretrained(export_dir, dtype=torch.float32).state_dict()
+            for name in names:
+                torch.testing.assert_close(exported[name].float(), after[name], rtol=0, atol=0)
+            assert all(exported[name].dtype == torch.float32 for name in BIAS_NAMES)
+            policy.kill_actors()
+            reloaded = _hf_response_logprobs_direct(str(export_dir), batch)
+            _assert_logprobs_close(post_update, reloaded, batch["response_mask"])
+            results.append({"loss": status["policy_loss"], "weights": exported, "logprobs": post_update})
+        finally:
+            ray.shutdown()
+    torch.testing.assert_close(results[1], results[0], rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.vllm
@@ -646,6 +656,51 @@ def _idle_pinned_host_bytes(_worker) -> int:
     """Pinned host memory that PyTorch's caching allocator holds but no tensor uses."""
     stats = torch.cuda.host_memory_stats()
     return stats["allocated_bytes.current"] - stats["active_bytes.current"]
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_cpu_offloaded_optimizer_load_does_not_stage_moments_on_cuda(dtype):
+    require_hoppers(1)
+    torch.manual_seed(19)
+    parameters = [torch.nn.Parameter(torch.randn(1024, 1024, device="cuda", dtype=dtype)) for _ in range(4)]
+    optimizer = HybridDeviceOptimizer(
+        parameters,
+        offload_fraction=1.0,
+        cpu_optimizer_cls=torch.optim.AdamW,
+        gpu_optimizer_cls=torch.optim.AdamW,
+        param_update_in_fp32=True,
+        overlap_cpu_optimizer_d2h_h2d=False,
+        lr=1e-3,
+    )
+    for parameter in parameters:
+        parameter.grad = torch.randn_like(parameter)
+    optimizer.step()
+    torch.cuda.synchronize()
+    saved_weights = [parameter.detach().cpu().clone() for parameter in parameters]
+    saved_state = copy.deepcopy(optimizer.state_dict())
+    for parameter in parameters:
+        parameter.grad = torch.randn_like(parameter)
+    optimizer.step()
+    torch.cuda.synchronize()
+    expected = [parameter.detach().cpu().clone() for parameter in parameters]
+
+    with torch.no_grad():
+        for parameter, saved in zip(parameters, saved_weights, strict=True):
+            parameter.copy_(saved)
+    torch.cuda.synchronize()
+    allocated = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+    optimizer.load_state_dict(saved_state)
+    torch.cuda.synchronize()
+    extra_allocated = torch.cuda.max_memory_allocated() - allocated
+    # Rebuilding CPU parameter copies can clone one shard on CUDA, but loading
+    # all moments on CUDA would require at least eight FP32 shards.
+    assert extra_allocated <= 2 * parameters[0].numel() * torch.float32.itemsize
+
+    optimizer.step()
+    torch.cuda.synchronize()
+    for parameter, continued in zip(parameters, expected, strict=True):
+        torch.testing.assert_close(parameter.cpu(), continued, rtol=0, atol=0)
 
 
 def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):

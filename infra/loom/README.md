@@ -5,8 +5,8 @@ retained Hyperdisk root disk, Artifact Registry repository, Secret Manager
 access, and Cloudflare DNS. The production host is an on-demand C4D VM with an
 AMD Turin CPU. It uses NVMe for its boot disk and gVNIC for networking, as
 required by the machine family. Hyperdisk performance is pinned to the included
-3,000 IOPS and 140 MB/s baseline. The runtime is built from the operator's local
-Loom worktree and runs as a Docker Compose application on the GCE host.
+3,000 IOPS and 140 MB/s baseline. The operator's workstation builds the release
+image, and the GCE host runs it as a Docker Compose application.
 
 ## Prerequisites
 
@@ -41,10 +41,11 @@ gcloud compute ssh loom --zone=us-central1-a --project=hai-gcp-models
 ## Deploy
 
 By default, Pulumi resolves the HEAD of Loom's default branch to its full commit
-SHA and uses that immutable Git context as the image input. When the resolved
-commit changes, preview reports an image update. `pulumi up` builds and pushes
-the changed image, places the provider-produced digest in VM metadata, and waits
-for `https://loom.oa.dev/api/ready` after activation.
+SHA and uses that immutable Git context as the image input. The build pulls
+current base images, so every update rebuilds the image, even for an unchanged
+commit. When preview skips that build, it shows the VM image as unknown.
+`pulumi up` builds and pushes the image, places the provider-produced digest in
+VM metadata, and waits for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
 cd /path/to/marin

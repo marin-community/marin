@@ -321,7 +321,7 @@ jobs:
                 timeout --kill-after=5 --signal=TERM 2090 \
                 uv run --package marin-levanter --frozen --group test --extra tpu \
                 pytest -n 0 $TPU_TEST_PATHS \
-                -m 'tpu and not slow and not torch and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' \
+                -m '(tpu or multidevice) and not slow and not torch and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' \
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
                 [ "\$status" -eq 5 ] && exit 0; \
                 exit "\$status" )"
