@@ -45,6 +45,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.egress import parse_egress_rules
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
@@ -226,6 +227,14 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
         f"Expected a known variant (e.g., H100), VARIANTxCOUNT (e.g., H100x8), "
         f"or a bare count (e.g., 8). Known variants: {known}"
     )
+
+
+def _validate_egress_allow(ctx: click.Context, param: click.Parameter, value: tuple[str, ...]) -> tuple[str, ...]:
+    try:
+        parse_egress_rules(value)
+    except ValueError as e:
+        raise click.BadParameter(str(e)) from e
+    return value
 
 
 def _find_closest(value: str, known: set[str]) -> str | None:
@@ -573,6 +582,7 @@ def run_iris_job(
     replicas: int | None = None,
     max_retries: int = 0,
     timeout: int = 0,
+    termination_grace: int | None = None,
     extras: list[str] | None = None,
     setup_scripts: list[str] | None = None,
     sync_packages: list[str] | None = None,
@@ -586,6 +596,7 @@ def run_iris_job(
     task_image: str | None = None,
     container_profile: str | None = None,
     egress_policy: str | None = None,
+    egress_allow: Sequence[str] = (),
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -704,6 +715,7 @@ def run_iris_job(
         replicas=replicas,
         max_retries=max_retries,
         timeout=timeout,
+        termination_grace=termination_grace,
         wait=wait,
         extras=extras,
         setup_scripts=setup_scripts,
@@ -715,6 +727,7 @@ def run_iris_job(
         priority_band=priority_band,
         container_profile=profile,
         egress_policy=egress,
+        egress_allow=egress_allow,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -734,6 +747,7 @@ def _submit_and_wait_job(
     max_retries: int,
     timeout: int,
     wait: bool,
+    termination_grace: int | None = None,
     extras: list[str] | None = None,
     setup_scripts: list[str] | None = None,
     sync_packages: list[str] | None = None,
@@ -744,6 +758,7 @@ def _submit_and_wait_job(
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
     egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+    egress_allow: Sequence[str] = (),
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -785,10 +800,12 @@ def _submit_and_wait_job(
         max_retries_failure=max_retries,
         max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
+        termination_grace=Duration.from_seconds(termination_grace) if termination_grace is not None else None,
         user=user,
         priority_band=priority_band,
         container_profile=container_profile,
         egress_policy=egress_policy,
+        egress_allow=egress_allow,
         submit_argv=submit_argv,
         task_image=task_image,
     )
@@ -929,6 +946,12 @@ Examples:
 )
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
+@click.option(
+    "--termination-grace",
+    type=int,
+    default=None,
+    help="Graceful SIGTERM shutdown budget in seconds (1-110; default: controller setting).",
+)
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option(
@@ -1013,9 +1036,25 @@ Examples:
     type=click.Choice(EGRESS_POLICY_NAMES, case_sensitive=False),
     default=None,
     help=(
-        "What the job's network reaches (default: EGRESS_POLICY_INTERNET for SANDBOX, "
-        "EGRESS_POLICY_CLUSTER otherwise). INTERNET reaches public addresses only and NONE "
-        "nothing; neither reaches the controller, so the task cannot launch child jobs."
+        "What the job's network reaches (default: the parent job's policy, else the cluster's: "
+        "INTERNET for SANDBOX, ALLOWLIST where the cluster's allowlist is the default, CLUSTER "
+        "otherwise). CLUSTER is unrestricted. ALLOWLIST reaches Iris services, other tasks and "
+        "allowlisted destinations; a cluster that cannot enforce it runs the job under CLUSTER. "
+        "INTERNET reaches public addresses only and NONE nothing; "
+        "neither reaches the controller, so the task cannot launch child jobs."
+    ),
+)
+@click.option(
+    "--egress-allow",
+    "egress_allow",
+    multiple=True,
+    metavar="DEST[:PORT[,PORT...]]",
+    callback=_validate_egress_allow,
+    help=(
+        "Repeatable. A destination the job needs beyond the cluster allowlist: a "
+        "domain (api.openai.com), a one-label wildcard (*.openai.com) or a CIDR "
+        "(203.0.113.0/24), optionally limited to TCP ports. Applies when the job runs under "
+        "EGRESS_POLICY_ALLOWLIST, by default or by --egress-policy."
     ),
 )
 @click.option(
@@ -1061,6 +1100,7 @@ def run(
     replicas: int | None,
     max_retries: int,
     timeout: int,
+    termination_grace: int | None,
     region: tuple[str, ...],
     zone: str | None,
     target_cluster: str | None,
@@ -1074,6 +1114,7 @@ def run(
     task_image: str | None,
     container_profile: str | None,
     egress_policy: str | None,
+    egress_allow: tuple[str, ...],
     cancel_on_exit: bool,
     include: tuple[str, ...],
     exclude: tuple[str, ...],
@@ -1128,6 +1169,7 @@ def run(
             replicas=replicas,
             max_retries=max_retries,
             timeout=timeout,
+            termination_grace=termination_grace,
             extras=list(extra),
             setup_scripts=[] if no_sync else None,
             sync_packages=list(sync_package),
@@ -1141,6 +1183,7 @@ def run(
             task_image=task_image,
             container_profile=container_profile,
             egress_policy=egress_policy,
+            egress_allow=egress_allow,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,

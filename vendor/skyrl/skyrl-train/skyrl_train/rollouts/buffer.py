@@ -376,9 +376,10 @@ class RollingBatchPolicy:
 
     A batch never waits for a slow group: it takes the first groups to commit after the previous batch filled. Groups
     that generate quickly therefore train sooner and at lower staleness than slow ones, and a group that would train
-    more than ``max_staleness_steps`` after its lease's policy step is discarded and its prompt regenerated. A prompt
-    whose rollouts outlast that window never trains, and for others the regenerated groups that do train are the ones
-    that happened to finish quickly.
+    more than ``max_staleness_steps`` after its lease's policy step is discarded and its prompt returned to the prompt
+    loader, which regenerates it up to ``max_stale_retries`` times in a row. A prompt whose rollouts outlast that
+    window never trains, and for others the regenerated groups that do train are the ones that happened to finish
+    quickly.
     """
 
     config: RolloutBufferConfig

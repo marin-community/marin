@@ -4,10 +4,9 @@
 """Build lazy evaluation and report artifacts."""
 
 import logging
-import tempfile
 import uuid
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import cast
 
 from fray.cluster import ResourceConfig
@@ -29,7 +28,6 @@ from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalResults, LmEvalRun, run_lm_eval
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.runner import EndpointRoute, run_evaluation
 from marin.evaluation.serving_config import inference_config_for_model
@@ -38,7 +36,6 @@ from marin.execution.artifact import result_type_name
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
-from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import remote_inference
 from marin.training.training import LevanterCheckpoint
 
@@ -64,14 +61,6 @@ class EvalchemyEvalConfig:
 class _EvalReportConfig:
     entries: tuple[ReportEntry, ...]
     out_path: str
-
-
-@dataclass(frozen=True)
-class _LmEvalStepConfig:
-    inference: RemoteInferenceConfig
-    packages: tuple[str, ...]
-    eval_run: LmEvalRun
-    results_path: str
 
 
 def _durable_output_dir(output_dir: str | None, run_id: str) -> str:
@@ -244,70 +233,4 @@ def eval_report(
         run=run,
         build_config=build_config,
         deps=deps,
-    )
-
-
-def run_served_lm_eval(
-    inference: RemoteInferenceConfig,
-    eval_run: LmEvalRun,
-    output_path: str,
-) -> None:
-    """Serve a model for one lm-eval run and upload its durable result tree."""
-    with tempfile.TemporaryDirectory() as local_output:
-        with remote_inference(inference) as session:
-            run_lm_eval(session.model, eval_run, local_output)
-        StoragePath(output_path).upload_from(local_output + "/", recursive=True)
-
-
-def lm_eval_step(
-    inference: RemoteInferenceConfig,
-    eval_run: LmEvalRun,
-    *,
-    name: str,
-    version: str,
-    parent_env_vars: Mapping[str, str],
-) -> ArtifactStep[LmEvalResults]:
-    """Build a lazy lm-eval result artifact."""
-    worker_resources = inference.iris.worker_resources
-    if inference.broker is not None:
-        eval_run = replace(
-            eval_run,
-            extra_model_args={
-                "num_concurrent": inference.broker.worker.max_in_flight,
-                "timeout": int(inference.broker.proxy.request_timeout_seconds),
-                **eval_run.extra_model_args,
-            },
-        )
-    results_path = str(StoragePath("mirror://") / name / version)
-
-    def build_config(context: StepContext) -> _LmEvalStepConfig:
-        return _LmEvalStepConfig(
-            inference=replace(
-                inference,
-                iris=replace(inference.iris, worker_resources=context.runtime_arg("worker_resources")),
-            ),
-            packages=LM_EVAL_UV_PACKAGES,
-            eval_run=eval_run,
-            results_path=results_path,
-        )
-
-    def run_step(config: _LmEvalStepConfig) -> LmEvalResults:
-        if config.packages != LM_EVAL_UV_PACKAGES:
-            raise ValueError("artifact lm-eval packages must match the pinned runtime packages")
-        remote(
-            run_served_lm_eval,
-            name=name,
-            resources=ResourceConfig.with_cpu(cpu=1, regions=inference.iris.worker_resources.regions),
-            env_vars=dict(parent_env_vars),
-        )(config.inference, config.eval_run, config.results_path)
-        return LmEvalResults(results_path=config.results_path)
-
-    return ArtifactStep(
-        name=name,
-        version=version,
-        artifact_type=LmEvalResults,
-        run=run_step,
-        build_config=build_config,
-        deps=(),
-        runtime_args={"worker_resources": worker_resources},
     )
