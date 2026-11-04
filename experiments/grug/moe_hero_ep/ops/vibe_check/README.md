@@ -40,6 +40,8 @@ completed results, active jobs, and requests that exhausted their retries. The
 checkpoint selection comes from [`hero_checkpoint_paths()`](../../checkpoints.py),
 which reads the current hero run and its ancestors. Discovery skips checkpoints
 before `FIRST_SAMPLED_STEP` in [config.py](config.py).
+The drawing prompt expansion starts at step 386,001, after the retained
+checkpoints through step 386,000, so it does not backfill those checkpoints.
 
 The workflow runs hourly. With its default, `submission=next`, it keeps at most two
 jobs for the current sampling specification active. It submits unfinished requests
