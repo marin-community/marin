@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -25,6 +26,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from functools import partial
+from importlib.metadata import requires
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -32,6 +34,8 @@ from typing import Any
 from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
+from packaging.requirements import Requirement
+from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.runtime.local import (
     ENVIRONMENT_MANIFEST,
@@ -92,6 +96,14 @@ class EnvironmentBuild:
     output_path: str
 
 
+def runtime_requirements() -> tuple[str, ...]:
+    """Base dependencies of the Verifyit source copied into every grader runtime."""
+    requirements = (Requirement(value) for value in requires("marin-verifyit") or ())
+    return tuple(
+        sorted(str(value) for value in requirements if value.marker is None or value.marker.evaluate({"extra": ""}))
+    )
+
+
 def environment_identity(environment: Environment) -> dict[str, Any]:
     """Everything that determines what building ``environment`` produces."""
     if environment.image is not None:
@@ -110,6 +122,7 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
         "platform": PLATFORM,
         "base_image": BASE_IMAGE,
         "runtime": runtime_files(),
+        "runtime_requirements": runtime_requirements(),
         "placement": placement(environment).value,
     }
     if placement(environment) == Placement.BUILT_IMAGE:
@@ -262,7 +275,7 @@ def write_context(environment: Environment, directory: Path) -> None:
     The files lie under ``files/`` at their guest paths, so ``COPY files/ /`` places them.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    compile_lock(environment.requirements, directory / LOCK_FILE)
+    compile_lock(tuple(sorted({*environment.requirements, *runtime_requirements()})), directory / LOCK_FILE)
     for path, archive in environment.files.items():
         materialize(archive, directory / FILES_DIRECTORY / path.removeprefix("/"))
     (directory / "Dockerfile").write_text(dockerfile(environment))
@@ -381,7 +394,7 @@ def built_environment(environment: Environment) -> EnvironmentArtifact:
             identity = step.name.removeprefix("images/env-")
             raise MissingEnvironmentArtifact(
                 f"The environment {step.name} is not built ({path} has no artifact); "
-                f"run: {BUILD_COMMAND.format(identity=identity)}"
+                f"run: MARIN_PREFIX={shlex.quote(marin_prefix())} {BUILD_COMMAND.format(identity=identity)}"
             )
         _built_environments[path] = EnvironmentArtifact.raw_load(path)
     return _built_environments[path]
