@@ -159,6 +159,7 @@ class HarborRuntimeOverlay:
     verifier_env: Mapping[str, str]
     archive_root: str
     archive_dataset: str
+    judge_model_identity: str | None = None
 
 
 def harbor_runtime_command(script: Path, *arguments: str) -> list[str]:

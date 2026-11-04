@@ -10,7 +10,6 @@ import pytest
 
 from harbor.agents.installed.cline import ClineCli
 from harbor.models.agent.context import AgentContext
-from harbor.utils.env import task_environment
 
 
 def _extract_json_heredoc(command: str) -> dict[str, str | None]:
@@ -58,9 +57,9 @@ class TestClineCli:
 
         with (
             patch.dict(os.environ, {"API_KEY": "host-provider-canary"}, clear=False),
-            task_environment({"API_KEY": "EMPTY"}),
         ):
             agent = ClineCli(
+                extra_env={"API_KEY": "EMPTY"},
                 logs_dir=logs_dir,
                 model_name="openrouter:anthropic/claude-opus-4.5",
                 github_user="my-fork",
@@ -155,15 +154,15 @@ class TestClineCli:
             "max-consecutive-mistakes": "9",
         }
 
-        with task_environment({"API_KEY": "EMPTY"}):
-            agent = ClineCli(
-                logs_dir=logs_dir,
-                model_name="openrouter:anthropic/claude-opus-4.5",
-                **agent_kwargs,
-            )
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Solve this task", mock_env, AsyncMock())
+        agent = ClineCli(
+            extra_env={"API_KEY": "EMPTY"},
+            logs_dir=logs_dir,
+            model_name="openrouter:anthropic/claude-opus-4.5",
+            **agent_kwargs,
+        )
+        mock_env = AsyncMock()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("Solve this task", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
         metadata_cmd = exec_calls[1].kwargs["command"]
@@ -188,16 +187,16 @@ class TestClineCli:
         logs_dir = temp_dir / "sample-task__trial-001" / "agent"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        with task_environment({"API_KEY": "EMPTY"}):
-            agent = ClineCli(
-                logs_dir=logs_dir,
-                model_name="openrouter:anthropic/claude-opus-4.5",
-                agent_timeout_sec=2400,
-                timeout=1200,
-            )
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Solve this task", mock_env, AsyncMock())
+        agent = ClineCli(
+            extra_env={"API_KEY": "EMPTY"},
+            logs_dir=logs_dir,
+            model_name="openrouter:anthropic/claude-opus-4.5",
+            agent_timeout_sec=2400,
+            timeout=1200,
+        )
+        mock_env = AsyncMock()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("Solve this task", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
         metadata_cmd = exec_calls[1].kwargs["command"]
@@ -219,9 +218,12 @@ class TestClineCli:
                 {"BASE_URL": "https://ambient-provider.invalid/v1"},
                 clear=False,
             ),
-            task_environment({"API_KEY": "EMPTY"}),
         ):
-            agent = ClineCli(logs_dir=logs_dir, model_name="openai:gpt-4o")
+            agent = ClineCli(
+                extra_env={"API_KEY": "EMPTY"},
+                logs_dir=logs_dir,
+                model_name="openai:gpt-4o",
+            )
             mock_env = AsyncMock()
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             with pytest.raises(ValueError, match="BASE_URL task capability"):

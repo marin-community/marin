@@ -4,30 +4,16 @@
 """Relay task-local model requests to a fixed, host-authenticated endpoint."""
 
 import json
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
 
 import httpx
 
 from harbor.llms.vllm_tokenization import tokenize_url
+from harbor.models.agent.model_api import ModelAPI
 from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse
 
 MODEL_RELAY_PORT = 8787
 CANDIDATE_MODEL_RELAY_PORT = 8788
-_HOST_MODEL_AUTH: ContextVar[Mapping[str, str]] = ContextVar(
-    "harbor_host_model_auth", default={}
-)
-
-
-@contextmanager
-def host_model_authentication(values: Mapping[str, str]) -> Iterator[None]:
-    """Bind endpoint-to-API-key credentials for relays constructed in this context."""
-    token = _HOST_MODEL_AUTH.set(dict(values))
-    try:
-        yield
-    finally:
-        _HOST_MODEL_AUTH.reset(token)
+SUPPORTED_MODEL_APIS = frozenset({ModelAPI.OPENAI_CHAT})
 
 
 class ModelRelay:
@@ -36,10 +22,10 @@ class ModelRelay:
     Streaming chat responses are buffered before SSE encoding.
     """
 
-    def __init__(self, endpoint: str, model: str):
+    def __init__(self, endpoint: str, model: str, *, api_key: str):
         self.endpoint = endpoint
         self.model = model.removeprefix("together_ai/")
-        self._api_key = _HOST_MODEL_AUTH.get().get(endpoint, "EMPTY")
+        self._api_key = api_key
 
     async def handle(self, request: HttpRequest) -> HttpResponse:
         if request.method != "POST" or request.path not in {

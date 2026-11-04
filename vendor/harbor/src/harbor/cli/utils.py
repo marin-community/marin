@@ -2,33 +2,68 @@ import asyncio
 import json
 import sys
 import tomllib
-from collections.abc import Mapping
-from contextlib import ExitStack
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Coroutine, TypeVar
 
 import yaml
-from typer import Context
-
-from harbor.environments.runtime import DAYTONA_API_URL, host_backend_credentials
-
+from harbor.environments.runtime import (
+    HostCapabilities,
+    OPENAI_API_URL,
+    host_capabilities_from_environment,
+)
 from harbor.models.task.config import MCPServerConfig, TpuSpec
+from harbor.models.trial.config import AgentConfig
 from harbor.utils.logger import logger
 
 T = TypeVar("T")
 
 
-def bind_backend_credentials(context: Context, environment: Mapping[str, str]) -> None:
-    """Keep an explicit host connection bound until the CLI command closes."""
-    resources = ExitStack()
-    context.call_on_close(resources.close)
-    resources.enter_context(
-        host_backend_credentials(
-            daytona_api_key=environment.get("DAYTONA_API_KEY"),
-            daytona_api_url=environment.get("DAYTONA_API_URL", DAYTONA_API_URL),
-            daytona_target=environment.get("DAYTONA_TARGET"),
-        )
+def cli_host_capabilities(
+    environment: Mapping[str, str],
+    *,
+    environment_kwargs: Mapping[str, Any],
+    agents: Sequence[AgentConfig] = (),
+) -> HostCapabilities:
+    """Resolve host authority from the CLI's snapshot and declared relay endpoints."""
+    api_key = (
+        environment.get("OPENAI_API_KEY")
+        or environment.get("TOGETHER_API_KEY")
+        or environment.get("CUSTOM_API_KEY")
+        or "EMPTY"
     )
+    authentication = {
+        endpoint: api_key
+        for name in ("model_endpoint", "candidate_model_endpoint")
+        if (endpoint := environment_kwargs.get(name))
+    }
+    authentication[OPENAI_API_URL] = environment.get("OPENAI_API_KEY") or "EMPTY"
+    for agent in agents:
+        if endpoint := agent.kwargs.get("api_base"):
+            authentication[endpoint] = api_key
+    return host_capabilities_from_environment(
+        environment, model_authentication=authentication
+    )
+
+
+def cli_guest_environment(environment_kwargs: Mapping[str, Any]) -> dict[str, str]:
+    """Declare guest model capabilities without copying host environment values."""
+    if not environment_kwargs.get("model_endpoint"):
+        return {}
+    # Relay execution needs the optional Shellbox runtime; basic CLI use does not.
+    from harbor.environments.model_relay import MODEL_RELAY_PORT
+
+    model_name = environment_kwargs.get("model_name")
+    if not model_name:
+        raise ValueError("A model endpoint requires an explicit model_name")
+    return {
+        "OPENAI_BASE_URL": f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1",
+        "OPENAI_API_KEY": "EMPTY",
+        "TOGETHER_API_KEY": "EMPTY",
+        "CUSTOM_API_KEY": "EMPTY",
+        "TAU2_USER_MODEL": "openai/" + model_name,
+        "TAU2_NL_ASSERTIONS_MODEL": "openai/" + model_name,
+    }
 
 
 def run_async(coro: Coroutine[Any, Any, T]) -> T:

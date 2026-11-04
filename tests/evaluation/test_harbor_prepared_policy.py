@@ -80,6 +80,7 @@ def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_ca
         overlay,
         tmp_path,
         endpoint_url="https://candidate.test/proxy/t/private-capability/v1",
+        judge_model_identity="org/judge@revision",
         verifier_env={
             "OPENAI_API_KEY": "judge-private",
             "OPENAI_BASE_URL": "https://judge.test/v1",
@@ -90,32 +91,57 @@ def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_ca
         "-c",
         textwrap.dedent(
             f"""
-            import json
+            import json, os
             from pathlib import Path
             from harbor_config import JobConfig
+            from harbor_config.models.trial.config import TaskConfig, TrialConfig
             from marin.evaluation.harbor.trial_driver import (
                 effective_job_config, RuntimeOverlay, _model_authentication,
             )
             policy, overlay_path = Path({str(policy)!r}), Path({str(overlay)!r})
-            config = effective_job_config(policy, overlay_path)
             original = JobConfig.model_validate_json(policy.read_text())
             overlay = RuntimeOverlay.model_validate_json(overlay_path.read_text())
-            authentication = _model_authentication(original, overlay, candidate_api_key='candidate-private')
+            config = effective_job_config(original, overlay)
+            host_environment = {{'OPENAI_API_KEY': 'candidate-private'}}
+            os.environ['OPENAI_API_KEY'] = 'later-ambient-key'
+            authentication = _model_authentication(original, overlay, host_environment=host_environment)
             assert authentication == {{
                 'https://candidate.test/proxy/t/private-capability/v1': 'candidate-private',
                 'https://judge.test/v1': 'judge-private',
             }}
             conflicting = overlay.model_copy(update={{'endpoint_url': 'https://judge.test/v1'}})
             try:
-                _model_authentication(original, conflicting, candidate_api_key='candidate-private')
+                _model_authentication(original, conflicting, host_environment=host_environment)
             except ValueError as error:
                 assert 'candidate-private' not in str(error) and 'judge-private' not in str(error)
             else:
                 raise AssertionError('conflicting candidate and judge credentials accepted')
+            def trial(job):
+                return TrialConfig(
+                    task=TaskConfig(name='test/offline', ref='sha256:' + 'a' * 64),
+                    agent=job.agents[0], environment=job.environment, verifier=job.verifier,
+                )
+            saved_trial = TrialConfig.model_validate_json(trial(config).model_dump_json())
+            relocated = overlay.model_copy(update={{
+                'endpoint_url': 'https://candidate-replacement.test/v1',
+                'served_model': 'candidate-replacement-alias',
+                'verifier_env': {{
+                    'OPENAI_API_KEY': 'replacement-judge-key',
+                    'OPENAI_BASE_URL': 'https://judge-replacement.test/v1',
+                    'MODEL_NAME': 'judge-replacement-alias',
+                }},
+            }})
+            changed_judge = relocated.model_copy(update={{'judge_model_identity': 'org/different-judge@revision'}})
+            changed_generation = relocated.model_copy(update={{'model_agent_kwargs': {{'temperature': 0.8}}}})
             print(json.dumps({{
                 'agent': config.agents[0].model_dump(mode='python'),
                 'verifier': config.verifier.env,
                 'capabilities': config.environment.kwargs,
+                'resume_relocated': saved_trial.matches_identity(trial(effective_job_config(original, relocated))),
+                'resume_changed_judge': saved_trial.matches_identity(
+                    trial(effective_job_config(original, changed_judge))),
+                'resume_changed_generation': saved_trial.matches_identity(
+                    trial(effective_job_config(original, changed_generation))),
             }}))
             """
         ),
@@ -125,6 +151,9 @@ def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_ca
     assert result["agent"]["kwargs"]["api_key"] == "EMPTY"
     assert result["verifier"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
     assert result["capabilities"]["candidate_model_endpoint"].endswith("private-capability/v1")
+    assert result["resume_relocated"] is True
+    assert result["resume_changed_judge"] is False
+    assert result["resume_changed_generation"] is False
     assert "private-capability" not in json.dumps(result["agent"])
     assert "candidate-private" not in completed.stdout
     assert "judge-private" not in completed.stdout
@@ -247,6 +276,7 @@ def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment
         endpoint_url="https://model.test/v1",
         served_model="test",
         task_limit=None,
+        judge_model_identity="org/judge@revision",
         verifier_env={
             "OPENAI_API_KEY": "hosted-judge-secret",
             "OPENAI_BASE_URL": "https://judge.test/v1",
@@ -260,9 +290,13 @@ def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment
             f"""
             import json
             from pathlib import Path
-            from marin.evaluation.harbor.trial_driver import effective_job_config
+            from harbor_config import JobConfig
+            from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay
             policy, overlay = Path({str(policy)!r}), Path({str(overlay)!r})
-            config = effective_job_config(policy, overlay)
+            config = effective_job_config(
+                JobConfig.model_validate_json(policy.read_text()),
+                RuntimeOverlay.model_validate_json(overlay.read_text()),
+            )
             print(json.dumps(config.verifier.env))
             """
         ),
@@ -271,7 +305,7 @@ def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment
     assert json.loads(completed.stdout) == {
         "OPENAI_API_KEY": "EMPTY",
         "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
-        "MODEL_NAME": "judge",
+        "MODEL_NAME": "org/judge@revision",
     }
     assert "hosted-judge-secret" not in completed.stdout
 
@@ -298,6 +332,7 @@ def test_prepared_tau2_models_resolve_openai_provider_and_hosted_judge_in_task_c
         overlay,
         tmp_path,
         dataset_path=str(tmp_path / "dataset"),
+        judge_model_identity="org/judge@revision",
         verifier_env={
             "OPENAI_API_KEY": "hosted-judge-secret",
             "OPENAI_BASE_URL": "https://judge.test/v1",
@@ -312,14 +347,20 @@ def test_prepared_tau2_models_resolve_openai_provider_and_hosted_judge_in_task_c
             from pathlib import Path
             from harbor.environments.docker_translate import import_prepared_task
             from harbor.models.task.task import Task
-            from harbor.utils.env import resolve_env_vars, task_environment
-            from marin.evaluation.harbor.trial_driver import effective_job_config, _model_environment
+            from harbor.utils.env import resolve_env_vars
+            from harbor_config import JobConfig
+            from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay, _model_environment
 
-            config = effective_job_config(Path({str(prepared_policy)!r}), Path({str(overlay)!r}))
+            config = effective_job_config(
+                JobConfig.model_validate_json(Path({str(prepared_policy)!r}).read_text()),
+                RuntimeOverlay.model_validate_json(Path({str(overlay)!r}).read_text()),
+            )
             task = Task(Path({str(environment.parent)!r}))
-            with task_environment(_model_environment(config)):
-                imported = import_prepared_task(task.config.environment, task.paths.environment_dir)
-                verifier = resolve_env_vars(task.config.verifier.env)
+            guest_environment = _model_environment(config)
+            imported = import_prepared_task(
+                task.config.environment, task.paths.environment_dir, guest_environment=guest_environment
+            )
+            verifier = resolve_env_vars(task.config.verifier.env, source=guest_environment)
             runtime = next(container.machine for container in imported.task.containers if container.name == 'runtime')
             print(json.dumps({{'runtime': runtime.env, 'verifier': verifier}}))
             """
@@ -328,8 +369,8 @@ def test_prepared_tau2_models_resolve_openai_provider_and_hosted_judge_in_task_c
 
     guest = json.loads(completed.stdout)
     # Tau2 uses LiteLLM: the first segment selects its transport, even for namespaced model IDs.
-    assert guest["runtime"]["TAU2_USER_MODEL"].split("/", 1) == ["openai", "Qwen/Qwen3-8B"]
-    assert guest["verifier"]["TAU2_NL_ASSERTIONS_MODEL"].split("/", 1) == ["openai", "Qwen/Qwen3-8B"]
+    assert guest["runtime"]["TAU2_USER_MODEL"].split("/", 1) == ["openai", "org/judge@revision"]
+    assert guest["verifier"]["TAU2_NL_ASSERTIONS_MODEL"].split("/", 1) == ["openai", "org/judge@revision"]
     assert guest["runtime"]["OPENAI_API_KEY"] == "EMPTY"
     assert guest["runtime"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
     assert "hosted-judge-secret" not in completed.stdout
@@ -369,6 +410,7 @@ def test_verifier_model_roles_call_hosted_judge_through_guest_loopback(tmp_path,
     write_runtime_overlay(
         overlay_path,
         tmp_path,
+        judge_model_identity="org/judge@revision",
         verifier_env={
             "OPENAI_BASE_URL": "https://hosted-qwen.test/v1",
             "OPENAI_API_KEY": "host-judge-private",
@@ -384,8 +426,9 @@ def test_verifier_model_roles_call_hosted_judge_through_guest_loopback(tmp_path,
             import httpx
             from openai import AsyncOpenAI
             from harbor_config import JobConfig
+            from harbor_config.models.trial.config import TaskConfig, TrialConfig
             from harbor.environments import model_relay
-            from harbor.environments.model_relay import ModelRelay, host_model_authentication
+            from harbor.environments.model_relay import ModelRelay
             from shellbox.http_service import HttpRequest
             from marin.evaluation.harbor.trial_driver import (
                 effective_job_config, RuntimeOverlay, _judge_authentication,
@@ -394,14 +437,20 @@ def test_verifier_model_roles_call_hosted_judge_through_guest_loopback(tmp_path,
             policy_path, overlay_path = Path({str(prepared_policy)!r}), Path({str(overlay_path)!r})
             policy = JobConfig.model_validate_json(policy_path.read_text())
             overlay = RuntimeOverlay.model_validate_json(overlay_path.read_text())
-            config = effective_job_config(policy_path, overlay_path)
+            config = effective_job_config(policy, overlay)
+            saved_trial = TrialConfig(
+                task=TaskConfig(name='test/offline', ref='sha256:' + 'a' * 64),
+                agent=config.agents[0], environment=config.environment, verifier=config.verifier,
+            )
             provider_models = []
+            expected_provider_url = 'https://hosted-qwen.test/v1/chat/completions'
+            expected_provider_model = 'Qwen/Qwen3-8B'
             original_client = httpx.AsyncClient
             def provider(request):
-                assert str(request.url) == 'https://hosted-qwen.test/v1/chat/completions'
+                assert str(request.url) == expected_provider_url
                 assert request.headers['authorization'] == 'Bearer host-judge-private'
                 payload = json.loads(request.content)
-                assert payload['model'] == 'Qwen/Qwen3-8B'
+                assert payload['model'] == expected_provider_model
                 provider_models.append(payload['model'])
                 return httpx.Response(200, json={{
                     'id':'judge', 'object':'chat.completion', 'created':0,
@@ -413,12 +462,15 @@ def test_verifier_model_roles_call_hosted_judge_through_guest_loopback(tmp_path,
                     kwargs.setdefault('transport', httpx.MockTransport(provider))
                     super().__init__(**kwargs)
             model_relay.httpx.AsyncClient = WireClient
-            with host_model_authentication(_judge_authentication(policy, overlay)):
-                relay = ModelRelay(config.environment.kwargs['model_endpoint'], config.environment.kwargs['model_name'])
+            authentication = _judge_authentication(policy, overlay, source={{}})
+            relay = ModelRelay(
+                config.environment.kwargs['model_endpoint'], config.environment.kwargs['model_name'],
+                api_key=authentication[config.environment.kwargs['model_endpoint']],
+            )
             async def loopback(request):
                 assert str(request.url) == 'http://127.0.0.1:8787/v1/chat/completions'
                 assert request.headers['authorization'] == 'Bearer EMPTY'
-                assert json.loads(request.content)['model'] == 'Qwen/Qwen3-8B'
+                assert json.loads(request.content)['model'] == 'org/judge@revision'
                 response = await relay.handle(HttpRequest('POST', request.url.path, request.content))
                 return httpx.Response(
                     response.status, content=response.body, headers={{'content-type':'application/json'}})
@@ -436,13 +488,29 @@ def test_verifier_model_roles_call_hosted_judge_through_guest_loopback(tmp_path,
                             model=model, messages=[{{'role':'user', 'content':role}}])
                         replies[role] = response.choices[0].message.content
                 return replies
-            print(json.dumps({{'replies':asyncio.run(guest()), 'provider_models':provider_models}}))
+            replies = asyncio.run(guest())
+            relocated_overlay = overlay.model_copy(update={{'verifier_env': {{
+                'OPENAI_BASE_URL': 'https://replacement-judge.test/v1',
+                'OPENAI_API_KEY': 'host-judge-private', 'MODEL_NAME': 'replacement-alias',
+            }}}})
+            config = effective_job_config(policy, relocated_overlay)
+            relocated_trial = saved_trial.model_copy(update={{
+                'agent':config.agents[0], 'environment':config.environment, 'verifier':config.verifier,
+            }})
+            assert saved_trial.matches_identity(relocated_trial)
+            expected_provider_url = 'https://replacement-judge.test/v1/chat/completions'
+            expected_provider_model = 'replacement-alias'
+            relay = ModelRelay(config.environment.kwargs['model_endpoint'],
+                config.environment.kwargs['model_name'], api_key='host-judge-private')
+            print(json.dumps({{'replies':replies, 'relocated_replies':asyncio.run(guest()),
+                'provider_models':provider_models}}))
             """
         ),
     )
     result = json.loads(completed.stdout)
     assert result["replies"] == {role: role for role in roles}
-    assert result["provider_models"] == ["Qwen/Qwen3-8B"] * len(roles)
+    assert result["relocated_replies"] == result["replies"]
+    assert result["provider_models"] == ["Qwen/Qwen3-8B"] * len(roles) + ["replacement-alias"] * len(roles)
     assert "host-judge-private" not in completed.stdout
 
 
@@ -505,14 +573,16 @@ def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_rout
         from pathlib import Path
         import httpx
         from harbor_config import JobConfig
+        from harbor_config.models.trial.config import TaskConfig, TrialConfig
         from harbor.environments import model_relay
-        from harbor.environments.model_relay import ModelRelay, host_model_authentication
+        from harbor.environments.model_relay import ModelRelay
         from shellbox.http_service import HttpRequest
         from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay, _judge_authentication
-        os.environ['TOGETHER_API_KEY'] = 'host-provider-private'
+        host_environment = {{'TOGETHER_API_KEY': 'host-provider-private'}}
+        os.environ['TOGETHER_API_KEY'] = 'later-ambient-key'
         policy = JobConfig.model_validate_json(Path({str(policy_path)!r}).read_text())
         overlay = RuntimeOverlay.model_validate_json(Path({str(overlay_path)!r}).read_text())
-        config = effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r}))
+        config = effective_job_config(policy, overlay)
         original_client = httpx.AsyncClient
         def provider(request):
             assert request.url == 'https://api.together.xyz/v1/chat/completions'
@@ -521,19 +591,38 @@ def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_rout
             return httpx.Response(200, json={{'ok':True}})
         model_relay.httpx.AsyncClient = lambda **kwargs: original_client(
             transport=httpx.MockTransport(provider), **kwargs)
-        with host_model_authentication(_judge_authentication(policy, overlay)):
-            relay = ModelRelay(config.environment.kwargs['model_endpoint'], config.environment.kwargs['model_name'])
-            request = HttpRequest('POST','/v1/chat/completions',b'{{"model":"untrusted-override"}}')
-            response = asyncio.run(relay.handle(request))
-            assert response.status == 200
+        authentication = _judge_authentication(policy, overlay, source=host_environment)
+        relay = ModelRelay(
+            config.environment.kwargs['model_endpoint'], config.environment.kwargs['model_name'],
+            api_key=authentication[config.environment.kwargs['model_endpoint']],
+        )
+        request = HttpRequest('POST','/v1/chat/completions',b'{{"model":"untrusted-override"}}')
+        response = asyncio.run(relay.handle(request))
+        assert response.status == 200
+        hosted_overlay = overlay.model_copy(update={{
+            'judge_model_identity': 'org/judge@revision',
+            'verifier_env': {{'OPENAI_BASE_URL': 'https://judge-a.test/v1',
+                'OPENAI_API_KEY': 'host-provider-private', 'MODEL_NAME': 'alias-a'}},
+        }})
+        hosted = effective_job_config(policy, hosted_overlay)
+        relocated = effective_job_config(policy, hosted_overlay.model_copy(update={{
+            'verifier_env': {{'OPENAI_BASE_URL': 'https://judge-b.test/v1',
+                'OPENAI_API_KEY': 'host-provider-private', 'MODEL_NAME': 'alias-b'}},
+        }}))
+        def trial(job):
+            return TrialConfig(task=TaskConfig(name='test/offline', ref='sha256:' + 'a' * 64),
+                agent=job.agents[0], environment=job.environment, verifier=job.verifier)
+        saved = TrialConfig.model_validate_json(trial(hosted).model_dump_json())
         print(json.dumps({{'verifier':config.verifier.env,
-            'agent':config.agents[0].env, 'kwargs':config.agents[0].kwargs}}))
+            'agent':config.agents[0].env, 'kwargs':config.agents[0].kwargs,
+            'role_resume_same':saved.matches_identity(trial(relocated))}}))
     """
         ),
     )
     result = json.loads(completed.stdout)
     assert result["verifier"]["OPENAI_API_KEY"] == "EMPTY"
     assert result["verifier"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
+    assert result["role_resume_same"] is True
     assert "host-provider-private" not in completed.stdout
     if agent_name == "sotopia":
         assert result["agent"] == {

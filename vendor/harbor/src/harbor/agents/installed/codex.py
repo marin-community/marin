@@ -5,6 +5,7 @@ from pathlib import Path, PurePosixPath
 from time import monotonic
 from typing import Any, Literal
 
+from harbor.models.agent.model_api import ModelAPI
 from harbor.agents.installed.base import (
     REQUIRED_MODEL_PRICE_FIELDS,
     BaseInstalledAgent,
@@ -40,6 +41,8 @@ class Codex(BaseInstalledAgent):
     """
     The Codex agent uses OpenAI's Codex CLI tool to solve tasks.
     """
+
+    MODEL_API = ModelAPI.OPENAI_RESPONSES
 
     SUPPORTS_ATIF: bool = True
     _OUTPUT_FILENAME = "codex.txt"

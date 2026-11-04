@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -47,7 +48,9 @@ class _DiagnosticLogFailureEnvironment(BaseEnvironment):
     def _validate_definition(self) -> None:
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool) -> None:

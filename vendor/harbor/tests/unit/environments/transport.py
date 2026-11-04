@@ -27,7 +27,8 @@ class ProcessMachine:
         self.root, self.spec = root, spec
         self.closed = False
         self.sessions: set[SubprocessSession] = set()
-        self.path(spec.workdir).mkdir(parents=True)
+        self.commands: set[asyncio.subprocess.Process] = set()
+        self.path(spec.workdir).mkdir(parents=True, exist_ok=True)
 
     def path(self, path: str) -> Path:
         return self.root / path.lstrip("/")
@@ -47,7 +48,14 @@ class ProcessMachine:
             process = await asyncio.create_subprocess_exec(
                 *(self.argument(value) for value in command.argv),
                 cwd=self.path(command.cwd or self.spec.workdir),
-                env={"PATH": os.environ["PATH"], **self.spec.env, **command.env},
+                env={
+                    key: self.argument(value) if key == "PATH" else value
+                    for key, value in {
+                        "PATH": os.environ["PATH"],
+                        **self.spec.env,
+                        **command.env,
+                    }.items()
+                },
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -60,7 +68,9 @@ class ProcessMachine:
                 except ProcessLookupError:
                     pass
 
-            session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
+            session = SubprocessSession(
+                process, stop=stop, stderr_limit=command.output_limit_bytes
+            )
             self.sessions.add(session)
             return session
 
@@ -70,15 +80,41 @@ class ProcessMachine:
         process = await asyncio.create_subprocess_exec(
             *(self.argument(value) for value in command.argv),
             cwd=self.path(command.cwd or self.spec.workdir),
-            env={"PATH": os.environ["PATH"], **self.spec.env, **command.env},
+            env={
+                key: self.argument(value) if key == "PATH" else value
+                for key, value in {
+                    "PATH": os.environ["PATH"],
+                    **self.spec.env,
+                    **command.env,
+                }.items()
+            },
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        stdout, stderr = await process.communicate(command.stdin)
+        self.commands.add(process)
+        try:
+            async with asyncio.timeout(command.timeout):
+                stdout, stderr = await process.communicate(command.stdin)
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            raise
         return Result(
             process.returncode, stdout, stderr, False, False, ExitReason.EXITED
         )
+
+    async def quiesce_commands(self) -> None:
+        for process in self.commands:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await process.wait()
 
     async def upload(self, source: Path, target: str) -> None:
         destination = self.path(target)
@@ -97,4 +133,5 @@ class ProcessMachine:
 
     async def close(self) -> None:
         self.closed = True
+        await self.quiesce_commands()
         await asyncio.gather(*(session.close() for session in self.sessions))

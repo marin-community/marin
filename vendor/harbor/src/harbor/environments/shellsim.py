@@ -3,6 +3,7 @@
 
 """Harbor adapter for ShellSim's built-in Unix-like environment."""
 
+import asyncio
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
@@ -93,7 +94,9 @@ class ShellSimEnvironment(BaseEnvironment):
         ):
             raise ValueError("ShellSim does not support Compose tasks")
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         workdir = self.task_env_config.workdir or "/workspace"
         spec = MachineSpec(
             self.package_spec,
@@ -156,11 +159,15 @@ class ShellSimEnvironment(BaseEnvironment):
     ) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        await download_artifact(self.machine, source_path, str(target_path), directory=False)
+        await download_artifact(
+            self.machine, source_path, str(target_path), directory=False
+        )
 
     async def download_dir(
         self, source_dir: str, target_dir: Path | StoragePath | str
     ) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        await download_artifact(self.machine, source_dir, str(target_dir), directory=True)
+        await download_artifact(
+            self.machine, source_dir, str(target_dir), directory=True
+        )

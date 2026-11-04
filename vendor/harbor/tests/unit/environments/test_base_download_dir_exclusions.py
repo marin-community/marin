@@ -1,3 +1,4 @@
+import asyncio
 import tarfile
 from pathlib import Path
 from uuid import UUID
@@ -30,7 +31,9 @@ class _StubEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):

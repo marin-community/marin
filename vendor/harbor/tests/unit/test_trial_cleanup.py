@@ -20,6 +20,8 @@ from harbor.models.trial.config import (
     TrialConfig,
     VerifierConfig,
 )
+from harbor.models.trial.result import TrialResult
+from harbor.job import Job
 from harbor.trial.trial import Trial
 
 
@@ -104,7 +106,9 @@ class SlowStopEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):
@@ -154,7 +158,9 @@ class HangingStopEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):
@@ -199,7 +205,9 @@ class MountedEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):
@@ -225,7 +233,9 @@ class MountedEnvironment(BaseEnvironment):
 
 
 class FailingStartEnvironment(MountedEnvironment):
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         raise RuntimeError("environment control plane unavailable")
 
 
@@ -307,6 +317,12 @@ class TestStopShieldedFromCancellation:
             await env.stop_completed.wait()
             assert trial._is_agent_environment_stopped is True
             assert env.stop_call_count == 1
+            native = TrialResult.model_validate_json(
+                trial.paths.result_path.read_text()
+            )
+            assert native.completion is not None
+            assert native.exception_info.exception_type == "CancelledError"
+            assert Job._is_resume_retryable_result(native)
 
 
 class TestStopBoundedByWallClock:
@@ -352,8 +368,10 @@ class TestStopBoundedByWallClock:
 
             assert done, "trial finalize hung on a stuck environment stop"
             assert env.stop_started.is_set()
-            assert trial._is_agent_environment_stopped is True
-            task.result()  # surface any unexpected trial error
+            result = task.result()
+            assert result.completion is None
+            assert result.exception_info is not None
+            assert result.verifier_result is None
 
 
 class TestPrepareLogsForHostCalledDuringTrial:

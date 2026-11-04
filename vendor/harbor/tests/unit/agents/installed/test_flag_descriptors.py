@@ -1,7 +1,5 @@
 """Unit tests for declarative CliFlag and EnvVar descriptors on BaseInstalledAgent."""
 
-from unittest.mock import patch
-
 import pytest
 
 from harbor.agents.installed.base import _coerce_value
@@ -9,24 +7,21 @@ from harbor.agents.installed.claude_code import ClaudeCode
 from harbor.agents.installed.codex import Codex
 from harbor.agents.installed.openhands import OpenHands
 from harbor.agents.installed.qwen_code import QwenCode
-from harbor.utils.env import task_environment
 
 
-@pytest.mark.parametrize("grant", ["agent", "task"])
 def test_qwen_descriptor_uses_granted_dummy_instead_of_host_provider_key(
-    temp_dir, monkeypatch, grant
+    temp_dir, monkeypatch
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
     capabilities = {"OPENAI_API_KEY": "EMPTY"}
-    with task_environment(capabilities if grant == "task" else {}):
-        agent = QwenCode(
-            logs_dir=temp_dir,
-            model_name="qwen/model",
-            extra_env=capabilities if grant == "agent" else {},
-        )
+    agent = QwenCode(
+        logs_dir=temp_dir,
+        model_name="qwen/model",
+        extra_env=capabilities,
+    )
     assert agent.resolve_env_vars()["OPENAI_API_KEY"] == "EMPTY"
-    with pytest.raises(ValueError, match="credentials must remain on the host"):
-        QwenCode(logs_dir=temp_dir, model_name="qwen/model")
+    ungranted = QwenCode(logs_dir=temp_dir, model_name="qwen/model")
+    assert "OPENAI_API_KEY" not in ungranted.resolve_env_vars()
 
 
 class TestCoerceValue:
@@ -209,29 +204,36 @@ class TestEnvFallback:
     """Test env_fallback behavior for descriptors."""
 
     def test_cli_flag_env_fallback(self, temp_dir):
-        with patch.dict("os.environ", {"CLAUDE_CODE_MAX_TURNS": "15"}):
-            agent = ClaudeCode(logs_dir=temp_dir)
-            flags = agent.build_cli_flags()
-            assert "--max-turns 15" in flags
+        agent = ClaudeCode(logs_dir=temp_dir, extra_env={"CLAUDE_CODE_MAX_TURNS": "15"})
+        assert "--max-turns 15" in agent.build_cli_flags()
 
     def test_cli_flag_kwarg_overrides_env_fallback(self, temp_dir):
-        with patch.dict("os.environ", {"CLAUDE_CODE_MAX_TURNS": "15"}):
-            agent = ClaudeCode(logs_dir=temp_dir, max_turns=20)
-            flags = agent.build_cli_flags()
-            assert "--max-turns 20" in flags
-            assert "15" not in flags
+        agent = ClaudeCode(
+            logs_dir=temp_dir, max_turns=20, extra_env={"CLAUDE_CODE_MAX_TURNS": "15"}
+        )
+        flags = agent.build_cli_flags()
+        assert "--max-turns 20" in flags
+        assert "15" not in flags
 
     def test_env_var_env_fallback(self, temp_dir):
-        with patch.dict("os.environ", {"MAX_THINKING_TOKENS": "4096"}):
-            agent = ClaudeCode(logs_dir=temp_dir)
-            env = agent.resolve_env_vars()
-            assert env["MAX_THINKING_TOKENS"] == "4096"
+        agent = ClaudeCode(logs_dir=temp_dir, extra_env={"MAX_THINKING_TOKENS": "4096"})
+        assert agent.resolve_env_vars()["MAX_THINKING_TOKENS"] == "4096"
 
     def test_env_var_kwarg_overrides_env_fallback(self, temp_dir):
-        with patch.dict("os.environ", {"MAX_THINKING_TOKENS": "4096"}):
-            agent = ClaudeCode(logs_dir=temp_dir, max_thinking_tokens=8000)
-            env = agent.resolve_env_vars()
-            assert env["MAX_THINKING_TOKENS"] == "8000"
+        agent = ClaudeCode(
+            logs_dir=temp_dir,
+            max_thinking_tokens=8000,
+            extra_env={"MAX_THINKING_TOKENS": "4096"},
+        )
+        assert agent.resolve_env_vars()["MAX_THINKING_TOKENS"] == "8000"
+
+
+def test_descriptor_fallbacks_ignore_ambient_environment(temp_dir, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_MAX_TURNS", "15")
+    monkeypatch.setenv("MAX_THINKING_TOKENS", "4096")
+    agent = ClaudeCode(logs_dir=temp_dir)
+    assert agent.build_cli_flags() == ""
+    assert agent.resolve_env_vars() == {}
 
 
 class TestAgentsWithNoDescriptors:

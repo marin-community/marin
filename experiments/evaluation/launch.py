@@ -37,6 +37,7 @@ from marin.evaluation.harbor.driver_config import (
     preflight_harbor_configs,
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
+from marin.evaluation.harbor.runtime import harbor_runtime_descriptor, harbor_runtime_source_hash
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
@@ -245,6 +246,7 @@ def _resolve_definitions(
     evalchemy_evaluator_hash = evalchemy_evaluator_source_hash() if evalchemy_definitions else ""
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
+    harbor_runtime = harbor_runtime_descriptor(harbor_runtime_source_hash()) if harbor_definitions else None
     model_agent_kwargs = harbor_model_agent_kwargs(model)
     requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
     validated_configs = iter(
@@ -288,8 +290,8 @@ def _resolve_definitions(
                 name,
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
-                    runtime_descriptor=None,
-                    cache_runtime_descriptor=None,
+                    runtime_descriptor=harbor_runtime,
+                    cache_runtime_descriptor=harbor_runtime,
                     executor=definition.executor_for(
                         config,
                         model,

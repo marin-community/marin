@@ -34,23 +34,6 @@ _DIGEST_PREFIX = "sha256:"
 _ENV_ARG_FLAGS = {"--ae", "--agent-env", "--ve", "--verifier-env"}
 TaskIdType = GitTaskId | LocalTaskId | PackageTaskId
 
-# Agent-kwarg keys that are per-ALLOCATION runtime endpoints, not replay-affecting
-# trial identity: the served-model URL + auth key. A legitimate resume re-runs the
-# SAME trials against a NEW serve node (a fresh SLURM allocation gets a different
-# MASTER_ADDR, and the eval sbatch rewrites config.json's `api_base` to it before
-# `harbor jobs resume`). Including these in the lock equality key made every
-# cross-allocation resume spuriously fail `_write_job_lock` with FileExistsError
-# ("lock.json does not match the resolved job lock") — same class of false-reject the
-# created_at/harbor/invocation/n_concurrent_trials carry-overs in Job._write_job_lock
-# already guard against, but at the per-trial agent.kwargs level. Excluded from the
-# equality key ONLY.
-_VOLATILE_AGENT_KWARG_KEYS = frozenset({"api_base", "key"})
-# Agent environment variables that carry the same per-allocation endpoint as
-# ``api_base``. Marin rewrites these when a resume lands on a new Iris serve
-# node, so they must not make the otherwise-identical resolved lock conflict.
-_VOLATILE_AGENT_ENV_KEYS = frozenset(
-    {"HARBOR_PI_API_BASE", "OPENAI_API_BASE", "OPENAI_BASE_URL"}
-)
 # Environment cache-acquisition kwargs (the Daytona snapshot trio) are defined
 # alongside the resume identity fingerprint they must stay in sync with: see
 # ``TrialConfig._PROVISIONING_ENV_KWARG_KEYS`` in harbor_config.
@@ -220,7 +203,11 @@ class TrialLock(BaseModel):
                 )
             ),
             tuple(skill._equality_key() for skill in self.skills),
-            _environment_equality_key(self.environment, candidate_model_identity=self.agent.model_name),
+            _environment_equality_key(
+                self.environment,
+                candidate_model_identity=self.agent.model_name,
+                judge_model_identity=self.verifier.model_name,
+            ),
             _frozen_value(self.verifier.identity_fingerprint()),
         )
 
@@ -286,25 +273,21 @@ def _frozen_value(value: Any, exclude: set[str] | None = None) -> Any:
 
 
 def _agent_equality_key(agent: AgentConfig) -> Any:
-    sanitized = agent.model_copy(
-        update={
-            "kwargs": {
-                key: value
-                for key, value in agent.kwargs.items()
-                if key not in _VOLATILE_AGENT_KWARG_KEYS
-            },
-            "env": {
-                key: value
-                for key, value in agent.env.items()
-                if key not in _VOLATILE_AGENT_ENV_KEYS
-            },
-        }
+    value = agent.identity_fingerprint()
+    value.pop("skills", None)
+    return _frozen_value(value)
+
+
+def _environment_equality_key(
+    environment: EnvironmentConfig,
+    *,
+    candidate_model_identity: str | None,
+    judge_model_identity: str | None,
+) -> Any:
+    fingerprint = environment.identity_fingerprint(
+        candidate_model_identity=candidate_model_identity,
+        judge_model_identity=judge_model_identity,
     )
-    return _frozen_value(sanitized, exclude={"skills", "model_alias"})
-
-
-def _environment_equality_key(environment: EnvironmentConfig, *, candidate_model_identity: str | None) -> Any:
-    fingerprint = environment.identity_fingerprint(candidate_model_identity=candidate_model_identity)
     for key in TrialConfig._PROVISIONING_ENV_KWARG_KEYS:
         fingerprint["kwargs"].pop(key, None)
     return _frozen_value(fingerprint)
@@ -317,16 +300,9 @@ def _user_agent_equality_key(
 ) -> Any:
     if user_agent is None:
         return None
-    value = user_agent.model_dump(
-        mode="python",
-        exclude={
-            "skills",
-            "model_alias",
-            "user_persona_path",
-            "user_prompt_template_path",
-        },
-        exclude_none=True,
-    )
+    value = user_agent.identity_fingerprint()
+    for key in ("skills", "user_persona_path", "user_prompt_template_path"):
+        value.pop(key, None)
     bridge = value.get("bridge")
     if isinstance(bridge, dict):
         bridge.pop("prompt_path", None)

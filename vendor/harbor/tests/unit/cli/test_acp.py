@@ -19,7 +19,7 @@ def test_trial_start_preserves_acp_agent_shorthand(tmp_path: Path, monkeypatch):
     task_dir.mkdir()
     captured = {}
 
-    async def _fake_create(config):
+    async def _fake_create(config, *, host_capabilities, guest_environment):
         captured["config"] = config
 
         class _DummyTrial:
@@ -62,7 +62,7 @@ def test_run_preserves_acp_agent_shorthand(tmp_path: Path, monkeypatch):
     task_dir.mkdir()
     captured = {}
 
-    async def _fake_create(config):
+    async def _fake_create(config, *, host_capabilities, guest_environment):
         captured["config"] = config
 
         class _DummyJob:

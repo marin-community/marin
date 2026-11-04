@@ -10,7 +10,6 @@ from harbor.agents.installed.openhands_sdk import OpenHandsSDK
 from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig, MCPTransport
-from harbor.utils.env import task_environment
 
 
 def test_populate_context_trajectory_extracts_usage_and_cost(tmp_path: Path):
@@ -53,9 +52,21 @@ def test_populate_context_missing_trajectory_preserves_context(tmp_path: Path):
     [
         (
             "stdio",
-            {"name": "test-server", "transport": "stdio", "command": "node", "args": ["server.js", "--port=3000"]},
+            {
+                "name": "test-server",
+                "transport": "stdio",
+                "command": "node",
+                "args": ["server.js", "--port=3000"],
+            },
         ),
-        ("sse", {"name": "test-server", "transport": "sse", "url": "http://localhost:8080/sse"}),
+        (
+            "sse",
+            {
+                "name": "test-server",
+                "transport": "sse",
+                "url": "http://localhost:8080/sse",
+            },
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -65,6 +76,7 @@ async def test_run_mcp_configuration_uses_transport_wire_fields(
     agent = OpenHandsSDK(
         logs_dir=tmp_path,
         model_name="test/model",
+        extra_env={"LLM_API_KEY": "EMPTY", "LLM_BASE_URL": "http://127.0.0.1:8788/v1"},
         mcp_servers=[
             MCPServerConfig(
                 name="test-server",
@@ -78,7 +90,8 @@ async def test_run_mcp_configuration_uses_transport_wire_fields(
     environment = AsyncMock()
     environment.exec.return_value = ExecResult(return_code=0, stdout="", stderr="")
 
-    with task_environment({"LLM_API_KEY": "EMPTY", "LLM_BASE_URL": "http://127.0.0.1:8788/v1"}):
-        await agent.run("Test instruction", environment, AgentContext())
+    await agent.run("Test instruction", environment, AgentContext())
 
-    assert json.loads(environment.exec.call_args.kwargs["env"]["MCP_SERVERS_JSON"]) == [expected]
+    assert json.loads(environment.exec.call_args.kwargs["env"]["MCP_SERVERS_JSON"]) == [
+        expected
+    ]

@@ -24,7 +24,6 @@ from harbor.trial.queue import TrialQueue
 from harbor.trial.trial import Trial
 from harbor.utils.artifact_writer import ArtifactUploadTimeoutError
 
-
 Behavior = Callable[["FakeTrial"], Awaitable[None]]
 
 
@@ -63,6 +62,9 @@ class PhaseCancellationTrial(Trial):
 
     async def _finalize(self) -> None:
         self.events.append("finalized")
+
+    async def _stop_agent_environment(self) -> None:
+        return None
 
     def _close_logger_handler(self) -> None:
         return None
@@ -182,16 +184,20 @@ async def test_agent_disk_exhaustion_is_a_model_failure(tmp_path: Path) -> None:
     async def run_agent(**kwargs):
         raise original
 
+    async def cleanup(*args):
+        pass
+
     trial = _phase_trial(cleanup_grace=1)
     trial.config = _config(tmp_path, "disk-full", attempt_timeout=60)
     trial._result = _result(trial.config, 0)
     trial._hooks = {event: [] for event in TrialEvent}
     trial.task = SimpleNamespace(name="disk-full")
-    trial.agent = SimpleNamespace(run=run_agent)
+    trial.agent = SimpleNamespace(run=run_agent, cleanup=cleanup)
     trial.user_agent = None
     trial.agent_environment = SimpleNamespace(
         with_default_user=lambda user: contextlib.nullcontext(),
         with_agent_timeout=lambda timeout: contextlib.nullcontext(),
+        quiesce_agent_commands=cleanup,
     )
 
     with pytest.raises(AgentDiskFullError) as raised:
@@ -236,6 +242,40 @@ async def test_cancelled_phase_tracks_cancellation_resistant_provider_work() -> 
 
 
 @pytest.mark.unit
+async def test_external_cancellation_bounds_cleanup_for_a_phase_without_a_deadline() -> (
+    None
+):
+    started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    provider_terminated = asyncio.Event()
+    trial = _phase_trial(cleanup_grace=0.01)
+
+    async def provider() -> None:
+        started.set()
+        await _resist_cancellation(cancellation_seen, provider_terminated)
+
+    phase = asyncio.create_task(
+        trial._await_phase(
+            provider(),
+            timeout_sec=None,
+            timeout_error=AgentTimeoutError("phase expired"),
+        )
+    )
+    await started.wait()
+    phase.cancel("external cancellation")
+    try:
+        async with asyncio.timeout(1):
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await phase
+        assert caught.value.args == ("external cancellation",)
+        assert cancellation_seen.is_set()
+        assert trial.pending_cleanup_tasks()
+    finally:
+        provider_terminated.set()
+        await asyncio.gather(*trial.pending_cleanup_tasks(), return_exceptions=True)
+
+
+@pytest.mark.unit
 async def test_phase_timeout_raises_when_cancellation_resists() -> None:
     cancellation_seen = asyncio.Event()
     provider_terminated = asyncio.Event()
@@ -272,6 +312,8 @@ async def test_trial_reports_result_persistence_after_lifecycle_write(
 ) -> None:
     config = _config(tmp_path, "persisting", attempt_timeout=None)
     trial = object.__new__(PhaseTrial)
+    trial._is_agent_environment_stopped = True
+    trial._environment_cleanup_failed = False
     trial.config = config
     trial.task = SimpleNamespace(name="task")
     trial.paths = TrialPaths(config.trials_dir / config.trial_name / "attempts" / "000")
@@ -299,7 +341,14 @@ async def test_trial_reports_result_persistence_after_lifecycle_write(
 
 
 def _install_factory(monkeypatch, behaviors: dict[tuple[str, int], FakeTrial]) -> None:
-    async def create(cls, config: TrialConfig, *, attempt_index: int | None = None):
+    async def create(
+        cls,
+        config: TrialConfig,
+        *,
+        attempt_index: int | None = None,
+        host_capabilities=None,
+        guest_environment=None,
+    ):
         if attempt_index is None:
             raise ValueError("queue attempts require an attempt index")
         return behaviors[(config.trial_name, attempt_index)]
@@ -385,7 +434,12 @@ async def test_trial_creation_failure_returns_terminal_result(
     config = _config(tmp_path, "creation-failed", attempt_timeout=None)
 
     async def fail_create(
-        cls, trial_config: TrialConfig, *, attempt_index: int | None = None
+        cls,
+        trial_config: TrialConfig,
+        *,
+        attempt_index: int | None = None,
+        host_capabilities=None,
+        guest_environment=None,
     ) -> Trial:
         raise RuntimeError("trial creation failed")
 
@@ -416,7 +470,14 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
     queued = _config(tmp_path, "queued", attempt_timeout=0.01)
     first_trial = FakeTrial(first, 0, hold_first)
 
-    async def create(cls, config: TrialConfig, *, attempt_index: int | None = None):
+    async def create(
+        cls,
+        config: TrialConfig,
+        *,
+        attempt_index: int | None = None,
+        host_capabilities=None,
+        guest_environment=None,
+    ):
         created.append(config.trial_name)
         if config.trial_name == "first" and attempt_index == 0:
             return first_trial
@@ -471,7 +532,14 @@ async def test_attempt_deadline_covers_trial_creation(
 ) -> None:
     creation_started = asyncio.Event()
 
-    async def create(cls, config: TrialConfig, *, attempt_index: int | None = None):
+    async def create(
+        cls,
+        config: TrialConfig,
+        *,
+        attempt_index: int | None = None,
+        host_capabilities=None,
+        guest_environment=None,
+    ):
         creation_started.set()
         await asyncio.Event().wait()
 

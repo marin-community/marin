@@ -4,8 +4,61 @@ import logging
 import pytest
 from pydantic import ValidationError
 
-from harbor.cli.utils import load_mcp_servers, parse_kwargs, parse_tpu_spec
+from harbor.cli.utils import (
+    cli_guest_environment,
+    cli_host_capabilities,
+    load_mcp_servers,
+    parse_kwargs,
+    parse_tpu_spec,
+)
 from harbor.models.task.config import TpuSpec
+from harbor.models.trial.config import AgentConfig
+
+
+def test_cli_model_capabilities_freeze_host_keys_and_only_export_declared_guest_access():
+    source = {
+        "OPENAI_API_KEY": "private-model-canary",
+        "DAYTONA_API_KEY": "private-backend-canary",
+        "AWS_SECRET_ACCESS_KEY": "private-storage-canary",
+        "OPENAI_BASE_URL": "https://private-upstream.invalid/v1",
+        "TAU2_USER_MODEL": "host-selected-model",
+    }
+    declarations = {
+        "model_endpoint": "https://judge.invalid/v1",
+        "model_name": "fixed-judge@revision",
+        "candidate_model_endpoint": "https://candidate.invalid/v1",
+        "candidate_model_name": "fixed-candidate@revision",
+    }
+    host = cli_host_capabilities(
+        source,
+        environment_kwargs=declarations,
+        agents=(
+            AgentConfig(
+                name="terminus-2", kwargs={"api_base": "https://agent.invalid/v1"}
+            ),
+        ),
+    )
+    guest = cli_guest_environment(declarations)
+    source["OPENAI_API_KEY"] = "changed-after-snapshot"
+    source["DAYTONA_API_KEY"] = "changed-after-snapshot"
+
+    assert host.model_authentication == {
+        "https://judge.invalid/v1": "private-model-canary",
+        "https://candidate.invalid/v1": "private-model-canary",
+        "https://agent.invalid/v1": "private-model-canary",
+        "https://api.openai.com/v1": "private-model-canary",
+    }
+    assert host.daytona.api_key == "private-backend-canary"
+    assert guest == {
+        "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
+        "OPENAI_API_KEY": "EMPTY",
+        "TOGETHER_API_KEY": "EMPTY",
+        "CUSTOM_API_KEY": "EMPTY",
+        "TAU2_USER_MODEL": "openai/fixed-judge@revision",
+        "TAU2_NL_ASSERTIONS_MODEL": "openai/fixed-judge@revision",
+    }
+    assert not set(source.values()) & set(guest.values())
+    assert cli_guest_environment({}) == {}
 
 
 class TestParseKwargs:

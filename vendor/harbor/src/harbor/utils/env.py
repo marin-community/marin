@@ -1,7 +1,4 @@
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
-import os
+from collections.abc import Mapping
 
 from harbor.agents.utils import PROVIDER_KEYS
 from harbor_config.env import get_required_host_vars as get_required_host_vars
@@ -13,9 +10,6 @@ from harbor_config.env import resolve_env_vars as _resolve_env_vars
 from harbor_config.env import sanitize_env_assignment as sanitize_env_assignment
 from harbor_config.env import templatize_sensitive_env as templatize_sensitive_env
 
-_TASK_ENVIRONMENT: ContextVar[Mapping[str, str]] = ContextVar(
-    "harbor_task_environment", default={}
-)
 _MODEL_CREDENTIAL_KEYS = frozenset(
     key
     for names in PROVIDER_KEYS.values()
@@ -76,7 +70,9 @@ _HOST_CREDENTIAL_KEYS = frozenset(
 )
 
 
-def validate_task_environment(values: Mapping[str, str]) -> None:
+def validate_task_environment(
+    values: Mapping[str, str], *, protected_values: frozenset[str] = frozenset()
+) -> None:
     """Reject host authentication material at the sandbox environment boundary."""
     for key, value in values.items():
         normalized = key.upper()
@@ -94,9 +90,15 @@ def validate_task_environment(values: Mapping[str, str]) -> None:
             raise ValueError(
                 f"Provider credentials must remain on the host; use a Shellbox model relay: {key}"
             )
-    protected_values = {
+    if any(value in protected_values for value in values.values()):
+        raise ValueError("Task environment contains host credential material")
+
+
+def protected_environment_values(environment: Mapping[str, str]) -> frozenset[str]:
+    """Select host credential values that must not enter a guest under another name."""
+    return frozenset(
         value
-        for key, value in os.environ.items()
+        for key, value in environment.items()
         if value
         and value != "EMPTY"
         and (
@@ -107,30 +109,17 @@ def validate_task_environment(values: Mapping[str, str]) -> None:
                 and is_sensitive_env_key(key)
             )
         )
-    }
-    if any(value in protected_values for value in values.values()):
-        raise ValueError("Task environment contains host credential material")
+    )
 
 
-@contextmanager
-def task_environment(values: Mapping[str, str]) -> Iterator[None]:
-    """Grant explicit task capabilities without exposing the harness environment."""
-    validate_task_environment(values)
-    token = _TASK_ENVIRONMENT.set(dict(values))
-    try:
-        yield
-    finally:
-        _TASK_ENVIRONMENT.reset(token)
-
-
-def task_environment_values() -> dict[str, str]:
-    """Return the explicitly granted guest environment for installed agents."""
-    return dict(_TASK_ENVIRONMENT.get())
-
-
-def resolve_env_vars(env_dict: dict[str, str]) -> dict[str, str]:
+def resolve_env_vars(
+    env_dict: dict[str, str],
+    *,
+    source: Mapping[str, str],
+    protected_values: frozenset[str] = frozenset(),
+) -> dict[str, str]:
     """Resolve task templates only from capabilities explicitly granted by its harness."""
-    validate_task_environment(env_dict)
-    resolved = _resolve_env_vars(env_dict, source=_TASK_ENVIRONMENT.get())
-    validate_task_environment(resolved)
+    validate_task_environment(env_dict, protected_values=protected_values)
+    resolved = _resolve_env_vars(env_dict, source=source)
+    validate_task_environment(resolved, protected_values=protected_values)
     return resolved

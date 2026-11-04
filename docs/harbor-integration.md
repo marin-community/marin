@@ -287,8 +287,9 @@ model name and keeps provider authentication in the host process. Its supported 
 Tau3 requires an explicit `--judge-model` in the shared launch command. That hosted model serves
 both the simulated user and verifier assertions; the candidate agent keeps its own model endpoint.
 Without a hosted model, the adapter rejects the task before allocating its container group. A direct
-Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint authentication with
-`harbor.environments.model_relay.host_model_authentication`; the adapter never reads an ambient model key.
+Harbor caller supplies `model_endpoint` and `model_name`, an explicit `HostCapabilities` value for
+host authentication, and a separate `guest_environment` mapping for task templates. Executable
+entry points capture their host environment once; adapters never read an ambient model key.
 
 The relay starts one Python HTTP helper and exchanges bounded request/response
 frames over a persistent process session. The session uses owned local process
@@ -310,6 +311,8 @@ and response bodies. Upstream authentication and context-limit errors retain san
 error codes; provider error messages are never forwarded. The Responses route supports non-streaming text input with
 an output-token limit and reasoning options; tools, stored responses, and stateful
 continuations are unsupported.
+Codex and Claude Code require protocols beyond this relay's supported contract and are rejected
+at admission. A text-only Responses route does not provide their full tool protocol.
 The tokenization route uses the configured upstream's server root. For installed
 SDKs requesting streaming chat, the host obtains one non-streaming completion and
 returns bounded SSE frames containing its text, reasoning, tool calls, finish reason,
@@ -317,7 +320,7 @@ and usage. This adds no streaming transport: the guest receives the complete buf
 response after generation finishes. Tasks using either relay need Python 3.
 
 The recognized Harbor agent-log bind is lowered only when the prepared sidecar declares
-`agent_logs: "publish"`. Before actor commands and artifact downloads, the adapter copies sidecar logs
+`agent_logs: "publish"`. After the agent phase and before verification, the adapter copies sidecar logs
 into the actor's agent-log directory through the control plane. This preserves tau3's runtime-state
 handoff to its verifier. It does not implement a shared writable volume; actor writes do not flow
 back into the sidecar.
@@ -339,7 +342,10 @@ Optional `registry_authfile` and `signature_policy` files configure host-side im
 they are never mounted into guests. Host mounts are unsupported. The guest has no external
 network route.
 
-An explicitly delegated cgroup v2 `cgroup_parent` enables CPU and memory limits
+The Harbor local adapter requires an explicitly delegated cgroup v2 `cgroup_parent`. Command
+timeouts kill that command's descendants without destroying the task filesystem or runtime peers.
+Before verification, the adapter stops all agent command groups, including detached processes;
+failure to confirm cleanup leaves the trial unscored. The same delegation enables CPU and memory limits
 across each container's processes and descendants. Use `limit` or `auto` to
 apply the task's declarations. The worker must run within that delegated
 hierarchy; see the [Shellbox delegation instructions](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md#local-backend).
@@ -365,6 +371,7 @@ environment:
   cpu_enforcement_policy: ignore
   memory_enforcement_policy: ignore
   kwargs:
+    cgroup_parent: /sys/fs/cgroup/path/to/delegated-worker
     ttl: 3600
 ```
 
@@ -375,9 +382,12 @@ uv run --isolated --project vendor/harbor --frozen --extra runtime \
   harbor run --config local-policy.yaml
 ```
 
-Model and judge settings follow the host bindings described above. A command timeout or
-cancellation closes the entire local machine or group. Cleanup preserves the originating
-interruption during startup, commands and file transfers. Local execution shares the host kernel;
+Model and judge settings use the explicit host capabilities described above. A local command
+timeout or cancellation stops its descendant processes while retaining the task for collection
+and grading. Trial cancellation closes the whole task. Cleanup preserves the originating
+interruption during startup, commands and file transfers. Confirmed cleanup of detached command
+descendants is currently a local-backend guarantee; the other backends retain their existing
+process cancellation behavior. Local execution shares the host kernel;
 use it for trusted tasks on isolated workers. Iris remains the default production boundary.
 
 The local backend uses the same Docker/OCI image contents; it unpacks the layers
@@ -534,6 +544,9 @@ Temporary policy and overlay files are owner-readable and removed after each iso
 
 The runtime uses `vendor/harbor/uv.lock`. Reproduce runs from their recorded Marin checkout
 and artifact provenance, with pinned dataset revisions and policies.
+The evaluation cache and resume record include the evaluator source and lockfile, adapter,
+scoring, storage, and execution source identities. Candidate and judge identities describe the
+registered models; a replacement serving endpoint or alias does not change the evaluation.
 The vendored package evaluates prebuilt task datasets; dataset generators are omitted.
 See the [vendor maintenance guide](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md)
 for dependency updates and direct evaluation CLI commands.
@@ -596,3 +609,8 @@ participants and ordered message, reasoning, tool-call, and observation parts. E
 normalized sample table directly. `record.json` stores the
 deterministic source-policy digest and any Marin runtime task cap. A source policy's own `n_tasks`
 remains part of the policy digest.
+
+Each attempt commits its native result, trajectory, and trajectory-presence metadata in one
+FineStore transaction. A result is terminal only after the trial's service task group and
+environment cleanup finish. Resume can repair a partial archive from terminal native files;
+missing required evidence fails the run and leaves the archive unsealed.

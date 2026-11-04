@@ -3,7 +3,6 @@ import warnings
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, NotRequired, TypedDict
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import (
@@ -30,12 +29,16 @@ from harbor_config.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
 DEFAULT_TRIAL_CLEANUP_GRACE_SEC = 30.0
 
 
-def _serialize_environment(env: dict[str, str], info: SerializationInfo) -> dict[str, str]:
+def _serialize_environment(
+    env: dict[str, str], info: SerializationInfo
+) -> dict[str, str]:
     serialized = templatize_sensitive_env(env)
     return redact_capability_urls(serialized) if info.mode == "json" else serialized
 
 
-EnvironmentVariables = Annotated[dict[str, str], PlainSerializer(_serialize_environment)]
+EnvironmentVariables = Annotated[
+    dict[str, str], PlainSerializer(_serialize_environment)
+]
 
 
 class ArtifactAuthorityConfig(BaseModel):
@@ -132,6 +135,23 @@ class AgentConfig(BaseModel):
     # environments ignore this (they use a bind mount, no round-trip).
     upload_agent_logs: bool = True
 
+    def identity_fingerprint(self) -> dict[str, Any]:
+        """Retain model and generation settings while excluding serving placement."""
+        dump = self.model_dump(exclude={"model_alias"}, exclude_none=True)
+        if self.model_name is not None:
+            for key in ("api_base", "key", "api_key"):
+                dump["kwargs"].pop(key, None)
+            for key in (
+                "HARBOR_PI_API_BASE",
+                "OPENAI_API_BASE",
+                "OPENAI_BASE_URL",
+                "OPENAI_API_KEY",
+                "TOGETHER_API_KEY",
+                "CUSTOM_API_KEY",
+            ):
+                dump["env"].pop(key, None)
+        return dump
+
     @model_validator(mode="after")
     def require_model_name_for_alias(self):
         if self.model_alias is not None and self.model_name is None:
@@ -148,7 +168,9 @@ class AgentConfig(BaseModel):
 
     @field_serializer("kwargs")
     @classmethod
-    def _serialize_kwargs(cls, kwargs: dict[str, Any], info: SerializationInfo) -> dict[str, Any]:
+    def _serialize_kwargs(
+        cls, kwargs: dict[str, Any], info: SerializationInfo
+    ) -> dict[str, Any]:
         """Replace non-serializable kwargs on dump.
 
         Some callers (e.g. SkyRL's terminal_bench generator with PRM
@@ -162,6 +184,7 @@ class AgentConfig(BaseModel):
         ``model_dump()`` and JSON dumps succeed. Original values remain on the
         live in-memory instance for the agent factory.
         """
+
         def _safe(v: Any) -> Any:
             try:
                 json.dumps(v)
@@ -265,21 +288,24 @@ class EnvironmentConfig(BaseModel):
     def _serialize_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
         return redact_capability_urls(kwargs)
 
-    def identity_fingerprint(self, *, candidate_model_identity: str | None) -> dict[str, Any]:
-        """Compare relay hosts and models without per-allocation capability routing."""
+    def identity_fingerprint(
+        self, *, candidate_model_identity: str | None, judge_model_identity: str | None
+    ) -> dict[str, Any]:
+        """Compare recorded relay models and settings independently of placement."""
         dump = self.model_dump()
         for endpoint_name, model_name in (
             ("candidate_model_endpoint", "candidate_model_name"),
             ("model_endpoint", "model_name"),
         ):
-            endpoint = self.kwargs.get(endpoint_name)
-            if endpoint and self.kwargs.get(model_name):
-                url = urlsplit(endpoint)
-                if url.hostname:
-                    dump["kwargs"][endpoint_name] = (url.scheme.lower(), url.hostname)
-                    if endpoint_name == "candidate_model_endpoint" and candidate_model_identity:
-                        # The agent's immutable model_name anchors candidate identity.
-                        dump["kwargs"].pop("candidate_model_name", None)
+            identity = (
+                candidate_model_identity
+                if endpoint_name == "candidate_model_endpoint"
+                else judge_model_identity
+            )
+            if identity or self.kwargs.get(model_name):
+                dump["kwargs"].pop(endpoint_name, None)
+                if identity:
+                    dump["kwargs"].pop(model_name, None)
         return dump
 
     @field_validator("env", mode="before")
@@ -308,6 +334,11 @@ class EnvironmentConfig(BaseModel):
 
 
 class VerifierConfig(BaseModel):
+    model_name: str | None = Field(
+        default=None,
+        description="Immutable judge model identity, independent of the verifier's serving alias.",
+        exclude_if=lambda value: value is None,
+    )
     override_timeout_sec: float | None = None
     max_timeout_sec: float | None = Field(
         default=None,
@@ -322,13 +353,13 @@ class VerifierConfig(BaseModel):
     disable: bool = False
 
     def identity_fingerprint(self) -> dict[str, Any]:
-        """Compare judge hosting service and settings without runtime URL routing."""
+        """Compare the recorded judge model and grading settings independently of placement."""
         dump = self.model_dump()
-        base_url = self.env.get("OPENAI_BASE_URL")
-        if base_url and self.env.get("MODEL_NAME"):
-            url = urlsplit(base_url)
-            if url.hostname:
-                dump["env"]["OPENAI_BASE_URL"] = (url.scheme.lower(), url.hostname)
+        if self.model_name or self.env.get("MODEL_NAME"):
+            for key in ("OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_API_KEY"):
+                dump["env"].pop(key, None)
+            if self.model_name:
+                dump["env"].pop("MODEL_NAME", None)
         return dump
 
 
@@ -468,17 +499,9 @@ class TrialConfig(BaseModel):
             other.model_dump(exclude=self.EQUALITY_EXCLUDED_FIELDS)
         )
 
-    # Agent-config keys that describe HOW a trial is SERVED at runtime (which
-    # served-model alias / endpoint / sampling-transport knobs the agent dials)
-    # rather than WHAT the trial IS. They drift across a resume that lands on a
-    # new serve node or after a serve-geometry change (e.g. a `--served-model-name`
-    # alias, an `api_base` rewrite to the live MASTER_ADDR) WITHOUT changing the
-    # task, the prompt, the verifier, or the trial's identity. The resume
-    # reconciliation must ignore these so partial progress survives benign drift.
+    # Agent timeouts are operational overrides. Generation settings remain in
+    # AgentConfig.identity_fingerprint alongside the recorded model identity.
     _SERVING_AGENT_FIELDS: ClassVar[set[str]] = {
-        "model_alias",
-        "kwargs",
-        "env",
         "override_timeout_sec",
         "override_setup_timeout_sec",
         "max_timeout_sec",
@@ -521,7 +544,13 @@ class TrialConfig(BaseModel):
         drift while still rejecting a genuinely different eval.
         """
         dump = self.model_dump(exclude=self._SERVING_TOP_FIELDS)
-        dump["environment"] = self.environment.identity_fingerprint(candidate_model_identity=self.agent.model_name)
+        dump["agent"] = self.agent.identity_fingerprint()
+        if self.user_agent is not None:
+            dump["user_agent"] = self.user_agent.identity_fingerprint()
+        dump["environment"] = self.environment.identity_fingerprint(
+            candidate_model_identity=self.agent.model_name,
+            judge_model_identity=self.verifier.model_name,
+        )
         dump["verifier"] = self.verifier.identity_fingerprint()
         task = dump.get("task")
         if isinstance(task, dict) and task.get("source") == "hf_dataset":

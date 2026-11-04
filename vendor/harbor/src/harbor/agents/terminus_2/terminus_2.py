@@ -39,6 +39,7 @@ from harbor.context_management import (
     trim_latest_turn,
 )
 from harbor.environments.base import BaseEnvironment
+from harbor.environments.runtime import OPENAI_API_URL
 from harbor.llms.base import (
     BaseLLM,
     ContextBudgetExceededError,
@@ -366,6 +367,9 @@ class Terminus2(BaseAgent):
 
         match backend_value:
             case LLMBackend.OPENAI.value:
+                constructor_kwargs["api_key"] = self._model_authentication.get(
+                    api_base or OPENAI_API_URL, "EMPTY"
+                )
                 return OpenAILLM(
                     model_name=model_name,
                     api_base=api_base,
@@ -695,6 +699,10 @@ class Terminus2(BaseAgent):
             batch_exec_timeout_margin_sec=self._batch_exec_timeout_margin_sec,
         )
         await self._session.start()
+
+    async def cleanup(self, environment: BaseEnvironment) -> None:
+        if self._session is not None:
+            await self._session.close()
 
     def _get_parser(self) -> TerminusResponseParser:
         """Return the appropriate parser instance for this format."""

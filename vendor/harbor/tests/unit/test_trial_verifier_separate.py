@@ -1,3 +1,5 @@
+import asyncio
+
 """Trial-level tests for separate verifier environments."""
 
 import contextlib
@@ -166,6 +168,7 @@ async def _run_trial(
                 SUPPORTS_WINDOWS=True,
                 setup=AsyncMock(),
                 run=AsyncMock(),
+                cleanup=AsyncMock(),
                 to_agent_info=lambda: AgentInfo(name="oracle", version="1.0"),
             ),
         ),
@@ -227,7 +230,7 @@ class TestSingleStepSeparateVerifierLifecycle:
             verifier_env.start.assert_awaited()
             verifier_env.stop.assert_awaited()
 
-    async def test_agent_env_stops_before_separate_verifier_starts(self):
+    async def test_agent_env_remains_alive_during_separate_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = _single_step_task_with_separate_verifier(Path(tmp))
             trials_dir = Path(tmp) / "trials"
@@ -240,7 +243,9 @@ class TestSingleStepSeparateVerifierLifecycle:
             async def stop_agent(delete: bool):
                 events.append("agent_stop")
 
-            async def verifier_start(force_build: bool):
+            async def verifier_start(
+                force_build: bool, *, service_tasks: asyncio.TaskGroup
+            ):
                 events.append("verifier_start")
 
             agent_env.stop.side_effect = stop_agent
@@ -249,7 +254,7 @@ class TestSingleStepSeparateVerifierLifecycle:
 
             await _run_trial(task_dir, trials_dir, fake_create)
 
-            assert events.index("agent_stop") < events.index("verifier_start")
+            assert events.index("verifier_start") < events.index("agent_stop")
 
 
 def _multi_step_task_with_step_tests(tmp: Path) -> Path:
@@ -364,7 +369,7 @@ class TestMultiStepMixedVerifierLifecycle:
                 == (task_dir / "steps" / "grade" / "tests").resolve()
             )
 
-    async def test_final_separate_step_stops_agent_env_before_verifier_starts(self):
+    async def test_final_separate_step_keeps_agent_env_until_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = _multi_step_task_with_step_tests(Path(tmp))
             trials_dir = Path(tmp) / "trials"
@@ -377,7 +382,9 @@ class TestMultiStepMixedVerifierLifecycle:
             async def stop_agent(delete: bool):
                 events.append("agent_stop")
 
-            async def verifier_start(force_build: bool):
+            async def verifier_start(
+                force_build: bool, *, service_tasks: asyncio.TaskGroup
+            ):
                 events.append("verifier_start")
 
             agent_env.stop.side_effect = stop_agent
@@ -386,7 +393,7 @@ class TestMultiStepMixedVerifierLifecycle:
 
             await _run_trial(task_dir, trials_dir, fake_create)
 
-            assert events.index("agent_stop") < events.index("verifier_start")
+            assert events.index("verifier_start") < events.index("agent_stop")
 
     async def test_non_final_separate_step_keeps_agent_env_running(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -402,10 +409,14 @@ class TestMultiStepMixedVerifierLifecycle:
             async def stop_agent(delete: bool):
                 events.append("agent_stop")
 
-            async def build_start(force_build: bool):
+            async def build_start(
+                force_build: bool, *, service_tasks: asyncio.TaskGroup
+            ):
                 events.append("build_verifier_start")
 
-            async def grade_start(force_build: bool):
+            async def grade_start(
+                force_build: bool, *, service_tasks: asyncio.TaskGroup
+            ):
                 events.append("grade_verifier_start")
 
             agent_env.stop.side_effect = stop_agent
@@ -419,7 +430,7 @@ class TestMultiStepMixedVerifierLifecycle:
             await _run_trial(task_dir, trials_dir, fake_create)
 
             assert events.index("build_verifier_start") < events.index("agent_stop")
-            assert events.index("agent_stop") < events.index("grade_verifier_start")
+            assert events.index("grade_verifier_start") < events.index("agent_stop")
 
     async def test_each_separate_step_gets_its_own_env_with_step_keyed_session(self):
         with tempfile.TemporaryDirectory() as tmp:

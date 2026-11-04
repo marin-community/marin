@@ -44,6 +44,7 @@ try:
         EvaluationStore,
         Grading,
         SampleKind,
+        SourceArtifact,
         StepRecord,
     )
     from finestore.reader import ReadView
@@ -58,6 +59,44 @@ logger = logging.getLogger(__name__)
 SOLVED_REWARD = 0.99
 _JSON_CONTENT_TYPE = "application/json"
 _JOB_SOURCE_NAMES = (JOB_CONFIG_FILENAME, JOB_LOCK_FILENAME, JOB_RESULT_FILENAME)
+
+
+def _attempt_is_complete(reader: ReadView, prefix: str) -> bool:
+    metadata = reader.blob_metadata(f"{prefix}/result.json")
+    if metadata is None or not isinstance(metadata.get("trajectory_present"), bool):
+        return False
+    raw = reader.read_blob(f"{prefix}/result.json")
+    if raw is None:
+        return False
+    result = TrialResult.model_validate_json(raw)
+    if (
+        result.completion is None
+        or result.finished_at is None
+        or result.completion.trajectory_present != metadata["trajectory_present"]
+    ):
+        return False
+    if (
+        metadata["trajectory_present"]
+        and reader.blob_metadata(f"{prefix}/trajectory.json") is None
+    ):
+        return False
+    return True
+
+
+def _validate_native_result(native: TrialResult, selected: TrialResult) -> None:
+    if (
+        native.id != selected.id
+        or native.trial_name != selected.trial_name
+        or native.task_name != selected.task_name
+        or not native.config.matches_identity(selected.config)
+    ):
+        raise ValueError(
+            f"Native attempt identity differs for trial {selected.trial_name}, attempt {selected.id}"
+        )
+    if native.completion is None or native.finished_at is None:
+        raise ValueError(
+            f"Attempt {selected.id} has no finalized native result after teardown; retry the attempt"
+        )
 
 
 def _numeric_rewards(result: TrialResult) -> dict[str, float]:
@@ -143,34 +182,40 @@ def _trajectory_step_rows(
                 source=step.source,
                 model_name=step.model_name,
                 message=_content_to_text(step.message),
-                reasoning_content=_content_to_text(step.reasoning_content)
-                if step.reasoning_content is not None
-                else None,
-                tool_calls_json=json.dumps(
-                    [
-                        tool_call.model_dump(mode="json")
-                        for tool_call in step.tool_calls
-                    ],
-                    ensure_ascii=True,
-                )
-                if step.tool_calls is not None
-                else None,
-                observation_json=json.dumps(
-                    step.observation.model_dump(mode="json"), ensure_ascii=True
-                )
-                if step.observation is not None
-                else None,
+                reasoning_content=(
+                    _content_to_text(step.reasoning_content)
+                    if step.reasoning_content is not None
+                    else None
+                ),
+                tool_calls_json=(
+                    json.dumps(
+                        [
+                            tool_call.model_dump(mode="json")
+                            for tool_call in step.tool_calls
+                        ],
+                        ensure_ascii=True,
+                    )
+                    if step.tool_calls is not None
+                    else None
+                ),
+                observation_json=(
+                    json.dumps(
+                        step.observation.model_dump(mode="json"), ensure_ascii=True
+                    )
+                    if step.observation is not None
+                    else None
+                ),
                 prompt_tokens=metrics.prompt_tokens if metrics is not None else None,
-                completion_tokens=metrics.completion_tokens
-                if metrics is not None
-                else None,
+                completion_tokens=(
+                    metrics.completion_tokens if metrics is not None else None
+                ),
                 cost_usd=metrics.cost_usd if metrics is not None else None,
-                prompt_token_ids=metrics.prompt_token_ids
-                if metrics is not None
-                else None,
-                completion_token_ids=metrics.completion_token_ids
-                if metrics is not None
-                else None,
+                prompt_token_ids=(
+                    metrics.prompt_token_ids if metrics is not None else None
+                ),
+                completion_token_ids=(
+                    metrics.completion_token_ids if metrics is not None else None
+                ),
                 logprobs=metrics.logprobs if metrics is not None else None,
             )
         )
@@ -225,7 +270,7 @@ class TrialArchive:
                 archived = result.id in self._attempt_digests
             if not archived:
                 prefix = f"sources/harbor/{result.trial_name}/attempts/{result.id}"
-                if previous.read_blob(f"{prefix}/result.json") is not None:
+                if _attempt_is_complete(previous, prefix):
                     continue
                 # Resumed results did not emit END in this writer. Their persisted
                 # attempt result retains the payload that the job may have slimmed.
@@ -235,14 +280,7 @@ class TrialArchive:
                         f"Missing persisted attempt {result.id} for trial {result.trial_name}: {path}"
                     )
                 native = TrialResult.model_validate_json(path.read_bytes())
-                if (
-                    native.id != result.id
-                    or native.trial_name != result.trial_name
-                    or native.task_name != result.task_name
-                ):
-                    raise ValueError(
-                        f"Persisted attempt identity differs for trial {result.trial_name}, attempt {result.id}"
-                    )
+                _validate_native_result(native, result)
                 self._write_attempt_safely(native)
         self._store.flush()
         reader = ReadView(self._root)
@@ -301,11 +339,17 @@ class TrialArchive:
                 )
 
     def _write_attempt(self, result: TrialResult) -> None:
+        _validate_native_result(result, result)
+        assert result.completion is not None
         prefix = f"harbor/{result.trial_name}/attempts/{result.id}"
         native = result.model_dump_json(indent=4).encode()
         trial_dir = result.resolve_trial_path(self._trials_dir)
         trajectory_path = trial_dir / "agent" / "trajectory.json"
-        raw = trajectory_path.read_bytes() if trajectory_path.exists() else None
+        raw = (
+            trajectory_path.read_bytes()
+            if result.completion.trajectory_present
+            else None
+        )
         digest = hashlib.sha256(native)
         digest.update(b"\0no-trajectory" if raw is None else b"\0trajectory\0")
         if raw is not None:
@@ -319,37 +363,47 @@ class TrialArchive:
                         f"Native result or trajectory changed for immutable attempt {result.id}"
                     )
                 return
-            self._store.add_source_artifact(
-                f"{prefix}/result.json",
-                native,
-                content_type=_JSON_CONTENT_TYPE,
-            )
-            if raw is not None:
-                self._store.add_source_artifact(
-                    f"{prefix}/trajectory.json",
-                    raw,
+            sources = [
+                SourceArtifact(
+                    name=f"{prefix}/result.json",
+                    raw=native,
                     content_type=_JSON_CONTENT_TYPE,
+                    metadata={
+                        "trajectory_present": result.completion.trajectory_present
+                    },
                 )
+            ]
+            if raw is not None:
+                sources.append(
+                    SourceArtifact(
+                        name=f"{prefix}/trajectory.json",
+                        raw=raw,
+                        content_type=_JSON_CONTENT_TYPE,
+                    )
+                )
+            self._store.add_source_artifacts(sources)
             self._attempt_digests[result.id] = fingerprint
 
     def _write_result(self, selected: TrialResult, reader: ReadView) -> None:
         prefix = f"sources/harbor/{selected.trial_name}/attempts/{selected.id}"
+        if not _attempt_is_complete(reader, prefix):
+            raise ValueError(
+                f"Incomplete archived attempt {selected.id} for trial {selected.trial_name}"
+            )
         native = reader.read_blob(f"{prefix}/result.json")
         if native is None:
             raise ValueError(
                 f"Missing archived attempt {selected.id} for trial {selected.trial_name}"
             )
         result = TrialResult.model_validate_json(native)
-        if (
-            result.id != selected.id
-            or result.trial_name != selected.trial_name
-            or result.task_name != selected.task_name
-        ):
-            raise ValueError(
-                f"Archived attempt identity differs for trial {selected.trial_name}, attempt {selected.id}"
-            )
+        _validate_native_result(result, selected)
         trajectory_uri = None
-        raw = reader.read_blob(f"{prefix}/trajectory.json")
+        assert result.completion is not None
+        raw = (
+            reader.read_blob(f"{prefix}/trajectory.json")
+            if result.completion.trajectory_present
+            else None
+        )
         if raw is not None:
             # Preserve the original JSON artifact, including surrogate escapes;
             # normalized Arrow text needs a UTF-8-safe representation.
@@ -381,6 +435,7 @@ class TrialArchive:
             _trial_sample(result, self._dataset, trajectory_uri=trajectory_uri),
             trial_id=result.trial_name,
         )
+        self._store.flush()
         with self._lock:
             self._written_trial_ids.add(result.trial_name)
 

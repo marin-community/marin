@@ -18,7 +18,6 @@ from shellbox.machine import (
     NetworkPolicy,
     UnsupportedMachineSpec,
 )
-from shellbox.process_session import finish_owned, own_cleanup
 
 _TIMED_PROBE = """\
 import os
@@ -136,17 +135,10 @@ class Task:
         return f"{container}:{port}"
 
     async def wait_ready(self) -> None:
-        """Wait for each declared probe, reclaiming the whole group on failure."""
-        try:
-            for container in self.spec.containers:
-                if container.readiness is not None:
-                    await wait_service_ready(self.containers[container.name], container.readiness)
-        except BaseException as error:
-            try:
-                await finish_owned(own_cleanup(self.close()))
-            except BaseException as cleanup_error:
-                error.add_note(f"Task readiness cleanup failed ({type(cleanup_error).__name__})")
-            raise
+        """Wait for declared probes; the owner closes helpers and task on failure."""
+        for container in self.spec.containers:
+            if container.readiness is not None:
+                await wait_service_ready(self.containers[container.name], container.readiness)
 
     async def close(self) -> None:
         if self._closing is None:

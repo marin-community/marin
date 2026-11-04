@@ -1,7 +1,6 @@
 """Unit tests for Claude Code reasoning_effort (--effort flag) support."""
 
-import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -90,36 +89,39 @@ class TestReasoningEffortInCommand:
         assert "--effort" not in command
 
     @pytest.mark.asyncio
-    async def test_effort_flag_from_env_var(self, temp_dir):
-        with patch.dict(
-            os.environ, {"CLAUDE_CODE_EFFORT_LEVEL": "medium"}, clear=False
-        ):
-            agent = ClaudeCode(logs_dir=temp_dir)
+    async def test_effort_flag_from_explicit_environment(self, temp_dir, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "high")
+        agent = ClaudeCode(
+            logs_dir=temp_dir, extra_env={"CLAUDE_CODE_EFFORT_LEVEL": "medium"}
+        )
 
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            mock_context = AsyncMock()
+        mock_env = AsyncMock()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        mock_context = AsyncMock()
 
-            await agent.run("do something", mock_env, mock_context)
+        await agent.run("do something", mock_env, mock_context)
 
-            run_command = mock_env.exec.call_args_list[-1]
-            command = run_command.kwargs.get("command", "")
-            assert "--effort medium" in command
+        run_command = mock_env.exec.call_args_list[-1]
+        command = run_command.kwargs.get("command", "")
+        assert "--effort medium" in command
 
     @pytest.mark.asyncio
-    async def test_kwarg_takes_precedence_over_env_var(self, temp_dir):
-        with patch.dict(os.environ, {"CLAUDE_CODE_EFFORT_LEVEL": "low"}, clear=False):
-            agent = ClaudeCode(logs_dir=temp_dir, reasoning_effort="high")
+    async def test_kwarg_takes_precedence_over_explicit_environment(self, temp_dir):
+        agent = ClaudeCode(
+            logs_dir=temp_dir,
+            reasoning_effort="high",
+            extra_env={"CLAUDE_CODE_EFFORT_LEVEL": "low"},
+        )
 
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            mock_context = AsyncMock()
+        mock_env = AsyncMock()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        mock_context = AsyncMock()
 
-            await agent.run("do something", mock_env, mock_context)
+        await agent.run("do something", mock_env, mock_context)
 
-            run_command = mock_env.exec.call_args_list[-1]
-            command = run_command.kwargs.get("command", "")
-            assert "--effort high" in command
+        run_command = mock_env.exec.call_args_list[-1]
+        command = run_command.kwargs.get("command", "")
+        assert "--effort high" in command
 
     def test_invalid_reasoning_effort_raises(self, temp_dir):
         with pytest.raises(ValueError, match="Invalid value for 'reasoning_effort'"):

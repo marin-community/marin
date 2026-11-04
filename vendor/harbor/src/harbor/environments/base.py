@@ -9,7 +9,7 @@ import time
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal
 
@@ -20,6 +20,7 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.definition import should_upload_environment_dir
+from harbor.environments.runtime import HostCapabilities
 from harbor.environments.resource_policies import (
     validate_resource_capabilities,
     validate_resource_values,
@@ -58,6 +59,8 @@ BASE_ENVIRONMENT_ARGUMENTS = frozenset(
         "memory_enforcement_policy",
         "persistent_env",
         "mounts",
+        "host_capabilities",
+        "guest_environment",
     }
 )
 
@@ -131,6 +134,8 @@ class BaseEnvironment(ABC):
         memory_enforcement_policy: ResourceMode = ResourceMode.AUTO,
         persistent_env: dict[str, str] | None = None,
         mounts: list[ServiceVolumeConfig] | None = None,
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
         *args,
         **kwargs,
     ):
@@ -170,6 +175,8 @@ class BaseEnvironment(ABC):
         self.default_user = None
         self.agent_timeout_sec = None
         self.task_env_config = task_env_config
+        self.host_capabilities = host_capabilities
+        self.guest_environment = dict(guest_environment)
 
         self._override_cpus = override_cpus
         self._override_memory_mb = override_memory_mb
@@ -179,7 +186,9 @@ class BaseEnvironment(ABC):
         self._cpu_resource_mode = ResourceMode(cpu_enforcement_policy)
         self._memory_resource_mode = ResourceMode(memory_enforcement_policy)
         self._persistent_env: dict[str, str] = persistent_env or {}
-        validate_task_environment(self._persistent_env)
+        validate_task_environment(
+            self._persistent_env, protected_values=host_capabilities.protected_values
+        )
         self._exec_env_overlays: contextvars.ContextVar[tuple[dict[str, str], ...]] = (
             contextvars.ContextVar(f"harbor_exec_env_overlays_{id(self)}", default=())
         )
@@ -203,8 +212,20 @@ class BaseEnvironment(ABC):
 
     def _maybe_resolve_task_env(self):
         if self.task_env_config.env and not self._uses_compose:
-            resolved = resolve_env_vars(self.task_env_config.env)
+            resolved = resolve_env_vars(
+                self.task_env_config.env,
+                source=self.guest_environment,
+                protected_values=self.host_capabilities.protected_values,
+            )
             self._persistent_env = {**resolved, **self._persistent_env}
+
+    def resolve_env_vars(self, values: dict[str, str]) -> dict[str, str]:
+        """Resolve guest templates from this execution's captured inputs."""
+        return resolve_env_vars(
+            values,
+            source=self.guest_environment,
+            protected_values=self.host_capabilities.protected_values,
+        )
 
     def _maybe_override_task_env_config(self):
         if self._override_cpus is not None:
@@ -369,7 +390,9 @@ class BaseEnvironment(ABC):
             merged.update(env)
         for scoped_env in overlays:
             merged.update(scoped_env)
-        validate_task_environment(merged)
+        validate_task_environment(
+            merged, protected_values=self.host_capabilities.protected_values
+        )
         return merged or None
 
     @contextlib.contextmanager
@@ -717,12 +740,20 @@ class BaseEnvironment(ABC):
         await self.upload_dir(self.environment_dir, workdir)
 
     @abstractmethod
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         """Starts the environment and optionally forces a build."""
 
     @abstractmethod
     async def stop(self, delete: bool):
         """Stop and reclaim the environment; retention is rejected before allocation."""
+
+    async def collect_runtime_logs(self) -> None:
+        """Copy declared runtime output into the actor before grading or recovery."""
+
+    async def quiesce_agent_commands(self) -> None:
+        """Confirm agent commands have stopped before collecting their output."""
 
     async def prepare_logs_for_host(self) -> None:
         """Fix log file permissions so the host process can read them.

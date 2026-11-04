@@ -895,8 +895,8 @@ def test_job_lock_equality_still_catches_agent_semantic_env_drift() -> None:
             },
             True,
         ),
-        ({"OPENAI_BASE_URL": "https://another.example/v1"}, False),
-        ({"OPENAI_BASE_URL": "http://iris.example/v1"}, False),
+        ({"OPENAI_BASE_URL": "https://another.example/v1"}, True),
+        ({"OPENAI_BASE_URL": "http://iris.example/v1"}, True),
         ({"MODEL_NAME": "different-judge"}, False),
         ({"REASONING_EFFORT": "high"}, False),
     ],
@@ -936,6 +936,49 @@ def test_judge_endpoint_rotation_without_model_identity_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(
+    "judge_identity,reasoning_effort,matches",
+    [
+        ("org/judge@revision", "low", True),
+        ("org/different-judge@revision", "low", False),
+        ("org/judge@revision", "high", False),
+    ],
+)
+def test_recorded_judge_identity_survives_host_and_serving_alias_replacement(
+    judge_identity, reasoning_effort, matches
+):
+    task = TaskConfig(name="test-org/test-task", ref=_sha("a"))
+    trials = [
+        _trial(
+            task,
+            verifier=VerifierConfig(
+                model_name=identity,
+                env={
+                    "MODEL_NAME": alias,
+                    "OPENAI_BASE_URL": endpoint,
+                    "REASONING_EFFORT": effort,
+                },
+            ),
+            environment=EnvironmentConfig(
+                kwargs={"model_name": alias, "model_endpoint": endpoint}
+            ),
+        )
+        for identity, alias, endpoint, effort in (
+            ("org/judge@revision", "alias-a", "https://host-a.example/v1", "low"),
+            (judge_identity, "alias-b", "https://host-b.example/v1", reasoning_effort),
+        )
+    ]
+    saved = TrialConfig.model_validate_json(trials[0].model_dump_json())
+    assert saved.matches_identity(trials[1]) is matches
+    config = JobConfig(job_name="job", tasks=[task])
+    saved_lock = JobLock.model_validate_json(
+        build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json()
+    )
+    assert (
+        saved_lock == build_job_lock(config=config, trial_configs=[trials[1]])
+    ) is matches
+
+
+@pytest.mark.parametrize(
     ("overrides", "candidate_model", "matches"),
     [
         (
@@ -951,14 +994,16 @@ def test_judge_endpoint_rotation_without_model_identity_is_rejected() -> None:
         ({}, "org/different-candidate", False),
         ({"model_name": "different-judge"}, "org/candidate", False),
         ({"network_block_all": False}, "org/candidate", False),
-        ({"candidate_model_endpoint": "http://iris.example/v1"}, "org/candidate", False),
+        ({"candidate_model_endpoint": "http://iris.example/v1"}, "org/candidate", True),
         *[
-            ({endpoint: "https://other.example/v1"}, "org/candidate", False)
+            ({endpoint: "https://other.example/v1"}, "org/candidate", True)
             for endpoint in ("candidate_model_endpoint", "model_endpoint")
         ],
     ],
 )
-def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(overrides, candidate_model, matches):
+def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(
+    overrides, candidate_model, matches
+):
     task = TaskConfig(name="test-org/test-task", ref=_sha("a"))
     old_kwargs = {
         "candidate_model_endpoint": "https://iris.example/proxy/t/old-capability/serve.old/v1",
@@ -969,7 +1014,9 @@ def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(ov
     }
     old_trial = _trial(
         task,
-        agent=AgentConfig(name="pi", model_name="org/candidate", model_alias="old-serving-alias"),
+        agent=AgentConfig(
+            name="pi", model_name="org/candidate", model_alias="old-serving-alias"
+        ),
         environment=EnvironmentConfig(type="daytona", kwargs=old_kwargs),
     )
     persisted = old_trial.model_dump_json()
@@ -978,13 +1025,19 @@ def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(ov
     new_kwargs = old_kwargs | overrides
     new_trial = _trial(
         task,
-        agent=AgentConfig(name="pi", model_name=candidate_model, model_alias=new_kwargs["candidate_model_name"]),
+        agent=AgentConfig(
+            name="pi",
+            model_name=candidate_model,
+            model_alias=new_kwargs["candidate_model_name"],
+        ),
         environment=EnvironmentConfig(type="daytona", kwargs=new_kwargs),
     )
     assert saved_trial.matches_identity(new_trial) is matches
 
     config = JobConfig(job_name="job", tasks=[task])
-    persisted_lock = build_job_lock(config=config, trial_configs=[old_trial]).model_dump_json()
+    persisted_lock = build_job_lock(
+        config=config, trial_configs=[old_trial]
+    ).model_dump_json()
     assert "old-capability" not in persisted_lock
     saved_lock = JobLock.model_validate_json(persisted_lock)
     new_lock = build_job_lock(config=config, trial_configs=[new_trial])
@@ -1013,7 +1066,10 @@ def test_candidate_model_change_without_immutable_agent_identity_rejects_saved_r
             task,
             agent=AgentConfig(name="pi"),
             environment=EnvironmentConfig(
-                kwargs={"candidate_model_endpoint": "https://iris.example/v1", "candidate_model_name": model}
+                kwargs={
+                    "candidate_model_endpoint": "https://iris.example/v1",
+                    "candidate_model_name": model,
+                }
             ),
         )
         for model in ("candidate-a", "candidate-b")
@@ -1021,7 +1077,42 @@ def test_candidate_model_change_without_immutable_agent_identity_rejects_saved_r
     saved_trial = TrialConfig.model_validate_json(trials[0].model_dump_json())
     assert not saved_trial.matches_identity(trials[1])
     config = JobConfig(job_name="job", tasks=[task])
-    saved_lock = JobLock.model_validate_json(build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json())
+    saved_lock = JobLock.model_validate_json(
+        build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json()
+    )
+    assert saved_lock != build_job_lock(config=config, trial_configs=[trials[1]])
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"temperature": 0.8},
+        {"max_tokens": 8192},
+        {"tool_url": "https://different-tool.example"},
+    ],
+)
+def test_candidate_generation_or_tool_changes_reject_saved_results(overrides):
+    task = TaskConfig(name="test-org/test-task", ref=_sha("a"))
+    kwargs = {
+        "temperature": 0.0,
+        "max_tokens": 4096,
+        "tool_url": "https://tool.example",
+    }
+    trials = [
+        _trial(
+            task,
+            agent=AgentConfig(
+                name="pi", model_name="org/candidate@revision", kwargs=settings
+            ),
+        )
+        for settings in (kwargs, kwargs | overrides)
+    ]
+    saved = TrialConfig.model_validate_json(trials[0].model_dump_json())
+    assert not saved.matches_identity(trials[1])
+    config = JobConfig(job_name="job", tasks=[task])
+    saved_lock = JobLock.model_validate_json(
+        build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json()
+    )
     assert saved_lock != build_job_lock(config=config, trial_configs=[trials[1]])
 
 

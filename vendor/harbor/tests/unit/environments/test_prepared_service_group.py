@@ -10,16 +10,14 @@ import shlex
 from pathlib import Path
 
 import httpx
-import pytest
 
+from harbor.environments.runtime import HostCapabilities
 from harbor.environments import local
 from harbor.environments.local import LocalEnvironment
 from harbor.environments import model_relay
-from harbor.environments.model_relay import host_model_authentication
 from tests.unit.environments.transport import ProcessMachine, available_port
 from harbor.models.task.config import EnvironmentConfig, MCPServerConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor.utils.env import task_environment
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.task import Task, TaskSpec
 
@@ -53,9 +51,14 @@ class ProcessTaskFactory:
         self.root, self.port = root, port
         self.closed = False
 
+    def check_environment(self, requirements, spec) -> None:
+        pass
+
     async def create_task(self, spec: TaskSpec) -> Task:
         actor = ProcessMachine(self.root / "actor", spec.primary_container.machine)
-        (runtime_spec,) = (container for container in spec.containers if container.name != spec.primary)
+        (runtime_spec,) = (
+            container for container in spec.containers if container.name != spec.primary
+        )
         runtime = ProcessMachine(self.root / "runtime", runtime_spec.machine)
         script = self.root / "runtime.py"
         script.write_text(_RUNTIME)
@@ -105,7 +108,9 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
         json.dumps(
             {
                 "services": {
-                    "main": {"depends_on": {"tau3-runtime": {"condition": "service_healthy"}}},
+                    "main": {
+                        "depends_on": {"tau3-runtime": {"condition": "service_healthy"}}
+                    },
                     "tau3-runtime": {
                         "environment": {
                             "OPENAI_BASE_URL": "${OPENAI_BASE_URL}",
@@ -141,22 +146,26 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
     monkeypatch.setattr(
         model_relay.httpx,
         "AsyncClient",
-        lambda **kwargs: original_client(transport=httpx.MockTransport(provider), **kwargs),
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(provider), **kwargs
+        ),
     )
     factory = ProcessTaskFactory(tmp_path, runtime_port)
-    monkeypatch.setattr("harbor.environments.local.LocalMachineFactory", lambda **kwargs: factory)
+    monkeypatch.setattr(
+        "harbor.environments.local.LocalMachineFactory", lambda **kwargs: factory
+    )
 
     async def check() -> None:
-        with (
-            task_environment(
-                {
+        async with asyncio.TaskGroup() as service_tasks:
+            adapter = LocalEnvironment(
+                host_capabilities=HostCapabilities(
+                    daytona=None,
+                    model_authentication={"https://judge.test/v1": "explicit-host-key"},
+                ),
+                guest_environment={
                     "OPENAI_BASE_URL": f"http://127.0.0.1:{relay_port}/v1",
                     "OPENAI_API_KEY": "EMPTY",
-                }
-            ),
-            host_model_authentication({"https://judge.test/v1": "explicit-host-key"}),
-        ):
-            adapter = LocalEnvironment(
+                },
                 environment_dir=environment_dir,
                 environment_name="tau3",
                 session_id="trial",
@@ -174,25 +183,39 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
                     ],
                 ),
             )
-            await adapter.start(force_build=False)
+            await adapter.start(service_tasks=service_tasks, force_build=False)
             try:
                 actor_code = f"import json,os,urllib.request; assert 'AWS_SECRET_ACCESS_KEY' not in os.environ; print(json.load(urllib.request.urlopen(urllib.request.Request('http://tau3-runtime:{runtime_port}/mcp',data=b'{{}}'))))"
                 actor = await adapter.exec("python3 -c " + shlex.quote(actor_code))
                 assert actor.return_code == 0, actor.stderr
                 assert "42" in actor.stdout
+                runtime_log = adapter.execution.containers["tau3-runtime"].path(
+                    "/logs/agent/tau3_runtime_state.json"
+                )
+                runtime_log.write_text(json.dumps({"answer": "43"}))
+                await adapter.exec("true")
+                adapter.machine.path("/logs/agent").mkdir(parents=True, exist_ok=True)
+                before_collection = tmp_path / "before-collection"
+                await adapter.download_dir("/logs/agent", before_collection)
+                assert not (before_collection / "tau3_runtime_state.json").exists()
+                await adapter.collect_runtime_logs()
                 verifier = await adapter.exec(
                     "python3 -c \"import json; print(json.load(open('/logs/agent/tau3_runtime_state.json'))['answer'])\""
                 )
                 assert verifier.return_code == 0
-                assert verifier.stdout.strip() == "42"
+                assert verifier.stdout.strip() == "43"
                 archive = StoragePath(f"memory://tau3-{tmp_path.name}/logs")
                 (archive / "previous.txt").write_text("previous artifact")
                 await adapter.download_dir("/logs/agent", str(archive))
-                assert json.loads((archive / "tau3_runtime_state.json").read_text()) == {"answer": "42"}
+                assert json.loads(
+                    (archive / "tau3_runtime_state.json").read_text()
+                ) == {"answer": "43"}
                 assert (archive / "previous.txt").read_text() == "previous artifact"
             finally:
                 await adapter.stop(delete=True)
-        assert factory.closed
-        assert model_calls == [{"model": "judge-model", "messages": [], "stream": False}]
+            assert factory.closed
+            assert model_calls == [
+                {"model": "judge-model", "messages": [], "stream": False}
+            ]
 
     asyncio.run(check())

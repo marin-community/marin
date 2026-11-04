@@ -4,7 +4,6 @@ from types import SimpleNamespace
 import pytest
 from harbor.cli.main import app
 from harbor.environments.factory import EnvironmentFactory
-from harbor.environments.runtime import daytona_connection
 from harbor.models.job.config import JobConfig
 from harbor.models.task.config import EnvironmentConfig as TaskEnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
@@ -27,7 +26,9 @@ class _FakeJob:
 def _capture_job_config(monkeypatch, tmp_path: Path) -> list[JobConfig]:
     captured: list[JobConfig] = []
 
-    async def create(config: JobConfig) -> _FakeJob:
+    async def create(
+        config: JobConfig, *, host_capabilities, guest_environment
+    ) -> _FakeJob:
         captured.append(config)
         return _FakeJob(config, tmp_path)
 
@@ -167,9 +168,11 @@ def test_jobs_start_rejects_removed_execution_paths(arguments):
 
 
 @pytest.mark.parametrize("fail", [False, True])
-@pytest.mark.parametrize("use_env_file", [False, True])
-def test_cli_binds_private_backend_connection_until_command_closes(
-    tmp_path: Path, monkeypatch, fail, use_env_file
+@pytest.mark.parametrize(
+    "command,use_env_file", [("start", False), ("start", True), ("resume", False)]
+)
+def test_cli_snapshots_private_backend_connection_after_dotenv_and_isolates_guest(
+    tmp_path: Path, monkeypatch, fail, command, use_env_file
 ):
     monkeypatch.setenv("DAYTONA_API_KEY", "private-backend-canary")
     monkeypatch.setenv("DAYTONA_API_URL", "https://daytona.invalid/api")
@@ -188,8 +191,11 @@ def test_cli_binds_private_backend_connection_until_command_closes(
     monkeypatch.setattr("harbor.environments.daytona.DaytonaMachineFactory", factory)
     _capture_job_config(monkeypatch, tmp_path)
 
-    async def create(config):
+    async def create(config, *, host_capabilities, guest_environment):
         configurations.append(config)
+        monkeypatch.setenv("DAYTONA_API_KEY", "changed-after-snapshot")
+        monkeypatch.setenv("DAYTONA_API_URL", "https://changed.invalid/api")
+        monkeypatch.setenv("DAYTONA_TARGET", "changed-target")
         EnvironmentFactory.create_environment_from_config(
             config.environment,
             environment_dir=tmp_path,
@@ -199,13 +205,25 @@ def test_cli_binds_private_backend_connection_until_command_closes(
             task_env_config=TaskEnvironmentConfig(
                 docker_image="registry.invalid/task@sha256:" + "a" * 64
             ),
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
         )
+        assert guest_environment == {}
         if fail:
             raise RuntimeError("command failed after backend construction")
         return _FakeJob(config, tmp_path)
 
     monkeypatch.setattr("harbor.job.Job.create", create)
     arguments = ["jobs", "start", "--env", "daytona"]
+    if command == "resume":
+        job_dir = tmp_path / "existing-job"
+        job_dir.mkdir()
+        (job_dir / "config.json").write_text(
+            JobConfig.model_validate(
+                {"environment": {"type": "daytona"}}
+            ).model_dump_json()
+        )
+        arguments = ["jobs", "resume", "--job-path", str(job_dir)]
     if use_env_file:
         monkeypatch.setenv("DAYTONA_API_KEY", "ambient-backend-canary")
         env_file = tmp_path / "backend.env"
@@ -224,5 +242,6 @@ def test_cli_binds_private_backend_connection_until_command_closes(
     assert connections[0].target == "test-target"
     assert "private-backend-canary" not in configurations[0].model_dump_json()
     assert configurations[0].environment.kwargs == {}
-    with pytest.raises(ValueError, match="explicit host"):
-        daytona_connection()
+    monkeypatch.delenv("DAYTONA_API_KEY")
+    disconnected = runner.invoke(app, ["jobs", "start", "--env", "daytona"])
+    assert disconnected.exit_code == 1

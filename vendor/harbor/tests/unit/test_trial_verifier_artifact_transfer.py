@@ -134,6 +134,7 @@ async def _run(task_dir, trials_dir, agent_env, verifier_env):
                 SUPPORTS_WINDOWS=True,
                 setup=AsyncMock(),
                 run=AsyncMock(),
+                cleanup=AsyncMock(),
                 to_agent_info=lambda: AgentInfo(name="oracle", version="1.0"),
             ),
         ),

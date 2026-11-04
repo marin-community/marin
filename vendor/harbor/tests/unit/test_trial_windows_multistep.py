@@ -65,6 +65,8 @@ def _make_trial_for_step_verification(
     trial._create_step_dirs = MagicMock()
     trial._prepare_step = AsyncMock()
     trial._run_step_agent = AsyncMock()
+    trial._collect_runtime_logs = AsyncMock()
+    trial._sync_agent_output = AsyncMock()
     trial._upload_agent_logs = AsyncMock()
     trial._collect_step_artifacts = AsyncMock(
         return_value=trial.paths.step_artifacts_dir("grade")

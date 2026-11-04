@@ -7,6 +7,7 @@ from typing import Any
 
 from upath import UPath
 
+from harbor.models.agent.model_api import ModelAPI
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
@@ -41,6 +42,7 @@ from harbor.utils.scripts import (
 
 
 class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
+    MODEL_API = ModelAPI.ANTHROPIC_MESSAGES
     SUPPORTS_ATIF: bool = True
     SUPPORTED_BRIDGES = frozenset({BridgeKind.ACP})
     CLAUDE_CODE_ACP_VERSION = "0.16.2"

@@ -174,6 +174,47 @@ def _write_harbor_config(path: Path) -> Path:
     return path
 
 
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "vendor/harbor/src/source.py",
+        "vendor/harbor/uv.lock",
+        "lib/finestore/src/source.py",
+        "lib/rigging/src/source.py",
+        "lib/shellbox/src/source.py",
+        "lib/marin/src/marin/evaluation/harbor/source.py",
+        "lib/marin/src/marin/evaluation/rollouts.py",
+    ],
+)
+def test_harbor_cache_reuses_unchanged_sources_and_invalidates_changed_runtime(
+    tmp_path, monkeypatch, harbor_runtime_sources, filename
+):
+    _install_fake_harbor_preflight(monkeypatch)
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(HarborDefinition("test", _write_harbor_config(tmp_path / "policy.yaml")),),
+        platform=Platform.GPU,
+        accelerator="H100x8",
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+        cache_key="same-pipeline",
+    )
+    provenance = LaunchProvenance(git_sha="abc", launch_host="host")
+    before = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
+    (harbor_runtime_sources / "vendor/harbor/src/ignored.py").write_text("scratch = True\n")
+    unchanged = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
+    assert unchanged == before
+    source = harbor_runtime_sources / filename
+    source.write_text(source.read_text() + "changed runtime\n")
+    changed = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
+    assert changed != before
+
+
 def _write_model_config(path: Path) -> Path:
     path.write_text(
         """\

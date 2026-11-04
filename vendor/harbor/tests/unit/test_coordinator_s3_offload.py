@@ -83,6 +83,8 @@ async def test_finalize_writes_result_json_off_event_loop(
 
     trial = object.__new__(SingleStepTrial)
     trial._attempt_index = None
+    trial._is_agent_environment_stopped = True
+    trial._environment_cleanup_failed = False
     trial._stop_agent_environment = AsyncMock()  # type: ignore[attr-defined]
     # Round-3: _enforce_verifier_result_invariant is now async (it offloads its
     # own exception.txt write off the loop), so _finalize awaits it.
@@ -92,7 +94,9 @@ async def test_finalize_writes_result_json_off_event_loop(
         finished_at=None,
         model_dump_json=lambda indent: '{"ok": true}',
     )
-    trial.paths = SimpleNamespace(result_path=writer, trial_dir=tmp_path)
+    trial.paths = SimpleNamespace(
+        result_path=writer, trial_dir=tmp_path, agent_dir=tmp_path / "agent"
+    )
 
     # _finalize awaits the required result, so the write is durable on return.
     await trial._finalize()

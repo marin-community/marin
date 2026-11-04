@@ -419,7 +419,9 @@ class TestTrialBridgeLifecycle:
             _bridge_cleanup_task=None,
             _bridge_trajectory_path=tmp_path / "bridge-trajectory.json",
             _agent_setup_timeout_sec=5,
-            config=SimpleNamespace(trial_name="bridge-test"),
+            config=SimpleNamespace(trial_name="bridge-test", trial_cleanup_grace_sec=5),
+            _first_phase_timeout=None,
+            _pending_cleanup_tasks=set(),
             logger=logging.getLogger("bridge-lifecycle-test"),
             _bridge_exec_env=lambda: {
                 "BRIDGE_SECRET": "secret",
@@ -428,6 +430,10 @@ class TestTrialBridgeLifecycle:
             },
         )
         trial._cleanup_bridge = lambda user: Trial._cleanup_bridge(trial, user)
+        trial._await_phase = lambda awaitable, **kwargs: Trial._await_phase(
+            trial, awaitable, **kwargs
+        )
+        trial._track_cleanup_task = lambda task: Trial._track_cleanup_task(trial, task)
         return trial
 
     def test_claude_code_acp_command_honors_extra_env_routing(self, tmp_path: Path):
@@ -469,7 +475,7 @@ class TestTrialBridgeLifecycle:
         assert trial._bridge_closed is True
 
     @pytest.mark.asyncio
-    async def test_cleanup_context_failure_falls_back_to_unscoped_teardown(
+    async def test_cleanup_context_failure_is_visible_to_trial_finalization(
         self, tmp_path: Path
     ):
         trial = self._trial_stub(tmp_path, ready=False)
@@ -477,9 +483,9 @@ class TestTrialBridgeLifecycle:
         broken_context.__enter__.side_effect = RuntimeError("context failed")
         trial.agent_environment.scoped_exec_env.return_value = broken_context
 
-        await Trial._close_bridge(trial, user=None)
+        with pytest.raises(RuntimeError, match="context failed"):
+            await Trial._close_bridge(trial, user=None)
 
-        trial.bridge.teardown.assert_awaited_once()
         assert trial._bridge_closed is True
 
     @pytest.mark.asyncio
@@ -519,7 +525,8 @@ class TestTrialBridgeLifecycle:
             order.append(name)
 
         async def close(**_kwargs) -> None:
-            await record("close")
+            if "close" not in order:
+                await record("close")
 
         async def recover() -> None:
             await record("recover")
@@ -532,6 +539,7 @@ class TestTrialBridgeLifecycle:
                 install_only=False,
                 trial_name="bridge-test",
                 agent=SimpleNamespace(),
+                trial_cleanup_grace_sec=5,
             ),
             task=SimpleNamespace(
                 config=SimpleNamespace(agent=SimpleNamespace(user=None))
@@ -544,12 +552,18 @@ class TestTrialBridgeLifecycle:
             _run=AsyncMock(),
             _record_exception=AsyncMock(),
             _close_bridge=AsyncMock(side_effect=close),
-            _recover_outputs_safely=AsyncMock(side_effect=recover),
+            _recover_outputs=recover,
+            _collect_runtime_logs=AsyncMock(),
+            _stop_agent_environment=AsyncMock(),
             _finalize=AsyncMock(side_effect=finalize),
             _scrub_jobs_dir=MagicMock(),
             _close_logger_handler=MagicMock(),
         )
 
+        trial._recover_outputs_safely = lambda: Trial._recover_outputs_safely(trial)
+        trial._await_phase = lambda awaitable, **kwargs: Trial._await_phase(
+            trial, awaitable, **kwargs
+        )
         await Trial.run(trial)
 
         assert order == ["close", "recover", "finalize"]
@@ -562,7 +576,8 @@ class TestTrialBridgeLifecycle:
             raise asyncio.CancelledError()
 
         async def close(**_kwargs) -> None:
-            order.append("close")
+            if "close" not in order:
+                order.append("close")
 
         async def recover() -> None:
             order.append("recover")
@@ -571,7 +586,9 @@ class TestTrialBridgeLifecycle:
             order.append("finalize")
 
         trial = SimpleNamespace(
-            config=SimpleNamespace(install_only=False, trial_name="bridge-test"),
+            config=SimpleNamespace(
+                install_only=False, trial_name="bridge-test", trial_cleanup_grace_sec=5
+            ),
             task=SimpleNamespace(
                 config=SimpleNamespace(agent=SimpleNamespace(user=None))
             ),
@@ -583,28 +600,37 @@ class TestTrialBridgeLifecycle:
             _run=AsyncMock(),
             _record_exception=AsyncMock(),
             _close_bridge=AsyncMock(side_effect=close),
-            _recover_outputs_safely=AsyncMock(side_effect=recover),
+            _recover_outputs=recover,
+            _collect_runtime_logs=AsyncMock(),
+            _stop_agent_environment=AsyncMock(),
             _finalize=AsyncMock(side_effect=finalize),
             _scrub_jobs_dir=MagicMock(),
             _close_logger_handler=MagicMock(),
         )
 
+        trial._recover_outputs_safely = lambda: Trial._recover_outputs_safely(trial)
+        trial._await_phase = lambda awaitable, **kwargs: Trial._await_phase(
+            trial, awaitable, **kwargs
+        )
         with pytest.raises(asyncio.CancelledError):
             await Trial.run(trial)
 
         assert order == ["close", "recover", "finalize"]
 
     @pytest.mark.asyncio
-    async def test_teardown_timeout_is_best_effort(self, tmp_path: Path):
+    async def test_teardown_timeout_is_visible_to_trial_finalization(
+        self, tmp_path: Path
+    ):
         trial = self._trial_stub(tmp_path, ready=False)
-        trial._agent_setup_timeout_sec = 0.01
+        trial.config.trial_cleanup_grace_sec = 0.01
 
         async def slow_teardown(_environment) -> None:
             await asyncio.sleep(60)
 
         trial.bridge.teardown.side_effect = slow_teardown
 
-        await Trial._close_bridge(trial, user=None)
+        with pytest.raises(TimeoutError):
+            await Trial._close_bridge(trial, user=None)
 
         assert trial._bridge_closed is True
 

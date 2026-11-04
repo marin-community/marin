@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime
@@ -25,6 +26,7 @@ from rich.progress import (
 )
 
 from harbor.metrics.base import BaseMetric
+from harbor.environments.runtime import HostCapabilities
 from harbor.metrics.factory import MetricFactory
 from harbor.metrics.mean import Mean
 from harbor.models.benchmark import (
@@ -136,6 +138,8 @@ class Job:
         _metrics: dict[str, list[BaseMetric]] | None = None,
         _task_download_results: dict[TaskIdType, TaskDownloadResult] | None = None,
         _benchmark_metadata: tuple[BenchmarkMetadata, ...] = (),
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
     ):
         """Deprecated. Use ``await Job.create(config)`` instead."""
         if _task_configs is None or _metrics is None:
@@ -145,6 +149,8 @@ class Job:
             )
 
         self.config = config
+        self.host_capabilities = host_capabilities
+        self.guest_environment = dict(guest_environment)
         if config.archive is not None and any(
             str(root).startswith(("s3://", "s3a://"))
             for root in (config.jobs_dir, config.archive.root)
@@ -201,6 +207,8 @@ class Job:
             for index, trial_config in enumerate(self._trial_configs)
         }
         self._trial_queue = TrialQueue(
+            host_capabilities=self.host_capabilities,
+            guest_environment=self.guest_environment,
             n_concurrent=self.config.n_concurrent_trials,
             retry_config=self.config.retry,
             release_trial_payloads_in_memory=(
@@ -213,7 +221,13 @@ class Job:
         self._trial_queue.add_hook(TrialEvent.END, self._on_trial_completed)
 
     @classmethod
-    async def create(cls, config: JobConfig) -> "Job":
+    async def create(
+        cls,
+        config: JobConfig,
+        *,
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
+    ) -> "Job":
         EnvironmentFactory.validate_config(config.environment)
         task_configs, benchmark_metadata = await cls._resolve_task_configs_and_metadata(
             config
@@ -228,6 +242,8 @@ class Job:
             _metrics=metrics,
             _task_download_results=task_download_results,
             _benchmark_metadata=benchmark_metadata,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
         )
 
     def __len__(self):
@@ -641,7 +657,9 @@ class Job:
                     "SOTOPIA correction requires one agent and one dataset per job"
                 )
             if config.sotopia_cohort is None:
-                raise ValueError("SOTOPIA correction requires an explicit sotopia_cohort")
+                raise ValueError(
+                    "SOTOPIA correction requires an explicit sotopia_cohort"
+                )
             metadata = [sotopia_benchmark_metadata(item) for item in metadata]
         return task_configs, tuple(metadata)
 

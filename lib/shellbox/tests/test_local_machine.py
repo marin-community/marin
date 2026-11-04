@@ -1124,7 +1124,10 @@ def test_real_local_http_relay_serves_concurrent_requests(factory):
                 await release.wait()
             return HttpResponse(200, request.path.encode(), "text/plain")
 
-        async with serve_http(machine, handler, port=8787) as endpoint:
+        async with (
+            asyncio.TaskGroup() as service_tasks,
+            serve_http(machine, handler, task_group=service_tasks, port=8787) as endpoint,
+        ):
             slow = asyncio.create_task(
                 machine.run(Command(("python3", "-c", HTTP_CLIENT, endpoint + "/slow"), timeout=15))
             )

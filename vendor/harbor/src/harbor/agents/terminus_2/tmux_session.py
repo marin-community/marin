@@ -500,6 +500,17 @@ class TmuxSession:
         )
         return result.return_code == 0
 
+    async def close(self) -> None:
+        """Stop the agent terminal before the verifier reads its files."""
+        if not await self.is_session_alive():
+            return
+        result = await self.environment.exec(
+            command=f"tmux kill-session -t {shlex.quote(self._session_name)}",
+            user=self._user,
+        )
+        if result.return_code != 0 or await self.is_session_alive():
+            raise TmuxCommandError("Cannot stop the agent tmux session")
+
     def _is_executing_command(self, key: str) -> bool:
         return self._is_enter_key(key) or self._ends_with_newline(key)
 

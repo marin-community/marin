@@ -3,12 +3,14 @@
 
 """Host-only backend capabilities supplied at an executable entry point."""
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
+
+from harbor.utils.env import protected_environment_values
 
 DAYTONA_API_URL = "https://app.daytona.io/api"
+OPENAI_API_URL = "https://api.openai.com/v1"
 
 
 @dataclass(frozen=True)
@@ -18,37 +20,39 @@ class DaytonaConnection:
     target: str | None
 
 
-_DAYTONA_CONNECTION: ContextVar[DaytonaConnection | None] = ContextVar(
-    "harbor_daytona_connection", default=None
-)
+@dataclass(frozen=True)
+class HostCapabilities:
+    """Host authority passed outside serialized job and task configuration."""
 
+    daytona: DaytonaConnection | None = field(default=None, repr=False)
+    model_authentication: Mapping[str, str] = field(default_factory=dict, repr=False)
+    protected_values: frozenset[str] = field(default_factory=frozenset, repr=False)
 
-@contextmanager
-def host_backend_credentials(
-    *,
-    daytona_api_key: str | None,
-    daytona_api_url: str = DAYTONA_API_URL,
-    daytona_target: str | None = None,
-) -> Iterator[None]:
-    """Bind a resolved connection without placing credentials in a job config."""
-    token = _DAYTONA_CONNECTION.set(
-        DaytonaConnection(daytona_api_key, daytona_api_url, daytona_target)
-    )
-    try:
-        yield
-    finally:
-        _DAYTONA_CONNECTION.reset(token)
-
-
-def daytona_connection() -> DaytonaConnection:
-    connection = _DAYTONA_CONNECTION.get()
-    if (
-        connection is None
-        or not connection.api_key
-        or not connection.api_url
-        or not connection.target
-    ):
-        raise ValueError(
-            "Daytona requires explicit host DAYTONA_API_KEY, DAYTONA_API_URL and DAYTONA_TARGET"
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "model_authentication",
+            MappingProxyType(dict(self.model_authentication)),
         )
-    return connection
+
+
+def host_capabilities_from_environment(
+    environment: Mapping[str, str],
+    *,
+    model_authentication: Mapping[str, str],
+) -> HostCapabilities:
+    """Resolve backend and model authority from one executable-owned snapshot."""
+    return HostCapabilities(
+        daytona=DaytonaConnection(
+            api_key=environment.get("DAYTONA_API_KEY"),
+            api_url=environment.get("DAYTONA_API_URL", DAYTONA_API_URL),
+            target=environment.get("DAYTONA_TARGET"),
+        ),
+        model_authentication=model_authentication,
+        protected_values=protected_environment_values(environment)
+        | frozenset(
+            value
+            for value in model_authentication.values()
+            if value and value != "EMPTY"
+        ),
+    )
