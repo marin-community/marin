@@ -22,6 +22,7 @@ import logging
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -205,7 +206,7 @@ def read_trajectories(evals_root: str, runs: Iterable[str], *, threads: int = RE
     with ThreadPoolExecutor(threads) as pool:
         for run in runs:
             trials = _trial_dirs(evals_root, run)
-            for trajectory in pool.map(lambda trial: _read_trajectory(evals_root, run, trial), trials):
+            for trajectory in pool.map(partial(_read_trajectory, evals_root, run), trials):
                 if trajectory is not None:
                     yield trajectory
 
