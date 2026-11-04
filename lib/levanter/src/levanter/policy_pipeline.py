@@ -512,12 +512,18 @@ def make_pipeline_scorer(mp_policy, sample_state, sample_microbatch, *, config: 
 def _place_existing(tree, targets, mpmd_mesh):
     """Keep tensor state stage-owned while placing shared scalar counters."""
     api = _require_jaxpp()
+    stage_devices = tuple(set(mesh.devices.flat) for mesh in mpmd_mesh.unstack)
 
     def place(value, target):
         if not _is_array(value) or not target.mesh_ids:
             return value
         source = value.first_mpmd_replica if isinstance(value, api.MpmdArray) else value
-        source_ids = set(mpmd_mesh.mpmd_indices_for_mesh(value.sharding.mesh))
+        # Checkpoint scalar reads use their own replicated mesh axis names.
+        # Ownership follows devices even when those logical mesh names differ.
+        source_devices = value.sharding.device_set
+        source_ids = {index for index, devices in enumerate(stage_devices) if devices <= source_devices}
+        if not source_ids:
+            raise ValueError("A pipeline input must cover at least one complete stage's devices")
         if isinstance(value, api.MpmdArray) and source_ids == target.mesh_ids and value.sharding.spec == target.spec:
             return value
         if mpmd_mesh.jax_mesh.is_multi_process and not target.mesh_ids <= source_ids:
