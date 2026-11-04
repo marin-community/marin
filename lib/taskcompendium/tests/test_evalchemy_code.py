@@ -4,6 +4,9 @@
 """Publish code rows while keeping executable tests in verifier-only resources."""
 
 import json
+import subprocess
+import sys
+import time
 from functools import partial
 
 import pyarrow as pa
@@ -187,3 +190,31 @@ def test_crux_reads_answers_by_the_harness_rule(direction, arguments, output, re
     problem = {"code": CONCAT, "input": arguments, "output": output}
 
     assert _passes(code_protocol.test_program(problem, reply, "cruxeval", direction)) is passed
+
+
+def _execute(tmp_path, program: str, timeout: int) -> tuple[float, float]:
+    """Run the grader command's script as the grading machine does; return its reward and duration."""
+    (tmp_path / "program.py").write_text(code_protocol.execution_program(program, timeout))
+    start = time.monotonic()
+    subprocess.run([sys.executable, "program.py"], cwd=tmp_path, check=True, timeout=timeout + 30)
+    return json.loads((tmp_path / "reward.json").read_text())["reward"], time.monotonic() - start
+
+
+def test_evalplus_budget_passes_a_test_program_longer_than_three_seconds(tmp_path):
+    # The candidate's own workload runs past the source's 3 seconds, as HumanEval/139's reference solution does.
+    reward, _ = _execute(tmp_path, "import time\ntime.sleep(3.5)", code_protocol.EXECUTION_TIMEOUT["humanevalplus"])
+    assert reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        "while True:\n    pass",
+        # The alarm cannot stop a program that catches it, so the child is killed one second later.
+        "while True:\n    try:\n        while True:\n            pass\n    except BaseException:\n        pass",
+    ],
+)
+def test_execution_program_fails_a_nonterminating_program_within_its_budget(tmp_path, program):
+    reward, duration = _execute(tmp_path, program, 1)
+    assert reward == 0.0
+    assert duration < 10

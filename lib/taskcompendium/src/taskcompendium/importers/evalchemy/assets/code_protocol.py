@@ -17,6 +17,9 @@ from verifyit.adapters.completion import END_OF_TURN
 
 HUMANEVAL_STOPS = ("\nclass", "\ndef", "\n#", "\nif", "\nprint", "\n```", *END_OF_TURN)
 HUMANEVAL_REQUEST_STOPS = HUMANEVAL_STOPS[:4]
+# The alarm for the whole test program. HumanEval and CruxEval keep their sources' alarms. HumanEval+ and MBPP+ run
+# every base and plus input in one program, so they get evalplus's 60-second limit for a whole task.
+EXECUTION_TIMEOUT = {"humaneval": 3, "humanevalplus": 60, "mbppplus": 60, "cruxeval": 10}
 PYTHON_IMPORTS = (
     "import math",
     "import re",
@@ -137,3 +140,51 @@ def test_program(problem: Mapping[str, Any], response: str, suite: str, directio
     if suite == "humanevalplus":
         tests += f"\ncheck({problem['entry_point']})"
     return "\n".join(PYTHON_IMPORTS) + "\n" + generation + "\n" + tests + "\n"
+
+
+def execution_program(program: str, timeout: int) -> str:
+    """Return the grader command's script: the test program in a forked child, with an alarm after ``timeout`` seconds.
+
+    The child has one more second before it is killed, and the reward goes to reward.json beside the script.
+    The receipt and exception handler reject early exits, including os._exit(0).
+    """
+    return (
+        "import json\n"
+        "import multiprocessing\n"
+        "import signal\n"
+        "from pathlib import Path\n"
+        "import numpy\n"
+        "\n"
+        "def timeout_handler(signum, frame):\n"
+        "    raise TimeoutError('Candidate timed out')\n"
+        "\n"
+        "def execute(connection):\n"
+        "    signal.signal(signal.SIGALRM, timeout_handler)\n"
+        f"    signal.setitimer(signal.ITIMER_REAL, {timeout})\n"
+        "    try:\n"
+        f"        exec(compile({program!r}, '<candidate>', 'exec'), {{}})\n"
+        "    except BaseException:\n"
+        "        passed = False\n"
+        "    else:\n"
+        "        passed = True\n"
+        "    finally:\n"
+        "        signal.setitimer(signal.ITIMER_REAL, 0)\n"
+        "    connection.send(passed)\n"
+        "\n"
+        "context = multiprocessing.get_context('fork')\n"
+        "receiver, sender = context.Pipe(duplex=False)\n"
+        "process = context.Process(target=execute, args=(sender,))\n"
+        "process.start()\n"
+        "sender.close()\n"
+        f"process.join({timeout + 1})\n"
+        "if process.is_alive():\n"
+        "    process.kill()\n"
+        "    process.join()\n"
+        "passed = False\n"
+        "if receiver.poll():\n"
+        "    try:\n"
+        "        passed = receiver.recv() is True and process.exitcode == 0\n"
+        "    except EOFError:\n"
+        "        pass\n"
+        "Path(__file__).with_name('reward.json').write_text(json.dumps({'reward': float(passed)}))\n"
+    )
