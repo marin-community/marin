@@ -1,14 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""NVIDIA Open-SWE-Traces as structured agent conversations.
-
-The two Qwen3.8-27B mini-swe-agent partitions get two fixes from the audit in marin-community/marin#10865. Their
-task messages regain the Solution Originality section that the export dropped, and the traces on the pinned
-``Min-Li/marin-sft-data-audit`` exclusion list are dropped. At the pinned source and list revisions, the exclusions
-drop 3,562 of the 53,553 scale-swe rows and 5,052 of the 53,714 swe-rebench-v2 rows, all of them resolved. The
-transform counts dropped rows in ``open_swe_traces/audit_exclusion_filtered``.
-"""
+"""NVIDIA Open-SWE-Traces as structured agent conversations."""
 
 import json
 from collections import deque
@@ -105,8 +98,8 @@ EXCLUSION_LIST_SIZE = 8614
 # The Qwen3.8-27B mini-swe-agent teacher was prompted with the NeMo-Skills template
 # nemo_skills/prompt/config/eval/swe-bench/mini-swe-agent/swebench.yaml at commit
 # 592ebaec5a80e17a3535623d0f5704d29e13a64f (Apache-2.0), which ends the task message with this
-# section between </CRITICAL> and </instructions>. The export drops the section, although 32% of
-# the successful traces quote it. Every row of both pinned partitions ends with the anchor below.
+# section between </CRITICAL> and </instructions>. The export drops it, and every row of both
+# pinned partitions ends with the anchor below.
 TASK_END_TAG = "</instructions>"
 SOLUTION_ORIGINALITY_ANCHOR = "</CRITICAL>\n" + TASK_END_TAG
 SOLUTION_ORIGINALITY_SECTION = "\n".join(
@@ -209,6 +202,7 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
     """Download one Open-SWE-Traces partition and normalize its structured chat."""
     glob, _ = OPEN_SWE_TRACES_PARTITIONS[source_name]
     raw = download_hf_step(f"raw/{source_name}", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=[glob])
+    exclusions = None
     if source_name in QWEN38_SOURCES:
         exclusions = download_hf_step(
             "raw/open-swe-traces-audit-exclusions",
@@ -216,19 +210,14 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
             revision=EXCLUSION_REVISION,
             hf_urls_glob=[EXCLUSION_FILE],
         )
-        processed = StepSpec(
-            name=f"processed-chat/{source_name}",
-            deps=[raw, exclusions],
-            fn=lambda output_path: transform_chat(raw.output_path, output_path, exclusions.output_path),
-            hash_attrs={"version": TRANSFORM_VERSION, "exclusion_revision": EXCLUSION_REVISION},
-        )
-    else:
-        processed = StepSpec(
-            name=f"processed-chat/{source_name}",
-            deps=[raw],
-            fn=lambda output_path: transform_chat(raw.output_path, output_path),
-            hash_attrs={"version": TRANSFORM_VERSION},
-        )
+    processed = StepSpec(
+        name=f"processed-chat/{source_name}",
+        deps=[raw] if exclusions is None else [raw, exclusions],
+        fn=lambda output_path: transform_chat(
+            raw.output_path, output_path, None if exclusions is None else exclusions.output_path
+        ),
+        hash_attrs={"version": TRANSFORM_VERSION},
+    )
     return processed, normalize_chat_step(
         name=f"normalized-chat/{source_name}", download=processed, output_schema=SOURCE_CHAT_SCHEMA
     )
