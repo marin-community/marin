@@ -5,7 +5,7 @@
 
 import hashlib
 import pathlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
 from rigging.config_discovery import find_project_root
@@ -28,12 +28,13 @@ def file_content_hash(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def directory_content_hash(directory: pathlib.Path) -> str:
+def directory_content_hash(directory: pathlib.Path, include: Callable[[pathlib.Path], bool] | None = None) -> str:
     """Return a checkout-independent SHA-256 identity for a directory tree.
 
     Relative paths and bytes are significant. Absolute roots and mtimes are excluded.
     Derived Python bytecode is excluded; missing paths, non-regular entries, and symlinks
-    are rejected because they make the boundary ambiguous.
+    are rejected because they make the boundary ambiguous. When ``include`` is given, only
+    the entries whose relative path it accepts are part of the identity.
     """
     _reject_missing_or_symlink(directory)
     root = directory.resolve()
@@ -44,6 +45,8 @@ def directory_content_hash(directory: pathlib.Path) -> str:
     _hash_component(digest, "schema", b"rigging-directory-content-v1")
     for candidate in sorted(root.rglob("*")):
         relative = candidate.relative_to(root)
+        if include is not None and not include(relative):
+            continue
         _reject_missing_or_symlink(candidate)
         if _is_derived_bytecode(relative):
             continue
