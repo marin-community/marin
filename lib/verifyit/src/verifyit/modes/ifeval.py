@@ -19,7 +19,8 @@ is one word, which undercounts Chinese and Japanese, except in a check that comp
 each such letter is one word. A sentence ends at a line break, at ``.``, ``!``, ``?`` or an ellipsis
 before whitespace, after any closing quotes or brackets, and at a Chinese, Japanese, Devanagari,
 Arabic, Armenian or Ethiopic sentence-final mark wherever it stands, after any closing quotes or
-brackets that follow it.
+brackets that follow it. Only ``detectable_format:sentence_hyphens`` reads the dot of an
+abbreviation, such as ``Dr.`` or ``e.g.``, as no sentence end.
 """
 
 import json
@@ -96,6 +97,10 @@ DOUBLE_ANGLE_SPAN = re.compile(r"<<((?:(?!<<|>>)[^\n])*)>>")
 JSON_FENCE = re.compile(r"^```(?:json)?[ \t]*\r?\n(.*)\n```\s*$", re.DOTALL)
 # One to three asterisks on each side; as in CommonMark, the span does not start or end with whitespace.
 MARKDOWN_HIGHLIGHT = re.compile(r"(?<!\*)(\*{1,3})(?![\s*])([^*\n]*?[^\s*])\1(?!\*)")
+# A sentence end that no hyphen joins to the next sentence: final marks and any closers before
+# whitespace, or before a hyphen and whitespace; or a script's sentence-final marks and any closers
+# before anything but a hyphen and the next sentence.
+UNJOINED_SENTENCE_END = re.compile(rf"{FINAL_MARK_RUN}(?:\s|-\s)|{SCRIPT_MARK_RUN}(?!-\S|\s*$)")
 # Exactly three asterisks; a longer run is not the divider.
 DIVIDER = r"(?<!\*)\*\*\*(?!\*)"
 DIVIDER_SPLIT = re.compile(rf"\s?{DIVIDER}\s?")
@@ -121,6 +126,13 @@ TWO_RESPONSE_SEPARATOR = re.compile(r"(?<!\*)\*{6}(?!\*)")
 DOTS = ".\uff0e\ufe52\u2024\u2025\u2026"
 # Markdown emphasis or straight double quotes around the whole answer, as in "**My answer is yes.**".
 ANSWER_WRAPPING = re.compile(r'^(\*{1,2}|")(.*)\1$', re.DOTALL)
+# Abbreviations whose dot ends no sentence in detectable_format:sentence_hyphens. "No.", "Fig." and
+# "Vol." are ones only before a number, as in "No. 5", since "no", "fig" and "vol" are also words.
+ABBREVIATIONS = frozenset({"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "vs", "etc", "cf", "approx"})
+NUMBER_ABBREVIATIONS = frozenset({"no", "fig", "vol"})
+# Letters joined by dots, such as "e.g", "U.S" or "9a.m"; in detectable_format:sentence_hyphens the dot
+# after such a token ends no sentence.
+DOTTED_TOKEN = re.compile(r"\d*[^\W\d_]+(?:\.[^\W\d_]+)+")
 
 # Closed-class words that are cheap evidence a response is in the requested language. Scripts with
 # no entry (zh, ja, ko, ar, th) are checked by their share of non-ASCII characters instead.
@@ -196,6 +208,22 @@ def ends_with_word(found: list[str], word: str) -> bool:
     """Whether the words end with the required word, which may split into several."""
     keys = [part.lower() for part in compared_words(word)]
     return bool(keys) and [part.lower() for part in found[-len(keys) :]] == keys
+
+
+def token_before(text: str, end: int) -> str:
+    """The text before ``end`` back to the last whitespace or hyphen."""
+    start = end
+    while start > 0 and not text[start - 1].isspace() and text[start - 1] != "-":
+        start -= 1
+    return text[start:end]
+
+
+def abbreviation_dot(token: str, following: str) -> bool:
+    """Whether the dot after ``token`` ends an abbreviation, such as "e.g." or "Dr.", rather than a sentence."""
+    word = re.sub(r"^\W+", "", token).lower()
+    if word in NUMBER_ABBREVIATIONS:
+        return following.isdigit()
+    return bool(DOTTED_TOKEN.fullmatch(word)) or word in ABBREVIATIONS
 
 
 def starts_line_or_sentence(text: str, start: int) -> bool:
@@ -596,17 +624,20 @@ def square_brackets(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("detectable_format:sentence_hyphens")
 def sentence_hyphens(text: str, params: dict) -> tuple[bool, str]:
-    """Every sentence must join its words with hyphens instead of spaces."""
-    found = sentences(text)
-    if not found:
+    """Sentences must be joined by hyphens with no whitespace between them, as in "One.-Two.". A line break is such
+    whitespace, so a reply must stay on one line; one with no sentence end to join is one sentence and passes."""
+    stripped = text.strip()
+    if not WORD.search(stripped):
         return False, "no sentences"
-    for sentence in found:
-        body = sentence.rstrip(".!?")
-        if " " in body or "\t" in body:
-            return False, f"sentence has whitespace: {body[:40]!r}"
-        if "-" not in body:
-            return False, f"sentence missing hyphen: {body[:40]!r}"
-    return True, f"hyphenated sentences={len(found)}"
+    if len(stripped.splitlines()) > 1:
+        return False, "a line break stands between two lines"
+    for match in UNJOINED_SENTENCE_END.finditer(stripped):
+        following = stripped[match.end() : match.end() + 1]
+        if match.group(1) == "." and abbreviation_dot(token_before(stripped, match.start()), following):
+            continue
+        before = stripped[max(0, match.start() - 20) : match.start() + 1].strip()
+        return False, f"sentence end without a hyphen at {before!r}"
+    return True, "sentences joined by hyphens"
 
 
 @constraint("detectable_format:bigram_wrapping")

@@ -166,6 +166,12 @@ CASES = [
         "[Hello] world",
     ),
     (
+        "detectable_format:sentence_hyphens",
+        {},
+        "The sky is blue.-The grass is green.",
+        "The sky is blue. The grass is green.",
+    ),
+    (
         "detectable_format:bigram_wrapping",
         {},
         '<<She said>> <<"Stop.">> <<I am>> <<at home>>',
@@ -263,6 +269,18 @@ CASES = [
         "ಮತ್ತು ಪ್ರಪಂಚ",
     ),
     (
+        "detectable_format:sentence_hyphens",
+        {},
+        "第一句。-第二句。",
+        "第一句。第二句。",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "He said “Stop!”-Then he left.",
+        "He said “Stop!” Then he left.",
+    ),
+    (
         "detectable_format:number_highlighted_sections",
         {"num_highlights": 1},
         "Use *this* one.",
@@ -314,10 +332,46 @@ CASES = [
         "[Hello world]",
     ),
     (
+        "detectable_format:sentence_hyphens",
+        {},
+        "We met Dr. Smith.-He waved.",
+        "The price is $3.50. Buy it now.",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "太好了！！-我们走吧。",  # noqa: RUF001 - Chinese punctuation.
+        "太好了！！我们走吧。",  # noqa: RUF001 - Chinese punctuation.
+    ),
+    (
         "keywords:start_end",
         {},
         "Love is all you need, love",
         "Love is all you need, love ❤️",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "他说：“走吧。”-我们就走了。",  # noqa: RUF001 - Chinese punctuation.
+        "他说：“走吧。”我们就走了。",  # noqa: RUF001 - Chinese punctuation.
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "We use e.g. this one.-Then stop.",
+        "We use e.g. this one. Then stop.",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "See Fig. 3 for the plot.-It helps.",
+        "I ate a fig. It was sweet.",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "See No. 5 for details.-It helps.",
+        "My answer is no. Sorry about that.",
     ),
     (
         "last_word:last_word_sent",
@@ -584,6 +638,24 @@ CASES = [
         "First\u060c then second.",
     ),
     (
+        "detectable_format:sentence_hyphens",
+        {},
+        "First point.-Second point.-Third point.",
+        "First point\nSecond point\nThird point",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "One.-Two.",
+        "One.-\nTwo.",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "One long sentence with no final mark",
+        "One long line with no final mark\nAnd another line",
+    ),
+    (
         "length_constraints:number_words",
         {"relation": "at least", "num_words": 2},
         "high-risk",
@@ -801,6 +873,7 @@ CASES = [
             "Wait" + "." * 40_000,
             False,
         ),
+        ("detectable_format:sentence_hyphens", {}, "Wait" + "!" * 40_000, True),
         ("detectable_content:number_placeholders", {"num_placeholders": 1}, "See [" + "a" * 100_000, False),
         ("detectable_format:title", {}, "<<" + "a" * 100_000, False),
         ("detectable_format:square_brackets", {}, " ".join(["[word]"] * 20_000), True),
@@ -809,6 +882,7 @@ CASES = [
     ],
     ids=[
         "sentence_marks",
+        "hyphen_marks",
         "open_bracket",
         "open_title",
         "many_brackets",
