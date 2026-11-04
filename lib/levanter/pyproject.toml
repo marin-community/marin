@@ -219,7 +219,7 @@ line-length = 119
 target-version = ["py312"]
 
 [tool.pytest.ini_options]
-addopts = "-n auto -m 'not slow and not torch' --import-mode=importlib"
+addopts = "-n auto -m 'not slow and not torch and not manual' --import-mode=importlib"
 pythonpath = ["src", "tests"]
 filterwarnings = [
     "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",
@@ -235,6 +235,7 @@ markers = [
     "multidevice: exercise multi-device code in TPU CI and CPU CI",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
+    "manual: accelerator acceptance run only when explicitly selected",
 ]
 asyncio_default_fixture_loop_scope = "function"
 
