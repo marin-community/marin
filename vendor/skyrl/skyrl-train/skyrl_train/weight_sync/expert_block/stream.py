@@ -1,9 +1,9 @@
 """Run the broadcasts of one sync on one participant.
 
 Every participant walks the same schedule and runs only the broadcasts of groups it belongs
-to, so all members of a group issue them in the same order. A broadcast writes directly into
-the live parameter. The router weight is the exception: it is BF16 on the wire and FP32 in
-vLLM, so it is received into scratch and copied.
+to, so all members of a group issue them in the same order. BF16 receivers write directly
+into live parameters except for the FP32 router, which receives BF16 into scratch. Online
+FP8 receivers stage checkpoint weights before quantizing and copying them into serving buffers.
 """
 
 from collections.abc import Callable
@@ -149,8 +149,6 @@ class Stream:
             self.receive(item, wire)
             # The router weight is stored as FP32; compare it in its wire dtype.
             installed = landing.installed.to(landing.wire_dtype)
-            # Summing bool bytes can materialize an int64 input. A vocabulary tensor
-            # otherwise needs eight times its byte size in additional GPU memory.
             mismatched.add_(mismatched_bytes(wire, installed, chunk_bytes))
             compared += landing.nbytes
         parameter_bytes = 0

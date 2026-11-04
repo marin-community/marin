@@ -1,13 +1,4 @@
-"""Verify an expert-block sync by replaying it (``generator.expert_block_sync.verify``).
-
-Every root sends its weights again. Each receiver receives them into scratch and counts the
-bytes that differ from its installed weights. It also checks that the bytes it compared add up
-to all the parameter bytes it holds, counting only the HF rows of a padded vocabulary tensor.
-Each trainer rank checks that its data-parallel peers hold identical bytes, because any of
-them can be a root.
-
-A replay sends about as many bytes as a sync.
-"""
+"""Compare replayed expert-block weights and trainer replicas byte by byte."""
 
 from dataclasses import dataclass
 
