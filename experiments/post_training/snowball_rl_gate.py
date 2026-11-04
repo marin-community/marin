@@ -46,7 +46,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
-GATE_REVISION = "2026.11.03.1"
+GATE_REVISION = "2026.11.04.1"
 GATE_REPORT_FILENAME = "gate_report.json"
 GRADER_ERROR_LIMIT = 0.01
 OUTCOME_PREFIX = "generate/outcome/"
