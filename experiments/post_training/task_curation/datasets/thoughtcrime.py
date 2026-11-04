@@ -19,7 +19,7 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, HfS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 REPOSITORY = "open-athena/Marin-Thoughtcrime"
-REVISION = "PENDING"
+REVISION = "231751144c48b5553d5b921054b196e5e2d073f9"
 ROWS_FILE = "rows.parquet"
 SOURCE_ID = "Marin:thoughtcrime"
 FAMILY = "reasoning_markup"
@@ -48,7 +48,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="Marin",
                 family=FAMILY,
                 tags=("eval", "single-turn", "tool-calling", "reasoning-markup", "pi", "bixbench", "bfcl", "tau3"),
-                count=None,
+                count=328,
                 notes="One prefix per benchmark task; prefixes stop at pi's first compaction and 12,288 prompt tokens.",
             ),
             config=CurationRecipe(

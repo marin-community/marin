@@ -14,6 +14,7 @@ import os
 
 import click
 from huggingface_hub import CommitOperationAdd, HfApi
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.thoughtcrime import REPOSITORY, ROWS_FILE
@@ -26,9 +27,11 @@ from experiments.post_training.thoughtcrime.mine_prefixes import REPORT_FILENAME
 def main(rows_root: str, repo: str) -> None:
     if not os.environ.get("HF_TOKEN"):
         raise click.UsageError("Uploads use HF_TOKEN; export it first")
+    configure_coreweave_s3()
     api = HfApi()
     root = StoragePath(rows_root)
-    api.create_repo(repo, repo_type="dataset", exist_ok=True)
+    # The rows republish benchmark prompts and tool outputs, so the repository stays private.
+    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
     commit = api.create_commit(
         repo_id=repo,
         repo_type="dataset",
