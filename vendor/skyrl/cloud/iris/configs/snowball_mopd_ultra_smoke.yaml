@@ -73,10 +73,6 @@ trainer:
 
 generator:
   backend: vllm
-  trajectory_reward_shaping:
-    reasoning_span:
-      # reward_mode=replace cannot take token credit.
-      target: rollout
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
   inference_engine_tensor_parallel_size: 1
