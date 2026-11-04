@@ -589,6 +589,8 @@ class Trial(ABC):
             await task
         except asyncio.CancelledError:
             raise timeout_error from None
+        except PhaseCancellationError:
+            raise
         except Exception as error:
             raise timeout_error from error
         raise timeout_error

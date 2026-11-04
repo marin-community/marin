@@ -176,6 +176,23 @@ def _phase_trial(cleanup_grace: float) -> PhaseTrial:
 
 
 @pytest.mark.unit
+async def test_failed_remote_cleanup_is_not_converted_to_scoreable_timeout() -> None:
+    trial = _phase_trial(cleanup_grace=1)
+
+    async def agent():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as error:
+            raise PhaseCancellationError("remote process is still running") from error
+
+    with pytest.raises(PhaseCancellationError) as raised:
+        await trial._await_phase(
+            agent(), timeout_sec=0.01, timeout_error=AgentTimeoutError("expired")
+        )
+    assert error_category(type(raised.value).__name__) is ErrorCategory.INFRASTRUCTURE
+
+
+@pytest.mark.unit
 async def test_agent_disk_exhaustion_is_a_model_failure(tmp_path: Path) -> None:
     original = SandboxDiskFullError("no space left on device")
 

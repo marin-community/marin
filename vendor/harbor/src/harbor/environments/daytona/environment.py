@@ -66,6 +66,7 @@ from harbor.models.environment_type import EnvironmentType
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import ResourceMode, ServiceVolumeConfig
 from harbor.models.trial.paths import TrialPaths
+from harbor.trial.errors import PhaseCancellationError
 from harbor.utils.env import resolve_env_vars
 from harbor.utils.logger import logger
 from harbor.utils.optional_import import MissingExtraError
@@ -471,6 +472,9 @@ class _DaytonaStrategy:
         env._exec_session_id = None
 
     @abstractmethod
+    def cancellation_command(self, command: str) -> str: ...
+
+    @abstractmethod
     async def start(self, force_build: bool) -> None: ...
 
     @abstractmethod
@@ -512,6 +516,9 @@ class _DaytonaStrategy:
 
 class _DaytonaDirect(_DaytonaStrategy):
     """Direct sandbox strategy — the original single-container behavior."""
+
+    def cancellation_command(self, command: str) -> str:
+        return f"bash -c {shlex.quote(command)}"
 
     async def start(self, force_build: bool) -> None:
         env = self._env
@@ -622,6 +629,13 @@ class _DaytonaDinD(_DaytonaStrategy):
         self._resolved_task_env: dict[str, str] = {}
         if self._env.task_env_config.env:
             self._resolved_task_env = resolve_env_vars(self._env.task_env_config.env)
+
+    def cancellation_command(self, command: str) -> str:
+        compose = self._compose_cmd(["exec", "-T", "main", "bash", "-c", command])
+        assignments = shlex.join(
+            [f"{key}={value}" for key, value in self._compose_env_vars().items()]
+        )
+        return f"env {assignments} {compose}"
 
     async def _vm_exec(
         self,
@@ -1952,32 +1966,32 @@ class DaytonaEnvironment(BaseEnvironment):
         #   2. Genuine session death (sandbox restart/expiry) — after the retry
         #      tier exhausts, drop the dead cached id, recreate once, and retry so
         #      we never keep executing against a stale session.
-        session_id = await self._ensure_exec_session()
         try:
-            response = await self._execute_session_command_with_retry(
-                session_id, request, timeout_sec
-            )
-        except SandboxDiskFullError:
-            raise
-        except Exception as error:
-            self.logger.warning(
-                "Daytona execution failed in session %r; recreating session "
-                "(HTTP status %s)",
-                session_id,
-                error.status_code if isinstance(error, DaytonaError) else None,
-                exc_info=True,
-            )
-            async with self._exec_session_lock:
-                self._exec_session_id = None
             session_id = await self._ensure_exec_session()
-            response = await self._execute_session_command_with_retry(
-                session_id, request, timeout_sec
-            )
+            try:
+                response = await self._execute_session_command_with_retry(
+                    session_id, request, timeout_sec
+                )
+            except SandboxDiskFullError:
+                raise
+            except Exception as error:
+                self.logger.warning(
+                    "Daytona execution failed in session %r; recreating session "
+                    "(HTTP status %s)",
+                    session_id,
+                    error.status_code if isinstance(error, DaytonaError) else None,
+                    exc_info=True,
+                )
+                async with self._exec_session_lock:
+                    self._exec_session_id = None
+                session_id = await self._ensure_exec_session()
+                response = await self._execute_session_command_with_retry(
+                    session_id, request, timeout_sec
+                )
 
-        if response.cmd_id is None:
-            raise RuntimeError("Cannot find command ID.")
+            if response.cmd_id is None:
+                raise RuntimeError("Cannot find command ID.")
 
-        try:
             return await self._poll_response(session_id, response.cmd_id)
         except asyncio.CancelledError:
             # The command runs server-side detached (``run_async=True``), so a
@@ -1987,39 +2001,42 @@ class DaytonaEnvironment(BaseEnvironment):
             # way. Reap it before propagating the cancellation. Shield the reap
             # so it completes while this task is unwinding.
             try:
-                await asyncio.shield(self._reap_inflight_agent_command())
-            except Exception:
+                await asyncio.shield(
+                    asyncio.wait_for(
+                        self._reap_inflight_agent_command(),
+                        timeout=self._REAP_TIMEOUT_SEC,
+                    )
+                )
+            except Exception as error:
+                if self.exec_cancel_command is not None:
+                    raise PhaseCancellationError(
+                        "Remote Pi cleanup could not be confirmed"
+                    ) from error
                 self.logger.debug(
                     "Failed to reap cancelled agent command", exc_info=True
                 )
             raise
 
     async def _reap_inflight_agent_command(self) -> None:
-        """Best-effort SIGKILL of a runaway agent process tree in the sandbox.
-
-        Invoked when a ``_sandbox_exec`` poll is CANCELLED (the agent-timeout
-        race or a job-kill teardown). The command was launched ``run_async``
-        (detached server-side), so cancelling the local poll does NOT stop it;
-        without this reap a looping ``opencode`` keeps running in the sandbox
-        (auto_stop=0) and orphans it. Runs a scoped ``pkill`` in a FRESH
-        short-lived session so it neither depends on nor disturbs the persistent
-        exec session (which may itself be running the target). One sandbox hosts
-        exactly one trial's agent, so ``pkill -f opencode`` is safely scoped; the
-        pattern matches both the ``timeout`` wrapper and the ``node`` process
-        that runs opencode.
-        """
+        """Attempt remote cleanup, requiring confirmation for scoped commands."""
         if not self._sandbox:
             return
         reap_session = f"reap-{uuid4()}"
         try:
             await self._sandbox.process.create_session(reap_session)
             request = SessionExecuteRequest(
-                command="pkill -9 -f opencode || true",
+                command=(
+                    self._strategy.cancellation_command(self.exec_cancel_command)
+                    if self.exec_cancel_command is not None
+                    else "pkill -9 -f opencode || true"
+                ),
                 run_async=False,
             )
-            await self._sandbox.process.execute_session_command(
+            result = await self._sandbox.process.execute_session_command(
                 reap_session, request, timeout=self._REAP_TIMEOUT_SEC
             )
+            if self.exec_cancel_command is not None and result.exit_code != 0:
+                raise RuntimeError("Detached agent cancellation cleanup failed")
         finally:
             try:
                 await self._sandbox.process.delete_session(reap_session)

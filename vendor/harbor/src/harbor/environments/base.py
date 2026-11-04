@@ -152,6 +152,9 @@ class BaseEnvironment(ABC):
         self.trial_paths = trial_paths
         self.default_user = None
         self.agent_timeout_sec = None
+        self._exec_cancel_command: contextvars.ContextVar[str | None] = (
+            contextvars.ContextVar("harbor_exec_cancel_command", default=None)
+        )
         self.extra_docker_compose_paths = self._normalize_extra_docker_compose_paths(
             extra_docker_compose
         )
@@ -362,6 +365,19 @@ class BaseEnvironment(ABC):
             yield
         finally:
             self.agent_timeout_sec = previous
+
+    @property
+    def exec_cancel_command(self) -> str | None:
+        return self._exec_cancel_command.get()
+
+    @contextlib.contextmanager
+    def scoped_exec_cancellation(self, command: str) -> Generator[None, None, None]:
+        """Supply cleanup for a detached command on providers supporting cancellation."""
+        token = self._exec_cancel_command.set(command)
+        try:
+            yield
+        finally:
+            self._exec_cancel_command.reset(token)
 
     def _merge_env(self, env: dict[str, str] | None) -> dict[str, str] | None:
         """Merge persistent, per-exec, and scoped environment variables."""
