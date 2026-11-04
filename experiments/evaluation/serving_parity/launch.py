@@ -103,7 +103,17 @@ def main() -> None:
     ports = [*RAY_PORTS] if args.hardware == "v4" else []
     coscheduling = resolve_coscheduling(resources, resources.replicas)
     print(
-        json.dumps(dict(vars(args), replicas=resources.replicas, ports=ports, coscheduling=str(coscheduling)), indent=2)
+        json.dumps(
+            dict(
+                vars(args),
+                weights=weights,
+                cpus_per_host=resources.cpu,
+                replicas=resources.replicas,
+                ports=ports,
+                coscheduling=str(coscheduling),
+            ),
+            indent=2,
+        )
     )
     if not args.submit:
         return

@@ -102,6 +102,7 @@ def tpu_ray_gang(
         command = [
             *launcher.command()[:-1],
             "python",
+            "-P",  # Do not let sibling types.py shadow the standard library.
             str(Path(tpu_ray_runtime.__file__).resolve()),
             "--config",
             str(config_path),
