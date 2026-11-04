@@ -281,6 +281,24 @@ CASES = [
         "He said “Stop!” Then he left.",
     ),
     (
+        "keywords:palindrome",
+        {},
+        "मलयालम एक भाषा है।",
+        "हिंदी एक भाषा है।",
+    ),
+    (
+        "keywords:palindrome",
+        {},
+        "A man, a plan, a canal: Panama.",
+        "I am here.",
+    ),
+    (
+        "keywords:palindrome",
+        {},
+        "Taco cat is a classic.",
+        "We met at a cafe.",
+    ),
+    (
         "detectable_format:number_highlighted_sections",
         {"num_highlights": 1},
         "Use *this* one.",
@@ -662,6 +680,18 @@ CASES = [
         "One long line with no final mark\nAnd another line",
     ),
     (
+        "keywords:palindrome",
+        {},
+        "Step on no pets!",
+        "I I I I I I I",
+    ),
+    (
+        "keywords:palindrome",
+        {},
+        "Never odd or even.",
+        "no on no on",
+    ),
+    (
         "length_constraints:number_words",
         {"relation": "at least", "num_words": 2},
         "high-risk",
@@ -865,6 +895,24 @@ CASES = [
         "<<你好>> <<世界>>",
         "<<你好>> 世界",
     ),
+    (
+        "keywords:palindrome",
+        {},
+        "A race-car passed.",
+        "A race-card passed.",
+    ),
+    (
+        "keywords:palindrome",
+        {},
+        "Mom called.",
+        "It costs 2,000.",
+    ),
+    (
+        "keywords:palindrome",
+        {},
+        "Mom called.",
+        "Visit www.site.org",
+    ),
 ]
 
 
@@ -885,6 +933,7 @@ CASES = [
         ("detectable_format:square_brackets", {}, " ".join(["[word]"] * 20_000), True),
         ("detectable_format:json_format", {}, "```" + "\n" * 100_000 + "x", False),
         ("keywords:existence", {"keywords": ["b"]}, "a" + "\u0301" * 100_000 + "b", False),
+        ("keywords:palindrome", {}, " ".join(["ab"] * 20_000), False),
     ],
     ids=[
         "sentence_marks",
@@ -894,6 +943,7 @@ CASES = [
         "many_brackets",
         "fence_newlines",
         "keyword_after_marks",
+        "many_words",
     ],
 )
 def test_check_of_degenerate_text_finishes_within_its_deadline(name, params, text, passed):

@@ -157,6 +157,14 @@ LANGUAGE_HINTS: dict[str, set[str]] = {
 NON_ASCII_MIN = 10
 NON_ASCII_SHARE = 0.2
 PALINDROME_MIN_LETTERS = 3
+# Different letters and digits a word palindrome needs, which "www" and the "000" of "2,000" lack.
+PALINDROME_MIN_DIFFERENT = 2
+# A phrase palindrome, such as "Never odd or even", spans at most this many words and has at least this many letters
+# and digits; shorter runs, such as "at a" or "on no", read the same backward by accident in most English texts. It
+# also needs this many different letters and digits, which "I I I I I I I" and "no on no on" lack.
+PHRASE_PALINDROME_MAX_WORDS = 12
+PHRASE_PALINDROME_MIN_LETTERS = 7
+PHRASE_PALINDROME_MIN_DIFFERENT = 3
 
 
 def constraint(name: str) -> Callable[[Check], Check]:
@@ -426,11 +434,20 @@ def keyword_specific_position(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("keywords:palindrome")
 def palindrome(text: str, params: dict) -> tuple[bool, str]:
-    """The response must contain at least one palindromic word of three letters or more."""
-    for word in words(text):
-        lowered = word.lower()
-        if len(lowered) >= PALINDROME_MIN_LETTERS and lowered == lowered[::-1]:
-            return True, f"palindrome={lowered!r}"
+    """The response must contain a word whose letters and digits, at least three and two different ones, read the same
+    backward, or a phrase of consecutive words whose letters and digits, at least seven and three different ones, do,
+    as in "Never odd or even"."""
+    found = words(text)
+    # Apostrophes and combining marks are left out, as in a Devanagari "Malayalam".
+    keys = ["".join(c for c in word.lower() if c.isalnum()) for word in found]
+    for start, key in enumerate(keys):
+        if len(key) >= PALINDROME_MIN_LETTERS and len(set(key)) >= PALINDROME_MIN_DIFFERENT and key == key[::-1]:
+            return True, f"palindrome={found[start]!r}"
+        for end in range(start + 1, min(len(keys), start + PHRASE_PALINDROME_MAX_WORDS)):
+            key += keys[end]
+            enough = len(key) >= PHRASE_PALINDROME_MIN_LETTERS and len(set(key)) >= PHRASE_PALINDROME_MIN_DIFFERENT
+            if enough and key == key[::-1]:
+                return True, f"palindrome={' '.join(found[start : end + 1])!r}"
     return False, "no palindrome found"
 
 
