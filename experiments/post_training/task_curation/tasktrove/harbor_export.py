@@ -29,6 +29,7 @@ from taskcompendium.models import (
     ArtifactKind,
     CommandSemantics,
     FileReward,
+    JsonValueAnswer,
     MissingArtifactPolicy,
     PlainText,
     ScriptGrader,
@@ -140,7 +141,9 @@ class HarborPayload:
 
 
 TASKS_SCHEMA = arrow_schema(HarborRecord)
-IN_PROCESS_FILE_MODES = frozenset({"exact", "math", "json-schema", "mcq", "ifeval", "xml-elements", "csv-columns"})
+IN_PROCESS_FILE_MODES = frozenset(
+    {"exact", "math", "json-schema", "structured_exact", "mcq", "ifeval", "xml-elements", "csv-columns"}
+)
 VERIFIER_SPEC_PATH = "tests/taskcompendium-verifier.toml"
 VERIFIER_RESOURCES_PATH = "tests/taskcompendium-resources.json"
 HARBOR_REWARD_PATH = "/logs/verifier/reward.txt"
@@ -248,10 +251,12 @@ def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentM
         raise UnsupportedHarborTask("Docker build contexts require a supported shared execution contract")
     if len(task.context.events) != 1 or not isinstance(task.context.events[0], TextMessage):
         raise UnsupportedHarborTask("Only a single public text instruction is supported")
-    if task.answer_type not in (AnswerType.TEXT, AnswerType.FILE, AnswerType.WORKSPACE_STATE):
+    if task.answer_type not in (AnswerType.TEXT, AnswerType.JSON, AnswerType.FILE, AnswerType.WORKSPACE_STATE):
         raise UnsupportedHarborTask(f"Unsupported answer type: {task.answer_type}")
     if task.answer_type == AnswerType.TEXT and not isinstance(task.answer_format, PlainText):
         raise UnsupportedHarborTask("Text extraction beyond plain text requires dedicated Harbor lowering")
+    if task.answer_type == AnswerType.JSON and not isinstance(task.answer_format, JsonValueAnswer):
+        raise UnsupportedHarborTask("JSON extraction beyond one complete JSON value requires dedicated Harbor lowering")
     if task.final_tools:
         raise UnsupportedHarborTask("Final tool calls require dedicated Harbor lowering")
     if environment.setup_commands:
@@ -283,7 +288,7 @@ def _verifier_program(
         ):
             # The legacy source image installs pytest and its reporting plugin in this venv.
             spec = replace(spec, python=f"{PYTEST_ENV}/bin/python")
-        answer_path = verifyit_answer_file(spec) if task.answer_type == AnswerType.TEXT else None
+        answer_path = verifyit_answer_file(spec) if task.answer_type in (AnswerType.TEXT, AnswerType.JSON) else None
         # Harbor reserves tests/verifier.toml for its image-installed dispatch.
         files[VERIFIER_SPEC_PATH] = render_spec(spec).encode()
         if environment_mode == VerifierEnvironmentMode.SHARED:
@@ -333,8 +338,8 @@ def _verifier_program(
     if grader.environment is None and environment_mode == VerifierEnvironmentMode.SEPARATE:
         if not isinstance(grader, VerifyitGrader) or grader.mode not in IN_PROCESS_FILE_MODES:
             raise UnsupportedHarborTask("In-process grader mode has no supported file-delivery lowering")
-        if task.answer_type != AnswerType.TEXT or answer_path is None:
-            raise UnsupportedHarborTask("In-process graders require a plain-text answer file")
+        if task.answer_type not in (AnswerType.TEXT, AnswerType.JSON) or answer_path is None:
+            raise UnsupportedHarborTask("In-process graders require a text or JSON answer file")
         files[VERIFIER_RESOURCES_PATH] = json.dumps([resource.path for resource in task.resources.verifier]).encode()
         files[TEST_SH] = (
             "#!/bin/bash\nset -euo pipefail\nexport PYTHONPATH=/tests/runtime\n"
@@ -410,12 +415,13 @@ def harbor_payload(
     modes: dict[str, str] = {}
     answer_path = verifier.answer_path
     prompt = cast(TextMessage, task.context.events[0]).content
-    if task.answer_type == AnswerType.TEXT:
+    if task.answer_type in (AnswerType.TEXT, AnswerType.JSON):
         if answer_path is None:
-            raise UnsupportedHarborTask("Text grader has no answer-file destination")
+            raise UnsupportedHarborTask("Conversation grader has no answer-file destination")
+        format_instruction = " Write exactly one complete JSON value." if task.answer_type == AnswerType.JSON else ""
         prompt += (
             f"\n\nWrite your final answer to `{answer_path}`. "
-            "The contents of this file are graded as your final response."
+            f"The contents of this file are graded as your final response.{format_instruction}"
         )
     if leak := _reference_leak(prompt, verifier.spec):
         raise UnsupportedHarborTask(f"gold_leak: {leak}")
@@ -512,11 +518,12 @@ def harbor_payload(
         "source_revision": task.source.revision,
         "source_row": task.source.row,
         "tasktrove_source": row["source_row"].split("/", 1)[0],
-        "tasktrove_path": row["original_path"],
         "family": family,
         "conversion_only": True,
         "runtime_verified": False,
     }
+    if row["original_path"] is not None:
+        metadata["tasktrove_path"] = row["original_path"]
     config: dict[str, Any] = {
         "schema_version": "1.2",
         "metadata": metadata,

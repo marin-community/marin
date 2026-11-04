@@ -1,9 +1,10 @@
 # COVID-19 immune-repertoire verifiable-task pilot
 
 This is a small, reproducible demonstration of turning one scientific data object
-into ordinary `TaskSpec`s with objective rewards. It is deliberately simpler than
-model-authored open-ended Taskforge: deterministic code chooses the question,
-computes the hidden answer, and packages an in-process VerifyIt grader.
+into ordinary `TaskSpec`s with objective rewards. Deterministic code chooses the
+question, computes the hidden answer, and packages an in-process VerifyIt grader.
+The resulting candidates can then cross the ordinary Taskforge workpiece lifecycle
+and the existing TaskCompendium curation and TaskTrove/Harbor export pipelines.
 
 The first slice covers TRAV1-2 usage in the T-cell repertoire. It is a plumbing
 and task-design pilot, not yet a publishable dataset. After reviewing the first
@@ -45,7 +46,7 @@ treating the convenience object as the canonical source.
 4. Enumerate meaningful parameterized analyses.
 5. Compute each hidden answer deterministically.
 6. Package data, instruction, and verifier as TaskSpec.
-7. Validate, inspect, and freeze a release manifest.
+7. Route candidates through Taskforge, curate them, inspect them, and freeze a release manifest.
 ```
 
 ### 1. Pin the source
@@ -120,7 +121,49 @@ tasks.jsonl     ordinary TaskCompendium TaskSpecs
 manifest.json   input/output digests, task IDs, generator version, release status
 ```
 
-### 7. Validate, inspect, and refocus
+### 7. Route through Taskforge, curate, inspect, and refocus
+
+`taskforge_flow.py` does not accept serialized task answers as authoritative. For
+each candidate it creates a grounded `TaskProposal` and immutable `build_input`,
+then runs Taskforge triage, static authoring, deterministic build, objective
+positive/negative grader canaries, review, event persistence, and terminal accepted
+or rejected state. The build recomputes the task from the count table and stable
+candidate identity.
+
+```bash
+TASKFORGE_ROOT=/tmp/covid-repertoire-taskforge-workpieces
+TASKFORGE_RELEASE=/tmp/covid-repertoire-taskforge-release
+
+PYTHONPATH=. uv run --with-editable lib/taskforge-adapters --project lib/taskforge python \
+  experiments/post_training/capability_driven_envs/covid_repertoire_tasks/taskforge_flow.py \
+  --counts "$OUT/repertoire_counts.csv" \
+  --source-revision sha256:9247763b3be7c89b6f765ed3f4d1c4a0abd68ad7ee06f4cdc78b7882d9660d61 \
+  --count 50 \
+  --root "$TASKFORGE_ROOT" \
+  --output "$TASKFORGE_RELEASE"
+```
+
+The release contains `accepted_tasks.jsonl` and a manifest that records source and
+output digests, task IDs, validation performed, and the remaining release gates.
+The workpiece root retains proposals, rounds, drafts, failures, validation events,
+and terminal decisions for resume and audit.
+
+Next, use the existing local Zephyr curation pipeline and TaskTrove/Harbor exporter:
+
+```bash
+PYTHONPATH=. uv run --project lib/taskcompendium python \
+  experiments/post_training/capability_driven_envs/covid_repertoire_tasks/curate_local.py \
+  --release "$TASKFORGE_RELEASE" \
+  --normalized-output /tmp/covid-repertoire-normalized \
+  --tasktrove-output /tmp/covid-repertoire-tasktrove
+```
+
+This validates every accepted `TaskSpec`, preserves its Taskforge ID as a tag,
+assigns canonical curation provenance, writes normalized Parquet, and emits the
+legacy TaskTrove/Harbor `tasks.parquet` plus manifest. Structured JSON answers are
+lowered to a dedicated answer file and remain graded by `StructuredExactSpec`.
+The compatibility export builds no images and runs no Harbor runtime; its manifest
+therefore records `runtime_verified=false`.
 
 Run the focused tests:
 
@@ -138,11 +181,13 @@ PYTHONPATH=. uv run --project lib/taskforge python \
   --output "$RELEASE/private-review.md"
 ```
 
-Manually inspect every instruction/answer pair and run solver canaries. The first
-such review found that biologically named arithmetic did not actually require
-biological reasoning; that finding and the resulting refocus are preserved in
-`DESIGN_REVIEW.md`. Generation should reject degenerate candidates rather than
-fill a requested quota with meaningless variants.
+Taskforge's local deterministic acceptance means only that proposal, build, and
+objective-grader contracts passed. It is **not** publication acceptance. Manually
+inspect every instruction/answer pair and run model solver/adversary canaries before
+promoting a release. The first such review found that biologically named arithmetic
+did not actually require biological reasoning; that finding and the resulting
+refocus are preserved in `DESIGN_REVIEW.md`. Generation should reject degenerate
+candidates rather than fill a requested quota with meaningless variants.
 
 ## Scaling to the first 50
 
@@ -170,3 +215,5 @@ separate cohort or source family is required for held-out evaluation.
 - It does not use an LLM judge; these rewards are objective.
 - It does not ask open-ended biological questions with multiple defensible answers.
 - It does not turn superficial prompt paraphrases into additional task IDs.
+- It does not publish the local TaskTrove compatibility export or mark its runtime verified.
+- It does not replace pending human review and model solver/adversary trials with structural Taskforge acceptance.

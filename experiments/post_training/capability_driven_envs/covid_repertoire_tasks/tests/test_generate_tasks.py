@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import base64
 import json
 
@@ -11,18 +12,30 @@ from taskcompendium.models import (
     ConversationTrace,
     GradingAttempt,
     InlineFile,
+    Source,
     TextMessage,
     VerifyitGrader,
     verifyit_spec,
 )
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import RawRow
 from verifyit.spec import StructuredExactSpec
 
+from experiments.post_training.capability_driven_envs.covid_repertoire_tasks.curate_local import (
+    convert,
+    golden,
+    negative,
+)
 from experiments.post_training.capability_driven_envs.covid_repertoire_tasks.generate_tasks import (
     REQUIRED_COLUMNS,
     generate,
     read_counts,
 )
 from experiments.post_training.capability_driven_envs.covid_repertoire_tasks.render_review import render
+from experiments.post_training.capability_driven_envs.covid_repertoire_tasks.taskforge_flow import (
+    run_campaign,
+    write_release,
+)
 
 
 def fixture_counts() -> bytes:
@@ -74,6 +87,36 @@ def test_generates_a_balanced_reproducible_25_task_release():
     wrong_result = grade_answer(task, wrong)
     assert (correct_result.status, correct_result.reward) == (Outcome.GRADED, 1.0)
     assert (wrong_result.status, wrong_result.reward) == (Outcome.GRADED, 0.0)
+
+
+def test_taskforge_rebuilds_accepts_and_releases_objective_tasks(tmp_path):
+    data = fixture_counts()
+    direct = generate(data, source_revision="sha256:fixture", count=2)
+    root = tmp_path / "workpieces"
+
+    accepted = asyncio.run(run_campaign(data, "sha256:fixture", 2, root))
+
+    assert [task.model_dump(mode="json") for task in accepted] == [task.model_dump(mode="json") for task in direct]
+    for task in accepted:
+        assert (root / "workpieces" / task.id / "events.json").is_file()
+    release = tmp_path / "release"
+    write_release(release, accepted, data, "sha256:fixture")
+    manifest = json.loads((release / "manifest.json").read_text())
+    assert manifest["count"] == 2
+    assert manifest["status"] == "structural_only_unreviewed_do_not_publish"
+
+
+def test_curation_converter_assigns_canonical_provenance_and_preserves_taskforge_id():
+    task = generate(fixture_counts(), source_revision="sha256:fixture", count=1)[0]
+    source = Source(dataset="curated", revision="pinned", row="accepted_tasks.jsonl:0", importer_revision="1")
+
+    converted = convert(RawRow("canonical-id", source, task.model_dump(mode="json")), ConversionContext({}, None))
+
+    assert converted.id == "canonical-id"
+    assert converted.source == source
+    assert f"taskforge-id:{task.id}" in converted.tags
+    assert golden(converted) is not None
+    assert negative(converted) is not None
 
 
 def test_private_review_sheet_contains_prompts_answers_and_checklist(tmp_path):
