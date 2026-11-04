@@ -166,12 +166,14 @@ def _trial_source(fs, trial_dir: str) -> tuple[str, str]:
 
 def _read_trajectory(evals_root: str, run: str, trial_dir: str) -> Trajectory | None:
     fs, _ = filesystem_for(evals_root)
-    attempts = sorted(fs.ls(f"{trial_dir}/attempts", detail=False))
-    transcript_paths = [f"{attempt}/{TRANSCRIPT_PATH}" for attempt in attempts]
-    transcript_paths = [path for path in transcript_paths if fs.exists(path)]
+    transcript_paths = sorted(fs.glob(f"{trial_dir}/attempts/*/{TRANSCRIPT_PATH}"))
+    trial = trial_dir.rsplit("/", 1)[-1]
     if not transcript_paths:
         return None
-    trial = trial_dir.rsplit("/", 1)[-1]
+    if not fs.exists(f"{trial_dir}/config.json"):
+        # An interrupted upload can leave a transcript without the config that names its benchmark and model.
+        logger.info("Skipping %s/%s: no trial config", run, trial)
+        return None
     benchmark, model = _trial_source(fs, trial_dir)
     with fs.open(transcript_paths[-1], "rt") as handle:
         try:
