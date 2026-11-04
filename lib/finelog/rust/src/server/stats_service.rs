@@ -347,10 +347,9 @@ impl StatsService for StatsServiceImpl {
         let fills = admission.cancel_on_drop(query_timeout(ctx.time_remaining(), None));
         let names = query_namespaces(&query_ctx, &sql).map_err(map_query_error)?;
 
-        // Hold the query-visibility READ guard across the WHOLE scan. DataFusion
-        // opens the snapshotted parquet files LAZILY during collect(), so the
-        // guard must outlive run_query_over (not just query_providers) to keep a
-        // concurrent drop_table / compaction from unlinking a file mid-scan.
+        // DataFusion opens legacy Parquet files during collect(), so keep the
+        // visibility guard through the scan. Legacy replacement and drop_table
+        // can unlink those files after the guard is released.
         let visibility_started = Instant::now();
         let _read_guard = if names.is_empty() {
             None
