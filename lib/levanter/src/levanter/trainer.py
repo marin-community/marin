@@ -73,7 +73,7 @@ from levanter.checkpoint import (
     load_checkpoint_or_initialize,
 )
 from levanter.config import JsonAtom
-from levanter.compute_dtype import cast_model_for_compute, compute_policy
+from levanter.compute_dtype import compute_policy
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
@@ -231,19 +231,16 @@ class WrappedLossFunction:
         raw_fn: ComputeLossFunction,
         mp: jmp.Policy,
         compute_axis_mapping: ResourceMapping,
-        compute_dtype_overrides: Mapping[str, str] | None = None,
     ):
         """
         Args:
             raw_fn: The underlying loss function
             mp: Mixed precision policy for casting
             compute_axis_mapping: Axis mapping for compute
-            compute_dtype_overrides: Exact array-field names with explicit compute dtypes.
         """
         self._raw_fn = raw_fn
         self._mp = mp
         self._compute_axis_mapping = compute_axis_mapping
-        self._compute_dtype_overrides = compute_dtype_overrides
 
     def __call__(self, model, *batch, **batch_kwargs) -> Tuple[Scalar, Dict[str, Metric]]:
         """
@@ -251,7 +248,7 @@ class WrappedLossFunction:
         Always returns (loss, wrapped_metrics) where metrics are Metric objects.
         """
         with hax.axis_mapping(self._compute_axis_mapping):
-            model = cast_model_for_compute(model, self._mp, self._compute_dtype_overrides)
+            model = self._mp.cast_to_compute(model)
             result = self._raw_fn(model, *batch, **batch_kwargs)
 
         if isinstance(result, tuple) and len(result) == 2:
@@ -333,14 +330,9 @@ class Trainer:
         """
         return WrappedLossFunction(
             self._raw_loss_function,
-            self.mp,
+            self.config.compute_policy,
             self.compute_axis_mapping,
-            self.config.compute_dtype_overrides,
         )
-
-    def compute_model(self, model: M) -> M:
-        """Build the same compute-dtype view used by the training loss."""
-        return cast_model_for_compute(model, self.mp, self.config.compute_dtype_overrides)
 
     @property
     def run_id(self) -> str:
@@ -773,7 +765,7 @@ class Trainer:
         def obj_fun(trainable_model):
             model = eqx.combine(trainable_model, state.model)
             with hax.axis_mapping(self.compute_axis_mapping):
-                model = self.compute_model(model)
+                model = self.config.compute_policy.cast_to_compute(model)
                 result = self._raw_loss_function(model, *batch, **batch_kwargs, key=key)
                 # result is (loss, metrics) tuple
                 loss_for_opt, _metrics = result
@@ -926,7 +918,7 @@ class TrainerConfig:
 
     @property
     def compute_policy(self) -> jmp.Policy:
-        """The policy for code outside the train step, such as evaluation: ``mp`` plus ``compute_dtype_overrides``."""
+        """The model compute policy, including field dtype overrides."""
         return compute_policy(self.mp, self.compute_dtype_overrides)
 
     @property

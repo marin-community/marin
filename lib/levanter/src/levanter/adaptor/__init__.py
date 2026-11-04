@@ -168,9 +168,8 @@ class NoAdaptorConfig(AdaptorConfig):
 class FrozenParameterAdaptorConfig(AdaptorConfig):
     """Train a full model except named fields, exporting the complete model.
 
-    Field names match exact attribute names at any depth, not HF state-dict keys.
+    Frozen fields match exact model attribute names at any depth.
     Native checkpoints omit frozen fields; resume requires the same pinned base.
-    This controls trainability, not the trainer's mixed-precision casting policy.
     """
 
     frozen_field_names: tuple[str, ...]

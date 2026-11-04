@@ -49,10 +49,7 @@ def cast_model_for_compute(
 
 @dataclasses.dataclass(frozen=True)
 class OverridingPolicy(jmp.Policy):
-    """A mixed-precision policy whose ``cast_to_compute`` applies field dtype overrides.
-
-    Code that only receives a policy, such as the evaluation loops, then builds the same compute view as training.
-    """
+    """A mixed-precision policy whose ``cast_to_compute`` applies field dtype overrides."""
 
     field_dtype_overrides: tuple[tuple[str, str], ...] = ()
 

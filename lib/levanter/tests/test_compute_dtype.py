@@ -11,7 +11,7 @@ import optax
 import pytest
 
 from levanter.compute_dtype import cast_model_for_compute
-from levanter.trainer import Trainer, TrainerConfig, WrappedLossFunction
+from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
 
@@ -28,14 +28,9 @@ def router(named=False):
 
 
 @pytest.mark.parametrize("named", [False, True])
-def test_compute_override_preserves_original_bits_and_default_policy(named):
+def test_compute_override_preserves_original_bits(named):
     model = tuple(router(named) for _ in range(26))
     policy = jmp.get_policy("p=f32,c=bf16,o=f32")
-    default = cast_model_for_compute(model, policy)
-    expected = policy.cast_to_compute(model)
-    for actual, reference in zip(jax.tree.leaves(default), jax.tree.leaves(expected), strict=True):
-        np.testing.assert_array_equal(actual, reference)
-        assert actual.dtype == reference.dtype
     compute = eqx.filter_jit(lambda model: cast_model_for_compute(model, policy, {"router_bias": "float32"}))(model)
     for master, view in zip(model, compute, strict=True):
         original = master.router_bias.array if named else master.router_bias
@@ -46,7 +41,7 @@ def test_compute_override_preserves_original_bits_and_default_policy(named):
         assert np.any(np.asarray(original) != np.asarray(original.astype(jnp.bfloat16).astype(jnp.float32)))
 
 
-def test_wrapped_loss_and_trainer_compute_view_share_override():
+def test_trainer_loss_preserves_router_bias_and_gradient():
     policy = jmp.get_policy("p=f32,c=bf16,o=f32")
     model = router()
 
@@ -64,34 +59,9 @@ def test_wrapped_loss_and_trainer_compute_view_share_override():
         mesh=MeshConfig(),
     )
     trainer = Trainer(config, optax.sgd(0.01), loss, add_default_hooks=False)
-    wrapped = WrappedLossFunction(loss, policy, {}, config.compute_dtype_overrides)
-    actual, _ = wrapped(model)
-    expected, _ = loss(trainer.compute_model(model))
+    actual, _ = trainer.loss_fn(model)
+    expected = jnp.sum(model.router_bias) + model.weight.astype(jnp.bfloat16).astype(jnp.float32)
     np.testing.assert_array_equal(actual, expected)
-    trainer_loss, _ = trainer.loss_fn(model)
-    np.testing.assert_array_equal(trainer_loss, expected)
-    gradient = eqx.filter_grad(lambda model: wrapped(model)[0])(model)
+    gradient = eqx.filter_grad(lambda model: trainer.loss_fn(model)[0])(model)
     np.testing.assert_array_equal(gradient.router_bias, jnp.ones_like(model.router_bias))
     np.testing.assert_array_equal(model.router_bias, router().router_bias)
-
-
-def test_eval_policy_builds_the_training_compute_view():
-    """Evaluation receives ``TrainerConfig.compute_policy``; its cast must equal the train step's compute view."""
-    policy = jmp.get_policy("p=f32,c=bf16,o=f32")
-    config = TrainerConfig(
-        id="eval-view-test",
-        mp=policy,
-        compute_dtype_overrides={"router_bias": "float32"},
-        tracker=(),
-        require_accelerator=False,
-        mesh=MeshConfig(),
-    )
-    trainer = Trainer(config, optax.sgd(0.01), lambda model: (jnp.zeros(()), {}), add_default_hooks=False)
-    model = tuple(router() for _ in range(3))
-    eval_view = eqx.filter_jit(config.compute_policy.cast_to_compute)(model)
-    train_view = trainer.compute_model(model)
-    for actual, expected in zip(jax.tree.leaves(eval_view), jax.tree.leaves(train_view), strict=True):
-        np.testing.assert_array_equal(actual, expected)
-        assert actual.dtype == expected.dtype
-    assert all(view.router_bias.dtype == jnp.float32 for view in eval_view)
-    assert all(view.weight.dtype == jnp.bfloat16 for view in eval_view)

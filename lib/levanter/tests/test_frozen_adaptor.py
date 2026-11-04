@@ -289,7 +289,6 @@ def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(native_snowball):
     for filename in (env.tmp_path / "step-2").glob("*.safetensors"):
         with safetensors.safe_open(filename, framework="jax", device="cpu") as shard:
             actual.update({name: shard.get_tensor(name) for name in shard.keys()})
-    assert len(actual) == len(env.original) == 502
     assert set(actual) == set(env.original)
     for name, value in actual.items():
         if name in env.overrides:

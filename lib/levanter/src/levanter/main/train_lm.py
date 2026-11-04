@@ -419,7 +419,7 @@ def main(config: TrainLmConfig):
 
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
-            model = trainer.compute_model(model)
+            model = config.trainer.compute_policy.cast_to_compute(model)
             activations, _ = split_activations(
                 model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
             )
