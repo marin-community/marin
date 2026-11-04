@@ -22,7 +22,7 @@ from typing import Any, Protocol
 
 GENERATION_CONFIG_FILENAME = "generation_config.json"
 
-END_OF_TURN_TOKENS = ("<|eot_id|>", "<|eom_id|>", "<|im_end|>", "<end_of_turn>", "<|end|>")
+END_OF_TURN_TOKENS = ("<|eot_id|>", "<|eom_id|>", "<|im_end|>", "<end_of_turn>")
 """Turn-boundary tokens added as stop tokens when the exported chat template emits them."""
 
 
