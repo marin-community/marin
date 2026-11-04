@@ -20,7 +20,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
 from levanter.models.snowball import SnowballConfig
 
-from experiments.june_tpu_67b_a2b.moe.model import MoEMLP, RMSNorm
+from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, MoEMLP, RMSNorm
 from experiments.june_tpu_67b_a2b.moe.rl_model import JuneSnowballConfig, split_june_pipeline_model
 
 
@@ -147,6 +147,21 @@ def test_june_adapter_uses_june_capacity_default_from_hf_config():
     assert JuneSnowballConfig().capacity_factor == 1.0
     decoded = JuneSnowballConfig.from_hf_config(_config().to_hf_config(24))
     assert decoded.capacity_factor == 1.0
+
+
+def test_june_training_config_drops_snowball_only_settings_at_their_defaults():
+    snowball_only = {field.name for field in dataclasses.fields(SnowballConfig)} - {
+        field.name for field in dataclasses.fields(GrugModelConfig)
+    }
+    assert "router_dot_fp32" in snowball_only
+    training = _config().training_config()
+    assert training.num_experts == 4
+    assert training.capacity_factor == _config().capacity_factor
+
+
+def test_june_training_config_rejects_a_set_snowball_only_setting():
+    with pytest.raises(ValueError, match="router_dot_fp32"):
+        dataclasses.replace(_config(), router_dot_fp32=True).training_config()
 
 
 def test_june_stage_telemetry_rejects_oversized_expert_parallel_microbatches():

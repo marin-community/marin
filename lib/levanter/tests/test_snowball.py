@@ -24,6 +24,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as random
+import jmp
 import numpy as np
 import pytest
 from haliax import Axis, named_jit
@@ -35,14 +36,16 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+from levanter.compute_dtype import cast_model_for_compute
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
-from levanter.main.train_lm import TrainLmConfig, main
+from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -51,6 +54,7 @@ from levanter.models.snowball import (
     SnowballConfig,
     SnowballLMHeadModel,
     SnowballMoEMLP,
+    _activation_spec,
     validate_single_name_config,
 )
 from levanter.optim.config import AdamConfig
@@ -320,6 +324,60 @@ def test_snowball_forward_shapes_and_finite():
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
+
+
+def test_snowball_route_observer_is_output_identical():
+    cfg = _tiny_config()
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+        ids = _device_batched_ids(cfg.vocab_size, 8)
+        plain = hax.named_jit(lambda m, x: m.activations(x))(model, ids)
+        observed, routes = hax.named_jit(lambda m, x: m.activations_with_routes(x))(model, ids)
+
+        # Layer 0's routes, recomputed by hand from the block's own pieces.
+        tf = model.transformer
+        tokens = ids.array
+        hidden = tf.embed_gated_norm(tf.embed_norm(tf.token_embed.at[tokens].get(out_sharding=_activation_spec())))
+        block = tf.blocks[0]
+        short_mask = GrugAttentionMask(is_causal=True, sliding_window=cfg.sliding_window)
+        x = hidden + block.attn(block.attn_gated_norm(block.rms_attn(hidden)), short_mask, disable_rope=False)
+        mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
+        logits = jnp.einsum("bsd,de->bse", mlp_in, block.mlp.router).astype(jnp.float32) + block.mlp.router_bias
+        expected = jax.lax.top_k(logits, cfg.num_experts_per_token + 1)[1][..., :-1]
+
+    routes, expected = np.asarray(jax.device_get(routes)), np.asarray(jax.device_get(expected))
+    assert np.array_equal(np.asarray(jax.device_get(plain.array)), np.asarray(jax.device_get(observed.array)))
+    assert routes.shape == (cfg.num_layers, tokens.shape[0], tokens.shape[1], cfg.num_experts_per_token)
+    assert ((routes >= 0) & (routes < cfg.num_experts)).all()
+    np.testing.assert_array_equal(routes[0], expected)
+
+
+def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
+    cfg = _tiny_config(router_dot_fp32=True, num_experts=4, num_experts_per_token=1)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballMoEMLP.init(cfg, key=jax.random.key(23))
+        # BF16 rounds 1 + 1/256 to 1 before bias is added. Native FP32
+        # router bias then makes expert 1 win; the FP32 dot must retain expert 0.
+        router = jnp.zeros((cfg.hidden_dim, cfg.num_experts), jnp.float32)
+        router = router.at[0, :2].set(1).at[1, 0].set(1 / 256)
+        model = replace(model, router=router, router_bias=jnp.array([0, 0.001, -10, -10], jnp.float32))
+        compute = cast_model_for_compute(model, jmp.get_policy("p=f32,c=bf16"), {"router_bias": "float32"})
+        inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, :2].set(1)
+        # Keep primitive boundaries explicit: XLA may fuse the BF16 dot's
+        # following FP32 conversion into a CPU dot with an FP32 accumulator.
+        routes = lambda value: value.with_routes(inputs)[1]
+        high = routes(compute)
+        low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
+    np.testing.assert_array_equal(high, [[[0]]])
+    np.testing.assert_array_equal(low, [[[1]]])
+
+
+def test_hf_reload_keeps_requested_runtime_settings():
+    requested = _tiny_config(router_dot_fp32=True, moe_implementation="ring")
+    reloaded = _tiny_config(moe_implementation=None)
+    restored = preserve_hf_runtime_settings(reloaded, requested, {"router_bias": "float32"})
+    assert restored.router_dot_fp32
+    assert restored.moe_implementation == "ring"
 
 
 @pytest.mark.parametrize(
@@ -657,6 +715,9 @@ def test_snowball_packed_conversations_are_isolated(separate_key_axis):
         forward = eqx.filter_jit(lambda m, tokens: m.activations(tokens, mask).array)
         before = np.array(forward(model, ids))
         after = np.array(forward(model, changed))
+        observe = eqx.filter_jit(lambda m, tokens: m.activations_with_routes(tokens, mask)[0].array)
+        np.testing.assert_array_equal(observe(model, ids), before)
+        np.testing.assert_array_equal(observe(model, changed), after)
     assert not np.allclose(before[:, :4], after[:, :4])
     np.testing.assert_allclose(before[:, 4:], after[:, 4:], atol=1e-5, rtol=1e-5)
 
