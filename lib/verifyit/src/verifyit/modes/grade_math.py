@@ -312,7 +312,7 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
 
 
 def math_answer(spec: MathSpec, text: str) -> str:
-    """The math content of an answer: all of it for the raw profile, else its last box or last line."""
+    """Keep raw responses whole; extract the last box or line for other profiles."""
     if spec.profile is MathProfile.RAW:
         return text
     if BOXED in text:

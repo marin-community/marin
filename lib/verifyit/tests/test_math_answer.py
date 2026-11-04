@@ -17,7 +17,13 @@ from verifyit.grade import InvalidTask, Status, run, write_reward
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_math
 from verifyit.modes.grade_exact import grade_exact_candidate
-from verifyit.spec import ExactSpec, MathProfile, MathSpec, MathType, render_spec
+from verifyit.spec import (
+    ExactSpec,
+    MathProfile,
+    MathSpec,
+    MathType,
+    render_spec,
+)
 
 
 def _answer(workspace: Path, text: str) -> None:

@@ -64,8 +64,8 @@ def _tiny_hero(
         initializer_std=0.2,
     )
     mesh = Mesh(
-        np.asarray(devices[:context_axis_size]).reshape(1, 1, context_axis_size, 1, 1),
-        ("replica_dcn", "data", "context", "expert", "model"),
+        np.asarray(devices[:context_axis_size]).reshape(1, 1, 1, context_axis_size, 1),
+        ("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     with jax.set_mesh(mesh):
