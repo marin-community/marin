@@ -1,217 +1,100 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the first 100 GSM8K test items on an H100 node or a v4-32 slice."""
+"""Run Snowball next-token probability and repeatability checks on H100 or TPU."""
 
 import argparse
-import contextlib
 import dataclasses
 import hashlib
 import json
-import math
 import os
-import subprocess
-import tempfile
 import time
 from pathlib import Path
 
-from finestore.reader import ReadView
 from fray.iris_backend import convert_constraints, convert_resources, resolve_coscheduling
 from fray.types import ResourceConfig
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import Entrypoint, EnvironmentSpec
-from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
-from marin.evaluation.evalchemy.config import load_evalchemy_config
-from marin.evaluation.evalchemy.runner import _evalchemy_client_command, _run_config_json
-from marin.evaluation.lm_eval_samples import read_evalchemy_results
-from marin.inference.config import ServedModelConfig, VllmEngineConfig, VllmLauncherType, VllmSource
-from marin.inference.iris import _vllm_model_spec
-from marin.inference.iris_tpu_vllm import RAY_PORTS, tpu_ray_gang
-from marin.inference.iris_vllm import (
-    iris_vllm_followers,
-    notify_iris_vllm_stopped,
-    wait_for_iris_vllm_shutdown,
-)
-from marin.inference.serve import local_inference
-from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.vllm_backend import VllmBackend, vllm_launcher
-from marin.inference.vllm_server import IsolatedTpuVllm
+from marin.inference.iris_tpu_vllm import RAY_PORTS
+from marin.testing.inference import snowball
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
-from experiments.evaluation.evals import evalchemy_run_config
-
-MODEL = "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
-REVISION = "50fe2f488aee7730bbccc721024b35229075602e"
-ITEM_COUNT = 100
+H100_WEIGHTS = snowball.SNOWBALL.export_uri
+V4_WEIGHTS = "gs://marin-us-central2/scratch/karan/task336/weights/june-42150-d819cbc63780bd86/"
+V4_MANIFEST = "gs://marin-us-central2/scratch/karan/task336/staging/manifest.json"
 RUNTIME_SECONDS = 3600
-POLICY = "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/gsm8k-0shot.yaml"
-
-
-def evaluate(model, output: StoragePath, timeout: float) -> list[dict]:
-    """Use the existing campaign evaluator, retaining its logs and FineStore samples."""
-    config = dataclasses.replace(
-        evalchemy_run_config("gsm8k-0shot", load_evalchemy_config(Path(POLICY))),
-        apply_chat_template=True,
-        max_length=8192,
-        max_eval_instances=ITEM_COUNT,
-        num_concurrent=16,
-        seed=42,
-        max_gen_toks=2048,
-        extra_gen_kwargs={"temperature": "0", "top_p": "1", "top_k": "-1"},
-    )
-    archive = str(output / "eval")
-    env = dict(
-        os.environ,
-        **{CONFIG_ENV_KEY: _run_config_json(model, config, archive)},
-        JAX_PLATFORMS="cpu",
-        CUDA_VISIBLE_DEVICES="",
-    )
-    env.pop("PYTHONPATH", None)
-    env.pop("UV_PROJECT_ENVIRONMENT", None)
-    command = [*_evalchemy_client_command(config.runtime), "lib/marin/src/marin/evaluation/evalchemy/client.py"]
-    with tempfile.TemporaryFile(mode="w+") as log:
-        try:
-            subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=timeout, check=True)
-        finally:
-            log.seek(0)
-            (output / "eval.log").write_text(log.read())
-    documents = read_evalchemy_results(archive)
-    if not documents or any(
-        outcome["status"] != "succeeded" or outcome["scored_count"] != ITEM_COUNT
-        for document in documents.values()
-        for outcome in document["task_outcomes"].values()
-    ):
-        raise ValueError("GSM8K did not finish all 100 items; see eval.log")
-    return collect_items(archive)
-
-
-def collect_items(archive: str) -> list[dict]:
-    """Read scored items from the evaluator archive, including Arrow map metrics."""
-    items = []
-    for row in ReadView(archive).iter_rows("samples"):
-        metrics = dict(row["metrics"])
-        if row["filter"] != "flexible-extract" or "exact_match" not in metrics:
-            continue
-        document = json.dumps(json.loads(row["doc"]), sort_keys=True, separators=(",", ":"))
-        items.append(
-            dict(
-                id=str(row["doc_id"]),
-                sha256=hashlib.sha256(document.encode()).hexdigest(),
-                correct=float(metrics["exact_match"]),
-            )
-        )
-    if len(items) != ITEM_COUNT or len({item["id"] for item in items}) != ITEM_COUNT:
-        raise ValueError("GSM8K sample coverage is incomplete or duplicated")
-    return sorted(items, key=lambda item: item["id"])
-
-
-@contextlib.contextmanager
-def serving_model(hardware, model, engine, cpus_per_host: float):
-    """Reuse the single-host backend or the multi-host TPU launcher."""
-    if hardware == "h100":
-        with local_inference(model, engine, num_chips=8) as session:
-            yield session.model
-            session.check_alive()
-        return
-    launcher = vllm_launcher(engine)
-    assert isinstance(launcher, IsolatedTpuVllm)
-    with tpu_ray_gang(
-        launcher, cpus_per_host=max(1, math.floor(cpus_per_host)), chips_per_host=4, timeout_seconds=2400
-    ) as gang:
-        if gang.leader:
-            with iris_vllm_followers(gang.identity):
-                spec = _vllm_model_spec(model, 16, 16)
-                with VllmBackend(engine).start(
-                    spec,
-                    extra_args=("--distributed-executor-backend", "ray"),
-                    subprocess_env=gang.subprocess_env,
-                ) as environment:
-                    environment.wait_until_ready()
-                    url = environment.server_url.rstrip("/").removesuffix("/v1") + "/v1"
-                    yield RunningModel(OpenAIEndpoint(url, MODEL), tokenizer=MODEL)
-                    gang.check_alive()
-                    environment.check_alive()
-        else:
-            wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
-    if not gang.leader:
-        notify_iris_vllm_stopped(gang.identity)
-        yield None
 
 
 def run_arm(hardware: str, weights: str, output: str, cpus_per_host: float) -> None:
-    """Own the server and evaluator in one bounded Iris job; release on exit."""
+    """Own one backend lifecycle and publish a result only after all gates pass."""
+    # This module includes optional JAX/Levanter scorer dependencies. Import on
+    # the Iris CPU coordinator, never while constructing the local dry plan.
+    from marin.testing.inference import snowball_backend_parity_jobs as jobs  # noqa: PLC0415
+
     configure_coreweave_s3()
-    root = StoragePath(output)
     info = get_job_info()
     if info is None:
-        raise RuntimeError("Run this experiment inside an Iris job")
+        raise RuntimeError("Run this check inside Iris")
+    root = StoragePath(output)
+    started = time.monotonic()
     if info.task_index == 0:
         if (root / "started.json").exists():
             raise ValueError("Use a fresh output prefix for each run")
-        (root / "started.json").write_text(json.dumps(dict(hardware=hardware, epoch=time.time())))
-    started = time.monotonic()
-    gpu = hardware == "h100"
-    model = ServedModelConfig(
-        weights=weights,
-        api_model=MODEL,
-        tokenizer=MODEL,
-        tokenizer_revision=REVISION,
-        revision=REVISION if weights == MODEL else None,
-        max_model_len=8192,
-        tensor_parallel_size=1 if gpu else 16,
-    )
-    engine = VllmEngineConfig(
-        launcher=VllmLauncherType.CUDA if gpu else VllmLauncherType.TPU,
-        source=VllmSource.MARIN_FORK if gpu else VllmSource.UPSTREAM,
-        startup_timeout_seconds=2400,
-        max_num_batched_tokens=512,
-        max_num_seqs=16,
-        extra_args=("--trust-remote-code", "--load-format", "runai_streamer")
-        + (
-            (
-                "--data-parallel-size",
-                "8",
-                "--enable-expert-parallel",
-                "--model-loader-extra-config",
-                '{"distributed":true}',
+        manifest = None
+        if hardware == "v4":
+            manifest = json.loads(StoragePath(V4_MANIFEST).read_bytes())
+            assert manifest["verified"] and manifest["destination"] == weights
+            assert manifest["source"] == snowball.SNOWBALL.export_uri
+            assert manifest["export_sha256"] == snowball.SNOWBALL.export_sha256
+        (root / "started.json").write_text(
+            json.dumps(
+                dict(
+                    hardware=hardware,
+                    job_id=str(info.job_id),
+                    model=dataclasses.asdict(snowball.SNOWBALL),
+                    staged_manifest=manifest,
+                    scorer_sha256=hashlib.sha256(Path(jobs.__file__).read_bytes()).hexdigest(),
+                ),
+                indent=2,
             )
-            if gpu
-            else ()
-        ),
-    )
-    with serving_model(hardware, model, engine, cpus_per_host) as running_model:
-        if running_model is None:
-            return
-        ready = time.monotonic()
-        items = evaluate(running_model, root, max(1, RUNTIME_SECONDS - (ready - started) - 60))
+        )
+    goldens = snowball.read_representative_goldens()
+    if hardware == "h100":
+        parities = jobs.score_vllm_against_goldens(goldens, "FLASH_ATTN", 1)
+    else:
+        parities = jobs.score_tpu_vllm_against_goldens(goldens, weights, cpus_per_host)
+    if parities is None:
+        return
     result = dict(
         hardware=hardware,
-        model=MODEL,
-        revision=REVISION,
-        items=items,
-        score=sum(item["correct"] for item in items) / ITEM_COUNT,
-        startup_seconds=ready - started,
+        export_sha256=snowball.SNOWBALL.export_sha256,
+        max_probability_error=jobs.VLLM_MAX_PROBABILITY_ERROR,
+        parities=[dataclasses.asdict(parity) for parity in parities],
+        same_rank_repeatability=True,
         wall_seconds=time.monotonic() - started,
     )
     (root / "result.json").write_text(json.dumps(result, indent=2))
-    print(json.dumps({key: value for key, value in result.items() if key != "items"}))
+    print(json.dumps({key: value for key, value in result.items() if key != "parities"}))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hardware", choices=("h100", "v4"), required=True)
     parser.add_argument("--name", required=True)
-    parser.add_argument("--weights", required=True, help="Pinned regional Step12 checkpoint")
+    parser.add_argument("--weights", help="Exact June d819 export; TPU uses its verified regional mirror")
     parser.add_argument("--output", required=True, help="Fresh S3 (H100) or GCS (TPU) prefix")
     parser.add_argument("--submit", action="store_true", help="Otherwise print the plan only")
     args = parser.parse_args()
     gpu = args.hardware == "h100"
+    weights = H100_WEIGHTS if gpu else V4_WEIGHTS
+    if args.weights is not None and args.weights != weights:
+        parser.error("Use the verified June export for the selected hardware")
     resources = (
-        ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="512g", disk="200g", target_cluster="cw-rno2a")
+        ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="512g", disk="128g", target_cluster="cw-us-east-02a")
         if gpu
         else ResourceConfig.with_tpu(
             "v4-32", cpu=32, ram="360g", disk="100g", regions=["us-central2"], zone="us-central2-b", preemptible=False
@@ -228,16 +111,23 @@ def main() -> None:
         with IrisClient.remote(endpoint.url, workspace=Path.cwd(), credentials=endpoint.credentials) as client:
             job = client.submit(
                 name=args.name,
-                entrypoint=Entrypoint.from_callable(run_arm, args.hardware, args.weights, args.output, resources.cpu),
+                entrypoint=Entrypoint.from_callable(run_arm, args.hardware, weights, args.output, resources.cpu),
                 replicas=resources.replicas,
                 coscheduling=coscheduling,
                 ports=ports,
                 resources=convert_resources(resources),
                 constraints=convert_constraints(resources),
                 environment=EnvironmentSpec(
-                    extras=("cpu",) if gpu else ("tpu",),
+                    extras=("cpu",),
                     env_vars={
-                        key: os.environ[key] for key in ("CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN") if key in os.environ
+                        **{
+                            key: os.environ[key]
+                            for key in ("CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN")
+                            if key in os.environ
+                        },
+                        "JAX_PLATFORMS": "cpu",
+                        "VLLM_BATCH_INVARIANT": "1",
+                        "VLLM_USE_FLASHINFER_SAMPLER": "0",
                     },
                 ),
                 timeout=Duration.from_seconds(RUNTIME_SECONDS),
