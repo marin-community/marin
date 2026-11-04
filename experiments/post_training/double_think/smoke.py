@@ -79,9 +79,7 @@ def write_prefix_tasks(config: PrefixTaskDataConfig) -> None:
         path = hf_hub_download(repository, ROWS_FILE, repo_type="dataset", revision=revision)
         for index, row in enumerate(pq.read_table(path).to_pylist()):
             source = Source(dataset=repository, revision=revision, row=f"{ROWS_FILE}:{index}", importer_revision="smoke")
-            tasks.append(
-                prefix_row_task(RawRow(row["digest"], source, row), ConversionContext({}, None))
-            )
+            tasks.append(prefix_row_task(RawRow(row["digest"], source, row), ConversionContext({}, None)))
     destination = StoragePath(config.output_path)
     destination.mkdirs()
     for filename in (TRAIN_FILENAME, VALIDATION_FILENAME):
