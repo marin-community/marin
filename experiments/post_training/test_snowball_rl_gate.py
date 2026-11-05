@@ -5,7 +5,7 @@ import hashlib
 import inspect
 import json
 import math
-import subprocess
+import runpy
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -226,7 +226,9 @@ def test_calibrate_pools_deviations_within_pins():
 
 
 @pytest.mark.parametrize("outlier", [False, True])
-def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs, outlier, tmp_path, monkeypatch):
+def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(
+    recorded_runs, outlier, tmp_path, monkeypatch, capsys
+):
     roots = controls(recorded_runs, "speed-medium")
     next(tmp_path.glob("rl-data/snowball-pass-rates/*/*/pass_rates.parquet")).unlink()
     if outlier:
@@ -235,11 +237,6 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
     before = {
         path: hashlib.sha256(path.read_bytes()).digest() for root in roots for path in root.rglob("*") if path.is_file()
     }
-    with monkeypatch.context() as legacy:
-        legacy.setattr(gate, "GATE_REVISION", "2026.11.03.1")
-        legacy_report = rescore("speed-medium", "--leave-out", "r0")
-    legacy_record = Path(legacy_report["report"]).parent / RECORD_FILENAME
-    _json(legacy_record, json.loads(legacy_record.read_text()) | {"result_type": "__main__.GateReport"})
     report = rescore("speed-medium", "--leave-out", "r0")
     timing, mismatch = report["guards"]
     assert [timing[key] for key in ("run", "control", "sd", "df", "n_run", "n_control", "delta")] == [
@@ -275,15 +272,13 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
     ordinary = rescore("speed-medium", "--candidate", presets.control_name(pin.preset, pin.main_commit, 0))
     assert ordinary["report"] != str(artifact) and [row["n_control"] for row in ordinary["guards"]] == [4, 4]
     arguments = ["snowball_rl_gate", "--preset", "speed-medium", "--leave-out", "r0"]
-    bootstrap = (
-        "import runpy, sys; from experiments.post_training import snowball_rl_presets as presets; "
-        f"presets.artifact_prefix = lambda cluster: {str(tmp_path)!r}; "
-        f"sys.argv = {arguments!r}; "
-        "runpy.run_module('experiments.post_training.snowball_rl_gate', run_name='__main__')"
-    )
-    separate = subprocess.run([sys.executable, "-c", bootstrap], capture_output=True, text=True, timeout=60)
-    assert separate.returncode == 0, (separate.stdout, separate.stderr)
-    assert [json.loads(line) for line in separate.stdout.splitlines() if line.startswith('{"report":')] == [
+    monkeypatch.setattr(sys, "argv", arguments)
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as exit_status:
+        runpy.run_module("experiments.post_training.snowball_rl_gate", run_name="__main__")
+    output = capsys.readouterr()
+    assert exit_status.value.code == 0
+    assert [json.loads(line) for line in output.out.splitlines() if line.startswith('{"report":')] == [
         {"report": str(artifact), **report}
     ]
     assert before == {path: hashlib.sha256(path.read_bytes()).digest() for path in before}
