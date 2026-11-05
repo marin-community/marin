@@ -28,9 +28,17 @@ All GPU work ran on Iris `cw-rno2a`, one whole H100x8 node per job, at Marin's p
 | 2–5. Probes: format, think tag, dialect, canaries | `generational_perplexity.py` | Probe payloads gist |
 | 3. Snowball think marker | `generational_perplexity.py` (`start_think_marker` probes) | `tm-v1-*.json` in the payloads gist |
 | 1. Turn coherence | `turn_coherence/turn_coherence.py` | Mini840 dumps (below) |
-| 6. Trace likelihood | `generational_perplexity.py --traces`, `trace_likelihood/analyze_traces.py` | Trace set: `mini_policy_runtime/trace-sets/` and the traces gist |
+| 6. Trace likelihood | `generational_perplexity.py --traces`, `trace_likelihood/analyze_traces.py` | Trace set in the [traces gist](https://gist.github.com/penfever/3a411b1289e9dbcb8d9edfc36edb8eaf); save it as `mini_policy_runtime/trace-sets/ifbench-11-authors-100-prompts.jsonl` (the repository ignores `*.jsonl`) |
 | 6. Snowball SFT improbability | `sft_improbability/*.py` | Per-token scores (below) |
 | 6. Decode-setting ablation | `mini_policy_runtime/decode_ablation_*`, `decode_ablation/*` | Ablation tables in the reports gist |
+
+## Public data
+
+- [Reports and tables](https://gist.github.com/penfever/2422c4b74ffc7644f282fdc050dfd914): analysis,
+  Mini840 tracker and state log, and the turn-coherence, SFT-improbability, non-greedy,
+  decode-ablation, think-marker and trace-likelihood reports.
+- [Probe payloads and audits](https://gist.github.com/penfever/c83170094ba051f12694ede515dd83e2).
+- [IFBench trace set](https://gist.github.com/penfever/3a411b1289e9dbcb8d9edfc36edb8eaf).
 
 ## Large data (Marin-internal object storage, region RNO2A)
 
