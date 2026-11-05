@@ -2121,8 +2121,8 @@ def _a100_device() -> job_pb2.DeviceConfig:
     return job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="A100", count=8))
 
 
-def test_demand_passes_all_tasks(state):
-    """Job emits all task demand entries."""
+def test_demand_with_no_workers_includes_every_pending_task(state):
+    """With no workers registered, every pending task becomes autoscaler demand (scale from zero)."""
     req = controller_pb2.Controller.LaunchJobRequest(
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
