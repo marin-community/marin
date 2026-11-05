@@ -8,10 +8,12 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from jax.sharding import AxisType, Mesh, set_mesh
 from levanter.grug.attention import AttentionMask
+from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep import model
+from experiments.grug.moe_hero_ep import launch_diagnostics, model
 
 
 def _explicit_mesh(*axis_sizes):
@@ -117,13 +119,21 @@ def _log_scaling_tokens(cfg):
     return jax.random.randint(jax.random.key(63), (1, cfg.max_seq_len), 0, cfg.vocab_size)
 
 
-def test_log_scaling_scales_only_rows_beyond_the_floor_and_matches_a_uniform_scale():
+def test_log_scaling_factor_at_slope_0_1_and_floor_65536():
+    visible_keys = jnp.asarray([[1, 65536, 131072, 262144]], dtype=jnp.int32)
+    factor = model.log_scaling_factor(visible_keys, 65536, 0.1)
+    # Literal values of 1 + 0.1 * ln(n / 65536), so a changed formula cannot pass unnoticed.
+    np.testing.assert_allclose(factor, [[1.0, 1.0, 1.0693147, 1.1386294]], rtol=1e-6)
+
+
+@pytest.mark.parametrize("alpha", [0.1, 0.2])
+def test_log_scaling_scales_only_rows_beyond_the_floor_and_matches_a_uniform_scale(alpha):
     base = _log_scaling_config()
     tokens = _log_scaling_tokens(base)
     off = _log_scaling_logits(base, tokens)
-    scaled = _log_scaling_logits(dataclasses.replace(base, log_scaling_n_floor=4), tokens)
+    scaled = _log_scaling_logits(dataclasses.replace(base, log_scaling_n_floor=4, log_scaling_alpha=alpha), tokens)
     # The last row sees 8 keys, twice the floor.
-    uniform = _log_scaling_logits(dataclasses.replace(base, qk_mult_long_scale=1 + 0.1 * math.log(2)), tokens)
+    uniform = _log_scaling_logits(dataclasses.replace(base, qk_mult_long_scale=1 + alpha * math.log(2)), tokens)
 
     # Rows 0-3 see at most 4 keys. Their factor is exactly 1, and an extra multiply only moves the
     # fusion, so they match to float32 rounding; the logits are O(0.1).
@@ -139,7 +149,7 @@ def test_log_scaling_counts_keys_from_the_document_start_and_skips_padding():
     segment_ids = jnp.asarray([[-1, 0, 0, 0, 1, 1, 1, 1]], dtype=jnp.int32)
     mask = AttentionMask.causal().with_segment_ids(segment_ids)
     off = _log_scaling_logits(base, tokens, mask)
-    scaled = _log_scaling_logits(dataclasses.replace(base, log_scaling_n_floor=3), tokens, mask)
+    scaled = _log_scaling_logits(dataclasses.replace(base, log_scaling_n_floor=3, log_scaling_alpha=0.1), tokens, mask)
     # Row 7 is the fourth token of its document, not the eighth of the sequence.
     uniform = _log_scaling_logits(dataclasses.replace(base, qk_mult_long_scale=1 + 0.1 * math.log(4 / 3)), tokens, mask)
 
@@ -150,9 +160,33 @@ def test_log_scaling_counts_keys_from_the_document_start_and_skips_padding():
     np.testing.assert_allclose(scaled[:, 7], uniform[:, 7], rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.parametrize("fields", [{"log_scaling_n_floor": 4}, {"log_scaling_alpha": 0.1}])
+def test_log_scaling_refuses_a_floor_or_slope_alone(fields):
+    with pytest.raises(ValueError, match="set together"):
+        dataclasses.replace(_tiny_config(), **fields)
+
+
+def test_diagnostic_run_passes_the_log_scaling_slope_to_the_model():
+    step = launch_diagnostics.build_diagnostic_run(
+        run_id="log-scaling",
+        dp_racks=1,
+        num_steps=1,
+        max_seq_len=262144,
+        context_axis_size=4,
+        expert_axis_size=16,
+        log_scaling_n_floor=65536,
+        log_scaling_alpha=0.25,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps))
+
+    assert config.model.log_scaling_n_floor == 65536
+    assert config.model.log_scaling_alpha == 0.25
+
+
 def test_log_scaling_keeps_a_bf16_query_bf16(monkeypatch):
     # XLA:CPU would run a promoted Q without complaint; FA4 on GPU takes the bf16 kernels only if Q stays bf16.
-    cfg = dataclasses.replace(_tiny_config(), log_scaling_n_floor=2)
+    cfg = dataclasses.replace(_tiny_config(), log_scaling_n_floor=2, log_scaling_alpha=0.1)
     x = jax.random.normal(jax.random.key(62), (2, 8, cfg.hidden_dim), dtype=jnp.bfloat16)
     # A strong float32, like the real factor. A weakly typed scale would leave Q bf16 even without the cast.
     scale = jnp.full((2, 8), 1.125, dtype=jnp.float32)
