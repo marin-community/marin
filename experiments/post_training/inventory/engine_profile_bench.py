@@ -78,6 +78,8 @@ VARIANTS = {
     "armD_nccl": Variant("armD_nccl", True, "TRITON_ATTN", False, True),
     # Arm D with prefix caching re-enabled.
     "armD_prefix": Variant("armD_prefix", True, "TRITON_ATTN", True, False),
+    # Arm D with NCCL defaults and prefix caching together.
+    "armD_nccl_prefix": Variant("armD_nccl_prefix", True, "TRITON_ATTN", True, True),
     # The main recipe's profile, as a control.
     "main": Variant("main", False, "FLASH_ATTN", True, False),
 }
