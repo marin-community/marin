@@ -16,6 +16,7 @@ from belay.app import (
     IdeaReport,
     IntakeApproval,
     IntakeComment,
+    IntakeDecline,
     PriorityBand,
     RunExpectation,
     SessionFinish,
@@ -27,6 +28,7 @@ from belay.app import (
     claim_events,
     create_api,
     decline_idea,
+    decline_intake_comment,
     expect_run,
     finish_session,
     migrate,
@@ -138,6 +140,7 @@ def test_comment_already_in_the_registry_is_not_queued(conn) -> None:
     record_intake_comment(conn, comment())
     assert not approve_idea(conn, idea_id(conn), "maintainer")
     assert approved_events(conn) == 0
+
     row = conn.execute(text("SELECT state, registry_id FROM ideas WHERE comment_id = '1'")).one()
     assert tuple(row) == ("recorded", "X0220")
 
@@ -217,6 +220,19 @@ def test_a_retried_requeue_queues_once(conn) -> None:
 
 def enable_dispatch(conn) -> None:
     conn.execute(text("UPDATE settings SET value = 'true' WHERE key = 'dispatch_enabled'"))
+
+
+def test_an_approval_stores_the_approvers_instructions_as_the_maintainer_note(conn) -> None:
+    record_intake_comment(conn, comment())
+    assert approve_idea(conn, idea_id(conn), "ClassicLarry", note="  Run on the d1280 track at lr 0.02.  ")
+    row = conn.execute(text("SELECT note FROM ideas WHERE id = :id"), {"id": idea_id(conn)}).one()
+    assert row.note == "Maintainer ClassicLarry: Run on the d1280 track at lr 0.02."
+
+
+def test_an_approval_without_instructions_leaves_the_note_alone(conn) -> None:
+    record_intake_comment(conn, comment())
+    assert approve_idea(conn, idea_id(conn), "ClassicLarry", note="   ")
+    assert conn.execute(text("SELECT note FROM ideas WHERE id = :id"), {"id": idea_id(conn)}).one().note is None
 
 
 def test_an_approval_records_its_node_grant(conn) -> None:
@@ -301,6 +317,36 @@ def test_an_intake_comment_the_registry_holds_cannot_be_approved_from_the_admin_
     )
     assert approve_intake_comment(conn, fresh, "ClassicLarry")["state"] == "approved"
     assert approved_events(conn) == 1
+
+
+def test_a_declined_comment_keeps_the_reason_and_is_never_queued(conn) -> None:
+    url = "https://github.com/marin-community/marin/issues/9514#issuecomment-5"
+    review = {"comment_id": "5", "url": url, "author": "a", "body": "Try Z.", "shown": "Try Z.", "posted_at": POSTED}
+    assert decline_intake_comment(conn, IntakeDecline(**review, note="eval-only"), "ClassicLarry")["state"] == "declined"
+    row = conn.execute(text("SELECT state, note FROM ideas WHERE comment_id = '5'")).one()
+    assert tuple(row) == ("declined", "Declined by ClassicLarry: eval-only")
+    with pytest.raises(HTTPException) as again:
+        approve_intake_comment(conn, IntakeApproval(**review), "ClassicLarry")
+    assert again.value.status_code == 409
+    assert approved_events(conn) == 0
+
+
+def test_a_stale_decline_cannot_close_an_approved_comment(conn) -> None:
+    url = "https://github.com/marin-community/marin/issues/9514#issuecomment-6"
+    review = {"comment_id": "6", "url": url, "author": "a", "body": "Try W.", "shown": "Try W.", "posted_at": POSTED}
+    approve_intake_comment(conn, IntakeApproval(**review), "ClassicLarry")
+    with pytest.raises(HTTPException) as stale:
+        decline_intake_comment(conn, IntakeDecline(**review, note="late"), "other-approver")
+    assert stale.value.status_code == 409
+    assert approved_events(conn) == 1
+
+
+def test_declining_an_approved_idea_drops_its_queued_approval(conn) -> None:
+    record_intake_comment(conn, comment())
+    approve_idea(conn, idea_id(conn), "maintainer")
+    assert approved_events(conn) == 1
+    decline_idea(conn, idea_id(conn), "maintainer", "changed my mind")
+    assert approved_events(conn) == 0
 
 
 class _Services:
