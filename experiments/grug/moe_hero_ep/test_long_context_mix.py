@@ -233,6 +233,7 @@ def test_diagnostic_arms_select_the_same_data_on_any_rack_count():
                 context_axis_size=4,
                 expert_axis_size=16,
                 long_context_start_step=390_000,
+                restore_from="s3://bucket/checkpoints/step-390000",
                 version="dev",
             )
         )

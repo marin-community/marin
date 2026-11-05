@@ -226,6 +226,8 @@ def build_diagnostic_run(
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
+    if long_context_start_step and restore_from is None:
+        raise ValueError("--long-context-start-step past step 0 requires --restore-from at or after that step")
     validation = validation_datasets() if eval_every > 0 else []
     length_statistics = harrier_length_statistics() if long_context_start_step is not None else None
     flops_per_example, _ = _compute_flops(model_config=model)
