@@ -16,6 +16,7 @@ import functools
 import logging
 import os
 from dataclasses import dataclass
+from typing import get_args
 
 import click
 import jax
@@ -32,6 +33,7 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval import eval_model
+from levanter.grug.attention import ContextAttentionLayout
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
@@ -240,6 +242,7 @@ def build_checkpoint_eval(
     seq_lens: tuple[int, ...] = HERO_EVAL_SEQ_LENS,
     context_axis_size: int = 1,
     nodes: int = HERO_EP_NODES,
+    attention_context_layout: ContextAttentionLayout = HERO_MODEL_CONFIG.attention_context_layout,
     mrcr: bool = False,
     mrcr_max_batches: int | None = None,
     version: str | None = None,
@@ -265,6 +268,7 @@ def build_checkpoint_eval(
             qk_mult=qk_mult,
             qk_mult_long_scale=qk_mult_long_scale,
             log_scaling_n_floor=log_scaling_n_floor,
+            attention_context_layout=attention_context_layout,
         )
     )
     resources = ResourceConfig.with_gpu(
@@ -389,6 +393,13 @@ def build_checkpoint_eval(
     show_default=True,
     help="GB200 nodes. Must divide a rack; the batch shrinks with it, keeping the tokens per GPU.",
 )
+@click.option(
+    "--attention-context-layout",
+    type=click.Choice(get_args(ContextAttentionLayout)),
+    default=HERO_MODEL_CONFIG.attention_context_layout,
+    show_default=True,
+    help="FA4 query-row layout under context parallelism; a diagnostic control for layout effects.",
+)
 @click.option("--mrcr", is_flag=True, help="Also run the paired 262144-token MRCR eval.")
 @click.option("--mrcr-max-batches", type=click.IntRange(min=1), default=None, help="Stop MRCR early, as a smoke test.")
 @build_options
@@ -402,6 +413,7 @@ def main(
     no_held_out: bool,
     context_axis_size: int,
     nodes: int,
+    attention_context_layout: ContextAttentionLayout,
     mrcr: bool,
     mrcr_max_batches: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -414,6 +426,7 @@ def main(
         seq_lens=() if no_held_out else tuple(seq_lens),
         context_axis_size=context_axis_size,
         nodes=nodes,
+        attention_context_layout=attention_context_layout,
         mrcr=mrcr,
         mrcr_max_batches=mrcr_max_batches,
     )
