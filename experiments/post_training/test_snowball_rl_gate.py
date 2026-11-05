@@ -5,6 +5,8 @@ import hashlib
 import inspect
 import json
 import math
+import subprocess
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -267,6 +269,18 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
     pin = gate.CONTROLS["speed-medium"][0]
     ordinary = rescore("speed-medium", "--candidate", presets.control_name(pin.preset, pin.main_commit, 0))
     assert ordinary["report"] != str(artifact) and [row["n_control"] for row in ordinary["guards"]] == [4, 4]
+    arguments = ["snowball_rl_gate", "--preset", "speed-medium", "--leave-out", "r0"]
+    bootstrap = (
+        "import runpy, sys; from experiments.post_training import snowball_rl_presets as presets; "
+        f"presets.artifact_prefix = lambda cluster: {str(tmp_path)!r}; "
+        f"sys.argv = {arguments!r}; "
+        "runpy.run_module('experiments.post_training.snowball_rl_gate', run_name='__main__')"
+    )
+    separate = subprocess.run([sys.executable, "-c", bootstrap], capture_output=True, text=True, timeout=60)
+    assert separate.returncode == 0, (separate.stdout, separate.stderr)
+    assert [json.loads(line) for line in separate.stdout.splitlines() if line.startswith('{"report":')] == [
+        {"report": str(artifact), **report}
+    ]
     assert before == {path: hashlib.sha256(path.read_bytes()).digest() for path in before}
 
 

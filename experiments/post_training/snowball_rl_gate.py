@@ -16,6 +16,7 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl_gat
 
 from __future__ import annotations
 
+import importlib
 import json
 import math
 import re
@@ -836,4 +837,4 @@ def main(preset_name: str, candidate_name: str | None, leave_out: str | None, re
 
 
 if __name__ == "__main__":
-    main()
+    importlib.import_module("experiments.post_training.snowball_rl_gate").main()
