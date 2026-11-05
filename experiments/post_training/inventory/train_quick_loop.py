@@ -96,7 +96,6 @@ def training_recipe(steps: int) -> dict:
     )
     # Arm D's reproducible serving profile, with the engine NCCL channel cap lifted.
     config["generator"].update(
-        eval_sampling_params={"seed": SEED},
         vllm_attention_backend="TRITON_ATTN",
         enable_prefix_caching=False,
         inference_engine_nccl_max_channels=32,
