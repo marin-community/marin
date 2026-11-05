@@ -77,7 +77,7 @@ async def test_inference_retries_then_preserves_wire_and_completion_values() -> 
     retries = Retries()
     backend = Backend((ModelRequestRejected(503, "private response", ()), provider_completion()))
     event = request()
-    result = await GlmInference(backend, "provider-config", max_attempts=3, notify=retries).complete(event)
+    result = await GlmInference(backend, event.sampling, max_attempts=3, notify=retries).complete(event)
     assert result.content == "answer" and result.reasoning == "reason"
     assert result.tool_calls == (ToolCall("id", "shell", "{}"),)
     assert result.usage.cached_tokens == 4 and result.continuations == 2
@@ -102,7 +102,7 @@ async def test_inference_exhausts_bound_without_consuming_later_success() -> Non
     backend = Backend((ModelRequestRejected(429, "", ()), ModelRequestRejected(503, "", ()), provider_completion()))
     event = request()
     with pytest.raises(Restart):
-        await GlmInference(backend, "provider-config", max_attempts=2, notify=retries).complete(event)
+        await GlmInference(backend, event.sampling, max_attempts=2, notify=retries).complete(event)
     assert len(backend.calls) == 2
     assert [retry.attempt for retry in retries.events] == [1]
 
@@ -113,7 +113,7 @@ async def test_provider_exhaustion_is_not_retried_by_executor() -> None:
     retries = Retries()
     event = request()
     with pytest.raises(Restart):
-        await GlmInference(backend, "provider-config", max_attempts=3, notify=retries).complete(event)
+        await GlmInference(backend, event.sampling, max_attempts=3, notify=retries).complete(event)
     assert len(backend.calls) == 1
     assert len(retries.events) == 1 and "secret" not in retries.events[0].cause
 
@@ -122,7 +122,7 @@ async def test_request_rejection_holds_without_retry() -> None:
     backend = Backend((ModelRequestRejected(400, "", ()),))
     retries = Retries()
     with pytest.raises(Hold):
-        await GlmInference(backend, "provider-config", max_attempts=3, notify=retries).complete(request())
+        await GlmInference(backend, Sampling(), max_attempts=3, notify=retries).complete(request())
     assert len(backend.calls) == 1 and not retries.events
 
 
