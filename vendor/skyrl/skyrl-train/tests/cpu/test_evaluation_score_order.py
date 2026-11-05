@@ -100,6 +100,7 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
             assert metrics["timing/setup/p50"] == 3.0
             assert metrics["timing/setup/p95"] == pytest.approx(85.6)
             assert not any(key.startswith("environment/timing/") for key in metrics)
+            assert not {"timing/grading", "timing/setup"} & metrics.keys()
     first_turns = filter_trajectory_batch(
         stepped, [index for index, last in enumerate(stepped["is_last_step"]) if not last]
     )

@@ -591,6 +591,10 @@ def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate
     return user_owned_name(name)
 
 
+def gated(preset: Preset) -> bool:
+    return preset.name in PRESETS and preset.focus != Focus.TRAIN
+
+
 def run_tree_hash(name: str) -> str:
     return name.partition(TRAIN_LONG_RUN)[2].partition("-in-")[0]
 
@@ -750,12 +754,10 @@ def grafana_links(
     run_id: str,
     cluster: str,
     training_type: Literal["sync", "async"],
-    started_ms: int | None,
+    started_ms: int,
     finished_ms: int | None,
 ) -> dict[str, str]:
-    """Build dashboard and preset-panel links for a native run with a known start time."""
-    if started_ms is None:
-        return {}
+    """Build dashboard and preset-panel links for a native run; an unfinished run links through now."""
     query = urlencode(
         {
             "orgId": 1,
