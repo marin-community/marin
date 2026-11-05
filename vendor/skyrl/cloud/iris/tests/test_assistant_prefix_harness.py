@@ -153,6 +153,49 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
 
 
 @pytest.mark.asyncio
+async def test_assistant_prefix_worker_grades_a_code_fence_without_its_stop_token(task_inputs):
+    config, request = task_inputs
+    prefix, expected = "```json\n[1", "```json\n[1,2]\n```"
+    task = request.rows[0].spec.task.model_copy(
+        update={
+            "context": ConversationInput(
+                events=(
+                    TextMessage(role="user", content="Close the fence"),
+                    TextMessage(role="assistant", content=prefix),
+                )
+            ),
+            "answer_type": AnswerType.TEXT,
+            "answer_format": PlainText(),
+            "grader": verifyit_package(StructureClosureSpec(prefix, expected, ClosureFormat.CODE_FENCE)).grader,
+        }
+    )
+    request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
+
+    class Engine:
+        tokenizer = WorkerTokenizer()
+
+        async def generate(self, model_request):
+            return {
+                "responses": [",2]\n```<|eot_id|>"],
+                "prompt_ids": model_request["prompt_token_ids"],
+                "response_ids": [[11, 12]],
+                "response_logprobs": [[-0.1, -0.2]],
+                "stop_reasons": ["stop"],
+            }
+
+    worker = TaskRolloutWorker(
+        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {}, shutdown_timeout=30
+    )
+    try:
+        (result,) = await worker.generate(request)
+    finally:
+        await worker.shutdown()
+    assert result.grade.reward == 1.0
+    assert result.messages[-1]["content"] == ",2]\n```"
+    assert result.response_token_ids == (11, 12)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "policy,penalty,target,status,reward,loop_advantages",
     [

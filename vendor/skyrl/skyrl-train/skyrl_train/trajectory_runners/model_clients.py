@@ -11,7 +11,9 @@ import numpy as np
 from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import RolloutContractError
 
+from skyrl_gym.closure_task import SNOWBALL_TURN_END_MARKERS
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
+from verifyit.closure_scoring import closure_response_content
 from verifyit.reasoning_markup import (
     REASONING_DELIMITERS,
     ReasoningViolation,
@@ -286,8 +288,12 @@ class DirectModelClient:
         )
         if output.get("prompt_ids") != [prompt_ids]:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
-        text = output["responses"][0]
-        message = (output.get("assistant_messages") or [{"role": "assistant", "content": text}])[0]
+        # response_ids keep the stop token. The grader scores this text, and a stop token after a closing fence
+        # leaves the fence open.
+        text = closure_response_content(
+            output["responses"][0], stop_reason=output["stop_reasons"][0], terminal_markers=SNOWBALL_TURN_END_MARKERS
+        )
+        message = {**(output.get("assistant_messages") or [{"role": "assistant"}])[0], "content": text}
         return _ChatResult(
             prompt_ids,
             output["response_ids"][0],
