@@ -223,7 +223,7 @@ Schema migration is an operator action, not a per-import operation.
 
 Disable `AGENTX_WEEKLY_ENABLED` to stop new weekly submissions. Cancel active Iris
 coordinators before disabling collection, following the
-[runner runbook](../../experiments/evaluation/agentx/README.md). Disable `INFERENCEX_INGEST_ENABLED` to stop database writes.
+[runner runbook](https://github.com/yonromai/marin/blob/cab4b9112a4df1e52b73271ff5649e3411d19839/experiments/evaluation/agentx/README.md). Disable `INFERENCEX_INGEST_ENABLED` to stop database writes.
 Keep raw artifacts and immutable completed-result descriptors so delivery and ingestion
 can be retried later. Coordinator failure can require manual recovery; the runner runbook
 contains the exact salvage and fresh-submission commands.

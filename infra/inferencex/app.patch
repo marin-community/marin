@@ -747,17 +747,33 @@ index 552759e1..bb26350f 100644
    'nvidia/DeepSeek-R1-0528-FP4-v2': 'dsr1',
    'nvidia/DeepSeek-R1-0528-FP4': 'dsr1',
 diff --git a/packages/db/src/etl/workflow-run.test.ts b/packages/db/src/etl/workflow-run.test.ts
-index ed633fe0..46736caf 100644
 --- a/packages/db/src/etl/workflow-run.test.ts
 +++ b/packages/db/src/etl/workflow-run.test.ts
-@@ -34,6 +34,24 @@ afterEach(() => {
+@@ -4,7 +4,7 @@
+ 
+ const RUN_ID = 12_345_678_901;
+ 
+-function runResponse(repo: string): Response {
++function runResponse(repo: string, runAttempt = 2): Response {
+   return Response.json({
+     name: 'Run Sweep',
+     status: 'completed',
+@@ -15,7 +15,7 @@
+     head_sha: '0123456789abcdef0123456789abcdef01234567',
+     head_branch: 'sweep-updates',
+     head_commit: { message: 'Add sweep' },
+-    run_attempt: 2,
++    run_attempt: runAttempt,
+     pull_requests: [{ number: 12 }],
+     repository: { html_url: `https://github.com/${repo}` },
+   });
+@@ -34,6 +34,23 @@
  });
  
  describe('fetchGithubRun', () => {
 +  it('keeps historical attempts separate from the latest run response', async () => {
-+    const first = await runResponse('example-org/single').json();
 +    const fetchMock = stubFetch(
-+      Response.json({ ...first, run_attempt: 1 }),
++      runResponse('example-org/single', 1),
 +      runResponse('example-org/single'),
 +    );
 +    const { fetchGithubRun } = createWorkflowRunServices({} as never, 'test-token', [
