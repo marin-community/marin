@@ -102,7 +102,16 @@ and perform the requested schema/data writes. Honor requests for PR-only work,
 local previews, drafts or review before release. Rollback, archive and unrelated
 data mutations still require authorization within the request.
 
-For maintained source, use a clean checkout at current remote main by default:
+Maintained apps with `release_on_merge = true` in
+[`.github/marina-app-releases.toml`](../../../.github/marina-app-releases.toml)
+release after a push to `main` changes their source or declared `source_paths`.
+The workflow waits for the runtime rollout, runs the declared tests (including
+migration coverage where needed), validates with `--dry-run`, and publishes
+with the inspected base version. Set the policy flag to `false` for releases
+that need operator coordination; Snowball tree has its own nightly workflow.
+The daily drift workflow checks all maintained apps, including manual ones.
+
+For a manual release, use a clean checkout at current remote main by default:
 
 ```bash
 uv run marina release-status my-app --json
@@ -134,8 +143,8 @@ uv run marina release my-report --id RETURNED_UUID --base-version CURRENT_VERSIO
 Record the first result's UUID and immutable revision URL. If future changes
 become necessary, check the source into `infra/marina/apps/<name>/` and declare
 that existing UUID as `applet_id` in `applet.toml`; release to the same app.
-A merge or runtime restart does not release source or load
-application datasets. `release-status` compares recorded app/shared-input trees;
+A runtime restart does not release source or load application datasets.
+`release-status` compares recorded app/shared-input trees;
 runtime dependencies also matter.
 
 Atlas's code release and catalog load are separate. Follow
