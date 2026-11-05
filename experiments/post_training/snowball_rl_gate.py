@@ -6,12 +6,13 @@
 Reads saved metrics and panel scores only, so it needs no GPU. Writes gate_report.json and
 gate_report.md under the caller's namespace and prints the report as JSON. snowball_rl runs this
 comparison itself after a gated run; use this command to re-score a finished run, for example
-with a new --require, or to check calibration by scoring a control against the other controls.
+with a new --require or --baseline, or to check calibration by scoring a control against the other controls.
 
 \b
 Examples, each after `uv run python -m experiments.post_training.snowball_rl_gate`:
   --preset learning-medium --candidate RUN_NAME --require 'panel-910/aaii_category/coding/mean>=control'
   --preset speed-medium --leave-out r0
+  --preset learning-medium --candidate RUN_NAME --baseline EARLIER_RUN@2026.10.27
 """
 
 from __future__ import annotations
@@ -23,14 +24,14 @@ import re
 import statistics
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from typing import TypeGuard
 
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, is_mutable_version
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from marin.experiment.namespacing import user_owned_name
@@ -107,6 +108,7 @@ class GateInputs:
     tasks: str | None = None
     init: str | None = None
     requirements: tuple[str, ...] = ()
+    baselines: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -150,14 +152,20 @@ def gate_inputs(
     tasks: ArtifactStep | str | None = None,
     init: ArtifactStep | str | None = None,
     requirements: Sequence[str] = (),
+    baselines: Sequence[str] = (),
 ) -> GateInputs:
     values = {leaf.key: leaf.value for setting in settings for leaf in presets.setting_leaves(setting)}
     tasks, init = (f"{item.name}@{item.version}" if isinstance(item, ArtifactStep) else item for item in (tasks, init))
+    for reference in baselines:
+        name, separator, version = reference.rpartition("@")
+        if not name or not separator or not version or is_mutable_version(version):
+            raise click.BadParameter("use NAME@VERSION with an immutable finished run", param_hint="--baseline")
     return GateInputs(
         tuple(f"{key}={json.dumps(value, default=str)}" for key, value in sorted(values.items())),
         tasks.removeprefix(presets.SELECTION_PREFIX + "/") if tasks else None,
         init,
         tuple(requirements),
+        tuple(sorted(set(baselines))),
     )
 
 
@@ -209,6 +217,7 @@ class RunMetadata(BaseModel):
     init: str | None
     replicates: int
     requirements: tuple[str, ...]
+    baselines: tuple[str, ...] = ()
 
 
 class ControlMetadata(BaseModel):
@@ -228,6 +237,7 @@ class GateReport(Artifact):
     invariants: tuple[ErrorBoundInvariant | Invariant, ...]
     guards: tuple[GuardComparison, ...]
     reported: tuple[ReportedComparison, ...]
+    vs_baseline: tuple[ReportedComparison, ...] = ()
     gaps: tuple[str, ...]
 
 
@@ -523,10 +533,20 @@ def _compare(
     runs: Sequence[RunData],
     controls: Mapping[ControlPin, Sequence[RunData]],
     requirements: Sequence[str] = (),
+    *,
+    baselines: Sequence[RunData] = (),
 ) -> tuple[list[GuardComparison], list[ReportedComparison], list[ReportedComparison]]:
     noise = calibrate({pin: [run.values for run in group] for pin, group in controls.items()})
     values = [run.values for run in runs]
     n_control = sum(map(len, controls.values()))
+    reference_noise: dict[str, MetricNoise | None] = dict(noise)
+    if baselines:
+        n_control = len(baselines)
+        for key, value in noise.items():
+            samples = [run.values.get(key, math.nan) for run in baselines]
+            reference_noise[key] = (
+                replace(value, mean=statistics.mean(samples)) if all(map(math.isfinite, samples)) else None
+            )
     guards = []
     relative = [parse_requirement(text) for text in requirements if parse_requirement(text).bound is None]
     metrics = tuple(
@@ -536,7 +556,7 @@ def _compare(
         }.values()
     )
     for metric in metrics:
-        row = _comparison(metric, values, noise.get(metric.key), n_control, len(metrics))
+        row = _comparison(metric, values, reference_noise.get(metric.key), n_control, len(metrics))
         if row.delta is None:
             raise InvalidComparison(f"missing or non-finite guard metric: {metric.key}")
         if row.sd == 0:
@@ -567,7 +587,7 @@ def _compare(
         row = _comparison(
             metric,
             values,
-            noise.get(metric.key),
+            reference_noise.get(metric.key),
             n_control,
             (
                 counts[_breakdown_group(metric.key)]
@@ -582,9 +602,8 @@ def _compare(
             if all(initial is not None for _, initial in slices)
             else None
         )
-        control_values = [
-            run.values[metric.key] for group in controls.values() for run in group if metric.key in run.values
-        ]
+        reference = baselines or [run for group in controls.values() for run in group]
+        control_values = [run.values[metric.key] for run in reference if metric.key in run.values]
         reported.append(
             ReportedComparison(
                 **row.model_dump(),
@@ -611,6 +630,12 @@ def _render_markdown(report: GateReport) -> str:
     for title, rows in (("Guards", report.guards), ("Reported", summary), ("Invariants", report.invariants)):
         rows = [row.model_dump() for row in rows]
         lines += ["", f"## {title}", "", tabulate(rows, "keys", "github", floatfmt=".8g", missingval="unavailable")]
+    if report.run.baselines:
+        rows = [
+            {key.replace("control", "baseline"): value for key, value in row.model_dump().items()}
+            for row in report.vs_baseline
+        ]
+        lines += ["", "## Vs baseline", "", tabulate(rows, "keys", "github", floatfmt=".8g", missingval="unavailable")]
     groups = {}
     for row in breakdown:
         control = f"{row.control:.8g} ({row.control_min:.8g}-{row.control_max:.8g})" if row.control is not None else None
@@ -642,7 +667,7 @@ def _write_gate(
     control = ControlMetadata(
         main_commit=pins[0].main_commit, revision=pins[0].revision, runs=sum(map(len, control_paths))
     )
-    invariants, guards, reported = [], [], []
+    invariants, guards, reported, vs_baseline = [], [], [], []
     verdict, label, reason = Verdict.INVALID, None, None
     try:
         rates = scoring.read_pass_rates(pass_rates_path) if pass_rates_path is not None else None
@@ -662,6 +687,7 @@ def _write_gate(
         controls = [candidate for group in grouped.values() for candidate in group]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
+        baselines = _baseline_runs(inputs.baselines, preset, run_paths, rates, controls[0])
         for pin, group in grouped.items():
             for candidate in group:
                 _check_control(candidate, pin)
@@ -673,6 +699,15 @@ def _write_gate(
             raise InvalidComparison("mismatch guard has missing or zero selected-token counts")
         guards, declared, details = _compare(preset, runs, grouped, inputs.requirements)
         reported = [*declared, *details]
+        if baselines:
+            baseline_guards, baseline_declared, baseline_details = _compare(
+                preset, runs, grouped, inputs.requirements, baselines=baselines
+            )
+            vs_baseline = (
+                [ReportedComparison(**row.model_dump(exclude={"passes"})) for row in baseline_guards]
+                + baseline_declared
+                + baseline_details
+            )
         verdict, label, reason = _verdict(invariants, guards, declared)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
         reason = str(error)
@@ -686,6 +721,7 @@ def _write_gate(
         invariants=invariants,
         guards=guards,
         reported=reported,
+        vs_baseline=vs_baseline,
         gaps=[gap.value for gap in preset.gaps],
     )
     for name, value in (
@@ -730,7 +766,19 @@ def _gate_artifact(
         tuple(_control_path(preset, pin, index) for index in range(pin.runs) if pin != pins[0] or index != leave_out)
         for pin in pins
     )
+    if inputs.baselines:
+        rates_path = _pass_rates_path(preset)
+        rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
+        paths = tuple(
+            item if isinstance(item, str) else item.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))
+            for item in candidates
+        )
+        try:
+            _baseline_runs(inputs.baselines, preset, paths, rates, _load_run(controls[0][0], preset, rates))
+        except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
+            raise click.BadParameter(str(error), param_hint="--baseline") from error
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
+    name += "-base-" + fingerprint_hash(canonical_json(inputs.baselines)) if inputs.baselines else ""
     return apply(
         name,
         _write_gate,
@@ -760,22 +808,59 @@ def gate_step(
     return _gate_artifact(name, preset, runs, inputs)
 
 
-def recorded_inputs(path: str) -> GateInputs:
+def _recorded_params(path: str) -> dict:
     try:
         receipt = read_skyrl_launch_receipt(path)
     except SkyRLReceiptLookupError:
-        return GateInputs()
+        return {}
     argv = (receipt.result.provenance or {}).get("command_line", []) if receipt else []
-    context = presets.run_command()(lambda **kwargs: ()).make_context(
+    command = presets.run_command()(lambda **kwargs: ())
+    command.params.append(click.Option(["--baseline", "baselines"], multiple=True))
+    context = command.make_context(
         "snowball", list(argv), resilient_parsing=True, ignore_unknown_options=True, allow_extra_args=True
     )
-    settings = tuple(map(presets.parse_setting, context.params.get("settings", ())))
+    return context.params
+
+
+def recorded_inputs(path: str) -> GateInputs:
+    params = _recorded_params(path)
+    settings = tuple(map(presets.parse_setting, params.get("settings", ())))
     return gate_inputs(
         settings,
-        context.params.get("tasks_name"),
-        context.params.get("init_name"),
-        context.params.get("requirements", ()),
+        params.get("tasks_name"),
+        params.get("init_name"),
+        params.get("requirements", ()),
+        params.get("baselines", ()),
     )
+
+
+def _baseline_runs(
+    references: tuple[str, ...],
+    preset: presets.Preset,
+    candidates: tuple[str, ...],
+    rates: pa.Table | None,
+    control: RunData,
+) -> list[RunData]:
+    runs = {}
+    for reference in references:
+        artifact = presets.published_artifact(reference)
+        path = artifact.path()
+        if path in candidates:
+            raise InvalidComparison(f"baseline overlaps a candidate: {reference}")
+        if path in runs:
+            continue
+        if _recorded_params(path).get("preset_name") != preset.name:
+            raise InvalidComparison(f"baseline is not a recorded {preset.name} run: {reference}")
+        inputs = replace(recorded_inputs(path), requirements=(), baselines=())
+        baseline = _load_run(path, preset, rates, inputs)
+        if baseline.version != presets.PRESET_REVISION:
+            raise InvalidComparison(f"baseline preset revision differs: {reference}")
+        if baseline.panel_ids != control.panel_ids:
+            raise InvalidComparison(f"baseline held-out panel task IDs differ: {reference}")
+        if baseline.missing_tokens or any(not row.holds for row in baseline.invariants):
+            raise InvalidComparison(f"baseline has missing tokens or failed invariants: {reference}")
+        runs[path] = baseline
+    return list(runs.values())
 
 
 @click.command(help=__doc__)
@@ -807,7 +892,20 @@ def recorded_inputs(path: str) -> GateInputs:
     metavar="KEY<=|>=BOUND",
     help="Add a condition, as in snowball_rl --require, to those the run recorded at launch. Repeatable.",
 )
-def main(preset_name: str, candidate_name: str | None, leave_out: str | None, requirements: tuple[str, ...]) -> None:
+@click.option(
+    "--baseline",
+    "baselines",
+    multiple=True,
+    metavar="NAME@VERSION",
+    help="Compare with earlier finished runs; the verdict still uses pinned controls. Repeatable.",
+)
+def main(
+    preset_name: str,
+    candidate_name: str | None,
+    leave_out: str | None,
+    requirements: tuple[str, ...],
+    baselines: tuple[str, ...],
+) -> None:
     if (candidate_name is None) == (leave_out is None):
         raise click.UsageError("choose --candidate NAME[@VERSION] or --leave-out r<index>")
     preset, pins = presets.PRESETS[preset_name], _pins(preset_name)
@@ -824,7 +922,13 @@ def main(preset_name: str, candidate_name: str | None, leave_out: str | None, re
         f"{presets.RUN_PREFIX}/rescore/{preset_name}-{fingerprint_hash(canonical_json((source, pins, index)))}"
     )
     recorded = recorded_inputs(source)
-    inputs = GateInputs(recorded.settings, recorded.tasks, recorded.init, (*recorded.requirements, *requirements))
+    inputs = gate_inputs(
+        tuple(map(presets.parse_setting, recorded.settings)),
+        recorded.tasks,
+        recorded.init,
+        (*recorded.requirements, *requirements),
+        (*recorded.baselines, *baselines),
+    )
     for text in inputs.requirements:
         parse_requirement(text)
     step = _gate_artifact(f"{namespace}/gate-n1-{pins[0].main_commit}", preset, (source,), inputs, index)

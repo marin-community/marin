@@ -16,9 +16,10 @@ import click
 import pytest
 from click.testing import CliRunner
 from iris.client.client import IrisClient
+from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
-from marin.rl.cli import _coordinator_request, rl_build_options
+from marin.rl.cli import _coordinator_request, rl_build_options, submit_or_run
 from marin.rl.skyrl import IrisSkyRLExecution
 from rigging.timing import Duration
 
@@ -90,6 +91,7 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
     monkeypatch: pytest.MonkeyPatch, missing_name: str | None
 ) -> None:
     client = MagicMock(spec=IrisClient)
+    client.submit.return_value.job_id = JobName.from_wire("/atqamar/submitted-coordinator")
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     expected_env = {
@@ -132,6 +134,15 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
     environment = client.submit.call_args.kwargs["environment"]
     assert expected_env.items() <= environment.env_vars.items()
     assert {"HF_TOKEN", "WANDB_API_KEY", "UNRELATED_SECRET"}.isdisjoint(environment.env_vars)
+
+
+def test_submit_returns_the_coordinator_id(monkeypatch):
+    client = MagicMock(spec=IrisClient)
+    expected = JobName.from_wire("/atqamar/coordinator-id-issued-by-iris")
+    client.submit.return_value.job_id = expected
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    assert submit_or_run("experiments.test_rl", [_step(_execution())], 3, {}) == expected
 
 
 def test_execution_requires_a_complete_federated_route() -> None:

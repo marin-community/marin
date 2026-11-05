@@ -14,11 +14,19 @@ under `experiments/`, `lib/` and `vendor/` must be tracked or staged: the git tr
 hash forms part of each run's identity. `--version dev` satisfies the standard
 launcher interface; Snowball steps use the fixed `PRESET_REVISION` instead.
 
+Add `--run --wait` to poll every 60 seconds and print the final status and report
+table. Its exit code is 0 for PASS or completed train-long/control collection,
+1 for FAIL and 2 for INVALID. Submission without `--wait` returns 0 when accepted.
+The status lists the latest completed update and the W&B URL when the tracker has
+saved one. Set `WANDB_ENTITY` before submission to choose the W&B team; an unset
+value uses `dogml`. The team changes neither run identity nor pinned configuration.
+
 | preset | allocation | workload | measurement |
 |---|---|---|---|
 | speed-short | 8 H100, east | 512 locally graded training tasks, four answers each, exactly 4,096 tokens | engine tokens/s/GPU; approximately 10 minutes |
 | data-short | 8 H100, east | 256 candidate training tasks, four answers, up to 8,192 tokens | fraction of tasks with both correct and incorrect answers |
 | speed-medium | 40 H100, east | ten synchronous updates, exactly 4,096 tokens per answer | median update time over updates 2–10 and staleness-0 k3 mismatch |
+| speed-long | 40 H100, east | 20 asynchronous updates, staleness 2 and TIS, replies up to 8,192 tokens | median update time and learner/engine tokens/s/GPU over updates 3–20; target 45–75 minutes |
 | learning-medium | 40 H100, east | 25 synchronous RLOO-N updates | final panel equal-family mean; training metrics over updates 21–25 |
 | data-medium | 40 H100, east | learning-medium on candidate tasks | same fixed panel and recipe as learning-medium |
 | train-long | 112 H100, Reno; optional 40 H100, east | asynchronous training, default 100 updates | checkpoints, 100-task panel every 10 updates, HF export; no verdict |
@@ -28,6 +36,9 @@ policy GPUs and 8 engine GPUs, 128 prompts×4 answers, a 24,576-token window and
 reply tokens. The 112-H100 layout has 64 policy GPUs and 48 engine GPUs, 512×16,
 a 65,536-token window and 32,768 reply tokens. Both use staleness 2 for train-long;
 medium runs use staleness 0. East uses sockets; Reno uses InfiniBand.
+Speed-long uses the asynchronous 40-H100 recipe without evaluation, checkpoints or
+export. It guards throughput and reports mismatch, phase timings, grading/setup
+timers, staleness summaries and selected-token counts by staleness bucket.
 
 ## Change one input
 
@@ -93,6 +104,17 @@ strings as `build_run(requirements=(...))`. Requirements change the report ident
 training names and configs stay fixed. Re-scoring appends `--require` to any recorded
 requirements, so completed runs can receive new constraints on CPU.
 
+Add repeatable `--baseline NAME@VERSION` arguments to compare against earlier
+finished runs of the same preset and `PRESET_REVISION`. The **Vs baseline** table
+uses their mean and replicate count, with the pinned controls' pooled spread and
+degrees of freedom. It applies the same guard and reporting tolerances as the
+control table. The verdict and change label continue to use the controls.
+Repeated references and aliases to the same saved run count once. Baselines must
+have matching panel task IDs and valid completed batches; a candidate cannot be
+its own baseline. Baselines change the gate identity and leave the training run
+identity fixed. The CPU re-score command accepts additional baselines and recovers
+those recorded at launch.
+
 The Breakdown tables show overall results, agentic results when the panel has both
 agentic and other tasks, family, AAII category,
 difficulty, category × difficulty, family × difficulty and training reward per source.
@@ -126,6 +148,8 @@ uv run python -m experiments.post_training.snowball_rl_gate \
   --preset learning-medium --candidate RUN_NAME[@VERSION]
 uv run python -m experiments.post_training.snowball_rl_gate \
   --preset speed-medium --leave-out r0
+uv run python -m experiments.post_training.snowball_rl_gate \
+  --preset learning-medium --candidate RUN_NAME --baseline EARLIER_RUN@2026.10.27
 ```
 
 Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
@@ -179,6 +203,7 @@ the submitting environment; every run forwards its required keys through Iris.
 | task selection | data-short, then data-medium |
 | SFT initializer | learning-medium with `--init` |
 | startup latency | speed-medium, which reports startup |
+| asynchronous loop, grading or admission throughput | speed-long |
 | release training | train-long |
 
 ## Gaps
