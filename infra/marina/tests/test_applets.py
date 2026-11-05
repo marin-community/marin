@@ -284,7 +284,7 @@ def test_release_allow_dirty_uploads_local_source_without_claiming_verified_prov
     monkeypatch.setattr("marina.client.requests.request", http_request)
     runner = CliRunner()
     args = ["release", str(release_checkout), "--base-version", "7", "--url", "http://localhost:8080", "--json"]
-    assert runner.invoke(cli, args).exit_code == 1
+    assert runner.invoke(cli, args).exit_code == (os.EX_TEMPFAIL if committed else 1)
     assert not uploads
     released = runner.invoke(cli, [*args, "--allow-dirty"])
     assert released.exit_code == 0, released.output
