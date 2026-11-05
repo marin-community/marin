@@ -1314,6 +1314,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         stop_step = config.stop_step
         restored_step = int(state.step)
         _check_restored_step(restored_step, stop_step)
+        # Rehearsal-only (interim branch): the optimizer's integer counters read from the restored state.
+        if jax.process_index() == 0:
+            logger.info(
+                "RESTORE-OPT-COUNTS step=%d %s",
+                restored_step,
+                sorted(
+                    {
+                        int(np.asarray(leaf.addressable_data(0)))
+                        for leaf in jax.tree.leaves(state.opt_state)
+                        if isinstance(leaf, jax.Array) and jnp.issubdtype(leaf.dtype, jnp.integer) and leaf.ndim == 0
+                    }
+                ),
+            )
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=stop_step)
