@@ -142,7 +142,7 @@ def test_agentic_records_drop_template_lines_shared_by_most_tasks():
 
     assert all(template not in text for text in rows.values())
     assert "station 4 mean" in rows["policy-task-4"]
-    # The stripped tests view is under 13 words, so it is folded into the full record only.
+    # The stripped tests view has fewer than MIN_VIEW_WORDS words with a letter, so only the full record holds it.
     assert "policy-task-4-tests" not in rows
 
 

@@ -312,7 +312,8 @@ SPECS = {
         "bixbench-cli-marin-corrections",
         "3",
         "Views: question from instruction.md and ideal_answer from tests/ground_truth.json. Ideal answers are "
-        "short, so most solution views fall below 13 words and only appear in the full record. Not indexed: the "
+        "short, so most solution views have fewer than MIN_VIEW_WORDS words with a letter and only appear in the "
+        "full record. Not indexed: the "
         "capsule data and analysis notebooks, which tasks download from futurehouse/BixBench at build time and are "
         "not part of the task tree. Skipped: shared llm_judge.py, test.sh, download_capsule.py, Dockerfiles.",
     ),
