@@ -21,7 +21,6 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
-from marin.execution.step_spec import StepSpec
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -116,16 +115,11 @@ def harrier_length_statistics() -> ArtifactStep[Artifact]:
     )
 
 
-def length_stats_step() -> StepSpec:
-    """Create the runnable StepSpec for the Harrier length-statistics artifact."""
-    return lower(harrier_length_statistics())
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    StepRunner().run([length_stats_step()], dry_run=args.dry_run)
+    StepRunner().run([lower(harrier_length_statistics())], dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
