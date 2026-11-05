@@ -230,6 +230,31 @@ def test_changed_test_module_runs_directly(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "changed_path,expected_paths",
+    [
+        ("infra/auth/service.py", ["infra/auth/tests/test_service.py"]),
+        ("infra/auth/tests/test_service.py", ["infra/auth/tests/test_service.py"]),
+        ("infra/auth/pyproject.toml", ["infra/auth/tests"]),
+    ],
+)
+def test_auth_changes_run_in_the_auth_environment(tmp_path: Path, changed_path: str, expected_paths: list[str]) -> None:
+    write(tmp_path, "infra/auth/service.py", "AUTHORITY = 1\n")
+    write(
+        tmp_path,
+        "infra/auth/tests/test_service.py",
+        "from infra.auth.service import AUTHORITY\ndef test_service():\n    assert AUTHORITY\n",
+    )
+    write(tmp_path, "tests/infra/test_other.py", "def test_unrelated():\n    pass\n")
+
+    matrix = select_matrix([changed_path], tmp_path)
+
+    assert scopes_in(matrix) == {"auth"}
+    assert leg_paths(matrix, "auth") == expected_paths
+    assert matrix[0].package == "marin-auth"
+    assert matrix[0].extras == ""
+
+
 def test_deleted_test_module_is_not_handed_to_pytest(tmp_path: Path) -> None:
     """git reports deleted paths; pytest aborts the whole run on a missing path."""
     _workspace(tmp_path)

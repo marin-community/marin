@@ -226,6 +226,7 @@ members = [
     "lib/finestore",
     "infra/pulumi",
     "infra/buckets",
+    "infra/auth",
     "infra/deploy",
     "infra/marina",
 ]

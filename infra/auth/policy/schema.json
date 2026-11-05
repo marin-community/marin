@@ -1,0 +1,55 @@
+{
+  "Marin": {
+    "entityTypes": {
+      "Principal": {
+        "memberOfTypes": ["Group"],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "owner": {"type": "String"},
+            "max_ttl": {"type": "Long"},
+            "delegation_depth": {"type": "Long"}
+          }
+        }
+      },
+      "Group": {"memberOfTypes": ["Group"]},
+      "Namespace": {"memberOfTypes": ["Namespace"]},
+      "LoomProfile": {"memberOfTypes": ["LoomProfile"]},
+      "Cluster": {"memberOfTypes": ["Cluster"]},
+      "App": {"memberOfTypes": ["App"]},
+      "CWIdentity": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "resources": {"type": "Set", "element": {"type": "String"}},
+            "actions": {"type": "Set", "element": {"type": "String"}},
+            "read_only": {"type": "Boolean"}
+          }
+        }
+      }
+    },
+    "actions": {
+      "loom.session.create": {
+        "appliesTo": {"principalTypes": ["Principal"], "resourceTypes": ["LoomProfile"], "context": {"type": "Record", "attributes": {}}}
+      },
+      "iris.job.submit": {
+        "appliesTo": {"principalTypes": ["Principal"], "resourceTypes": ["Namespace"], "context": {"type": "Record", "attributes": {}}}
+      },
+      "finelog.logs.query": {
+        "appliesTo": {"principalTypes": ["Principal"], "resourceTypes": ["Cluster"], "context": {"type": "Record", "attributes": {}}}
+      },
+      "finelog.logs.ingest": {
+        "appliesTo": {"principalTypes": ["Principal"], "resourceTypes": ["Cluster"], "context": {"type": "Record", "attributes": {}}}
+      },
+      "marina.app.read": {
+        "appliesTo": {"principalTypes": ["Principal"], "resourceTypes": ["App"], "context": {"type": "Record", "attributes": {}}}
+      },
+      "marina.app.release": {
+        "appliesTo": {"principalTypes": ["Principal"], "resourceTypes": ["App"], "context": {"type": "Record", "attributes": {}}}
+      },
+      "cw_s3.credentials.issue": {
+        "appliesTo": {"principalTypes": ["Principal"], "resourceTypes": ["CWIdentity"], "context": {"type": "Record", "attributes": {}}}
+      }
+    }
+  }
+}

@@ -46,6 +46,7 @@ SCOPES: tuple[str, ...] = (
     "verifyit",
     "deploy",
     "iac",
+    "auth",
 )
 
 
@@ -60,12 +61,18 @@ class SourceRoot:
 
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
-    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
+    *(
+        SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src")
+        for scope in SCOPES
+        if scope not in {"deploy", "iac", "auth"}
+    ),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("infra/shellsim", "."),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
+    SourceRoot("infra/auth", "."),
+    SourceRoot("infra/loom-cw", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
     SourceRoot("infra/marina/apps", "infra/marina/apps"),
 )
@@ -96,6 +103,7 @@ UV_PACKAGE: dict[str, str] = {
     "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
+    "auth": "marin-auth",
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
@@ -118,9 +126,10 @@ BROAD_TRIGGER_REASON = "broad-trigger"
 DIFF_DRIVEN_REASON = "diff-driven"
 
 TEST_DIRS: dict[str, tuple[str, ...]] = {
-    **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
+    **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin", "auth"}},
     "deploy": ("infra/deploy/tests",),
     "iac": ("infra/pulumi/tests",),
+    "auth": ("infra/auth/tests",),
     "marin": ("tests", "experiments"),
 }
 
@@ -795,7 +804,9 @@ def classify(
                     forced.add(scope)
                 break
 
-            package_root = {"deploy": "infra/deploy", "iac": "infra/pulumi"}.get(scope, f"lib/{scope}")
+            package_root = {"deploy": "infra/deploy", "iac": "infra/pulumi", "auth": "infra/auth"}.get(
+                scope, f"lib/{scope}"
+            )
             if filepath in (f"{package_root}/conftest.py", f"{package_root}/pyproject.toml"):
                 forced.add(scope)
                 break

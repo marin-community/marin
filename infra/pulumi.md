@@ -60,6 +60,11 @@ leaf that configures a shared `iac` component. For example, `infra/grafana`
 constructs `iac.gcp.cloud_run.CloudRunService` with Grafana's image, runtime
 configuration, and dependencies.
 
+`infra/auth` owns the OpenBao and grant-broker deployment, including its
+non-secret standing-policy ConfigMap. Runtime session grants belong to the
+broker database. CoreWeave storage identity policies remain in `infra/buckets`;
+job and session launches do not update Pulumi.
+
 A small internal web app (a browser UI over a database or an API, used by the
 team) does not need its own project at all: keep its source under
 `infra/marina/apps/` and release its package with

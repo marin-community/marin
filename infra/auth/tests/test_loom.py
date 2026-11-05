@@ -1,0 +1,281 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+import socket
+import threading
+from contextlib import closing
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+import requests
+from rigging.auth import StaticTokenProvider
+from rigging.grants import GrantDenied, GrantStore, Permission, PrincipalAuthority
+
+from infra.auth.loom import LoomLauncher
+
+
+class GrantService:
+    def __init__(self, store, grant):
+        self.store = store
+        self.grant = grant
+        self.token = "synthetic-shared-grant-bearer"
+
+    def authorize(self, token, *, audience, action, resource):
+        if token != self.token:
+            raise GrantDenied("Unknown shared credential")
+        return self.store.authorize(
+            self.grant.id, actor=self.grant.actor, service=audience, action=action, resource=resource
+        )
+
+    def active(self, grant_id, actor):
+        try:
+            return self.store.active(grant_id).actor == actor
+        except GrantDenied:
+            return False
+
+    def revoke(self, grant_id, principal):
+        self.store.revoke(grant_id, principal=principal)
+
+
+class LaunchPolicy:
+    def __init__(self, permission):
+        self.permission = permission
+
+    def allows_grant(self, principal, permissions):
+        return principal == "owner" and tuple(permissions) == (self.permission,)
+
+    def check(self, principal, service, action, resource):
+        return (
+            principal == "owner"
+            and service == self.permission.service
+            and action in self.permission.actions
+            and resource == self.permission.resource
+        )
+
+
+@pytest.fixture
+def grant_service(tmp_path):
+    permission = Permission("loom", frozenset({"session.create"}), "/review/")
+    with closing(
+        GrantStore(
+            tmp_path / "grants.sqlite",
+            [PrincipalAuthority("owner", "owner", 300, 1, "1")],
+            LaunchPolicy(permission),
+            now=lambda: 1000,
+        )
+    ) as store:
+        grant = store.create("owner", actor="runtime", permissions=(permission,), expires_at=1200)
+        yield GrantService(store, grant)
+
+
+@dataclass
+class LoomBoundary:
+    base_url: str = ""
+    runs: dict = field(default_factory=dict)
+    archived: set = field(default_factory=set)
+    redirected: list = field(default_factory=list)
+    metadata_override: dict = field(default_factory=dict)
+    redirect: bool = False
+    drop_response: bool = False
+
+
+@pytest.fixture
+def loom_api(grant_service):
+    state = LoomBoundary()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            operation = self.path.removeprefix("/api/")
+            if self.path == "/credential-sink":
+                state.redirected.append(self.headers.get("Authorization"))
+            if state.redirect and operation == "runs/create":
+                self.send_response(307)
+                self.send_header("Location", "/credential-sink")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            expected = grant_service.token if operation == "runs/create" else "lifecycle-observer"
+            if self.headers.get("Authorization") != f"Bearer {expected}":
+                self.respond({}, status=403)
+                return
+            if operation == "runs/create":
+                result = {
+                    "id": "native-run",
+                    "session_id": "native-session",
+                    "status": "running",
+                    "actor_subject": grant_service.grant.actor,
+                    "shared_grant_id": grant_service.grant.id,
+                    "idempotency_key": payload["idempotency_key"],
+                    "profile": payload["profile"],
+                }
+                state.runs[result["id"]] = result
+                if state.drop_response:
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    self.connection.close()
+                    return
+                self.respond({**result, **state.metadata_override})
+            elif operation == "runs/get":
+                self.respond(state.runs[payload["id"]])
+            elif operation == "runs/list":
+                self.respond(list(state.runs.values()))
+            elif operation == "sessions/archive":
+                state.archived.add(payload["session"])
+                self.respond({})
+            else:
+                self.respond({}, status=404)
+
+        def respond(self, result, status=200):
+            content = json.dumps(result).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def log_message(self, *args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        state.base_url = f"http://127.0.0.1:{server.server_port}"
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            yield state
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+@pytest.fixture
+def launcher(tmp_path, grant_service, loom_api):
+    with requests.Session() as session:
+        yield LoomLauncher(
+            tmp_path / "runs.sqlite",
+            base_url=loom_api.base_url,
+            observer_tokens=StaticTokenProvider("lifecycle-observer"),
+            grants=grant_service,
+            session=session,
+        )
+
+
+def restarted_launcher(launcher):
+    return LoomLauncher(
+        launcher.database,
+        base_url=launcher.base_url,
+        observer_tokens=launcher.observer_tokens,
+        grants=launcher.grants,
+        session=launcher.session,
+    )
+
+
+def test_native_launch_uses_shared_bearer_and_preserves_run_metadata(launcher, grant_service, loom_api):
+    run = launcher.launch(grant_service.token, template="review", title="Review", goal="Read change")
+    assert (run.run_id, run.session_id, run.actor, run.grant_id, run.template) == (
+        "native-run",
+        "native-session",
+        grant_service.grant.actor,
+        grant_service.grant.id,
+        "review",
+    )
+    assert loom_api.runs[run.run_id]["shared_grant_id"] == run.grant_id
+    assert launcher.launch(grant_service.token, template="review", title="Review", goal="Read change") == run
+    assert grant_service.token.encode() not in launcher.database.read_bytes()
+
+
+@pytest.mark.parametrize("field", ["shared_grant_id", "actor_subject", "profile"])
+def test_native_launch_rejects_response_belonging_to_another_grant_actor_or_profile(
+    launcher, grant_service, loom_api, field
+):
+    loom_api.metadata_override[field] = "someone-else"
+    with pytest.raises(ValueError):
+        launcher.launch(grant_service.token, template="review", title="Review", goal="Read change")
+    assert grant_service.active(grant_service.grant.id, grant_service.grant.actor)
+
+
+def test_revoked_grant_cannot_launch_native_run(launcher, grant_service, loom_api):
+    grant_service.revoke(grant_service.grant.id, "owner")
+    with pytest.raises(GrantDenied):
+        launcher.launch(grant_service.token, template="review", title="Review", goal="Read change")
+    assert loom_api.runs == {}
+
+
+def test_completed_run_revokes_runtime_grant_after_launcher_restart(launcher, grant_service, loom_api):
+    run = launcher.launch(grant_service.token, template="review", title="Review", goal="Read change")
+    loom_api.runs[run.run_id]["status"] = "completed"
+    restarted = restarted_launcher(launcher)
+    observed = restarted.reconcile()
+    assert observed[0].run_id == run.run_id
+    assert not grant_service.active(grant_service.grant.id, grant_service.grant.actor)
+    assert restarted.reconcile() == []
+
+
+def test_revoked_grant_archives_its_actual_native_session(launcher, grant_service, loom_api):
+    run = launcher.launch(grant_service.token, template="review", title="Review", goal="Read change")
+    grant_service.revoke(grant_service.grant.id, "owner")
+    launcher.reconcile()
+    assert loom_api.archived == {run.session_id}
+
+
+def test_redirect_does_not_forward_shared_credential(launcher, grant_service, loom_api):
+    loom_api.redirect = True
+    with pytest.raises(requests.HTTPError):
+        launcher.launch(grant_service.token, template="review", title="Review", goal="Read change")
+    assert loom_api.redirected == []
+    assert loom_api.runs == {}
+
+
+def test_lost_native_response_is_recovered_by_grant_metadata_after_restart(launcher, grant_service, loom_api):
+    loom_api.drop_response = True
+    with pytest.raises(requests.ConnectionError):
+        launcher.launch(grant_service.token, template="review", title="Review", goal="Read change")
+    assert len(loom_api.runs) == 1
+    loom_api.runs["native-run"]["status"] = "completed"
+    restarted = restarted_launcher(launcher)
+    observed = restarted.reconcile()
+    assert (observed[0].run_id, observed[0].grant_id) == ("native-run", grant_service.grant.id)
+    assert not grant_service.active(grant_service.grant.id, grant_service.grant.actor)
+    assert restarted.reconcile() == []
+
+
+def test_direct_native_launch_is_observed_and_revoked_on_completion(launcher, grant_service, loom_api):
+    response = launcher.session.post(
+        loom_api.base_url + "/api/runs/create",
+        headers={"Authorization": f"Bearer {grant_service.token}"},
+        json={"profile": "review", "idempotency_key": f"direct:{grant_service.grant.id}"},
+        timeout=5,
+    )
+    response.raise_for_status()
+    native = response.json()
+    launcher.observe(grant_service.grant, "review")
+    observed = launcher.reconcile()
+    assert (observed[0].run_id, observed[0].grant_id) == (native["id"], grant_service.grant.id)
+    assert grant_service.active(grant_service.grant.id, grant_service.grant.actor)
+    loom_api.runs[native["id"]]["status"] = "completed"
+    restarted = restarted_launcher(launcher)
+    assert restarted.reconcile()[0].status == "completed"
+    assert not grant_service.active(grant_service.grant.id, grant_service.grant.actor)
+    assert restarted.reconcile() == []
+
+
+def test_observed_credential_without_native_run_is_revoked_after_binding_deadline(launcher, grant_service, loom_api):
+    clock = [1000]
+    observer = LoomLauncher(
+        launcher.database,
+        base_url=launcher.base_url,
+        observer_tokens=launcher.observer_tokens,
+        grants=grant_service,
+        session=launcher.session,
+        now=lambda: clock[0],
+    )
+    observer.observe(grant_service.grant, "review")
+    observer.reconcile()
+    assert grant_service.active(grant_service.grant.id, grant_service.grant.actor)
+    clock[0] += 61
+    assert observer.reconcile()[0].run_id == ""
+    assert not grant_service.active(grant_service.grant.id, grant_service.grant.actor)
+    assert loom_api.runs == {}
+    assert observer.reconcile() == []

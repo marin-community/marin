@@ -1,0 +1,500 @@
+# Marin auth management service
+
+`marin-auth` deploys a durable OpenBao Raft cluster in a dedicated management
+namespace. It owns no training resources. Three replicas use separate retained
+PVCs, verified TLS, pod anti-affinity, a disruption budget, and restricted
+service accounts. The public ingress exposes exactly the identity discovery and
+JWKS endpoints. The API remains a ClusterIP service.
+
+This is a deployment program, not evidence that a staging service exists.
+`Pulumi.staging.yaml` records only the namespace, capacity and shared KMS secrets
+provider. An operator must supply the environment-specific inputs below before
+preview. No service, WIF registration, or live storage exchange has been applied
+or verified by adding this program.
+
+## Deployment prerequisites
+
+Use the repository environment with `marin-iac[deploy]` installed. State uses
+the shared `gs://marin-iac-state/` backend and repository `.venv`, as described in
+[Pulumi ownership](../pulumi.md).
+
+Choose an explicit Kubernetes context for a management cluster with three
+schedulable hosts, Traefik's `traefik` ingress class and
+`traefik.io/v1alpha1/ServersTransport` CRD, and a CNI that enforces NetworkPolicy.
+Set the actual ingress controller namespace and pod labels. Only those pods and
+the explicitly selected auth broker pods can contact OpenBao on port 8200.
+Raft traffic stays inside the OpenBao pod set. Egress allows DNS only to
+explicit resolver host CIDRs and HTTPS to configured destination CIDRs.
+Read the selected cluster's pod resolver configuration and DNS services before
+setting `dns_cidrs`; each entry must be a `/32` or `/128` resolver address.
+Read-only inspection of the current CoreWeave cluster found resolver service
+`10.16.0.10`, upstream service `10.16.0.95`, and node-local service `10.16.0.30`,
+with `node-local-dns` and `coredns` selectors. These observations are inputs to
+deployment review, not portable defaults. Include the resolver addresses
+actually reached by the selected cluster's pods.
+
+Use a dedicated management cluster before enrolling live identities. Existing
+Iris cluster roles can manage pods across namespaces; a namespace and
+NetworkPolicy alone do not isolate signing authority from those roles. Reuse
+of a training cluster requires a separately audited RBAC, admission and node
+isolation design. This stack does not change Iris roles or create that design.
+
+Select storage whose provider documents the synchronous writes, locking and
+durability required by [OpenBao Integrated Storage](https://openbao.org/docs/configuration/storage/raft/).
+Prefer durable block storage. The observed CoreWeave cluster currently exposes
+only `shared-vast`; that observation does **not** establish that this class is
+safe for Raft. The stack deliberately has no storage-class default. Certify a
+suitable class before applying. Each pod receives its own `ReadWriteOnce` PVC;
+PVCs remain after scale-down and deletion. Disable host swap because the
+unprivileged server uses `disable_mlock=true`.
+
+Supply a digest-pinned OpenBao image that supports the configured APIs and runs
+as UID/GID 1000. Test image and storage compatibility on staging before adoption.
+
+Provision two TLS Secrets outside Pulumi in the management namespace:
+
+- `listener_tls_secret`: `tls.crt`, `tls.key`, and `ca.crt`. The server
+  certificate must contain `openbao.NAMESPACE.svc`, the configured
+  `listener_tls_server_name`, and `localhost` for verified operator
+  port-forwarding. `ca.crt` must contain its issuing trust chain. The same
+  server name and CA authenticate Raft joins and Traefik's upstream connection.
+- `ingress_tls_secret`: a publicly trusted certificate and private key for
+  `public_hostname`. Point that DNS name at the ingress. Only the two exact
+  discovery paths are routed to OpenBao; `/v1/sys/*`, authentication, token
+  minting and signing APIs are not publicly routed.
+
+Pulumi stores Secret **names** only. It does not create, fetch or export their
+contents. The first approved deployment creates the namespace and leaves pods
+pending until the external TLS Secrets are installed there. Service, ingress
+and StatefulSet readiness are deliberately not awaited during this bootstrap
+phase. If the namespace already exists, import it under the OpenBao component
+using the [program-first import procedure](../pulumi/README.md) before adoption.
+
+Select the `staging` stack in `infra/auth`, then set these non-secret config
+keys with `pulumi config set --stack staging KEY VALUE` or
+`pulumi config set --stack staging --path 'KEY[index]' VALUE`:
+
+| Key | Required value |
+| --- | --- |
+| `kubernetes_context` | Explicit management-cluster kubeconfig context |
+| `image` | OpenBao image with `@sha256:` digest |
+| `public_hostname` | Public discovery DNS name |
+| `raft_storage_class` | Reviewed storage class suitable for Raft |
+| `listener_tls_secret` | Existing server TLS/CA Secret name |
+| `listener_tls_server_name` | SAN used to verify internal TLS |
+| `ingress_tls_secret` | Existing public edge certificate Secret name |
+| `ingress_namespace` | Existing Traefik namespace |
+| `ingress_pod_labels` | Object of exact ingress controller pod labels |
+| `operator_groups` | Array of Kubernetes groups allowed to port-forward |
+| `dns_cidrs` | Explicit resolver host CIDRs used by OpenBao and the broker |
+| `https_egress_cidrs` | Explicit array; use `[]` if no external auth fetches are needed |
+
+The operator Role permits pod discovery and port-forwarding. It grants no
+Secret access, pod execution or cluster-wide rights. The OpenBao ServiceAccount
+has no RoleBinding and no mounted Kubernetes API token. Kubernetes auth using
+TokenReview is therefore not configured implicitly.
+
+OpenBao API ingress is limited to the broker pods labeled
+`app.kubernetes.io/name=marin-auth` in the management namespace, the explicit
+Traefik selector and OpenBao peers. Operators use the Kubernetes port-forward
+API rather than a publicly routed management endpoint.
+
+Review without applying:
+
+```bash
+cd infra/auth
+pulumi preview --stack staging --diff
+```
+
+## Initialize, unseal and configure
+
+After an explicitly approved apply, servers start sealed. Pulumi deliberately
+does not await StatefulSet readiness because first initialization is an
+operator ceremony. Deployment completion therefore does not imply readiness.
+Port-forward a specific pod on a trusted operator machine:
+
+```bash
+kubectl --context "$MANAGEMENT_CONTEXT" -n marin-auth-staging \
+  port-forward --address 127.0.0.1 pod/openbao-0 18200:8200
+```
+
+In a separate terminal, set `BAO_ADDR=https://localhost:18200` and
+`BAO_CACERT` to the issuing CA file. Run `bao operator init` **once** on pod 0,
+with reviewed share/threshold and PGP recipient options, and store encrypted
+unseal shares and the initial root token in the approved recovery system. Do
+not send them to Pulumi, logs or the repository. Run interactive
+`bao operator unseal` separately for enough key holders. The other pods
+retry-join using verified TLS; port-forward and unseal each in turn. Never
+initialize a second pod into an independent cluster.
+
+Once a quorum is unsealed, supply an ephemeral operator token through
+`BAO_TOKEN` and run from the repository root:
+
+```bash
+uv run --no-sync infra/auth/bootstrap.py \
+  --issuer "https://$AUTH_HOSTNAME/v1/identity/oidc"
+```
+
+The bootstrap command creates the non-exportable Ed25519 Transit key
+`marin-grants`; the rotating RS256 identity signing key `marin-coreweave`;
+identity roles `marin-auth` (audience `marin-auth`) and `marin-coreweave`
+(audience `https://coreweave.com/iam`, both with a ten-minute TTL); and three
+separate ACL policies:
+
+| ACL policy | Allowed API |
+| --- | --- |
+| `marin-auth-broker` | Sign with `transit/sign/marin-grants`; read its public key metadata |
+| `marin-auth-identity` | Mint the authenticated entity's `marin-auth` identity JWT |
+| `marin-coreweave-identity` | Mint the authenticated entity's `marin-coreweave` identity JWT |
+
+Configure trusted auth methods, entity aliases and policy assignments through a
+separately reviewed OpenBao operator change. The bootstrap command does not
+invent an upstream issuer, enroll arbitrary callers, or issue runtime tokens.
+Bind the broker ACL to the broker workload only. Bind each storage ACL to its
+own predeclared entity and keep its token separate from the broker token.
+OpenBao identity tokens use the authenticated entity UUID as `sub`; the caller
+cannot choose another entity's subject.
+
+Enable a reviewed audit device before enrolling callers. Verify that audit
+redaction and log routing keep bearer tokens and private material out of logs.
+Revoke the initial root token after recovery and administrative access are
+verified. Unset `BAO_TOKEN` when finished.
+
+## Grant broker deployment
+
+Enable the broker only after OpenBao is initialized and the external broker
+and storage identity tokens have been installed. Set `broker_image` to the
+digest-pinned image built from `infra/auth/Dockerfile` with the `marin-auth`
+runtime dependencies. It runs `python -m infra.auth.service` from `/app`.
+With this key set, all broker configuration is required;
+there is no generated identity or in-memory ledger fallback.
+
+| Key | Required value |
+| --- | --- |
+| `broker_storage_class` | Storage class suitable for a persistent SQLite ledger |
+| `broker_storage_size` | Explicit ledger volume capacity |
+| `broker_tls_secret` | External TLS Secret valid for `marin-auth.NAMESPACE.svc` and operator `localhost` access |
+| `broker_ca_secret` | Existing Secret with `ca.crt` combining internal OpenBao/Loom roots and public roots |
+| `broker_token_secrets` | Array of external Secret names, each with a `token` key |
+| `broker_client_namespace` | Namespace of isolated Loom sessions or other approved clients |
+| `broker_client_pod_labels` | Exact approved client pod labels |
+| `broker_https_egress_cidrs` | HTTPS egress destinations for public OpenBao discovery/JWKS |
+| `broker_policy` | Object with exactly the seven fields below |
+
+`broker_policy` supplies `broker_token_file`, `subjects`, `cedar`, `storage`
+and `max_token_ttl`, plus explicit `loom` (`null` or a configured Loom binding)
+and `signing_key_version` (the reviewed Transit key version);
+their exact schema is
+[`ServiceConfig`](service.py). Token files must be
+`/var/run/marin-auth/SECRET-NAME/token`, matching `broker_token_secrets`. The
+signing token must use a different Secret from every storage identity token.
+When `loom` is enabled, its `observer_token_file` must also correspond to a
+listed external Secret mount.
+`subjects` maps authenticated OpenBao entity UUIDs to stable principals.
+`cedar` contains `schema_document`, `policies` and trusted `entities`. The
+runtime validates this bundle with the Cedar engine and derives principal
+authority and its policy revision from it. `storage` binds each named,
+predeclared CoreWeave subject and its complete provider permissions to a
+separate token file. The runtime derives Cedar provider entities from those
+bindings; provider capabilities are not declared again in the Cedar entity
+list.
+
+The auth stack exports `coreweave_identities`, keyed by storage binding name,
+with only `subject` and `permissions`. It excludes token-file references and
+roles. The bucket stack selects named entries from this output, so its standing
+provider policies and the runtime's capability checks use the same declaration.
+
+Pulumi manages the remaining `ServiceConfig` fields: the actual private
+OpenBao service address and public issuer, `ca_bundle` pointing to a CA-only
+projection from `broker_ca_secret`, the retained database path
+`/var/lib/marin-auth/grants.db`, and issuer
+`https://marin-auth.NAMESPACE.svc:8090`. It publishes this policy in a ConfigMap
+and mounts external Secret files without reading their values. Runtime grant
+creation, attenuation and revocation update only SQLite. They cannot alter the
+ConfigMap, OpenBao ACLs or provider policies.
+
+The combined CA bundle must verify the private OpenBao listener, public OpenBao
+issuer/JWKS endpoint and private Loom TLS proxy. A listener-only private CA
+cannot verify the public issuer certificate. The broker uses this same explicit
+bundle for observer requests to Loom; no TLS verification is disabled.
+
+The broker is a restricted, single-replica StatefulSet. Its PVC and ledger
+survive a process restart; do not scale it above one or share this SQLite file
+across broker processes. Configuration changes update a pod-template hash and
+trigger a singleton `RollingUpdate`: Kubernetes stops the old process before
+starting its replacement on the same PVC. A completed broker rollout enforces
+the new standing policy revision; a preview alone changes no policy. Rotate
+external tokens before their expiry; the runtime reads
+token files on demand. The namespace has no Docker socket, host mounts,
+privileged workloads or general-purpose session runner.
+
+Only approved client pods can reach the HTTPS broker service on port 8090.
+There is no public broker ingress. An explicitly approved staging session
+deployment or an operator port-forward is required for an end-to-end run.
+
+From outside the cluster, fetch
+`https://HOST/v1/identity/oidc/.well-known/openid-configuration`, check that its
+issuer matches the stack output exactly, and fetch its `jwks_uri`. Confirm a
+public request to `/v1/sys/health` receives no OpenBao route. Inspect readiness,
+`bao operator raft list-peers` and each PVC before treating the service as ready.
+
+## CoreWeave standing policies
+
+[CoreWeave WIF](https://docs.coreweave.com/products/storage/object-storage/auth-access/workload-identity-federation/use-oidc-tokens)
+requires a registered issuer/audience pair and publicly reachable discovery and
+JWKS endpoints. Register the stack's `issuer` and audience
+`https://coreweave.com/iam` in the CoreWeave Console's Workload Federation page.
+Record the returned Config ID in the deployment review. Installed
+`pulumi-coreweave` 1.0.2 exposes organization policies and bucket policies, but
+has no WIF/OIDC registration resource. This program does not claim to register
+an issuer or export a fabricated registration ID.
+
+The existing `infra/buckets` project owns provider storage authorization.
+Declare each complete mapping once under `broker_policy.storage` in the auth
+stack, for example:
+
+```yaml
+- name: checkpoint-reader
+  role: marin-coreweave
+  subject: ENTITY-UUID-FROM-OPENBAO
+  token_file: /var/run/marin-auth/checkpoint-reader/token
+  permissions:
+    - service: cw_s3
+      actions: ["s3:GetObject"]
+      resource: s3://YOUR-BUCKET/YOUR-PREFIX/
+```
+
+Replace the example subject and resource with audited values, and include the
+external token Secret in `broker_token_secrets`. Each subject has one complete
+mapping. Select the mapping in the bucket stack by name:
+
+```yaml
+marin-buckets:auth_stack: AUTH-STACK-REFERENCE
+marin-buckets:auth_identity_names:
+  - checkpoint-reader
+```
+
+Pulumi reads the issuer and selected `coreweave_identities` entries through
+`StackReference`. Resource names and count come from the explicit selected
+names; their subject and permissions come only from the auth output. The
+organization policy allows that exact `role/ISSUER:SUBJECT` to exchange
+identity JWTs and access only the declared S3 resources. Existing bucket
+policies keep their current ownership and deletion protections.
+
+Object actions become short-form `bucket/prefix/*` resources. Bucket actions
+such as `s3:ListBucket` are supported only for a grant covering the bucket root,
+because this provider's organization-policy resource has no prefix-condition
+field. Prefix-scoped list access fails configuration rather than widening to a
+bucket-wide permission. No wildcard actions, all-principal statements or global
+S3 resource grants are generated.
+
+Audit **all** organization policies for the chosen role before adoption. An
+unrelated wildcard policy can grant additional rights; creating a scoped
+policy does not revoke those other policies. The provider mapping must match
+the entire standing authority of its OpenBao subject. Runtime grants do not
+change organization or bucket policies. The runtime must refuse to exchange a
+provider identity unless its complete mapping is covered by the active grant.
+
+CoreWeave credentials have their own provider expiration; neither deleting a
+runtime grant nor revoking an OpenBao login token retracts already exchanged
+credentials. Record and enforce that expiration at the runtime boundary. A
+successful local grant test is not proof of provider-side revocation, isolation
+or a live WIF exchange.
+
+## Shared grants and Loom
+
+Standing policy is written in Cedar. The authoritative
+[schema](policy/schema.json) defines the action space and the resource type for
+each action; [example.cedar](policy/example.cedar) and
+[example-entities.json](policy/example-entities.json) show the policy and trusted
+principal data. The broker uses the official Rust Cedar engine through the
+third-party `cedarpy` binding, pinned in the auth package. Cedar is confined to
+this service; application clients call the shared decision API.
+
+```cedar
+permit (
+    principal in Marin::Group::"research",
+    action == Marin::Action::"iris.job.submit",
+    resource in Marin::Namespace::"/analysis/"
+);
+```
+
+The current schema names these actions:
+
+| Action | Resource type |
+| --- | --- |
+| `loom.session.create` | `LoomProfile` |
+| `iris.job.submit` | `Namespace` |
+| `finelog.logs.query`, `finelog.logs.ingest` | `Cluster` |
+| `marina.app.read`, `marina.app.release` | `App` |
+| `cw_s3.credentials.issue` | `CWIdentity` |
+
+Schemas and policies validate at startup. Unknown actions, malformed resources,
+and every Cedar evaluation error deny access. Principals, groups, ownership and
+delegation limits come from trusted deployment entities. Resource ancestry is
+constructed from canonical paths on the server; callers cannot supply parent
+entities, privileged attributes or request context. The policy bundle's content
+hash records its revision, including provider mappings and principal limits.
+
+A runtime grant is a bounded record approved by that standing policy. For
+example, an approved bundle can contain:
+
+```yaml
+permissions:
+  - service: loom
+    actions: [session.create]
+    resource: /diagnostics/
+  - service: iris
+    actions: [job.submit]
+    resource: /analysis/
+  - service: cw_s3
+    actions: [s3:GetObject]
+    resource: s3://example-diagnostics/incidents/
+```
+
+The trailing slash is part of a bound: `/analysis/` excludes `/analysis-other/`.
+Encoded paths, traversal, wildcard actions and ambiguous paths are rejected.
+The same `Permission` type describes runtime ceilings and the CoreWeave policy
+compiler's input. It is a capability description, not a second standing-policy
+language. Only complete approved native mappings can be issued for storage;
+an unrepresentable narrower prefix is rejected. A Cedar decision on a prefix
+node is not a proof about every descendant of that node.
+
+Pulumi publishes Cedar schema, policies and entities, trusted OpenBao principal mappings,
+and provider mappings. `POST /v1/grants` authenticates its bearer as an OpenBao
+identity and writes the approved runtime grant to SQLite. Owner comes from
+trusted principal data. A child grant can reduce actions, prefixes, lifetime and
+delegation depth and must still pass current policy. Live checks require the
+entire ancestor chain to remain active. They evaluate Cedar using the original
+granting principal and enforce the current actor's grant ceiling separately;
+an attribution owner does not confer that owner's permissions.
+
+`POST /oauth/token` follows [OAuth Token Exchange](https://www.rfc-editor.org/rfc/rfc8693.html):
+form fields name the subject token, token type, exact audience and grant ID.
+The authority signs short-lived `at+jwt` tokens through OpenBao Transit with
+mandatory integer `grant_version: 1`. Python and Rust parse the same signed
+contract and run the same positive and negative fixtures.
+Workloads may refresh an unexpired access token with the same audience and
+bounds; they receive no broker credential or signing key. Applications check
+issuer, signature, audience, token type, format version and acting principal.
+For an operation, the receiving handler constructs its action and resource and
+calls `POST /v1/authorize` with the presented bearer. The broker checks token
+bounds, live grant state, current Cedar policy and revision. A successful
+decision returns matching grant/actor/owner metadata; it grants no authority to
+other operations. Iris, Finelog and Marina have schema entries but do not yet
+enforce these grants in their existing handlers.
+
+Enable Loom lifecycle integration with an explicit `loom` policy object
+containing `base_url` and `observer_token_file`. Set `loom: null` to disable
+Loom launch and runtime credential issuance.
+`POST /v1/loom/launch` accepts only a Loom-audience grant token and the chosen
+template, title and goal. It forwards the original shared token to native Loom.
+Loom verifies that token, pins a restricted, strict, environment-cleared profile
+and repository from its own configuration, and obtains runtime credentials from
+`POST /v1/loom/credentials`. Credential injection is an internal launch step;
+callers cannot supply environment values, repository paths or profile overrides.
+Loom creates one run per grant, records its shared grant ID, and keeps bearer
+credentials out of its stored request and profile. Shared-auth mode requires
+credentials for loopback administration too.
+
+Run/session IDs and launch intent live in a separate SQLite ledger on the same
+retained volume. Repeated delivery uses one durable idempotency key. A five-second
+reconciler checks actual Loom state and revokes completed grants. Native calls
+register their intent before credential issuance, so bypassing the launch
+front door does not bypass lifecycle tracking. An intent that never produces
+a run is revoked after sixty seconds. Revoking a grant immediately prevents further
+broker issuance; archiving its Loom session depends on the next successful
+reconciliation. A Loom outage can delay session cleanup. SQLite targets a
+single broker instance; running replicas against independent ledgers is unsupported.
+
+Storage issuance requires a separate Cedar permit on the complete `CWIdentity`,
+whose attributes are derived from its audited provider mapping. Its native
+permissions must also fit the live grant. OpenBao and CoreWeave retain their
+own ACL and S3 enforcement. Arbitrary Cedar policies are not translated into
+cloud IAM; the adapter issues only predeclared, representable capabilities.
+
+Current restricted Loom profiles have no CoreWeave storage tool and cannot run
+an arbitrary shell helper or attach an unreviewed MCP. The adapter establishes
+the launch and credential boundary. A reviewed Loom storage tool is still needed
+for normal restricted agents to read CoreWeave objects. The local scripted ACP
+proof below consumes the injected credential without making a model call.
+
+For an authorized workload that can run a command, `infra.auth.client` obtains
+and rotates a private OIDC token file for the native SDK provider:
+
+```bash
+uv run --package marin-auth python -m infra.auth.client \
+  --auth-url "$AUTH_URL" --binding diagnostics --organization "$CW_ORG_ID" \
+  --token-file "$PRIVATE_RUNTIME_DIR/cw.jwt" -- your-command
+```
+
+The parent process reads `MARIN_GRANT_TOKEN`; the child receives the native
+container-provider file configuration. Use a new private token-file path. The
+fixed provider identity must fit entirely inside the grant, and its OIDC token
+must expire before the grant. Issuance therefore stops before grant completion
+when the remaining lifetime is shorter than the fixed OpenBao role TTL.
+
+## Reproduce the local proof and verify staging
+
+Build the deployable broker image from the repository root:
+
+```bash
+docker build -f infra/auth/Dockerfile -t marin-auth:staging .
+docker run --rm --network none --read-only marin-auth:staging \
+  python -m infra.auth.service --help
+```
+
+Publish only a reviewed image, then set its registry digest as `broker_image`.
+The Docker build installs the `marin-auth` closure from the repository lock.
+
+Run the repeatable local proof with an installed OpenBao executable and a Loom
+checkout containing its scripted ACP fixture:
+
+```bash
+uv run --package marin-auth --group test python -m infra.auth.prove \
+  --bao /path/to/bao --loom /path/to/loom --loom-source /path/to/loom-checkout
+```
+
+The proof initializes a temporary non-dev, TLS-enabled Raft server and a private
+Loom home, then cleans up both. It exercises actual OpenBao authentication,
+Transit signing, OIDC issuance, key rotation, grant denials and revocation, plus
+a real Loom session using a scripted ACP process. It makes no CoreWeave calls.
+Its one-share initialization is confined to disposable test storage and is not
+the staging recovery ceremony.
+
+After registering WIF and applying reviewed provider policies, provision one
+nonempty fixture inside the approved prefix and another outside it in a
+dedicated **test** bucket. Supply a valid scoped `MARIN_GRANT_TOKEN` and run:
+
+```bash
+uv run --package marin-auth python -m infra.auth.verify_storage \
+  --auth-url "$AUTH_URL" --binding diagnostics --organization "$CW_ORG_ID" \
+  --endpoint "$CW_S3_ENDPOINT" --region "$CW_REGION" \
+  --test-bucket "$TEST_BUCKET" --prefix incidents/ \
+  --allowed-key incidents/allowed --denied-key outside/denied
+```
+
+The verifier uses only the native container credential provider, reads one byte
+from each fixture, and requires explicit `AccessDenied` for the outside read,
+a fresh sentinel write and a nonexistent sentinel delete. Authentication errors
+and missing objects do not count as policy denials. An unexpectedly permitted
+write attempts to remove only its own sentinel and reports the key if cleanup
+is denied. No existing object is deleted. Add `--wait-up-to SECONDS` explicitly
+to require the same client to read after its first provider credential expires;
+the report includes observed expiration times and whether its key changed.
+Retain that report with the deployment review. Until this check passes on the
+deployed stack, live CoreWeave enforcement remains unverified.
+
+## Recovery and upgrades
+
+Keep encrypted unseal shares, CA recovery and Raft snapshots outside this stack.
+Take and restore a staging snapshot before relying on this service. PVC
+retention is not a backup. Protect the namespace and StatefulSet from accidental
+Pulumi deletion; removing them requires a reviewed recovery or retirement plan.
+
+StatefulSet updates use `OnDelete`: config and image changes do not silently
+restart sealed replicas. During an approved upgrade, replace and unseal one
+replica at a time, verify quorum and readiness, then continue. Renew externally
+managed certificates before expiry and restart or reload replicas through that
+same reviewed procedure. Never disable TLS verification to bypass a failed
+renewal or Raft join.

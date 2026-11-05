@@ -37,7 +37,6 @@ from jaxtyping import PyTree
 from rigging import telemetry
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.s3_compat import coreweave_federated_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
@@ -1247,7 +1246,7 @@ def _get_fs_and_plain_path(path, fs=None):
         return fs, path
     url = str(path)
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme == "s3" and coreweave_federated_bucket(parsed.netloc):
+    if parsed.scheme == "s3":
         return url_to_fs(url)
     fs, _, (path_to_open,) = fsspec.get_fs_token_paths(url)
     return fs, path_to_open

@@ -701,6 +701,7 @@ fork-strategy = "fewest"
 
 [manifest]
 members = [
+    "marin-auth",
     "marin-buckets",
     "marin-core",
     "marin-deploy",
@@ -1482,6 +1483,24 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ca/8d/e7a165aa44bb2876bec96f7fb1995346d14e43d46237421382f8af4f37da/caio-0.12.4-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:9dc0fd6f09ef72d18d3f43ca3d1140295222d925c583114ab9b1e8843a109a6e", size = 159088, upload-time = "2026-09-07T06:52:24.362Z" },
     { url = "https://files.pythonhosted.org/packages/6f/31/d31ed073a7f8e02d352b390ff556757ba82afbd747c68238b1bda638ce6f/caio-0.12.4-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:413565d77dfdf2dd841ac100571ef1cc710f9c56137312f3ec51356350b4f3a5", size = 41919, upload-time = "2026-09-07T06:52:25.5Z" },
     { url = "https://files.pythonhosted.org/packages/e8/e6/07100a694613344d22958fb6d803fdf914ee9395278fe58ad1b1b9c59e52/caio-0.12.4-py3-none-any.whl", hash = "sha256:7a5e231bbf81eaed269f99afa9ef46457f51f9407952a1795c0795b3a62c23c0", size = 25628, upload-time = "2026-09-07T06:52:38.147Z" },
+]
+
+[[package]]
+name = "cedarpy"
+version = "4.12.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3e/38/d0faf97857eee89d1825b6d335d319a3d0504c9e763103e9a1dff2840ddb/cedarpy-4.12.2.tar.gz", hash = "sha256:38941ae12f187e00896ce31036d436fc3190fd0f1501daea6265006aea018e4a", size = 3328016, upload-time = "2026-10-14T15:34:09.531Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4e/a0/77beebdf39f4174c4d5ee5a37c073436808a7e4f998f200aaa3de51e5cab/cedarpy-4.12.2-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:6d4fee5fee0634a41e08432fc33ecbbe3eb5e6a5f058958a333ed8089579442c", size = 4491190, upload-time = "2026-10-14T15:34:04.227Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/bc/5afd3ab3b7670691faf31d5d9dbeaffd8bd399a5245e796fe58075e235de/cedarpy-4.12.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:bb52e8af010ee7bd3a4c227d7b20be392085900cd6ef554b0d662e265ed45895", size = 4357247, upload-time = "2026-10-14T15:33:58.318Z" },
+    { url = "https://files.pythonhosted.org/packages/37/16/b9fb093bb543bec088f9d97575fefb886072b97ef94cf09afbbee87a7bef/cedarpy-4.12.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b1829d4b6163072a04d1e6a774f7771b08d15dcee19901f04d70f5a75c27ebb0", size = 4927728, upload-time = "2026-10-14T15:33:34.159Z" },
+    { url = "https://files.pythonhosted.org/packages/41/64/a924768eb52f5139e617a3de68d0651ee7f566b5e60009a9d1a1e38c26ff/cedarpy-4.12.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a389bc0e930797e23428608304a0fc78dc46d8b5f2405cc80a683dcde2998ceb", size = 4907664, upload-time = "2026-10-14T15:33:45.97Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/0f/b1fb48a6fb1f6964aba38a2ad573aaa983caa7decf76a109a0c303e8321d/cedarpy-4.12.2-cp312-cp312-win_amd64.whl", hash = "sha256:c0214599126a6ee93191fc1f0b559e00fbc1e3f07610ec0e3ab31927b40550e7", size = 4289278, upload-time = "2026-10-14T15:34:14.305Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/84/03b0d05ce85ae463a664a0c95412f655cbd4840591995c4791ed2ed4fd01/cedarpy-4.12.2-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:5f85dc340b97e7057ca5ab8249659ced6d69a13bcb01a248c1d8c9544f34a0c6", size = 4490776, upload-time = "2026-10-14T15:34:05.944Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/e5/b6d0b4003887d4a92c21a58021ea2607caf668d34da584fc272f88d548ff/cedarpy-4.12.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:a38d8d3318cf5067d1240c56e8f76cd3882b048ed1580fdd9794d1d793d5e0eb", size = 4356262, upload-time = "2026-10-14T15:33:59.865Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/f8/bba7d0df69aea893ff0f4cdda125bf19107a0dddd6bd57662a95d0034ae4/cedarpy-4.12.2-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:48bac292e79f88740b90d0a5abde2e2c61a77ca7876e1048da1379a901e8373f", size = 4928325, upload-time = "2026-10-14T15:33:35.757Z" },
+    { url = "https://files.pythonhosted.org/packages/49/6a/c9c62c6d905f4e9515afc7760392e158fef357a88b3b853660522e99ce17/cedarpy-4.12.2-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:61e49baf4d075189c068a028a01f6e2f5bb91f1877a2039c55b4fb8709659a07", size = 4906830, upload-time = "2026-10-14T15:33:47.549Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/52/5c75294d13d04e05a23917ad69dc324c4e43d6b8c2207d317fda6a061ef3/cedarpy-4.12.2-cp313-cp313-win_amd64.whl", hash = "sha256:82ed87e561db7f468c9262993a41ce20ffcfecdc8c9e98f20619f31d01400ac5", size = 4288906, upload-time = "2026-10-14T15:34:15.635Z" },
 ]
 
 [[package]]
@@ -6185,6 +6204,41 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/29/aa/008a6dc9884d855cf5f7e3e02466b0b44cb1e64fd4b5ce906d4ce03030f9/magiccube-0.3.0.tar.gz", hash = "sha256:4fa47df1e99c19ac74597279a17de5a652083d4d68f0d5e52cf09202317e5d04", size = 19407, upload-time = "2024-07-15T06:58:03.757Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f7/8d/354a7357e03fb9277401989b7866b8f05ae407319e7bc450b958f9187308/magiccube-0.3.0-py3-none-any.whl", hash = "sha256:a8da38cac53dff1667949c9a12485bebb9d62c01ae73db41eb7aba1bc1c8a00c", size = 16931, upload-time = "2024-07-15T06:58:02.631Z" },
+]
+
+[[package]]
+name = "marin-auth"
+version = "0.0.0"
+source = { virtual = "infra/auth" }
+dependencies = [
+    { name = "cedarpy" },
+    { name = "marin-rigging" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "httpx" },
+    { name = "marin-core" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cedarpy", specifier = "==4.12.2" },
+    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "uvicorn", specifier = ">=0.23.0" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "marin-core", editable = "lib/marin" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
