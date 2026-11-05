@@ -15,6 +15,7 @@ from taskforge.llm.policy import LLMPolicy, ReasoningEffort
 from forge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying
 from forge.effects.issues import Hold, Restart, Transient
 from forge.model.llm import Completion, FinishReason, Message, Sampling, ToolCall, ToolSchema, Usage
+from forge.model.serialization import TOOL_SCHEMA
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,23 +58,21 @@ def _message(message: Message) -> dict[str, object]:
     return wire
 
 
+@dataclass(frozen=True, slots=True)
 class GlmInference(InferenceClient):
-    def __init__(
-        self,
-        client: CompletionBackend,
-        sampling: Sampling,
-        *,
-        max_attempts: int,
-        notify: Callable[[Retrying], Awaitable[None]],
-    ) -> None:
-        if max_attempts < 1:
+    client: CompletionBackend
+    provider_digest: str
+    max_attempts: int
+    notify: Callable[[Retrying], Awaitable[None]]
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
             raise Hold("Inference requires at least one attempt")
-        self.client, self.sampling, self.max_attempts, self.notify = client, sampling, max_attempts, notify
 
     @override
     def fingerprint(self) -> Fingerprint:
         return Fingerprint(
-            "inference", combined_content_hash((self.client.model, repr(self.sampling))), ReplayPolicy.CACHE
+            "inference", combined_content_hash((self.client.model, self.provider_digest)), ReplayPolicy.CACHE
         )
 
     async def _attempts(self, request: InferenceRequest, attempts: Sequence[Attempt]) -> None:
@@ -84,17 +83,14 @@ class GlmInference(InferenceClient):
 
     async def _complete(self, request: InferenceRequest) -> Completion:
         sampling = request.sampling
-        defaults = LLMPolicy()
-        policy = LLMPolicy(
-            max_tokens=defaults.max_tokens if sampling.max_tokens is None else sampling.max_tokens,
-            reasoning_effort=ReasoningEffort(sampling.reasoning_effort),
-            temperature=sampling.temperature,
-            top_p=sampling.top_p,
-            max_continuations=(
-                defaults.max_continuations if sampling.max_continuations is None else sampling.max_continuations
-            ),
-        )
-        fields: dict[str, object] = {"tools": [{"type": "function", "function": asdict(tool)} for tool in request.tools]}
+        settings = {key: value for key, value in asdict(sampling).items() if value is not None}
+        settings["reasoning_effort"] = ReasoningEffort(sampling.reasoning_effort)
+        policy = LLMPolicy(**settings)
+        fields: dict[str, object] = {
+            "tools": [
+                {"type": "function", "function": TOOL_SCHEMA.dump_python(tool, mode="json")} for tool in request.tools
+            ]
+        }
         try:
             result = await self.client.complete(tuple(_message(message) for message in request.messages), policy, fields)
         except ModelUnavailable as error:
