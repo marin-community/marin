@@ -70,16 +70,16 @@ class GrantBroker(pulumi.ComponentResource):
         if args.policy["ca_bundle"] != f"{TOKEN_DIRECTORY}/ca/ca.crt":
             raise ValueError("Grant broker must verify service TLS using the mounted CA bundle")
         expected_paths = {f"{TOKEN_DIRECTORY}/{secret}/token" for secret in args.token_secret_names}
-        configured_paths = {
+        configured_paths = [
             args.policy["broker_token_file"],
             *(binding["token_file"] for binding in args.policy["storage"]),
-        }
+        ]
         if args.policy["loom"] is not None:
-            configured_paths.add(args.policy["loom"]["observer_token_file"])
-        if configured_paths != expected_paths:
+            configured_paths.append(args.policy["loom"]["observer_token_file"])
+        if len(set(configured_paths)) != len(configured_paths):
+            raise ValueError("Broker signing, storage, and Loom observer tokens require distinct files")
+        if set(configured_paths) != expected_paths:
             raise ValueError("Every broker/storage token file must correspond to an explicit external Secret mount")
-        if args.policy["broker_token_file"] in {binding["token_file"] for binding in args.policy["storage"]}:
-            raise ValueError("Broker signing and storage identities require separate token mounts")
         child = pulumi.ResourceOptions(parent=self, provider=k8s_provider)
         policy_json = pulumi.Output.json_dumps(args.policy, sort_keys=True)
         config = k8s.core.v1.ConfigMap(

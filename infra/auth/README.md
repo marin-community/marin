@@ -187,9 +187,11 @@ and `signing_key_version` (the reviewed Transit key version);
 their exact schema is
 [`ServiceConfig`](service.py). Token files must be
 `/var/run/marin-auth/SECRET-NAME/token`, matching `broker_token_secrets`. The
-signing token must use a different Secret from every storage identity token.
+signing, storage identity and Loom observer tokens must use pairwise distinct
+files and Secrets.
 When `loom` is enabled, its `observer_token_file` must also correspond to a
-listed external Secret mount.
+listed external Secret mount containing a native Loom operator token. The
+observer rejects OpenBao credentials before making a request to Loom.
 `subjects` maps authenticated OpenBao entity UUIDs to stable principals.
 `cedar` contains `schema_document`, `policies` and trusted `entities`. The
 runtime validates this bundle with the Cedar engine and derives principal
@@ -222,8 +224,16 @@ The broker is a restricted, single-replica StatefulSet. Its PVC and ledger
 survive a process restart; do not scale it above one or share this SQLite file
 across broker processes. Configuration changes update a pod-template hash and
 trigger a singleton `RollingUpdate`: Kubernetes stops the old process before
-starting its replacement on the same PVC. A completed broker rollout enforces
-the new standing policy revision; a preview alone changes no policy. Rotate
+starting its replacement on the same PVC. Every edit to the standing Cedar
+bundle changes its global revision, including an unrelated policy or principal
+addition, schema change, provider mapping or principal-limit edit. A rollout
+with a new bundle invalidates **all existing grants**. The lifecycle reconciler
+permanently revokes every tracked run's old grant and archives its Loom session,
+even when that run's permissions would still be allowed. Rolling the bundle
+back does not restore those revoked grants or archived sessions. Plan every
+bundle update as a session-draining rollout: finish running work beforehand,
+then obtain fresh grants under the new revision before launching replacement
+sessions. A preview alone changes no policy. Rotate
 external tokens before their expiry; the runtime reads
 token files on demand. The namespace has no Docker socket, host mounts,
 privileged workloads or general-purpose session runner.
@@ -333,8 +343,10 @@ Schemas and policies validate at startup. Unknown actions, malformed resources,
 and every Cedar evaluation error deny access. Principals, groups, ownership and
 delegation limits come from trusted deployment entities. Resource ancestry is
 constructed from canonical paths on the server; callers cannot supply parent
-entities, privileged attributes or request context. The policy bundle's content
-hash records its revision, including provider mappings and principal limits.
+entities, privileged attributes or request context. One content hash versions
+the entire bundle, including provider mappings and principal limits. Any bundle
+edit invalidates every old grant, with the mass revocation and session archival
+described in the rollout procedure above.
 
 A runtime grant is a bounded record approved by that standing policy. For
 example, an approved bundle can contain:
@@ -374,8 +386,10 @@ form fields name the subject token, token type, exact audience and grant ID.
 The authority signs short-lived `at+jwt` tokens through OpenBao Transit with
 mandatory integer `grant_version: 1`. Python and Rust parse the same signed
 contract and run the same positive and negative fixtures.
-Workloads may refresh an unexpired access token with the same audience and
-bounds; they receive no broker credential or signing key. Applications check
+Only `cw_s3` access tokens may refresh while unexpired, preserving their audience
+and bounds. Loom and Iris require a fresh OpenBao identity exchange; an external
+service receiving their bearer token cannot renew it. Workloads receive no
+broker credential or signing key. Applications check
 issuer, signature, audience, token type, format version and acting principal.
 For an operation, the receiving handler constructs its action and resource and
 calls `POST /v1/authorize` with the presented bearer. The broker checks token
@@ -402,10 +416,20 @@ retained volume. Repeated delivery uses one durable idempotency key. A five-seco
 reconciler checks actual Loom state and revokes completed grants. Native calls
 register their intent before credential issuance, so bypassing the launch
 front door does not bypass lifecycle tracking. An intent that never produces
-a run is revoked after sixty seconds. Revoking a grant immediately prevents further
-broker issuance; archiving its Loom session depends on the next successful
-reconciliation. A Loom outage can delay session cleanup. SQLite targets a
-single broker instance; running replicas against independent ledgers is unsupported.
+a run becomes eligible for revocation after sixty seconds. Each reconciliation
+checks local expiry, revocation and policy revision for all rows before any
+network requests, so an earlier failed request cannot postpone authority already
+due for retirement. An in-progress network cycle can delay the next local check.
+Each ledger row is reconciled independently: a missing or malformed run cannot block
+completion cleanup for later grants. Malformed or mismatched metadata revokes
+the affected grant; cleanup uses only its previously verified session ID.
+Revoking a grant immediately prevents further broker issuance; archiving its
+Loom session and discovering a late run depend on successful reconciliation.
+Unavailable requests are logged and retried, so a Loom outage can delay session
+cleanup. SQLite targets a single broker instance; running replicas against
+independent ledgers is unsupported.
+A fatal background-task or ledger failure makes `/healthz` return 503,
+allowing Kubernetes probes to restart the broker.
 
 Storage issuance requires a separate Cedar permit on the complete `CWIdentity`,
 whose attributes are derived from its audited provider mapping. Its native

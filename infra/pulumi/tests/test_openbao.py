@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
+from pathlib import Path
 
 import pulumi
 import pulumi_kubernetes as k8s
+import pytest
 from iac.auth.broker import GrantBroker, GrantBrokerArgs
 from iac.auth.openbao import OpenBao, OpenBaoArgs
 
@@ -77,10 +80,8 @@ def test_openbao_exposes_only_verification_endpoints_and_retains_sealed_raft_ser
     ).apply(check)
 
 
-@pulumi.runtime.test
-def test_grant_broker_publishes_runtime_policy_and_keeps_credentials_in_external_mounts(recording_mocks):
-    mocks = recording_mocks
-    pulumi.runtime.set_mocks(mocks, project="marin-auth", stack="test", preview=False)
+@pytest.fixture
+def broker_args():
     policy = {
         "bao_address": "https://openbao.management.svc:8200",
         "ca_bundle": "/var/run/marin-auth/ca/ca.crt",
@@ -91,29 +92,46 @@ def test_grant_broker_publishes_runtime_policy_and_keeps_credentials_in_external
         "signing_key_version": 1,
         "subjects": {"entity-id": "human:alice"},
         "cedar": {"schema_document": {}, "policies": "permit(principal, action, resource);", "entities": []},
-        "storage": [],
+        "storage": [
+            {
+                "name": "checkpoint-reader",
+                "subject": "ad14b571-2449-4fd5-974e-f525ed965370",
+                "role": "marin-coreweave",
+                "token_file": "/var/run/marin-auth/storage-token/token",
+                "permissions": [
+                    {"service": "cw_s3", "actions": ["s3:GetObject"], "resource": "s3://checkpoints/run-1/"}
+                ],
+            }
+        ],
         "max_token_ttl": 300,
         "loom": {
             "base_url": "https://loom.sessions.svc:8000",
             "observer_token_file": "/var/run/marin-auth/loom-token/token",
         },
     }
+    return GrantBrokerArgs(
+        namespace="management",
+        image="marin-auth@sha256:" + "b" * 64,
+        storage_class="block",
+        storage_size="1Gi",
+        policy=policy,
+        token_secret_names=("broker-token", "loom-token", "storage-token"),
+        listener_tls_secret="broker-tls",
+        ca_secret="combined-trust-bundle",
+        client_namespace="sessions",
+        client_pod_labels={"app.kubernetes.io/name": "loom"},
+        dns_cidrs=("10.16.0.10/32", "10.16.0.30/32"),
+        https_egress_cidrs=(),
+    )
+
+
+@pulumi.runtime.test
+def test_grant_broker_publishes_runtime_policy_and_keeps_credentials_in_external_mounts(recording_mocks, broker_args):
+    mocks = recording_mocks
+    pulumi.runtime.set_mocks(mocks, project="marin-auth", stack="test", preview=False)
     broker = GrantBroker(
         "broker",
-        GrantBrokerArgs(
-            namespace="management",
-            image="marin-auth@sha256:" + "b" * 64,
-            storage_class="block",
-            storage_size="1Gi",
-            policy=policy,
-            token_secret_names=("broker-token", "loom-token"),
-            listener_tls_secret="broker-tls",
-            ca_secret="combined-trust-bundle",
-            client_namespace="sessions",
-            client_pod_labels={"app.kubernetes.io/name": "loom"},
-            dns_cidrs=("10.16.0.10/32", "10.16.0.30/32"),
-            https_egress_cidrs=(),
-        ),
+        broker_args,
         k8s_provider=k8s.Provider("test", kubeconfig="", context="test"),
     )
 
@@ -158,3 +176,33 @@ def test_grant_broker_publishes_runtime_policy_and_keeps_credentials_in_external
         } in resources["kubernetes:networking.k8s.io/v1:NetworkPolicy"]["spec"]["egress"]
 
     return pulumi.Output.all(broker.stateful_set.spec, broker.network_policy.spec).apply(check)
+
+
+@pytest.mark.parametrize("collision", ["observer-broker", "observer-storage", "storage-broker", "storage-storage"])
+@pulumi.runtime.test
+def test_grant_broker_rejects_reusing_credentials_across_trust_boundaries(recording_mocks, broker_args, collision):
+    pulumi.runtime.set_mocks(recording_mocks, project="marin-auth", stack="test", preview=False)
+    policy = broker_args.policy
+    storage = policy["storage"][0]
+    if collision == "observer-broker":
+        policy["loom"]["observer_token_file"] = policy["broker_token_file"]
+    elif collision == "observer-storage":
+        policy["loom"]["observer_token_file"] = storage["token_file"]
+    elif collision == "storage-broker":
+        storage["token_file"] = policy["broker_token_file"]
+    else:
+        policy["storage"].append({**storage, "name": "other-identity"})
+    # Keep the declared mounts consistent so only the credential alias is rejected.
+    paths = [
+        policy["broker_token_file"],
+        policy["loom"]["observer_token_file"],
+        *(item["token_file"] for item in policy["storage"]),
+    ]
+    secrets = tuple(sorted({Path(path).parent.name for path in paths}))
+
+    with pytest.raises(ValueError, match="distinct files"):
+        GrantBroker(
+            "broker",
+            replace(broker_args, token_secret_names=secrets),
+            k8s_provider=k8s.Provider("test", kubeconfig="", context="test"),
+        )

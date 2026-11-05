@@ -3,6 +3,7 @@
 
 """Launch through Loom's shared-grant API and reconcile runtime grant lifetime."""
 
+import logging
 import sqlite3
 import threading
 import time
@@ -41,7 +42,13 @@ class LoomRun:
 
 
 _TERMINAL = frozenset({"completed", "failed", "cancelled"})
+_NATIVE_STATUS = _TERMINAL | {"creating", "waiting", "delivering", "running"}
 UNBOUND_GRANT_TTL = 60
+logger = logging.getLogger(__name__)
+
+
+class InvalidLoomRun(ValueError):
+    """Loom cannot establish the recorded grant's run identity or state."""
 
 
 class LoomLauncher:
@@ -160,12 +167,21 @@ class LoomLauncher:
                 raise GrantDenied("The grant is already bound to a different Loom launch")
 
     def _record_result(self, run: LoomRun, result: dict) -> LoomRun:
+        fields = ("shared_grant_id", "actor_subject", "profile", "id", "session_id", "status")
+        if not isinstance(result, dict) or any(not isinstance(result.get(name), str) for name in fields):
+            raise InvalidLoomRun("Loom returned malformed run metadata")
+        if not all(result[name] for name in fields):
+            raise InvalidLoomRun("Loom returned incomplete run metadata")
+        if result["status"] not in _NATIVE_STATUS:
+            raise InvalidLoomRun("Loom returned an unknown run status")
         if (
             result["shared_grant_id"] != run.grant_id
             or result["actor_subject"] != run.actor
             or result["profile"] != run.template
         ):
-            raise ValueError("Loom returned a run belonging to another grant, actor, or profile")
+            raise InvalidLoomRun("Loom returned a run belonging to another grant, actor, or profile")
+        if (run.run_id and result["id"] != run.run_id) or (run.session_id and result["session_id"] != run.session_id):
+            raise InvalidLoomRun("Loom changed the recorded run or session identity")
         with self._connect() as db:
             db.execute(
                 "UPDATE loom_grant_runs SET run_id = ?, session_id = ?, status = ? WHERE grant_id = ?",
@@ -179,27 +195,67 @@ class LoomLauncher:
         with self._lock:
             with self._connect() as db:
                 rows = db.execute("SELECT * FROM loom_grant_runs WHERE status != 'cleaned'").fetchall()
-            observed = []
+            pending = []
             for row in rows:
                 run = LoomRun(**dict(row))
-                if not run.run_id:
-                    matches = [
-                        candidate
-                        for candidate in self._post("runs/list", {})
-                        if candidate["shared_grant_id"] == run.grant_id
-                    ]
-                    if len(matches) > 1:
-                        raise ValueError("Loom returned multiple runs for one grant")
-                    if matches:
-                        run = self._record_result(run, matches[0])
-                elif run.status not in _TERMINAL:
-                    run = self._record_result(run, self._post("runs/get", {"id": run.run_id}))
-                unbound = not run.run_id and self._now() - run.requested_at >= UNBOUND_GRANT_TTL
-                if unbound or run.status in _TERMINAL or not self.grants.active(run.grant_id, run.actor):
-                    self.grants.revoke(run.grant_id, run.principal)
-                    if run.session_id and run.status not in _TERMINAL:
-                        self._post("sessions/archive", {"session": run.session_id})
-                    with self._connect() as db:
-                        db.execute("UPDATE loom_grant_runs SET status = 'cleaned' WHERE grant_id = ?", (run.grant_id,))
-                observed.append(run)
+                try:
+                    self._retire_local_authority(run)
+                    pending.append(run)
+                except (ValueError, KeyError, TypeError, OSError, sqlite3.Error):
+                    logger.exception("Loom local retirement failed for grant %s; retrying later", run.grant_id)
+            observed = []
+            for run in pending:
+                try:
+                    observed.append(self._reconcile_run(run))
+                except (requests.RequestException, ValueError, KeyError, TypeError, OSError, sqlite3.Error):
+                    logger.exception("Loom lifecycle reconciliation failed for grant %s", run.grant_id)
             return observed
+
+    def _retire_local_authority(self, run: LoomRun) -> bool:
+        unbound = not run.run_id and self._now() - run.requested_at >= UNBOUND_GRANT_TTL
+        retiring = unbound or run.status in _TERMINAL or not self.grants.active(run.grant_id, run.actor)
+        if retiring:
+            # Credential authority must end even while discovery or archival is unavailable.
+            self.grants.revoke(run.grant_id, run.principal)
+        return retiring
+
+    def _reconcile_run(self, run: LoomRun) -> LoomRun:
+        retiring = self._retire_local_authority(run)
+        try:
+            if not run.run_id:
+                candidates = self._post("runs/list", {})
+                if not isinstance(candidates, list) or any(
+                    not isinstance(candidate, dict) or "shared_grant_id" not in candidate for candidate in candidates
+                ):
+                    raise InvalidLoomRun("Loom returned malformed run discovery metadata")
+                matches = [candidate for candidate in candidates if candidate["shared_grant_id"] == run.grant_id]
+                if len(matches) > 1:
+                    raise InvalidLoomRun("Loom returned multiple runs for one grant")
+                if matches:
+                    run = self._record_result(run, matches[0])
+            elif not retiring:
+                run = self._record_result(run, self._post("runs/get", {"id": run.run_id}))
+        except requests.HTTPError as error:
+            if error.response.status_code != 404 or not run.run_id:
+                raise
+            logger.warning("Loom run is missing for grant %s; retiring its authority", run.grant_id)
+            retiring = True
+        except (InvalidLoomRun, requests.exceptions.JSONDecodeError):
+            self.grants.revoke(run.grant_id, run.principal)
+            if run.session_id:
+                self._retire_run(run)
+            raise
+        if retiring or run.status in _TERMINAL:
+            self._retire_run(run)
+        return run
+
+    def _retire_run(self, run: LoomRun) -> None:
+        self.grants.revoke(run.grant_id, run.principal)
+        if run.session_id and run.status not in _TERMINAL:
+            try:
+                self._post("sessions/archive", {"session": run.session_id})
+            except requests.HTTPError as error:
+                if error.response.status_code != 404:
+                    raise
+        with self._connect() as db:
+            db.execute("UPDATE loom_grant_runs SET status = 'cleaned' WHERE grant_id = ?", (run.grant_id,))

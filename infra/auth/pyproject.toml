@@ -9,4 +9,4 @@ dependencies = ["marin-rigging", "uvicorn>=0.23.0", "cedarpy==4.12.2"]
 package = false
 
 [dependency-groups]
-test = ["marin-core", "httpx>=0.28.1", "pytest>=8.3.2", "pytest-timeout", "pytest-xdist"]
+test = ["marin-core", "httpx>=0.28.1", "pytest>=8.3.2", "pytest-asyncio", "pytest-timeout", "pytest-xdist"]

@@ -6253,6 +6253,7 @@ test = [
     { name = "httpx" },
     { name = "marin-core" },
     { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
@@ -6269,6 +6270,7 @@ test = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "marin-core", editable = "lib/marin" },
     { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]

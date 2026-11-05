@@ -9,11 +9,12 @@ import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
+from typing import Self
 
 import requests
 import uvicorn
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from rigging.grant_auth import GrantAuthService, create_app
 from rigging.grants import GrantDenied, GrantStore, Permission
 from rigging.openbao import (
@@ -85,12 +86,15 @@ class LoomCredentialRequest(BaseModel):
     resource: str
 
 
-class FileTokenProvider:
+class LoomObserverTokenProvider:
     def __init__(self, path: Path):
         self.path = path
 
     def get_token(self) -> str:
-        return self.path.read_text().strip()
+        token = self.path.read_text().strip()
+        if not token.startswith("loom_"):
+            raise ValueError("The observer requires a native Loom credential")
+        return token
 
 
 class ServiceConfig(BaseModel):
@@ -107,6 +111,16 @@ class ServiceConfig(BaseModel):
     storage: tuple[StorageConfig, ...]
     max_token_ttl: int
     loom: LoomConfig | None
+
+    @model_validator(mode="after")
+    def separate_workload_credentials(self) -> Self:
+        paths = [self.broker_token_file, *(binding.token_file for binding in self.storage)]
+        if self.loom is not None:
+            paths.append(self.loom.observer_token_file)
+        resolved = [path.resolve() for path in paths]
+        if len(resolved) != len(set(resolved)):
+            raise ValueError("Broker, storage and Loom observer credentials require distinct token files")
+        return self
 
 
 def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
@@ -148,6 +162,8 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
         for binding in config.storage
     }
     app = create_app(authority)
+    serving = False
+    reconciler: asyncio.Task[None] | None = None
     session = requests.Session()
     session.verify = config.ca_bundle
     launcher = None
@@ -155,7 +171,7 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
         launcher = LoomLauncher(
             config.database.parent / "loom-runs.db",
             base_url=config.loom.base_url,
-            observer_tokens=FileTokenProvider(config.loom.observer_token_file),
+            observer_tokens=LoomObserverTokenProvider(config.loom.observer_token_file),
             grants=authority,
             session=session,
         )
@@ -180,8 +196,9 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
     def public_keys(_request: Request) -> JSONResponse:
         return JSONResponse(signer.public_jwks())
 
-    def health(_request: Request) -> JSONResponse:
-        return JSONResponse({"ready": True, "policy_revision": policy.revision})
+    async def health(_request: Request) -> JSONResponse:
+        ready = serving and (launcher is None or (reconciler is not None and not reconciler.done()))
+        return JSONResponse({"ready": ready, "policy_revision": policy.revision}, status_code=200 if ready else 503)
 
     async def launch_loom(request: Request) -> JSONResponse:
         token = extract_bearer_token(dict(request.headers))
@@ -257,17 +274,22 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
 
     @asynccontextmanager
     async def lifespan(_app: Starlette):
+        nonlocal serving, reconciler
         try:
             if launcher is None:
+                serving = True
                 yield
             else:
                 async with asyncio.TaskGroup() as tasks:
-                    task = tasks.create_task(reconcile_loom())
+                    reconciler = tasks.create_task(reconcile_loom())
+                    serving = True
                     try:
                         yield
                     finally:
-                        task.cancel()
+                        serving = False
+                        reconciler.cancel()
         finally:
+            serving = False
             session.close()
             store.close()
 

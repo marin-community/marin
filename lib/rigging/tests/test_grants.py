@@ -65,15 +65,18 @@ def test_multi_service_grant_delegates_only_parent_bounds(store, clock, grant_pe
 @pytest.mark.parametrize(
     "permission",
     [
-        Permission("iris", frozenset({"job.delete"}), "/alice/"),
-        Permission("iris", frozenset({"job.submit"}), "/"),
-        Permission("iris", frozenset({"job.submit"}), "/alice-other/"),
-        Permission("marina", frozenset({"job.submit"}), "/alice/"),
-        Permission("cw_s3", frozenset({"s3:PutObject"}), "s3://logs/alerts/"),
+        Permission("iris", frozenset({"job.read"}), "/alice/experiment/"),
+        Permission("iris", frozenset({"job.submit"}), "/alice/"),
+        Permission("loom", frozenset({"session.create"}), "/alice/"),
     ],
 )
-def test_delegation_rejects_widened_actions_resources_and_services(store, clock, grant_permissions, permission):
-    parent = store.create("user:alice", actor="loom:one", permissions=grant_permissions, expires_at=clock[0] + 300)
+def test_delegation_rejects_policy_allowed_actions_resources_and_services_outside_parent(store, clock, permission):
+    parent = store.create(
+        "user:alice",
+        actor="loom:one",
+        permissions=(Permission("iris", frozenset({"job.submit"}), "/alice/experiment/"),),
+        expires_at=clock[0] + 300,
+    )
     with pytest.raises(GrantDenied):
         store.create(
             "loom:one", actor="iris:job", permissions=(permission,), expires_at=clock[0] + 100, parent_id=parent.id

@@ -28,6 +28,7 @@ import subprocess
 import tomllib
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 
 # Ordered list of workspace member short names.
@@ -139,8 +140,8 @@ TEST_DIRS: dict[str, tuple[str, ...]] = {
     "marin": ("tests", "experiments"),
 }
 
-# Files outside a scope's test directories that its tests read. The import graph cannot
-# see these reads, so a change to one runs the whole scope.
+# File patterns outside a scope's test directories that need its full suite.
+# The import graph cannot see data reads or executions of standalone entrypoints.
 EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
     "iac": frozenset(
         {
@@ -149,7 +150,14 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
             ".github/workflows/ops-fork-ferry.yaml",
             ".github/workflows/ops-loom-holistic-review.yaml",
             ".github/workflows/ops-loom-review.yaml",
+            "infra/auth/__main__.py",
+            "infra/auth/Pulumi*.yaml",
+            "infra/loom-cw/__main__.py",
+            "infra/loom-cw/Pulumi*.yaml",
         }
+    ),
+    "auth": frozenset(
+        {"infra/auth/bootstrap.py", "infra/auth/service.py", "infra/auth/Dockerfile", "infra/auth/policy/*"}
     ),
 }
 
@@ -773,7 +781,11 @@ def classify(
             broad = True
             continue
 
-        forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
+        forced.update(
+            scope
+            for scope, patterns in EXTERNAL_TEST_INPUTS.items()
+            if any(fnmatchcase(filepath, pattern) for pattern in patterns)
+        )
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python

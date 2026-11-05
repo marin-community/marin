@@ -151,51 +151,76 @@ def test_http_owner_cannot_be_self_asserted_and_actor_must_authenticate(auth):
         assert allowed.headers["cache-control"] == "no-store"
 
 
-def test_refresh_preserves_audience_grant_and_narrowed_token_bounds(auth):
-    grant = _session_grant(auth)
+def test_storage_refresh_preserves_audience_grant_and_narrowed_token_bounds(auth, grant_policy):
+    permissions = (Permission("cw_s3", frozenset({"s3:GetObject", "s3:PutObject"}), "s3://logs/alerts/"),)
+    grant_policy.permissions["user:alice"] += permissions
+    grant = auth.store.create("user:alice", actor="loom:one", permissions=permissions, expires_at=auth.clock[0] + 300)
     result = auth.service.mint_for(
         grant,
-        audience="iris",
-        permissions=(Permission("iris", frozenset({"job.read"}), "/alice/logs/"),),
+        audience="cw_s3",
+        permissions=(Permission("cw_s3", frozenset({"s3:GetObject"}), "s3://logs/alerts/train/"),),
     )
     with TestClient(create_app(auth.service)) as client:
         refreshed = client.post(
             "/oauth/token",
-            data=_token_request(result["access_token"], grant.id, token_type=ACCESS_TOKEN_TYPE),
+            data=_token_request(result["access_token"], grant.id, audience="cw_s3", token_type=ACCESS_TOKEN_TYPE),
         )
         assert refreshed.status_code == 200
         assert refreshed.json()["access_token"] != result["access_token"]
         token = refreshed.json()["access_token"]
         assert (
-            auth.service.authorize(token, audience="iris", action="job.read", resource="/alice/logs/train").id
+            auth.service.authorize(
+                token, audience="cw_s3", action="s3:GetObject", resource="s3://logs/alerts/train/current.json"
+            ).id
             == grant.id
         )
         with pytest.raises(GrantDenied):
-            auth.service.authorize(token, audience="iris", action="job.submit", resource="/alice/logs/train")
+            auth.service.authorize(
+                token, audience="cw_s3", action="s3:PutObject", resource="s3://logs/alerts/train/current.json"
+            )
         with pytest.raises(GrantDenied):
-            auth.service.authorize(token, audience="iris", action="job.read", resource="/alice/elsewhere")
+            auth.service.authorize(
+                token, audience="cw_s3", action="s3:GetObject", resource="s3://logs/alerts/elsewhere/current.json"
+            )
         different_audience = client.post(
             "/oauth/token", data=_token_request(token, grant.id, audience="loom", token_type=ACCESS_TOKEN_TYPE)
         )
         assert different_audience.status_code == 403
         other_grant = _session_grant(auth)
         different_grant = client.post(
-            "/oauth/token", data=_token_request(token, other_grant.id, token_type=ACCESS_TOKEN_TYPE)
+            "/oauth/token", data=_token_request(token, other_grant.id, audience="cw_s3", token_type=ACCESS_TOKEN_TYPE)
         )
         assert different_grant.status_code == 403
 
 
+@pytest.mark.parametrize("audience", ["loom", "iris"])
+def test_http_service_tokens_require_identity_for_renewal(auth, audience):
+    grant = _session_grant(auth)
+    with TestClient(create_app(auth.service)) as client:
+        issued = client.post("/oauth/token", data=_token_request("session-one-identity", grant.id, audience=audience))
+        assert issued.status_code == 200
+        refreshed = client.post(
+            "/oauth/token",
+            data=_token_request(
+                issued.json()["access_token"], grant.id, audience=audience, token_type=ACCESS_TOKEN_TYPE
+            ),
+        )
+        assert refreshed.status_code == 403
+        reissued = client.post("/oauth/token", data=_token_request("session-one-identity", grant.id, audience=audience))
+        assert reissued.status_code == 200
+
+
 def test_revocation_stops_existing_tokens_exchange_and_refresh(auth):
     grant = _session_grant(auth)
-    token = auth.service.exchange("session-one-identity", grant_id=grant.id, audience="iris")["access_token"]
+    token = auth.service.exchange("session-one-identity", grant_id=grant.id, audience="cw_s3")["access_token"]
     auth.service.revoke(grant.id, "user:alice")
     assert not auth.service.active(grant.id, "loom:one")
     with pytest.raises(GrantDenied):
-        auth.service.authorize(token, audience="iris", action="job.submit", resource="/alice/train")
+        auth.service.authorize(token, audience="cw_s3", action="s3:GetObject", resource="s3://logs/alerts/train")
     with pytest.raises(GrantDenied):
-        auth.service.refresh(token, audience="iris")
+        auth.service.refresh(token, audience="cw_s3")
     with pytest.raises(GrantDenied):
-        auth.service.exchange("session-one-identity", grant_id=grant.id, audience="iris")
+        auth.service.exchange("session-one-identity", grant_id=grant.id, audience="cw_s3")
 
 
 def test_revocation_during_signing_does_not_return_a_new_token(auth):
@@ -207,14 +232,14 @@ def test_revocation_during_signing_does_not_return_a_new_token(auth):
 
 def test_policy_withdrawal_stops_existing_tokens_exchange_and_refresh(auth, grant_policy):
     grant = _session_grant(auth)
-    token = auth.service.exchange("session-one-identity", grant_id=grant.id, audience="iris")["access_token"]
+    token = auth.service.exchange("session-one-identity", grant_id=grant.id, audience="cw_s3")["access_token"]
     grant_policy.permissions.clear()
     with pytest.raises(GrantDenied):
-        auth.service.authorize(token, audience="iris", action="job.submit", resource="/alice/train")
+        auth.service.authorize(token, audience="cw_s3", action="s3:GetObject", resource="s3://logs/alerts/train")
     with pytest.raises(GrantDenied):
-        auth.service.exchange("session-one-identity", grant_id=grant.id, audience="iris")
+        auth.service.exchange("session-one-identity", grant_id=grant.id, audience="cw_s3")
     with pytest.raises(GrantDenied):
-        auth.service.refresh(token, audience="iris")
+        auth.service.refresh(token, audience="cw_s3")
 
 
 def test_child_policy_withdrawal_stops_token_issuance_without_disabling_parent(auth, grant_policy):
@@ -222,29 +247,31 @@ def test_child_policy_withdrawal_stops_token_issuance_without_disabling_parent(a
     child = auth.store.create(
         "loom:one",
         actor="loom:two",
-        permissions=(Permission("iris", frozenset({"job.submit"}), "/alice/restricted/"),),
+        permissions=(Permission("cw_s3", frozenset({"s3:GetObject"}), "s3://logs/alerts/restricted/"),),
         expires_at=auth.clock[0] + 100,
         parent_id=parent.id,
     )
-    token = auth.service.exchange("session-two-identity", grant_id=child.id, audience="iris")["access_token"]
-    grant_policy.denied_grant_resources.add("/alice/restricted/")
+    token = auth.service.exchange("session-two-identity", grant_id=child.id, audience="cw_s3")["access_token"]
+    grant_policy.denied_grant_resources.add("s3://logs/alerts/restricted/")
     assert auth.store.active(parent.id).id == parent.id
     with pytest.raises(GrantDenied):
-        auth.service.exchange("session-two-identity", grant_id=child.id, audience="iris")
+        auth.service.exchange("session-two-identity", grant_id=child.id, audience="cw_s3")
     with pytest.raises(GrantDenied):
-        auth.service.refresh(token, audience="iris")
+        auth.service.refresh(token, audience="cw_s3")
     with pytest.raises(GrantDenied):
-        auth.service.authorize(token, audience="iris", action="job.submit", resource="/alice/restricted/train")
+        auth.service.authorize(
+            token, audience="cw_s3", action="s3:GetObject", resource="s3://logs/alerts/restricted/train"
+        )
 
 
 def test_live_grant_expiry_rejects_cryptographically_valid_token(auth):
     grant = _session_grant(auth)
-    token = auth.service.exchange("session-one-identity", grant_id=grant.id, audience="iris")["access_token"]
+    token = auth.service.exchange("session-one-identity", grant_id=grant.id, audience="cw_s3")["access_token"]
     auth.clock[0] = grant.expires_at
     with pytest.raises(GrantDenied):
-        auth.service.authorize(token, audience="iris", action="job.submit", resource="/alice/train")
+        auth.service.authorize(token, audience="cw_s3", action="s3:GetObject", resource="s3://logs/alerts/train")
     with pytest.raises(GrantDenied):
-        auth.service.refresh(token, audience="iris")
+        auth.service.refresh(token, audience="cw_s3")
 
 
 def test_jwt_expiry_and_header_type_are_checked_before_authorization(auth):

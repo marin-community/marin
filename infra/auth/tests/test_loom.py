@@ -79,6 +79,9 @@ class LoomBoundary:
     metadata_override: dict = field(default_factory=dict)
     redirect: bool = False
     drop_response: bool = False
+    unavailable: bool = False
+    get_responses: dict = field(default_factory=dict)
+    authority_at_request: list = field(default_factory=list)
 
 
 @pytest.fixture
@@ -89,6 +92,10 @@ def loom_api(grant_service):
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             operation = self.path.removeprefix("/api/")
+            state.authority_at_request.append(grant_service.active(grant_service.grant.id, grant_service.grant.actor))
+            if state.unavailable:
+                self.respond({}, status=503)
+                return
             if self.path == "/credential-sink":
                 state.redirected.append(self.headers.get("Authorization"))
             if state.redirect and operation == "runs/create":
@@ -102,9 +109,10 @@ def loom_api(grant_service):
                 self.respond({}, status=403)
                 return
             if operation == "runs/create":
+                suffix = f"-{len(state.runs) + 1}" if state.runs else ""
                 result = {
-                    "id": "native-run",
-                    "session_id": "native-session",
+                    "id": f"native-run{suffix}",
+                    "session_id": f"native-session{suffix}",
                     "status": "running",
                     "actor_subject": grant_service.grant.actor,
                     "shared_grant_id": grant_service.grant.id,
@@ -119,7 +127,8 @@ def loom_api(grant_service):
                     return
                 self.respond({**result, **state.metadata_override})
             elif operation == "runs/get":
-                self.respond(state.runs[payload["id"]])
+                status, result = state.get_responses.get(payload["id"], (200, state.runs.get(payload["id"])))
+                self.respond(result, status=status)
             elif operation == "runs/list":
                 self.respond(list(state.runs.values()))
             elif operation == "sessions/archive":
@@ -279,3 +288,63 @@ def test_observed_credential_without_native_run_is_revoked_after_binding_deadlin
     assert not grant_service.active(grant_service.grant.id, grant_service.grant.actor)
     assert loom_api.runs == {}
     assert observer.reconcile() == []
+
+
+@pytest.mark.parametrize(
+    "bad_response",
+    [
+        (404, {}),
+        (200, {}),
+        (200, {"status": "cleaned"}),
+        (200, {"id": "other-run"}),
+        (200, {"session_id": "other-session"}),
+    ],
+)
+def test_bad_first_run_does_not_block_later_completed_grant(launcher, grant_service, loom_api, bad_response):
+    first = launcher.launch(grant_service.token, template="review", title="First", goal="Read first change")
+    second_grant = grant_service.store.create(
+        "owner", actor="runtime-two", permissions=grant_service.grant.permissions, expires_at=1200
+    )
+    grant_service.grant = second_grant
+    second = launcher.launch(grant_service.token, template="review", title="Second", goal="Read second change")
+    status, override = bad_response
+    loom_api.get_responses[first.run_id] = (
+        status,
+        {**loom_api.runs[first.run_id], **override} if override else override,
+    )
+    loom_api.runs[second.run_id]["status"] = "completed"
+    launcher.reconcile()
+    assert not grant_service.active(first.grant_id, first.actor)
+    assert not grant_service.active(second.grant_id, second.actor)
+    assert first.session_id in loom_api.archived
+    assert launcher.reconcile() == []
+
+
+def test_unbound_deadline_revokes_authority_during_total_loom_outage(launcher, grant_service, loom_api):
+    first = launcher.launch(grant_service.token, template="review", title="Bound run", goal="Read change")
+    stale = grant_service.store.create(
+        "owner", actor="unbound-runtime", permissions=grant_service.grant.permissions, expires_at=1200
+    )
+    grant_service.grant = stale
+    clock = [1000]
+    observer = LoomLauncher(
+        launcher.database,
+        base_url=launcher.base_url,
+        observer_tokens=launcher.observer_tokens,
+        grants=grant_service,
+        session=launcher.session,
+        now=lambda: clock[0],
+    )
+    observer.observe(grant_service.grant, "review")
+    loom_api.unavailable = True
+    observer.reconcile()
+    assert grant_service.active(grant_service.grant.id, grant_service.grant.actor)
+    clock[0] += 61
+    loom_api.authority_at_request.clear()
+    observer.reconcile()
+    assert not grant_service.active(grant_service.grant.id, grant_service.grant.actor)
+    assert loom_api.authority_at_request[0] is False
+    assert grant_service.active(first.grant_id, first.actor)
+    loom_api.unavailable = False
+    observer.reconcile()
+    assert {run.grant_id for run in observer.reconcile()} == {first.grant_id}
