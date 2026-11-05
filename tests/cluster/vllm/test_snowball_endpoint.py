@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from hashlib import sha256
 import math
 import threading
 from dataclasses import replace
+from hashlib import sha256
 
 import pytest
 from marin.inference.backend import ModelSpec
@@ -13,10 +13,10 @@ from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_backend import VllmBackend
 from marin.testing.inference import snowball
 from marin.testing.inference.backend_parity import TokenScore
-from rigging.filesystem.storage_path import StoragePath
 from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from marin.testing.inference.snowball import PromptBatch, RepresentativeCase, RepresentativePromptFixture
 from marin.testing.inference.snowball_backend_parity_jobs import score_vllm_endpoint, tpu_vllm_engine_config
+from rigging.filesystem.storage_path import StoragePath
 
 
 def fixture():
@@ -111,8 +111,9 @@ def test_tpu_arm_engine_timeout_is_an_integer_in_the_server_process(monkeypatch,
 @pytest.mark.parametrize("damage", [None, "bytes", "export"])
 def test_durable_manifest_requires_both_pinned_bytes_and_export_identity(monkeypatch, damage):
     model = snowball.SNOWBALL
-    manifest = dict(verified=True, destination=model.tpu_export_uri,
-                    source=model.export_uri, export_sha256=model.export_sha256)
+    manifest = dict(
+        verified=True, destination=model.tpu_export_uri, source=model.export_uri, export_sha256=model.export_sha256
+    )
     if damage == "export":
         manifest["export_sha256"] = "different-export"
     raw = json.dumps(manifest).encode()
