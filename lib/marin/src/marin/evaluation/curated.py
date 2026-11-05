@@ -4,6 +4,7 @@
 """Run immutable evaluation corpora against a launcher-owned inference session."""
 
 import json
+import logging
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -32,14 +33,13 @@ from marin.evaluation.task_worker import (
     JUDGE_ENDPOINT,
     SOLVER_API_KEY,
     SOLVER_ENDPOINT,
+    WORKER_TIMEOUT,
     execution_config,
     run_worker,
 )
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import InferenceBackendState
 from marin.rollouts.evaluation import EvaluationRunConfig, JudgeIdentity, ModelIdentity
-
-WORKER_TIMEOUT = 36 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,8 @@ class CuratedRunSettings:
 def runtime_config(settings: CuratedRunSettings, session: RemoteInferenceSession) -> EvaluationRunConfig:
     """Read the running server's context limit before admitting any evaluation rows."""
     endpoint = session.model.endpoint
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     with OpenAI(base_url=endpoint.base_url, api_key=endpoint.api_key or "local-endpoint") as client:
         served = next(model for model in client.models.list().data if model.id == endpoint.model)
     context = (served.model_extra or {}).get("max_model_len")

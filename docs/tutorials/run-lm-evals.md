@@ -91,7 +91,8 @@ Judge selections record a `JudgeIdentity` in `judge`, a credential-free
 FinanceBench and OlympiadBench definitions use Together and record its model alias
 as provider-managed. A provider alias does not establish the exact weights served.
 Supply explicit judge deployment identities for reproducible private deployments.
-The policy campaign supplies its separately pinned hosted judge.
+The [September 25 publication campaign](https://github.com/marin-community/marin/tree/main/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled)
+supplies its separately pinned hosted judge through `--policy-finalization-config`.
 
 Harbor files retain Harbor's `JobConfig` schema and `--harbor-config` option.
 Harbor execution is independent of curated TaskSpec evaluation.
@@ -124,7 +125,9 @@ Harbor's hosted verifier. See [Harbor integration](../harbor-integration.md).
 
 ## Results
 
-Each launch writes `{records_prefix}/{run_id}/record.json`. Curated producer records
+Each evaluation gets a `run_id` and writes `{records_prefix}/{run_id}/record.json`.
+The selected evaluations share a `group_id`; `--run-id` sets that launch ID.
+Curated producer records
 contain launch identity, status, jobs and the raw FineStore location. Their metric
 maps stay empty. Evaldash imports the raw archive and stores its derived scores in
 its own catalog; it does not rewrite the producer's record.
@@ -156,10 +159,14 @@ paths; the canonical run records remain under the evaluation records prefix.
 ## Compose evaluation steps from Levanter checkpoints
 
 ```python
+from dataclasses import replace
+
 from experiments.evals.evals import core_evals
 from experiments.evals.evaluation import eval_report, eval_steps
 
-results = eval_steps(checkpoint, core_evals(), version="dev")
+groups = [replace(group, tokenizer="Qwen/Qwen3-8B", tokenizer_revision="<commit-sha>")
+          for group in core_evals()]
+results = eval_steps(checkpoint, groups, version="dev")
 report = eval_report(results, name="checkpoint-core", version="dev")
 ```
 
@@ -170,7 +177,8 @@ Reports contain durable run references; Evaldash owns score computation.
 ## Audit a curated run before its record appears
 
 Use Iris to inspect the orchestrator and its children. Check the curation campaign
-report before investigating serving: no GPU is acquired until the source graphs
+report at `{records_prefix}/groups/{group_id}/curation/campaign.json`
+before investigating serving: no GPU is acquired until the source graphs
 finish. Once evaluation starts, inspect the raw selection and attempt tables at the
 run's FineStore root. A started row without a finished row is incomplete work.
 Repeat the standalone [task driver](../references/evaluation-tasks.md#curate-and-run)

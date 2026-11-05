@@ -3,6 +3,7 @@
 
 """Bind evaluation menu entries to the canonical task-curation artifact graph."""
 
+import json
 from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
@@ -16,11 +17,13 @@ from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import CuratedRef, EvalRef
 from marin.execution.lazy import ArtifactStep
 from marin.rollouts.evaluation import JudgeIdentity
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import is_secret_reference
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, run_campaign
+from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.evaluation import curate
 from experiments.post_training.task_curation.sources import evaluation_sources
@@ -150,6 +153,10 @@ def prepare_corpora(names: tuple[str, ...], report_root: str) -> dict[str, str]:
     """Build or reuse complete corpus artifacts before acquiring serving hardware."""
     runtime = CampaignRuntime()
     steps = corpus_steps(names, runtime)
+    catalog = _evaluation_sources()
+    selected = tuple(dict.fromkeys(names))
+    report_path = prefix_join(report_root, "campaign.json")
+    catalog_root = prefix_join(report_root, "catalog")
     run_campaign(
         steps,
         runtime=runtime,
@@ -158,11 +165,13 @@ def prepare_corpora(names: tuple[str, ...], report_root: str) -> dict[str, str]:
             coordinator_resources=ResourceConfig(cpu=2, ram="8g"),
             worker_resources=ResourceConfig(cpu=2, ram="8g"),
             concurrent_sources=2,
-            chunk_storage_prefix=report_root + "/chunks",
+            chunk_storage_prefix=prefix_join(report_root, "chunks"),
         ),
-        report_path=report_root + "/campaign.json",
-        source_ids={step.name: name for name, step in zip(dict.fromkeys(names), steps, strict=True)},
-        catalog_root=report_root + "/catalog",
+        report_path=report_path,
+        source_ids={step.name: catalog[name].info.id for name, step in zip(selected, steps, strict=True)},
+        catalog_root=catalog_root,
         mode=SourceProcessingMode.QUICK,
     )
-    return {name: step.path() for name, step in zip(dict.fromkeys(names), steps, strict=True)}
+    report = json.loads(StoragePath(report_path).read_text())
+    publish_catalog(catalog_root, report["run_id"], (catalog[name] for name in selected))
+    return {name: step.path() for name, step in zip(selected, steps, strict=True)}
