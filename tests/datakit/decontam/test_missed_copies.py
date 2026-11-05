@@ -123,7 +123,7 @@ def test_financebench_dump_is_marked_but_a_copy_of_the_filing_page_is_not(tmp_pa
         "evidence_text": (
             (
                 "Consolidated Statement of Income. Net sales were 14,694 million dollars and cost of sales was 11,969 "
-                "million dollars for the fiscal year, compared with 14,544 and 11,724 million dollars in the prior year. "
+                "million dollars for the fiscal year, compared with 14,544 and 11,724 million in the prior year. "
             )
             * 3
         ),
