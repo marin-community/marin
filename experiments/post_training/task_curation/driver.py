@@ -599,7 +599,15 @@ def main(
         max_workers,
         concurrent_sources,
         worker_resources=worker_resources,
-        coordinator_resources=ResourceConfig(cpu=1, ram=coordinator_memory or LOCAL_MEMORY, preemptible=False),
+        # Iris authorizes an elevated worker profile only when the launching parent
+        # task carries the same profile; the coordinator job is that parent, so it
+        # must request the profile the workers will run under.
+        coordinator_resources=ResourceConfig(
+            cpu=1,
+            ram=coordinator_memory or LOCAL_MEMORY,
+            preemptible=False,
+            container_profile=worker_resources.container_profile,
+        ),
         chunk_storage_prefix=(
             str(cache_dir / ".zephyr")
             if cache_dir is not None

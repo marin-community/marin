@@ -887,6 +887,9 @@ def _enable_apis(project: str) -> list[gcp.projects.Service]:
     services = (
         "artifactregistry.googleapis.com",
         "compute.googleapis.com",
+        # Google Doc sessions read and edit docs and their comments; see profiles/gdoc.
+        "docs.googleapis.com",
+        "drive.googleapis.com",
         "iam.googleapis.com",
         "iamcredentials.googleapis.com",
         "secretmanager.googleapis.com",

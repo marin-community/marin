@@ -2,9 +2,9 @@
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -19,6 +19,7 @@ from harbor.agents.installed.acp import (
 from harbor.agents.installed.pi import Pi
 from harbor.models.agent.context import AgentContext
 from harbor.models.agent.name import AgentName
+from harbor.models.task.config import MCPServerConfig
 
 
 REGISTRY_ENTRY = {
@@ -46,6 +47,140 @@ PI_ACP_REGISTRY_ENTRY = {
     "description": "ACP adapter for Pi",
     "distribution": {"npx": {"package": "pi-acp@0.0.33"}},
 }
+
+
+@pytest.mark.parametrize("acp", [False, True])
+async def test_pi_mcp_exclusions_preserve_domain_tools_across_rediscovery(
+    temp_dir, monkeypatch, acp
+):
+    extension = temp_dir / "mcp-extension.mjs"
+    extension.write_text(
+        "export default function(pi) {\n"
+        "  const tools = ['mcp_tau3_runtime_lookup_order', 'mcp_tau3_runtime_end_conversation'];\n"
+        "  for (const name of tools) pi.registerTool({name});\n"
+        "  pi.setActiveTools(tools);\n"
+        "  pi.on('rediscover', () => {\n"
+        "    pi.registerTool({name: 'mcp_tau3_runtime_end_conversation'});\n"
+        "    pi.registerTool({name: 'mcp_tau3_runtime_cancel_order'});\n"
+        "    pi.setActiveTools([...tools, 'mcp_tau3_runtime_cancel_order']);\n"
+        "  });\n"
+        "}\n"
+    )
+    monkeypatch.setattr(Pi, "_MCP_EXTENSION_PATH", str(extension))
+    configure_path = temp_dir / "pi_configure_mcp.cjs"
+    monkeypatch.setattr(Pi, "_MCP_CONFIGURE_PATH", str(configure_path))
+    directory = temp_dir / ".pi/agent"
+    directory.mkdir(parents=True)
+    original = {
+        "extensions": ["/existing-extension.ts", str(extension)],
+        "compaction": {"enabled": False},
+    }
+    (directory / "settings.json").write_text(json.dumps(original))
+    node = shutil.which("node")
+    assert node is not None
+
+    class LocalEnvironment:
+        async def upload_file(self, source_path, target_path):
+            shutil.copyfile(source_path, target_path)
+
+        async def exec(self, command, **kwargs):
+            completed = subprocess.run(
+                ["/bin/bash", "-c", command],
+                capture_output=True,
+                text=True,
+                env={
+                    "HOME": str(temp_dir),
+                    "PATH": f"{Path(node).parent}:/usr/bin:/bin",
+                },
+            )
+            return SimpleNamespace(
+                return_code=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+
+    kwargs = {
+        "logs_dir": temp_dir,
+        "mcp_servers": [
+            MCPServerConfig(
+                name="tau3-runtime",
+                transport="streamable-http",
+                url="http://runtime/mcp",
+            )
+        ],
+        "mcp_excluded_tools": ["mcp_tau3_runtime_end_conversation"],
+    }
+    agent = (
+        AcpAgent(registry_entry=PI_ACP_REGISTRY_ENTRY, **kwargs)
+        if acp
+        else Pi(**kwargs)
+    )
+    environment = LocalEnvironment()
+    if acp:
+        await agent.acp_install(environment)
+    else:
+        await agent.configure_mcp_servers(environment)
+    settings = json.loads((directory / "settings.json").read_text())
+    assert settings["compaction"] == original["compaction"]
+    assert settings["extensions"] == [
+        "/existing-extension.ts",
+        str(directory / "harbor-mcp-filter.js"),
+    ]
+    probe = """
+const extension = await import(process.argv[1]);
+const tools = new Set(), events = new Map();
+let active = [];
+await extension.default({
+  registerTool(tool) { tools.add(tool.name); },
+  getActiveTools() { return active; },
+  setActiveTools(names) { active = names; },
+  on(name, callback) { events.set(name, callback); },
+});
+const initial = {registered: [...tools], active};
+events.get('rediscover')();
+console.log(JSON.stringify({initial, refreshed: {registered: [...tools], active}}));
+"""
+    result = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "-e",
+            probe,
+            str(directory / "harbor-mcp-filter.js"),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    observed = json.loads(result.stdout)
+    assert observed["initial"] == {
+        "registered": ["mcp_tau3_runtime_lookup_order"],
+        "active": ["mcp_tau3_runtime_lookup_order"],
+    }
+    assert observed["refreshed"] == {
+        "registered": [
+            "mcp_tau3_runtime_lookup_order",
+            "mcp_tau3_runtime_cancel_order",
+        ],
+        "active": ["mcp_tau3_runtime_lookup_order", "mcp_tau3_runtime_cancel_order"],
+    }
+    # Reusing the profile without exclusions restores the original extension once.
+    unrestricted = Pi(logs_dir=temp_dir, mcp_servers=kwargs["mcp_servers"])
+    await unrestricted.configure_mcp_servers(environment)
+    assert json.loads((directory / "settings.json").read_text()) == original
+    assert not (directory / "harbor-mcp-filter.js").exists()
+
+
+async def test_non_pi_acp_target_rejects_unenforced_mcp_exclusions(temp_dir):
+    agent = AcpAgent(
+        logs_dir=temp_dir,
+        registry_entry=REGISTRY_ENTRY,
+        mcp_excluded_tools=["mcp_tau3_runtime_end_conversation"],
+    )
+    with pytest.raises(
+        ValueError, match="only supported for the pi-acp registry target"
+    ):
+        await agent.acp_install(AsyncMock())
 
 
 class TestAcpAgentBasics:
@@ -181,43 +316,89 @@ class TestAcpAgentDistributionSelection:
 
         assert "/opt/harbor-acp-venv/bin/uvx fast-agent-acp==0.6.10 serve" in launcher
 
-    def test_pi_acp_launcher_can_start_adapter_with_nvm_pi(self, temp_dir):
+    def test_pi_acp_launcher_uses_image_adapter(self, temp_dir):
         agent = AcpAgent(logs_dir=temp_dir, registry_entry=PI_ACP_REGISTRY_ENTRY)
-
         launcher = agent._build_launcher_script(
             "npx",
-            AcpPackageDistribution(package="pi-acp@0.0.33"),
+            AcpPackageDistribution(
+                package="pi-acp@0.0.33", args=["--stdio"], env={"ADAPTER_MODE": "test"}
+            ),
         )
-
-        nvm_dir = temp_dir / ".nvm"
-        fake_bin = temp_dir / "fake-bin"
-        nvm_dir.mkdir()
-        fake_bin.mkdir()
-        output = temp_dir / "npx-args.json"
-        (nvm_dir / "nvm.sh").write_text(
-            "nvm() {\n"
-            '  [ "$1" = use ] && [ "$2" = 22 ] || return 1\n'
-            f'  export PATH={shlex.quote(str(fake_bin))}:"$PATH"\n'
-            "}\n"
-        )
-        npx = fake_bin / "npx"
-        npx.write_text(
+        image_bin = temp_dir / "bin"
+        image_bin.mkdir()
+        output = temp_dir / "adapter-args.json"
+        adapter = image_bin / "pi-acp"
+        adapter.write_text(
             "#!/usr/bin/env python3\n"
             "import json, os, pathlib, sys\n"
-            "pathlib.Path(os.environ['NPX_ARGS']).write_text(json.dumps(sys.argv[1:]))\n"
+            "pathlib.Path(os.environ['ADAPTER_ARGS']).write_text("
+            "json.dumps([sys.argv[1:], os.environ['ADAPTER_MODE']]))\n"
         )
-        npx.chmod(0o755)
+        adapter.chmod(0o755)
         launcher_path = temp_dir / "acp-launch.sh"
         launcher_path.write_text(launcher)
         launcher_path.chmod(0o755)
 
         subprocess.run(
-            [launcher_path, "--stdio"],
+            [launcher_path, "--extra"],
             check=True,
-            env={**os.environ, "HOME": str(temp_dir), "NPX_ARGS": str(output)},
+            env={
+                **os.environ,
+                "HOME": str(temp_dir),
+                "PATH": f"{image_bin}:/usr/bin:/bin",
+                "ADAPTER_ARGS": str(output),
+            },
         )
 
-        assert json.loads(output.read_text()) == ["-y", "pi-acp@0.0.33", "--stdio"]
+        assert json.loads(output.read_text()) == [["--stdio", "--extra"], "test"]
+
+    async def test_pi_acp_setup_rejects_wrong_image_adapter_version(self, temp_dir):
+        image_bin = temp_dir / "bin"
+        image_bin.mkdir()
+        node = shutil.which("node")
+        assert node is not None
+        (image_bin / "node").symlink_to(node)
+        pi = image_bin / "pi"
+        pi.write_text('#!/bin/sh\nprintf "0.80.5\\n"\n')
+        pi.chmod(0o755)
+        adapter_package = temp_dir / "node_modules/pi-acp"
+        (adapter_package / "dist").mkdir(parents=True)
+        (adapter_package / "package.json").write_text(
+            json.dumps({"name": "pi-acp", "version": "0.0.32"})
+        )
+        adapter = adapter_package / "dist/index.js"
+        adapter.write_text("#!/usr/bin/env node\n")
+        adapter.chmod(0o755)
+        (image_bin / "pi-acp").symlink_to(adapter)
+        installed_agent = temp_dir / "installed-agent"
+
+        class LocalEnvironment:
+            async def exec(self, command, **kwargs):
+                completed = subprocess.run(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        command.replace("/installed-agent", str(installed_agent)),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    env={"HOME": str(temp_dir), "PATH": f"{image_bin}:/usr/bin:/bin"},
+                )
+                return SimpleNamespace(
+                    return_code=completed.returncode,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                )
+
+            async def upload_file(self, source_path, target_path):
+                shutil.copyfile(source_path, installed_agent / Path(target_path).name)
+
+        agent = AcpAgent(logs_dir=temp_dir, registry_entry=PI_ACP_REGISTRY_ENTRY)
+
+        with pytest.raises(RuntimeError, match="Image provides pi-acp 0.0.32"):
+            await agent.setup(LocalEnvironment())
+
+        assert not (installed_agent / "acp-launch.sh").exists()
 
     def test_rejects_non_https_binary_archive(self):
         with pytest.raises(ValueError, match="Binary archive URL must use HTTPS"):
@@ -716,8 +897,16 @@ class TestAcpAgentRun:
     """Test ACP runtime env wiring."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_alias, expected_model", [(None, "openai/gpt-5.4"), ("hosted_vllm/resumed-endpoint", "hosted_vllm/resumed-endpoint")])
-    async def test_run_passes_auth_policy_and_requested_model(self, temp_dir, model_alias, expected_model):
+    @pytest.mark.parametrize(
+        "model_alias, expected_model",
+        [
+            (None, "openai/gpt-5.4"),
+            ("hosted_vllm/resumed-endpoint", "hosted_vllm/resumed-endpoint"),
+        ],
+    )
+    async def test_run_passes_auth_policy_and_requested_model(
+        self, temp_dir, model_alias, expected_model
+    ):
         agent = AcpAgent(
             logs_dir=temp_dir,
             registry_entry=REGISTRY_ENTRY,
@@ -735,7 +924,10 @@ class TestAcpAgentRun:
         assert env["HARBOR_ACP_AUTH_POLICY"] == "explicit"
         assert env["HARBOR_ACP_AUTHENTICATE_METHOD_ID"] == "openai-api-key"
         assert env["HARBOR_ACP_REQUESTED_MODEL"] == expected_model
-        assert agent.to_agent_info().model_info.model_dump() == {"name": "gpt-5.4", "provider": "openai"}
+        assert agent.to_agent_info().model_info.model_dump() == {
+            "name": "gpt-5.4",
+            "provider": "openai",
+        }
         assert "HARBOR_ACP_TERMINAL_OUTPUT_BYTE_LIMIT" not in env
 
     @pytest.mark.asyncio
@@ -749,20 +941,12 @@ class TestAcpAgentRun:
             model_name="Qwen/Qwen3.6-35B-A3B",
             model_alias="hosted_vllm/campaign-model",
             api_base=endpoint,
-            api_key="dummy-key",
+            api_key="EMPTY",
             model_info={"max_input_tokens": 32768, "max_output_tokens": 16384},
             thinking_format="qwen-chat-template",
         )
-        nvm_dir = temp_dir / ".nvm"
-        nvm_dir.mkdir()
         node = shutil.which("node")
         assert node is not None
-        (nvm_dir / "nvm.sh").write_text(
-            "nvm() {\n"
-            '  [ "$1" = use ] && [ "$2" = 22 ] || return 1\n'
-            f"  export PATH={shlex.quote(str(node.rsplit('/', 1)[0]))}:/usr/bin:/bin\n"
-            "}\n"
-        )
 
         class LocalEnvironment:
             async def upload_file(self, source_path, target_path):
@@ -773,7 +957,10 @@ class TestAcpAgentRun:
                     ["/bin/bash", "-c", command],
                     capture_output=True,
                     text=True,
-                    env={"HOME": str(temp_dir), "PATH": "/usr/bin:/bin"},
+                    env={
+                        "HOME": str(temp_dir),
+                        "PATH": f"{Path(node).parent}:/usr/bin:/bin",
+                    },
                 )
                 return SimpleNamespace(
                     return_code=completed.returncode,
@@ -806,4 +993,4 @@ class TestAcpAgentRun:
             }
         ]
         assert not endpoint_path.exists()
-        assert agent.acp_env() == {"HARBOR_PI_API_KEY": "dummy-key"}
+        assert agent.acp_env() == {"HARBOR_PI_API_KEY": "EMPTY"}

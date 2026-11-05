@@ -30,7 +30,7 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 from shellbox.backends.local import launch
-from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent
+from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, delegated_cgroup_parent
 from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.backends.local.transfers import unpack_local_archive
@@ -53,7 +53,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import SubprocessSession, acquire_owned, finish_owned, own_cleanup
+from shellbox.process_session import SubprocessSession, acquire_owned, await_cleanup, finish_owned, own_cleanup
 from shellbox.task import Task, TaskSpec, single_container_task
 
 logger = logging.getLogger(__name__)
@@ -423,6 +423,10 @@ class LocalMachine:
         self._bundle = bundle
         self._cgroup_parent = cgroup_parent
         self._cgroup: MachineCgroup | None = None
+        self._command_cgroups: set[MachineCgroup] = set()
+        self._background_cgroups: set[MachineCgroup] = set()
+        self._run_commands: dict[MachineCgroup, asyncio.Task[asyncio.subprocess.Process]] = {}
+        self._keeper_cgroup: MachineCgroup | None = None
         self._bwrap = bwrap
         self._environment = environment
         self._closed = False
@@ -446,6 +450,13 @@ class LocalMachine:
     async def _start_keeper(self, peer: "LocalMachine | None" = None) -> None:
         if self._cgroup_parent is not None:
             self._cgroup = MachineCgroup.create(self._cgroup_parent, cpus=self.spec.cpus, memory_mb=self.spec.memory_mb)
+            self._keeper_cgroup = self._cgroup.create_child()
+        elif self.spec.cpus is not None or self.spec.memory_mb is not None:
+            logger.warning(
+                "Local CPU/memory limits cannot be applied without cgroup delegation (cpus=%s, memory_mb=%s)",
+                self.spec.cpus,
+                self.spec.memory_mb,
+            )
         if self.image is None:
             arguments = _sandbox_argv(
                 self._bwrap,
@@ -539,7 +550,7 @@ class LocalMachine:
             config = {
                 "namespaces": prefix,
                 "program": arguments,
-                "cgroup": None if self._cgroup is None else str(self._cgroup.path / "cgroup.procs"),
+                "cgroup": None if self._keeper_cgroup is None else str(self._keeper_cgroup.path / "cgroup.procs"),
             }
             with tempfile.TemporaryFile() as configuration:
                 configuration.write(json.dumps(config).encode())
@@ -645,29 +656,45 @@ class LocalMachine:
         config = self._command_config(command, environment)
 
         async def acquire() -> SubprocessSession:
+            group = self._new_command_cgroup()
+            config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
             # Keep all private descriptors alive until asyncio returns the child
             # handle. The launcher closes them before executing guest code.
-            with tempfile.TemporaryFile() as configuration:
-                configuration.write(json.dumps(config).encode())
-                configuration.seek(0)
-                assert self._root_fd is not None
-                process = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-I",
-                    "-S",
-                    "-c",
-                    LAUNCH_SOURCE,
-                    str(configuration.fileno()),
-                    pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
-                    env=CONTROL_ENVIRONMENT,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    start_new_session=True,
-                )
+            try:
+                with tempfile.TemporaryFile() as configuration:
+                    configuration.write(json.dumps(config).encode())
+                    configuration.seek(0)
+                    assert self._root_fd is not None
+                    process = await asyncio.create_subprocess_exec(
+                        sys.executable,
+                        "-I",
+                        "-S",
+                        "-c",
+                        LAUNCH_SOURCE,
+                        str(configuration.fileno()),
+                        pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
+                        env=CONTROL_ENVIRONMENT,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        start_new_session=True,
+                    )
+            except BaseException:
+                if group is not None:
+                    await finish_owned(own_cleanup(group.close()))
+                    self._command_cgroups.discard(group)
+                raise
             self._commands.add(process)
 
             async def stop() -> None:
+                if group is not None:
+                    try:
+                        await self._stop_command(process, group)
+                        await session.drain_output()
+                    finally:
+                        self._commands.discard(process)
+                        self._sessions.discard(session)
+                    return
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
@@ -727,11 +754,59 @@ class LocalMachine:
             "cwd": command.cwd or self.spec.workdir or "/",
             "argv": command.argv,
             "environment": environment,
-            "cgroup": None if self._cgroup is None else str(self._cgroup.path / "cgroup.procs"),
+            "cgroup": None,
         }
         if any("\0" in argument for argument in (*command.argv, *environment, *environment.values())):
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
         return config
+
+    def _new_command_cgroup(self) -> MachineCgroup | None:
+        if self._cgroup is None:
+            return None
+        for group in tuple(self._background_cgroups):
+            if group.remove_if_empty():
+                self._background_cgroups.discard(group)
+                self._command_cgroups.discard(group)
+                self._run_commands.pop(group, None)
+        group = self._cgroup.create_child()
+        self._command_cgroups.add(group)
+        return group
+
+    async def _stop_command(self, process: asyncio.subprocess.Process, group: MachineCgroup) -> None:
+        # Stop the trusted launcher first: it may not yet have joined its cgroup
+        # when subprocess acquisition returns. It must never fork after cleanup.
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        await group.close()
+        self._command_cgroups.discard(group)
+        self._background_cgroups.discard(group)
+        self._run_commands.pop(group, None)
+        await process.wait()
+
+    async def quiesce_commands(self) -> None:
+        """Stop all run commands and their background work, preserving process sessions.
+
+        Requires delegated cgroups. Call after stopping agent command submission,
+        before collecting outputs or starting verification in this machine.
+        """
+        self._check_open()
+        if self._cgroup is None:
+            raise UnsupportedMachineSpec("Command quiescence requires delegated cgroups")
+
+        async def stop(group: MachineCgroup, acquisition: asyncio.Task[asyncio.subprocess.Process]) -> None:
+            process = await finish_owned(acquisition)
+            if group in self._command_cgroups:
+                await self._stop_command(process, group)
+
+        async def cleanup() -> None:
+            async with asyncio.TaskGroup() as pending:
+                for group, acquisition in tuple(self._run_commands.items()):
+                    pending.create_task(stop(group, acquisition))
+
+        await await_cleanup(own_cleanup(cleanup()))
 
     async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
         config = self._command_config(command, environment)
@@ -750,11 +825,13 @@ class LocalMachine:
             # Reports are written before the launcher exits. A nonblocking read
             # cannot be held open by a process that inherited another pipe end.
             os.set_blocking(status_read, False)
-            configuration.write(json.dumps(config).encode())
-            configuration.seek(0)
             stdin_file.write(command.stdin)
             stdin_file.seek(0)
             assert self._root_fd is not None
+            group = self._new_command_cgroup()
+            config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
+            configuration.write(json.dumps(config).encode())
+            configuration.seek(0)
             acquisition = asyncio.create_task(
                 asyncio.create_subprocess_exec(
                     sys.executable,
@@ -771,6 +848,8 @@ class LocalMachine:
                     start_new_session=True,
                 )
             )
+            if group is not None:
+                self._run_commands[group] = acquisition
             process = None
             try:
                 async with asyncio.timeout(command.timeout):
@@ -779,24 +858,41 @@ class LocalMachine:
                     status_writer.close()
                     await process.wait()
             except BaseException as interruption:
-                try:
+
+                async def cleanup() -> None:
+                    nonlocal process
                     if process is None:
                         # A child may already have forked before asyncio hands
                         # back its handle. Own that handle before closing its
                         # namespace or the private configuration descriptors.
-                        process = await asyncio.shield(acquisition)
+                        process = await finish_owned(acquisition)
                         self._commands.add(process)
-                finally:
                     status_writer.close()
-                    if not self._closed:
-                        await asyncio.shield(self.close())
-                await process.wait()
+                    if group is not None:
+                        await self._stop_command(process, group)
+                    elif not self._closed:
+                        await self.close()
+                    await process.wait()
+
+                try:
+                    await finish_owned(own_cleanup(cleanup()))
+                except BaseException as cleanup_error:
+                    if isinstance(interruption, TimeoutError):
+                        raise RuntimeError("Cannot confirm timed-out command cleanup") from cleanup_error
+                    interruption.add_note(f"Command cleanup failed ({type(cleanup_error).__name__})")
                 if isinstance(interruption, TimeoutError):
                     return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
                 raise
             finally:
                 if process is not None:
                     self._commands.discard(process)
+                if group is not None and not self._closed and group in self._command_cgroups:
+                    if group.populated:
+                        self._background_cgroups.add(group)
+                    else:
+                        await group.close()
+                        self._command_cgroups.discard(group)
+                        self._run_commands.pop(group, None)
             self._check_open()
             if error := status.read(launch.SETUP_ERROR_LIMIT_BYTES):
                 raise RuntimeError(
@@ -881,6 +977,9 @@ class LocalMachine:
             for process in tuple(self._commands):
                 pending.create_task(process.wait())
         if self._cgroup is not None:
+            await asyncio.gather(*(group.close() for group in tuple(self._command_cgroups)))
+            if self._keeper_cgroup is not None:
+                await self._keeper_cgroup.close()
             await self._cgroup.remove()
         if self._keeper_pidfd is not None:
             os.close(self._keeper_pidfd)
@@ -913,9 +1012,7 @@ def _check_mounts(mounts: tuple[Mount, ...]) -> None:
             raise UnsupportedMachineSpec(f"The local backend's mount {mount.guest} lies inside another mount")
 
 
-def _check_spec(
-    spec: MachineSpec, cgroup_parent: Path | None = None
-) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
+def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
     if not isinstance(spec.source, (HostImage, PackageSpec, PreparedImage, RegistryImage)):
         raise UnsupportedMachineSpec(
             "The local backend requires HostImage, PackageSpec, or a prepared/pinned OCI image, "
@@ -923,10 +1020,6 @@ def _check_spec(
         )
     if spec.storage_mb is not None or spec.gpus:
         raise UnsupportedMachineSpec("The local backend does not provide disk quotas or GPU allocations")
-    if spec.cpus is not None or spec.memory_mb is not None:
-        if cgroup_parent is None:
-            raise UnsupportedMachineSpec("Local CPU and memory limits require an explicit delegated cgroup parent")
-        check_cgroup_parent(cgroup_parent)
     if spec.memory_mb is not None and spec.memory_mb <= 0:
         raise ValueError("Local memory_mb must be positive")
     if (
@@ -941,14 +1034,18 @@ def check_local_environment(
     requirements: ExecutionRequirements, spec: MachineSpec, *, cgroup_parent: Path | None = None
 ) -> None:
     """Check local execution support without acquiring a bubblewrap sandbox."""
-    source = _check_spec(spec, cgroup_parent)
+    source = _check_spec(spec)
     origin = source.source if isinstance(source, PreparedImage) else source
     reference = origin.reference if isinstance(origin, RegistryImage) else None
+    capabilities = LINUX_PROCESS_CAPABILITIES
+    if cgroup_parent is not None:
+        check_cgroup_parent(cgroup_parent)
+        capabilities = capabilities | {"retained_command_cancellation"}
     check_execution_requirements(
         requirements,
         spec,
         semantics=CommandSemantics.LINUX_PROCESS,
-        capabilities=LINUX_PROCESS_CAPABILITIES,
+        capabilities=capabilities,
         image_reference=reference,
     )
 
@@ -968,8 +1065,9 @@ class LocalMachineFactory:
     Commands never inherit the host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``,
     ``HOME``, ``LANG``, ``PYTHONHASHSEED`` when the factory has a ``hash_seed``, and the spec's and
     command's variables. ``bin_dirs`` only sets ``PATH``; a directory outside the mounted ones is not
-    visible to commands. An explicit delegated ``cgroup_parent`` enables aggregate CPU and memory limits
-    for every process in each machine. Disk quotas remain unsupported.
+    visible to commands. The factory discovers a writable cgroup delegation for command containment
+    and attempts aggregate CPU and memory limits there. Unavailable limits produce warnings.
+    ``cgroup_parent`` overrides discovery. Disk quotas remain unsupported.
 
     ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap
     and any bwrap on ``PATH`` that can build a sandbox on this host, and raises ``SandboxUnavailable``
@@ -977,7 +1075,8 @@ class LocalMachineFactory:
 
     Prepared images use private rootless umoci bundles, without host program mounts. Registry inputs
     must be digest pinned. Only numeric root image users are supported. ``ttl`` bounds the lifetime of
-    a task; a command timeout or cancellation also closes every container in that task.
+    a task. With delegated cgroups, command interruption preserves the task;
+    without delegation it closes every container in the task.
     """
 
     backend: Backend = Backend.LOCAL
@@ -1002,7 +1101,7 @@ class LocalMachineFactory:
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
-        self.cgroup_parent = None if cgroup_parent is None else cgroup_parent.resolve()
+        self.cgroup_parent = delegated_cgroup_parent() if cgroup_parent is None else cgroup_parent.resolve()
         if self.cgroup_parent is not None:
             check_cgroup_parent(self.cgroup_parent)
         self.image_cache = process_image_cache(image_cache or Path.home() / ".cache/shellbox/images", authfile, policy)
@@ -1029,11 +1128,11 @@ class LocalMachineFactory:
     async def create_task(self, spec: TaskSpec) -> Task:
         """Start named containers with private filesystems and one network."""
         for container in spec.containers:
-            _check_spec(container.machine, self.cgroup_parent)
+            _check_spec(container.machine)
         if len(spec.containers) > 1 and spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("Local multi-container tasks require denied external networking")
-        if any(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", container.name) is None for container in spec.containers):
-            raise UnsupportedMachineSpec("Local container names must be lowercase DNS labels")
+        if any(re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", container.name) is None for container in spec.containers):
+            raise UnsupportedMachineSpec("Local container names must match [a-z][a-z0-9_-]{0,62}")
         primary = spec.primary_container
         if primary.entrypoint is not None or primary.arguments is not None:
             raise UnsupportedMachineSpec("The local task's primary container does not support startup overrides")
@@ -1093,7 +1192,7 @@ class LocalMachineFactory:
     async def _create(
         self, spec: MachineSpec, peer: LocalMachine | None = None, aliases: str | None = None
     ) -> LocalMachine:
-        source = _check_spec(spec, self.cgroup_parent)
+        source = _check_spec(spec)
         if isinstance(source, (PreparedImage, RegistryImage)):
             return await self._create_image(spec, source, peer, aliases)
 

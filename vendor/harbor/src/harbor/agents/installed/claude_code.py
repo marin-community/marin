@@ -7,6 +7,7 @@ from typing import Any
 
 from upath import UPath
 
+from harbor.models.agent.model_api import ModelAPI
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
@@ -41,6 +42,7 @@ from harbor.utils.scripts import (
 
 
 class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
+    MODEL_API = ModelAPI.ANTHROPIC_MESSAGES
     SUPPORTS_ATIF: bool = True
     SUPPORTED_BRIDGES = frozenset({BridgeKind.ACP})
     CLAUDE_CODE_ACP_VERSION = "0.16.2"
@@ -125,8 +127,15 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
         api_base: str | None = None,
         model_info: dict[str, Any] | None = None,
         collect_rollout_details: bool = False,
+        extra_env: dict[str, str] | None = None,
         **kwargs,
     ):
+        if (extra_env or {}).get("CLAUDE_CODE_USE_BEDROCK", "").strip() == "1" or (
+            extra_env or {}
+        ).get("AWS_BEARER_TOKEN_BEDROCK", "").strip():
+            raise ValueError(
+                "Installed Claude cannot receive AWS credentials; use a host-side model proxy"
+            )
         self._api_base = api_base
         self._model_info = model_info
         self._collect_rollout_details = collect_rollout_details
@@ -139,7 +148,7 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
         )
         self.memory_dir = memory_dir
         self._acp_claude_executable: str | None = None
-        super().__init__(logs_dir, *args, **kwargs)
+        super().__init__(logs_dir, *args, extra_env=extra_env, **kwargs)
 
     def get_version_command(self) -> str | None:
         return 'export PATH="$HOME/.local/bin:$PATH"; claude --version'
@@ -191,8 +200,6 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
     def _resolved_acp_model_name(self) -> str | None:
         if not self.model_alias:
             return self._get_env("ANTHROPIC_MODEL")
-        if self._is_bedrock_mode():
-            return self.model_alias.split("/", 1)[-1]
         if self._get_env("ANTHROPIC_BASE_URL"):
             return self.model_alias
         return self.model_alias.split("/")[-1]
@@ -282,14 +289,6 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
             "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_BASE_URL",
             "CLAUDE_CODE_OAUTH_TOKEN",
-            "CLAUDE_CODE_USE_BEDROCK",
-            "AWS_BEARER_TOKEN_BEDROCK",
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-            "AWS_PROFILE",
-            "AWS_REGION",
-            "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
             "DISABLE_PROMPT_CACHING",
         )
         return {
@@ -809,9 +808,11 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
                             "timestamp": timestamp,
                             "role": message.get("role", "assistant"),
                             "text": text or "",
-                            "reasoning": reasoning
-                            if message.get("role") == "assistant"
-                            else None,
+                            "reasoning": (
+                                reasoning
+                                if message.get("role") == "assistant"
+                                else None
+                            ),
                             "metrics": metrics,
                             "extra": extra or None,
                             "model_name": model_name,
@@ -847,9 +848,9 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
                         "status": tool_block.get("status"),
                         "message": None,
                         "extra": call_extra or None,
-                        "metrics": metrics
-                        if idx == 0 and metrics is not None
-                        else None,
+                        "metrics": (
+                            metrics if idx == 0 and metrics is not None else None
+                        ),
                         "model_name": model_name,
                     }
                     if idx == 0 and metrics is not None:
@@ -1148,22 +1149,11 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
         escaped = shlex.quote(claude_json)
         return f"echo {escaped} > $CLAUDE_CONFIG_DIR/.claude.json"
 
-    @staticmethod
-    def _is_bedrock_mode() -> bool:
-        """Check if Bedrock mode is enabled via environment variables."""
-        if os.environ.get("CLAUDE_CODE_USE_BEDROCK", "").strip() == "1":
-            return True
-        if os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "").strip():
-            return True
-        return False
-
     @with_prompt_template
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext
     ) -> None:
         escaped_instruction = shlex.quote(instruction)
-
-        use_bedrock = self._is_bedrock_mode()
 
         env = {
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY")
@@ -1179,10 +1169,6 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
         }
 
         if self._api_base:
-            if use_bedrock:
-                raise ValueError(
-                    "Native served-model API cannot be combined with Bedrock"
-                )
             env["ANTHROPIC_BASE_URL"] = self._api_base.rstrip("/").removesuffix("/v1")
             env["ANTHROPIC_API_KEY"] = "EMPTY"
             env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
@@ -1195,56 +1181,14 @@ class ClaudeCode(BaseInstalledAgent, ACPAgentMixin):
                     f"{CORRELATION_ID_HEADER}: {self.rollout_correlation_id}"
                 )
 
-        # Bedrock configuration: pass through AWS credentials and region
-        if use_bedrock:
-            env["CLAUDE_CODE_USE_BEDROCK"] = "1"
-
-            # AWS Bedrock API key auth (Option E from Bedrock docs)
-            bedrock_token = os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "")
-            if bedrock_token:
-                env["AWS_BEARER_TOKEN_BEDROCK"] = bedrock_token
-
-            # Standard AWS credential chain (Option B from Bedrock docs)
-            for aws_var in (
-                "AWS_ACCESS_KEY_ID",
-                "AWS_SECRET_ACCESS_KEY",
-                "AWS_SESSION_TOKEN",
-                "AWS_PROFILE",
-            ):
-                val = os.environ.get(aws_var, "")
-                if val:
-                    env[aws_var] = val
-
-            # AWS_REGION is required for Bedrock; default to us-east-1
-            env["AWS_REGION"] = os.environ.get("AWS_REGION", "us-east-1")
-
-            # Optional: separate region for the small/fast model (Haiku)
-            small_model_region = os.environ.get(
-                "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION", ""
-            )
-            if small_model_region:
-                env["ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION"] = small_model_region
-
-            # Optional: disable prompt caching (not available in all regions)
-            if os.environ.get("DISABLE_PROMPT_CACHING", "").strip() == "1":
-                env["DISABLE_PROMPT_CACHING"] = "1"
-
         # Remove empty auth credentials to allow Claude CLI to prioritize the available method
         # When both are empty, Claude CLI will fail with a clear authentication error
         env = {k: v for k, v in env.items() if v}
 
-        # Handle model name based on whether using custom API base or Bedrock
+        # Preserve provider model identifiers for custom API endpoints.
         if self.model_alias:
             if self._api_base:
                 env["ANTHROPIC_MODEL"] = self.model_alias.removeprefix("hosted_vllm/")
-            elif use_bedrock:
-                # Bedrock model IDs (e.g. global.anthropic.claude-sonnet-4-5-20250929-v1:0)
-                # or ARNs should be passed through as-is; strip the provider prefix only
-                # when it looks like a Harbor-style "provider/model" string
-                if "/" in self.model_alias:
-                    env["ANTHROPIC_MODEL"] = self.model_alias.split("/", 1)[-1]
-                else:
-                    env["ANTHROPIC_MODEL"] = self.model_alias
             elif "ANTHROPIC_BASE_URL" in env:
                 # If using custom base URL (OpenRouter, self-hosted), keep full model name
                 env["ANTHROPIC_MODEL"] = self.model_alias
