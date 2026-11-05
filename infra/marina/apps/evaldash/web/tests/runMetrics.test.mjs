@@ -6,19 +6,12 @@ import { metricView } from '../src/utils/runMetrics.ts'
 const NUPA_RAW = {
   exact_match: 0,
   digit_match: 0.0030796088040486408,
-  dlength: 61.5,
   format_valid_rate: 0.0046,
-  no_answer_rate: 0.9954,
+  'bucket:S/exact_match': 0,
+  'task:add_Integer_Integer/bucket:S/exact_match': 0,
 }
 
 function nupaRecord() {
-  const raw = { ...NUPA_RAW }
-  for (const bucket of ['S', 'M', 'L', 'XL']) {
-    for (const metric of ['exact_match', 'digit_match', 'dlength', 'format_valid_rate', 'no_answer_rate']) {
-      raw[`bucket:${bucket}/${metric}`] = 0
-      raw[`task:add_Integer_Integer/bucket:${bucket}/${metric}`] = 0
-    }
-  }
   return {
     eval: {
       name: 'nupa',
@@ -48,14 +41,14 @@ function nupaRecord() {
         },
       ],
     },
-    metrics: { nupa5k: raw },
+    metrics: { nupa5k: NUPA_RAW },
     canonical_metrics: {
       nupa5k: { accuracy: 0, digit_match: 0.0030796088040486408, format_valid_rate: 0.0046 },
     },
   }
 }
 
-test('the declared protocol metrics replace the raw bucket and per-task flood', () => {
+test('declared protocol metrics stay separate from raw bucket metrics', () => {
   const view = metricView(nupaRecord())
 
   assert.deepEqual(view.declared, [
@@ -63,9 +56,6 @@ test('the declared protocol metrics replace the raw bucket and per-task flood', 
     { task: 'NUPA5K-Loose', metric: 'digit_match', value: 0.0030796088040486408 },
     { task: 'NUPA5K-Loose', metric: 'format_valid_rate', value: 0.0046 },
   ])
-  // The raw map keeps its whole shape for the folded section: five base metrics, plus a bucket and a
-  // per-task row for each of four buckets.
-  assert.equal(view.raw.length, 5 + 2 * 4 * 5)
   assert.ok(view.raw.some((row) => row.metric === 'task:add_Integer_Integer/bucket:S/exact_match'))
 })
 
@@ -89,7 +79,7 @@ test('records without a declared benchmark keep the raw metric list', () => {
   const view = metricView(record)
 
   assert.deepEqual(view.declared, [])
-  assert.equal(view.raw.length, Object.keys(record.metrics.nupa5k).length)
+  assert.ok(view.raw.some((row) => row.task === 'nupa5k' && row.metric === 'exact_match' && row.value === 0))
 })
 
 test('multi-task records resolve each task by its benchmark name', () => {

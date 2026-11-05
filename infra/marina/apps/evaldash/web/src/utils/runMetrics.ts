@@ -1,6 +1,3 @@
-// Shaping of a run's metric tables: the declared protocol rows a benchmark reports, and the
-// evaluator's raw metric map kept behind a fold.
-
 import type { BenchmarkMetric, EvalRecord, EvalTask } from '@/types/api'
 
 export interface MetricRow {
@@ -9,17 +6,10 @@ export interface MetricRow {
   value: number
 }
 
-/** Strip lm-eval's `,<filter>` suffix from a raw metric key. */
 function baseMetric(key: string): string {
   return key.split(',', 1)[0]
 }
 
-/**
- * Whether one metrics-map key belongs to a declared task.
- *
- * Mirrors the evaluator's naming: a single-task record owns every key, and otherwise a key names the
- * benchmark (or ends in it), or carries the task's own name or directory prefix.
- */
 function keyBelongsToTask(record: EvalRecord, key: string, task: EvalTask): boolean {
   if (record.eval.tasks.length <= 1) return true
   const leaf = key.includes('/') ? key.slice(key.lastIndexOf('/') + 1) : key
@@ -28,7 +18,6 @@ function keyBelongsToTask(record: EvalRecord, key: string, task: EvalTask): bool
   return key === task.name || leaf === task.name || key.startsWith(`${task.name}/`)
 }
 
-/** The benchmark's declared value for one metric: canonical copy first, then the raw source metric. */
 function declaredValue(record: EvalRecord, task: EvalTask, metric: BenchmarkMetric): number | null {
   for (const [key, values] of Object.entries(record.canonical_metrics ?? {})) {
     if (!keyBelongsToTask(record, key, task)) continue
@@ -43,12 +32,7 @@ function declaredValue(record: EvalRecord, task: EvalTask, metric: BenchmarkMetr
   return null
 }
 
-/**
- * The declared protocol metrics for every task, primary first, in declaration order.
- *
- * A metric with no resolvable value is left out rather than shown as a guess: the page already
- * explains a missing grade elsewhere, and a fabricated cell would hide the gap.
- */
+/** Return resolvable protocol metrics for every task, with the primary metric first. */
 export function declaredMetricRows(record: EvalRecord): MetricRow[] {
   const rows: MetricRow[] = []
   for (const task of record.eval.tasks) {
