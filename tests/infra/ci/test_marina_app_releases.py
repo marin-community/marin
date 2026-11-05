@@ -37,8 +37,8 @@ def fake_uv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: dict, *, mo
         "elif '--base-version' in args:\n"
         "    if os.environ['FAKE_MODE'] == 'stale_once':\n"
         "        if publishes == 1:\n"
-        '            print("Error: Releases require origin\'s current main commit by default", file=sys.stderr)\n'
-        "            sys.exit(1)\n"
+        '            print("stale main checkout", file=sys.stderr)\n'
+        "            sys.exit(os.EX_TEMPFAIL)\n"
         "        print(json.dumps({'version': 5}))\n"
         "    else:\n"
         "        sys.exit(17)\n"

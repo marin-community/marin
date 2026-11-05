@@ -104,7 +104,8 @@ changed app. It includes declared `source_paths`, runs the policy's tests
 (including migration tests where the app has `migrate()`), validates with
 `marina release --dry-run`, and publishes from clean current `main` with
 `--base-version` set to the inspected live version. If `main` advances
-during validation, CI refreshes its checkout and repeats the tests and dry-run.
+during validation, `marina release` exits with code 75; CI refreshes its
+checkout and repeats the tests and dry-run.
 A live-version conflict fails the job; inspect the selected revision before
 trying again.
 

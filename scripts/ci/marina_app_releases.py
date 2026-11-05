@@ -15,7 +15,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MAX_MAIN_REFRESHES = 3
-STALE_MAIN_ERROR = "Releases require origin's current main commit by default"
 
 
 @dataclass(frozen=True)
@@ -181,7 +180,7 @@ def release_once(policy: AppPolicy, record_path: Path, *, initial_version: int |
     try:
         published = marina("release", policy.path, "--base-version", str(before["version"]), root=root)
     except subprocess.CalledProcessError as error:
-        if STALE_MAIN_ERROR in (error.stderr or ""):
+        if error.returncode == os.EX_TEMPFAIL:
             raise StaleMainError(f"{policy.name}: source head moved during publication") from error
         raise
     record.update(action="released", published=published, verification="pending")

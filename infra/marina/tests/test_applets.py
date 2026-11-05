@@ -4,6 +4,7 @@
 import gzip
 import io
 import json
+import os
 import shutil
 import subprocess
 import tarfile
@@ -363,6 +364,19 @@ def test_require_current_main_rejects_unreleased_source(release_checkout: Path, 
             subprocess.run(["git", *command], cwd=release_checkout, check=True, capture_output=True)
     with pytest.raises(RuntimeError):
         require_current_main(release_checkout)
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_release_stale_main_has_distinct_exit_code(release_checkout: Path) -> None:
+    repo = release_checkout.parent
+    (repo / "new.txt").write_text("new main")
+    for command in (["add", "."], ["commit", "-m", "Advance main"], ["push", "origin", "HEAD:main"]):
+        subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "reset", "--hard", "HEAD^"], cwd=repo, check=True, capture_output=True)
+
+    result = CliRunner().invoke(cli, ["release", str(release_checkout), "--base-version", "7"])
+
+    assert result.exit_code == os.EX_TEMPFAIL
 
 
 @pytest.mark.parametrize("release_checkout", ["build"], indirect=True)
