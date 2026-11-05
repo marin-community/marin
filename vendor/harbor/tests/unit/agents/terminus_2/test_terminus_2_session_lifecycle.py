@@ -4,6 +4,7 @@ import asyncio
 import json
 import shutil
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -49,13 +50,10 @@ class ScriptedLLM(BaseLLM):
 
 
 class ForegroundLLM(ScriptedLLM):
-    def __init__(self, builtin):
+    def __init__(self, foreground, background):
         self.command_sent = False
-        self.foreground = (
-            "echo $$ > foreground.pid; while :; do :; done"
-            if builtin
-            else "sh -c 'echo $$ > foreground.pid; exec sleep 3600'"
-        )
+        self.foreground = foreground
+        self.background = background
 
     async def call(self, prompt: str, **kwargs) -> LLMResponse:
         if self.command_sent:
@@ -68,9 +66,11 @@ class ForegroundLLM(ScriptedLLM):
                     "plan": "Leave the service available for grading.",
                     "commands": [
                         {
-                            "keystrokes": "sleep 3600 & echo $! > background.pid; "
-                            f"{self.foreground}; "
-                            "printf unexpected > after-timeout\n",
+                            "keystrokes": (
+                                f"{self.background} & echo $! > background.pid; "
+                                f"{self.foreground}; "
+                                "printf unexpected > after-timeout\n"
+                            ),
                             "duration": 0.1,
                         }
                     ],
@@ -132,9 +132,11 @@ async def test_run_after_cleanup_starts_a_new_terminal_and_retains_phase_files(
             await adapter.stop(delete=True)
 
 
-@pytest.mark.parametrize("builtin", [False, True])
+@pytest.mark.parametrize(
+    "foreground_kind", ["external", "builtin", "zombie-descendant"]
+)
 async def test_cancelled_run_stops_foreground_job_and_preserves_background_service(
-    tmp_path, monkeypatch, builtin
+    tmp_path, monkeypatch, foreground_kind
 ):
     if shutil.which("tmux") is None:
         pytest.skip("The terminal lifecycle regression requires installed tmux")
@@ -142,8 +144,25 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
     async def token_count(url, payload):
         return 128
 
+    fixture_path = Path(__file__).parent / "fixtures/foreground_zombie.py"
+    fixture = "foreground_zombie.py"
+    foreground = {
+        "external": "sh -c 'echo $$ > foreground.pid; exec sleep 3600'",
+        "builtin": "echo $$ > foreground.pid; while :; do :; done",
+        "zombie-descendant": (
+            "until test -p join-group; do sleep 0.01; done; "
+            f"python3 {fixture} foreground"
+        ),
+    }[foreground_kind]
+    background = (
+        f"python3 {fixture} holder"
+        if foreground_kind == "zombie-descendant"
+        else "sleep 3600"
+    )
     monkeypatch.setattr(
-        Terminus2, "_init_llm", lambda self, **kwargs: ForegroundLLM(builtin)
+        Terminus2,
+        "_init_llm",
+        lambda self, **kwargs: ForegroundLLM(foreground, background),
     )
     monkeypatch.setattr(terminus_2, "_server_token_count", token_count)
     environment_dir = tmp_path / "environment"
@@ -166,6 +185,10 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
             ),
         )
         adapter.machine = machine
+        if foreground_kind == "zombie-descendant":
+            shutil.copyfile(
+                fixture_path, machine.path("/workspace/foreground_zombie.py")
+            )
         agent = Terminus2(logs_dir=tmp_path / "agent", model_name="test/terminal")
         running = asyncio.create_task(
             agent.run("Run a service.", adapter, AgentContext())
@@ -179,10 +202,19 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(running, 5)
 
-            if not builtin:
+            if foreground_kind != "builtin":
                 assert (
                     await adapter.exec("kill -0 $(cat foreground.pid)")
                 ).return_code != 0
+            if foreground_kind == "zombie-descendant":
+                descendant = int(machine.path("/workspace/descendant.pid").read_text())
+                assert (
+                    Path(f"/proc/{descendant}/stat")
+                    .read_text()
+                    .split(") ", 1)[1]
+                    .split()[0]
+                    == "Z"
+                )
             assert (
                 await adapter.exec("kill -0 $(cat background.pid)")
             ).return_code == 0
@@ -201,6 +233,12 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
         finally:
             running.cancel()
             await asyncio.gather(running, return_exceptions=True)
+            if foreground_kind == "zombie-descendant":
+                await adapter.exec(
+                    "if test -s background.pid; then kill -TERM $(cat background.pid); "
+                    "until test -f descendant-reaped; do sleep 0.01; done; fi",
+                    timeout_sec=5,
+                )
             await agent.cleanup(adapter)
             await adapter.exec("tmux kill-server")
             await adapter.stop(delete=True)

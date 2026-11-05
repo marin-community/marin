@@ -35,6 +35,7 @@ from experiments.evaluation.models import models
 def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_API_KEY", "local-test-key")
+    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     batches: list[EvaluationBatch] = []
 
     class Client:

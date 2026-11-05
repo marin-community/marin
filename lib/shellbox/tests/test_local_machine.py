@@ -1081,11 +1081,11 @@ else:
 """
 
 
-def private_task_spec(marker="service", readiness=None):
+def private_task_spec(marker="service", readiness=None, peer_name="runtime"):
     return TaskSpec(
         containers=(
             ContainerSpec(
-                name="runtime",
+                name=peer_name,
                 machine=MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY),
                 endpoints=(ServiceEndpoint("http", 8123),),
                 entrypoint=("python3", "-c", SERVICE_SERVER),
@@ -1165,12 +1165,16 @@ def test_real_local_http_relay_serves_concurrent_requests(factory):
     on_machine(factory, MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY), scenario)
 
 
-@pytest.mark.parametrize("family,host", [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")], ids=["ipv4", "ipv6"])
-def test_local_task_peers_have_private_filesystems_and_no_host_network(factory, family, host):
+@pytest.mark.parametrize(
+    "family,host,peer_name",
+    [(socket.AF_INET, "127.0.0.1", "runtime_peer"), (socket.AF_INET6, "::1", "runtime")],
+    ids=["ipv4-underscore-peer", "ipv6"],
+)
+def test_local_task_peers_have_private_filesystems_and_no_host_network(factory, family, host, peer_name):
     async def scenario(host_port):
         groups = await asyncio.gather(
-            factory.create_task(private_task_spec("first")),
-            factory.create_task(private_task_spec("second")),
+            factory.create_task(private_task_spec("first", peer_name=peer_name)),
+            factory.create_task(private_task_spec("second", peer_name=peer_name)),
         )
         roots = [cast(LocalMachine, machine).root for group in groups for machine in group.containers.values()]
         try:
@@ -1181,7 +1185,7 @@ def test_local_task_peers_have_private_filesystems_and_no_host_network(factory, 
                 own = await group.primary.run(Command(("cat", "/app/member-secret")))
                 assert own.stdout == b"actor\n"
                 answer = await group.primary.run(
-                    Command(("python3", "-c", HTTP_CLIENT, "http://" + group.endpoint("runtime", "http")))
+                    Command(("python3", "-c", HTTP_CLIENT, "http://" + group.endpoint(peer_name, "http")))
                 )
                 assert (answer.exit_code, answer.stdout) == (0, expected)
                 connection = await group.primary.run(Command(("python3", "-c", CONNECT_PROBE, str(host_port), host)))

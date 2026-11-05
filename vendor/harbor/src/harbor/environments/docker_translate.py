@@ -34,7 +34,7 @@ COMPOSE_FILENAMES = (
 )
 PREPARED_IMAGES_FILE = "shellbox-images.json"
 PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
-_SERVICE_NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
+_SERVICE_NAME = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _DURATION = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)")
 _LOG_VOLUME = "${HOST_AGENT_LOGS_PATH}:${ENV_AGENT_LOGS_PATH}"
 
@@ -267,7 +267,7 @@ def import_prepared_task(
         raise ValueError("shellbox-images.json contains images for undeclared services")
     for name in document.services:
         if _SERVICE_NAME.fullmatch(name) is None:
-            raise ValueError("Compose service names must be lowercase DNS labels")
+            raise ValueError("Compose service names must match [a-z][a-z0-9_-]{0,62}")
     main = document.services["main"]
     if (
         main.command is not None

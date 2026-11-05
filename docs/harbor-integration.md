@@ -87,8 +87,9 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 The launcher keeps one judge session alive and shares it across every evaluation in the batch. It
-overrides only the verifier's `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `MODEL_NAME`; the evaluated
-agent continues to use the candidate endpoint. Candidate and judge placement must resolve to the
+replaces the policy's judge endpoint, credential and declared model roles. Both OpenAI URL aliases
+point to the guest relay, and all verifier model roles use the hosted judge. The evaluated agent
+continues to use its separate candidate endpoint. Candidate and judge placement must resolve to the
 same cluster or region. The durable run record pins the judge model configuration and hardware.
 
 Launch a Harbor `JobConfig` without adding it to the catalog:

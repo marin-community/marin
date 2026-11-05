@@ -31,7 +31,7 @@ def tau3_environment(tmp_path):
         json.dumps(
             {
                 "main": {"image": MAIN_IMAGE, "workdir": "/app"},
-                "tau3-runtime": {
+                "tau3_runtime": {
                     "image": RUNTIME_IMAGE,
                     "workdir": "/app",
                     "agent_logs": "publish",
@@ -41,8 +41,8 @@ def tau3_environment(tmp_path):
     )
     compose = {
         "services": {
-            "main": {"depends_on": {"tau3-runtime": {"condition": "service_healthy"}}},
-            "tau3-runtime": {
+            "main": {"depends_on": {"tau3_runtime": {"condition": "service_healthy"}}},
+            "tau3_runtime": {
                 "build": {"context": "./runtime-server"},
                 "environment": [
                     "OPENAI_API_KEY=${OPENAI_API_KEY:-}",
@@ -82,9 +82,9 @@ def test_tau3_import_preserves_prepared_services_and_private_model_capability(
         },
         mcp_servers=[
             MCPServerConfig(
-                name="tau3-runtime",
+                name="tau3_runtime",
                 transport="streamable-http",
-                url="http://tau3-runtime:8000/mcp",
+                url="http://tau3_runtime:8000/mcp",
             )
         ],
     )
@@ -108,7 +108,7 @@ def test_tau3_import_preserves_prepared_services_and_private_model_capability(
     assert runtime.endpoints[0].port == 8000
     assert runtime.readiness.command.argv[:2] == ("python3", "-c")
     assert runtime.readiness.attempts == 15
-    assert plan.service_log_paths == (("tau3-runtime", "/logs/agent"),)
+    assert plan.service_log_paths == (("tau3_runtime", "/logs/agent"),)
 
 
 @pytest.mark.parametrize(
@@ -126,7 +126,7 @@ def test_compose_rejects_host_authority_before_submitting_any_service(
 ):
     path = tau3_environment / "docker-compose.yaml"
     document = yaml.safe_load(path.read_text())
-    document["services"]["tau3-runtime"].update(escape)
+    document["services"]["tau3_runtime"].update(escape)
     path.write_text(yaml.safe_dump(document))
     with pytest.raises(ValueError):
         import_prepared_task(
@@ -142,7 +142,7 @@ def test_compose_does_not_resolve_storage_secret_through_an_alias(
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "storage-private")
     path = tau3_environment / "docker-compose.yaml"
     document = yaml.safe_load(path.read_text())
-    document["services"]["tau3-runtime"]["environment"] = [
+    document["services"]["tau3_runtime"]["environment"] = [
         "UNRELATED_NAME=${AWS_SECRET_ACCESS_KEY}"
     ]
     path.write_text(yaml.safe_dump(document))
@@ -160,7 +160,7 @@ def test_compose_requires_every_build_to_have_a_prepared_image(tau3_environment)
     )
     path = tau3_environment / "docker-compose.yaml"
     document = yaml.safe_load(path.read_text())
-    document["services"]["tau3-runtime"].pop("volumes")
+    document["services"]["tau3_runtime"].pop("volumes")
     path.write_text(yaml.safe_dump(document))
     with pytest.raises(ValueError, match="prepared image"):
         import_prepared_task(

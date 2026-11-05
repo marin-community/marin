@@ -1131,8 +1131,8 @@ class LocalMachineFactory:
             _check_spec(container.machine)
         if len(spec.containers) > 1 and spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("Local multi-container tasks require denied external networking")
-        if any(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", container.name) is None for container in spec.containers):
-            raise UnsupportedMachineSpec("Local container names must be lowercase DNS labels")
+        if any(re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", container.name) is None for container in spec.containers):
+            raise UnsupportedMachineSpec("Local container names must match [a-z][a-z0-9_-]{0,62}")
         primary = spec.primary_container
         if primary.entrypoint is not None or primary.arguments is not None:
             raise UnsupportedMachineSpec("The local task's primary container does not support startup overrides")

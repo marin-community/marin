@@ -7,6 +7,11 @@ import uuid
 from dataclasses import dataclass
 from typing import NoReturn
 
+from shellbox.process_session import (
+    PROCESS_GROUP_ABSENT_EXIT_CODE,
+    PROBE_PROCESS_GROUP_COMMAND,
+)
+
 from harbor.agents.base import encode_model_output
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.environments.base import BaseEnvironment, ExecResult
@@ -295,7 +300,9 @@ class TmuxSession:
 
         # Package manager commands with non-interactive flags
         install_commands = {
-            "apt-get": "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tmux",
+            "apt-get": (
+                "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tmux"
+            ),
             "dnf": "dnf install -y tmux",
             "yum": "yum install -y tmux",
             "apk": "apk add --no-cache tmux",
@@ -527,7 +534,11 @@ class TmuxSession:
             'kill -INT -- "-$shell_group"; '
             'if [ "$foreground_group" != "$shell_group" ]; then '
             'kill -KILL -- "-$foreground_group" 2>/dev/null || true; '
-            'while kill -0 -- "-$foreground_group" 2>/dev/null; do sleep 0.01; done; fi; fi'
+            "while :; do "
+            f'if /bin/sh -c {shlex.quote(PROBE_PROCESS_GROUP_COMMAND)} probe-group "$foreground_group"; '
+            "then sleep 0.01; "
+            f'else status=$?; [ "$status" -eq {PROCESS_GROUP_ABSENT_EXIT_CODE} ] || exit "$status"; '
+            "break; fi; done; fi; fi"
         )
         result = await self.environment.exec(
             command=command, user=self._user, timeout_sec=_FOREGROUND_STOP_TIMEOUT
