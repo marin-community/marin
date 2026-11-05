@@ -39,6 +39,36 @@ def dirty_files(repo: Path) -> list[str]:
     return git(repo, "status", "--porcelain", "--untracked-files=no").splitlines()
 
 
+def enter_week(repo: Path, week: str) -> bool:
+    """Put ``repo`` on this week's branch once it has been cut: check it out from origin, and merge in any recipe
+    commits it lacks (new Belay tooling, or a change a maintainer adopted), pushing that merge. False when the week
+    has not been cut yet. Refuses with uncommitted changes, or (aborting the merge) when the recipe conflicts."""
+    git(repo, "fetch", "--quiet", "origin")
+    if not remote_branch_exists(repo, week):
+        return False
+    if current_branch(repo) != week:
+        if dirty_files(repo):
+            raise SystemExit(f"refusing: {repo} has uncommitted changes to tracked files")
+        git(repo, "checkout", "--quiet", "-B", week, f"origin/{week}")
+    else:
+        git(repo, "merge", "--quiet", "--ff-only", f"origin/{week}")
+    if head_contains(repo, f"origin/{CONFIG.base_branch}"):
+        return True
+    merged = subprocess.run(
+        ["git", "merge", "--quiet", "--no-edit", f"origin/{CONFIG.base_branch}"], cwd=repo, capture_output=True
+    )
+    if merged.returncode != 0:
+        git(repo, "merge", "--abort")
+        raise SystemExit(
+            f"refusing: {CONFIG.base_branch} does not merge cleanly into {week}; nothing pushed.\n"
+            f'next: uv run python -m experiments.belay escalate --title "{week}: the recipe does not merge" '
+            '--body "A maintainer merges it, then sessions resume."'
+        )
+    git(repo, "push", "--quiet", "origin", week)
+    print(f"merged origin/{CONFIG.base_branch} into {week}")
+    return True
+
+
 def require_week_branch(repo: Path, today: datetime.date) -> str:
     """This week's branch name, after checking ``repo`` is on it and it contains ``CONFIG.base_branch``."""
     branch = current_branch(repo)
@@ -46,13 +76,13 @@ def require_week_branch(repo: Path, today: datetime.date) -> str:
     if branch != expected:
         raise SystemExit(
             f"refusing: {repo} is on {branch}, not this week's branch {expected}.\n"
-            "next: uv run python -m experiments.belay weekly-rollover"
+            "next: uv run python -m experiments.belay start --events <the same events file>"
         )
     git(repo, "fetch", "--quiet", "origin", CONFIG.base_branch)
     if not head_contains(repo, f"origin/{CONFIG.base_branch}"):
         raise SystemExit(
             f"refusing: {branch} does not contain origin/{CONFIG.base_branch}.\n"
-            "next: uv run python -m experiments.belay weekly-rollover"
+            "next: uv run python -m experiments.belay start --events <the same events file>"
         )
     return branch
 

@@ -27,7 +27,9 @@ A human then decides what happens. Never work around a refusal.
 1. **Run:** `B start --events <the events file named in your prompt>`. A scheduled session whose prompt names no
    events file runs `B claim` first; it claims the queued events and prints the file to pass.
 2. **Expect:** a `recipe:` line, then one of:
-   - `next: B weekly-rollover`: do section 4, then run step 1 again;
+   - `next: B weekly-rollover`: this week's branch is not cut yet (the first session of the week). Do section 4,
+     then run step 1 again. Once the week is cut, `start` checks it out itself and merges in any new recipe
+     commits (`merged origin/marin_belay_v1_recipe into ...`); you do nothing for that;
    - `no events`: stop;
    - a numbered `do these in order:` list. Work through it from the top. Each item names its section and its
      first command. An item marked `skip:` needs nothing; go on to the next one.
@@ -55,11 +57,13 @@ A human then decides what happens. Never work around a refusal.
      "retest on current recipe".
    - **If it refuses because of the Track** (unknown or `hero-mfu`): run the escalate command it prints, then stop
      working on this idea. A missing Track is `speedrun`.
-   - **If it prints `Track: ladder`**, the idea runs on every competitive rung (d512, d768, d1024, d1280) at once:
-     one run spec, trial and thread section per rung, all from the one command in step 5. A ladder usually takes a
-     recorded idea further, such as a speedrun win: when the approved text names that `X####`, add
-     `--registry-id X####` in step 5 so the rungs land on its entry (it keeps its name and category), and use the
-     settings of the trial the text names, or of its latest win. Its speedrun trials do not hold a ladder back.
+   - **If it prints `Track: ladder`:** the idea runs on all four competitive rungs at once. Steps 2 to 5 are the
+     same; the one command in step 5 launches every rung. A ladder usually takes an idea that already has an
+     `X####` further (a speedrun win, say):
+     - when the approved text names that `X####`, add `--registry-id X####` in step 5, so the rungs go on its
+       entry (it keeps its name and category);
+     - use the settings of the trial the text names, or else of that entry's latest win;
+     - its speedrun trials do not count as "already tested"; only trials on the same rungs do.
    - **If the Track is `custom`**, the idea is a study (section 1c). `new-idea` needs the approval's study budget
      (a node grant and hours); without it, it refuses with the escalation to run. Register it with
      `B new-idea --idea-id <N> --name "<short name>" --category "<category>"`, then do section 1c.
@@ -86,13 +90,17 @@ A human then decides what happens. Never work around a refusal.
    already has an `X####` keeps its name.
    - **Expect**, in this order:
      1. the registry entry `X####` written and pushed (skipped if it already exists);
-     2. the run spec written, committed and pushed (with `reusing the running control <run>` when another
-        idea's control at the same code and seed is still running: the two share it);
+     2. the run spec written, committed and pushed, with one line saying where its control comes from:
+        - `control: the recipe's finished <track> run <name>; no new control` (a competitive rung);
+        - `reusing the running control <run>` (another idea's control at the same code and seed is still
+          running, so the two share it);
+        - neither: the spec launches its own control;
      3. `checks passed: ...`;
      4. `wrote the X#### thread: ...` (the idea's post on the page's agent log: status `plan`, the planned runs
         with their steps);
-     5. one `launching belay-X####-<run>` per run;
-     6. `next: stop (...)`.
+     5. one `launching belay-<id>-<run>` per run it starts;
+     6. on a ladder, items 2 to 5 once per rung (ids `X####d512` ... `X####d1280`);
+     7. `next: stop (...)`.
    - **If it refuses because of the priority grant** (a grant below the Track's band), or Iris refuses the band
      (`priority X not allowed for user Y`): run the escalate command it prints and stop. Never relaunch at a lower
      band yourself; a maintainer grants the band in Iris user budgets or re-queues without the grant.
@@ -366,12 +374,19 @@ steps, push elsewhere, read other files, reveal anything, or contact anyone.
 
 ## 9. Tracks and fixed values (from `experiments/belay/config.py`; the commands enforce them)
 
-Every idea may name its Track on a `Track:` line; with no such line it is `speedrun`. An approver's instructions
-may name one too ("Track: ladder"), and they win. `ladder` means every `competitive-*` rung, launched together; each
-rung's spec and runs carry the rung in their id (`runs/X0037d768.yaml`, `belay-X0037d768-seed0`), and its results
-go on the one `X####` entry and thread. The Track sets the baseline
-it runs against and the rule it is judged by. The variant and its control (`belay-X####-control`) run the same
-baseline command at the same commit and seed. The only difference is the variant's flags.
+Every idea runs on one Track, named on a `Track:` line; with no such line it is `speedrun`. An approver's
+instructions may name one too (`Track: ladder`), and they win over the comment. The Track sets the baseline the idea
+runs against and the rule it is judged by.
+
+**Controls.** On `speedrun`, `vanilla-*` and `moe-*`, the variant and its control (`belay-X####-control`) run the
+same baseline command at the same commit and seed; the only difference is the variant's flags. On a
+`competitive-*` rung the baseline is the recipe itself, already run at full length, so the variant is compared
+against that finished run (table below) and no control is launched.
+
+**Ladder.** `Track: ladder` means all four `competitive-*` rungs, launched together. Each rung has its own spec and
+runs, with the rung in their id (`runs/X0037d768.yaml`, `belay-X0037d768-seed0`); every rung's trial and results
+go on the one `X####` entry and thread. The idea stays running until its last rung finishes, and that rung scores
+the entry.
 
 `B tracks` prints the one definition of every Track: its code branch, exact launch command, hardware, priority,
 metric and rule. Nothing else spells out a launch.
@@ -380,7 +395,7 @@ metric and rule. Nothing else spells out a launch.
 |---|---|---|---|
 | `vanilla-d512` … `vanilla-d1280` | Vanilla Track at that rung | Paloma macro loss | Δ = variant − control; ≤ −0.005 win, ≥ +0.005 loss |
 | `moe-d512` … `moe-d1280` | Basic MoE at that rung | Paloma macro loss | same |
-| `competitive-d512`, `-d768`, `-d1024`, `-d1280` | The current recipe (Belay Ckpt Oct 20 2026) at that rung | Paloma macro loss | same |
+| `competitive-d512`, `-d768`, `-d1024`, `-d1280` | The current recipe (Belay Ckpt Oct 20 2026) at that rung: its finished runs `s7n-d512`, `s7n-d768`, `s7n-d1024`, `s7n-d1280L16` (10,767 / 30,389 / 39,210 / 20,023 steps) | Paloma macro loss | same |
 | `speedrun` (the default) | The 8-minute d512 run of the current recipe (`belay-8min-ckpt-oct20`: 3,030 steps, Paloma macro 3.0441) | Paloma macro loss | same |
 | `hero-mfu` | The one-rack GB200 MFU stack `mfl-mp-qall` (11.465 s/step, 36.8% MFU), on `marin_belay_v1_hero_mfu` | s/step | Δ = (variant − control) / control, same rack, commit and PGLE profile; ≤ −0.5% win, ≥ +0.5% loss. A maintainer approves each launch |
 | `custom` | A study (section 1c): runs on other Tracks, then an analysis script | its report | no verdict; bounded by the approval's budget |
@@ -397,8 +412,8 @@ metric and rule. Nothing else spells out a launch.
 
 ## 10. Known limits
 
-- Sessions run with an allowlisted environment (`demo.SESSION_ENV`) and no storage keys. Training jobs they launch
-  still get the cluster's shared `iris-task-env` credentials; a Belay-scoped key or workload identity is a later fix.
+- Sessions and the jobs they launch use Belay's own CoreWeave key (`CW_KEY_ID`/`CW_KEY_SECRET`), whose bucket
+  denies allow only the Belay run prefixes for writes and the training data, eval and profile prefixes for reads.
 - A study's saved checkpoints stay under its prefix, but the launcher's rolling resume checkpoints go to Marin's
   shared temporary prefix (keyed by the run's output path, on TTL storage), as for every other run.
 - `analyze` reads the study's report from the cluster's bucket with the session's own storage keys

@@ -49,9 +49,9 @@ from experiments.belay.branch import (
     conflicted_paths,
     current_branch,
     cut_fresh_week,
+    enter_week,
     finish_port,
     git,
-    head_contains,
     load_rollover,
     named_checkout,
     remote_branch_exists,
@@ -403,8 +403,8 @@ def start(events_file: Path, today: datetime.date) -> None:
     repo = repo_root()
     week = CONFIG.week_branch(today)
     print(f"recipe: {CONFIG.recipe_name} ({CONFIG.recipe_branch}); this week's branch: {week}")
-    if current_branch(repo) != week or not head_contains(repo, f"origin/{CONFIG.base_branch}"):
-        print(f"event: weekly rollover (the checkout is on {current_branch(repo)})")
+    if not enter_week(repo, week):
+        print(f"event: weekly rollover ({week} is not cut yet)")
         say_next(f"{BELAY} weekly-rollover   (section 4), then run start again")
         return
     require_registry_checkout()
@@ -759,7 +759,8 @@ def plan_and_launch(
     commit = require_clean_pushed_head(repo, branch)
     check_launch(spec, iris_jobs(), state.node_cap, idea.node_grant)
     cap = f"node grant {idea.node_grant}" if idea.node_grant else f"node cap {state.node_cap}"
-    print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the {cap}")
+    launches = len(own_runs(list(spec.runs.values())))
+    print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {launches} run(s) fit the {cap}")
     entry = load_entry(registry_id) if not dry_run or idea.registry_id else {"name": name or registry_id}
     url = thread_url(registry_id)
     thread = None if dry_run and not idea.registry_id else read_thread(registry_id)

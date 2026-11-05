@@ -14,13 +14,15 @@ them.
 
 - **Which branch to build on.** The recipe is `marin_belay_v1_recipe`. Only a maintainer's `recipe-change` moves
   it, and tags each new tip `belay-ckpt-<YYYY-MM-DD>`.
-  - Experiment code goes on this week's branch, `marin_belay_v1_w<monday>`. `weekly-rollover` cuts it from last
-    week's branch, merges the base branch in and pushes it, the first time a session runs that week.
+  - Experiment code goes on this week's branch, `marin_belay_v1_w<monday>`. The week's first session cuts it fresh
+    from the recipe with `weekly-rollover`, carrying the code of ideas still in play (and porting any that no
+    longer apply). After that, `start` checks it out and merges in new recipe commits by itself.
   - In the demo the weekly branches are `marin_belay_v1_loomdemo_w<monday>`, cut from `marin_belay_v1_loomdemo`.
   - Never base work on `main`, `marin_belay_v1_ckpt*`, `marin_belay_v1_b<batch>`, `ladderclimb_*` or the GB200
     lineages.
 - **How ideas arrive.**
-  1. Anyone comments on marin#9514, one idea per comment, with a required `Track:` line (RUNBOOK.md section 9).
+  1. Anyone comments on marin#9514, one idea per comment, optionally with a `Track:` line (default `speedrun`;
+     `ladder` for every competitive rung; RUNBOOK.md section 9). The approver's instructions may set it instead.
   2. A maintainer approves it on the Belay admin page, which reads #9514 live and shows the visible text it will
      store (hidden HTML and invisible characters stripped, and flagged). GitHub reactions approve nothing.
   3. The session reads only that stored text (an edit on GitHub after approval is refused), gives the idea its
@@ -29,16 +31,18 @@ them.
   - Plans, stage tables and verdicts go to the page's agent log, one thread per idea at `#status/X####` on the page, updated in
     place. Nothing new is posted on #9451; its existing comments stay as they are.
 - **How edits are made.**
-  - A session changes nothing by hand. Each command writes, commits and pushes its own files:
+  - A session changes nothing by hand, except resolving a weekly-rollover port (RUNBOOK.md section 4). Each
+    command writes, commits and pushes its own files:
     - the registry entry (on the registry branch);
-    - the run spec `experiments/belay/runs/X####.yaml` (on the weekly branch);
+    - the run spec `experiments/belay/runs/X####.yaml`, or one per ladder rung (`X####d768.yaml`), on the weekly
+      branch;
     - the trial and its results (on the registry branch).
   - An idea that needs new code gets a new default-off config field. `code-change --finish` commits it straight to
     the weekly branch once its fixed checks pass (RUNBOOK.md section 1b); no human review gates it. The idea then
     runs as configuration. Flags that never win stay as dead default-off code until a maintainer deletes them.
 - **The recipe** changes only when maintainers accept a checkpoint (runbook section 5).
-- **The page** shows the registry. The watcher uploads `registry.py build`, and `demo release` re-releases the
-  app.
+- **The page** shows the registry. `B sync`, which the Loom watch runs every pass, uploads `registry.py build`
+  along with run states and storage; a maintainer releases the app from main.
 
 ## Where things are
 

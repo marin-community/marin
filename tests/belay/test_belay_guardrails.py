@@ -44,6 +44,7 @@ from experiments.belay.branch import (
     abort_rollover,
     carry,
     cut_fresh_week,
+    enter_week,
     finish_port,
     git,
     load_rollover,
@@ -150,6 +151,22 @@ def test_a_fresh_week_is_the_recipe_plus_only_the_carried_commits(repo: Path) ->
     assert git(repo, "rev-parse", "HEAD~1") == git(repo, "rev-parse", f"origin/{CONFIG.base_branch}")
     assert (repo / "winner.txt").exists() and (repo / "recipe_fix.txt").exists()
     assert not (repo / "loser.txt").exists()
+
+
+def test_start_enters_a_cut_week_and_brings_in_the_recipe(repo: Path) -> None:
+    week = CONFIG.week_branch(MONDAY)
+    assert not enter_week(repo, week)  # not cut yet: start sends the session to weekly-rollover
+    git(repo, "checkout", "--quiet", "-b", week, f"origin/{CONFIG.base_branch}")
+    git(repo, "push", "--quiet", "origin", week)
+    git(repo, "checkout", "--quiet", CONFIG.base_branch)
+    commit_file(repo, "tooling.txt", "new Belay tooling\n")
+    git(repo, "push", "--quiet", "origin", CONFIG.base_branch)
+
+    assert enter_week(repo, week)
+
+    assert git(repo, "rev-parse", "--abbrev-ref", "HEAD") == week
+    assert (repo / "tooling.txt").exists()
+    assert git(repo, "rev-parse", "HEAD") == git(repo, "rev-parse", f"origin/{week}")  # the merge is pushed
 
 
 def conflicting_week(repo: Path) -> tuple[str, Rollover]:
