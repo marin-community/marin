@@ -67,6 +67,14 @@ runtime references stay as declared in the manifest.
 
 ## Update dependencies
 
+The pinned npm packages run inside the Tau3 evaluation sandbox. Their security
+warnings are accepted risk for this use: Dependabot update PRs are ignored for
+this directory in [`.github/dependabot.yml`](../../../../.github/dependabot.yml),
+and alerts for `experiments/evaluation/images/tau3/package-lock.json` are dismissed
+as **tolerable risk** in GitHub. The configuration does not suppress alerts for
+new advisories; dismiss those separately under the same policy. Revisit this
+exception if these dependencies are used outside the evaluation sandbox.
+
 Edit `package.json`, `requirements.in` or the constants in `build.py`, then regenerate the
 affected locks:
 
