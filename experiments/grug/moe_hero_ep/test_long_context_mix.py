@@ -12,6 +12,8 @@ import haliax as hax
 import jax
 import numpy as np
 import pytest
+from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat, preprocessor_for_format
 from levanter.data.text.length_bucket import document_length_stats, load_bucket_length_stats
@@ -19,8 +21,9 @@ from levanter.schedule import BatchSchedule
 from levanter.store.cache import TreeCache, write_levanter_cache
 from levanter.tokenizers import load_tokenizer
 from marin.execution.lazy import StepContext
+from zephyr.context import ZephyrContext
 
-from experiments.grug.moe_hero_ep import harrier_length_stats, harrier_long_context_mix, launch_scaling_ladder
+from experiments.grug.moe_hero_ep import harrier_long_context_mix, launch_scaling_ladder
 from experiments.grug.moe_hero_ep.harrier_length_stats import write_length_stats
 from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
     LONG_CONTEXT_SKEW,
@@ -57,7 +60,22 @@ def _fingerprint_config(step):
 
 
 @pytest.fixture
-def fake_store(tmp_path, monkeypatch):
+def zephyr_context(tmp_path):
+    client = LocalClient()
+    context = ZephyrContext(
+        client=client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="length-stats-test",
+    )
+    yield context
+    context.shutdown()
+    client.shutdown(wait=True)
+
+
+@pytest.fixture
+def fake_store(tmp_path, monkeypatch, zephyr_context):
     """A two-bucket store on disk, with the mix restricted to those buckets."""
     tokenizer_dir = tmp_path / "tokenizer"
     tokenizer_dir.mkdir()
@@ -80,9 +98,9 @@ def fake_store(tmp_path, monkeypatch):
         path = store / f"cluster={int(cell[1:3])}/quality={cell[4]}"
         write_levanter_cache(docs, str(path), metadata=metadata)
     stats_path = tmp_path / "stats"
-    monkeypatch.setattr(harrier_length_stats, "LENGTH_THRESHOLDS", (8, 16, 32))
-    monkeypatch.setattr(harrier_length_stats, "DOCUMENT_CHUNK_ROWS", 8)
-    write_length_stats(str(stats_path), str(store), tuple(TOKENS))
+    write_length_stats(
+        str(stats_path), str(store), tuple(TOKENS), thresholds=(8, 16, 32), chunk_rows=8, zephyr_context=zephyr_context
+    )
     monkeypatch.setattr(harrier_long_context_mix, "_COOLDOWN_WEIGHTS", WEIGHTS)
     monkeypatch.setattr(harrier_long_context_mix, "LONG_CONTEXT_THRESHOLD", 16)
 
@@ -211,3 +229,28 @@ def test_diagnostic_arms_select_the_same_data_on_any_rack_count():
     assert one_rack.data == four_racks.data
     assert one_rack.data.mixture_start_step == 390_000
     assert LONG_CONTEXT_TAG in one_rack.trainer.trainer.tracker.tags
+
+
+@pytest.mark.parametrize("launcher", ["hero", "diagnostic"])
+def test_statistics_dependency_resolves_in_each_training_prefix(tmp_path, monkeypatch, launcher):
+    if launcher == "hero":
+        monkeypatch.setattr(launch_scaling_ladder, "HERO_USES_LONG_CONTEXT_MIX", True)
+        step = build_ladder_run(run_id="test-stats-dependency", size="d6144", version="dev")
+    else:
+        step = build_diagnostic_run(
+            run_id="test-stats-dependency", dp_racks=1, num_steps=25, long_context_start_step=0, version="dev"
+        )
+
+    for prefix in (tmp_path / "first-region", tmp_path / "second-region"):
+        ctx = StepContext.for_run(
+            output_path=str(prefix / "run"), prefix=str(prefix), runtime_args=step.runtime_args, deps=step.deps
+        )
+        config = step.build_config(ctx)
+        statistics_path = config.data.components["c00q0"].stats_path
+        assert Path(statistics_path).is_relative_to(prefix)
+        dependency = next(dep for dep in step.deps if dep.path(str(prefix)) == statistics_path)
+        stats_config = dependency.build_config(
+            StepContext.for_run(output_path=statistics_path, prefix=str(prefix), deps=dependency.deps)
+        )
+        assert stats_config.output_path == statistics_path
+        assert stats_config.store == ctx.artifact_path(dependency.deps[0])

@@ -280,9 +280,10 @@ thresholds; see the
 The 262K extension reads the existing Harrier token caches. Each cache is split into virtual streams of documents
 at most 65,536 tokens and above 65,536 tokens. `harrier_long_context_mix.py` concatenates one short stream with
 eight references to the long stream within each cell, preserving the cell's cooldown weight. No token cache or
-document index is written. Before training, run the length-statistics step. It reads only cache offsets and writes
+document index is written. Both launchers build the length-statistics artifact as a training dependency when this
+mix is selected. The scan uses one Zephyr task per Harrier cell, reads only cache offsets, and writes
 small per-cell metadata containing total tokens, tokens in documents strictly above 65,536, 131,072, and
-262,144 tokens, and chunk totals for locating virtual reads:
+262,144 tokens, and chunk totals for locating virtual reads. To precompute the same artifact before launching:
 
 ```bash
 uv run python -m experiments.grug.moe_hero_ep.harrier_length_stats

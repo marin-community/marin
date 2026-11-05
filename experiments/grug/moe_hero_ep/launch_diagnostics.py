@@ -19,6 +19,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.grug.moe_hero_ep.harrier_length_stats import harrier_length_statistics
 from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
     LONG_CONTEXT_TAG,
     harrier_long_context_data_config,
@@ -226,6 +227,7 @@ def build_diagnostic_run(
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     validation = validation_datasets() if eval_every > 0 else []
+    length_statistics = harrier_length_statistics() if long_context_start_step is not None else None
     flops_per_example, _ = _compute_flops(model_config=model)
     experiment_flops = flops_per_example * batch_size * total_schedule_steps
 
@@ -291,8 +293,8 @@ def build_diagnostic_run(
             ),
             context_axis_size=context_axis_size,
         )
-        data = (
-            harrier_mix_2026_08_18_data_config(
+        if length_statistics is None:
+            data = harrier_mix_2026_08_18_data_config(
                 ctx=ctx,
                 total_steps=total_schedule_steps,
                 batch_size=batch_size,
@@ -300,14 +302,15 @@ def build_diagnostic_run(
                 enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
                 validation=validation,
             )
-            if long_context_start_step is None
-            else harrier_long_context_data_config(
+        else:
+            assert long_context_start_step is not None
+            data = harrier_long_context_data_config(
                 ctx=ctx,
                 start_step=long_context_start_step,
                 max_seq_len=model.max_seq_len,
                 validation=validation,
+                stats_path=ctx.artifact_path(length_statistics),
             )
-        )
         return GrugRunConfig(
             model=model,
             data=data,
@@ -339,7 +342,11 @@ def build_diagnostic_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
+        deps=(
+            HARRIER_MIX_2026_08_18_STORE,
+            *validation,
+            *((length_statistics,) if length_statistics is not None else ()),
+        ),
         runtime_args={"train_resources": train_resources},
     )
 

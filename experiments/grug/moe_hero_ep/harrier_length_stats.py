@@ -5,7 +5,7 @@
 
 import argparse
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import numpy as np
 from fray.types import ResourceConfig
@@ -17,52 +17,108 @@ from levanter.data.text.length_bucket import (
     document_length_stats,
 )
 from levanter.store.cache import TreeCache
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
-from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import _SPEC
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import _SPEC, HARRIER_MIX_2026_08_18_STORE
 
 LENGTH_THRESHOLDS = (65_536, 131_072, 262_144)
-_MAX_WORKERS = 16
+_MAX_WORKERS = 32
 
 
 def _cell_cache_dir(store: str, cell: str) -> str:
     return prefix_join(store, f"cluster={int(cell[1:3])}/quality={int(cell[4])}")
 
 
-def write_length_stats(output_path: str, store: str, cells: tuple[str, ...]) -> BucketLengthStats:
+@dataclass(frozen=True)
+class LengthStatsConfig:
+    output_path: str
+    store: str
+    cells: tuple[str, ...]
+    thresholds: tuple[int, ...]
+    chunk_rows: int
+
+
+def write_length_stats(
+    output_path: str,
+    store: str,
+    cells: tuple[str, ...],
+    *,
+    thresholds: tuple[int, ...],
+    chunk_rows: int,
+    zephyr_context: ZephyrContext,
+) -> BucketLengthStats:
     """Write one JSON metadata file for the existing Harrier caches; no tokens are copied."""
     configure_coreweave_s3()
 
     def count(cell: str) -> tuple[str, DocumentLengthStats]:
+        configure_coreweave_s3()
         cache = TreeCache.load(_cell_cache_dir(store, cell), {"input_ids": np.empty(0, dtype=np.int32)})
-        return cell, asyncio.run(
-            document_length_stats(cache, thresholds=LENGTH_THRESHOLDS, chunk_rows=DOCUMENT_CHUNK_ROWS)
-        )
+        return cell, asyncio.run(document_length_stats(cache, thresholds=thresholds, chunk_rows=chunk_rows))
 
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        cell_stats = dict(pool.map(count, cells))
-    stats = BucketLengthStats(chunk_rows=DOCUMENT_CHUNK_ROWS, buckets=cell_stats)
+    pipeline = Dataset.from_list(list(cells)).map(count)
+    cell_stats = dict(zephyr_context.execute(pipeline, verbose=True).results)
+    stats = BucketLengthStats(chunk_rows=chunk_rows, buckets=cell_stats)
     StoragePath(output_path).mkdirs()
     StoragePath(prefix_join(output_path, LENGTH_STATS_FILE)).write_text(stats.model_dump_json(indent=2))
     return stats
 
 
-def length_stats_step(store: str | None = None) -> StepSpec:
-    """Create the read-only Harrier length scan and its small metadata artifact."""
-    cells = tuple(cell for cell, _ in _SPEC.available_tokens)
-    store = store or _SPEC.candidate_store_uri
-    return StepSpec(
-        name="grug/moe-hero/harrier-length-stats",
-        hash_attrs={"store": store, "thresholds": LENGTH_THRESHOLDS, "chunk_rows": DOCUMENT_CHUNK_ROWS, "cells": cells},
-        fn=remote(
-            lambda output_path: write_length_stats(output_path, store, cells),
-            resources=ResourceConfig(cpu=8, ram="16g", disk="8g"),
-        ),
+def _run_length_stats(config: LengthStatsConfig) -> Artifact:
+    context = ZephyrContext(
+        resources=ResourceConfig(cpu=1, ram="2g"),
+        coordinator_resources=ResourceConfig(cpu=1, ram="4g", preemptible=False),
+        max_workers=min(_MAX_WORKERS, len(config.cells)),
+        chunk_storage_prefix=marin_temp_bucket(ttl_days=1, prefix="zephyr", source_prefix=config.output_path),
+        name="harrier-length-stats",
     )
+    write_length_stats(
+        config.output_path,
+        config.store,
+        config.cells,
+        thresholds=config.thresholds,
+        chunk_rows=config.chunk_rows,
+        zephyr_context=context,
+    )
+    return Artifact(path=config.output_path)
+
+
+def harrier_length_statistics() -> ArtifactStep[Artifact]:
+    """Bind the Harrier offset scan into the training artifact graph."""
+
+    def build_config(ctx: StepContext) -> LengthStatsConfig:
+        return LengthStatsConfig(
+            output_path=ctx.output_path,
+            store=ctx.artifact_path(HARRIER_MIX_2026_08_18_STORE),
+            cells=tuple(cell for cell, _ in _SPEC.available_tokens),
+            thresholds=LENGTH_THRESHOLDS,
+            chunk_rows=DOCUMENT_CHUNK_ROWS,
+        )
+
+    return ArtifactStep(
+        name="grug/moe-hero/harrier-length-stats",
+        version="2026.11.05",
+        artifact_type=Artifact,
+        run=remote(
+            _run_length_stats,
+            resources=ResourceConfig(cpu=1, ram="4g", disk="8g"),
+        ),
+        build_config=build_config,
+        deps=(HARRIER_MIX_2026_08_18_STORE,),
+    )
+
+
+def length_stats_step() -> StepSpec:
+    """Create the runnable StepSpec for the Harrier length-statistics artifact."""
+    return lower(harrier_length_statistics())
 
 
 def main() -> None:

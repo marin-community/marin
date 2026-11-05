@@ -66,6 +66,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
+from experiments.grug.moe_hero_ep.harrier_length_stats import harrier_length_statistics
 from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
     LONG_CONTEXT_TAG,
     harrier_long_context_data_config,
@@ -280,6 +281,7 @@ def build_ladder_run(
 
     hero = size == "d6144"
     use_long_context_mix = hero and HERO_USES_LONG_CONTEXT_MIX
+    length_statistics = harrier_length_statistics() if use_long_context_mix else None
     if context_phases is None:
         if flops_baseline_total is not None:
             raise ValueError("flops_baseline_total requires an explicit context_phases")
@@ -450,8 +452,9 @@ def build_ladder_run(
                     start_step=context_phases[-1].end_step,
                     max_seq_len=model.max_seq_len,
                     validation=validation,
+                    stats_path=ctx.artifact_path(length_statistics),
                 )
-                if use_long_context_mix
+                if length_statistics is not None
                 else harrier_mix_2026_08_18_data_config(
                     ctx=ctx,
                     total_steps=num_steps,
@@ -491,7 +494,11 @@ def build_ladder_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
+        deps=(
+            HARRIER_MIX_2026_08_18_STORE,
+            *validation,
+            *((length_statistics,) if length_statistics is not None else ()),
+        ),
         runtime_args={"train_resources": train_resources},
     )
 
