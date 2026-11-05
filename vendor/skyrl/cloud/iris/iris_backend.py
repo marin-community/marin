@@ -291,6 +291,7 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         cluster=iris["cluster"],
         cluster_config=iris["cluster_config"],
         runtime_profile=RuntimeProfile(runtime["profile"]),
+        hero_piecewise_runtime=runtime["hero_piecewise_runtime"],
         job_name=iris["job_name"],
         priority=iris["priority"],
         max_retries=int(iris["max_retries"]),
@@ -1088,7 +1089,9 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             environment=EnvironmentSpec(
                 env_vars=env_vars,
                 extras=["gpu"],
-                setup_scripts=[task_setup_script(args.runtime_profile)],
+                setup_scripts=[
+                    task_setup_script(args.runtime_profile, hero_piecewise_runtime=args.hero_piecewise_runtime)
+                ],
             ),
             constraints=constraints or None,
             coscheduling=coscheduling,

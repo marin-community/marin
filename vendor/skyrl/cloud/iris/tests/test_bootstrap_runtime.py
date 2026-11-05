@@ -125,7 +125,7 @@ def _fake_frozen_runtime(
 
 
 def _run_bootstrap(
-    environment: Path, process_environment: dict[str, str], profile: str
+    environment: Path, process_environment: dict[str, str], profile: str, *, overlay: str = "none"
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -136,6 +136,7 @@ def _run_bootstrap(
             str(environment / "runtime.sh"),
             profile,
             "production",
+            overlay,
         ],
         cwd=REPOSITORY_ROOT,
         env=process_environment,
@@ -176,7 +177,6 @@ def test_export_bootstrap_does_not_require_rollout_or_telemetry_packages(tmp_pat
 @pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
 def test_bootstrap_uses_system_python_when_managed_pin_is_unresolvable(tmp_path: Path, architecture: str) -> None:
     environment, process_environment = _fake_frozen_runtime(tmp_path, managed_python_pin_is_unresolvable=True)
-    process_environment.pop("MARIN_HERO_PIECEWISE_RUNTIME", None)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
     _write_module(site_packages, "sitecustomize.py", f"import platform\nplatform.machine = lambda: {architecture!r}\n")
 
@@ -185,16 +185,25 @@ def test_bootstrap_uses_system_python_when_managed_pin_is_unresolvable(tmp_path:
     assert result.returncode == 0, result.stderr
 
 
-def test_hero_overlay_is_only_staged_after_explicit_opt_in(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("profile", "expected_error"),
+    [
+        ("megatron", "Hero PIECEWISE experiment requires Linux aarch64"),
+        ("megatron-export", "Hero PIECEWISE overlay requires the megatron runtime profile"),
+    ],
+)
+def test_hero_overlay_is_only_staged_after_explicit_opt_in(
+    tmp_path: Path, profile: str, expected_error: str
+) -> None:
     environment, process_environment = _fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
     _write_module(site_packages, "sitecustomize.py", "import platform\nplatform.machine = lambda: 'x86_64'\n")
-    process_environment.update(MARIN_HERO_PIECEWISE_RUNTIME="1", IRIS_OUTPUT_DIR=str(tmp_path / "output"))
+    process_environment["IRIS_OUTPUT_DIR"] = str(tmp_path / "output")
 
-    result = _run_bootstrap(environment, process_environment, "megatron")
+    result = _run_bootstrap(environment, process_environment, profile, overlay="hero-piecewise")
 
     assert result.returncode != 0
-    assert "Hero PIECEWISE experiment requires Linux aarch64" in result.stderr
+    assert expected_error in result.stderr
     assert not (environment / "runtime.sh").exists()
 
 

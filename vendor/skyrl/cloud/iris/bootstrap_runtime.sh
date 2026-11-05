@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-if [[ $# -ne 5 ]]; then
-  echo "usage: bootstrap_runtime.sh PROJECT_ROOT ENVIRONMENT RUNTIME_FILE PROFILE INSTALL_MODE" >&2
+if [[ $# -ne 6 ]]; then
+  echo "usage: bootstrap_runtime.sh PROJECT_ROOT ENVIRONMENT RUNTIME_FILE PROFILE INSTALL_MODE OVERLAY" >&2
   exit 2
 fi
 
@@ -12,11 +12,26 @@ environment="$2"
 runtime_file="$3"
 profile="$4"
 install_mode="$5"
+overlay="$6"
 
 case "$profile" in
   megatron|megatron-export) ;;
   *)
     echo "unsupported runtime profile: $profile" >&2
+    exit 2
+    ;;
+esac
+
+case "$overlay" in
+  none) ;;
+  hero-piecewise)
+    if [[ "$profile" != megatron ]]; then
+      echo "Hero PIECEWISE overlay requires the megatron runtime profile" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "unsupported runtime overlay: $overlay" >&2
     exit 2
     ;;
 esac
@@ -62,7 +77,7 @@ UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
   "${runtime_extras[@]}"
 
 python="$environment/bin/python"
-if [[ "$profile" == megatron && "${MARIN_HERO_PIECEWISE_RUNTIME:-0}" == 1 ]]; then
+if [[ "$overlay" == hero-piecewise ]]; then
   "$python" "$project_root/../../experiments/post_training/hero_rl/piecewise_runtime.py" \
     --workspace "$project_root/../.." \
     --receipt "${IRIS_OUTPUT_DIR:?}/hero-piecewise-runtime.json"

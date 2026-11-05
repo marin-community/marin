@@ -20,5 +20,6 @@ bash "$repository_root/cloud/iris/bootstrap_runtime.sh" \
   "$NIGHTLY_RL_ENV" \
   "$RUNTIME_ENV_FILE" \
   "$runtime_profile" \
-  "$install_mode"
+  "$install_mode" \
+  none
 source "$RUNTIME_ENV_FILE"

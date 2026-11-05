@@ -6,6 +6,7 @@
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -16,6 +17,11 @@ from experiments.post_training.hero_rl import piecewise_runtime as runtime
 
 @pytest.fixture
 def wheel_environment(tmp_path, monkeypatch):
+    # Staging runs before imports in a fresh task. Other suites may import vLLM
+    # in this process; restore that task boundary for the temporary wheel.
+    for name in tuple(sys.modules):
+        if name == "vllm" or name.startswith("vllm."):
+            monkeypatch.delitem(sys.modules, name)
     workspace = tmp_path / "workspace"
     payload = workspace / runtime.PAYLOAD_DIRECTORY
     payload.mkdir(parents=True)

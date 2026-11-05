@@ -63,6 +63,7 @@ class RuntimeConfig:
     """SkyRL execution settings."""
 
     profile: str = MISSING
+    hero_piecewise_runtime: bool = False
     entrypoint: str = ""
     training_type: str | None = None
     experiments_dir: str = "/app/experiments"

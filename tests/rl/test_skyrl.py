@@ -451,6 +451,8 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
     assert base.fingerprint() == moved.fingerprint()
     assert base.fingerprint() == resized.fingerprint()
     assert base.fingerprint() != changed_roles.fingerprint()
+    overlay = skyrl_step(dataclasses.replace(spec, hero_piecewise_runtime=True), _execution())
+    assert base.fingerprint() != overlay.fingerprint()
 
 
 def test_skyrl_step_declares_model_and_data_dependencies() -> None:

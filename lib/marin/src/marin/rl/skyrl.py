@@ -427,6 +427,7 @@ class SkyRLSpec:
     topology: SkyRLTopology
     retention: SkyRLRetentionPolicy
     seed: int
+    hero_piecewise_runtime: bool = False
 
     def __post_init__(self) -> None:
         _validate_skyrl_recipe(self.config_yaml, self.topology)
@@ -832,6 +833,7 @@ def _launch_config_yaml(
         },
         "runtime": {
             "profile": _declared_config_value(recipe, "trainer.strategy"),
+            "hero_piecewise_runtime": spec.hero_piecewise_runtime,
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
             "task_env": task_env,

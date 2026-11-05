@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import shlex
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +18,7 @@ from cloud.iris.ray_storage import RaySpillBackend
 from cloud.iris.runtime_environment import RuntimeProfile
 
 
+@pytest.mark.parametrize("hero_piecewise_runtime", [False, True])
 @pytest.mark.parametrize("preemption_retries", [None, 0, 4])
 @pytest.mark.parametrize(
     "target_cluster,parent_cluster_config,interface",
@@ -28,7 +30,7 @@ from cloud.iris.runtime_environment import RuntimeProfile
     ],
 )
 def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
-    tmp_path, monkeypatch, target_cluster, parent_cluster_config, interface, preemption_retries
+    tmp_path, monkeypatch, target_cluster, parent_cluster_config, interface, preemption_retries, hero_piecewise_runtime
 ):
     requests = []
 
@@ -73,6 +75,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         memory="512GB",
         disk="512GB",
         runtime_profile=RuntimeProfile.MEGATRON,
+        hero_piecewise_runtime=hero_piecewise_runtime,
         priority="interactive",
         storage_paths=RLStoragePaths("checkpoints", "exports", "trajectories", "logs", 2),
         ray_spill_backend=RaySpillBackend.LOCAL,
@@ -97,6 +100,8 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     [(address, request)] = requests
     assert address == "http://parent-controller:8080"
     assert request.name == result.job_id
+    setup_args = shlex.split(request.environment.setup_scripts[0])
+    assert setup_args[setup_args.index("production") + 1] == ("hero-piecewise" if hero_piecewise_runtime else "none")
     backend_default = inspect.signature(IrisClient.submit).parameters["max_retries_preemption"].default
     assert request.max_retries_preemption == (backend_default if preemption_retries is None else preemption_retries)
     assert all(constraint.key != CLUSTER_CONSTRAINT_KEY for constraint in request.constraints)

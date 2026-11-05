@@ -333,7 +333,6 @@ def training_config(hardware: Hardware = Hardware.H100) -> dict:
     }
     _materialize_role_plan_config(config, plan)
     if hardware is Hardware.GB200_48:
-        config["extra_env"]["MARIN_HERO_PIECEWISE_RUNTIME"] = "1"
         # The native cache cap also prevents large-block rounding. Unrounded
         # blocks must bypass Torch's power-of-two cache buckets to avoid reuse
         # of a smaller block for a larger request in the same bucket.
@@ -430,6 +429,7 @@ def build_qualification(
         topology=SkyRLTopology(plan.num_nodes, plan.policy_num_gpus_per_node, profile.gpu_variant, plan),
         retention=SkyRLRetentionPolicy(),
         seed=SEED,
+        hero_piecewise_runtime=hardware is Hardware.GB200_48,
     )
     config = training_config(hardware)
     config["trainer"].update(eval_before_train=False, eval_interval=-1)

@@ -48,6 +48,7 @@ for path in sys.argv[1:]:
         iris_backend.launch(args, Path.cwd())
     result.append({
         "training_type": launch.runtime.training_type,
+        "hero_piecewise_runtime": launch.runtime.hero_piecewise_runtime,
         "policy_gpus": (
             launch.skyrl.trainer.placement.policy_num_nodes * launch.skyrl.trainer.placement.policy_num_gpus_per_node
         ),
@@ -140,6 +141,7 @@ def test_hero_qualification_composes_multinode_probe_and_updates(tmp_path: Path)
     for stage in (numerics, updates):
         assert stage["policy_gpus"] == 128
         assert stage["allocated_gpus"] == 152
+        assert stage["hero_piecewise_runtime"] is False
         assert stage["inference_mp"] is True
         assert stage["request_window"] == 4096
         assert stage["response_cap"] == 3072
@@ -178,6 +180,7 @@ def test_experimental_gb200_profile_composes_36_learners_and_12_servers(tmp_path
     assert updates["max_steps"] == 4
     for stage in (numerics, updates):
         assert (stage["policy_gpus"], stage["allocated_gpus"]) == (36, 48)
+        assert stage["hero_piecewise_runtime"] is True
         assert stage["geometry"] == {
             "tensor_model_parallel_size": 1,
             "pipeline_model_parallel_size": 12,

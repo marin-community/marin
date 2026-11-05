@@ -64,11 +64,11 @@ the three Python changes together by replacing the environment's package entry.
 The shared uv package cache remains unchanged.
 
 The overlay manifest SHA256 is
-`6c933795b025ceac484f0d503bac933f47fc6821e05e2bfe2e55531ff065ba90`.
+`0be164471abec10acfce437a00d6f7deeda8b72c7316c3665350ffd0a7e54c90`.
 The source patch SHA256 is
 `1b377716b4586cc8ad5e4c607048aa6bb39ce159893da847cf6514ba9aae1896`
 against vLLM `39e62869693c46402b1a95fde4fc55ca1aab9ae1`.
-GB200 artifact names include `piecewise-6c933795b025ceac`, and engine settings
+GB200 artifact names include `piecewise-0be164471abec10a`, and engine settings
 request `PIECEWISE` with capture sizes `[1, 2, 4, 8, 16]`. Batch invariance and
 routed-expert capture remain enabled. Full CUDA graphs remain unsupported.
 Native `cudagraph_metrics` records execution tables. Require capture logs and
@@ -76,9 +76,10 @@ positive completed PIECEWISE executions for all twelve serving DP ranks before
 accepting the full-model gate. Coordinator and GPU tasks have zero failure and
 preemption retries.
 
-The GB200 profile opts into this overlay with
-`extra_env.MARIN_HERO_PIECEWISE_RUNTIME=1`; ordinary Megatron and export
-profiles retain their existing bootstrap.
+The GB200 artifact sets `SkyRLSpec.hero_piecewise_runtime=True`, which renders
+`runtime.hero_piecewise_runtime` and passes the explicit `hero-piecewise`
+bootstrap argument. Ordinary Megatron and export profiles retain their existing
+bootstrap.
 
 The GB200 update profile uses
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,pinned_max_cached_size_mb:1`.

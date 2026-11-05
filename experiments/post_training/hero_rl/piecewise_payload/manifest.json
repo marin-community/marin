@@ -40,7 +40,7 @@
     "vendor/skyrl/pyproject.toml": "20d36bdb03519e05df7592f081111338caca92c0f4d6a53f19cf279875dd1a06",
     "vendor/skyrl/uv.lock": "9892cf3c54141e908d8def4a9e72f6d045601e3c9bb3f47fbcc50ca297d488de",
     "vendor/skyrl/.uv-version": "44712a66e62881fe24778a22d0f57d0e74084311fd2cd84070fc7fa9ce0f65bf",
-    "vendor/skyrl/cloud/iris/runtime_environment.py": "c0d3e341f628fc6166af1245ca629cce6a0203b74a0823e307613654eb2ebaf9",
+    "vendor/skyrl/cloud/iris/runtime_environment.py": "c3746d60cc748c9907012e9ea911365aaac8010cc76b61b74845d1ab136540f1",
     "vendor/skyrl/marinskyrl/environment_contract.py": "c9270125a0889ee4290dc46579511c571b4fc0acaeba128fbcfd6ccba72775c9"
   },
   "qualification": "EXPERIMENTAL: kernel, matched-route DP4 and fresh full-Hero numerics gates required"
