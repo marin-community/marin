@@ -175,6 +175,7 @@ def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch
         "data-short": "aea96ee0",
         "speed-medium": "13f69efa",
         "learning-medium": "cff794ee",
+        "speed-long": "11b234e3",
     }
     paths = []
     for name in expected:
