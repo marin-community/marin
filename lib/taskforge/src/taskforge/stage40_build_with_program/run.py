@@ -34,7 +34,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 from rigging.filesystem.atomic import write_bytes_atomic
 from taskcompendium.models import TaskSpec
 
@@ -43,7 +43,13 @@ from taskforge.ledger.records import EntryKind, span
 from taskforge.llm.client import Completion, ModelClient, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
-from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
+from taskforge.stage30_author.program import (
+    BUILD_INPUT,
+    PROPOSAL_INPUT,
+    RLEnvBuildProgram,
+    RLEnvBuildSink,
+    RLEnvBuildStep,
+)
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
     BuildFailure,
@@ -202,13 +208,16 @@ async def run_program(
     store: RLEnvBuildStepStore,
     model_digest: str,
     invalidate: frozenset[str] = frozenset(),
+    *,
+    build_input: JsonValue = None,
 ) -> tuple[TaskSpec, tuple[RLEnvBuildStepOutcome, ...]]:
     """Run ``program`` and return the sink's ``TaskSpec`` with one outcome per step, in ``program.order``.
 
     Every step starts as soon as the steps it takes inputs from have finished, so steps that do not
     depend on each other run at the same time; the sink runs once every step has. A step's key
     holds the output digest of each input, with ``content_hash.digest`` of ``proposal`` for
-    ``PROPOSAL_INPUT``. The runner passes the key to ``memoized``. When ``store`` holds a memo
+    ``PROPOSAL_INPUT`` and the caller's immutable build input for ``BUILD_INPUT``. The runner passes the key to
+    ``memoized``. When ``store`` holds a memo
     under it, the step is a ``HIT`` and the runner passes the decoded output on. Otherwise
     ``memoized`` calls the step with its context and inputs and stores the output, and the step is
     a ``MISS``. A step named in ``invalidate`` runs either way and is ``INVALIDATED``. The first
@@ -223,13 +232,13 @@ async def run_program(
         BuildInfrastructureFailure: a step failed because of the host, anywhere in the cause chain
             of what it raised.
     """
-    assert (
-        store.workpiece_id == context.workpiece_id
-    ), f"store is for {store.workpiece_id}, context for {context.workpiece_id}"
+    assert store.workpiece_id == context.workpiece_id, (
+        f"store is for {store.workpiece_id}, context for {context.workpiece_id}"
+    )
     unknown = sorted(invalidate - {*program.steps, program.sink.name})
     assert not unknown, f"invalidate names {unknown}, which are not steps of the program"
-    outputs: dict[str, Any] = {PROPOSAL_INPUT: proposal}
-    digests: dict[str, str] = {PROPOSAL_INPUT: digest(proposal)}
+    outputs: dict[str, Any] = {PROPOSAL_INPUT: proposal, BUILD_INPUT: build_input}
+    digests: dict[str, str] = {PROPOSAL_INPUT: digest(proposal), BUILD_INPUT: digest(build_input)}
     outcomes: dict[str, RLEnvBuildStepOutcome] = {}
     raised: dict[BaseException, TracebackType | None] = {}
     program_files = {inspect.getfile(node.fn) for node in (*program.steps.values(), program.sink)}
@@ -373,6 +382,7 @@ async def run_build(
     round: int,  # noqa: A002 - the loop's round number
     *,
     research: ResearchRequirement,
+    build_input: JsonValue = None,
     invalidate: frozenset[str] = frozenset(),
     model_digest: str | None = None,
 ) -> TaskDraft:
@@ -391,6 +401,8 @@ async def run_build(
         research: Under ``ENFORCED``, a program for a proposal that lists research needs a ``sources``
             step returning ``Sources`` with a finding for every research item; a proposal without
             research needs no such step.
+        build_input: Immutable source-specific data passed to steps taking ``build_input`` and included in their
+            cache keys.
         invalidate: Step names to rerun even when the store holds their output.
         model_digest: Replaces ``build_model_digest(model, sampling, services)`` in every key.
 
@@ -414,7 +426,9 @@ async def run_build(
     )
     with span(services.ledger, EntryKind.STAGE, workpiece_id=workpiece_id, round=round, step=BUILD_STAGE) as fields:
         fields.attrs["program"] = program.digest
-        task, outcomes = await run_program(program, context, proposal, store, keyed_model, invalidate)
+        task, outcomes = await run_program(
+            program, context, proposal, store, keyed_model, invalidate, build_input=build_input
+        )
         fields.attrs["hits"] = str(sum(outcome.status is CacheStatus.HIT for outcome in outcomes))
         fields.attrs["steps"] = str(len(outcomes))
     draft = TaskDraft(

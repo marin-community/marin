@@ -41,6 +41,7 @@ RESEARCH_CITATION = re.compile(r"research\[(\d+)\]")
 
 class SourceKind(StrEnum):
     CAPABILITY = "capability"
+    OPEN_ENDED = "open_ended"
     REPO = "repo"
 
 
@@ -126,7 +127,7 @@ class ProposalFormatError(ValueError):
 @with_config(ConfigDict(extra="forbid"))
 @dataclass(frozen=True)
 class SourceRef:
-    """Where the proposal came from: a catalog capability id or a repository, and its content hash."""
+    """Where the proposal came from, with its source-specific identity and content hash."""
 
     kind: SourceKind
     ref: Text

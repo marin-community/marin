@@ -64,7 +64,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from taskcompendium.submission import require_submission_compatibility
 from verifyit.candidate import IN_PROCESS_MODES
-from verifyit.spec import Spec, mode_of
+from verifyit.spec import JudgeSpec, Spec, mode_of
 
 from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, MachineHost, container_backend, grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
@@ -391,11 +391,11 @@ def answer_grader(spec: Spec, *, environment: EnvironmentRequirements | None = N
     build time: grade with deterministic checks in ``python_grader`` instead.
 
     Raises:
-        ValueError: the mode does not grade in process and no environment was given, or the
-            environment is ``GRADER_BASE_IMAGE``.
+        ValueError: the mode is neither in-process nor a host judge and no environment was given, or the environment
+            is ``GRADER_BASE_IMAGE``.
     """
     mode = mode_of(spec)
-    if environment is None and mode not in IN_PROCESS_MODES:
+    if environment is None and mode not in IN_PROCESS_MODES and not isinstance(spec, JudgeSpec):
         raise ValueError(
             f"verifyit mode {mode.value!r} does not grade in process; give it a grading environment with "
             "verifyit installed, or use script_grader"
