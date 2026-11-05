@@ -187,11 +187,11 @@ def configure_coreweave_s3() -> None:
 
 
 def s3_credential_options() -> dict[str, str]:
-    """Read a complete configured credential set or the named AWS secrets."""
+    """Read complete configured, named, or native shared-file credentials."""
     configured = fsspec.config.conf.get("s3") or {}
     if configured.get("key") and configured.get("secret"):
         return {name: configured[name] for name in ("key", "secret", "token") if configured.get(name)}
-    return {
+    named = {
         option: value
         for option, name in (
             ("key", "AWS_ACCESS_KEY_ID"),
@@ -199,6 +199,25 @@ def s3_credential_options() -> dict[str, str]:
             ("token", "AWS_SESSION_TOKEN"),
         )
         if (value := get_secret(name))
+    }
+    if named.get("key") and named.get("secret"):
+        return named
+    return _shared_credential_options(profile_name=configured.get("profile"))
+
+
+def _shared_credential_options(*, profile_name: str | None = None) -> dict[str, str]:
+    if not (filename := os.environ.get("AWS_SHARED_CREDENTIALS_FILE")):
+        return {}
+    credentials = SharedCredentialProvider(
+        creds_filename=filename, profile_name=profile_name or os.environ.get("AWS_PROFILE", "default")
+    ).load()
+    if credentials is None:
+        return {}
+    frozen = credentials.get_frozen_credentials()
+    return {
+        option: value
+        for option, value in (("key", frozen.access_key), ("secret", frozen.secret_key), ("token", frozen.token))
+        if value
     }
 
 
@@ -219,14 +238,9 @@ def s3_credentials(store: StoreType) -> tuple[str, str] | None:
     secret = get_secret(config.key_secret_env) or get_secret("AWS_SECRET_ACCESS_KEY")
     if key and secret:
         return key, secret
-    if filename := os.environ.get("AWS_SHARED_CREDENTIALS_FILE"):
-        credentials = SharedCredentialProvider(
-            creds_filename=filename, profile_name=os.environ.get("AWS_PROFILE", "default")
-        ).load()
-        if credentials is not None:
-            frozen = credentials.get_frozen_credentials()
-            if frozen.access_key and frozen.secret_key:
-                return frozen.access_key, frozen.secret_key
+    shared = _shared_credential_options()
+    if shared.get("key") and shared.get("secret"):
+        return shared["key"], shared["secret"]
     return None
 
 
