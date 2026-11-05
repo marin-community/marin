@@ -141,7 +141,6 @@ jobs:
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
-      # The Grafana nightly matrix finds skipped runs by this step's name.
       - name: Note a skipped day
         if: steps.wait.outputs.resource_exhausted == 'true'
         run: |
