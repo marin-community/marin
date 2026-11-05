@@ -1,6 +1,6 @@
 # Evaluation launcher
 
-Run Evalchemy and Harbor evaluations on Iris. Evaluations in one launch share a
+Run curated TaskSpec and Harbor evaluations on Iris. Evaluations in one launch share a
 model server and, when configured, a hosted judge. Each evaluation writes its own
 results and `record.json`. Serving workers stop when the launch ends.
 
@@ -32,12 +32,12 @@ Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
 `smoke`, `core`, `nlp`, `chat`, `math`, `code`, and `agentic`.
 [evals.py](evals.py) lists their members and the available evaluation keys.
 
-To use evaluation files, repeat `--evalchemy-config` or `--harbor-config`.
+To use evaluation files, repeat `--curated-config` or `--harbor-config`.
 These add to `--evals`; each file produces one evaluation record. With no
 evaluation selection, the launcher uses `smoke`. File-only launches do not add
 that default.
 
-For example, run an Evalchemy task and a Harbor benchmark on shared GPU serving:
+For example, run a curated task and a Harbor benchmark on shared GPU serving:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
@@ -58,7 +58,7 @@ uv run python -m experiments.evaluation.cli launch \
 | `--limit N` | Cap items or tasks per evaluation. |
 | `--instances N` | Start N candidate serving instances, each with the selected accelerator shape. Default: 1. |
 | `--max-concurrent N` | Run at most N evaluators at once on shared serving. Default: 1. |
-| `--seed N` | Override the Evalchemy seed. |
+| `--seed N` | Override the curated run seed. |
 | `--version <label>` | Set the cohort label. Labels do not change evaluator settings. |
 | `--records-prefix <URI>` | Choose the root for records and default result paths. |
 | `--run-id <id>` | Set a launch ID that you can reuse to retry failed evaluations. |
@@ -80,38 +80,26 @@ uv run python -m experiments.evaluation.cli launch \
   --federated_cluster cw-rno2a --limit 2
 ```
 
-Evalchemy tasks that need an external judge declare a `judge` block in their
+Curated evaluations that need an external judge declare a `judge` block in their
 configuration. It supplies the endpoint, model, and secret reference. Records
 omit the secret reference and resolved credential.
 
 ## Evaluation files and runtimes
 
-Evalchemy and Harbor run from [vendor/evalchemy](../../vendor/evalchemy/README.md)
-and [vendor/harbor](../../vendor/harbor/README.md). Each has a separate environment
-and frozen lockfile. Neither is installed in the main workspace environment.
+Curated evaluations run through `marin.rollouts.evaluation`, using complete corpora
+from the task-curation catalog. Named menus select exact protocol variants, including
+shots and raw/chat transport. Missing corpus dependencies build before inference.
+The standalone `task_driver` also accepts already published corpus roots.
 
-Historical cohorts pinned to external Evalchemy commits require their recorded
-Marin checkout. The current launcher rejects those configurations with vendored
-Evalchemy. Historical records remain readable.
+`--curated-config` files name catalog sources, optional chat variants, source limits,
+budgets, seeds and explicit judge metadata. They accept no evaluator plugins or
+runtime extras. `standard-local` selects standard protocols that require no external
+judge. GraphWalks needs at least 8,192 output tokens, even in a bounded smoke.
 
-### Evalchemy
-
-Put portable YAML or JSON files under [configs/evalchemy](configs/evalchemy).
-A file selects `tasks`, per-task options, generation settings, and any required
-`runtime_extras`. See [the runtime reference](../../vendor/evalchemy/README.md)
-for the retained tasks and dependencies.
-
-A Marin dry run checks the file shape and launch plan. It does not check the
-installed task catalog. Validate task names separately before submission:
-
-```bash
-uv run --project vendor/evalchemy --frozen --no-default-groups evalchemy validate-config \
-  experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml
-```
-
-An explicit `--limit` or `--seed` overrides the file value.
-`apply_chat_template` uses the model setting unless the file sets it.
-GPQA Diamond's seeded requests require GPU vLLM; they do not work with TPU vLLM.
+The driver writes raw attempts, samples, selection decisions and evidence. Evaldash
+computes metadata-driven summaries and selects the latest terminal retry for both
+scores and the sample browser. Producer records contain status and raw archive
+locations. The old evaluator runtime is removed; historical archive readers remain.
 
 ### Harbor
 
@@ -148,7 +136,9 @@ Evaluations in one launch share a `group_id`, which is the launch ID set by
 The result path contains a FineStore archive:
 
 - `samples`: normalized per-item scores. Repeated answers have distinct trial IDs.
-- `evalchemy_results`: Evalchemy aggregate result documents.
+- `evaluation_attempts`: append-only attempt outcomes and retry identities.
+- `evaluation_selection`: cohort admission decisions.
+- `evaluation/run.json`: immutable run configuration, manifests and protocols.
 - `steps`: Harbor trajectory steps.
 - `rollouts_v1`: normalized conversations derived by Marin.
 
@@ -161,9 +151,9 @@ Sequential vLLM evaluations record token and throughput measurements.
 Concurrent evaluations omit server-wide measurements because the counts cannot
 be assigned to one evaluator.
 
-Evalchemy coverage is scored items divided by attempted items. Infrastructure
-failures do not count as scored items. A run with infrastructure errors and
-coverage below 90% is marked `infra_failed` and is not cached as successful.
+Curated workers fail when infrastructure failures remain after retry. Evaldash
+computes coverage and summaries from raw terminal attempts; valid zero scores count
+as scored. Model mistakes do not become infrastructure failures.
 
 ## Recovery
 
@@ -173,8 +163,8 @@ pending evaluation gets an infrastructure-failure record.
 
 During inference preemption, Marin stops affected evaluators and waits for the
 candidate and any hosted judge to become ready. It then restarts the evaluators
-at the same result paths. Harbor keeps completed trials. Evalchemy reuses
-committed successful responses and retries failed requests. Uncommitted work can
+at the same result paths. Harbor keeps completed trials. Curated execution reuses
+completed logical trials and retries infrastructure failures. Uncommitted work can
 run again. If inference ends permanently, unfinished evaluations fail.
 
 To repeat a CLI launch while retaining completed steps, set `--run-id` on the
@@ -210,18 +200,16 @@ rebuilding paths.
 
 Pipeline retries reuse completed evaluations when their resolved settings match.
 Changes to the model, evaluator, judge, or evaluation configuration create new run directories;
-mutable `dev` versions always create new runs. Evalchemy caches include evaluator
-source, data, configuration, lockfile, and selected extras. Changes to local
-storage libraries or Marin adapters are recorded as provenance but do not
-invalidate completed work. Bump the evaluation version or `cache_key` when such
-a change affects results.
+mutable `dev` versions always create new runs. Curated identities include source
+artifact fingerprints, selected variants, pinned model/tokenizer revisions and
+the driver execution revision. Throughput controls do not invalidate scores.
 
 To extend the catalog:
 
 - Add model YAML under `serve/models/<org>/<model>.yaml`; see the
   [model schema](serve/models/README.md).
-- Add Evalchemy files under `configs/evalchemy/` and register their names in
-  `_STANDARD_EVALCHEMY_EVALS` in [evals.py](evals.py).
+- Add pinned evaluation source recipes under `experiments/post_training/task_curation/datasets/`
+  and register source selections in `STANDARD_EVALS` in [evals.py](evals.py).
 - Add Harbor files under `configs/harbor/` and register them with
   `harbor_definition()`. Add keys to `SUITES` when they belong in a suite.
 

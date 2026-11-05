@@ -1,0 +1,228 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Raw TaskSpec ingestion preserves logical trials and declared reductions."""
+
+import asyncio
+import json
+import math
+from datetime import UTC, datetime
+
+import pytest
+from evaldash.app import Ingestor, MemoryRecordStore
+from evaldash.curated import import_curated_record, logical_samples
+from evaldash.record_reconciliation import VerificationSchedule, _inspect_record
+from evaldash.results_db import ObservationKind, SourceState
+from evaldash.samples import _archive_task_table
+from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind, sample_to_archive_row
+from finestore.reader import ReadView
+from finestore.schema import arrow_schema
+from finestore.store import DataStore
+from marin.evaluation.records import CuratedRef, EvalRef, EvalRunRecord, HardwareRef, ModelRef, Provenance, write_record
+from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt
+from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection
+from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, Sampling, TrialPolicy
+
+
+@pytest.fixture
+def raw_run(tmp_path):
+    root = str(tmp_path / "run" / "results")
+    record = EvalRunRecord(
+        run_id="run",
+        group_id="group",
+        created_at="2026-11-05T00:00:00Z",
+        user="test",
+        model=ModelRef(name="solver", location="test/solver", backend="vllm"),
+        eval=EvalRef(
+            name="colors",
+            mechanism="curated",
+            curated=CuratedRef(datasets=("source",), settings_json='{"source_limit":null}'),
+        ),
+        hardware=HardwareRef(platform="gpu", accelerator="H100x1", region_or_cluster="test"),
+        provenance=Provenance(git_sha="revision", launch_host="test"),
+        status="succeeded",
+        results_path=root,
+        error=None,
+        metrics={},
+        jobs={},
+        log_tails={},
+    )
+    return record
+
+
+def write_observations(record, *, summary="mean", metrics=("accuracy",), observations):
+    protocol = EvaluationProtocol(
+        benchmark="colors",
+        version="1",
+        operation="chat_generation",
+        sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=16, stop=(), chat_template_kwargs={}),
+        trials=TrialPolicy(count=1, seed=0),
+        metrics=tuple(Metric(name=name, kind="continuous", higher_is_better=True) for name in metrics),
+        primary_metric=metrics[0],
+        summary=summary,
+        expected_population=2,
+    )
+    with DataStore.open(record.results_path) as store:
+        EvaluationStore(store)
+        store.table(
+            ATTEMPTS_TABLE,
+            schema=arrow_schema(Attempt),
+            primary_key=("dataset", "source_row", "trial", "retry", "phase"),
+            schema_version=1,
+        )
+        store.table(
+            SELECTIONS_TABLE, schema=arrow_schema(Selection), primary_key=("dataset", "source_row"), schema_version=1
+        )
+        with store.transaction() as transaction:
+            transaction.write_object(
+                RUN_OBJECT,
+                json.dumps(
+                    {
+                        "datasets": [
+                            {
+                                "dataset": "dataset",
+                                "protocol": protocol.model_dump(mode="json"),
+                                "manifest": {"rows": 2, "source_dataset": "colors", "source_revision": "pin"},
+                            }
+                        ]
+                    }
+                ).encode(),
+            )
+            for index in range(2):
+                transaction.table(SELECTIONS_TABLE).add(
+                    Selection(
+                        dataset="dataset",
+                        source_row=f"rows:{index}",
+                        source_ordinal=index,
+                        status="selected",
+                        reason=None,
+                        rank=index,
+                        context_window=1024,
+                        max_tokens=16,
+                        prompt_tokens=1,
+                        reference_tokens=None,
+                    ).model_dump(mode="json")
+                )
+            for index, retry, phase, outcome, values, weights in observations:
+                attempt = Attempt(
+                    dataset="dataset",
+                    task_id=str(index),
+                    source_row=f"rows:{index}",
+                    trial=0,
+                    retry=retry,
+                    phase=phase,
+                    seed=0,
+                    outcome=outcome,
+                    error=None,
+                    result_blob="evidence",
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                )
+                transaction.table(ATTEMPTS_TABLE).add(attempt.model_dump(mode="json"))
+                if phase == "finished":
+                    sample = EvalSample(
+                        task="colors",
+                        doc_id=str(index),
+                        kind=SampleKind.GENERATION,
+                        output="red",
+                        metrics=values,
+                        grading=Grading(
+                            method="fixture",
+                            metric=metrics[0],
+                            score=values.get(metrics[0]),
+                            detail=json.dumps({"detail": {"weights": weights}}),
+                        ),
+                        doc=json.dumps({"groups": {"color": "red"}}),
+                    )
+                    transaction.table("samples").add(sample_to_archive_row(sample, trial_id=f"dataset/0/{retry}"))
+
+
+def test_raw_ingestion_and_browser_choose_terminal_trials_without_counting_retries(raw_run, tmp_path):
+    write_observations(
+        raw_run,
+        observations=[
+            (0, 0, "finished", "infra_error", {}, {}),
+            (0, 1, "finished", "graded", {"accuracy": 0.0}, {}),
+            (0, 2, "started", None, {}, {}),
+            (1, 0, "finished", "graded", {"accuracy": 1.0}, {}),
+        ],
+    )
+    write_record(raw_run, str(tmp_path))
+    store = MemoryRecordStore()
+    assert asyncio.run(Ingestor(store, (str(tmp_path),), 1).run_once()) == ()
+    imported = store.get_record("run")
+    assert imported is not None
+    assert imported["metrics"]["colors"]["accuracy"] == 0.5
+    assert imported["coverage"]["colors"]["n_scored"] == 2
+    assert imported["coverage"]["colors"]["n_attempted"] == 2
+    samples = list(logical_samples(ReadView(raw_run.results_path)))
+    assert sorted(dict(sample["metrics"])["accuracy"] for sample in samples) == [0, 1]
+    table = _archive_task_table(raw_run.results_path, "colors")
+    assert sorted(dict(row["metrics"])["accuracy"] for row in table.to_pylist()) == [0, 1]
+    assert import_curated_record(raw_run).canonical_metrics["colors"]["accuracy"] == 0.5
+
+
+@pytest.mark.parametrize(
+    "summary,metric,observations,expected",
+    [
+        (
+            "weighted_mean",
+            "instruction",
+            [
+                (0, 0, "finished", "graded", {"instruction": 1.0}, {"instruction": 1}),
+                (1, 0, "finished", "graded", {"instruction": 0.0}, {"instruction": 3}),
+            ],
+            0.25,
+        ),
+        (
+            "perplexity",
+            "perplexity,none",
+            [
+                (0, 0, "finished", "graded", {"perplexity,none": -2.0}, {}),
+                (1, 0, "finished", "graded", {"perplexity,none": -4.0}, {}),
+            ],
+            math.exp(3),
+        ),
+    ],
+)
+def test_raw_import_uses_the_protocol_reduction(raw_run, summary, metric, observations, expected):
+    write_observations(raw_run, summary=summary, metrics=(metric,), observations=observations)
+    result = import_curated_record(raw_run)
+    assert result.metrics["colors"][metric] == pytest.approx(expected)
+    assert result.metrics["colors"][f"color=red/{metric}"] == pytest.approx(expected)
+
+
+def test_failed_and_unfinished_trials_remain_missing_coverage(raw_run):
+    write_observations(
+        raw_run, observations=[(0, 0, "finished", "infra_error", {}, {}), (1, 0, "started", None, {}, {})]
+    )
+    result = import_curated_record(raw_run)
+    assert result.metrics["colors"] == {}
+    assert result.coverage["colors"].n_scored == 0
+    assert result.coverage["colors"].errors == {"infra_error": 1, "unfinished": 1}
+
+
+def test_reconciliation_refreshes_resumed_raw_results_without_rewriting_launch_record(raw_run, tmp_path):
+    write_observations(raw_run, observations=[(0, 0, "finished", "graded", {"accuracy": 0.0}, {})])
+    write_record(raw_run, str(tmp_path))
+    path = str(tmp_path / "run" / "record.json")
+    schedule = VerificationSchedule(checked_at=datetime.now(UTC), retry_after=1, revalidate_after=60)
+    first = _inspect_record(path, None, schedule)
+    assert first.record is not None
+    assert first.record.coverage["colors"].n_scored == 1
+    state = SourceState(
+        path=path,
+        run_id="run",
+        object_version=first.object_version,
+        last_verified_at=schedule.checked_at,
+        next_verify_at=schedule.checked_at,
+        missing_since=None,
+        error=None,
+    )
+    assert _inspect_record(path, state, schedule).kind is ObservationKind.UNCHANGED
+    write_observations(raw_run, observations=[(1, 0, "finished", "graded", {"accuracy": 1.0}, {})])
+    resumed = _inspect_record(path, state, schedule)
+    assert resumed.kind is ObservationKind.CHANGED
+    assert resumed.record is not None
+    assert resumed.record.metrics["colors"]["accuracy"] == 0.5
+    assert resumed.record.coverage["colors"].n_scored == 2

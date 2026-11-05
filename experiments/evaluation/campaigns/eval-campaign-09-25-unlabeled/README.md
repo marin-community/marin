@@ -64,7 +64,7 @@ absolute path to this YAML by default.
 
 Evalchemy's 30-minute timeout starts separately for each request after it acquires a client
 concurrency slot. A transport attempt may use that full window; retrying does not extend it.
-`evalchemy_num_concurrent` in a model config limits simultaneous requests to that model's endpoint.
+`evaluation_num_concurrent` in a model config limits simultaneous requests to that model's endpoint.
 K2 is limited to four after its 16-request runs saturated serving and produced mostly timed-out
 generations. Effective concurrency is recorded in each run's Evalchemy provenance.
 
@@ -82,7 +82,7 @@ cd experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled
 ```
 
 The first launch command is a dry run. `--suite nonagentic` and `--suite agentic` select one full
-mechanism. Repeat `--evalchemy NAME` or `--harbor NAME` to select individual configs; pair a selector
+mechanism. Repeat `--curated NAME` or `--harbor NAME` to select individual configs; pair a selector
 with its corresponding suite to avoid launching the other mechanism. `--wait` waits for durable
 records and requires CoreWeave object-store credentials.
 

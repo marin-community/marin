@@ -112,6 +112,7 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataset]:
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
+                requires_judge=judged,
                 version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(

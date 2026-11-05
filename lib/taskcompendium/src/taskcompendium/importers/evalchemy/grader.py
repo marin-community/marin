@@ -26,6 +26,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
+    "checkpoint_generation": ("checkpoint_generation.py", "minerva.py", "amc.py"),
     "boxed_math": ("math.py", "amc.py", "minerva.py"),
     "amc": ("amc.py",),
     "olympiad": ("olympiad.py", "minerva.py"),

@@ -1,0 +1,5 @@
+name: gsm8k-0shot
+sources:
+- evalchemy-gsm8k-0shot
+chat_sources:
+- evalchemy-gsm8k-0shot-chat

@@ -35,6 +35,7 @@ from finestore.eval import (
     Grading,
     SampleKind,
     sample_from_archive_row,
+    samples_schema,
 )
 from finestore.layout import FormatVersionError
 from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
@@ -44,6 +45,8 @@ from marin.evaluation.metric_selection import PUBLICATION_METRICS, base_metric, 
 from marin.evaluation.records import BenchmarkMetricRef, EvalRunRecord, MetricKind
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
+
+from .curated import RUN_OBJECT, logical_samples
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +215,11 @@ def _archive_task_table(results_path: str, task: str) -> pa.Table:
     cached = _table_cache.get(key)
     if cached is not None:
         return cached
-    table = _archive_view(results_path).scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
+    reader = _archive_view(results_path)
+    if reader.read_blob(RUN_OBJECT) is not None:
+        table = pa.Table.from_pylist(list(logical_samples(reader, task=task)), schema=samples_schema())
+    else:
+        table = reader.scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
     if table is None:
         table = pa.table({})
     _table_cache.put(key, table)
@@ -338,7 +345,7 @@ def _task_table(results_path: str, task: str) -> pa.Table | None:
 
 def sample_metric(record: EvalRunRecord, sample_task: str) -> BenchmarkMetricRef | None:
     """Resolve the publication metric or the evaluator's recorded default."""
-    selected = PUBLICATION_METRICS.get(record.evaluation.name)
+    selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
     if selected is not None:
         return selected
     tasks = record.evaluation.tasks

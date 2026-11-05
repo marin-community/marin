@@ -91,7 +91,7 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
     spec = LaunchSpec(
         model=config.model,
         evals=keys,
-        evalchemy_definitions=(),
+        curated_definitions=(),
         harbor_definitions=(),
         platform=default_platform(config.model),
         accelerator=config.accelerator,

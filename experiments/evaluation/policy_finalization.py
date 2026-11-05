@@ -11,8 +11,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import yaml
-from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor
+from marin.evaluation.curated import CuratedExecutor
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.records import EvalRef, RunStatus
@@ -26,6 +25,7 @@ from marin.evaluation.runner import (
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.inference.types import InferenceBackendState
+from marin.rollouts.evaluation import JudgeIdentity
 
 POLICY = "marin-10197"
 MIN_SCORED_FRACTION = 0.9
@@ -52,23 +52,11 @@ def load_policy_finalization(path: Path) -> PolicyFinalization:
     return PolicyFinalization(judge)
 
 
-def _complete_coverage(outcome: EvaluationOutcome) -> None:
-    if not outcome.coverage:
-        raise ValueError("policy finalization requires declared trial coverage")
-    for task, coverage in outcome.coverage.items():
-        if (
-            coverage.n_attempted is None
-            or coverage.n_attempted <= 0
-            or coverage.n_scored < MIN_SCORED_FRACTION * coverage.n_attempted
-        ):
-            raise ValueError(f"{task}: fewer than 90% of declared trials have valid scores")
-
-
 @dataclass(frozen=True)
 class PolicyJudge:
-    """Run Evalchemy with the policy judge as its native grading endpoint."""
+    """Run curated evaluations with the policy answer-equivalence judge."""
 
-    source: EvalchemyExecutor
+    source: CuratedExecutor
     model: ModelConfig
     accelerator: AcceleratorChoice
     priority: int
@@ -87,19 +75,19 @@ class PolicyJudge:
             self.accelerator,
             env_vars=env_vars,
             priority=self.priority,
-            api_model=self.model.location,
+            api_model="openai/gpt-oss-120b",
         )
         try:
             with remote_inference(inference) as policy_judge:
                 jobs = {f"policy-judge-{i}": str(job.job_id) for i, job in enumerate(policy_judge.jobs)}
                 policy_judge.wait_until_ready(check_dependencies=lambda: check_inference_backend(backend_state()))
-                configuration = EvalchemyJudgeConfig(
-                    base_url=policy_judge.model.endpoint.base_url,
-                    model=policy_judge.model.endpoint.model,
-                    api_key=("env:JUDGE_API_KEY",),
-                    protocol=POLICY,
+                assert self.model.revision is not None
+                configuration = JudgeIdentity(
+                    deployment=self.model.location,
+                    models={"openai/gpt-oss-120b": self.model.revision},
+                    default_model="openai/gpt-oss-120b",
                 )
-                executor = EvalchemyExecutor(replace(self.source.config, judge=configuration))
+                executor = replace(self.source, settings=replace(self.source.settings, judge=configuration))
 
                 def dependencies() -> InferenceBackendState:
                     check_inference_backend(policy_judge.backend_state())
@@ -111,20 +99,12 @@ class PolicyJudge:
                         output_dir,
                         {**env_vars, "JUDGE_API_KEY": "local-policy-judge"},
                         backend_state=dependencies,
+                        judge=policy_judge,
                     )
                 except EvaluationError as exc:
                     exc.jobs.update(jobs)
                     raise
                 jobs.update(outcome.jobs)
-                try:
-                    _complete_coverage(outcome)
-                except Exception as exc:
-                    raise EvaluationError(
-                        f"policy #10197 judge coverage failed: {exc}",
-                        status=RunStatus.ARTIFACT_FAILED,
-                        jobs=jobs,
-                        coverage=outcome.coverage,
-                    ) from exc
                 return replace(outcome, jobs=jobs)
         except RemoteInferenceStartupError as exc:
             jobs, tails = job_diagnostics(exc.jobs, "policy-judge")
@@ -146,8 +126,24 @@ def policy_executor(
     """Bind each policy benchmark to its own grading configuration."""
     if reference.name in POLICY_JUDGED_BENCHMARKS:
         assert judge_accelerator is not None
-        if not isinstance(source, EvalchemyExecutor):
-            raise TypeError("policy answer-equivalence grading requires Evalchemy")
+        if not isinstance(source, CuratedExecutor):
+            raise TypeError("policy answer-equivalence grading requires curated tasks")
+        assert config.judge.revision is not None
+        source = replace(
+            source,
+            settings=replace(
+                source.settings,
+                judge=JudgeIdentity(
+                    deployment=config.judge.location,
+                    models={"openai/gpt-oss-120b": config.judge.revision},
+                    default_model="openai/gpt-oss-120b",
+                ),
+            ),
+        )
+        assert reference.curated is not None
+        reference = reference.model_copy(
+            update={"curated": reference.curated.model_copy(update={"settings_json": source.settings.record_json()})}
+        )
         executor = PolicyJudge(
             source,
             config.judge,

@@ -179,9 +179,6 @@ cpu = [
 # AMD GPUs: Levanter's ROCm JAX stack.
 rocm = ["marin-levanter[rocm]"]
 
-# Vendored Evalchemy runs against a served OpenAI URL from its own locked uv project.
-# See vendor/evalchemy and marin.evaluation.evalchemy.runtime.
-
 vizier = [
     "google-vizier[jax]",
 ]

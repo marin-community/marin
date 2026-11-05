@@ -73,7 +73,7 @@ from verifyit.modes.grade_judge import JudgeConnection
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.03"
+EVALUATION_EXECUTION_REVISION = "2026.11.05"
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -107,6 +107,8 @@ class EvaluationRunConfig(RunModel):
     model: ModelIdentity
     max_tokens: int = Field(gt=0)
     generation_extra_body: dict[str, Any] = Field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
+    thinking_off_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
     concurrency: int = Field(default=64, gt=0)
     limits: RolloutLimits
     source_limit: int | None = Field(default=None, gt=0)
@@ -159,6 +161,18 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
     if seed is not None:
         options["seed"] = seed
     return options
+
+
+def effective_protocol(protocol: EvaluationProtocol, config: EvaluationRunConfig) -> EvaluationProtocol:
+    """Use the same resolved chat policy for context admission and generation."""
+    sampling = protocol.sampling
+    if sampling is None or protocol.operation != "chat_generation":
+        return protocol
+    kwargs = {**config.chat_template_kwargs, **sampling.chat_template_kwargs}
+    if sampling.chat_template_kwargs.get("enable_thinking") is False and config.thinking_off_template_kwargs:
+        kwargs.pop("enable_thinking", None)
+        kwargs.update(config.thinking_off_template_kwargs)
+    return protocol.model_copy(update={"sampling": sampling.model_copy(update={"chat_template_kwargs": kwargs})})
 
 
 def _sample(
@@ -567,6 +581,8 @@ async def run_evaluation(
     if len({canonical_sha256(manifest.model_dump(mode="json")) for _, _, manifest in corpora}) != len(corpora):
         raise ValueError("A run cannot include the same dataset snapshot twice")
     for _, protocol, _ in corpora:
+        if protocol.requires_judge and config.judge is None:
+            raise ValueError(f"An explicit judge is required by {protocol.benchmark}")
         if protocol.operation in ("choice_likelihood", "continuation_likelihood") and likelihood is None:
             raise ValueError(f"Likelihood scoring requires an explicit scorer: {protocol.benchmark}")
         if protocol.operation == "text_generation" and completion_model is None:
@@ -616,6 +632,7 @@ async def run_evaluation(
         async def produce() -> None:
             for root, protocol, manifest in corpora:
                 dataset_id = canonical_sha256(manifest.model_dump(mode="json"))
+                protocol = effective_protocol(protocol, config)
                 records = []
                 selected = 0
                 for decision in select_cases(

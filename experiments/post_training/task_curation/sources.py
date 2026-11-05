@@ -10,6 +10,7 @@ from experiments.post_training.task_curation.datasets import (
     unconverted,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.datasets.evalchemy import checkpoint as eval_checkpoint
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
 from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
 from experiments.post_training.task_curation.datasets.evalchemy import harness as eval_harness
@@ -40,14 +41,20 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
+from experiments.post_training.task_curation.evaluation import EvalDataset
 from experiments.post_training.task_curation.source import RlDataSource
 
 
-def all_sources() -> dict[str, RlDataSource]:
+def evaluation_sources() -> dict[str, RlDataSource[EvalDataset]]:
+    """Canonical evaluation declarations, keyed by curation invocation name."""
     sources = [
         *eval_code.sources(),
+        *eval_checkpoint.sources(),
         *eval_harness.sources(),
         *eval_instructions.sources(),
+        *eval_harness.chat_sources(
+            [source for source in eval_instructions.sources() if source.name == "evalchemy-ifeval"]
+        ),
         *eval_jee.sources(),
         *eval_math.sources(),
         *eval_reasoning.sources(),
@@ -56,6 +63,15 @@ def all_sources() -> dict[str, RlDataSource]:
         *eval_simpleqa.sources(),
         *eval_long_context.sources(),
         *eval_nupa.sources(),
+    ]
+    if len({source.name for source in sources}) != len(sources):
+        raise ValueError("Duplicate evaluation source names")
+    return {source.name: source for source in sources}
+
+
+def all_sources() -> dict[str, RlDataSource]:
+    sources = [
+        *evaluation_sources().values(),
         *skyrl_math.sources(),
         *skyrl_code.sources(),
         *skyrl_ifeval.sources(),
