@@ -143,7 +143,12 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
     uids = [str(index) for index in range(16)]
     buffer_config = RolloutBufferConfig(3, 3, 0, BatchPolicy.FULL_BATCH, None, None)
     context = TrainingContext(
-        PromptLoader(_Prompts(uids), SeededPasses(len(uids), seed=0, shuffle=False), batch_size=3),
+        PromptLoader(
+            _Prompts(uids),
+            SeededPasses(len(uids), seed=0, shuffle=False),
+            batch_size=3,
+            max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
+        ),
         buffer_config,
         _InProcessActor(RolloutBuffer(buffer_config)),
         CONTENT_POLICY,
