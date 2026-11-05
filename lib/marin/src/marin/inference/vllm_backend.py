@@ -3,14 +3,14 @@
 
 """vLLM local inference backend."""
 
+import argparse
 import contextlib
 import os
-import socket
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -20,6 +20,7 @@ from marin.inference.config import (
     VllmSource,
 )
 from marin.inference.model_preparation import read_tool_chat_template
+from marin.inference.vllm_router import available_port
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -46,7 +47,12 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     version = config.version if source is VllmType.UPSTREAM else None
     if source is VllmType.UPSTREAM and version is None:
         version = DEFAULT_CUDA_VLLM_VERSION
-    return IsolatedCudaVllm(source=source, version=version, extra_requirements=config.extra_requirements)
+    return IsolatedCudaVllm(
+        source=source,
+        version=version,
+        extra_requirements=config.extra_requirements,
+        release=config.release or VLLM_GPU_RELEASE,
+    )
 
 
 def _with_subprocess_env(
@@ -58,12 +64,6 @@ def _with_subprocess_env(
     if subprocess_env:
         environment.update(subprocess_env)
     return VllmLauncherWithEnvironment(launcher, environment)
-
-
-def _reserve_localhost_port(host: str) -> int:
-    with socket.socket() as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
 
 
 @contextlib.contextmanager
@@ -93,6 +93,10 @@ class VllmServedModel:
     model_id: str
     chat_template_content: str | None
     environment: VllmEnvironment
+
+    @property
+    def metrics_url(self) -> str:
+        return f"{self.environment.worker_server_url.removesuffix(OPENAI_API_SUFFIX)}/metrics"
 
     def check_alive(self) -> None:
         self.environment.check_alive()
@@ -128,7 +132,7 @@ class VllmBackend:
     ) -> Iterator[VllmEnvironment]:
         """Start vLLM without imposing HTTP readiness on the caller."""
         chat_template_content = _resolved_chat_template(spec)
-        resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
+        resolved_port = available_port(self.host) if self.port is None or self.config.router is not None else self.port
         model = self._model_config(spec)
         launcher = _with_subprocess_env(
             vllm_launcher(self.config),
@@ -145,6 +149,10 @@ class VllmBackend:
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
                 extra_metric_families=self.config.extra_metric_families,
+                collect_metrics=self.config.collect_metrics,
+                collect_nccl=self.config.collect_nccl,
+                router=self.config.router,
+                router_port=self.port,
                 wait_for_ready=False,
             ) as environment:
                 yield environment
@@ -156,6 +164,18 @@ class VllmBackend:
         extra_args: Sequence[str],
     ) -> list[str]:
         loader_args = (*self.config.extra_args, *extra_args)
+        if self.config.router is not None:
+            parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+            parser.add_argument("--data-parallel-size", type=int)
+            parser.add_argument("--data-parallel-hybrid-lb", action="store_true")
+            parser.add_argument("--data-parallel-external-lb", action="store_true")
+            topology, _ = parser.parse_known_args(loader_args)
+            if topology.data_parallel_hybrid_lb or topology.data_parallel_external_lb:
+                raise ValueError("session routing requires vLLM's global internal DP load balancer")
+            if topology.data_parallel_size is None:
+                loader_args = (*loader_args, "--data-parallel-size", str(self.config.router.data_parallel_size))
+            elif topology.data_parallel_size != self.config.router.data_parallel_size:
+                raise ValueError("router DP size must match vLLM's data parallel size")
         if (
             self.config.launcher is not VllmLauncherType.TPU
             and _is_object_store_path(spec.weights)

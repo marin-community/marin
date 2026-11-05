@@ -17,6 +17,8 @@ from typing import Any
 from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
 from rigging.filesystem.storage_path import StoragePath
 
+from marin.external_dependencies import VllmGpuRelease
+
 # Worker and isolated vLLM environments use one Python version so cloudpickle
 # and the launched callable stay compatible.
 WORKER_PYTHON_VERSION = "3.12"
@@ -31,6 +33,11 @@ VLLM_TOPOLOGY_OPTIONS = frozenset(
         "--data-parallel-size",
         "--data-parallel-size-local",
         "--data-parallel-start-rank",
+        "--data-parallel-address",
+        "--data-parallel-rpc-port",
+        "--data-parallel-backend",
+        "--data-parallel-hybrid-lb",
+        "--data-parallel-external-lb",
         "--nnodes",
         "--node-rank",
         "--master-addr",
@@ -70,16 +77,26 @@ class ServingGeometry:
     data_parallel_size: int
     pipeline_parallel_size: int
     gpus_per_task: int
+    data_parallel_size_local: int | None = None
 
     def __post_init__(self) -> None:
         if min(self.tensor_parallel_size, self.data_parallel_size, self.pipeline_parallel_size) < 1:
             raise ValueError("parallel sizes must be positive")
-        if self.tensor_parallel_size * self.data_parallel_size != self.gpus_per_task:
-            raise ValueError("tensor_parallel_size * data_parallel_size must equal gpus_per_task")
+        local_dp = self.local_data_parallel_size
+        if local_dp < 1 or self.data_parallel_size % local_dp:
+            raise ValueError("local data parallel size must evenly divide data_parallel_size")
+        if self.pipeline_parallel_size > 1 and local_dp != self.data_parallel_size:
+            raise ValueError("a gang may distribute pipeline stages or data-parallel ranks, not both")
+        if self.tensor_parallel_size * local_dp != self.gpus_per_task:
+            raise ValueError("tensor_parallel_size * local data parallel size must equal gpus_per_task")
+
+    @property
+    def local_data_parallel_size(self) -> int:
+        return self.data_parallel_size if self.data_parallel_size_local is None else self.data_parallel_size_local
 
     @property
     def task_count(self) -> int:
-        return self.pipeline_parallel_size
+        return self.pipeline_parallel_size * (self.data_parallel_size // self.local_data_parallel_size)
 
     @property
     def total_gpus(self) -> int:
@@ -268,10 +285,27 @@ class InferenceModelConfig:
 
 
 @dataclass(frozen=True)
+class VllmRouterConfig:
+    """Released consistent-hash routing with no request retries.
+
+    ``data_parallel_size`` counts ranks reachable behind each worker URL, including
+    remote ranks behind the leader's native global DP load balancer.
+    """
+
+    data_parallel_size: int = 1
+    request_timeout_seconds: int = 14400
+
+    def __post_init__(self) -> None:
+        if self.data_parallel_size < 1 or self.request_timeout_seconds < 1:
+            raise ValueError("router DP size and request timeout must be positive")
+
+
+@dataclass(frozen=True)
 class VllmEngineConfig:
     launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
+    release: VllmGpuRelease | None = None
     extra_requirements: tuple[str, ...] = ()
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800
@@ -279,7 +313,10 @@ class VllmEngineConfig:
     max_num_seqs: int | None = None
     extra_args: tuple[str, ...] = ()
     extra_metric_families: frozenset[str] = frozenset()
+    collect_metrics: bool = True
+    collect_nccl: bool = True
     speculative: SpeculativeServingConfig | None = None
+    router: VllmRouterConfig | None = None
 
     def __post_init__(self) -> None:
         if self.startup_timeout_seconds <= 0:
@@ -290,6 +327,10 @@ class VllmEngineConfig:
             raise ValueError("max_num_seqs must be positive")
         if self.source is VllmSource.MARIN_FORK and self.launcher is not VllmLauncherType.CUDA:
             raise ValueError("the Marin vLLM fork source requires the CUDA launcher")
+        if self.release is not None and self.source is not VllmSource.MARIN_FORK:
+            raise ValueError("a vLLM release pin requires the Marin CUDA fork")
+        if self.router is not None and self.launcher is VllmLauncherType.TPU:
+            raise ValueError("session routing is supported by CUDA vLLM")
         extra_metric_families = _normalize_vllm_metric_families(
             self.extra_metric_families,
             source="VllmEngineConfig.extra_metric_families",
@@ -456,11 +497,16 @@ class RemoteInferenceConfig:
             if self.model.object_store_load_mode is not ObjectStoreLoadMode.STREAM:
                 raise ValueError("multi-host TPU serving requires shared weights with stream loading")
         geometry = self.iris.serving_geometry
-        if geometry is not None and geometry.task_count > 1:
-            if not isinstance(self.engine, VllmEngineConfig):
-                raise ValueError("pipeline parallelism requires the vLLM backend")
+        if isinstance(self.engine, VllmEngineConfig) and self.engine.router is not None:
             if self.instances != 1 or self.broker is not None:
-                raise ValueError("pipeline parallelism requires one instance and no broker")
+                raise ValueError("session routing requires one native vLLM group and no broker")
+            if geometry is not None and self.engine.router.data_parallel_size != geometry.data_parallel_size:
+                raise ValueError("router DP size must match the native serving geometry")
+        if geometry is not None and (geometry.task_count > 1 or geometry.data_parallel_size_local is not None):
+            if not isinstance(self.engine, VllmEngineConfig):
+                raise ValueError("multi-host GPU serving requires the vLLM backend")
+            if self.instances != 1 or self.broker is not None:
+                raise ValueError("multi-host GPU serving requires one instance and no broker")
             if self.model.tensor_parallel_size != geometry.tensor_parallel_size:
                 raise ValueError("model tensor_parallel_size must match serving geometry")
             validate_pipeline_args(self.engine.extra_args)
