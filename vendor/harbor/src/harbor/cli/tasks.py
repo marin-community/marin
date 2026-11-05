@@ -1,22 +1,23 @@
+import asyncio
+import os
 import sys
 import tempfile
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from rich.console import Console
-from rich.table import Table
-from typer import Argument, Option, Typer
-from upath import UPath
-
 from harbor.cli.init import _init_task, _resolve_name
-from harbor.cli.utils import run_async
+from harbor.cli.utils import cli_guest_environment, cli_host_capabilities, run_async
 from harbor.mappers.terminal_bench import TerminalBenchMapper
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.task.config import Author, TaskConfig
 from harbor.models.task.paths import TaskPaths
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
+from rich.console import Console
+from rich.table import Table
+from typer import Argument, Option, Typer
+from upath import UPath
 
 tasks_app = Typer(
     no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
@@ -229,16 +230,7 @@ def start_env(
             help="Environment type to start.",
             rich_help_panel="Environment",
         ),
-    ] = EnvironmentType.DOCKER,
-    environment_import_path: Annotated[
-        str | None,
-        Option(
-            "--environment-import-path",
-            help="Import path for custom environment (module.path:ClassName).",
-            rich_help_panel="Environment",
-            show_default=False,
-        ),
-    ] = None,
+    ] = EnvironmentType.LOCAL,
     mounts: Annotated[
         str | None,
         Option(
@@ -342,6 +334,7 @@ def start_env(
                 result[key] = value
         return result
 
+    host_environment = dict(os.environ)
     task = Task(path)
 
     # Create agent config if agent is specified
@@ -382,26 +375,24 @@ def start_env(
         if mounts is not None:
             extra_env_kwargs["mounts"] = json.loads(mounts)
 
-        if environment_import_path is not None:
-            environment = EnvironmentFactory.create_environment_from_import_path(
-                environment_import_path,
-                environment_dir=task.paths.environment_dir,
-                environment_name=task.short_name,
-                session_id=str(uuid4()),
-                trial_paths=trial_paths,
-                task_env_config=task.config.environment,
-                **extra_env_kwargs,
-            )
-        else:
-            environment = EnvironmentFactory.create_environment(
-                environment_type,
-                environment_dir=task.paths.environment_dir,
-                environment_name=task.short_name,
-                session_id=str(uuid4()),
-                trial_paths=trial_paths,
-                task_env_config=task.config.environment,
-                **extra_env_kwargs,
-            )
+        host_capabilities = cli_host_capabilities(
+            host_environment,
+            environment_kwargs=extra_env_kwargs,
+            agents=() if agent_config is None else (agent_config,),
+        )
+        guest_environment = cli_guest_environment(extra_env_kwargs)
+
+        environment = EnvironmentFactory.create_environment(
+            environment_type,
+            environment_dir=task.paths.environment_dir,
+            environment_name=task.short_name,
+            session_id=str(uuid4()),
+            trial_paths=trial_paths,
+            task_env_config=task.config.environment,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
+            **extra_env_kwargs,
+        )
         if environment.capabilities.mounted:
             trial_paths.chmod_dir()
 
@@ -412,41 +403,46 @@ def start_env(
                 # to a stdlib Path collapses ``gs://`` to ``gs:/`` and silently
                 # redirects trajectory.json writes to the local filesystem.
                 logs_dir=trial_paths.agent_dir,
+                guest_environment=guest_environment,
+                host_capabilities=host_capabilities,
             )
 
         async def main():
-            try:
-                await environment.start(force_build=True)
-
-                if all:
-                    env_paths = EnvironmentPaths.for_os(environment.os)
-                    await environment.upload_dir(
-                        task.paths.solution_dir,
-                        str(env_paths.solution_dir),
-                    )
-                    await environment.upload_dir(
-                        task.paths.tests_dir,
-                        str(env_paths.tests_dir),
+            async with asyncio.TaskGroup() as service_tasks:
+                try:
+                    await environment.start(
+                        force_build=True, service_tasks=service_tasks
                     )
 
-                if task.config.environment.healthcheck is not None:
-                    console.print("[blue]Running healthcheck...[/blue]")
-                    await environment.run_healthcheck()
-                    console.print("[green]✓ Healthcheck passed[/green]")
+                    if all:
+                        env_paths = EnvironmentPaths.for_os(environment.os)
+                        await environment.upload_dir(
+                            task.paths.solution_dir,
+                            str(env_paths.solution_dir),
+                        )
+                        await environment.upload_dir(
+                            task.paths.tests_dir,
+                            str(env_paths.tests_dir),
+                        )
 
-                if agent is not None:
-                    console.print("[blue]Setting up agent in environment...[/blue]")
-                    environment.default_user = task.config.agent.user
-                    await agent.setup(environment=environment)
-                    console.print("[green]✓ Agent setup complete[/green]")
+                    if task.config.environment.healthcheck is not None:
+                        console.print("[blue]Running healthcheck...[/blue]")
+                        await environment.run_healthcheck()
+                        console.print("[green]✓ Healthcheck passed[/green]")
 
-                if interactive:
-                    try:
-                        await environment.attach()
-                    except NotImplementedError as e:
-                        console.print(f"[red]❌ {e}[/red]")
-            finally:
-                await environment.stop(delete=True)
+                    if agent is not None:
+                        console.print("[blue]Setting up agent in environment...[/blue]")
+                        environment.default_user = task.config.agent.user
+                        await agent.setup(environment=environment)
+                        console.print("[green]✓ Agent setup complete[/green]")
+
+                    if interactive:
+                        try:
+                            await environment.attach()
+                        except NotImplementedError as e:
+                            console.print(f"[red]❌ {e}[/red]")
+                finally:
+                    await environment.stop(delete=True)
 
         run_async(main())
 

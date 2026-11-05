@@ -12,13 +12,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use uuid::Uuid;
 
-use crate::indices::exact::ExactSection;
-use crate::indices::format::{self, BundleHeader, SectionKind};
-use crate::indices::group_extrema::{GroupExtremaConfig, GroupExtremaSection};
+use crate::indices::exact::{self, ExactSection};
+use crate::indices::format::{BundleHeader, SectionKind};
+use crate::indices::group_extrema::{self, GroupExtremaConfig, GroupExtremaSection};
+use crate::indices::input::{BundleInput, BundleReadError};
 use crate::indices::trigram::{self, ColumnIndex};
 use crate::indices::{
-    parse_group_extrema_config, parse_trigram_coverage, read_exact_section,
-    read_group_extrema_section, trigram_section_id, TrigramCoverage,
+    parse_group_extrema_config, parse_trigram_coverage, trigram_section_id, TrigramCoverage,
 };
 
 pub const DEFAULT_INDEX_CACHE_MB: usize = 256;
@@ -122,17 +122,21 @@ impl IndexCache {
     /// Load `bundle_path` only when it is bound to the current source segment.
     pub fn get_header(
         &self,
-        bundle_path: &Path,
+        input: &BundleInput<'_>,
         source_id: Uuid,
         row_count: u64,
     ) -> Option<Arc<BundleHeader>> {
+        let bundle_path = input.path;
         let key = Key::Header(bundle_path.to_path_buf(), source_id);
         let header = self.get_or_load(key, || {
-            let Some(header) = format::read_header(bundle_path) else {
-                if bundle_path.exists() {
-                    self.corrupt_bundles.fetch_add(1, Ordering::Relaxed);
+            let header = match input.read_header() {
+                Ok(header) => header,
+                Err(error) => {
+                    if matches!(error, BundleReadError::Corrupt) {
+                        self.corrupt_bundles.fetch_add(1, Ordering::Relaxed);
+                    }
+                    return None;
                 }
-                return None;
             };
             if !header.matches(source_id, row_count) {
                 tracing::debug!(
@@ -163,10 +167,11 @@ impl IndexCache {
 
     pub fn get_trigram(
         &self,
-        bundle_path: &Path,
+        input: &BundleInput<'_>,
         header: &BundleHeader,
         column: &str,
     ) -> Option<(TrigramCoverage, Arc<ColumnIndex>)> {
+        let bundle_path = input.path;
         let id = trigram_section_id(column);
         let section = header.section(&id)?;
         if section.kind != SectionKind::TrigramBloom {
@@ -179,10 +184,7 @@ impl IndexCache {
             id.clone(),
         );
         let index = self.get_or_load(key, || {
-            let Some(payload) = format::read_section(bundle_path, header, &id) else {
-                self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
-                return None;
-            };
+            let payload = self.section_bytes(input, header, &id)?;
             let Some(index) = trigram::parse_column(&payload, coverage.span_count) else {
                 self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
                 return None;
@@ -200,10 +202,11 @@ impl IndexCache {
 
     pub fn get_exact(
         &self,
-        bundle_path: &Path,
+        input: &BundleInput<'_>,
         header: &BundleHeader,
         kind: SectionKind,
     ) -> Option<Arc<ExactSection>> {
+        let bundle_path = input.path;
         let section = header
             .sections
             .iter()
@@ -214,7 +217,8 @@ impl IndexCache {
             section.id.clone(),
         );
         self.get_or_load(key, || {
-            let Some(index) = read_exact_section(bundle_path, header, kind) else {
+            let payload = self.section_bytes(input, header, &section.id)?;
+            let Some(index) = exact::parse(&payload) else {
                 self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
                 return None;
             };
@@ -230,10 +234,11 @@ impl IndexCache {
 
     pub fn get_group_extrema(
         &self,
-        bundle_path: &Path,
+        input: &BundleInput<'_>,
         header: &BundleHeader,
         config: &GroupExtremaConfig,
     ) -> Option<Arc<GroupExtremaSection>> {
+        let bundle_path = input.path;
         let section = header.sections.iter().find(|section| {
             section.kind == SectionKind::GroupExtrema
                 && parse_group_extrema_config(&section.coverage).as_ref() == Some(config)
@@ -244,7 +249,8 @@ impl IndexCache {
             section.id.clone(),
         );
         self.get_or_load(key, || {
-            let Some(index) = read_group_extrema_section(bundle_path, header, config) else {
+            let payload = self.section_bytes(input, header, &section.id)?;
+            let Some(index) = group_extrema::parse(&payload) else {
                 self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
                 return None;
             };
@@ -260,6 +266,22 @@ impl IndexCache {
 
     pub fn invalidate(&self, bundle_path: &Path) {
         self.state.lock().unwrap().cache.remove_path(bundle_path);
+    }
+
+    fn section_bytes(
+        &self,
+        input: &BundleInput<'_>,
+        header: &BundleHeader,
+        id: &str,
+    ) -> Option<Vec<u8>> {
+        match input.read_section(header, id) {
+            Ok(bytes) => Some(bytes),
+            Err(BundleReadError::Unavailable) => None,
+            Err(BundleReadError::Corrupt) => {
+                self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
     }
 
     pub fn corruption_counts(&self) -> CorruptionCounts {
@@ -496,7 +518,7 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use crate::indices::format::{Exactness, SectionInput, SegmentBinding};
+    use crate::indices::format::{self, Exactness, SectionInput, SegmentBinding};
 
     use super::*;
 
@@ -541,10 +563,14 @@ mod tests {
         let bundle =
             format::write_bundle(&parquet, &binding(first_id), &[exact_section()]).unwrap();
         let cache = IndexCache::with_budget_bytes(1024 * 1024);
-        assert!(cache.get_header(&bundle, first_id, 7).is_some());
+        assert!(cache
+            .get_header(&BundleInput::local(&bundle), first_id, 7)
+            .is_some());
 
         format::write_bundle(&parquet, &binding(second_id), &[exact_section()]).unwrap();
-        assert!(cache.get_header(&bundle, second_id, 7).is_some());
+        assert!(cache
+            .get_header(&BundleInput::local(&bundle), second_id, 7)
+            .is_some());
         assert_eq!(
             cache.corruption_counts(),
             CorruptionCounts {
@@ -562,7 +588,9 @@ mod tests {
         let path =
             format::write_bundle(&parquet, &binding(segment_id), &[exact_section()]).unwrap();
         let cache = IndexCache::with_budget_bytes(1024 * 1024);
-        let header = cache.get_header(&path, segment_id, 7).unwrap();
+        let header = cache
+            .get_header(&BundleInput::local(&path), segment_id, 7)
+            .unwrap();
         let section = header.section("exact-postings").unwrap();
         File::options()
             .write(true)
@@ -571,7 +599,11 @@ mod tests {
             .write_all_at(&[0xff], section.offset)
             .unwrap();
         assert!(cache
-            .get_exact(&path, &header, SectionKind::ExactPostings)
+            .get_exact(
+                &BundleInput::local(&path),
+                &header,
+                SectionKind::ExactPostings
+            )
             .is_none());
         assert_eq!(
             cache.corruption_counts(),
@@ -591,7 +623,9 @@ mod tests {
             .unwrap()
             .write_all_at(&[0xff], 0)
             .unwrap();
-        assert!(cache.get_header(&path, segment_id, 7).is_none());
+        assert!(cache
+            .get_header(&BundleInput::local(&path), segment_id, 7)
+            .is_none());
         assert_eq!(
             cache.corruption_counts(),
             CorruptionCounts {
