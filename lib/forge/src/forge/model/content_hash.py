@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Source: Taskforge integration 9807c5cfb3, content_hash.py.
+
 """Canonical JSON encoding and sha256 content hashes over it.
 
 ``canonical_json`` is the encoding Taskforge hashes. It sorts keys, uses compact separators and

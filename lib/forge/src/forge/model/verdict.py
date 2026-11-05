@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Source: Taskforge integration 9807c5cfb3, spec/verdict.py.
+
 """The verdict file a Taskforge grader program writes, and the per-check results it reports.
 
 A grader program writes one JSON object to ``GRADER_VERDICT_PATH``::

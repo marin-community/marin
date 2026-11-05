@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Source: Taskforge integration 9807c5cfb3, stage10_proposal/model.py.
+
 """Typed proposal JSON with a Markdown body.
 
 The JSON object holds ``header`` and ``body``. Parsing checks the environment,

@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Source: Taskforge integration 9807c5cfb3, spec/controls.py (reward checks).
+
 """Authored candidates and their expected rewards; reward checks copied from Taskforge."""
 
 import math

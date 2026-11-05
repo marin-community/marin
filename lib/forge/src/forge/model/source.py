@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Source: Taskforge integration 9807c5cfb3, stage10_proposal/source.py.
+
 """I/O boundary for proposal loading: the two source phases and the batch assembled from them.
 
 A source plans a portfolio once (``ProposalSource.plan``) and then writes each slot's document on its

@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Source: Taskforge integration 9807c5cfb3, policy.py.
+
 """The prompts and settings of a run as one flat mapping from dotted key to value.
 
 The prompt file ``prompts/<group>/<name>.md`` is the key ``<group>.<name>``; ``policy.json`` holds the settings. A

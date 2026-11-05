@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Source: Taskforge integration 9807c5cfb3, spec/draft.py.
+
 """Assemble a TaskCompendium ``TaskSpec`` from builder outputs and lower it for RolloutEngine.
 
 These helpers own the serialized details a builder should not repeat: the
