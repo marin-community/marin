@@ -15,7 +15,11 @@ The step submits an Iris orchestrator job and waits for its records. The launche
 GCS or CoreWeave ``evals`` output root, while the artifact path stores the pipeline cache record. The
 pipeline itself must run where it can reach Iris::
 
-    uv run iris --cluster marin job run -- python -m experiments.evaluation.pipeline
+    uv run iris --cluster marin job run --container-profile CONTAINER_PROFILE_PRIVILEGED \\
+      -- python -m experiments.evaluation.pipeline
+
+Checkpoint pipelines that submit curated evaluations need this same parent profile:
+Iris permits nested grader workers to inherit it, but forbids elevation from a default task.
 
 The demo pipeline below runs the smoke suite for one small model.
 """
@@ -133,7 +137,7 @@ def eval_step(
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
 ) -> ArtifactStep[EvaluationResult]:
-    """Evaluate a model with Evalchemy and Harbor.
+    """Evaluate a model with curated TaskSpec corpora and Harbor.
 
     Experiments declare producer dependencies and resolve their paths in ``resolve_model``.
     Checked-in models use ``model`` directly without a producer step.

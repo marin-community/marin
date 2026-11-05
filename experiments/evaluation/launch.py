@@ -23,6 +23,7 @@ from iris.client.client import IrisClient
 from iris.cluster.config import load_config
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc import job_pb2
 from marin.evaluation.curated import CuratedExecutor
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
@@ -656,6 +657,12 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
         name=f"eval-{batch.group_id}-{uuid.uuid4().hex[:8]}",
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
         environment=EnvironmentSpec(env_vars=launch_env),
+        # Child grader workers can inherit this profile, but cannot elevate a default parent.
+        container_profile=(
+            job_pb2.CONTAINER_PROFILE_PRIVILEGED
+            if any(_curated_executor(evaluation.executor) is not None for evaluation in batch.evaluations)
+            else job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+        ),
         constraints=constraints,
         egress_allow=batch.egress_allow,
         max_retries_failure=0,
