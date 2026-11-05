@@ -3,6 +3,7 @@
 
 """Check Harbor's standalone lock and run its offline runtime tests."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -58,7 +59,20 @@ def run_harbor_tests(repo_root: Path, extra_args: tuple[str, ...] = ()) -> int:
         cwd=repo_root,
         check=False,
     )
-    return result.returncode
+    if result.returncode:
+        return result.returncode
+    return subprocess.run(
+        [
+            *pytest_command,
+            "--noconftest",
+            "vendor/harbor/tests/marin",
+            "experiments/evaluation/images/tau3/test_build.py",
+            *extra_args,
+        ],
+        cwd=repo_root,
+        env={**os.environ, "PYTHONPATH": str(repo_root / "lib/marin/src")},
+        check=False,
+    ).returncode
 
 
 if __name__ == "__main__":

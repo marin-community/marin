@@ -68,5 +68,3 @@ async def test_tokenizer_propagates_exhausted_or_permanent_errors(monkeypatch, s
 
     assert error.value.response.status_code == status
     assert len(requests) == attempts
-
-

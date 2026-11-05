@@ -3,6 +3,7 @@
 
 import json
 import math
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,7 +16,7 @@ from harbor.metrics.sotopia import (
     length_controlled_scores,
 )
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
-from harbor.models.trial.result import AgentInfo, TrialResult
+from harbor.models.trial.result import AgentInfo, TrialCompletion, TrialResult
 from harbor.models.verifier.result import VerifierResult
 from harbor_config.models.job.config import SotopiaCohort
 from upath import UPath
@@ -90,6 +91,8 @@ def candidate_trials(root):
                 config=config,
                 agent_info=AgentInfo(name="sotopia", version="test"),
                 verifier_result=VerifierResult(rewards=dict(row["metrics"])),
+                finished_at=datetime.now(),
+                completion=TrialCompletion(trajectory_present=False),
             )
         )
     return trials
@@ -109,7 +112,10 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
         "models": [{"model": "baseline", "results_path": str(baseline)}],
     }
     result = correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+        trials,
+        model="candidate",
+        trials_dir=trials_dir,
+        cohort=SotopiaCohort.model_validate(cohort),
     )
     adjusted = [row.length_controlled_overall for row in result.adjusted_episodes if row.model == "candidate"]
     assert result.canonical_metrics["length_controlled_overall"] == pytest.approx(sum(adjusted) / 100)
@@ -129,7 +135,10 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
         ],
     }
     replaced = correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(replacement)
+        trials,
+        model="candidate",
+        trials_dir=trials_dir,
+        cohort=SotopiaCohort.model_validate(replacement),
     )
     assert replaced.source_episodes == result.source_episodes
     assert replaced.canonical_metrics == result.canonical_metrics
@@ -137,7 +146,10 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     candidate.rename(relocated)
     trials_dir = UPath(relocated / "harbor_jobs" / "job")
     resumed = correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+        trials,
+        model="candidate",
+        trials_dir=trials_dir,
+        cohort=SotopiaCohort.model_validate(cohort),
     )
     assert resumed == result
     next((baseline / "harbor_jobs").rglob("sotopia-summary.json")).unlink()

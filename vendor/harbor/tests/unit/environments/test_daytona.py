@@ -12,20 +12,32 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from daytona._utils.env import DaytonaEnvReader
-from openai import AsyncOpenAI, AuthenticationError, BadRequestError, PermissionDeniedError
+from openai import (
+    AsyncOpenAI,
+    AuthenticationError,
+    BadRequestError,
+    PermissionDeniedError,
+)
 
-from harbor.agents.terminus_2.tmux_session import TmuxCommandError, TmuxKeystrokeBatch, TmuxSession
-from harbor.environments import daytona, model_relay
+from harbor.host_capabilities import (
+    HostCapabilities,
+    DaytonaConnection,
+    DAYTONA_API_URL,
+)
+from harbor.agents.terminus_2.tmux_session import (
+    TmuxCommandError,
+    TmuxKeystrokeBatch,
+    TmuxSession,
+)
+from harbor.environments import model_relay
 from harbor.environments.daytona import DaytonaEnvironment
 from harbor.environments.local import LocalEnvironment
-from harbor.environments.model_relay import ModelRelay, host_model_authentication
+from harbor.environments.model_relay import ModelRelay
 from harbor.environments.qemu import QemuEnvironment
-from harbor.environments.runtime import host_backend_credentials
 from harbor.environments.shellsim import ShellSimEnvironment
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
-from harbor.utils.env import task_environment
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
 from shellbox.machine import Command, MachineSpec, PackageSpec
@@ -63,9 +75,12 @@ async def test_shellbox_environment_captures_terminus_scrollback_and_preserves_p
         "fi\n"
     )
     tmux.chmod(0o755)
-    machine = ProcessMachine(tmp_path / "guest", MachineSpec(PackageSpec(), workdir="/workspace"))
+    machine = ProcessMachine(
+        tmp_path / "guest", MachineSpec(PackageSpec(), workdir="/workspace")
+    )
     # Substitute only the external transport; run the real adapter and Terminus scripts.
     adapter = object.__new__(environment_class)
+    adapter.host_capabilities = HostCapabilities()
     adapter.machine = machine
     adapter.session_id = "capture-test"
     adapter.default_user = None
@@ -79,9 +94,13 @@ async def test_shellbox_environment_captures_terminus_scrollback_and_preserves_p
     try:
         if capture_exit_code:
             with pytest.raises(TmuxCommandError):
-                await session.send_keys_and_capture([TmuxKeystrokeBatch("echo hello\n", 0)])
+                await session.send_keys_and_capture(
+                    [TmuxKeystrokeBatch("echo hello\n", 0)]
+                )
         else:
-            output, alive = await session.send_keys_and_capture([TmuxKeystrokeBatch("echo hello\n", 0)])
+            output, alive = await session.send_keys_and_capture(
+                [TmuxKeystrokeBatch("echo hello\n", 0)]
+            )
             assert output == "Current Terminal Screen:\nscreen\n"
             assert alive is True
     finally:
@@ -100,34 +119,37 @@ def test_cancelled_start_reclaims_a_late_daytona_machine(tmp_path, cleanup_failu
     )
 
     async def run():
-        submitting, submitted = asyncio.Event(), asyncio.Event()
-        closing, closed = asyncio.Event(), asyncio.Event()
-        finish_cleanup = asyncio.Event()
+        async with asyncio.TaskGroup() as service_tasks:
+            submitting, submitted = asyncio.Event(), asyncio.Event()
+            closing, closed = asyncio.Event(), asyncio.Event()
+            finish_cleanup = asyncio.Event()
 
-        async def close():
-            closing.set()
-            await finish_cleanup.wait()
-            closed.set()
-            if cleanup_failure:
-                raise RuntimeError("Backend cleanup failed")
+            async def close():
+                closing.set()
+                await finish_cleanup.wait()
+                closed.set()
+                if cleanup_failure:
+                    raise RuntimeError("Backend cleanup failed")
 
-        async def create(spec):
-            submitting.set()
-            await submitted.wait()
-            return SimpleNamespace(close=close)
+            async def create(spec):
+                submitting.set()
+                await submitted.wait()
+                return SimpleNamespace(close=close)
 
-        adapter.factory = SimpleNamespace(create=create)
-        start = asyncio.create_task(adapter.start(False))
-        await asyncio.wait_for(submitting.wait(), 5)
-        start.cancel("initial cancellation")
-        submitted.set()
-        await asyncio.wait_for(closing.wait(), 5)
-        start.cancel("repeated cancellation")
-        finish_cleanup.set()
-        with pytest.raises(asyncio.CancelledError) as error:
-            await asyncio.wait_for(start, 5)
-        assert error.value.args == ("initial cancellation",)
-        assert closed.is_set()
+            adapter.factory = SimpleNamespace(create=create)
+            start = asyncio.create_task(
+                adapter.start(False, service_tasks=service_tasks)
+            )
+            await asyncio.wait_for(submitting.wait(), 5)
+            start.cancel("initial cancellation")
+            submitted.set()
+            await asyncio.wait_for(closing.wait(), 5)
+            start.cancel("repeated cancellation")
+            finish_cleanup.set()
+            with pytest.raises(asyncio.CancelledError) as error:
+                await asyncio.wait_for(start, 5)
+            assert error.value.args == ("initial cancellation",)
+            assert closed.is_set()
 
     asyncio.run(run())
 
@@ -136,7 +158,7 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
     tmp_path, monkeypatch
 ):
     port = available_port()
-    monkeypatch.setattr(daytona, "MODEL_RELAY_PORT", port)
+    monkeypatch.setattr(model_relay, "MODEL_RELAY_PORT", port)
     monkeypatch.setenv("TOGETHER_API_KEY", "host-provider-private")
     task_dir = tmp_path / "task"
     (task_dir / "environment").mkdir(parents=True)
@@ -179,16 +201,19 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
     factory = ProcessFactory(tmp_path / "guest")
 
     async def run():
-        with (
-            host_backend_credentials(
-                daytona_api_key="host-daytona-private", daytona_target="test-target"
-            ),
-            task_environment({}),
-            host_model_authentication(
-                {"https://api.together.xyz/v1": "host-provider-private"}
-            ),
-        ):
+        async with asyncio.TaskGroup() as service_tasks:
             adapter = DaytonaEnvironment(
+                host_capabilities=HostCapabilities(
+                    daytona=DaytonaConnection(
+                        api_key="host-daytona-private",
+                        api_url=DAYTONA_API_URL,
+                        target="test-target",
+                    ),
+                    model_authentication={
+                        "https://api.together.xyz/v1": "host-provider-private"
+                    },
+                ),
+                guest_environment={},
                 environment_dir=task_dir / "environment",
                 environment_name="task",
                 session_id="trial",
@@ -208,8 +233,13 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
                 model_name="together_ai/openai/gpt-oss-120b",
             )
             adapter.factory = factory
-            await adapter.start(False)
+            await adapter.start(False, service_tasks=service_tasks)
             try:
+                unavailable = (
+                    'python3 -c "import socket; s=socket.socket(); '
+                    f"assert s.connect_ex(('127.0.0.1', {port})) != 0\""
+                )
+                assert (await adapter.exec(unavailable)).return_code == 0
                 verifier = Verifier(
                     Task(task_dir),
                     trial_paths,
@@ -219,10 +249,12 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
                         "OPENAI_BASE_URL": f"http://127.0.0.1:{port}/v1",
                     },
                 )
-                assert (await verifier.verify()).rewards == {"reward": 1.0}
+                async with adapter.verifier_model_access(service_tasks):
+                    assert (await verifier.verify()).rewards == {"reward": 1.0}
+                assert (await adapter.exec(unavailable)).return_code == 0
             finally:
                 await adapter.stop(True)
-        assert factory.machine.closed
+            assert factory.machine.closed
 
     asyncio.run(run())
 
@@ -245,89 +277,94 @@ def test_daytona_rejects_legacy_dind_and_unknown_runtime_options(tmp_path):
         DaytonaEnvironment(**arguments)
 
 
-async def test_installed_candidate_relay_buffers_sdk_events_and_keeps_judge_separate(tmp_path, monkeypatch):
-    environment_dir = tmp_path / "environment"
-    environment_dir.mkdir()
-    candidate_port, judge_port = available_port(), available_port()
-    monkeypatch.setattr(daytona, "CANDIDATE_MODEL_RELAY_PORT", candidate_port)
-    monkeypatch.setattr(daytona, "MODEL_RELAY_PORT", judge_port)
-    original_client = httpx.AsyncClient
-    completion = {
-        "id": "completion-one",
-        "created": 1,
-        "model": "candidate-model",
-        "object": "chat.completion",
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "answer",
-                    "reasoning_content": "reason",
-                    "tool_calls": [
-                        {
-                            "id": "call-one",
-                            "type": "function",
-                            "function": {"name": "shell", "arguments": '{"cmd":"pwd"}'},
-                        }
-                    ],
-                },
-                "finish_reason": "tool_calls",
-            }
-        ],
-        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-    }
-
-    def provider(request):
-        payload = json.loads(request.content)
-        if request.url.host == "judge.example":
-            assert request.headers["authorization"] == "Bearer judge-private"
-            assert payload["model"] == "judge-model"
-            return httpx.Response(200, json={"judge": True})
-        assert str(request.url) in {
-            "https://candidate.example/proxy/t/host-capability/serve/v1/chat/completions",
-            "https://candidate.example/proxy/t/host-capability/serve/tokenize",
+async def test_installed_candidate_relay_buffers_sdk_events_and_keeps_judge_separate(
+    tmp_path, monkeypatch
+):
+    async with asyncio.TaskGroup() as service_tasks:
+        environment_dir = tmp_path / "environment"
+        environment_dir.mkdir()
+        candidate_port, judge_port = available_port(), available_port()
+        monkeypatch.setattr(model_relay, "CANDIDATE_MODEL_RELAY_PORT", candidate_port)
+        monkeypatch.setattr(model_relay, "MODEL_RELAY_PORT", judge_port)
+        original_client = httpx.AsyncClient
+        completion = {
+            "id": "completion-one",
+            "created": 1,
+            "model": "candidate-model",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "answer",
+                        "reasoning_content": "reason",
+                        "tool_calls": [
+                            {
+                                "id": "call-one",
+                                "type": "function",
+                                "function": {
+                                    "name": "shell",
+                                    "arguments": '{"cmd":"pwd"}',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
         }
-        assert request.headers["authorization"] == "Bearer candidate-private"
-        assert payload["model"] == "candidate-model"
-        if request.url.path.endswith("/tokenize"):
-            assert payload["tools"][0]["type"] == "function"
-            return httpx.Response(
-                200, json={"tokens": [1, 2], "count": 2, "max_model_len": 32}
-            )
-        assert payload["stream"] is False
-        assert "stream_options" not in payload
-        if payload.get("messages") == ["redirect"]:
-            return httpx.Response(
-                302,
-                headers={"Location": "https://unauthorized.example/candidate-private"},
-            )
-        if payload.get("messages") == ["oversized"]:
-            return httpx.Response(200, content=b"x" * (model_relay.MAX_BODY + 1))
-        if payload.get("messages") == ["provider-failure"]:
-            return httpx.Response(401, text="candidate-private host-capability")
-        return httpx.Response(200, json=completion)
 
-    monkeypatch.setattr(
-        model_relay.httpx,
-        "AsyncClient",
-        lambda **kwargs: original_client(
-            transport=httpx.MockTransport(provider), **kwargs
-        ),
-    )
-    factory = ProcessFactory(tmp_path / "guest")
-    with (
-        host_model_authentication(
-            {
-                "https://candidate.example/proxy/t/host-capability/serve/v1": (
-                    "candidate-private"
-                ),
-                "https://judge.example/v1": "judge-private",
+        def provider(request):
+            payload = json.loads(request.content)
+            if request.url.host == "judge.example":
+                assert request.headers["authorization"] == "Bearer judge-private"
+                assert payload["model"] == "judge-model"
+                return httpx.Response(200, json={"judge": True})
+            assert str(request.url) in {
+                "https://candidate.example/proxy/t/host-capability/serve/v1/chat/completions",
+                "https://candidate.example/proxy/t/host-capability/serve/tokenize",
             }
-        ),
-        task_environment({}),
-    ):
+            assert request.headers["authorization"] == "Bearer candidate-private"
+            assert payload["model"] == "candidate-model"
+            if request.url.path.endswith("/tokenize"):
+                assert payload["tools"][0]["type"] == "function"
+                return httpx.Response(
+                    200, json={"tokens": [1, 2], "count": 2, "max_model_len": 32}
+                )
+            assert payload["stream"] is False
+            assert "stream_options" not in payload
+            if payload.get("messages") == ["redirect"]:
+                return httpx.Response(
+                    302,
+                    headers={
+                        "Location": "https://unauthorized.example/candidate-private"
+                    },
+                )
+            if payload.get("messages") == ["oversized"]:
+                return httpx.Response(200, content=b"x" * (model_relay.MAX_BODY + 1))
+            if payload.get("messages") == ["provider-failure"]:
+                return httpx.Response(401, text="candidate-private host-capability")
+            return httpx.Response(200, json=completion)
+
+        monkeypatch.setattr(
+            model_relay.httpx,
+            "AsyncClient",
+            lambda **kwargs: original_client(
+                transport=httpx.MockTransport(provider), **kwargs
+            ),
+        )
+        factory = ProcessFactory(tmp_path / "guest")
         adapter = DaytonaEnvironment(
+            host_capabilities=HostCapabilities(
+                daytona=None,
+                model_authentication={
+                    "https://candidate.example/proxy/t/host-capability/serve/v1": "candidate-private",
+                    "https://judge.example/v1": "judge-private",
+                },
+            ),
+            guest_environment={},
             environment_dir=environment_dir,
             environment_name="task",
             session_id="trial",
@@ -340,15 +377,20 @@ async def test_installed_candidate_relay_buffers_sdk_events_and_keeps_judge_sepa
             candidate_model_name="candidate-model",
             model_endpoint="https://judge.example/v1",
             model_name="judge-model",
+            judge_access="runtime",
         )
         adapter.factory = factory
-        await adapter.start(False)
+        await adapter.start(False, service_tasks=service_tasks)
         try:
             script = f"""
 import json, os, urllib.request, urllib.error
 assert os.environ['OPENAI_API_KEY'] == 'EMPTY'
 assert os.environ['OPENAI_BASE_URL'] == 'http://127.0.0.1:{candidate_port}/v1'
-assert not any('private' in value or 'host-capability' in value for value in os.environ.values())
+assert not any(
+    secret in value
+    for value in os.environ.values()
+    for secret in ('candidate-private', 'judge-private', 'host-capability')
+)
 def post(path, payload, port={candidate_port}):
     request = urllib.request.Request('http://127.0.0.1:'+str(port)+path, data=json.dumps(payload).encode(), headers={{'Authorization':'Bearer EMPTY'}})
     with urllib.request.urlopen(request) as response:
@@ -393,73 +435,73 @@ print('ok')
             assert result.stdout.strip() == "ok"
         finally:
             await adapter.stop(True)
-    assert factory.machine.closed
+        assert factory.machine.closed
 
 
 async def test_model_relay_serves_bounded_non_streaming_responses_for_simpleqa(
     tmp_path, monkeypatch
 ):
-    port = available_port()
-    endpoint = "https://judge.example/proxy/t/host-capability/serve/v1"
-    original_client = httpx.AsyncClient
+    async with asyncio.TaskGroup() as service_tasks:
+        port = available_port()
+        endpoint = "https://judge.example/proxy/t/host-capability/serve/v1"
+        original_client = httpx.AsyncClient
 
-    def provider(request):
-        assert str(request.url) == endpoint + "/responses"
-        assert request.headers["authorization"] == "Bearer judge-private"
-        payload = json.loads(request.content)
-        assert payload == {
-            "model": "judge-model",
-            "input": payload["input"],
-            "max_output_tokens": 1024,
-            "reasoning": {"effort": "low"},
-        }
-        if payload["input"] == "redirect":
-            return httpx.Response(
-                302, headers={"Location": "https://other.example/judge-private"}
-            )
-        if payload["input"] == "error":
-            return httpx.Response(500, text="judge-private host-capability")
-        if payload["input"] == "oversized":
-            return httpx.Response(200, content=b"x" * (model_relay.MAX_BODY + 1))
-        assert payload["input"] == "Grade this answer."
-        return httpx.Response(
-            200,
-            json={
-                "id": "resp-one",
-                "object": "response",
-                "created_at": 1,
+        def provider(request):
+            assert str(request.url) == endpoint + "/responses"
+            assert request.headers["authorization"] == "Bearer judge-private"
+            payload = json.loads(request.content)
+            assert payload == {
                 "model": "judge-model",
-                "output": [
-                    {
-                        "id": "msg-one",
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [
-                            {
-                                "type": "output_text",
-                                "text": "CORRECT",
-                                "annotations": [],
-                            }
-                        ],
-                    }
-                ],
-            },
-        )
+                "input": payload["input"],
+                "max_output_tokens": 1024,
+                "reasoning": {"effort": "low"},
+            }
+            if payload["input"] == "redirect":
+                return httpx.Response(
+                    302, headers={"Location": "https://other.example/judge-private"}
+                )
+            if payload["input"] == "error":
+                return httpx.Response(500, text="judge-private host-capability")
+            if payload["input"] == "oversized":
+                return httpx.Response(200, content=b"x" * (model_relay.MAX_BODY + 1))
+            assert payload["input"] == "Grade this answer."
+            return httpx.Response(
+                200,
+                json={
+                    "id": "resp-one",
+                    "object": "response",
+                    "created_at": 1,
+                    "model": "judge-model",
+                    "output": [
+                        {
+                            "id": "msg-one",
+                            "type": "message",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "CORRECT",
+                                    "annotations": [],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
 
-    monkeypatch.setattr(
-        model_relay.httpx,
-        "AsyncClient",
-        lambda **kwargs: original_client(
-            transport=httpx.MockTransport(provider), **kwargs
-        ),
-    )
-    machine = ProcessMachine(
-        tmp_path / "guest", MachineSpec(PackageSpec(), workdir="/workspace")
-    )
-    with host_model_authentication({endpoint: "judge-private"}):
-        relay = ModelRelay(endpoint, "judge-model")
-    script = f"""
+        monkeypatch.setattr(
+            model_relay.httpx,
+            "AsyncClient",
+            lambda **kwargs: original_client(
+                transport=httpx.MockTransport(provider), **kwargs
+            ),
+        )
+        machine = ProcessMachine(
+            tmp_path / "guest", MachineSpec(PackageSpec(), workdir="/workspace")
+        )
+        relay = ModelRelay(endpoint, "judge-model", api_key="judge-private")
+        script = f"""
 import json, urllib.request, urllib.error
 from openai import OpenAI
 client = OpenAI(base_url='http://127.0.0.1:{port}/v1', api_key='EMPTY', max_retries=0)
@@ -482,20 +524,32 @@ for failure in ('redirect', 'error', 'oversized'):
 rejected({{**base, 'input':'x' * {model_relay.MAX_BODY}}}, 400)
 print('ok')
 """
-    try:
-        async with serve_http(machine, relay.handle, port=port):
-            result = await machine.run(Command((sys.executable, "-c", script)))
-            assert result.exit_code == 0, result.stderr.decode()
-            assert result.stdout.strip() == b"ok"
-    finally:
-        await machine.close()
+        try:
+            async with serve_http(
+                machine, relay.handle, task_group=service_tasks, port=port
+            ):
+                result = await machine.run(Command((sys.executable, "-c", script)))
+                assert result.exit_code == 0, result.stderr.decode()
+                assert result.stdout.strip() == b"ok"
+        finally:
+            await machine.close()
 
 
 @pytest.mark.parametrize(
     "status, upstream_error, expected_error, expected_code",
     [
-        (401, {"message": "invalid host-private credential"}, AuthenticationError, "authentication_error"),
-        (403, {"message": "forbidden host-private capability"}, PermissionDeniedError, "authentication_error"),
+        (
+            401,
+            {"message": "invalid host-private credential"},
+            AuthenticationError,
+            "authentication_error",
+        ),
+        (
+            403,
+            {"message": "forbidden host-private capability"},
+            PermissionDeniedError,
+            "authentication_error",
+        ),
         (
             400,
             {"code": "context_length_exceeded", "message": "host-private details"},
@@ -504,7 +558,10 @@ print('ok')
         ),
         (
             400,
-            {"code": 400, "message": "This model's maximum context length is 131072 tokens: host-private details"},
+            {
+                "code": 400,
+                "message": "This model's maximum context length is 131072 tokens: host-private details",
+            },
             BadRequestError,
             "context_length_exceeded",
         ),
@@ -527,11 +584,12 @@ async def test_model_relay_preserves_sdk_error_classification_without_upstream_d
 
     monkeypatch.setattr(model_relay.httpx, "AsyncClient", RelayClient)
     endpoint = "https://provider.example/private-capability/v1"
-    with host_model_authentication({endpoint: "host-private"}):
-        relay = ModelRelay(endpoint, "candidate")
+    relay = ModelRelay(endpoint, "candidate", api_key="host-private")
 
     async def guest(request):
-        response = await relay.handle(HttpRequest("POST", request.url.path, request.content))
+        response = await relay.handle(
+            HttpRequest("POST", request.url.path, request.content)
+        )
         assert b"host-private" not in response.body
         assert b"private-capability" not in response.body
         return httpx.Response(response.status, content=response.body)
@@ -571,10 +629,17 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
     monkeypatch.setattr(DaytonaEnvReader, "get", environment_value)
 
     async def run():
-        with host_backend_credentials(
-            daytona_api_key="explicit-key", daytona_target="test-target"
-        ):
+        async with asyncio.TaskGroup() as service_tasks:
             adapter = DaytonaEnvironment(
+                host_capabilities=HostCapabilities(
+                    daytona=DaytonaConnection(
+                        api_key="explicit-key",
+                        api_url=DAYTONA_API_URL,
+                        target="test-target",
+                    ),
+                    model_authentication={},
+                ),
+                guest_environment={},
                 environment_dir=tmp_path,
                 environment_name="task",
                 session_id="trial",

@@ -63,8 +63,6 @@ def test_verified_launch_requires_its_historical_evaluator_checkout(monkeypatch,
         replace(spec, version=None), LaunchProvenance(git_sha="abc", launch_host="test"), "test"
     ).evaluations[0]
     assert isinstance(ad_hoc.executor, EvalchemyExecutor)
-    assert ad_hoc.identity.eval_runtime.startswith("evalchemy[")
-    assert "vendor/evalchemy#sha256=" in ad_hoc.identity.eval_runtime
 
 
 @pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])

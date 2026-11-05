@@ -16,6 +16,8 @@ from unittest.mock import patch
 import click
 import pytest
 from click.testing import CliRunner
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -38,7 +40,7 @@ from marin.evaluation.evalchemy.runner import (
     _coverage_with_aggregate_counts,
     run_evalchemy,
 )
-from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor, evalchemy_runtime_source_hash
+from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
     HarborDatasetKind,
@@ -87,6 +89,7 @@ from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupE
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.storage_path import StoragePath
+from rigging.provenance import launch_provenance
 
 from experiments.evaluation.cli import cli, resolve_model_config
 from experiments.evaluation.evals import (
@@ -172,6 +175,34 @@ def _install_fake_harbor_preflight(
 def _write_harbor_config(path: Path) -> Path:
     path.write_text("{}")
     return path
+
+
+def test_harbor_cache_reuses_launch_tree_and_invalidates_changed_provenance(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(HarborDefinition("test", _write_harbor_config(tmp_path / "policy.yaml")),),
+        platform=Platform.GPU,
+        accelerator="H100x8",
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+        cache_key="same-pipeline",
+    )
+    provenance = LaunchProvenance(git_sha="abc", launch_host="host")
+    before = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
+    unchanged = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
+    assert unchanged == before
+    captured = launch_provenance()
+    monkeypatch.setattr(
+        "marin.evaluation.harbor.driver_config.launch_provenance", lambda: replace(captured, tree_hash="changed-tree")
+    )
+    changed = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
+    assert changed != before
 
 
 def _write_model_config(path: Path) -> Path:
@@ -1847,9 +1878,7 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
         "tester",
     )
 
-    assert batch.evaluations[0].identity.eval_runtime == evalchemy_runtime_descriptor(
-        ("serve-eval", "math500"), evalchemy_runtime_source_hash()
-    )
+    assert batch.evaluations[0].identity.eval_runtime == evalchemy_runtime_descriptor(("serve-eval", "math500"))
 
 
 def test_build_evaluation_batch_routes_and_records_financebench_judge(monkeypatch):
@@ -2214,9 +2243,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         "aime-policy",
     ]
     ifeval = batch.evaluations[1].identity.eval_ref
-    assert batch.evaluations[1].identity.eval_runtime == evalchemy_runtime_descriptor(
-        ("serve-eval", "ifeval"), evalchemy_runtime_source_hash()
-    )
+    assert batch.evaluations[1].identity.eval_runtime == evalchemy_runtime_descriptor(("serve-eval", "ifeval"))
     assert ifeval.model_dump(mode="json", exclude_none=True) == {
         "name": "ifeval",
         "mechanism": "evalchemy",
@@ -2786,3 +2813,35 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
+
+
+@pytest.mark.parametrize("code", [Code.NOT_FOUND, Code.PERMISSION_DENIED])
+def test_inference_readiness_retries_missing_registration_but_preserves_access_errors(monkeypatch, code):
+    session = replace(_remote_session(), jobs=())
+    addresses = iter((ConnectError(code, "registry response"), "http://inference:8000"))
+    probed = []
+
+    def resolve_endpoint(_name):
+        result = next(addresses)
+        if isinstance(result, ConnectError):
+            raise result
+        return result
+
+    def probe(url, *, timeout):
+        probed.append(url)
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(
+        "marin.inference.iris.iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(resolve_endpoint=resolve_endpoint)),
+    )
+    monkeypatch.setattr("marin.inference.iris.requests.get", probe)
+    monkeypatch.setattr("marin.inference.iris.time", SimpleNamespace(sleep=lambda _interval: None))
+    if code == Code.NOT_FOUND:
+        session.wait_until_ready()
+        assert probed == ["http://inference:8000/v1/models"]
+    else:
+        with pytest.raises(ConnectError) as raised:
+            session.wait_until_ready()
+        assert raised.value.code == Code.PERMISSION_DENIED
+        assert not probed

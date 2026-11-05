@@ -1,9 +1,12 @@
 import json
+import os
 from pathlib import Path
 from typing import Annotated
 
 import yaml
 from harbor.cli.utils import (
+    cli_guest_environment,
+    cli_host_capabilities,
     load_mcp_servers,
     parse_env_vars,
     parse_kwargs,
@@ -400,6 +403,8 @@ def start(
     from harbor.trial.queue import TrialQueue
     from harbor.trial.trial import Trial
 
+    host_environment = dict(os.environ)
+
     base_config = None
     if config_path is not None:
         if config_path.suffix == ".yaml":
@@ -505,6 +510,14 @@ def start(
     elif path is not None:
         config.task = TaskConfig(path=path)
 
+    host_capabilities = cli_host_capabilities(
+        host_environment,
+        environment_kwargs=config.environment.kwargs,
+        agents=(config.agent,),
+        verifier_environment=config.verifier.env,
+    )
+    guest_environment = cli_guest_environment(config.environment.kwargs)
+
     # Keep creation and execution on one event loop so clients and background
     # tasks survive across the whole trial lifecycle.
     async def _create_and_run() -> TrialResult:
@@ -517,8 +530,16 @@ def start(
         console.print(f"Trials directory: {config.trials_dir}")
 
         if config.trial_attempt_timeout_sec is not None:
-            return await TrialQueue(n_concurrent=1).submit(config)
-        trial = await Trial.create(config)
+            return await TrialQueue(
+                n_concurrent=1,
+                host_capabilities=host_capabilities,
+                guest_environment=guest_environment,
+            ).submit(config)
+        trial = await Trial.create(
+            config,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
+        )
         return await trial.run()
 
     result = run_async(_create_and_run())

@@ -124,6 +124,8 @@ Creation starts the containers and returns handles without waiting for health.
 Start host capabilities before readiness when a container needs them:
 
 ```python
+import asyncio
+
 from shellbox.http_service import serve_http
 from shellbox.task import ContainerSpec, ServiceEndpoint, TaskSpec
 
@@ -141,7 +143,9 @@ spec = TaskSpec(
 )
 group = await factory.create_task(spec)
 try:
-    async with serve_http(group.primary, model_handler, port=18080):
+    async with asyncio.TaskGroup() as service_tasks, serve_http(
+        group.primary, model_handler, task_group=service_tasks, port=18080
+    ):
         await group.wait_ready()
         result = await group.primary.run(agent_command)
 finally:
@@ -149,6 +153,9 @@ finally:
 ```
 
 `serve_http` starts one Python HTTP listener through a persistent process session.
+The required `task_group` owns the listener pump and reports late helper failures to
+its owner, even when startup ran in a completed phase task. Close the service
+context before leaving that group.
 The host handler receives bounded requests on that process's stdout and performs only the
 operations it authorizes. Model URLs and authentication stay with the host
 handler; a runtime service uses the group-local listener URL and a dummy API key.
@@ -176,6 +183,8 @@ Create the machine with `NetworkPolicy.DENY`, then enter `serve_http` before
 running the application and close the relay before closing the machine:
 
 ```python
+import asyncio
+
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.http_service import serve_http
 from shellbox.image import RegistryImage
@@ -185,7 +194,9 @@ machine = await DockerMachineFactory().create(
     MachineSpec(RegistryImage("python:3.12-slim"), network=NetworkPolicy.DENY)
 )
 try:
-    async with serve_http(machine, authorized_handler, port=8787) as url:
+    async with asyncio.TaskGroup() as service_tasks, serve_http(
+        machine, authorized_handler, task_group=service_tasks, port=8787
+    ) as url:
         result = await machine.run(
             Command(("python3", "/app/worker.py"), env={"SERVICE_URL": url})
         )
@@ -214,12 +225,17 @@ timeout, interval, start period and optional attempt limit. Timed readiness
 requires Python 3 in each container image: a guest supervisor kills the probe's
 process group when its attempt times out, allowing the next attempt without
 stopping the runtime service. Exhausted attempts, the overall readiness timeout
-or cancelled startup close the whole group. Closing any member, a member exiting,
+or cancelled startup propagate to the task owner, which must close relay contexts
+before closing the group. Closing any member, a member exiting,
 or the job lifetime ending also tears down the group; containers are not reused
 between trials. Download outputs through machine handles before closing them.
 
-An ordinary command timeout or caller cancellation closes the whole local
+Without delegated cgroups, an ordinary command timeout or caller cancellation closes the whole local
 machine or group; successful commands preserve background processes.
+With delegation, interruption reclaims only the current command and descendants.
+Before grading, stop agent command submission and call `LocalMachine.quiesce_commands()`
+to reclaim work left by earlier successful commands, including tmux servers.
+Process sessions, relay helpers and peer containers remain alive.
 
 Docker and Daytona preserve the machine after confirmed command teardown, including
 caller cancellation. If teardown cannot be confirmed, they close the machine and
@@ -359,26 +375,26 @@ finally:
 
 - Each machine has a private root under the host's temporary directory, removed by `close`. Commands see the host's `/usr`, `/bin`, `/sbin` and `/lib*` read-only, together with explicit `read_only` mounts. `/etc` contains copies of only the account databases, name resolution, loader cache, timezone, alternatives and public CA certificates listed in `RUNTIME_CONFIGURATION`. Host shell startup files, `/etc/environment`, password hashes, private keys and other configuration are absent. `/sys` is empty and read-only. `/opt`, `/app`, `/tests`, `/tmp` and `HOME` belong to the machine. Software under the shared program directories and explicit mounts must be trusted and free of credentials.
 - Machines are independent, so a process may run any number of them at once.
-- Files, background processes, PID, IPC and UTS namespaces persist until `close`, with a private `/proc`, `/dev` and `/dev/shm`. Host supervisors and their namespace handles stay outside the guest PID namespace. Under `NetworkPolicy.DENY` a private network contains only loopback, which refuses TCP and UDP to the host and beyond; under `ALLOW` the machine uses the host network. A successful command may leave a server running for later commands. An ordinary command timeout or caller cancellation closes the machine and, for a group member, every peer. Set `LocalMachineFactory(ttl=...)` to bound the lifetime even when a caller forgets to close it.
+- Files, background processes, PID, IPC and UTS namespaces persist until `close`, with a private `/proc`, `/dev` and `/dev/shm`. Host supervisors and their namespace handles stay outside the guest PID namespace. Under `NetworkPolicy.DENY` a private network contains only loopback, which refuses TCP and UDP to the host and beyond; under `ALLOW` the machine uses the host network. A successful command may leave a server running for later commands. With writable cgroup delegation, a command timeout or cancellation kills that command and its descendants, including processes that call `setsid`, while preserving files, peers, helpers and background processes from earlier successful commands. Without delegation, interruption closes the machine and every peer. Set `LocalMachineFactory(ttl=...)` to bound the lifetime even when a caller forgets to close it.
 - `upload` and `download` run tar inside the guest with a fixed control environment, so absolute symlinks resolve inside the guest root. Uploads to read-only directories fail. Downloads preserve interior symlinks; later downloads replace those links without following them into the host. Host destination roots and ancestors must not be symlinks. A missing guest path raises `RuntimeError`, as the container backends do.
 - With `system_directories=SystemDirectories.COPY_ON_WRITE`, each host-program machine overlays `/usr`, `/bin`, `/sbin` and `/lib*` with a writable layer and makes its private `/etc` writable. Writes persist between commands and `close` discards them; the host's files never change. Writes follow file permissions. `/sys` and host submounts inside overlaid program directories stay read-only; `read_only_system_mounts()` lists those submounts. Downloading the entire host-program root is refused. This mode needs overlayfs and a temporary directory that is not itself on overlayfs.
 - Commands never inherit the host environment, which can hold cluster credentials. Host-program commands get `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`. The trusted host launcher reads configuration through a private file descriptor, keeping environment values out of host process listings, and applies task and command variables after isolation. Its own fixed environment prevents loader options such as `LD_PRELOAD` from affecting it.
 - `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. Command output goes to private temporary files, subject to the 1 GiB file-size limit; returned bytes are truncated to `output_limit_bytes` and report truncation flags.
-- Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files and files of at most 1 GiB. Command deadlines close the namespace; no inherited CPU-time limit later kills a background service started by a successful command. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
-- Pass an explicit writable cgroup v2 `cgroup_parent` to enforce `MachineSpec.cpus` and `memory_mb` across every process in each machine. The parent must delegate the CPU and memory controllers, and the worker must have permission to move its children within that hierarchy. The backend enables these controllers, creates one child cgroup per machine, disables swapping when memory is limited, and kills and removes the child on close. The guest sees no writable cgroup filesystem. Without this configuration, CPU and memory requests raise `UnsupportedMachineSpec`. Disk quotas and GPU allocation remain unsupported.
+- Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files and files of at most 1 GiB. Command deadlines reclaim the command cgroup when delegated, or close the namespace otherwise; no inherited CPU-time limit later kills a background service started by a successful command. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
+- The factory discovers the worker's writable cgroup v2 delegation and creates a machine parent with keeper and command children. `cgroup_parent` supplies an operator override. Containment requires writable `cgroup.kill` and permission to move children within the hierarchy. Each machine owns and reclaims its groups; successful commands may leave background processes in their tracked child groups, and session close reclaims only its own group. Execution preflight admits `retained_command_cancellation` only when delegation is available. Requiring this capability rejects unsupported hosts before allocation. The guest sees no writable cgroup filesystem.
+- `MachineSpec.cpus` and `memory_mb` request aggregate limits across every process in a machine. The backend enables each requested controller separately and disables swapping when memory is limited. Unavailable controllers or failed limit writes produce warnings and execution continues. Process containment and cleanup still must succeed. Disk quotas and GPU allocation remain unsupported.
 - `Command.user` keeps the process's user when it is omitted or names that user. Another user requires a root process; the command then runs with that account's UID and primary group, no supplementary groups and no capabilities. A user without a host account raises `UnsupportedMachineSpec`.
 
 The factory mounts exactly the directories in `read_only` and infers nothing from `bin_dirs`, which only sets `PATH`. The caller must keep each `read_only` directory self-contained. A symlink whose target lies outside the mounted directories does not resolve in the sandbox. A uv venv, for example, links `python` to an interpreter elsewhere on the host, so mounting the venv alone leaves `python3` missing. The factory raises `ValueError` for a `read_only` path that is not an existing directory.
 
-A systemd user service can supply delegation without granting the worker host administration privileges. Set `Delegate=cpu memory pids` and `DelegateSubgroup=supervisor`, then pass the service's cgroup directory as `cgroup_parent`. The supervisor subgroup keeps the delegated parent empty so it can distribute CPU and memory to machine subgroups. For example, on a host whose user manager has these controllers delegated, run the aggregate limit tests from the repository root:
+A systemd user service can supply delegation without granting the worker host administration privileges. Set `Delegate=cpu memory pids` and `DelegateSubgroup=supervisor`. Shellbox discovers the empty service parent above the supervisor subgroup; callers do not need to supply its path. For example, on a host whose user manager has these controllers delegated, run the aggregate limit tests from the repository root:
 
 ```bash
 systemd-run --user --unit=shellbox-limits --collect --wait --pipe \
   --working-directory="$PWD" --property=Type=exec \
   --property='Delegate=cpu memory pids' --property=DelegateSubgroup=supervisor \
   uv run --no-sync --package marin-shellbox pytest -o addopts='' -m manual \
-  lib/shellbox/tests/test_local_cgroup.py \
-  --local-cgroup-parent="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/app.slice/shellbox-limits.service"
+  lib/shellbox/tests/test_local_cgroup.py
 ```
 
 For an OCI image, pass a `PreparedImage` from `ImageCache.prepare` or a

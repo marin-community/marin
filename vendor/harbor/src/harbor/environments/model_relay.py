@@ -3,31 +3,71 @@
 
 """Relay task-local model requests to a fixed, host-authenticated endpoint."""
 
+import asyncio
 import json
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import AsyncIterator, Iterable, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager
+from enum import StrEnum
 
 import httpx
 
 from harbor.llms.vllm_tokenization import tokenize_url
-from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse
-
-MODEL_RELAY_PORT = 8787
-CANDIDATE_MODEL_RELAY_PORT = 8788
-_HOST_MODEL_AUTH: ContextVar[Mapping[str, str]] = ContextVar(
-    "harbor_host_model_auth", default={}
+from harbor.host_capabilities import (
+    CANDIDATE_MODEL_RELAY_PORT,
+    MODEL_RELAY_PORT,
+    model_api_url,
 )
+from harbor.models.agent.model_api import ModelAPI
+from harbor.trial.errors import RuntimeServiceError
+from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
+from shellbox.machine import Machine
+
+SUPPORTED_MODEL_APIS = frozenset({ModelAPI.OPENAI_CHAT})
 
 
-@contextmanager
-def host_model_authentication(values: Mapping[str, str]) -> Iterator[None]:
-    """Bind endpoint-to-API-key credentials for relays constructed in this context."""
-    token = _HOST_MODEL_AUTH.set(dict(values))
-    try:
+class JudgeAccess(StrEnum):
+    VERIFIER = "verifier"
+    RUNTIME = "runtime"
+
+
+@asynccontextmanager
+async def verifier_model_access(
+    machine: Machine,
+    judge: "ModelRelay | None",
+    access: JudgeAccess,
+    service_tasks: asyncio.TaskGroup,
+) -> AsyncIterator[None]:
+    """Grant verifier-only model access for the grading phase."""
+    async with AsyncExitStack() as stack:
+        if access is JudgeAccess.VERIFIER:
+            await start_model_relays(
+                machine, stack, service_tasks, judge=judge, candidate=None
+            )
         yield
-    finally:
-        _HOST_MODEL_AUTH.reset(token)
+
+
+async def start_model_relays(
+    machine: Machine,
+    stack: AsyncExitStack,
+    service_tasks: asyncio.TaskGroup,
+    *,
+    judge: "ModelRelay | None",
+    candidate: "ModelRelay | None",
+) -> None:
+    """Enter role relays whose contexts and service tasks belong to the caller."""
+    for relay, port in (
+        (judge, MODEL_RELAY_PORT),
+        (candidate, CANDIDATE_MODEL_RELAY_PORT),
+    ):
+        if relay is not None:
+            try:
+                await stack.enter_async_context(
+                    serve_http(
+                        machine, relay.handle, port=port, task_group=service_tasks
+                    )
+                )
+            except Exception as exc:
+                raise RuntimeServiceError("Model relay failed to start") from exc
 
 
 class ModelRelay:
@@ -36,10 +76,25 @@ class ModelRelay:
     Streaming chat responses are buffered before SSE encoding.
     """
 
-    def __init__(self, endpoint: str, model: str):
+    def __init__(self, endpoint: str, model: str, *, api_key: str):
         self.endpoint = endpoint
         self.model = model.removeprefix("together_ai/")
-        self._api_key = _HOST_MODEL_AUTH.get().get(endpoint, "EMPTY")
+        self._api_key = api_key
+
+    @classmethod
+    def from_endpoint(
+        cls,
+        endpoint: str | None,
+        model: str | None,
+        *,
+        authentication: Mapping[str, str],
+    ) -> "ModelRelay | None":
+        """Resolve an optional relay before allocating its guest environment."""
+        if endpoint is None and model is None:
+            return None
+        if endpoint is None or model is None:
+            raise ValueError("Model relay requires a host endpoint and model")
+        return cls(endpoint, model, api_key=authentication.get(endpoint, "EMPTY"))
 
     async def handle(self, request: HttpRequest) -> HttpResponse:
         if request.method != "POST" or request.path not in {
@@ -119,6 +174,34 @@ class ModelRelay:
                     return HttpResponse(response.status_code, bytes(body))
         except httpx.HTTPError:
             return HttpResponse(502, b'{"error":"model request failed"}')
+
+
+def task_model_relays(
+    *,
+    model_endpoint: str | None,
+    model_name: str | None,
+    candidate_model_endpoint: str | None,
+    candidate_model_name: str | None,
+    authentication: Mapping[str, str],
+    judge_access: JudgeAccess,
+    environments: Iterable[Mapping[str, str]],
+) -> tuple[ModelRelay | None, ModelRelay | None]:
+    """Resolve role relays and require runtime authority for task model callers."""
+    judge = ModelRelay.from_endpoint(
+        model_endpoint, model_name, authentication=authentication
+    )
+    candidate = ModelRelay.from_endpoint(
+        candidate_model_endpoint, candidate_model_name, authentication=authentication
+    )
+    endpoints = tuple(model_api_url(values) for values in environments)
+    if any(endpoint is not None for endpoint in endpoints):
+        if judge is None:
+            raise ValueError(
+                "Task model calls require an explicit host judge endpoint and model"
+            )
+        if judge_access is not JudgeAccess.RUNTIME:
+            raise ValueError("Task model calls require explicit judge_access='runtime'")
+    return judge, candidate
 
 
 def _upstream_error(status: int, body: bytes) -> HttpResponse:

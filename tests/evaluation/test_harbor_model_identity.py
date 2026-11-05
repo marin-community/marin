@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Offline regressions for model provenance, resume identity, and request routing."""
+"""Preflight policy identity is independent of model and serving names."""
 
 import json
 import tempfile
@@ -42,10 +42,15 @@ def test_runtime_alias_change_preserves_identity_and_rejects_different_model(tmp
         from harbor.agents.factory import AgentFactory
         from harbor.models.trial.config import TrialConfig, TaskConfig
         from harbor.models.job.reconciliation import trial_identity_key, classify_trial_plan_mismatches
-        from marin.evaluation.harbor.trial_driver import effective_job_config
+        from harbor_config import JobConfig
+        from marin.evaluation.harbor.trial_driver import RuntimeOverlay, effective_job_config
 
         policy, *overlays = map(Path, sys.argv[1:])
-        configs = [effective_job_config(policy, overlay) for overlay in overlays]
+        stable_policy = JobConfig.model_validate_json(policy.read_text())
+        configs = [
+            effective_job_config(stable_policy, RuntimeOverlay.model_validate_json(overlay.read_text()))
+            for overlay in overlays
+        ]
         trials = [
             TrialConfig(task=TaskConfig(path=Path('/tasks/problem')), agent=config.agents[0]) for config in configs
         ]
@@ -86,13 +91,16 @@ def test_runtime_alias_change_preserves_identity_and_rejects_different_model(tmp
 def test_preflight_policy_identity_ignores_model_and_serving_names():
     with tempfile.TemporaryDirectory(prefix=".harbor-identity-", dir=Path(__file__).parents[2]) as directory:
         tmp_path = Path(directory)
-        task = tmp_path / "dataset" / "task"
-        task.mkdir(parents=True)
-        (task / "task.toml").write_text('[task]\nname = "test/model-identity"\n')
-        (task / "instruction.md").write_text("Complete the task.\n")
-        (task / "environment").mkdir()
+        task = tmp_path / "dataset/task"
+        (task / "environment").mkdir(parents=True)
         (task / "tests").mkdir()
-        (task / "tests" / "test.sh").write_text("exit 0\n")
+        (task / "task.toml").write_text(
+            '[task]\nname = "test/model-identity"\n[environment]\n'
+            f'docker_image = "example.test/task@sha256:{"a" * 64}"\n'
+            'allow_internet = false\nworkdir = "/workspace"\n'
+        )
+        (task / "instruction.md").write_text("Complete the task.\n")
+        (task / "tests/test.sh").write_text("exit 0\n")
         paths = []
         for model_name, model_alias in [
             ("hosted_vllm/org/original", "hosted_vllm/old"),
@@ -102,7 +110,7 @@ def test_preflight_policy_identity_ignores_model_and_serving_names():
             path.write_text(
                 json.dumps(
                     {
-                        "environment": {"type": "daytona"},
+                        "environment": {"type": "local"},
                         "agents": [{"name": "terminus-2", "model_name": model_name, "model_alias": model_alias}],
                         "datasets": [{"path": "dataset"}],
                     }
@@ -111,4 +119,3 @@ def test_preflight_policy_identity_ignores_model_and_serving_names():
             paths.append(path)
         configs = preflight_harbor_configs([(path, {}) for path in paths], judge_model=None)
         assert configs[0].digest == configs[1].digest
-        assert configs[0].benchmark.n_attempted == configs[1].benchmark.n_attempted == 1

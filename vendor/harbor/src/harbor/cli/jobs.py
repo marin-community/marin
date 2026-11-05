@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 from harbor.agents.factory import AgentFactory
 from harbor.cli.notifications import show_registry_hint_if_first_run
 from harbor.cli.utils import (
-    bind_backend_credentials,
+    cli_guest_environment,
+    cli_host_capabilities,
     load_mcp_servers,
     parse_env_vars,
     parse_kwargs,
@@ -863,7 +864,8 @@ def start(
             console.print(f"[red]❌ Env file not found: {env_file}[/red]")
             raise SystemExit(1)
         load_dotenv(env_file, override=True)
-        bind_backend_credentials(context, os.environ)
+
+    host_environment = dict(os.environ)
 
     base_config = None
     if config_path is not None:
@@ -1184,8 +1186,20 @@ def start(
                 "--exclude-task-name without also specifying --dataset, --task, or --path."
             )
 
+    host_capabilities = cli_host_capabilities(
+        host_environment,
+        environment_kwargs=config.environment.kwargs,
+        agents=config.agents,
+        verifier_environment=config.verifier.env,
+    )
+    guest_environment = cli_guest_environment(config.environment.kwargs)
+
     async def _run_job():
-        job = await Job.create(config)
+        job = await Job.create(
+            config,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
+        )
         job_result = await job.run()
         console.print()
         print_job_results_tables(job_result)
@@ -1307,6 +1321,8 @@ def resume(
     """Resume an existing job from its job directory."""
     from harbor.job import Job
 
+    host_environment = dict(os.environ)
+
     job_dir = Path(job_path)
     config_path = job_dir / "config.json"
 
@@ -1338,8 +1354,20 @@ def resume(
         type=config.environment.type,
     )
 
+    host_capabilities = cli_host_capabilities(
+        host_environment,
+        environment_kwargs=config.environment.kwargs,
+        agents=config.agents,
+        verifier_environment=config.verifier.env,
+    )
+    guest_environment = cli_guest_environment(config.environment.kwargs)
+
     async def _run_job():
-        job = await Job.create(config)
+        job = await Job.create(
+            config,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
+        )
         return await job.run()
 
     job_result = run_async(_run_job())

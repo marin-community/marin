@@ -27,13 +27,12 @@ from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, run
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.evalchemy.runtime import (
-    evalchemy_evaluator_source_hash,
     evalchemy_runtime_descriptor,
-    evalchemy_runtime_source_hash,
 )
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
+    harbor_runtime_descriptor,
     preflight_harbor_configs,
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
@@ -241,10 +240,9 @@ def _resolve_definitions(
             f"{version} requires historical Evalchemy commit {commit}; "
             "run it from a Marin checkout that predates Evalchemy vendoring"
         )
-    evalchemy_source_hash = evalchemy_runtime_source_hash() if evalchemy_definitions else ""
-    evalchemy_evaluator_hash = evalchemy_evaluator_source_hash() if evalchemy_definitions else ""
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
+    harbor_runtime = harbor_runtime_descriptor() if harbor_definitions else None
     model_agent_kwargs = harbor_model_agent_kwargs(model)
     requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
     validated_configs = iter(
@@ -267,10 +265,8 @@ def _resolve_definitions(
                     name,
                     _ResolvedDefinition(
                         record_ref=definition.record_ref_for(config),
-                        runtime_descriptor=evalchemy_runtime_descriptor(config.runtime.extras, evalchemy_source_hash),
-                        cache_runtime_descriptor=evalchemy_runtime_descriptor(
-                            config.runtime.extras, evalchemy_evaluator_hash
-                        ),
+                        runtime_descriptor=evalchemy_runtime_descriptor(config.runtime.extras),
+                        cache_runtime_descriptor=evalchemy_runtime_descriptor(config.runtime.extras),
                         executor=EvalchemyExecutor(config),
                         endpoint_route=EndpointRoute.DIRECT,
                         secret_env=dict(secret_env),
@@ -288,8 +284,8 @@ def _resolve_definitions(
                 name,
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
-                    runtime_descriptor=None,
-                    cache_runtime_descriptor=None,
+                    runtime_descriptor=harbor_runtime,
+                    cache_runtime_descriptor=harbor_runtime,
                     executor=definition.executor_for(
                         config,
                         model,

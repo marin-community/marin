@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from harbor.cli.main import app
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.job.config import JobConfig
 from harbor.models.task.config import MCPServerConfig
 from harbor.models.trial.config import AgentConfig
@@ -22,7 +23,7 @@ def _mcp_json(tmp_path):
 def test_job_start_mcp_config_populates_agents(tmp_path, monkeypatch):
     captured = []
 
-    async def create(config: JobConfig):
+    async def create(config: JobConfig, *, host_capabilities, guest_environment):
         async def run():
             return SimpleNamespace(started_at=None, finished_at=None)
 
@@ -52,7 +53,7 @@ def test_trial_start_mcp_config_populates_agent(tmp_path, monkeypatch):
     task_dir = tmp_path / "task"
     task_dir.mkdir()
 
-    async def create(config):
+    async def create(config, *, host_capabilities, guest_environment):
         captured.append(config)
 
         async def run():
@@ -107,6 +108,8 @@ def test_trial_init_agent_merges_mcp_servers_by_name(tmp_path):
     )
     trial.paths = SimpleNamespace(agent_dir=tmp_path / "agent")
     trial.logger = logging.getLogger(__name__)
+    trial.guest_environment = {}
+    trial.host_capabilities = HostCapabilities()
     trial._effective_skills_dir = None
 
     with patch(

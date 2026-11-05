@@ -321,7 +321,7 @@ jobs:
                 timeout --kill-after=5 --signal=TERM 2090 \
                 uv run --package marin-levanter --frozen --group test --extra tpu \
                 pytest -n 0 $TPU_TEST_PATHS \
-                -m 'tpu and not slow and not torch and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' \
+                -m '(tpu or multidevice) and not slow and not torch and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' \
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
                 [ "\$status" -eq 5 ] && exit 0; \
                 exit "\$status" )"
@@ -558,8 +558,9 @@ jobs:
         working-directory: vendor/skyrl
         run: |
           uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
-            infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py \
-            skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py
+            infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py skyrl-train/tests/test_*.py \
+            skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py \
+            skyrl-train/tests/cpu/test_compact_distillation.py
 
   unit_tests:
     name: unit-tests

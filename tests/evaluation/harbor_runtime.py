@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run Harbor boundary tests in its isolated, locked environment."""
+"""Exercise Harbor's driver protocol through its isolated, locked environment."""
 
 import json
 import os
 import subprocess
 from pathlib import Path
 
-from marin.evaluation.harbor.driver_config import _driver_environment
+from marin.evaluation.harbor.driver_config import _driver_environment, harbor_runtime_command
 
 _ROOT = Path(__file__).parents[2]
 _DRIVER = _ROOT / "lib/marin/src/marin/evaluation/harbor/trial_driver.py"
@@ -72,21 +72,18 @@ def preflight(
     *,
     hash_seed: str = "0",
     check: bool = True,
-    extra_python_path: Path | None = None,
     judge_model: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     request_path = tmp_path / f"requests-{hash_seed}.json"
     request_path.write_text(
         json.dumps(
-            [{"path": str(path), "model_agent_kwargs": kwargs, "judge_model": judge_model} for path, kwargs in requests],
-            separators=(",", ":"),
+            [{"path": str(path), "model_agent_kwargs": kwargs, "judge_model": judge_model} for path, kwargs in requests]
         )
     )
-    return external_python(
-        str(_DRIVER),
-        "preflight",
-        str(request_path),
-        hash_seed=hash_seed,
+    return subprocess.run(
+        harbor_runtime_command(_DRIVER, "preflight", str(request_path)),
         check=check,
-        extra_python_path=extra_python_path,
+        capture_output=True,
+        text=True,
+        env=_driver_environment({"PYTHONHASHSEED": hash_seed}),
     )

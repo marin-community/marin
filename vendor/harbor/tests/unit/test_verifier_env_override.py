@@ -9,7 +9,7 @@ from harbor.models.task.config import TaskOS
 from harbor.models.task.config import VerifierConfig as TaskVerifierConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.verifier.verifier import Verifier
-from harbor.utils.env import task_environment
+from harbor.utils.env import resolve_env_vars
 
 
 def _make_task(tmp_path: Path, verifier_env: dict[str, str]):
@@ -36,6 +36,9 @@ def _make_task(tmp_path: Path, verifier_env: dict[str, str]):
 
 def _make_environment(trial_paths: TrialPaths) -> MagicMock:
     environment = MagicMock()
+    environment.resolve_env_vars.side_effect = lambda values: resolve_env_vars(
+        values, source={"HOST_API_KEY": "EMPTY"}
+    )
     environment.upload_dir = AsyncMock()
     environment.download_dir = AsyncMock()
     environment.capabilities.mounted = True
@@ -78,8 +81,7 @@ async def test_verifier_runtime_env_overrides_task_env(tmp_path, monkeypatch):
         },
     )
 
-    with task_environment({"HOST_API_KEY": "EMPTY"}):
-        result = await verifier.verify()
+    result = await verifier.verify()
 
     assert result.rewards == {"reward": 1.0}
     assert environment.exec.await_args_list[1].kwargs["env"] == {
@@ -129,8 +131,7 @@ async def test_verifier_no_override_uses_task_env(tmp_path, monkeypatch):
         environment=environment,
     )
 
-    with task_environment({"HOST_API_KEY": "EMPTY"}):
-        result = await verifier.verify()
+    result = await verifier.verify()
 
     assert result.rewards == {"reward": 1.0}
     assert environment.exec.await_args_list[1].kwargs["env"] == {

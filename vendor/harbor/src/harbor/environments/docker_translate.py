@@ -34,7 +34,7 @@ COMPOSE_FILENAMES = (
 )
 PREPARED_IMAGES_FILE = "shellbox-images.json"
 PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
-_SERVICE_NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
+_SERVICE_NAME = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _DURATION = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)")
 _LOG_VOLUME = "${HOST_AGENT_LOGS_PATH}:${ENV_AGENT_LOGS_PATH}"
 
@@ -99,31 +99,44 @@ def _argv(value: list[str] | str | None) -> tuple[str, ...] | None:
         return None
     arguments = tuple(shlex.split(value)) if isinstance(value, str) else tuple(value)
     if not arguments:
-        raise ValueError("Empty Compose command or entrypoint overrides are unsupported")
+        raise ValueError(
+            "Empty Compose command or entrypoint overrides are unsupported"
+        )
     if any("${" in item for item in arguments):
         raise ValueError("Compose commands cannot interpolate harness variables")
     return tuple(item.replace("$$", "$") for item in arguments)
 
 
-def _environment(value: dict[str, str | int | float] | list[str]) -> dict[str, str]:
+def _environment(
+    value: dict[str, str | int | float] | list[str],
+    *,
+    source: Mapping[str, str],
+    protected_values: frozenset[str],
+) -> dict[str, str]:
     if isinstance(value, list):
         if any("=" not in item for item in value):
             raise ValueError("Compose environment entries must have explicit values")
         values = dict(item.split("=", 1) for item in value)
     else:
         values = {key: str(item) for key, item in value.items()}
-    validate_task_environment(values)
-    return resolve_env_vars(values)
+    validate_task_environment(values, protected_values=protected_values)
+    return resolve_env_vars(values, source=source, protected_values=protected_values)
 
 
-def _prepared_images(environment_dir: Path) -> dict[str, PreparedImageConfig]:
+def prepared_images(environment_dir: Path) -> dict[str, PreparedImageConfig]:
+    """Read the task's explicit prepared-image declarations."""
     path = environment_dir / PREPARED_IMAGES_FILE
     if not path.exists():
         return {}
     document = json.loads(path.read_text())
     if not isinstance(document, dict):
-        raise ValueError("shellbox-images.json must map service names to prepared image references and workdirs")
-    return {name: PreparedImageConfig.model_validate(value) for name, value in document.items()}
+        raise ValueError(
+            "shellbox-images.json must map service names to prepared image references and workdirs"
+        )
+    return {
+        name: PreparedImageConfig.model_validate(value)
+        for name, value in document.items()
+    }
 
 
 def _machine(
@@ -131,31 +144,61 @@ def _machine(
     service: ComposeService,
     prepared: Mapping[str, PreparedImageConfig],
     task: EnvironmentConfig,
+    *,
+    guest_environment: Mapping[str, str],
+    protected_values: frozenset[str],
 ) -> MachineSpec:
     image = prepared.get(name)
     image_reference = image.image if image is not None else service.image
     workdir = service.working_dir or (image.workdir if image is not None else None)
     if name == "main":
         image_reference = image_reference or task.docker_image
-        workdir = workdir or task.workdir
+        workdir = task.workdir or workdir
     if image_reference is None or PINNED_IMAGE.fullmatch(image_reference) is None:
-        raise ValueError(f"Service {name!r} requires a prepared image pinned with @sha256 in shellbox-images.json")
+        raise ValueError(
+            f"Service {name!r} requires a prepared image pinned with @sha256 in shellbox-images.json"
+        )
     if not workdir or not PurePosixPath(workdir).is_absolute():
-        raise ValueError(f"Service {name!r} requires its prepared image's absolute working directory")
+        raise ValueError(
+            f"Service {name!r} requires its prepared image's absolute working directory"
+        )
     if service.build is not None and image is None:
-        raise ValueError(f"Service {name!r} has a build recipe; prepare its image before task execution")
+        raise ValueError(
+            f"Service {name!r} has a build recipe; prepare its image before task execution"
+        )
     if image is not None and service.image is not None and service.image != image.image:
-        raise ValueError(f"Service {name!r} image conflicts with its prepared image reference")
-    if name == "main" and task.docker_image is not None and task.docker_image != image_reference:
+        raise ValueError(
+            f"Service {name!r} image conflicts with its prepared image reference"
+        )
+    if (
+        name == "main"
+        and task.docker_image is not None
+        and task.docker_image != image_reference
+    ):
         raise ValueError("The task docker_image conflicts with the prepared main image")
     return MachineSpec(
         source=RegistryImage(image_reference),
         workdir=workdir,
         network=NetworkPolicy.DENY,
         env=(
-            {**resolve_env_vars(task.env), **_environment(service.environment)}
+            {
+                **resolve_env_vars(
+                    task.env,
+                    source=guest_environment,
+                    protected_values=protected_values,
+                ),
+                **_environment(
+                    service.environment,
+                    source=guest_environment,
+                    protected_values=protected_values,
+                ),
+            }
             if name == "main"
-            else _environment(service.environment)
+            else _environment(
+                service.environment,
+                source=guest_environment,
+                protected_values=protected_values,
+            )
         ),
         cpus=task.cpus,
         memory_mb=task.memory_mb,
@@ -191,19 +234,31 @@ def _readiness(healthcheck: Healthcheck | None) -> ReadinessProbe | None:
     )
 
 
-def import_prepared_task(task: EnvironmentConfig, environment_dir: Path) -> ImportedTask:
+def import_prepared_task(
+    task: EnvironmentConfig,
+    environment_dir: Path,
+    *,
+    guest_environment: Mapping[str, str] = {},
+    protected_values: frozenset[str] = frozenset(),
+) -> ImportedTask:
     """Translate the supported Compose subset without building images or reading host variables."""
     if task.allow_internet:
         raise ValueError("Prepared service groups require allow_internet=false")
     if task.os is not TaskOS.LINUX:
         raise ValueError("Prepared service groups require Linux images")
     if task.gpus or task.gpu_types or task.tpu is not None:
-        raise ValueError("Prepared task sandboxes do not support GPU or TPU allocations")
-    validate_task_environment(task.env)
-    compose_paths = [environment_dir / name for name in COMPOSE_FILENAMES if (environment_dir / name).exists()]
+        raise ValueError(
+            "Prepared task sandboxes do not support GPU or TPU allocations"
+        )
+    validate_task_environment(task.env, protected_values=protected_values)
+    compose_paths = [
+        environment_dir / name
+        for name in COMPOSE_FILENAMES
+        if (environment_dir / name).exists()
+    ]
     if len(compose_paths) > 1:
         raise ValueError("Prepared tasks accept one Compose file per task")
-    prepared = _prepared_images(environment_dir)
+    prepared = prepared_images(environment_dir)
     content = yaml.safe_load(compose_paths[0].read_text()) if compose_paths else {}
     document = ComposeDocument.model_validate({} if content is None else content)
     if "main" not in document.services:
@@ -212,10 +267,17 @@ def import_prepared_task(task: EnvironmentConfig, environment_dir: Path) -> Impo
         raise ValueError("shellbox-images.json contains images for undeclared services")
     for name in document.services:
         if _SERVICE_NAME.fullmatch(name) is None:
-            raise ValueError("Compose service names must be lowercase DNS labels")
+            raise ValueError("Compose service names must match [a-z][a-z0-9_-]{0,62}")
     main = document.services["main"]
-    if main.command is not None or main.entrypoint is not None or main.healthcheck is not None or main.expose:
-        raise ValueError("The actor main service cannot override its idle process or publish endpoints")
+    if (
+        main.command is not None
+        or main.entrypoint is not None
+        or main.healthcheck is not None
+        or main.expose
+    ):
+        raise ValueError(
+            "The actor main service cannot override its idle process or publish endpoints"
+        )
     dependencies = (
         {name: {"condition": "service_started"} for name in main.depends_on}
         if isinstance(main.depends_on, list)
@@ -228,9 +290,16 @@ def import_prepared_task(task: EnvironmentConfig, environment_dir: Path) -> Impo
             "service_started",
             "service_healthy",
         }:
-            raise ValueError("Compose depends_on supports service_started or service_healthy only")
-        if dependency["condition"] == "service_healthy" and document.services[name].healthcheck is None:
-            raise ValueError("Compose service_healthy dependencies require a healthcheck")
+            raise ValueError(
+                "Compose depends_on supports service_started or service_healthy only"
+            )
+        if (
+            dependency["condition"] == "service_healthy"
+            and document.services[name].healthcheck is None
+        ):
+            raise ValueError(
+                "Compose service_healthy dependencies require a healthcheck"
+            )
     services = []
     log_paths = []
     for name, service in document.services.items():
@@ -248,7 +317,9 @@ def import_prepared_task(task: EnvironmentConfig, environment_dir: Path) -> Impo
         if name == "main":
             continue
         if service.depends_on:
-            raise ValueError("Inter-service Compose startup dependencies are not yet supported")
+            raise ValueError(
+                "Inter-service Compose startup dependencies are not yet supported"
+            )
         ports = []
         for port in service.expose:
             text = str(port)
@@ -258,29 +329,59 @@ def import_prepared_task(task: EnvironmentConfig, environment_dir: Path) -> Impo
         services.append(
             ContainerSpec(
                 name=name,
-                machine=_machine(name, service, prepared, task),
+                machine=_machine(
+                    name,
+                    service,
+                    prepared,
+                    task,
+                    guest_environment=guest_environment,
+                    protected_values=protected_values,
+                ),
                 endpoints=tuple(ports),
                 readiness=_readiness(service.healthcheck),
                 entrypoint=_argv(service.entrypoint),
                 arguments=_argv(service.command),
             )
         )
-    names_and_ports = {(service.name, endpoint.port) for service in services for endpoint in service.endpoints}
+    names_and_ports = {
+        (service.name, endpoint.port)
+        for service in services
+        for endpoint in service.endpoints
+    }
     for server in task.mcp_servers:
         endpoint = urlsplit(server.url or "")
-        if server.transport not in {"sse", "streamable-http"} or endpoint.scheme != "http":
-            raise ValueError("Prepared task MCP servers must use HTTP within the service group")
-        if endpoint.username or endpoint.password or (endpoint.hostname, endpoint.port or 80) not in names_and_ports:
-            raise ValueError("Prepared task MCP endpoint must name a declared service and exposed port")
+        if (
+            server.transport not in {"sse", "streamable-http"}
+            or endpoint.scheme != "http"
+        ):
+            raise ValueError(
+                "Prepared task MCP servers must use HTTP within the service group"
+            )
+        if (
+            endpoint.username
+            or endpoint.password
+            or (endpoint.hostname, endpoint.port or 80) not in names_and_ports
+        ):
+            raise ValueError(
+                "Prepared task MCP endpoint must name a declared service and exposed port"
+            )
     return ImportedTask(
         task=TaskSpec(
-            containers=(ContainerSpec("main", _machine("main", main, prepared, task)), *services),
+            containers=(
+                ContainerSpec(
+                    "main",
+                    _machine(
+                        "main",
+                        main,
+                        prepared,
+                        task,
+                        guest_environment=guest_environment,
+                        protected_values=protected_values,
+                    ),
+                ),
+                *services,
+            ),
             primary="main",
         ),
         service_log_paths=tuple(log_paths),
     )
-
-
-def validate_prepared_task(task_env_config: EnvironmentConfig, environment_dir: Path) -> None:
-    """Validate prepared images and task services without acquiring a sandbox."""
-    import_prepared_task(task_env_config, environment_dir)

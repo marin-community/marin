@@ -3,6 +3,7 @@
 
 """Harbor adapter for the QEMU machine backend."""
 
+import asyncio
 import hashlib
 import json
 from enum import StrEnum
@@ -138,7 +139,9 @@ class QemuEnvironment(BaseEnvironment):
                 "Prebuilt OCI bundle does not match the task image reference"
             )
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         if force_build and self.guest_bundle is not None:
             raise ValueError(
                 "QEMU guest bundles are prebuilt; force_build is unsupported"

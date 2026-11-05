@@ -1,5 +1,4 @@
 import functools
-import os
 import shlex
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -12,7 +11,6 @@ from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.trial.errors import AgentTimeoutError, PhaseCancellationError
 from harbor.utils.env import (
     parse_bool_env_value,
-    task_environment_values,
     validate_task_environment,
 )
 from harbor.utils.templating import render_prompt_template
@@ -178,6 +176,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         prompt_template_path: Path | str | None = None,
         version: str | None = None,
         extra_env: dict[str, str] | None = None,
+        protected_values: frozenset[str] = frozenset(),
         *args,
         **kwargs,
     ):
@@ -188,9 +187,15 @@ class BaseInstalledAgent(BaseAgent, ABC):
                 self._flag_kwargs[descriptor.kwarg] = kwargs.pop(descriptor.kwarg)
 
         self._extra_env: dict[str, str] = dict(extra_env) if extra_env else {}
-        validate_task_environment(self._extra_env)
+        validate_task_environment(self._extra_env, protected_values=protected_values)
 
-        super().__init__(logs_dir, *args, **kwargs)
+        super().__init__(
+            logs_dir,
+            *args,
+            extra_env=self._extra_env,
+            protected_values=protected_values,
+            **kwargs,
+        )
 
         # Resolve and validate all descriptor values eagerly
         self._resolved_flags = self._resolve_flag_values()
@@ -203,17 +208,13 @@ class BaseInstalledAgent(BaseAgent, ABC):
         self,
         descriptor: CliFlag | EnvVar,
     ) -> Any:
-        """Prefer kwargs and granted capabilities before validated host defaults."""
+        """Resolve descriptors from explicit agent inputs."""
         if descriptor.kwarg in self._flag_kwargs:
             return self._flag_kwargs[descriptor.kwarg]
         if descriptor.env_fallback:
             granted = self._get_env(descriptor.env_fallback)
             if granted is not None:
                 return granted
-        if descriptor.env_fallback and descriptor.env_fallback in os.environ:
-            value = os.environ[descriptor.env_fallback]
-            validate_task_environment({descriptor.env_fallback: value})
-            return value
         return descriptor.default
 
     def _resolve_flag_values(self) -> dict[str, Any]:
@@ -265,9 +266,11 @@ class BaseInstalledAgent(BaseAgent, ABC):
 
     def _get_env(self, key: str) -> str | None:
         """Get a task capability, allowing an explicit agent override."""
-        value = self._extra_env.get(key, task_environment_values().get(key))
+        value = self._extra_env.get(key)
         if value is not None:
-            validate_task_environment({key: value})
+            validate_task_environment(
+                {key: value}, protected_values=self._protected_values
+            )
         return value
 
     def _has_env(self, key: str) -> bool:
@@ -276,13 +279,11 @@ class BaseInstalledAgent(BaseAgent, ABC):
     def _get_env_prefixed(self, prefix: str) -> dict[str, str]:
         """Get granted task variables with a prefix, applying agent overrides."""
         result: dict[str, str] = {}
-        for key, value in task_environment_values().items():
-            if key.startswith(prefix):
-                validate_task_environment({key: value})
-                result[key[len(prefix) :]] = value
         for key, value in self._extra_env.items():
             if key.startswith(prefix):
-                validate_task_environment({key: value})
+                validate_task_environment(
+                    {key: value}, protected_values=self._protected_values
+                )
                 result[key[len(prefix) :]] = value
         return result
 
@@ -323,7 +324,9 @@ class BaseInstalledAgent(BaseAgent, ABC):
         if self._extra_env:
             merged_env = dict(env) if env else {}
             merged_env.update(self._extra_env)
-        validate_task_environment(merged_env or {})
+        validate_task_environment(
+            merged_env or {}, protected_values=self._protected_values
+        )
 
         self.logger.debug(
             f"Running command: {command}",

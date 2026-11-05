@@ -1,3 +1,5 @@
+import importlib
+from collections.abc import Mapping
 from pathlib import Path
 
 from upath import UPath
@@ -9,6 +11,8 @@ from harbor.agents.installed.opencode import OpenCode
 from harbor.agents.installed.pi import Pi
 from harbor.agents.terminus_2 import Terminus2
 from harbor.agents.terminus_kira import TerminusKira
+from harbor.host_capabilities import HostCapabilities
+from harbor.models.agent.name import AgentName
 from harbor.models.trial.config import AgentConfig
 from harbor.utils.env import resolve_env_vars
 
@@ -115,6 +119,9 @@ class AgentFactory:
         cls,
         config: AgentConfig,
         logs_dir: Path | UPath,
+        *,
+        guest_environment: Mapping[str, str] = {},
+        host_capabilities: HostCapabilities = HostCapabilities(),
         **kwargs,
     ) -> BaseAgent:
         """
@@ -131,12 +138,18 @@ class AgentFactory:
         """
         agent_class = cls.get_agent_class_from_config(config)
         agent_kwargs = {**config.kwargs, **kwargs}
+        agent_kwargs["protected_values"] = host_capabilities.protected_values
+        agent_kwargs["model_authentication"] = host_capabilities.model_authentication
         if config.override_setup_timeout_sec is not None:
             agent_kwargs["override_setup_timeout_sec"] = config.override_setup_timeout_sec
         return agent_class(
             logs_dir=logs_dir,
             model_name=config.model_name,
             model_alias=config.model_alias,
-            extra_env=resolve_env_vars(config.env),
+            extra_env=resolve_env_vars(
+                config.env,
+                source=guest_environment,
+                protected_values=host_capabilities.protected_values,
+            ),
             **agent_kwargs,
         )

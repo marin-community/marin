@@ -15,7 +15,8 @@ from harbor.job import Job
 from harbor.models.job.config import JobConfig, RetryConfig
 from harbor.models.job.result import JobResult, JobStats
 from harbor.models.trial.config import AgentConfig, TaskConfig
-from harbor.models.trial.result import AgentInfo, TrialResult
+from harbor.models.trial.result import AgentInfo, TrialCompletion, TrialResult
+from harbor.tasks.packager import Packager
 from harbor.tasks.client import BatchDownloadResult, TaskDownloadResult
 from harbor.tasks.packager import Packager
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
@@ -81,7 +82,9 @@ class TestTrialQueueIntegration:
         ]
 
         for method_name in required_methods:
-            assert hasattr(TrialQueue, method_name), f"TrialQueue missing required method: {method_name}"
+            assert hasattr(
+                TrialQueue, method_name
+            ), f"TrialQueue missing required method: {method_name}"
             method = getattr(TrialQueue, method_name)
             assert callable(method), f"{method_name} is not callable"
 
@@ -352,6 +355,8 @@ class TestTrialQueueIntegration:
                     task_checksum=content_hash,
                     config=existing_trial_config,
                     agent_info=AgentInfo(name="oracle", version="unknown"),
+                    finished_at=datetime.now(),
+                    completion=TrialCompletion(trajectory_present=False),
                 ).model_dump_json(indent=4)
             )
         finally:
@@ -417,6 +422,8 @@ class TestTrialQueueIntegration:
                     task_checksum=content_hash,
                     config=existing_trial_config,
                     agent_info=AgentInfo(name="oracle", version="unknown"),
+                    finished_at=datetime.now(),
+                    completion=TrialCompletion(trajectory_present=False),
                 ).model_dump_json(indent=4)
             )
         finally:

@@ -16,13 +16,21 @@ from finestore.eval import (
     ARCHIVE_STEPS_TABLE,
     EvaluationStore,
     RolloutRecord,
+    SourceArtifact,
     sample_from_archive_row,
 )
 from finestore.reader import ReadView
+from rigging.filesystem.conditional_object import LocalConditionalObject
+
 from harbor.archive import ProcessTrialArchive, TrialArchive, open_archive
 from harbor.models.agent.context import AgentContext
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
-from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
+from harbor.models.trial.result import (
+    AgentInfo,
+    ExceptionInfo,
+    TrialCompletion,
+    TrialResult,
+)
 from harbor.models.verifier.result import VerifierResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor_config.models.job.config import ArchiveConfig, JobConfig
@@ -74,7 +82,11 @@ def _end_event(
         task_checksum="abc123",
         config=config,
         agent_info=AgentInfo(name="a", version="1.0"),
-        verifier_result=(VerifierResult(rewards={"reward": reward}) if reward is not None else None),
+        finished_at=datetime.now(),
+        completion=TrialCompletion(trajectory_present=trajectory),
+        verifier_result=(
+            VerifierResult(rewards={"reward": reward}) if reward is not None else None
+        ),
         exception_info=(
             ExceptionInfo(
                 exception_type=exception_type,
@@ -300,7 +312,9 @@ def test_retry_preserves_native_attempts_and_normalizes_only_selected_result(
     sample = sample_from_archive_row(row)
     assert sample.grading.score == final_reward
     assert sample.correct is (True if final_reward is not None else None)
-    assert sample.metrics == ({"reward": final_reward} if final_reward is not None else {})
+    assert sample.metrics == (
+        {"reward": final_reward} if final_reward is not None else {}
+    )
     if final_error is not None:
         assert json.loads(sample.grading.detail)["error"]["message"] == "trial failed"
     steps = view.scan(ARCHIVE_STEPS_TABLE).to_pylist()
@@ -324,7 +338,9 @@ def test_finalize_restores_full_native_resumed_result_before_normalizing(tmp_pat
     assert result is not None
     result.agent_result = AgentContext(metadata={"native_payload": "resumed"})
     native = result.model_dump_json(indent=4).encode()
-    raw = (result.resolve_trial_path(tmp_path) / "agent" / "trajectory.json").read_bytes()
+    raw = (
+        result.resolve_trial_path(tmp_path) / "agent" / "trajectory.json"
+    ).read_bytes()
     (result.resolve_trial_path(tmp_path) / "result.json").write_bytes(native)
     if reopened:
         archive = _open_archive(root, trials_dir=tmp_path)
@@ -342,8 +358,12 @@ def test_finalize_restores_full_native_resumed_result_before_normalizing(tmp_pat
 
     view = ReadView(root)
     assert view.read_blob("sources/harbor/t0/result.json") == native
-    assert view.read_blob(f"sources/harbor/t0/attempts/{result.id}/result.json") == native
-    assert view.read_blob(f"sources/harbor/t0/attempts/{result.id}/trajectory.json") == raw
+    assert (
+        view.read_blob(f"sources/harbor/t0/attempts/{result.id}/result.json") == native
+    )
+    assert (
+        view.read_blob(f"sources/harbor/t0/attempts/{result.id}/trajectory.json") == raw
+    )
     assert view.read_blob("t0/trajectory.json") == raw
     assert len(view.scan(ARCHIVE_STEPS_TABLE).to_pylist()) == 1
     sample = sample_from_archive_row(_sample_rows(root)[0])
@@ -417,7 +437,9 @@ def test_reopened_archive_rebuilds_selected_rows_and_preserves_native_attempts(t
     assert view.read_blob(f"{prefix}/result.json") == original_native
     assert view.read_blob(f"{prefix}/trajectory.json") == original_trace
     assert (
-        view.read_blob(f"sources/harbor/removed/attempts/{removed.result.id}/result.json")
+        view.read_blob(
+            f"sources/harbor/removed/attempts/{removed.result.id}/result.json"
+        )
         == removed.result.model_dump_json(indent=4).encode()
     )
 
@@ -438,7 +460,9 @@ def test_repeated_end_preserves_immutable_attempt_and_reports_changed_content(tm
     if changed:
         with pytest.raises(ExceptionGroup) as exc_info:
             asyncio.run(archive.finalize([result]))
-        assert any("immutable attempt" in str(error) for error in exc_info.value.exceptions)
+        assert any(
+            "immutable attempt" in str(error) for error in exc_info.value.exceptions
+        )
     else:
         asyncio.run(archive.finalize([result]))
         archive.seal()
@@ -446,7 +470,9 @@ def test_repeated_end_preserves_immutable_attempt_and_reports_changed_content(tm
 
     view = ReadView(root)
     assert view.is_sealed() is not changed
-    assert view.read_blob(f"sources/harbor/t0/attempts/{result.id}/result.json") == native
+    assert (
+        view.read_blob(f"sources/harbor/t0/attempts/{result.id}/result.json") == native
+    )
     (row,) = _sample_rows(root)
     assert sample_from_archive_row(row).metrics == {"reward": 1.0}
 
@@ -503,7 +529,12 @@ def test_non_end_event_does_not_archive_attempt(tmp_path: Path):
     archive.close()
 
     assert event.result is not None
-    assert ReadView(root).read_blob(f"sources/harbor/t0/attempts/{event.result.id}/result.json") is None
+    assert (
+        ReadView(root).read_blob(
+            f"sources/harbor/t0/attempts/{event.result.id}/result.json"
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("operation", ["add_sample", "add_source_artifact"])
@@ -561,3 +592,208 @@ def test_archive_config_survives_job_config_round_trip():
     restored = JobConfig.model_validate_json(config.model_dump_json())
 
     assert restored.archive == config.archive
+
+
+@pytest.mark.parametrize("metadata", [None, {"trajectory_present": True}])
+def test_resume_repairs_interrupted_native_pair_from_final_trial_files(
+    tmp_path, metadata
+):
+    root = str(tmp_path / "archive")
+    event = _end_event(tmp_path, reward=1.0)
+    result = event.result
+    assert result is not None
+    native = result.model_dump_json(indent=4).encode()
+    trajectory = (
+        result.resolve_trial_path(None) / "agent" / "trajectory.json"
+    ).read_bytes()
+    prefix = f"harbor/{result.trial_name}/attempts/{result.id}"
+    # Reproduce preemption after the old writer's first durable result write.
+    with EvaluationStore.open(root, writer_id="interrupted") as store:
+        store.add_source_artifacts(
+            [
+                SourceArtifact(
+                    f"{prefix}/result.json", native, "application/json", metadata
+                )
+            ]
+        )
+    archive = _open_archive(root, trials_dir=tmp_path)
+    asyncio.run(archive.finalize([result.slimmed()]))
+    archive.seal()
+    archive.close()
+    reader = ReadView(root)
+    assert reader.is_sealed()
+    assert reader.read_blob(f"sources/{prefix}/trajectory.json") == trajectory
+    assert (
+        reader.blob_metadata(f"sources/{prefix}/result.json")["trajectory_present"]
+        is True
+    )
+    [sample] = _sample_rows(root)
+    assert sample_from_archive_row(sample).grading.score == 1.0
+    [step] = reader.scan(ARCHIVE_STEPS_TABLE).to_pylist()
+    assert step["message"] == "the answer"
+
+
+def test_failed_attempt_commit_is_retried_on_the_next_end_event(tmp_path, monkeypatch):
+    root = str(tmp_path / "archive")
+    event = _end_event(tmp_path, reward=1.0)
+    assert event.result is not None
+    # In-process retries must not confuse a failed commit with an archived END.
+    archive = TrialArchive(
+        EvaluationStore.open(root, writer_id="interrupted"),
+        "mybench",
+        tmp_path,
+        root=root,
+    )
+
+    def fail_commit(self, data, *, expected_version):
+        raise OSError("interrupted HEAD publication")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(LocalConditionalObject, "write", fail_commit)
+        asyncio.run(archive.on_trial_end(event))
+    prefix = f"sources/harbor/t0/attempts/{event.result.id}"
+    assert (
+        ReadView(root).read_blobs(
+            [f"{prefix}/result.json", f"{prefix}/trajectory.json"]
+        )
+        == {}
+    )
+    asyncio.run(archive.on_trial_end(event))
+    reader = ReadView(root)
+    assert (
+        reader.read_blob(f"{prefix}/result.json")
+        == event.result.model_dump_json(indent=4).encode()
+    )
+    assert reader.read_blob(f"{prefix}/trajectory.json") is not None
+    archive.close()
+    assert not ReadView(root).is_sealed()
+
+
+@pytest.mark.parametrize(
+    "missing", ["trajectory", "completion", "finished_at", "generation_settings"]
+)
+def test_resume_incomplete_attempt_without_required_native_evidence_stays_unsealed(
+    tmp_path, missing
+):
+    root = str(tmp_path / "archive")
+    event = _end_event(tmp_path, reward=1.0)
+    result = event.result
+    assert result is not None
+    native = result
+    trial_dir = result.resolve_trial_path(None)
+    if missing == "trajectory":
+        (trial_dir / "agent" / "trajectory.json").unlink()
+    elif missing == "generation_settings":
+        native = result.model_copy(deep=True)
+        native.config.agent.kwargs["temperature"] = 0.8
+    else:
+        native = result.model_copy(update={missing: None})
+    (trial_dir / "result.json").write_text(native.model_dump_json())
+    with EvaluationStore.open(root, writer_id="interrupted") as store:
+        store.add_source_artifact(
+            f"harbor/t0/attempts/{result.id}/result.json",
+            result.model_dump_json().encode(),
+            content_type="application/json",
+        )
+    archive = _open_archive(root, trials_dir=tmp_path)
+    with pytest.raises((ValueError, ExceptionGroup)):
+        asyncio.run(archive.finalize([result.slimmed()]))
+    archive.close()
+    reader = ReadView(root)
+    assert not reader.is_sealed()
+    assert _sample_rows(root) == []
+    assert reader.scan(ARCHIVE_STEPS_TABLE) is None
+
+
+@pytest.mark.parametrize(
+    "exception_type,trajectory",
+    [
+        ("RuntimeError", True),
+        ("TrialTimeoutError", False),
+        ("AgentTimeoutError", True),
+        ("SandboxBuildFailedError", False),
+    ],
+)
+def test_incomplete_attempt_evidence_does_not_prevent_successful_retry_sealing(
+    tmp_path, exception_type, trajectory
+):
+    root = str(tmp_path / "archive")
+    abandoned = _end_event(
+        tmp_path,
+        reward=0.0,
+        exception_type=exception_type,
+        trajectory=trajectory,
+        attempt=0,
+    )
+    assert abandoned.result is not None
+    abandoned.result.completion = None
+    if trajectory:
+        (
+            abandoned.result.resolve_trial_path(tmp_path) / "agent" / "trajectory.json"
+        ).write_bytes(b'{"partial":')
+    native = abandoned.result.model_dump_json(indent=4).encode()
+    (abandoned.result.resolve_trial_path(tmp_path) / "result.json").write_bytes(native)
+    selected = _end_event(tmp_path, reward=1.0, attempt=1)
+    assert selected.result is not None
+    archive = _open_archive(root, trials_dir=tmp_path)
+    asyncio.run(archive.on_trial_end(abandoned))
+    asyncio.run(archive.on_trial_end(selected))
+    asyncio.run(archive.finalize([selected.result.slimmed()]))
+    archive.seal()
+    archive.close()
+
+    reader = ReadView(root)
+    assert reader.is_sealed()
+    prefix = f"sources/harbor/t0/attempts/{abandoned.result.id}"
+    assert reader.read_blob(f"{prefix}/result.json") == native
+    assert reader.blob_metadata(f"{prefix}/result.json")["trajectory_present"] is None
+    raw = reader.read_blob(f"{prefix}/trajectory.json")
+    assert raw == (b'{"partial":' if trajectory else None)
+    [row] = _sample_rows(root)
+    assert sample_from_archive_row(row).grading.score == 1.0
+    assert (
+        reader.read_blob("sources/harbor/t0/result.json")
+        == selected.result.model_dump_json(indent=4).encode()
+    )
+
+
+def test_missing_declared_terminal_trajectory_still_prevents_retry_archive_sealing(
+    tmp_path,
+):
+    root = str(tmp_path / "archive")
+    corrupt = _end_event(tmp_path, reward=0.0, attempt=0)
+    assert corrupt.result is not None
+    (corrupt.result.resolve_trial_path(tmp_path) / "agent" / "trajectory.json").unlink()
+    selected = _end_event(tmp_path, reward=1.0, attempt=1)
+    assert selected.result is not None
+    archive = _open_archive(root, trials_dir=tmp_path)
+    asyncio.run(archive.on_trial_end(corrupt))
+    asyncio.run(archive.on_trial_end(selected))
+    with pytest.raises(ExceptionGroup, match="archive writes failed"):
+        asyncio.run(archive.finalize([selected.result]))
+    archive.close()
+
+    assert not ReadView(root).is_sealed()
+
+
+def test_incomplete_scored_end_result_remains_evidence_without_normalized_sample(
+    tmp_path,
+):
+    root = str(tmp_path / "archive")
+    event = _end_event(tmp_path, reward=1.0)
+    assert event.result is not None
+    event.result.completion = None
+    archive = _open_archive(root, trials_dir=tmp_path)
+    asyncio.run(archive.on_trial_end(event))
+    with pytest.raises(ExceptionGroup, match="archive writes failed"):
+        asyncio.run(archive.finalize([event.result.slimmed()]))
+    archive.close()
+
+    reader = ReadView(root)
+    assert not reader.is_sealed()
+    assert _sample_rows(root) == []
+    prefix = f"sources/harbor/t0/attempts/{event.result.id}"
+    native = reader.read_blob(f"{prefix}/result.json")
+    assert native is not None
+    assert TrialResult.model_validate_json(native).completion is None
+    assert reader.blob_metadata(f"{prefix}/result.json")["trajectory_present"] is None

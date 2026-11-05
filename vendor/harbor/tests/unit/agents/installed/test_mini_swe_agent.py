@@ -9,6 +9,7 @@ Tests cover:
 - File-based convert_and_save_trajectory
 """
 
+import contextlib
 import json
 import os
 import shlex
@@ -16,7 +17,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from harbor.agents.installed.mini_swe_agent import (
@@ -26,7 +27,6 @@ from harbor.agents.installed.mini_swe_agent import (
     convert_mini_swe_agent_to_atif,
 )
 from harbor.models.agent.context import AgentContext
-from harbor.utils.env import task_environment
 
 # ---------------------------------------------------------------------------
 # Fixtures: realistic v2 tool-calling trajectory data
@@ -709,16 +709,33 @@ class TestPopulateContextPostRun:
 # ---------------------------------------------------------------------------
 
 
+@contextlib.asynccontextmanager
+async def _command_scope():
+    yield
+
+
+def _mock_run_environment():
+    environment = AsyncMock()
+    environment.agent_timeout_sec = None
+    scope = MagicMock()
+    scope.command.side_effect = lambda command, timeout: command
+    scope.cancel_command.return_value = "cancel"
+    environment.process_scope.return_value = scope
+    environment.scoped_command = MagicMock(return_value=_command_scope())
+    return environment
+
+
 class TestCreateRunAgentCommands:
     @pytest.mark.asyncio
-    async def test_uses_mini_command(self, temp_dir, mock_environment):
-        with task_environment({"MSWEA_API_KEY": "EMPTY"}):
-            agent = MiniSweAgent(
-                logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
-            )
-            mock_env = mock_environment
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Fix the bug", mock_env, AsyncMock())
+    async def test_uses_mini_command(self, temp_dir):
+        agent = MiniSweAgent(
+            extra_env={"MSWEA_API_KEY": "EMPTY"},
+            logs_dir=temp_dir,
+            model_name="anthropic/claude-sonnet-4-5-20250929",
+        )
+        mock_env = _mock_run_environment()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("Fix the bug", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
         assert len(exec_calls) == 1
@@ -730,14 +747,15 @@ class TestCreateRunAgentCommands:
         assert "--exit-immediately" in cmd
 
     @pytest.mark.asyncio
-    async def test_mswea_configured_env(self, temp_dir, mock_environment):
-        with task_environment({"MSWEA_API_KEY": "EMPTY"}):
-            agent = MiniSweAgent(
-                logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
-            )
-            mock_env = mock_environment
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("task", mock_env, AsyncMock())
+    async def test_mswea_configured_env(self, temp_dir):
+        agent = MiniSweAgent(
+            extra_env={"MSWEA_API_KEY": "EMPTY"},
+            logs_dir=temp_dir,
+            model_name="anthropic/claude-sonnet-4-5-20250929",
+        )
+        mock_env = _mock_run_environment()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("task", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
         assert exec_calls[-1].kwargs["env"]["MSWEA_CONFIGURED"] == "true"
@@ -764,12 +782,13 @@ class TestCreateRunAgentCommands:
                 },
                 clear=False,
             ),
-            task_environment(
-                {key_name: "EMPTY", base_name: "http://127.0.0.1:8787/v1"}
-            ),
         ):
-            agent = MiniSweAgent(logs_dir=temp_dir, model_name="openai/gpt-4o")
-            mock_env = mock_environment
+            agent = MiniSweAgent(
+                extra_env={key_name: "EMPTY", base_name: "http://127.0.0.1:8787/v1"},
+                logs_dir=temp_dir,
+                model_name="openai/gpt-4o",
+            )
+            mock_env = _mock_run_environment()
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("task", mock_env, AsyncMock())
 
@@ -808,14 +827,15 @@ class TestCreateRunAgentCommands:
             await agent.run("task", mock_env, AsyncMock())
 
     @pytest.mark.asyncio
-    async def test_instruction_shell_escaped(self, temp_dir, mock_environment):
-        with task_environment({"MSWEA_API_KEY": "EMPTY"}):
-            agent = MiniSweAgent(
-                logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
-            )
-            mock_env = mock_environment
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Fix the bug; rm -rf /", mock_env, AsyncMock())
+    async def test_instruction_shell_escaped(self, temp_dir):
+        agent = MiniSweAgent(
+            extra_env={"MSWEA_API_KEY": "EMPTY"},
+            logs_dir=temp_dir,
+            model_name="anthropic/claude-sonnet-4-5-20250929",
+        )
+        mock_env = _mock_run_environment()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("Fix the bug; rm -rf /", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
         cmd = exec_calls[-1].kwargs["command"]

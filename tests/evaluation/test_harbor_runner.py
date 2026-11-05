@@ -33,6 +33,7 @@ from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
 from rigging.filesystem.storage_path import StoragePath
+from rigging.provenance import launch_provenance
 
 _ERROR_TAXONOMY = HarborErrorTaxonomy(
     infrastructure=frozenset({"InfrastructureError", "InternalServerError"}),
@@ -290,7 +291,10 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     """Read completed trials after a driver failure and a resumed run that writes no new trials."""
     _memory_remote(protocol, monkeypatch)
     output_dir = f"{protocol}://eval-bucket-{tmp_path.name}/run"
-    executor = _harbor_executor(f"resume-{tmp_path.name}")
+    executor = replace(
+        _harbor_executor(f"resume-{tmp_path.name}"),
+        judge_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="judge", location="org/judge@revision"))),
+    )
 
     captured: dict = {}
 
@@ -310,7 +314,13 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
     monkeypatch.setattr(runner, "run_harbor_driver", dying_driver)
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_inference_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
+        executor(
+            _inference_session(),
+            output_dir,
+            {},
+            backend_state=lambda: InferenceBackendState.READY,
+            judge=_inference_session("https://judge-a.example/v1", "judge-alias-a"),
+        )
     assert exc_info.value.status is RunStatus.FAILED
 
     durable = StoragePath(captured["jobs_dir"]) / captured["job_name"] / "trial-one" / "result.json"
@@ -321,7 +331,13 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
         return None
 
     monkeypatch.setattr(runner, "run_harbor_driver", resumed_driver)
-    outcome = executor(_inference_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
+    outcome = executor(
+        _inference_session("https://replacement-node.example/v1", "replacement-alias"),
+        output_dir,
+        {},
+        backend_state=lambda: InferenceBackendState.READY,
+        judge=_inference_session("https://judge-b.example/v1", "judge-alias-b"),
+    )
 
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
@@ -566,12 +582,16 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(
         task_limit=7,
         model_agent_kwargs={"extra_body": "{}"},
         model_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="qwen3-0.6b", location="org/checkpoint"))),
-        secret_env_keys=("DAYTONA_API_KEY",),
+        judge_config=ModelConfigRef.model_validate(
+            asdict(ModelConfig(name="qwen-judge", location="org/judge@revision"))
+        ),
+        secret_env_keys=("DAYTONA_API_KEY", "OPENAI_API_KEY"),
     )
     env_vars = {
         "DAYTONA_API_KEY": "daytona-key",
         "DAYTONA_TARGET": "test-target",
         "DAYTONA_API_URL": "https://daytona.example/api",
+        "OPENAI_API_KEY": "policy-judge-private",
     }
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         env_vars["HF_TOKEN"] = "hf-key"
@@ -601,7 +621,8 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(
     assert captured["env"]["DAYTONA_API_URL"] == "https://daytona.example/api"
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         assert captured["env"]["HF_TOKEN"] == "hf-key"
-    assert captured["env"]["OPENAI_API_KEY"] == (model.endpoint.api_key or "EMPTY")
+    assert captured["env"]["OPENAI_API_KEY"] == "policy-judge-private"
+    assert captured["env"]["HARBOR_CANDIDATE_API_KEY"] == (model.endpoint.api_key or "EMPTY")
     if api_key:
         assert api_key not in json.dumps(asdict(captured["overlay"]))
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
@@ -616,7 +637,7 @@ def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path,
     session = _inference_session()
     job_name = runner._job_name(
         executor.config.record_dataset,
-        (executor.config.digest, session.model.endpoint.model, executor.task_limit),
+        (json.dumps(executor.resume_identity.model_dump(mode="json"), sort_keys=True),),
     )
     (tmp_path / "harbor_resume_identity.json").write_text(executor.resume_identity.model_dump_json())
     job_dir = Path(str(runner._jobs_dir(str(tmp_path)))) / job_name
@@ -952,7 +973,7 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
     assert result["unscored_trials"] == 0
 
 
-@pytest.mark.parametrize("changed_input", ["checkpoint", "judge", "policy"])
+@pytest.mark.parametrize("changed_input", ["checkpoint", "judge", "policy", "evaluator"])
 def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_path, monkeypatch, changed_input):
     executor = _harbor_executor("aime")
     stored_results = []
@@ -980,8 +1001,15 @@ def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_
         )
     elif changed_input == "judge":
         changed = replace(executor, judge_config=executor.model_config)
-    else:
+    elif changed_input == "policy":
         changed = replace(executor, config=replace(executor.config, digest=f"sha256:{'2' * 64}"))
+    else:
+        captured = launch_provenance()
+        monkeypatch.setattr(
+            "marin.evaluation.harbor.driver_config.launch_provenance",
+            lambda: replace(captured, tree_hash="changed-tree"),
+        )
+        changed = executor
     before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     with pytest.raises(EvaluationError, match="different dataset, model, policy"):
         changed(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)

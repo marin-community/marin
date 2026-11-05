@@ -8,6 +8,8 @@ set -euo pipefail
 
 SSH_KEY="${HOME}/.ssh/google_compute_engine"
 SSH_CONNECT_TIMEOUT=15
+SSH_ALIVE_INTERVAL=15
+SSH_ALIVE_COUNT_MAX=4
 RESTART_TIMEOUT=600
 READY_ATTEMPTS=90
 READY_INTERVAL=10
@@ -20,21 +22,26 @@ if [ ! -r "$SSH_KEY" ] || [ ! -r "${SSH_KEY}.pub" ]; then
   exit 1
 fi
 
+# Operator workstations such as macOS lack GNU timeout, so the VM bounds the
+# restart. gcloud bounds key propagation, and ssh bounds the connection attempt
+# and drops a connection that stops responding.
 restart_status=0
-timeout "$RESTART_TIMEOUT" gcloud --project="$LOOM_PROJECT" compute ssh "$LOOM_INSTANCE" \
+gcloud --project="$LOOM_PROJECT" compute ssh "$LOOM_INSTANCE" \
   --zone="$LOOM_ZONE" --quiet \
   --ssh-key-file="$SSH_KEY" \
   --ssh-flag="-oBatchMode=yes" \
   --ssh-flag="-oConnectTimeout=${SSH_CONNECT_TIMEOUT}" \
-  --command='
+  --ssh-flag="-oServerAliveInterval=${SSH_ALIVE_INTERVAL}" \
+  --ssh-flag="-oServerAliveCountMax=${SSH_ALIVE_COUNT_MAX}" \
+  --command="
     set -euo pipefail
     sudo rm -f /run/loom-startup-succeeded
-    sudo systemctl restart google-startup-scripts.service
+    sudo timeout ${RESTART_TIMEOUT} systemctl restart google-startup-scripts.service
     sudo test -f /run/loom-startup-succeeded
-  ' || restart_status=$?
+  " || restart_status=$?
 
 if [ "$restart_status" -eq 124 ]; then
-  echo "startup-script restart on ${LOOM_INSTANCE} exceeded ${RESTART_TIMEOUT}s; ${SSH_KEY} is likely not propagated to the instance" >&2
+  echo "startup-script restart on ${LOOM_INSTANCE} exceeded ${RESTART_TIMEOUT}s; it may still be running, see 'journalctl -u google-startup-scripts' on the VM" >&2
   exit 1
 fi
 if [ "$restart_status" -ne 0 ]; then

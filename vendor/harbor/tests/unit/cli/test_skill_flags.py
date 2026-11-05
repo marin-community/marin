@@ -29,7 +29,9 @@ def _capture_job_config(monkeypatch, tmp_path: Path) -> list[JobConfig]:
         async def run(self):
             return SimpleNamespace(started_at=None, finished_at=None)
 
-    async def create(config: JobConfig) -> FakeJob:
+    async def create(
+        config: JobConfig, *, host_capabilities, guest_environment
+    ) -> FakeJob:
         captured.append(config)
         return FakeJob(config)
 
@@ -99,7 +101,9 @@ def test_trial_start_skill_flags_are_repeatable(tmp_path: Path, monkeypatch) -> 
                 verifier_result=None,
             )
 
-    async def create(config: TrialConfig) -> FakeTrial:
+    async def create(
+        config: TrialConfig, *, host_capabilities, guest_environment
+    ) -> FakeTrial:
         captured.append(config)
         return FakeTrial()
 

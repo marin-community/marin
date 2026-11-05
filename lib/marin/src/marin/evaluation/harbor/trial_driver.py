@@ -21,27 +21,36 @@ from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import
 from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
 from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
     COMPOSE_FILENAMES,
-    validate_prepared_task,
+    PINNED_IMAGE,
+    import_prepared_task,
+    prepared_images,
 )
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
-    CANDIDATE_MODEL_RELAY_PORT,
-    MODEL_RELAY_PORT,
-    host_model_authentication,
+    JudgeAccess,
+    task_model_relays,
 )
 from harbor.environments.resource_policies import validate_local_resources  # pyrefly: ignore[missing-import]
-from harbor.environments.runtime import DAYTONA_API_URL, host_backend_credentials  # pyrefly: ignore[missing-import]
+from harbor.host_capabilities import (  # pyrefly: ignore[missing-import]
+    CANDIDATE_MODEL_RELAY_PORT,
+    HostCapabilities,
+    endpoint_authentication,
+    host_capabilities_from_environment,
+    judge_model,
+    model_api_url,
+    model_guest_credentials,
+    model_guest_environment,
+    task_model_environment,
+)
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.models.task.config import TaskOS  # pyrefly: ignore[missing-import]
 from harbor.models.task.task import Task  # pyrefly: ignore[missing-import]
 from harbor.utils.env import (  # pyrefly: ignore[missing-import]
     resolve_env_vars,
-    task_environment,
     validate_task_environment,
 )
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
-from harbor_config.env import resolve_env_vars as resolve_host_env_vars  # pyrefly: ignore[missing-import]
 from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
 from harbor_config.models.environment_type import EnvironmentType  # pyrefly: ignore[missing-import]
@@ -51,6 +60,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.s3_compat import s3_credential_options
 
 from marin.evaluation.harbor.agent_context import (
+    CANDIDATE_API_KEY_ENV,
     MAX_INPUT_TOKENS_KEY,
     MAX_OUTPUT_TOKENS_KEY,
     MODEL_INFO_KEY,
@@ -77,6 +87,7 @@ _MODEL_RELAY_ENVIRONMENT_KWARGS = frozenset(
         "model_name",
         "candidate_model_endpoint",
         "candidate_model_name",
+        "judge_access",
     }
 )
 _LOCAL_ENVIRONMENT_KWARGS = _MODEL_RELAY_ENVIRONMENT_KWARGS | {
@@ -89,11 +100,6 @@ _LOCAL_ENVIRONMENT_KWARGS = _MODEL_RELAY_ENVIRONMENT_KWARGS | {
     "ttl",
 }
 _MODEL_RELAY_ENVIRONMENTS = frozenset({EnvironmentType.LOCAL, EnvironmentType.DAYTONA})
-_TASK_MODEL_ENVIRONMENT = {
-    "OPENAI_BASE_URL": f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1",
-    "OPENAI_API_KEY": "EMPTY",
-}
-_VERIFIER_MODEL_ROLES = ("MODEL_NAME", "JUDGE_MODEL", "REFUSAL_JUDGE_MODEL", "EXPANSION_MODEL")
 
 
 class RuntimeOverlay(BaseModel):
@@ -110,6 +116,7 @@ class RuntimeOverlay(BaseModel):
     verifier_env: dict[str, str]
     archive_root: str
     archive_dataset: str
+    judge_model_identity: str | None = None
 
 
 class _DatasetKind(StrEnum):
@@ -156,7 +163,7 @@ def _validate_environment(config: JobConfig) -> str:
     if environment.type == EnvironmentType.LOCAL:
         _validate_prepared_policy(config)
     elif environment.type in {EnvironmentType.QEMU, EnvironmentType.SHELLSIM}:
-        resolve_env_vars(config.verifier.env)
+        resolve_env_vars(config.verifier.env, source=_model_environment(config))
     return environment.type.value
 
 
@@ -198,18 +205,38 @@ def _validate_job_tasks(job: Job) -> None:
             else task_config.path
         )
         task = Task(task_path, disable_verification=job.config.verifier.disable)
-        task_environments = (
-            task.config.environment.env,
-            {**task.config.verifier.env, **job.config.verifier.env},
-            task.config.solution.env,
+        if job.config.agents[0].name == AgentName.PI:
+            main_image = prepared_images(task.paths.environment_dir).get("main")
+            if main_image is None or PINNED_IMAGE.fullmatch(main_image.image) is None:
+                raise ValueError(
+                    "Standalone Pi requires a prepared main image declared by digest in "
+                    "environment/shellbox-images.json; build the task image with Pi before launching"
+                )
+            if (
+                job.config.environment.type == EnvironmentType.DAYTONA
+                and task.config.environment.docker_image != main_image.image
+            ):
+                raise ValueError("Daytona Pi task docker_image must match its prepared main image declaration")
+        task_environment, verifier_environment, solution_environment = (
+            resolve_env_vars(
+                values,
+                source=job.guest_environment,
+                protected_values=job.host_capabilities.protected_values,
+            )
+            for values in (
+                task.config.environment.env,
+                {**task.config.verifier.env, **job.config.verifier.env},
+                task.config.solution.env,
+            )
         )
         if not job.config.environment.kwargs.get("model_endpoint") and any(
-            {"OPENAI_API_KEY", "OPENAI_BASE_URL", "TOGETHER_API_KEY", "CUSTOM_API_KEY"} & values.keys()
-            for values in task_environments
+            model_api_url(values) is not None or {"OPENAI_API_KEY", "TOGETHER_API_KEY", "CUSTOM_API_KEY"} & values.keys()
+            for values in (task_environment, verifier_environment, solution_environment)
         ):
             raise ValueError("Task model inputs require an explicit host judge capability before allocation")
         if task.config.environment.os != TaskOS.LINUX:
             raise ValueError("Shellbox Harbor adapters currently require Linux tasks")
+        runtime_environments = (task_environment,)
         if job.config.environment.type == EnvironmentType.LOCAL:
             environment = job.config.environment
             task_environment_config = task.config.environment.model_copy(
@@ -219,24 +246,32 @@ def _validate_job_tasks(job: Job) -> None:
                     if (value := getattr(environment, f"override_{name}")) is not None
                 }
             )
-            validate_prepared_task(task_environment_config, task.paths.environment_dir)
+            prepared = import_prepared_task(
+                task_environment_config,
+                task.paths.environment_dir,
+                guest_environment=job.guest_environment,
+                protected_values=job.host_capabilities.protected_values,
+            )
+            runtime_environments = tuple(container.machine.env for container in prepared.task.containers)
             validate_local_resources(
                 task_environment_config,
                 cpu_enforcement_policy=environment.cpu_enforcement_policy,
                 memory_enforcement_policy=environment.memory_enforcement_policy,
-                cgroup_parent=(
-                    Path(environment.kwargs["cgroup_parent"])
-                    if environment.kwargs.get("cgroup_parent") is not None
-                    else None
-                ),
             )
             if task.config.steps:
                 raise ValueError("Prepared Shellbox environments do not yet support multi-step tasks")
         elif any((task.paths.environment_dir / name).exists() for name in COMPOSE_FILENAMES):
             raise ValueError("Compose service groups require the Shellbox local backend")
-        resolve_env_vars(task.config.environment.env)
-        resolve_env_vars({**task.config.verifier.env, **job.config.verifier.env})
-        resolve_env_vars(task.config.solution.env)
+        kwargs = job.config.environment.kwargs
+        task_model_relays(
+            model_endpoint=kwargs.get("model_endpoint"),
+            model_name=kwargs.get("model_name"),
+            candidate_model_endpoint=kwargs.get("candidate_model_endpoint"),
+            candidate_model_name=kwargs.get("candidate_model_name"),
+            authentication=job.host_capabilities.model_authentication,
+            judge_access=JudgeAccess(kwargs.get("judge_access", JudgeAccess.VERIFIER)),
+            environments=runtime_environments,
+        )
         if task.config.verifier.environment is not None or task.config.verifier.environment_mode == "separate":
             raise ValueError("Shellbox model capabilities currently require a shared verifier environment")
 
@@ -322,12 +357,6 @@ def _terminus_llm_call_kwargs(
     return {**call_kwargs, _MAX_TOKENS_KEY: max_tokens}
 
 
-def _pinned_pi_agent[T: AgentConfig](agent: T) -> T:
-    if agent.name != AgentName.PI:
-        return agent
-    return agent.model_copy(update={"kwargs": {**agent.kwargs, "version": _PI_VERSION}})
-
-
 def _agent_config(
     agent: AgentConfig,
     *,
@@ -350,7 +379,7 @@ def _agent_config(
         extra="forbid",
     )
 
-    return _pinned_pi_agent(configured)
+    return configured
 
 
 def _installed_agent(agent: AgentConfig) -> bool:
@@ -384,7 +413,7 @@ def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig
         configured = configured.model_copy(
             update={
                 "env": {
-                    **_dummy_model_keys(configured.env),
+                    **model_guest_credentials(configured.env),
                     "OPENAI_BASE_URL": configured.kwargs["api_base"],
                     "OPENAI_API_BASE": configured.kwargs["api_base"],
                     "OPENAI_API_KEY": "EMPTY",
@@ -396,13 +425,14 @@ def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig
 
 def _stable_agent(agent: AgentConfig) -> AgentConfig:
     reconciled_model_info(None, agent.kwargs.get(MODEL_INFO_KEY))
-    return _agent_config(
+    configured = _agent_config(
         agent,
         endpoint_url=_STABLE_ENDPOINT,
         served_model=_STABLE_MODEL,
         model_identity=_STABLE_MODEL,
         kwargs=agent.kwargs,
     )
+    return configured.model_copy(update={"env": agent.env})
 
 
 def _dataset_with_runtime(
@@ -423,6 +453,10 @@ def _dataset_with_runtime(
 
 
 def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
+    if config.user_agent is not None:
+        raise ValueError("Harbor simulated-user agents are not supported")
+    if config.environment.type == EnvironmentType.LOCAL:
+        _validate_prepared_policy(config)
     validate_task_environment(
         {
             name: "EMPTY"
@@ -461,121 +495,79 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
                     **environment.kwargs,
                     "model_endpoint": endpoint,
                     "model_name": model_name,
+                    "judge_access": _judge_access(config),
                 }
             }
         )
-        verifier_env = _guest_model_environment(verifier_env, model_name)
-    agent = agent.model_copy(update={"env": _dummy_model_keys(agent.env)})
+        guest_model_name = overlay.judge_model_identity or config.verifier.model_name or model_name
+        verifier_env = model_guest_environment(verifier_env, guest_model_name)
+    agent = agent.model_copy(update={"env": model_guest_credentials(agent.env)})
     effective = JobConfig.model_validate(
         {
             **dict(config),
             "job_name": overlay.job_name,
             "jobs_dir": overlay.jobs_dir,
             "agents": [agent],
-            "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
+            "user_agent": None,
             "datasets": [dataset],
             "environment": environment,
-            "verifier": config.verifier.model_copy(update={"env": verifier_env}),
+            "verifier": config.verifier.model_copy(
+                update={"env": verifier_env, "model_name": overlay.judge_model_identity or config.verifier.model_name}
+            ),
             "archive": ArchiveConfig(
                 root=overlay.archive_root,
                 dataset=overlay.archive_dataset,
             ),
         }
     )
-    with task_environment(_model_environment(effective)):
-        _validate_environment(effective)
     return effective
 
 
+def _judge_access(config: JobConfig) -> JudgeAccess:
+    explicit = config.environment.kwargs.get("judge_access")
+    if explicit is not None:
+        return JudgeAccess(explicit)
+    return JudgeAccess.VERIFIER
+
+
 def _environment_declarations(config: JobConfig) -> tuple[dict[str, str], ...]:
-    agents = [*config.agents, *([config.user_agent] if config.user_agent is not None else [])]
-    return (*(agent.env for agent in agents), config.verifier.env)
-
-
-def _dummy_model_keys(values: dict[str, str]) -> dict[str, str]:
-    return {
-        name: "EMPTY" if name.endswith("API_KEY") or name in {"ANTHROPIC_AUTH_TOKEN", "API_KEY"} else value
-        for name, value in values.items()
-    }
-
-
-def _guest_model_environment(values: dict[str, str], model: str) -> dict[str, str]:
-    result = {**_dummy_model_keys(values), **_TASK_MODEL_ENVIRONMENT}
-    if any(name != "MODEL_NAME" and name in values for name in _VERIFIER_MODEL_ROLES):
-        result["OPENAI_API_BASE"] = _TASK_MODEL_ENVIRONMENT["OPENAI_BASE_URL"]
-    for name in _VERIFIER_MODEL_ROLES:
-        if name in result:
-            result[name] = "openai/" + model if name != "MODEL_NAME" else model
-    return result
+    return (*(agent.env for agent in config.agents), config.verifier.env)
 
 
 def _judge_settings(config: JobConfig, overlay: RuntimeOverlay) -> tuple[str, str] | None:
-    values = {**config.verifier.env, **overlay.verifier_env}
-    endpoint = values.get("OPENAI_BASE_URL")
+    values = overlay.verifier_env or config.verifier.env
+    endpoint = model_api_url(values)
     if endpoint:
-        configured_model = _single_judge_model(config.verifier.env)
-        model = _single_judge_model(overlay.verifier_env) or configured_model
+        model = judge_model(values)
         if not model:
             raise ValueError("A judge endpoint requires an explicit verifier model role")
         return endpoint, model
     return None
 
 
-def _single_judge_model(values: dict[str, str]) -> str | None:
-    models = {
-        (
-            model
-            if name == "MODEL_NAME"
-            else (
-                model.removeprefix("together_ai/") if model.startswith("together_ai/") else model.removeprefix("openai/")
-            )
-        )
-        for name in _VERIFIER_MODEL_ROLES
-        if (model := values.get(name))
-    }
-    if len(models) > 1:
-        raise ValueError("Distinct verifier model roles require separate host capabilities")
-    return next(iter(models), None)
-
-
-def _judge_authentication(config: JobConfig, overlay: RuntimeOverlay) -> dict[str, str]:
+def _judge_authentication(config: JobConfig, overlay: RuntimeOverlay, *, source: Mapping[str, str]) -> dict[str, str]:
     judge = _judge_settings(config, overlay)
     if judge is None:
         return {}
-    declarations = {**config.agents[0].env, **config.verifier.env, **overlay.verifier_env}
-    auth = {
-        name: value
-        for name, value in declarations.items()
-        if name in {"OPENAI_API_KEY", "TOGETHER_API_KEY", "CUSTOM_API_KEY"}
-    }
-    sources = {name for name, _ in get_required_host_vars(auth)}
-    if sources - {"OPENAI_API_KEY", "TOGETHER_API_KEY", "CUSTOM_API_KEY"}:
-        raise ValueError("Judge credentials must name an explicit model-provider source")
-    resolved = resolve_host_env_vars(auth, source={name: os.environ[name] for name in sources if name in os.environ})
-    key = resolved.get("OPENAI_API_KEY") or resolved.get("TOGETHER_API_KEY") or resolved.get("CUSTOM_API_KEY") or "EMPTY"
-    return {judge[0]: key}
+    return endpoint_authentication(judge[0], overlay.verifier_env or config.verifier.env, source=source)
 
 
-def _model_authentication(config: JobConfig, overlay: RuntimeOverlay, *, candidate_api_key: str) -> dict[str, str]:
-    authentication = _judge_authentication(config, overlay)
-    if _installed_agent(config.agents[0]):
-        if overlay.endpoint_url in authentication and authentication[overlay.endpoint_url] != candidate_api_key:
-            raise ValueError("Candidate and judge credentials conflict for the same host endpoint")
-        authentication[overlay.endpoint_url] = candidate_api_key
+def _model_authentication(
+    config: JobConfig, overlay: RuntimeOverlay, *, host_environment: Mapping[str, str]
+) -> dict[str, str]:
+    authentication = _judge_authentication(config, overlay, source=host_environment)
+    candidate_api_key = host_environment.get(CANDIDATE_API_KEY_ENV, "EMPTY")
+    if overlay.endpoint_url in authentication and authentication[overlay.endpoint_url] != candidate_api_key:
+        raise ValueError("Candidate and judge credentials conflict for the same host endpoint")
+    authentication[overlay.endpoint_url] = candidate_api_key
     return authentication
 
 
 def _model_environment(config: JobConfig) -> dict[str, str]:
     if config.environment.type not in _MODEL_RELAY_ENVIRONMENTS or not config.environment.kwargs.get("model_endpoint"):
         return {}
-    model_name = str(config.environment.kwargs.get("model_name", _STABLE_MODEL))
-    return {
-        **_TASK_MODEL_ENVIRONMENT,
-        "TOGETHER_API_KEY": "EMPTY",
-        "CUSTOM_API_KEY": "EMPTY",
-        "TAU2_USER_MODEL": "openai/" + model_name,
-        "TAU2_NL_ASSERTIONS_MODEL": "openai/" + model_name,
-    }
+    model_name = config.verifier.model_name or str(config.environment.kwargs.get("model_name", _STABLE_MODEL))
+    return task_model_environment(model_name)
 
 
 def _stable_config(config: JobConfig) -> JobConfig:
@@ -585,7 +577,7 @@ def _stable_config(config: JobConfig) -> JobConfig:
             "job_name": _STABLE_JOB_NAME,
             "jobs_dir": _STABLE_JOBS_DIR,
             "agents": [agent],
-            "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
+            "user_agent": None,
         }
     )
     return JobConfig.model_validate(stable.model_dump(mode="python"), extra="forbid")
@@ -614,9 +606,13 @@ def _stable_policy_json(config: JobConfig) -> str:
     return _stable_json(_normalized(config.model_dump(mode="python")))
 
 
-def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object], judge_model: str | None) -> dict[str, object]:
+def _preflight_one(
+    path: Path, model_agent_kwargs: Mapping[str, object], judge_model: str | None, *, host_environment: Mapping[str, str]
+) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
+    if config.user_agent is not None:
+        raise ValueError("Harbor simulated-user agents are not supported")
     if config.tasks:
         raise ValueError("Harbor config tasks are incompatible with the shared launcher; declare one dataset")
     agent = _single_entry(config, "agents")
@@ -624,8 +620,9 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object], judge_m
     assert isinstance(agent, AgentConfig)
     assert isinstance(dataset, DatasetConfig)
     agent_name = _validate_agent(agent)
-    with task_environment(_model_environment(config)):
-        environment_name = _validate_environment(config)
+    environment_name = _validate_environment(config)
+    if config.environment.type == EnvironmentType.DAYTONA and not host_environment.get("DAYTONA_TARGET"):
+        raise ValueError("Harbor Daytona policies require DAYTONA_TARGET before model allocation")
     dataset_metadata = _dataset_metadata(dataset, _raw_dataset_path(document))
 
     stable_config = _stable_config(config)
@@ -673,9 +670,14 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object], judge_m
                     "Check the model YAML's agent.agent_kwargs or the Harbor policy's agents[0].kwargs; "
                     "hosted Pi requires an explicit thinking_format."
                 ) from exc
-        with task_environment(_model_environment(effective)):
-            job = asyncio.run(Job.create(effective))
-            _validate_job_tasks(job)
+        job = asyncio.run(
+            Job.create(
+                effective,
+                host_capabilities=host_capabilities_from_environment(host_environment, model_authentication={}),
+                guest_environment=_model_environment(effective),
+            )
+        )
+        _validate_job_tasks(job)
     if len(job.benchmark_metadata) != 1:
         raise ValueError("Harbor shared launcher requires exactly one benchmark descriptor")
     infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)
@@ -712,7 +714,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object], judge_m
     }
 
 
-def _preflight(request_path: Path) -> None:
+def _preflight(request_path: Path, *, host_environment: Mapping[str, str]) -> None:
     requests = json.loads(request_path.read_text())
     if not isinstance(requests, list):
         raise ValueError("Harbor preflight request must be a list")
@@ -729,23 +731,20 @@ def _preflight(request_path: Path) -> None:
             raise ValueError("Harbor preflight model agent kwargs must be a mapping")
         if judge_model is not None and not isinstance(judge_model, str):
             raise ValueError("Harbor preflight judge model must be a string or null")
-        results.append(_preflight_one(Path(path), model_agent_kwargs, judge_model))
+        results.append(_preflight_one(Path(path), model_agent_kwargs, judge_model, host_environment=host_environment))
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
-async def _run(config: JobConfig) -> None:
-    with task_environment(_model_environment(config)):
-        job = await Job.create(config)
-        _validate_job_tasks(job)
-        await job.run()
+async def _run(config: JobConfig, *, host_capabilities: HostCapabilities) -> None:
+    job = await Job.create(config, host_capabilities=host_capabilities, guest_environment=_model_environment(config))
+    _validate_job_tasks(job)
+    await job.run()
 
 
-def effective_job_config(policy_path: Path, overlay_path: Path) -> JobConfig:
-    """Parse an opaque policy, apply the Marin overlay, and validate the full job."""
-    policy = JobConfig.model_validate_json(policy_path.read_text(), extra="forbid")
+def effective_job_config(policy: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
+    """Apply a parsed Marin overlay to the stable policy and validate the job."""
     if policy.tasks or len(policy.agents) != 1 or len(policy.datasets) != 1:
         raise ValueError("Harbor stable policy violates the shared launcher contract")
-    overlay = RuntimeOverlay.model_validate_json(overlay_path.read_text())
     return _effective_config(policy, overlay)
 
 
@@ -756,33 +755,28 @@ def _diagnostic(exc: Exception) -> str:
 
 
 def main() -> None:
+    host_environment = dict(os.environ)
     try:
         # Harbor uses UPath directly, so configure its filesystem credentials
         # before parsing remote job paths or starting artifact writers.
         fsspec.config.conf.setdefault("s3", {}).update(s3_credential_options())
         command = sys.argv[1]
         if command == "preflight":
-            _preflight(Path(sys.argv[2]))
+            _preflight(Path(sys.argv[2]), host_environment=host_environment)
             return
         if command != "run":
             raise ValueError(f"unknown command {command!r}")
         policy = JobConfig.model_validate_json(Path(sys.argv[2]).read_text(), extra="forbid")
-        config = effective_job_config(Path(sys.argv[2]), Path(sys.argv[3]))
         overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text())
+        config = effective_job_config(policy, overlay)
+        capabilities = host_capabilities_from_environment(
+            host_environment,
+            model_authentication=_model_authentication(policy, overlay, host_environment=host_environment),
+        )
     except (IndexError, json.JSONDecodeError, OSError, TypeError, ValueError, ValidationError) as exc:
         print(_diagnostic(exc), file=sys.stderr)
         raise SystemExit(2) from exc
-    with (
-        host_backend_credentials(
-            daytona_api_key=os.environ.get("DAYTONA_API_KEY"),
-            daytona_api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
-            daytona_target=os.environ.get("DAYTONA_TARGET"),
-        ),
-        host_model_authentication(
-            _model_authentication(policy, overlay, candidate_api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"))
-        ),
-    ):
-        asyncio.run(_run(config))
+    asyncio.run(_run(config, host_capabilities=capabilities))
 
 
 if __name__ == "__main__":

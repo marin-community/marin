@@ -5,7 +5,7 @@
 
 import asyncio
 from collections.abc import Callable
-from contextlib import AsyncExitStack
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from functools import partial
 from pathlib import Path
 
@@ -23,8 +23,14 @@ from harbor.environments.capabilities import (
 from harbor.environments.docker_translate import COMPOSE_FILENAMES
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.execution import execute_shellbox_command
-from harbor.environments.runtime import daytona_connection
-from harbor.environments.model_relay import CANDIDATE_MODEL_RELAY_PORT, MODEL_RELAY_PORT, ModelRelay
+from harbor.host_capabilities import HostCapabilities
+from harbor.environments.model_relay import (
+    JudgeAccess,
+    ModelRelay,
+    start_model_relays,
+    task_model_relays,
+    verifier_model_access,
+)
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
@@ -34,10 +40,14 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
 )
-from shellbox.http_service import serve_http
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import MachineSpec, NetworkPolicy
-from shellbox.process_session import acquire_owned, await_cleanup, finish_owned, own_cleanup
+from shellbox.process_session import (
+    acquire_owned,
+    await_cleanup,
+    finish_owned,
+    own_cleanup,
+)
 
 
 class DaytonaEnvironment(BaseEnvironment):
@@ -52,6 +62,7 @@ class DaytonaEnvironment(BaseEnvironment):
         create_timeout: float = 600,
         model_endpoint: str | None = None,
         model_name: str | None = None,
+        judge_access: JudgeAccess = JudgeAccess.VERIFIER,
         candidate_model_endpoint: str | None = None,
         candidate_model_name: str | None = None,
         **kwargs,
@@ -69,7 +80,17 @@ class DaytonaEnvironment(BaseEnvironment):
                 DaytonaNetworkMode(network_policy["mode"]), network_policy.get("value")
             )
         if client_factory is None:
-            connection = daytona_connection()
+            capabilities: HostCapabilities = kwargs.get(
+                "host_capabilities", HostCapabilities()
+            )
+            connection = capabilities.daytona
+            if (
+                connection is None
+                or not connection.api_key
+                or not connection.api_url
+                or not connection.target
+            ):
+                raise ValueError("Daytona requires an explicit host connection")
             client_factory = partial(
                 AsyncDaytona,
                 DaytonaConfig(
@@ -85,7 +106,12 @@ class DaytonaEnvironment(BaseEnvironment):
             network_policy=policy,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
-        self.candidate_model_endpoint, self.candidate_model_name = candidate_model_endpoint, candidate_model_name
+        self.judge_access = JudgeAccess(judge_access)
+        self._judge: ModelRelay | None = None
+        self.candidate_model_endpoint, self.candidate_model_name = (
+            candidate_model_endpoint,
+            candidate_model_name,
+        )
         self.machine: DaytonaMachine | None = None
         self._relay = AsyncExitStack()
         self._stopping: asyncio.Task[None] | None = None
@@ -126,7 +152,9 @@ class DaytonaEnvironment(BaseEnvironment):
         if any(str(mount["target"]) not in allowed for mount in self._mounts):
             raise ValueError("Shellbox Daytona does not support custom host mounts")
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         if force_build:
             raise ValueError(
                 "Shellbox snapshots are immutable; change the prepared image or build inputs"
@@ -151,33 +179,28 @@ class DaytonaEnvironment(BaseEnvironment):
             memory_mb=self._effective_memory_mb,
             storage_mb=self._effective_storage_mb,
         )
-        if (self.model_endpoint is None) != (self.model_name is None):
-            raise ValueError(
-                "Daytona model capability requires a host endpoint and model"
-            )
-        if (self.candidate_model_endpoint is None) != (self.candidate_model_name is None):
-            raise ValueError("Daytona candidate capability requires a host endpoint and model")
+        judge, candidate = task_model_relays(
+            model_endpoint=self.model_endpoint,
+            model_name=self.model_name,
+            candidate_model_endpoint=self.candidate_model_endpoint,
+            candidate_model_name=self.candidate_model_name,
+            authentication=self.host_capabilities.model_authentication,
+            judge_access=self.judge_access,
+            environments=(spec.env,),
+        )
+        self._judge = judge
         self._stopping = None
-        self.machine = await acquire_owned(asyncio.create_task(self.factory.create(spec)))
+        self.machine = await acquire_owned(
+            asyncio.create_task(self.factory.create(spec))
+        )
         try:
-            if self.model_endpoint is not None:
-                assert self.model_name is not None
-                await self._relay.enter_async_context(
-                    serve_http(
-                        self.machine,
-                        ModelRelay(self.model_endpoint, self.model_name).handle,
-                        port=MODEL_RELAY_PORT,
-                    )
-                )
-            if self.candidate_model_endpoint is not None:
-                assert self.candidate_model_name is not None
-                await self._relay.enter_async_context(
-                    serve_http(
-                        self.machine,
-                        ModelRelay(self.candidate_model_endpoint, self.candidate_model_name).handle,
-                        port=CANDIDATE_MODEL_RELAY_PORT,
-                    )
-                )
+            await start_model_relays(
+                self.machine,
+                self._relay,
+                service_tasks,
+                judge=judge if self.judge_access is JudgeAccess.RUNTIME else None,
+                candidate=candidate,
+            )
             targets = self._mount_targets(writable_only=True)
             if targets:
                 result = await self.exec(
@@ -190,8 +213,23 @@ class DaytonaEnvironment(BaseEnvironment):
             try:
                 await finish_owned(own_cleanup(self.stop(True)))
             except BaseException as cleanup_error:
-                error.add_note(f"Daytona sandbox cleanup failed ({type(cleanup_error).__name__})")
+                error.add_note(
+                    f"Daytona sandbox cleanup failed ({type(cleanup_error).__name__})"
+                )
             raise
+
+    @property
+    def requires_agent_quiescence_for_verifier(self) -> bool:
+        return self._judge is not None and self.judge_access is JudgeAccess.VERIFIER
+
+    def verifier_model_access(
+        self, service_tasks: asyncio.TaskGroup
+    ) -> AbstractAsyncContextManager[None]:
+        if self.machine is None:
+            raise RuntimeError("Daytona environment is not running")
+        return verifier_model_access(
+            self.machine, self._judge, self.judge_access, service_tasks
+        )
 
     async def stop(self, delete: bool) -> None:
         if self._stopping is None:

@@ -1,5 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from uuid import UUID
 
@@ -9,6 +10,7 @@ from harbor_config.model_name import split_provider_model_name
 
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+from harbor.models.agent.model_api import ModelAPI
 from harbor.models.bridge import BridgeKind
 from harbor.models.task.config import MCPServerConfig
 from harbor.models.trial.paths import EnvironmentPaths
@@ -56,6 +58,11 @@ class TurnCapExhaustedError(Exception):
 
 
 class BaseAgent(ABC):
+    MODEL_API = ModelAPI.OPENAI_CHAT
+
+    async def cleanup(self, environment: BaseEnvironment) -> None:
+        """Release sessions at teardown or before isolated verifier model access."""
+
     # ``logs_dir`` may be a remote ``UPath`` (e.g. gs://, s3://) when the trial
     # writes directly to object storage. ``UPath`` is NOT a ``pathlib.Path``
     # subclass, so the annotation must admit both — coercing a remote UPath to a
@@ -102,6 +109,8 @@ class BaseAgent(ABC):
         skills_dir: str | None = None,  # Skills directory path in the environment
         *args,
         extra_env: dict[str, str] | None = None,
+        protected_values: frozenset[str] = frozenset(),
+        model_authentication: Mapping[str, str] = {},
         environment_logs_dir: PurePosixPath | None = None,
         **kwargs,
     ):
@@ -111,10 +120,11 @@ class BaseAgent(ABC):
         self.model_alias = model_name if model_alias is None else model_alias
         self.logger = (logger or global_logger).getChild(__name__)
         self.mcp_servers = mcp_servers or []
-        validate_task_environment(extra_env or {})
+        self._protected_values = protected_values
+        self._model_authentication = dict(model_authentication)
+        validate_task_environment(extra_env or {}, protected_values=protected_values)
         self.skills_dir = skills_dir
-        if not hasattr(self, "_extra_env"):
-            self._extra_env = dict(extra_env) if extra_env else {}
+        self._extra_env = dict(extra_env) if extra_env else {}
 
         self._init_model_info()
 
