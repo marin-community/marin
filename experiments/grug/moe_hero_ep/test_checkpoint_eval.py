@@ -21,7 +21,11 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 
 from experiments.grug.moe_hero_ep import model
-from experiments.grug.moe_hero_ep.launch_checkpoint_eval import CheckpointEvalConfig, evaluate_checkpoint
+from experiments.grug.moe_hero_ep.launch_checkpoint_eval import (
+    CheckpointEvalConfig,
+    eval_tokens_per_batch,
+    evaluate_checkpoint,
+)
 from experiments.grug.moe_hero_ep.train import _reshard_tree_to_mesh
 
 
@@ -119,3 +123,22 @@ def test_checkpoint_eval_scores_saved_weights_at_each_length_and_pads_the_final_
             prefix = f"eval_dropless/seq_len_{seq_len}"
             np.testing.assert_allclose(metrics[prefix + "/paloma/tiny/loss"], reference[seq_len], rtol=1e-4)
             assert abs(rescaled[prefix + "/loss"] - metrics[prefix + "/loss"]) > 1e-4
+
+
+@pytest.mark.parametrize(("nodes", "sequences"), [(16, 16), (8, 8), (4, 4)])
+def test_fewer_nodes_keep_the_tokens_per_gpu_and_one_row_per_context_group(nodes, sequences):
+    tokens = eval_tokens_per_batch(nodes=nodes, context_axis_size=4, seq_lens=(4096, 65536, 262144))
+    assert tokens // 262144 == sequences
+
+
+@pytest.mark.parametrize(
+    ("nodes", "context", "seq_len"),
+    [
+        (3, 4, 262144),  # does not divide the rack
+        (16, 3, 4096),  # context does not divide the GPUs
+        (2, 1, 262144),  # two sequences cannot fill eight batch shards
+    ],
+)
+def test_a_shape_that_does_not_divide_is_refused(nodes, context, seq_len):
+    with pytest.raises(ValueError, match=r"must divide|does not give whole sequences"):
+        eval_tokens_per_batch(nodes=nodes, context_axis_size=context, seq_lens=(seq_len,))

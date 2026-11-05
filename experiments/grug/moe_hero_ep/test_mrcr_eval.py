@@ -191,6 +191,7 @@ def _write_fixture(directory, rows):
             "distance_band": "distance_0_32768",
             "evidence_distance_tokens": 3,
             "scored_tokens": len(TARGET),
+            "length_tokens": len(rows[index]["input_ids"]),
         }
         for index in range(len(rows))
     ]

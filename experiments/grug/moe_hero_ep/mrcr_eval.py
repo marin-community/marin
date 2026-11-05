@@ -15,6 +15,8 @@ import hashlib
 import json
 import logging
 import math
+import resource
+import time
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -347,6 +349,13 @@ def _sequence_score_sums(
     )
 
 
+def _memory_summary() -> str:
+    """This process's peak device and host memory, for the batch log. CPU devices report no device stats."""
+    stats = jax.local_devices()[0].memory_stats()
+    device = f"peak_hbm={stats['peak_bytes_in_use'] / 1024**3:.1f}GiB " if stats else ""
+    return f"{device}max_rss={resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2:.1f}GiB"
+
+
 def score_condition_rows(
     params: Transformer,
     config: MrcrEvalConfig,
@@ -368,6 +377,7 @@ def score_condition_rows(
     score = eqx.filter_jit(_sequence_score_sums)
 
     output: list[MrcrConditionLoss] = []
+    batch_start = time.monotonic()
     with jax_config.enable_pgle(False):
         for batch_index, batch in enumerate(loader):
             if config.max_batches is not None and batch_index >= config.max_batches:
@@ -386,7 +396,13 @@ def score_condition_rows(
                 np.asarray(multihost_utils.process_allgather(value, tiled=True)).reshape(-1) for value in sums
             )
             # A padded final batch has more rows than the manifest has left; only real rows bind.
-            for offset, record in enumerate(manifest[len(output) : len(output) + config.batch_size]):
+            batch_rows = manifest[len(output) : len(output) + config.batch_size]
+            logger.info(
+                "MRCR batch %d real tokens per row: %s",
+                batch_index,
+                [record["length_tokens"] for record in batch_rows],
+            )
+            for offset, record in enumerate(batch_rows):
                 if int(scored[offset]) != record["scored_tokens"]:
                     raise ValueError(
                         f"row {len(output)}: scored {int(scored[offset])} tokens, "
@@ -404,7 +420,16 @@ def score_condition_rows(
                         scored_bytes=int(scored_bytes[offset]),
                     )
                 )
-            logger.info("MRCR batch %d: %d of %d rows", batch_index, len(output), len(manifest))
+            elapsed = time.monotonic() - batch_start
+            batch_start = time.monotonic()
+            logger.info(
+                "MRCR batch %d: %d of %d rows, %.1fs, %s",
+                batch_index,
+                len(output),
+                len(manifest),
+                elapsed,
+                _memory_summary(),
+            )
     return output
 
 

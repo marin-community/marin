@@ -111,6 +111,27 @@ class CheckpointEvalConfig:
                 raise ValueError(f"context_axis_size={self.context_axis_size} must divide eval length {seq_len}")
 
 
+def eval_tokens_per_batch(*, nodes: int, context_axis_size: int, seq_lens: tuple[int, ...]) -> int:
+    """Return the tokens in one eval batch on ``nodes``, which keep one rack's tokens per GPU.
+
+    Every length must fill a whole number of sequences on each batch shard, one per ``data`` group.
+    """
+    if HERO_EP_NODES % nodes:
+        raise ValueError(f"nodes={nodes} must divide the rack's {HERO_EP_NODES} nodes")
+    tokens = HERO_TOKENS_PER_RACK * nodes // HERO_EP_NODES
+    gpus = nodes * HERO_GPUS_PER_NODE
+    if gpus % context_axis_size:
+        raise ValueError(f"context_axis_size={context_axis_size} must divide {gpus} GPUs")
+    batch_shards = gpus // context_axis_size
+    for seq_len in seq_lens:
+        if tokens % seq_len or (tokens // seq_len) % batch_shards:
+            raise ValueError(
+                f"eval length {seq_len} does not give whole sequences on {batch_shards} batch shards "
+                f"from {tokens} tokens per batch"
+            )
+    return tokens
+
+
 def load_checkpoint_params(
     model_config: GrugModelConfig, checkpoint_path: str, *, mesh: Mesh, mp: jmp.Policy
 ) -> tuple[Transformer, int]:
@@ -218,18 +239,25 @@ def build_checkpoint_eval(
     log_scaling_n_floor: int | None = None,
     seq_lens: tuple[int, ...] = HERO_EVAL_SEQ_LENS,
     context_axis_size: int = 1,
+    nodes: int = HERO_EP_NODES,
     mrcr: bool = False,
     mrcr_max_batches: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """One rack evaluating the hero's model from ``checkpoint_path`` at ``seq_lens`` and, optionally, on MRCR.
+    """``nodes`` evaluating the hero's model from ``checkpoint_path`` at ``seq_lens`` and, optionally, on MRCR.
 
-    Only ``qk_mult``, ``qk_mult_long_scale`` and ``log_scaling_n_floor`` differ from the hero's model. Every
-    eval batch holds one hero rack's 4,194,304 tokens. Capacity does not enter the dropless eval.
+    Only ``qk_mult``, ``qk_mult_long_scale`` and ``log_scaling_n_floor`` differ from the hero's model. An eval
+    batch holds a rack's 4,194,304 tokens at the full 16 nodes, and the same tokens per GPU on fewer. Capacity
+    does not enter the dropless eval.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     longest = max((*seq_lens, MRCR_CONTEXT_CAP) if mrcr else seq_lens)
+    tokens_per_batch = eval_tokens_per_batch(
+        nodes=nodes,
+        context_axis_size=context_axis_size,
+        seq_lens=(*seq_lens, MRCR_CONTEXT_CAP) if mrcr else seq_lens,
+    )
     model = with_transport_remat_mode(
         dataclasses.replace(
             HERO_MODEL_CONFIG,
@@ -245,7 +273,7 @@ def build_checkpoint_eval(
         cpu=HERO_NODE_CPU,
         ram=HERO_NODE_RAM,
         disk=HERO_NODE_DISK,
-        replicas=HERO_EP_NODES,
+        replicas=nodes,
     )
     name = f"eval/mrcr-hero/{run_id}"
     version = resolve_version(name, version)
@@ -257,7 +285,7 @@ def build_checkpoint_eval(
         trainer = hero_trainer_config(
             run_id=run_id,
             seed=0,
-            train_batch_size=HERO_TOKENS_PER_RACK // model.max_seq_len,
+            train_batch_size=tokens_per_batch // model.max_seq_len,
             context_axis_size=context_axis_size,
             num_train_steps=1,
             profiler=ProfilerConfig(enabled=False),
@@ -292,7 +320,7 @@ def build_checkpoint_eval(
                 data_path=ctx.artifact_path(mrcr_data),
                 output_path=ctx.output_path,
                 tokenizer=marin_tokenizer,
-                batch_size=HERO_TOKENS_PER_RACK // MRCR_CONTEXT_CAP,
+                batch_size=tokens_per_batch // MRCR_CONTEXT_CAP,
                 max_batches=mrcr_max_batches,
             )
         return CheckpointEvalConfig(
@@ -302,7 +330,7 @@ def build_checkpoint_eval(
             resources=ctx.runtime_arg("resources"),
             checkpoint_path=checkpoint_path,
             seq_lens=seq_lens,
-            eval_tokens_per_batch=HERO_TOKENS_PER_RACK,
+            eval_tokens_per_batch=tokens_per_batch,
             context_axis_size=context_axis_size,
             mrcr=mrcr_config,
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
@@ -354,6 +382,13 @@ def build_checkpoint_eval(
     show_default=True,
     help="Sequence shards. 262144-token sequences need 4.",
 )
+@click.option(
+    "--nodes",
+    type=click.IntRange(min=1),
+    default=HERO_EP_NODES,
+    show_default=True,
+    help="GB200 nodes. Must divide a rack; the batch shrinks with it, keeping the tokens per GPU.",
+)
 @click.option("--mrcr", is_flag=True, help="Also run the paired 262144-token MRCR eval.")
 @click.option("--mrcr-max-batches", type=click.IntRange(min=1), default=None, help="Stop MRCR early, as a smoke test.")
 @build_options
@@ -366,6 +401,7 @@ def main(
     seq_lens: tuple[int, ...],
     no_held_out: bool,
     context_axis_size: int,
+    nodes: int,
     mrcr: bool,
     mrcr_max_batches: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -377,6 +413,7 @@ def main(
         log_scaling_n_floor=log_scaling_n_floor,
         seq_lens=() if no_held_out else tuple(seq_lens),
         context_axis_size=context_axis_size,
+        nodes=nodes,
         mrcr=mrcr,
         mrcr_max_batches=mrcr_max_batches,
     )
