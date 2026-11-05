@@ -12,3 +12,7 @@ runs:
     variant: competitive-d1280 control
     control: true
     shared: s7n-d1280L16
+launched:
+  seed0: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d1280 --model-set logit_soft_cap=10 --seed
+    0 --run-id belay-X0073d1280-seed0 --output-path tmp/ttl=30d/belay/runs/belay-X0073d1280-seed0 --submit --target-cluster
+    cw-us-east-02a --priority batch
