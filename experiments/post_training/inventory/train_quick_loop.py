@@ -52,7 +52,7 @@ def training_recipe(steps: int) -> dict:
         label="snowball-100k",
         max_steps=steps,
         eval_interval=steps,
-        max_staleness_steps=0,
+        max_staleness_steps=2,
         request_window_tokens=REQUEST_WINDOW_TOKENS,
         max_new_tokens=MAX_NEW_TOKENS,
         batch_policy="full_batch",
@@ -87,11 +87,19 @@ def training_recipe(steps: int) -> dict:
         dump_eval_results=True,
     )
     trainer["algorithm"].update(
+        batch_invariant=True,
         advantage_estimator="rloo_n",
         group_advantage_min_size=2,
         advantage_batch_normalize=False,
         rloo_n_filter_zero_reward_groups=True,
         use_entropy_loss=False,
+    )
+    # Arm D's reproducible serving profile, with the engine NCCL channel cap lifted.
+    config["generator"].update(
+        eval_sampling_params={"seed": SEED},
+        vllm_attention_backend="TRITON_ATTN",
+        enable_prefix_caching=False,
+        inference_engine_nccl_max_channels=32,
     )
     trainer["policy"]["optimizer_config"].update(
         lr=1e-6,
