@@ -526,7 +526,7 @@ def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
 
     At training ``data`` size one, ``expert`` becomes the eval ``data`` axis and training ``data``
     drops out, so every device keeps the shard it already holds. Otherwise the spec is unchanged:
-    a leaf sharded on ``expert`` lands replicated and the move transfers it.
+    a leaf sharded on ``expert`` without ``data`` lands replicated and the move transfers it.
     """
     if train_mesh.shape["data"] != 1:
         return spec
