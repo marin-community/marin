@@ -27,6 +27,7 @@ from infra.ci.select_tests import (
     select_all_tests,
     select_changed_tests,
     select_local_tests,
+    shard_files,
 )
 
 GITHUB_FILE = re.compile(r"\.github/[\w./-]+\.yaml")
@@ -844,3 +845,15 @@ def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
     matrix = select_matrix(["uv.lock"], tmp_path)
     assert matrix, "broad trigger emits the full matrix"
     assert all(leg.setup == "" for leg in matrix)
+
+
+def test_shards_spread_each_directory_across_runners() -> None:
+    """A directory of neighbouring test files must not land on a single shard."""
+    heavy = [f"experiments/grug/test_{index}.py" for index in range(6)]
+    light = [f"tests/test_{index}.py" for index in range(9)]
+    files = sorted(heavy + light)
+
+    chunks = shard_files(files, 3)
+
+    assert sorted(path for chunk in chunks for path in chunk) == files
+    assert [sum(path in heavy for path in chunk) for chunk in chunks] == [2, 2, 2]

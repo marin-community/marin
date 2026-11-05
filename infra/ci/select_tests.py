@@ -944,15 +944,13 @@ def all_test_files(scope: str, repo_root: Path) -> list[str]:
 
 
 def shard_files(tests: list[str], count: int) -> list[list[str]]:
-    """Split ``tests`` into ``count`` contiguous, size-balanced chunks."""
-    base, extra = divmod(len(tests), count)
-    chunks: list[list[str]] = []
-    start = 0
-    for index in range(count):
-        size = base + (1 if index < extra else 0)
-        chunks.append(tests[start : start + size])
-        start += size
-    return chunks
+    """Deal ``tests`` round-robin into ``count`` chunks.
+
+    Expensive tests cluster by directory (``experiments/grug/``, ``tests/grug/``), so
+    contiguous slices of the sorted list put a whole cluster on one runner. Interleaving
+    spreads each directory across every chunk.
+    """
+    return [tests[index::count] for index in range(count)]
 
 
 def scope_legs(
