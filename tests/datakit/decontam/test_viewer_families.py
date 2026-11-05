@@ -8,7 +8,7 @@ from collections import Counter
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from experiments.datakit.decontam.viewer import export_run
+from experiments.datakit.decontam.viewer import export_reference_run, export_run
 
 
 def test_uncheatable_records_group_by_subset_and_lm_eval_records_by_task():
@@ -37,3 +37,24 @@ def test_uncheatable_eval_text_loads_from_its_subset_artifact(tmp_path, monkeypa
     texts = export_run._load_eval_texts({"uncheatable-bbc_news-1"})
 
     assert texts == {"uncheatable-bbc_news-1": "Second."}
+
+
+def test_reference_run_groups_pinned_suite_records_and_views_by_eval():
+    eval_ids = [
+        "swebench_verified-django__django-11099",
+        "swebench_verified-django__django-11099-instruction",
+        "terminal_bench_4-build-pmars-solution",
+        "hle_diamond-6702b8",
+        "hle-6702b8",
+        "math500-algebra/1",
+    ]
+
+    families = Counter(export_reference_run._eval_family(eval_id) for eval_id in eval_ids)
+
+    assert families == {
+        "SWE-bench Verified": 2,
+        "Terminal-Bench 4.0": 1,
+        "HLE-Diamond": 1,
+        "Humanity's Last Exam": 1,
+        "MATH-500": 1,
+    }

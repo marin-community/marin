@@ -11,6 +11,12 @@ in ``MARIN_PREFIX``:
 - ``uncheatable/<subset>/test.parquet`` -- the Uncheatable Eval subsets that
   ``experiments/datasets/uncheatable.py`` evaluates, pinned to an upstream
   commit. These artifacts are mandatory.
+- ``aaii_v5/<eval>/test.parquet`` -- the public parts of the AA Intelligence
+  Index v5.0 (:mod:`experiments.datakit.decontam.aaii_v5_evals`). Mandatory.
+- ``eval_policy/<eval>/test.parquet`` -- the post-training eval-policy evals
+  (#9566) that no other suite indexes
+  (:mod:`experiments.datakit.decontam.eval_policy_qa_evals` and
+  :mod:`experiments.datakit.decontam.eval_policy_agentic_evals`). Mandatory.
 - ``lmh/<task>/<split>.parquet`` -- every unique task in
   ``experiments/evals/task_configs.py`` bundles, loaded via lm-eval-harness.
   These artifacts keep their extraction-version sidecars in the same immutable
@@ -20,7 +26,7 @@ Each record has the form ``{id: str, text: str}``. Mandatory extraction is
 pinned by benchmark. Preparation of a mandatory suite fails if a source cannot
 load or if its extracted record count differs from the registered count. A
 complete suite manifest is written only after all of its artifacts pass
-validation. Bloom creation requires both mandatory manifests. Source downloads
+validation. Bloom creation requires every mandatory manifest. Source downloads
 and required lm-eval task loads are retried with backoff.
 
 Test split is preferred; tasks without a test split fall back to
@@ -48,29 +54,37 @@ namespaced repositories.
 """
 
 import dataclasses
+import functools
 import io as io_mod
 import json
 import logging
+import tempfile
 import urllib.request
 import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
+from marin.datakit.decon import RequiredEvalSuite
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
+from experiments.datakit.decontam.aaii_v5_evals import AAII_V5_EVALS
+from experiments.datakit.decontam.eval_policy_agentic_evals import EVAL_POLICY_AGENTIC_EVALS
+from experiments.datakit.decontam.eval_policy_qa_evals import EVAL_POLICY_QA_EVALS
 from experiments.datakit.decontam.lmh_loader import (
     flatten_task_dict,
     materialize_first_nonempty_split,
     patch_hf_dataset_loading,
 )
+from experiments.datakit.decontam.pinned_evals import PinnedEval, markable
 from experiments.datasets.uncheatable import UNCHEATABLE_SUBSETS
 from experiments.evals.task_configs import (
     ACTION_TASKS,
@@ -98,11 +112,13 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v10"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v13"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
 LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
 UNCHEATABLE_MANIFEST_RELATIVE = "uncheatable/_manifest.json"
+AAII_V5_MANIFEST_RELATIVE = "aaii_v5/_manifest.json"
+EVAL_POLICY_MANIFEST_RELATIVE = "eval_policy/_manifest.json"
 LMH_MANIFEST_RELATIVE = "lmh/_manifest.json"
 
 # Downloads and required lm-eval task loads retry transient failures such as
@@ -792,6 +808,71 @@ def _prepare_uncheatable() -> dict[str, Any]:
     )
 
 
+# Pinned suites whose benchmarks are built by the modules they come from.
+EVAL_POLICY_EVALS: tuple[PinnedEval, ...] = EVAL_POLICY_QA_EVALS + EVAL_POLICY_AGENTIC_EVALS
+AAII_V5_BENCHMARK_NAMES: tuple[str, ...] = tuple(ev.name for ev in AAII_V5_EVALS)
+EVAL_POLICY_BENCHMARK_NAMES: tuple[str, ...] = tuple(ev.name for ev in EVAL_POLICY_EVALS)
+# Source downloads for the pinned suites are cached here for the life of the job.
+_SOURCE_CACHE = Path(tempfile.gettempdir()) / "decontam-eval-sources"
+
+
+def _pinned_suite_manifest(suite: str, evals: tuple[PinnedEval, ...], status: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "corpus_version": EVAL_CORPUS_VERSION,
+        "suite": suite,
+        "required": True,
+        "status": status,
+        "benchmarks": [
+            {
+                "name": ev.name,
+                "artifact": f"{ev.subdir}/test.parquet",
+                "source": ev.source,
+                "source_revision": ev.revision,
+                "expected_records": ev.expected_records,
+            }
+            for ev in evals
+        ],
+    }
+
+
+def _pinned_records(ev: PinnedEval) -> list[dict[str, str]]:
+    return [{"id": record["id"], "text": markable(record["text"])} for record in ev.build(_SOURCE_CACHE)]
+
+
+def _prepare_pinned_suite(
+    label: str, manifest_relative: str, suite: str, evals: tuple[PinnedEval, ...]
+) -> dict[str, Any]:
+    return _prepare_required_suite(
+        label,
+        manifest_relative,
+        functools.partial(_pinned_suite_manifest, suite, evals),
+        {ev.name: functools.partial(_pinned_records, ev) for ev in evals},
+    )
+
+
+def _prepare_aaii_v5() -> dict[str, Any]:
+    return _prepare_pinned_suite(
+        "aaii_v5", AAII_V5_MANIFEST_RELATIVE, "Artificial Analysis Intelligence Index v5.0 (public)", AAII_V5_EVALS
+    )
+
+
+def _prepare_eval_policy() -> dict[str, Any]:
+    return _prepare_pinned_suite(
+        "eval_policy", EVAL_POLICY_MANIFEST_RELATIVE, "Post-training eval policy (#9566)", EVAL_POLICY_EVALS
+    )
+
+
+def required_eval_suites(eval_root: str) -> tuple[RequiredEvalSuite, ...]:
+    """Every mandatory suite under ``eval_root``, the corpus root this script writes."""
+    return (
+        RequiredEvalSuite(f"{eval_root}/{AA_MANIFEST_RELATIVE}", AA_BENCHMARK_NAMES),
+        RequiredEvalSuite(f"{eval_root}/{UNCHEATABLE_MANIFEST_RELATIVE}", UNCHEATABLE_BENCHMARK_NAMES),
+        RequiredEvalSuite(f"{eval_root}/{AAII_V5_MANIFEST_RELATIVE}", AAII_V5_BENCHMARK_NAMES),
+        RequiredEvalSuite(f"{eval_root}/{EVAL_POLICY_MANIFEST_RELATIVE}", EVAL_POLICY_BENCHMARK_NAMES),
+    )
+
+
 # Eval tasks excluded from the *decontamination* bloom (they remain valid
 # benchmarks for actual evaluation — this only affects what we treat as
 # "eval content to scrub from training data"). Each of these has test
@@ -1024,6 +1105,8 @@ def main() -> None:
     configure_logging(logging.INFO)
     aa_manifest = _prepare_aa()
     uncheatable_manifest = _prepare_uncheatable()
+    aaii_v5_manifest = _prepare_aaii_v5()
+    eval_policy_manifest = _prepare_eval_policy()
     lmh_manifest = _prepare_lmh()
     _write_json(
         f"{_output_root()}/_manifest.json",
@@ -1032,6 +1115,8 @@ def main() -> None:
             "corpus_version": EVAL_CORPUS_VERSION,
             "artificial_analysis": aa_manifest,
             "uncheatable_eval": uncheatable_manifest,
+            "aaii_v5": aaii_v5_manifest,
+            "eval_policy": eval_policy_manifest,
             "lm_eval_harness": lmh_manifest,
         },
     )
