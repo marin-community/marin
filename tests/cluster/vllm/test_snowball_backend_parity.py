@@ -18,6 +18,7 @@ import pytest
 from fray.iris_backend import convert_entrypoint
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.client.client import IrisClient
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc import job_pb2
 from marin.inference.iris_tpu_vllm import RAY_PORTS
@@ -72,7 +73,12 @@ def _vllm_job(
             args=[goldens, attention_backend, pipeline_parallel_size],
         ),
         resources=ResourceConfig.with_gpu(
-            "H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g", target_cluster=MARIN_GPU_CLUSTER
+            "H100",
+            count=GPU_COUNT,
+            cpu=64,
+            ram="512g",
+            disk="128g",
+            target_cluster=None if get_job_info() is not None else MARIN_GPU_CLUSTER,
         ),
         environment=create_environment(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
@@ -156,3 +162,12 @@ def test_vllm_job_payload_survives_worker_serialization(backend):
         assert bound.arguments["weights"] == SNOWBALL.tpu_export_uri
     else:
         assert bound.arguments["pipeline_parallel_size"] == int(backend[-1])
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_gpu_job_routes_only_root_submissions_to_the_peer(monkeypatch, nested):
+    monkeypatch.setattr(
+        "tests.cluster.vllm.test_snowball_backend_parity.get_job_info", lambda: object() if nested else None
+    )
+    request = _vllm_job(read_representative_goldens(), "FLASH_ATTN", 1)
+    assert request.resources.target_cluster == (None if nested else MARIN_GPU_CLUSTER)
