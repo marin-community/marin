@@ -286,11 +286,19 @@ def test_step_slicing():
     with tempfile.TemporaryDirectory() as tmpdir:
         builder = JaggedArrayStore.open(tmpdir, item_rank=2, dtype=jnp.float32)
 
-        data = jnp.array([[1.0, 2.0], [3.0, 4.0]])
-        builder.append(data)
+        rows = [np.full((i + 1, 2), float(i), dtype=np.float32) for i in range(5)]
+        for row in rows:
+            builder.append(row)
 
-        # with pytest.raises(ValueError):
-        #     builder[::2]
+        for item, expected_rows in [
+            (slice(None, None, 2), [rows[0], rows[2], rows[4]]),
+            (slice(1, None, 2), [rows[1], rows[3]]),
+            (slice(None, None, -2), [rows[4], rows[2], rows[0]]),
+        ]:
+            result = builder[item]
+            assert len(result) == len(expected_rows)
+            for actual, expected in zip(result, expected_rows):
+                np.testing.assert_array_equal(actual, expected)
 
 
 async def create_builder_with_data(

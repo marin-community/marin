@@ -14,6 +14,7 @@ pub mod exact_aggregate;
 pub mod exact_prune;
 pub(crate) mod file_scan;
 pub mod group_extrema;
+pub(crate) mod object_reader;
 pub mod optimizer;
 pub(crate) mod predicate;
 pub mod provider;
