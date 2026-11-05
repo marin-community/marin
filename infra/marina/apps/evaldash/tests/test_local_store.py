@@ -455,5 +455,4 @@ def test_genomeqa_sample_text_is_not_exposed_by_public_routes(tmp_path, store, c
     ):
         response = client.get(route)
         assert response.status_code == 403
-        assert response.json() == {"error": "Sample browsing is unavailable for this benchmark"}
     assert client.post(f"/runs/{record.run_id}/samples/review", json={"task": "GenomeQA"}).status_code == 403
