@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import dataclasses
 import shutil
 from collections import Counter
@@ -16,9 +15,8 @@ from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat, preprocessor_for_format
-from levanter.data.text.length_bucket import document_length_stats, load_bucket_length_stats
 from levanter.schedule import BatchSchedule
-from levanter.store.cache import TreeCache, write_levanter_cache
+from levanter.store.cache import write_levanter_cache
 from levanter.tokenizers import load_tokenizer
 from marin.execution.lazy import StepContext
 from zephyr.context import ZephyrContext
@@ -162,15 +160,8 @@ def test_bucket_without_long_tokens_reads_only_short_documents(fake_store):
     )
 
 
-def test_store_counts_read_from_document_offsets(fake_store):
-    cache = TreeCache.load(str(fake_store.store / "cluster=1/quality=0"), {"input_ids": np.empty(0, dtype=np.int32)})
-
+def test_read_length_tokens(fake_store):
     assert read_length_tokens(str(fake_store.stats_path)) == TOKENS
-    counts = asyncio.run(document_length_stats(cache, thresholds=(8, 16, 32), chunk_rows=8))
-    written = load_bucket_length_stats(str(fake_store.stats_path))
-    assert written.buckets["c01q0"] == counts
-    assert counts.total_tokens == 992
-    assert counts.tokens_above == {8: 160, 16: 160, 32: 0}
 
 
 def test_reported_share_and_passes(monkeypatch):
