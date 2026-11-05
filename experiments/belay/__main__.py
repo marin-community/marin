@@ -92,6 +92,7 @@ from experiments.belay.page import (
     SESSION_FILE,
     TERMINAL_RUN_STATES,
     Idea,
+    PageRequestError,
     PageRun,
     PageState,
     Post,
@@ -230,6 +231,9 @@ DRAIN_BUDGET = datetime.timedelta(hours=3)
 DRAIN_MAX_IDEAS = 10
 DRAIN_HARD_STOP = datetime.timedelta(hours=3, minutes=45)
 WAIT_POLL_SECONDS = 60
+# A Loom watch pass does not start while a session runs, so the session's own wait keeps the page synced (run states,
+# which turn finished and failed runs into events) this often.
+WAIT_SYNC_INTERVAL = datetime.timedelta(minutes=5)
 # One `wait` call returns within this, so it fits in one shell command; the session then runs it again.
 WAIT_CALL_SECONDS = 9 * 60
 
@@ -362,7 +366,14 @@ def wait(session_id: str, events_file: Path) -> None:
     seen_file.write_text(json.dumps(sorted(seen)))
     own_session(session_id)
     deadline = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=WAIT_CALL_SECONDS)
+    synced_at = None
     while True:
+        if synced_at is None or datetime.datetime.now(datetime.UTC) - synced_at >= WAIT_SYNC_INTERVAL:
+            try:
+                sync()
+            except (subprocess.CalledProcessError, PageRequestError) as failure:  # keep waiting on the last sync
+                print(f"sync failed, still waiting: {failure}")
+            synced_at = datetime.datetime.now(datetime.UTC)
         state = call("agent/state")
         session = next((s for s in state["sessions"] if s["id"] == session_id), None)
         if session is None or session["state"] != "running":
