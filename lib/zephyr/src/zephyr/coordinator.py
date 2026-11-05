@@ -251,8 +251,8 @@ class _PipelineExecution:
     # True once the final task-producing stage has been loaded, so a drained
     # queue means no further task can be dispatched for this pipeline.
     is_last_stage: bool = False
-    # Folded completed-task counters, keyed by stage, name, and aggregation.
-    completed_totals: dict[tuple[str | None, str, Aggregation], CounterEntry] = field(default_factory=dict)
+    # Folded completed-task counters, keyed by scope and aggregation.
+    completed_totals: dict[tuple[CounterKey, Aggregation], CounterEntry] = field(default_factory=dict)
     # Set at each _start_stage so status logs show throughput since stage start.
     stage_monotonic_start: float | None = None
     progress_time_seconds: float = 0.0
@@ -312,7 +312,7 @@ class _PipelineExecution:
     def fold_counters(self, snapshot: CounterSnapshot) -> None:
         """Fold one completed task snapshot into bounded execution state."""
         for counter_key, entry in snapshot.counters.items():
-            key = (counter_key.stage, counter_key.name, entry.aggregation)
+            key = (counter_key, entry.aggregation)
             accumulated = self.completed_totals.get(key)
             if accumulated is None:
                 self.completed_totals[key] = CounterEntry(entry.value, entry.aggregation, entry.count)
@@ -322,7 +322,7 @@ class _PipelineExecution:
     def completed_snapshot(self) -> CounterSnapshot:
         """Return completed counters for this execution, still keyed by scope."""
         merged, conflicted = merge_counter_entries(
-            (CounterKey(stage, name), entry) for (stage, name, _), entry in self.completed_totals.items()
+            (counter_key, entry) for (counter_key, _), entry in self.completed_totals.items()
         )
         return CounterSnapshot(counters={k: e for k, e in merged.items() if k not in conflicted}, generation=0)
 

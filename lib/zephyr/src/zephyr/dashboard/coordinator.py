@@ -39,7 +39,6 @@ from zephyr.plan import SOURCE_STAGE_TYPE, PhysicalPlan
 from zephyr.stage_io import ZephyrTaskResources
 from zephyr.stats import ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, ZEPHYR_WORKER_MEM_CURRENT_KEY, StatsWriter
 from zephyr.worker_context import (
-    Aggregation,
     CounterEntry,
     CounterKey,
     CounterSnapshot,
@@ -88,8 +87,7 @@ class DashboardExecution(Protocol):
     @property
     def results(self) -> Mapping[int, object]: ...
 
-    @property
-    def completed_totals(self) -> Mapping[tuple[str | None, str, Aggregation], CounterEntry]: ...
+    def completed_snapshot(self) -> CounterSnapshot: ...
 
 
 class DashboardCoordinator(Protocol):
@@ -191,11 +189,7 @@ class CoordinatorDashboard:
         for (worker_id, _), snapshot in self._coordinator._worker_counters.items():
             entries_by_worker[worker_id].extend(snapshot.counters.items())
 
-        merged_by_worker: dict[str, dict[str, CounterEntry]] = {}
-        for worker_id, entries in entries_by_worker.items():
-            merged, conflicted = merge_counter_entries(entries)
-            merged_by_worker[worker_id] = counters_by_name((k, e) for k, e in merged.items() if k not in conflicted)
-        return merged_by_worker
+        return {worker_id: counters_by_name(entries) for worker_id, entries in entries_by_worker.items()}
 
     def _shard_buckets_locked(self, run: DashboardExecution) -> tuple[ShardBucket, ...]:
         total = run.total_shards
@@ -347,7 +341,7 @@ class CoordinatorDashboard:
             run = self._run_locked(execution_id)
             if run is None:
                 return []
-            entries = [(CounterKey(stage, name), entry) for (stage, name, _), entry in run.completed_totals.items()]
+            entries = list(run.completed_snapshot().counters.items())
             entries.extend(
                 (key, entry)
                 for (worker_id, snapshot_execution_id), snapshot in self._coordinator._worker_counters.items()
