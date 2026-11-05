@@ -16,6 +16,7 @@ from fray.local_backend import LocalClient
 from marin.datakit.decon import (
     EvalBloom,
     NGramConfig,
+    RequiredEvalSuite,
     _bloom_hash,
     _extract_ngrams,
     _load_drop_set,
@@ -966,9 +967,8 @@ def test_build_eval_bloom_requires_complete_eval_manifest(tmp_path: Path):
         build_eval_bloom(
             eval_data_sources=str(eval_root),
             output_path=str(tmp_path / "bloom"),
-            required_eval_manifest_path=str(manifest_path),
+            required_eval_suites=(RequiredEvalSuite(str(manifest_path), ("Required Eval",)),),
             required_eval_corpus_version="test-corpus-v1",
-            required_eval_names=("Required Eval",),
         )
 
     assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()
@@ -1001,9 +1001,8 @@ def test_build_eval_bloom_checks_required_artifact_counts(tmp_path: Path):
         build_eval_bloom(
             eval_data_sources=str(eval_root),
             output_path=str(tmp_path / "bloom"),
-            required_eval_manifest_path=str(manifest_path),
+            required_eval_suites=(RequiredEvalSuite(str(manifest_path), ("Required Eval",)),),
             required_eval_corpus_version="test-corpus-v1",
-            required_eval_names=("Required Eval",),
         )
 
 
@@ -1035,9 +1034,8 @@ def test_build_eval_bloom_requires_features_for_every_required_record(tmp_path: 
             eval_data_sources=str(eval_root),
             output_path=str(tmp_path / "bloom"),
             ngram=NGramConfig(min_matched_features=2, ngram_length=13),
-            required_eval_manifest_path=str(manifest_path),
+            required_eval_suites=(RequiredEvalSuite(str(manifest_path), ("Required Eval",)),),
             required_eval_corpus_version="test-corpus-v1",
-            required_eval_names=("Required Eval",),
         )
 
 
@@ -1070,10 +1068,66 @@ def test_build_eval_bloom_requires_each_required_record_to_self_match(tmp_path: 
             eval_data_sources=str(eval_root),
             output_path=str(tmp_path / "bloom"),
             ngram=NGramConfig(ngram_length=13, min_matched_features=3),
-            required_eval_manifest_path=str(manifest_path),
+            required_eval_suites=(RequiredEvalSuite(str(manifest_path), ("Required Eval",)),),
             required_eval_corpus_version="test-corpus-v1",
-            required_eval_names=("Required Eval",),
         )
+
+
+def _write_required_suite(root: Path, name: str, records: list[dict], *, status: str = "complete") -> Path:
+    _write_input_parquet(root / "eval" / "test.parquet", records)
+    manifest_path = root / "_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "test-corpus-v1",
+                "required": True,
+                "status": status,
+                "benchmarks": [{"name": name, "artifact": "eval/test.parquet", "expected_records": len(records)}],
+            }
+        )
+    )
+    return manifest_path
+
+
+def test_build_eval_bloom_indexes_every_required_suite(tmp_path: Path):
+    first = _write_required_suite(tmp_path / "evals" / "first", "First Eval", [{"id": "first-1", "text": "alpha beta"}])
+    second = _write_required_suite(
+        tmp_path / "evals" / "second", "Second Eval", [{"id": "second-1", "text": "gamma delta"}]
+    )
+
+    result = build_eval_bloom(
+        eval_data_sources=str(tmp_path / "evals"),
+        output_path=str(tmp_path / "bloom"),
+        required_eval_suites=(
+            RequiredEvalSuite(str(first), ("First Eval",)),
+            RequiredEvalSuite(str(second), ("Second Eval",)),
+        ),
+        required_eval_corpus_version="test-corpus-v1",
+    )
+
+    index = pq.read_table(result.eval_hash_index_path).to_pylist()
+    assert {row["eval_id"] for row in index} == {"first-1", "second-1"}
+
+
+def test_build_eval_bloom_rejects_any_incomplete_required_suite(tmp_path: Path):
+    first = _write_required_suite(tmp_path / "evals" / "first", "First Eval", [{"id": "first-1", "text": "alpha beta"}])
+    second = _write_required_suite(
+        tmp_path / "evals" / "second", "Second Eval", [{"id": "second-1", "text": "gamma delta"}], status="building"
+    )
+
+    with pytest.raises(ValueError, match="status is 'building'"):
+        build_eval_bloom(
+            eval_data_sources=str(tmp_path / "evals"),
+            output_path=str(tmp_path / "bloom"),
+            required_eval_suites=(
+                RequiredEvalSuite(str(first), ("First Eval",)),
+                RequiredEvalSuite(str(second), ("Second Eval",)),
+            ),
+            required_eval_corpus_version="test-corpus-v1",
+        )
+
+    assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()
 
 
 def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: Path):
@@ -1125,9 +1179,8 @@ def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: P
     result = build_eval_bloom(
         eval_data_sources=str(required_root),
         output_path=str(tmp_path / "bloom"),
-        required_eval_manifest_path=str(required_manifest),
+        required_eval_suites=(RequiredEvalSuite(str(required_manifest), ("Required Eval",)),),
         required_eval_corpus_version="test-corpus-v1",
-        required_eval_names=("Required Eval",),
         best_effort_eval_manifest_path=str(best_effort_manifest),
         best_effort_eval_corpus_version="test-corpus-v1",
     )
@@ -1135,6 +1188,40 @@ def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: P
     assert result.n_eval_records == 2
     index = pq.read_table(result.eval_hash_index_path).to_pylist()
     assert {row["eval_id"] for row in index} == {"required-1", "included-1"}
+
+
+@pytest.mark.parametrize(
+    "required_tasks",
+    [None, {"required": ["required_a", "required_b"]}],
+    ids=["manifest-without-required-tasks", "required-leaf-not-included"],
+)
+def test_build_eval_bloom_requires_best_effort_required_tasks(tmp_path: Path, required_tasks: dict | None):
+    best_effort_root = tmp_path / "evals" / "lmh"
+    _write_input_parquet(best_effort_root / "required_a" / "eval.parquet", [{"id": "a-1", "text": "alpha beta gamma"}])
+    manifest = {
+        "schema_version": 1,
+        "corpus_version": "test-corpus-v1",
+        "required": False,
+        "status": "complete_with_failures",
+        "included_leaf_tasks": ["required_a"],
+        "artifacts": [{"task": "required_a", "artifact": "required_a/eval.parquet", "records": 1}],
+        "failed": [{"task": "required_b", "reason": "no docs"}],
+    }
+    if required_tasks is not None:
+        manifest["required_tasks"] = required_tasks
+    best_effort_manifest = best_effort_root / "_manifest.json"
+    best_effort_manifest.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="required task 'required'"):
+        build_eval_bloom(
+            eval_data_sources=str(best_effort_root),
+            output_path=str(tmp_path / "bloom"),
+            best_effort_eval_manifest_path=str(best_effort_manifest),
+            best_effort_eval_corpus_version="test-corpus-v1",
+            best_effort_required_tasks=("required",),
+        )
+
+    assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()
 
 
 def test_build_eval_bloom_excludes_named_task_dirs(tmp_path: Path):

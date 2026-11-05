@@ -8,20 +8,26 @@ in ``MARIN_PREFIX``:
 
 - ``aa/<eval>/<split>.parquet`` -- all nine AA Intelligence Index v4.1.1
   benchmarks. These artifacts are mandatory.
+- ``uncheatable/<subset>/test.parquet`` -- the Uncheatable Eval subsets that
+  ``experiments/datasets/uncheatable.py`` evaluates, pinned to an upstream
+  commit. These artifacts are mandatory.
 - ``lmh/<task>/<split>.parquet`` -- every unique task in
   ``experiments/evals/task_configs.py`` bundles, loaded via lm-eval-harness.
-  These best-effort artifacts keep their extraction-version sidecars in the
-  same immutable corpus-version root.
+  These artifacts keep their extraction-version sidecars in the same immutable
+  corpus-version root.
 
-Each record has the form ``{id: str, text: str}``. AA extraction is pinned by
-benchmark. AA preparation fails if a source cannot load or if its extracted
-record count differs from the registered count. A complete manifest is written
-only after all mandatory AA artifacts pass validation. Bloom creation requires
-this manifest.
+Each record has the form ``{id: str, text: str}``. Mandatory extraction is
+pinned by benchmark. Preparation of a mandatory suite fails if a source cannot
+load or if its extracted record count differs from the registered count. A
+complete suite manifest is written only after all of its artifacts pass
+validation. Bloom creation requires both mandatory manifests. Source downloads
+and required lm-eval task loads are retried with backoff.
 
 Test split is preferred; tasks without a test split fall back to
 validation, then training. Tasks that fail to load (e.g. removed from
-lm-eval since our pinned commit, gated HF datasets) are logged and skipped.
+lm-eval since our pinned commit, gated HF datasets) are logged and skipped,
+except :data:`REQUIRED_LMH_TASKS`: if one of them fails, preparation stops
+before it seals the lm-eval manifest.
 
 Submit on a CPU Iris cluster. The ``lm_eval`` extra supplies the optional
 lm-eval-harness package:
@@ -37,7 +43,8 @@ script monkey-patches ``datasets.load_dataset`` to force
 ``trust_remote_code=True`` and sets ``HF_ALLOW_CODE_EVAL=1`` before
 loading any task, so tasks shipping custom HF loading scripts (logiqa,
 piqa, ethics_*, crows_pairs_*, ...) and humaneval load without per-task
-plumbing.
+plumbing. It also maps legacy dataset IDs such as ``gsm8k`` to their
+namespaced repositories.
 """
 
 import dataclasses
@@ -46,7 +53,7 @@ import json
 import logging
 import urllib.request
 import zipfile
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from enum import StrEnum
 from typing import Any
 
@@ -57,12 +64,14 @@ from datasets import load_dataset
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from experiments.datakit.decontam.lmh_loader import (
     flatten_task_dict,
     materialize_first_nonempty_split,
-    trust_remote_code_for_hf,
+    patch_hf_dataset_loading,
 )
+from experiments.datasets.uncheatable import UNCHEATABLE_SUBSETS
 from experiments.evals.task_configs import (
     ACTION_TASKS,
     BIAS_SAFETY_TASKS,
@@ -89,11 +98,17 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v3"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v5"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
 LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
+UNCHEATABLE_MANIFEST_RELATIVE = "uncheatable/_manifest.json"
 LMH_MANIFEST_RELATIVE = "lmh/_manifest.json"
+
+# Downloads and required lm-eval task loads retry transient failures such as
+# "Server disconnected" before preparation stops.
+LOAD_ATTEMPTS = 5
+LOAD_BACKOFF = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0)
 
 
 def _output_root() -> str:
@@ -404,13 +419,26 @@ def _write_parquet(path: str, records: Iterator[dict]) -> int:
     return n
 
 
+def _download(url: str) -> bytes:
+    def fetch() -> bytes:
+        with urllib.request.urlopen(url) as response:
+            return response.read()
+
+    return retry_with_backoff(
+        fetch,
+        retryable=lambda exc: isinstance(exc, OSError),
+        max_attempts=LOAD_ATTEMPTS,
+        backoff=LOAD_BACKOFF,
+        operation=f"download {url}",
+    )
+
+
 def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
     """Stream raw rows for one pinned AA source."""
     if cfg.record_type == AARecordType.TERMINAL_BENCH_TASK:
         if cfg.source_url is None:
             raise ValueError(f"{cfg.name}: source_url is required")
-        with urllib.request.urlopen(cfg.source_url) as response:
-            archive = response.read()
+        archive = _download(cfg.source_url)
         with zipfile.ZipFile(io_mod.BytesIO(archive)) as source_zip:
             instructions: dict[str, str] = {}
             solutions: dict[str, str] = {}
@@ -441,8 +469,7 @@ def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
         return
 
     if cfg.source_url is not None:
-        with urllib.request.urlopen(cfg.source_url) as response:
-            rows = json.load(response)
+        rows = json.loads(_download(cfg.source_url))
         if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
             raise ValueError(f"{cfg.name}: expected a JSON list of objects")
         yield from rows
@@ -565,7 +592,7 @@ def _write_json(path: str, value: dict[str, Any]) -> None:
         output.write("\n")
 
 
-def _staged_aa_is_current(out_path: str, sidecar_path: str, entry: dict[str, Any]) -> bool:
+def _staged_artifact_is_current(out_path: str, sidecar_path: str, entry: dict[str, Any]) -> bool:
     if not StoragePath(out_path).exists() or not StoragePath(sidecar_path).exists():
         return False
     with StoragePath(sidecar_path).open("r") as source:
@@ -587,45 +614,127 @@ def _aa_manifest(status: str) -> dict[str, Any]:
     }
 
 
-def _prepare_aa() -> dict[str, Any]:
-    manifest_path = f"{_output_root()}/{AA_MANIFEST_RELATIVE}"
+def _prepare_required_suite(
+    label: str,
+    manifest_relative: str,
+    manifest: Callable[[str], dict[str, Any]],
+    records: Mapping[str, Callable[[], Iterable[dict[str, str]]]],
+) -> dict[str, Any]:
+    """Write every artifact of a mandatory suite, then seal its manifest.
+
+    ``manifest(status)`` builds the suite manifest. ``records`` maps each
+    benchmark name in it to a function that returns the benchmark's records.
+    A sealed manifest is returned as is; one whose content changed raises.
+    """
+    manifest_path = f"{_output_root()}/{manifest_relative}"
     manifest_storage = StoragePath(manifest_path)
     if manifest_storage.exists():
         with manifest_storage.open("r") as source:
             existing_manifest = json.load(source)
         if not isinstance(existing_manifest, dict):
-            raise ValueError(f"AA manifest must be an object: {manifest_path}")
-        expected_manifest = _aa_manifest("complete")
+            raise ValueError(f"{label} manifest must be an object: {manifest_path}")
         if existing_manifest.get("status") == "complete":
-            if existing_manifest != expected_manifest:
+            if existing_manifest != manifest("complete"):
                 raise ValueError(
-                    "AA manifest content changed within EVAL_CORPUS_VERSION; "
+                    f"{label} manifest content changed within EVAL_CORPUS_VERSION; "
                     "change EVAL_CORPUS_VERSION before preparation"
                 )
-            logger.info("aa: version %s is already sealed at %s", EVAL_CORPUS_VERSION, manifest_path)
+            logger.info("%s: version %s is already sealed at %s", label, EVAL_CORPUS_VERSION, manifest_path)
             return existing_manifest
 
-    _write_json(manifest_path, _aa_manifest("building"))
-
-    for cfg in AA_EVALS:
-        out_path = f"{_output_root()}/aa/{cfg.subdir}/{cfg.split}.parquet"
-        sidecar_path = f"{_output_root()}/aa/{cfg.subdir}/{cfg.split}.source.json"
-        entry = _aa_manifest_entry(cfg)
-        if _staged_aa_is_current(out_path, sidecar_path, entry):
-            logger.info("aa/%s: validated existing artifact", cfg.subdir)
+    _write_json(manifest_path, manifest("building"))
+    suite_root = manifest_path.rsplit("/", 1)[0]
+    benchmarks = manifest("complete")["benchmarks"]
+    for entry in benchmarks:
+        out_path = f"{suite_root}/{entry['artifact']}"
+        sidecar_path = f"{out_path.removesuffix('.parquet')}.source.json"
+        if _staged_artifact_is_current(out_path, sidecar_path, entry):
+            logger.info("%s/%s: validated existing artifact", label, entry["artifact"])
             continue
-
-        records = _aa_records(_iter_aa_rows(cfg), cfg)
-        n = _write_parquet(out_path, iter(records))
-        if n != cfg.expected_records:
-            raise ValueError(f"{cfg.name}: wrote {n} records, expected {cfg.expected_records}")
+        n = _write_parquet(out_path, iter(records[entry["name"]]()))
+        if n != entry["expected_records"]:
+            raise ValueError(f"{entry['name']}: wrote {n} records, expected {entry['expected_records']}")
         _write_json(sidecar_path, entry)
-        logger.info("aa/%s: %d records -> %s", cfg.subdir, n, out_path)
+        logger.info("%s/%s: %d records -> %s", label, entry["artifact"], n, out_path)
 
-    manifest = _aa_manifest("complete")
-    _write_json(manifest_path, manifest)
-    logger.info("aa: all %d mandatory benchmarks are complete", len(AA_EVALS))
-    return manifest
+    sealed = manifest("complete")
+    _write_json(manifest_path, sealed)
+    logger.info("%s: all %d mandatory benchmarks are complete", label, len(benchmarks))
+    return sealed
+
+
+def _prepare_aa() -> dict[str, Any]:
+    return _prepare_required_suite(
+        "aa",
+        AA_MANIFEST_RELATIVE,
+        _aa_manifest,
+        {cfg.name: lambda cfg=cfg: _aa_records(_iter_aa_rows(cfg), cfg) for cfg in AA_EVALS},
+    )
+
+
+# The Uncheatable Eval dumps that ``experiments/datasets/uncheatable.py`` evaluates,
+# pinned to the upstream commit that holds them, with their record counts.
+UNCHEATABLE_REPOSITORY = "ziqing-huang/uncheatable_eval"
+UNCHEATABLE_COMMIT = "185c463882a8ae0f203e51ae5852d8cf4fe299cf"
+UNCHEATABLE_WINDOW = "20250901to20250914"
+UNCHEATABLE_RECORDS: dict[str, int] = {
+    "wikipedia_english": 1000,
+    "github_python": 973,
+    "github_cpp": 998,
+    "bbc_news": 1081,
+    "arxiv_physics": 1000,
+    "arxiv_computer_science": 1000,
+    "ao3_english": 1000,
+}
+if UNCHEATABLE_RECORDS.keys() != UNCHEATABLE_SUBSETS.keys():
+    raise ValueError("UNCHEATABLE_RECORDS must list exactly the evaluated UNCHEATABLE_SUBSETS")
+UNCHEATABLE_BENCHMARK_NAMES: tuple[str, ...] = tuple(f"Uncheatable Eval {subset}" for subset in UNCHEATABLE_RECORDS)
+
+
+def _uncheatable_url(subset: str) -> str:
+    return (
+        f"https://raw.githubusercontent.com/{UNCHEATABLE_REPOSITORY}/{UNCHEATABLE_COMMIT}/"
+        f"data/{subset}_{UNCHEATABLE_WINDOW}.json"
+    )
+
+
+def _uncheatable_manifest(status: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "corpus_version": EVAL_CORPUS_VERSION,
+        "suite": f"Uncheatable Eval {UNCHEATABLE_WINDOW}",
+        "required": True,
+        "status": status,
+        "benchmarks": [
+            {
+                "name": f"Uncheatable Eval {subset}",
+                "artifact": f"{subset}/test.parquet",
+                "source": _uncheatable_url(subset),
+                "source_revision": UNCHEATABLE_COMMIT,
+                "expected_records": expected_records,
+            }
+            for subset, expected_records in UNCHEATABLE_RECORDS.items()
+        ],
+    }
+
+
+def _uncheatable_records(subset: str) -> list[dict[str, str]]:
+    texts = json.loads(_download(_uncheatable_url(subset)))
+    if not isinstance(texts, list) or not all(isinstance(text, str) for text in texts):
+        raise ValueError(f"Uncheatable Eval {subset}: expected a JSON list of strings")
+    return [{"id": f"uncheatable-{subset}-{i}", "text": text} for i, text in enumerate(texts)]
+
+
+def _prepare_uncheatable() -> dict[str, Any]:
+    return _prepare_required_suite(
+        "uncheatable",
+        UNCHEATABLE_MANIFEST_RELATIVE,
+        _uncheatable_manifest,
+        {
+            f"Uncheatable Eval {subset}": lambda subset=subset: _uncheatable_records(subset)
+            for subset in UNCHEATABLE_RECORDS
+        },
+    )
 
 
 # Eval tasks excluded from the *decontamination* bloom (they remain valid
@@ -665,6 +774,11 @@ DECON_EXCLUDED_EVAL_TASKS: frozenset[str] = frozenset(
 )
 
 
+# lm-eval tasks that must load. Preparation does not seal the lm-eval manifest,
+# and the Bloom is not built, unless every leaf task of each one is present.
+REQUIRED_LMH_TASKS: tuple[str, ...] = ("gsm8k", "humaneval", "leaderboard_mmlu_pro", "mmlu", "mmlu_pro")
+
+
 def _lmh_task_names() -> list[str]:
     bundles: tuple[Iterable, ...] = (
         CORE_TASKS,
@@ -693,6 +807,26 @@ def _lmh_task_names() -> list[str]:
         for cfg in bundle:
             names.add(cfg.name)
     return sorted(names - DECON_EXCLUDED_EVAL_TASKS)
+
+
+def _missing_required_lmh_tasks(task_leaves: dict[str, list[str]], failed: list[tuple[str, str]]) -> list[str]:
+    """Return required tasks that did not load or have a failed leaf task."""
+    failed_names = {name for name, _ in failed}
+    return [
+        task for task in REQUIRED_LMH_TASKS if not task_leaves.get(task) or failed_names.intersection(task_leaves[task])
+    ]
+
+
+def _load_task_dict(get_task_dict: Callable[[list[str]], dict], name: str) -> dict:
+    """Load one lm-eval task, retrying required tasks on any error."""
+    if name not in REQUIRED_LMH_TASKS:
+        return get_task_dict([name])
+    return retry_with_backoff(
+        lambda: get_task_dict([name]),
+        max_attempts=LOAD_ATTEMPTS,
+        backoff=LOAD_BACKOFF,
+        operation=f"load lm-eval task {name}",
+    )
 
 
 def _prepare_lmh() -> dict[str, Any]:
@@ -724,7 +858,7 @@ def _prepare_lmh() -> dict[str, Any]:
         logger.info("lmh: version %s is already sealed at %s", EVAL_CORPUS_VERSION, manifest_path)
         return existing_manifest
 
-    trust_remote_code_for_hf()
+    patch_hf_dataset_loading()
     names = _lmh_task_names()
     logger.info("lmh: %d unique task names from task_configs.py", len(names))
 
@@ -733,16 +867,18 @@ def _prepare_lmh() -> dict[str, Any]:
     succeeded: list[str] = []
     skipped_existing: list[str] = []
     failed: list[tuple[str, str]] = []
+    task_leaves: dict[str, list[str]] = {}
     for name in names:
         direct_out_path = f"{_lmh_output_root()}/{name}/eval.parquet"
         direct_version_path = f"{_lmh_output_root()}/{name}/{_LMH_VERSION_SIDECAR}"
         if StoragePath(direct_out_path).exists() and _staged_lmh_version(direct_version_path) == _LMH_EXTRACTION_VERSION:
             logger.info("lmh/%s: exists (extraction %s), skipping", name, _LMH_EXTRACTION_VERSION)
             skipped_existing.append(name)
+            task_leaves[name] = [name]
             continue
 
         try:
-            task_dict = get_task_dict([name])
+            task_dict = _load_task_dict(get_task_dict, name)
         except Exception as exc:
             logger.warning("lmh/%s: load failed: %s", name, exc)
             failed.append((name, f"load: {exc}"))
@@ -755,6 +891,7 @@ def _prepare_lmh() -> dict[str, Any]:
             continue
         if len(leaves) > 1:
             logger.info("lmh/%s: group expanded to %d leaf tasks", name, len(leaves))
+        task_leaves[name] = [child_name for child_name, _ in leaves]
 
         for child_name, task in leaves:
             out_path = f"{_lmh_output_root()}/{child_name}/eval.parquet"
@@ -800,6 +937,10 @@ def _prepare_lmh() -> dict[str, Any]:
         for n, reason in failed:
             logger.info("  FAIL lmh/%s: %s", n, reason)
 
+    missing_required = _missing_required_lmh_tasks(task_leaves, failed)
+    if missing_required:
+        raise ValueError(f"required lm-eval tasks did not load: {missing_required}; the FAIL lines above give reasons")
+
     included_leaf_tasks = sorted(set(succeeded + skipped_existing))
     artifacts: list[dict[str, Any]] = []
     for task_name in included_leaf_tasks:
@@ -817,6 +958,7 @@ def _prepare_lmh() -> dict[str, Any]:
         "artifact_root": LMH_EVALS_RELATIVE,
         "extraction_version": _LMH_EXTRACTION_VERSION,
         "configured_tasks": names,
+        "required_tasks": {task: task_leaves[task] for task in REQUIRED_LMH_TASKS},
         "included_leaf_tasks": included_leaf_tasks,
         "artifacts": artifacts,
         "failed": [{"task": name, "reason": reason} for name, reason in failed],
@@ -828,6 +970,7 @@ def _prepare_lmh() -> dict[str, Any]:
 def main() -> None:
     configure_logging(logging.INFO)
     aa_manifest = _prepare_aa()
+    uncheatable_manifest = _prepare_uncheatable()
     lmh_manifest = _prepare_lmh()
     _write_json(
         f"{_output_root()}/_manifest.json",
@@ -835,6 +978,7 @@ def main() -> None:
             "schema_version": 1,
             "corpus_version": EVAL_CORPUS_VERSION,
             "artificial_analysis": aa_manifest,
+            "uncheatable_eval": uncheatable_manifest,
             "lm_eval_harness": lmh_manifest,
         },
     )

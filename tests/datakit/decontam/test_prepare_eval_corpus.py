@@ -16,7 +16,9 @@ import types
 import zipfile
 from dataclasses import replace
 
+import pyarrow.parquet as pq
 import pytest
+from rigging.timing import ExponentialBackoff
 
 from experiments.datakit.decontam import prepare_eval_corpus
 from experiments.datakit.decontam.prepare_eval_corpus import (
@@ -294,29 +296,169 @@ def test_lmh_manifest_is_immutable_within_a_corpus_version(tmp_path, monkeypatch
     assert manifest_path.read_bytes() == original_bytes
 
 
-def test_lmh_artifacts_are_stored_below_the_versioned_corpus_root(tmp_path, monkeypatch):
-    task = types.SimpleNamespace(
-        test_docs=lambda: [{"question": "What is two plus two?", "answer": "4"}],
+def _fake_task(docs: list[dict]) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        test_docs=lambda: docs,
         validation_docs=lambda: [],
         training_docs=lambda: [],
         doc_to_text=lambda doc: doc["question"],
         doc_to_target=lambda doc: doc["answer"],
     )
+
+
+def _use_fake_lm_eval(monkeypatch, tmp_path, get_task_dict, task_names: list[str], required: tuple[str, ...]) -> None:
     lm_eval = types.ModuleType("lm_eval")
     lm_eval_tasks = types.ModuleType("lm_eval.tasks")
-    lm_eval_tasks.get_task_dict = lambda _names: {"example-task": task}
+    lm_eval_tasks.get_task_dict = get_task_dict
     lm_eval.tasks = lm_eval_tasks
     monkeypatch.setitem(sys.modules, "lm_eval", lm_eval)
     monkeypatch.setitem(sys.modules, "lm_eval.tasks", lm_eval_tasks)
     monkeypatch.setattr(prepare_eval_corpus, "marin_prefix", lambda: str(tmp_path))
-    monkeypatch.setattr(prepare_eval_corpus, "trust_remote_code_for_hf", lambda: None)
-    monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: ["example-task"])
+    monkeypatch.setattr(prepare_eval_corpus, "patch_hf_dataset_loading", lambda: None)
+    monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: task_names)
+    monkeypatch.setattr(prepare_eval_corpus, "REQUIRED_LMH_TASKS", required)
+    monkeypatch.setattr(
+        prepare_eval_corpus, "LOAD_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0)
+    )
+
+
+def test_lmh_artifacts_are_stored_below_the_versioned_corpus_root(tmp_path, monkeypatch):
+    task = _fake_task([{"question": "What is two plus two?", "answer": "4"}])
+    _use_fake_lm_eval(
+        monkeypatch, tmp_path, lambda _names: {"example-task": task}, ["example-task"], required=("example-task",)
+    )
 
     manifest = prepare_eval_corpus._prepare_lmh()
 
     artifact_path = tmp_path / prepare_eval_corpus.EVALS_RELATIVE / "lmh/example-task/eval.parquet"
     assert artifact_path.exists()
     assert manifest["artifacts"] == [{"task": "example-task", "artifact": "example-task/eval.parquet", "records": 1}]
+    assert manifest["required_tasks"] == {"example-task": ["example-task"]}
+
+
+def _load_required_group(names: list[str]) -> dict:
+    [name] = names
+    if name != "required-group":
+        return {name: _fake_task([{"question": "What is two plus two?", "answer": "4"}])}
+    return {
+        "required-group": {
+            "required-group_a": _fake_task([{"question": "What is one plus one?", "answer": "2"}]),
+            "required-group_b": _fake_task([]),
+        }
+    }
+
+
+def _reject_required_group(names: list[str]) -> dict:
+    if names == ["required-group"]:
+        raise ConnectionError("Server disconnected without sending a response.")
+    return _load_required_group(names)
+
+
+@pytest.mark.parametrize(
+    "get_task_dict",
+    [_reject_required_group, _load_required_group],
+    ids=["task-load-fails", "one-leaf-has-no-docs"],
+)
+def test_lmh_required_task_failure_does_not_seal_manifest(tmp_path, monkeypatch, get_task_dict):
+    _use_fake_lm_eval(
+        monkeypatch, tmp_path, get_task_dict, ["optional-task", "required-group"], required=("required-group",)
+    )
+
+    with pytest.raises(ValueError, match="required-group"):
+        prepare_eval_corpus._prepare_lmh()
+
+    assert not (tmp_path / prepare_eval_corpus.EVALS_RELATIVE / prepare_eval_corpus.LMH_MANIFEST_RELATIVE).exists()
+
+
+def test_lmh_required_task_load_is_retried(tmp_path, monkeypatch):
+    attempts = []
+
+    def flaky_get_task_dict(names: list[str]) -> dict:
+        attempts.append(names)
+        if len(attempts) == 1:
+            raise ConnectionError("Server disconnected without sending a response.")
+        return {"required-task": _fake_task([{"question": "What is two plus two?", "answer": "4"}])}
+
+    _use_fake_lm_eval(monkeypatch, tmp_path, flaky_get_task_dict, ["required-task"], required=("required-task",))
+
+    manifest = prepare_eval_corpus._prepare_lmh()
+
+    assert len(attempts) == 2
+    assert manifest["required_tasks"] == {"required-task": ["required-task"]}
+
+
+def test_lmh_optional_task_load_is_not_retried(tmp_path, monkeypatch):
+    attempts = []
+
+    def failing_get_task_dict(names: list[str]) -> dict:
+        attempts.append(names)
+        raise ConnectionError("Server disconnected without sending a response.")
+
+    _use_fake_lm_eval(monkeypatch, tmp_path, failing_get_task_dict, ["optional-task"], required=())
+
+    manifest = prepare_eval_corpus._prepare_lmh()
+
+    assert len(attempts) == 1
+    assert manifest["failed"][0]["task"] == "optional-task"
+
+
+def _use_fake_uncheatable(monkeypatch, tmp_path, dumps: dict[str, list[str]], expected: dict[str, int]) -> None:
+    monkeypatch.setattr(prepare_eval_corpus, "_output_root", lambda: str(tmp_path))
+    monkeypatch.setattr(prepare_eval_corpus, "UNCHEATABLE_RECORDS", expected)
+    urls = {prepare_eval_corpus._uncheatable_url(subset): texts for subset, texts in dumps.items()}
+    monkeypatch.setattr(prepare_eval_corpus, "_download", lambda url: json.dumps(urls[url]).encode())
+
+
+def test_uncheatable_suite_writes_each_subset_and_seals_its_manifest(tmp_path, monkeypatch):
+    _use_fake_uncheatable(
+        monkeypatch, tmp_path, {"bbc_news": ["First article.", "Second article."]}, expected={"bbc_news": 2}
+    )
+
+    manifest = prepare_eval_corpus._prepare_uncheatable()
+
+    artifact = tmp_path / "uncheatable" / "bbc_news" / "test.parquet"
+    assert pq.read_table(artifact).to_pylist() == [
+        {"id": "uncheatable-bbc_news-0", "text": "First article."},
+        {"id": "uncheatable-bbc_news-1", "text": "Second article."},
+    ]
+    assert manifest["status"] == "complete"
+    assert manifest["required"] is True
+    assert [entry["name"] for entry in manifest["benchmarks"]] == ["Uncheatable Eval bbc_news"]
+
+
+def test_uncheatable_record_count_mismatch_does_not_seal_manifest(tmp_path, monkeypatch):
+    _use_fake_uncheatable(monkeypatch, tmp_path, {"bbc_news": ["Only article."]}, expected={"bbc_news": 2})
+
+    with pytest.raises(ValueError, match="Uncheatable Eval bbc_news: wrote 1 records, expected 2"):
+        prepare_eval_corpus._prepare_uncheatable()
+
+    manifest = json.loads((tmp_path / prepare_eval_corpus.UNCHEATABLE_MANIFEST_RELATIVE).read_text())
+    assert manifest["status"] == "building"
+
+
+def test_uncheatable_dump_must_be_a_list_of_strings(tmp_path, monkeypatch):
+    _use_fake_uncheatable(monkeypatch, tmp_path, {"bbc_news": [{"text": "An article."}]}, expected={"bbc_news": 1})
+
+    with pytest.raises(ValueError, match="expected a JSON list of strings"):
+        prepare_eval_corpus._prepare_uncheatable()
+
+
+def test_download_retries_transient_network_errors(monkeypatch):
+    calls = []
+
+    def flaky_urlopen(url):
+        calls.append(url)
+        if len(calls) == 1:
+            raise ConnectionResetError("connection reset")
+        return io.BytesIO(b"payload")
+
+    monkeypatch.setattr(prepare_eval_corpus.urllib.request, "urlopen", flaky_urlopen)
+    monkeypatch.setattr(
+        prepare_eval_corpus, "LOAD_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0)
+    )
+
+    assert prepare_eval_corpus._download("https://example.com/data.json") == b"payload"
+    assert len(calls) == 2
 
 
 def test_lmh_import_failure_does_not_seal_manifest(tmp_path, monkeypatch):
@@ -328,7 +470,7 @@ def test_lmh_import_failure_does_not_seal_manifest(tmp_path, monkeypatch):
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(prepare_eval_corpus, "_output_root", lambda: str(tmp_path))
-    monkeypatch.setattr(prepare_eval_corpus, "trust_remote_code_for_hf", lambda: None)
+    monkeypatch.setattr(prepare_eval_corpus, "patch_hf_dataset_loading", lambda: None)
     monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: ["example-task"])
     monkeypatch.setattr(builtins, "__import__", reject_lm_eval)
 
