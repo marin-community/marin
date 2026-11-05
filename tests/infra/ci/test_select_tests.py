@@ -329,12 +329,16 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     [
         (
             "lib/taskcompendium/src/taskcompendium/lowering.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["forge-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
-        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "skyrl-wheel", "taskforge-unit"]),
+        (
+            "lib/rolloutengine/src/rolloutengine/engine.py",
+            ["forge-unit", "rolloutengine-unit", "skyrl-wheel", "taskforge-unit"],
+        ),
         (
             "lib/shellbox/src/shellbox/machine.py",
             [
+                "forge-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "shellbox-unit",
@@ -346,6 +350,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         (
             "lib/shellbox/tests/test_docker_machine.py",
             [
+                "forge-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "shellbox-unit",
@@ -357,6 +362,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         (
             "lib/shellbox/pyproject.toml",
             [
+                "forge-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "shellbox-unit",
@@ -367,12 +373,13 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         (
             "lib/verifyit/src/verifyit/grading.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["forge-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
         (
             "lib/rigging/src/rigging/message.py",
             [
                 "evalchemy-unit",
+                "forge-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "skyrl-wheel",
@@ -382,11 +389,12 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         ("vendor/harbor/src/harbor/job.py", ["harbor-unit", "skyrl-wheel"]),
         ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
-        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit", "skyrl-wheel"]),
-        ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
-        ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
+        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "forge-unit", "harbor-unit", "skyrl-wheel"]),
+        ("lib/iris/src/iris/client/client.py", ["forge-unit", "iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
+        ("lib/taskforge/src/taskforge/llm/glm_client.py", ["forge-unit", "taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
         ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
+        ("lib/forge/src/forge/unimported.py", ["forge-unit"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
