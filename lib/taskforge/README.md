@@ -18,6 +18,8 @@ src/taskforge/
                                config.py, prompts.py, parallel.py (web search), example_build.py
   capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
+  policy.py                    Policy: every prompt by stage, `load_policy` and the policy digest
+  defaults/                    policy.json and prompts/**.md, the package's DEFAULT_POLICY
   ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
                                output, ledger recording, agent loop, web tools, the
@@ -48,7 +50,7 @@ src/taskforge/
                                failure_text.py: the failure text an author reads, led by the program's
                                frame that raised it, and `BuildCrash`;
                                template/standard.py: the standard six-step program;
-                               glm_author.py: GlmAuthor and its prompts;
+                               glm_author.py: GlmAuthor, `author_messages` and the SDK reference;
                                step_store.py: step keys, memos, the memo store and `memoized`;
                                run.py: `run_program`, `run_build`, `build_model_digest`, the draft and
                                `WorkpieceBuildProvenance`
@@ -78,6 +80,21 @@ their docstrings: `scripts/build_image_job.py` builds a directory's `DockerBuild
 `taskforge.sandbox.image_builder` and prints the pinned registry digest, and
 `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved from
 a relay job.
+
+## Prompts and policy
+
+The text Taskforge sends its models lives in `src/taskforge/defaults/prompts/<stage>/<name>.md`, one
+template per file, rendered with `str.format`. `policy.Policy` groups the templates by stage
+(`ProposerPolicy`, `AuthorPolicy`, `AdversaryPrompts`), and the stage functions take their group as a
+parameter: `author_messages(proposal, policy.author)`, `CapabilitySource(model, sampling, policy.proposer,
+environments)`, `AdversaryPolicy(..., prompts=policy.adversary)`. `load_policy(defaults_dir, *overlays)`
+reads `policy.json`, which maps each dotted field (`author.system`) to its file; an overlay is a JSON file of
+the same shape naming only the fields it replaces, with paths relative to itself. `Policy.stage_digest` hashes
+the `author` and `adversary` templates, and the coordinator records it in `OPENED`; the proposer's prompts are
+used before a workpiece exists, so they are outside the relaunch check. `defaults.DEFAULT_POLICY` is the package's own
+files. The pre-commit check `taskforge_prompt_literals` (`infra/pre-commit.py`) refuses a new string literal
+of 200 or more characters under `src/`, docstrings aside; the ones still in code are listed, with the reason, in
+`prompt_literals_allowed.txt`.
 
 ## Proposals
 
@@ -113,7 +130,7 @@ not a relative path inside the build root and a `build` name that repeats.
 `document_request_fields(proposal_id, source)` returns the `response_format` JSON-schema request
 field that constrains a completion to the typed object for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
-built from `DOCUMENT_REPAIR_PROMPT`.
+built from `ProposerPolicy.repair`.
 
 `experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
 source for catalog capabilities, which takes its model, sampling policy and host environments at
@@ -535,8 +552,8 @@ The review stage reads the result back from `validation.json` (`load_validation`
 the default rule table is under Review.
 
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
-digest and research requirement. A relaunch of the workpiece with another proposal, budget, model
-digest or research requirement raises `ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
+digest, research requirement and policy digest. A relaunch of the workpiece with another proposal, budget, model
+digest, research requirement or policy digest raises `ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
 
 A run root holds:
 
@@ -704,7 +721,9 @@ Each policy names an `AdversarySpec(name, brief)`. `name` is unique in the roste
 (`<name>-<i>`); `brief` is the goal sentence of the brief. `stage50_validate.adversary` defines three specs:
 `FALSE_ACCEPT` searches for wrong or incomplete answers that earn full credit, `FALSE_REJECT` for correct,
 complete answers that lose credit, and `SHORTCUT` for accepted answers that skip the task's computation.
-Their text is in `adversary_prompts`. Neither the round nor review branches on a name, so a new adversary
+Their goals are the policy's `adversary.false_accept`, `adversary.false_reject` and
+`adversary.shortcut` prompts, and the brief, the white-box header and the `submit` description are
+`AdversaryPolicy.prompts` (see Prompts and policy). Neither the round nor review branches on a name, so a new adversary
 is a new spec. `blackbox` exposes the solver's task;
 `whitebox` also exposes the grader, reference and controls without clipping their text.
 

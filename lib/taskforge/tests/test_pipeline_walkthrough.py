@@ -27,11 +27,13 @@ from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, Tas
 from verifyit.spec import NumericSpec
 
 from taskforge import content_hash
+from taskforge.defaults import DEFAULT_POLICY, DEFAULTS_DIR
 from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.policy import load_policy
 from taskforge.spec.controls import ControlKind
 from taskforge.spec.draft import assemble, requirements
 from taskforge.stage10_proposal.model import (
@@ -385,9 +387,19 @@ def coordinator(
     budget: WorkpieceBudget = BUDGET,
     digest: str = UNUSED_MODEL_DIGEST,
     research: ResearchRequirement = ResearchRequirement.OFF,
+    policy_digest: str = DEFAULT_POLICY.stage_digest,
 ) -> StageCoordinator:
     return StageCoordinator(
-        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, research, digest
+        stages,
+        budget,
+        root,
+        JsonEventStore(root),
+        UnusedModel(),
+        SAMPLING,
+        SERVICES,
+        research,
+        digest,
+        policy_digest,
     )
 
 
@@ -493,34 +505,52 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 
 
 OFF = ResearchRequirement.OFF
+POLICY = DEFAULT_POLICY.stage_digest
 
 
 @pytest.mark.parametrize(
-    ("proposal", "budget", "digest", "research", "refusal"),
+    ("proposal", "budget", "digest", "research", "policy_digest", "refusal"),
     [
         (
             replace(PROPOSAL, body=PROPOSAL.body.replace("Multiply", "Add")),
             BUDGET,
             UNUSED_MODEL_DIGEST,
             OFF,
+            POLICY,
             "opened for proposal",
         ),
-        (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, OFF, "opened under budget"),
-        (PROPOSAL, BUDGET, "another-model", OFF, "opened with model digest"),
-        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, ResearchRequirement.ENFORCED, "opened with research off"),
+        (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, OFF, POLICY, "opened under budget"),
+        (PROPOSAL, BUDGET, "another-model", OFF, POLICY, "opened with model digest"),
+        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, ResearchRequirement.ENFORCED, POLICY, "opened with research off"),
+        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, OFF, "another-policy", "opened with policy digest"),
     ],
-    ids=["proposal", "budget", "model digest", "research"],
+    ids=["proposal", "budget", "model digest", "research", "policy digest"],
 )
-async def test_a_relaunch_with_another_proposal_budget_model_digest_or_research_is_refused(
-    tmp_path, proposal, budget, digest, research, refusal
+async def test_a_relaunch_with_another_proposal_budget_model_research_or_policy_is_refused(
+    tmp_path, proposal, budget, digest, research, policy_digest, refusal
 ):
     await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL, InMemoryEventLog())
     before = tree_bytes(tmp_path)
 
-    relaunch = coordinator(tmp_path, budget=budget, digest=digest, research=research)
+    relaunch = coordinator(tmp_path, budget=budget, digest=digest, research=research, policy_digest=policy_digest)
     with pytest.raises(ValueError, match=f"{WORKPIECE} was {refusal}"):
         await run_workpiece(relaunch, WORKPIECE, proposal, InMemoryEventLog())
     assert tree_bytes(tmp_path) == before
+
+
+async def test_a_relaunch_under_other_proposer_prompts_is_not_refused(tmp_path):
+    await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL, InMemoryEventLog())
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "plan.md").write_text("Plan {n} slots.\n")
+    (prompts / "overlay.json").write_text(json.dumps({"proposer.plan": "plan.md"}))
+    policy = load_policy(DEFAULTS_DIR, prompts / "overlay.json")
+
+    log = InMemoryEventLog()
+    await run_workpiece(coordinator(tmp_path, policy_digest=policy.stage_digest), WORKPIECE, PROPOSAL, log)
+
+    assert policy.proposer != DEFAULT_POLICY.proposer
+    assert log.events()[0].attrs["policy_digest"] == DEFAULT_POLICY.stage_digest
 
 
 async def test_a_program_other_than_the_authored_one_fails_the_workpiece_at_build(tmp_path):
@@ -1340,7 +1370,7 @@ def agentic_author(model: ScriptedModel, root: Path) -> AgenticAuthor:
 
         return SessionBuild(builder, store, SERVICES, root / "sessions.jsonl", in_process_loader)
 
-    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.ledger, builds)
+    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.ledger, builds, DEFAULT_POLICY.author)
 
 
 class RecordingValidate:

@@ -82,6 +82,7 @@ from taskcompendium.runtime.shell import resolve_shell_tool
 from taskcompendium.submission import conversation_messages
 
 from taskforge.content_hash import canonical_json, digest
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.llm.agent import (
     AgentInterrupted,
     AgentRun,
@@ -97,6 +98,7 @@ from taskforge.llm.agent import (
 from taskforge.llm.client import Completion, FinishReason, ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
+from taskforge.policy import AdversaryPrompts, Prompt
 from taskforge.sandbox.host_failures import machine_lost
 from taskforge.spec.controls import (
     Control,
@@ -108,18 +110,12 @@ from taskforge.spec.controls import (
 )
 from taskforge.spec.draft import GRADER_RESOURCE_ROOT
 from taskforge.stage50_validate.adversary_prompts import (
-    BRIEF_TEMPLATE,
-    FALSE_ACCEPT_GOAL,
-    FALSE_REJECT_GOAL,
     NO_CONTROLS,
     NO_EXAMPLES,
     NO_VERIFIER_FILES,
-    SHORTCUT_GOAL,
-    SUBMIT_DESCRIPTION,
     TOOLS_SUBMIT_ONLY,
     TOOLS_WITH_SHELL,
     VERIFIER_FAILED,
-    WHITEBOX_HEADER,
 )
 from taskforge.stage50_validate.classify import classify
 from taskforge.stage50_validate.evidence import passed
@@ -173,9 +169,11 @@ class AdversarySpec:
             raise ValueError(f"AdversarySpec needs a name matching {ADVERSARY_NAME.pattern} and a non-empty brief")
 
 
-FALSE_ACCEPT = AdversarySpec("false_accept", FALSE_ACCEPT_GOAL)
-FALSE_REJECT = AdversarySpec("false_reject", FALSE_REJECT_GOAL)
-SHORTCUT = AdversarySpec("shortcut", SHORTCUT_GOAL)
+FALSE_ACCEPT = AdversarySpec("false_accept", DEFAULT_POLICY.adversary.false_accept.template)
+FALSE_REJECT = AdversarySpec("false_reject", DEFAULT_POLICY.adversary.false_reject.template)
+SHORTCUT = AdversarySpec("shortcut", DEFAULT_POLICY.adversary.shortcut.template)
+"""The default specs, whose goals are the default policy's ``AdversaryPrompts.false_accept``, ``false_reject`` and
+``shortcut``."""
 
 
 @dataclass(frozen=True)
@@ -190,6 +188,7 @@ class AdversaryPolicy:
         sampling: The adversary's sampling policy; an agent loop has no continuation.
         mode: What the adversary knows of the grader.
         min_probes: Distinct candidates an attempt grades before ``finish_search`` accepts its report.
+        prompts: The brief, the white-box header and the ``submit`` tool's description.
     """
 
     spec: AdversarySpec
@@ -199,6 +198,7 @@ class AdversaryPolicy:
     sampling: LLMPolicy
     mode: AdversaryMode
     min_probes: int
+    prompts: AdversaryPrompts
 
     def __post_init__(self) -> None:
         if (
@@ -319,7 +319,7 @@ def control_view(control: Control) -> dict[str, Any]:
     }
 
 
-def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
+def whitebox_context(task: TaskSpec, controls: Sequence[Control], header: Prompt) -> str:
     """The white-box section of the brief: the grader, the controls with their expected rewards, the example answers."""
     source = grader_source(task)
     spec = json.dumps(source["grader_spec"], indent=1, ensure_ascii=False)
@@ -344,7 +344,7 @@ def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
     examples = [message for message in conversation_messages(task.context.events) if message.get("role") == "assistant"]
     example_text = "\n\n".join(json.dumps(m, ensure_ascii=False) for m in examples) if examples else NO_EXAMPLES
     return (
-        f"{WHITEBOX_HEADER}\n\n## Grader specification\n```json\n{spec}\n```\n\n## Grader source\n\n{files}\n\n"
+        f"{header.render()}\n\n## Grader specification\n```json\n{spec}\n```\n\n## Grader source\n\n{files}\n\n"
         f"## Controls with expected rewards\n\n{control_text}\n\n"
         f"## Example answers in the task's conversation\n\n{example_text}"
     )
@@ -353,8 +353,8 @@ def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
 def adversary_brief(spec: TaskRolloutSpec, controls: Sequence[Control], policy: AdversaryPolicy) -> str:
     """The brief of an adversary on ``spec``: the white-box section of ``controls`` only in ``WHITEBOX`` mode."""
     whitebox = policy.mode is AdversaryMode.WHITEBOX
-    context = whitebox_context(spec.task, controls) if whitebox else ""
-    return BRIEF_TEMPLATE.format(
+    context = whitebox_context(spec.task, controls, policy.prompts.whitebox) if whitebox else ""
+    return policy.prompts.brief.render(
         goal=policy.spec.brief,
         tools=TOOLS_WITH_SHELL if spec.task_machine is not None else TOOLS_SUBMIT_ONLY,
         submissions="unlimited" if policy.submissions is None else policy.submissions,
@@ -696,7 +696,7 @@ async def _agent_attempt(
         async with deadline, attempt_machine(spec, settings, run_id) as machine:
             verifier = Verifier(spec, settings, submission_plan, machine, policy.submissions, policy.min_probes)
             submit = AgentTool(
-                SUBMIT_TOOL_NAME, SUBMIT_DESCRIPTION, submit_parameters(machine is not None), verifier.submit
+                SUBMIT_TOOL_NAME, policy.prompts.submit.render(), submit_parameters(machine is not None), verifier.submit
             )
             finish = AgentTool(
                 "finish_search",

@@ -46,10 +46,12 @@ from pathlib import Path
 import click
 from rigging.log_setup import configure_logging
 from taskforge.content_hash import pretty_json
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.glm_client import EndpointSource, GlmClient, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.policy import ProposerPolicy
 from taskforge.stage10_proposal.model import Environment, render
 from taskforge.stage10_proposal.source import ProposalBatch, SlotProposal, propose_all
 from taskforge.stage20_triage.preflight import preflight
@@ -98,10 +100,10 @@ async def propose_capability(source: CapabilitySource, idea: CapabilityIdea, slo
     try:
         batch = await propose_all(source, idea, slots)
     except StructuredOutputError as error:
-        planning = ProposalBatch(plan_request(idea, slots, source.environments), error.completions, ())
+        planning = ProposalBatch(plan_request(source.proposer, idea, slots, source.environments), error.completions, ())
         return ProposedCapability(idea.capability_id, planning, {}, str(error))
     except (ModelRequestRejected, ModelUnavailable) as error:
-        planning = ProposalBatch(plan_request(idea, slots, source.environments), (), ())
+        planning = ProposalBatch(plan_request(source.proposer, idea, slots, source.environments), (), ())
         return ProposedCapability(idea.capability_id, planning, {}, str(error))
     verdicts = {s.slot: await preflight(s.proposal) for s in batch.slots if isinstance(s, SlotProposal)}
     return ProposedCapability(idea.capability_id, batch, verdicts, None)
@@ -113,9 +115,10 @@ async def propose_tasks(
     slots: int,
     environments: frozenset[Environment],
     policy: LLMPolicy,
+    proposer: ProposerPolicy,
 ) -> list[ProposedCapability]:
-    """Propose and triage every capability of ``ideas`` concurrently."""
-    source = CapabilitySource(model, policy, environments)
+    """Propose and triage every capability of ``ideas`` concurrently, with ``proposer``'s text."""
+    source = CapabilitySource(model, policy, proposer, environments)
 
     async def logged(idea: CapabilityIdea) -> ProposedCapability:
         proposed = await propose_capability(source, idea, slots)
@@ -165,7 +168,7 @@ async def _propose(
     environments: frozenset[Environment],
 ) -> list[ProposedCapability]:
     async with GlmClient(source, GLM_PROVIDER) as client:
-        return await propose_tasks(client, ideas, slots, environments, LLMPolicy())
+        return await propose_tasks(client, ideas, slots, environments, LLMPolicy(), DEFAULT_POLICY.proposer)
 
 
 @click.command()

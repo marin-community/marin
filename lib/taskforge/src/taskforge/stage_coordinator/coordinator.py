@@ -88,6 +88,7 @@ FAILURES_DIR = "build-failures"
 DECISION_FILE = "decision.json"
 BUDGET_DIGEST = "budget_digest"
 MODEL_DIGEST = "model_digest"
+POLICY_DIGEST = "policy_digest"
 RESEARCH = "research"
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build or author failure for the author's revision."""
@@ -135,6 +136,7 @@ class StageCoordinator:
             records it.
         model_digest: The model part of every step key, usually
             ``run.build_model_digest(model, sampling, services)``. ``OPENED`` records it.
+        policy_digest: The ``Policy.stage_digest`` of the prompts the stages were made with. ``OPENED`` records it.
     """
 
     stages: StageFunctions
@@ -146,6 +148,7 @@ class StageCoordinator:
     services: RLEnvBuildServices
     research: ResearchRequirement
     model_digest: str
+    policy_digest: str
 
 
 @dataclass(frozen=True)
@@ -197,7 +200,7 @@ async def run_workpiece(
 
     Final decisions return without running stages. ABANDONED starts a fresh budget
     window; HELD resumes the interrupted stage with the existing budget. Other run
-    settings must still match the original proposal, model and research digests.
+    settings must still match the original proposal, model, research and policy digests.
 
     Stage exceptions and cancellation are checkpointed as HELD and re-raised.
     Persistence errors are propagated; an unavailable store may prevent a checkpoint.
@@ -259,6 +262,7 @@ def _open(workpiece: _Workpiece) -> None:
         BUDGET_DIGEST: digest(coordinator.budget),
         MODEL_DIGEST: coordinator.model_digest,
         RESEARCH: str(coordinator.research),
+        POLICY_DIGEST: coordinator.policy_digest,
     }
     events = workpiece.log.events()
     if not events:
@@ -284,6 +288,11 @@ def _open(workpiece: _Workpiece) -> None:
     if first.attrs[RESEARCH] != attrs[RESEARCH]:
         raise ValueError(
             f"{workpiece.workpiece_id} was opened with research {first.attrs[RESEARCH]}, not {attrs[RESEARCH]}"
+        )
+    if first.attrs[POLICY_DIGEST] != attrs[POLICY_DIGEST]:
+        raise ValueError(
+            f"{workpiece.workpiece_id} was opened with policy digest {first.attrs[POLICY_DIGEST]}, "
+            f"not {attrs[POLICY_DIGEST]}"
         )
 
 

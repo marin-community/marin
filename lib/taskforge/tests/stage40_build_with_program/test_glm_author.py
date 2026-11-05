@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from taskforge.defaults import DEFAULT_POLICY
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.structured import IncompleteOutput, StructuredOutputError, schema_instruction
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthorContext, Revision, RevisionKind
@@ -42,7 +43,7 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     fake_glm.stream(content=submission(PROGRAM))
     workpiece_dir = tmp_path / "workpiece"
 
-    authored = await GlmAuthor(glm_client, SAMPLING, ledger)(
+    authored = await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY.author)(
         AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {}
     )
 
@@ -68,7 +69,7 @@ async def test_a_revision_continues_from_the_program_the_workpiece_holds(
     fake_glm.stream(content=submission(fixed))
     revision = Revision(RevisionKind.BUILD_FAILURE, "grader: the reference scored 0.0")
 
-    authored = await GlmAuthor(glm_client, SAMPLING, ledger)(
+    authored = await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY.author)(
         AuthorContext(WORKPIECE, 2, workpiece_dir), proposal, revision, {}
     )
 
@@ -88,7 +89,9 @@ async def test_an_author_call_that_never_loads_keeps_its_completions(proposal, g
     workpiece_dir = tmp_path / "workpiece"
 
     with pytest.raises(StructuredOutputError):
-        await GlmAuthor(glm_client, SAMPLING, ledger)(AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {})
+        await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY.author)(
+            AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {}
+        )
 
     completions = json.loads((workpiece_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())
     assert [json.loads(c["content"])["source"] for c in completions] == [refused, refused]
@@ -103,7 +106,9 @@ async def test_an_author_reply_cut_off_by_the_output_limit_fails_without_a_repai
     workpiece_dir = tmp_path / "workpiece"
 
     with pytest.raises(IncompleteOutput):
-        await GlmAuthor(glm_client, SAMPLING, ledger)(AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {})
+        await GlmAuthor(glm_client, SAMPLING, ledger, DEFAULT_POLICY.author)(
+            AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {}
+        )
 
     assert len(fake_glm.requests) == 1
     completions = json.loads((workpiece_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())

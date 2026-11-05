@@ -1,0 +1,1 @@
+Grade one candidate with the task's verifier and return the grade. reply is the final answer, submitted the way the task asks for one; files are absolute paths in your workspace whose current contents are copied into a fresh workspace before grading. Each call spends one of your submissions.
