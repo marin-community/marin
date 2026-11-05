@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from rigging.filesystem.atomic import write_bytes_atomic
 
 from taskforge.content_hash import canonical_json, digest, pretty_json
@@ -82,6 +82,7 @@ DECISION_FILE = "decision.json"
 BUDGET_DIGEST = "budget_digest"
 MODEL_DIGEST = "model_digest"
 POLICY_DIGEST = "policy_digest"
+BUILD_INPUT_DIGEST = "build_input_digest"
 RESEARCH = "research"
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build or author failure for the author's revision."""
@@ -136,6 +137,8 @@ class StageCoordinator:
             records it.
         model_digest: The model part of every step key, usually
             ``run.build_model_digest(model, sampling, services)``. ``OPENED`` records it.
+        build_input: Immutable source-specific data exposed to build-program steps taking ``build_input``.
+            ``OPENED`` records its digest.
     """
 
     stages: StageFunctions
@@ -147,6 +150,7 @@ class StageCoordinator:
     services: RLEnvBuildServices
     research: ResearchRequirement
     model_digest: str
+    build_input: JsonValue = None
 
     @property
     def budget(self) -> WorkpieceBudget:
@@ -263,8 +267,9 @@ def _opened_event(workpiece: _Workpiece) -> WorkpieceEvent:
     attrs = {
         BUDGET_DIGEST: digest(coordinator.budget),
         MODEL_DIGEST: coordinator.model_digest,
-        RESEARCH: str(coordinator.research),
         POLICY_DIGEST: coordinator.policy_digest,
+        BUILD_INPUT_DIGEST: digest(coordinator.build_input),
+        RESEARCH: str(coordinator.research),
     }
     return WorkpieceEvent(EventKind.OPENED, 0, digest(workpiece.proposal), attrs)
 
@@ -427,6 +432,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
             coordinator.services,
             state.round,
             research=coordinator.research,
+            build_input=coordinator.build_input,
             model_digest=coordinator.model_digest,
         )
     except Exception as error:
@@ -507,7 +513,7 @@ async def _review(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
     result = load_validation(round_dir)
     decision = await coordinator.stages.review(result, band=coordinator.band)
     if isinstance(decision, Accept) or (isinstance(decision, Reject) and decision.kind is RejectKind.TASK):
-        gaps = evidence_gaps(result)
+        gaps = (coordinator.stages.evidence_gaps or evidence_gaps)(result)
         if isinstance(decision, Accept) and decision.band is not BandOutcome.IN_BAND:
             gaps += (f"review attempted acceptance outside the band: {decision.band}",)
         if gaps:

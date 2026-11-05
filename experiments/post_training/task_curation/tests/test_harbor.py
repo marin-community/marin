@@ -25,6 +25,7 @@ from taskcompendium.models import (
     DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
+    JsonValueAnswer,
     NoGrader,
     ResourceGroups,
     RewardFile,
@@ -38,7 +39,17 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.grade import grade, read_output
-from verifyit.spec import ExactSpec, JsonSchemaSpec, MathSpec, McqSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
+from verifyit.spec import (
+    ExactSpec,
+    JsonSchemaSpec,
+    MathSpec,
+    McqSpec,
+    PytestSpec,
+    ScriptSpec,
+    StructuredExactSpec,
+    parse_spec,
+    render_spec,
+)
 
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
@@ -91,6 +102,29 @@ def normalized_row() -> tuple[dict, TaskSpec]:
         "original_path": "fixture-task",
         "source_row": source.row,
     }, task
+
+
+def test_harbor_lowers_structured_json_answer_to_answer_file(normalized_row) -> None:
+    row, task = normalized_row
+    task = task.model_copy(
+        update={
+            "answer_type": AnswerType.JSON,
+            "answer_format": JsonValueAnswer(),
+            "grader": verifyit_package(StructuredExactSpec(expected={"value": 7})).grader,
+        }
+    )
+
+    record = harbor_record(
+        {**row, "task_json": task.model_dump_json()},
+        fallback_actor_image=BASE_IMAGE,
+        verifyit_package_root=VERIFYIT_PACKAGE,
+        grader_image=GRADER_IMAGE,
+        family="fixture",
+    )
+
+    instruction = archive_files(record.task_binary)["instruction.md"].decode()
+    assert "Write exactly one complete JSON value" in instruction
+    assert "answer.txt" in instruction
 
 
 def test_harbor_rejects_unresolved_package_lock_despite_source_dockerfile(normalized_row):
