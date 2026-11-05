@@ -149,6 +149,8 @@ trainer:
     model:
       # Validation requires null; callers may explicitly set this selector.
       path: null
+    optimizer_config:
+      lr_decay_steps: null
   algorithm:
     batch_invariant: false
     advantage_estimator: "grpo"
