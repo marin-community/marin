@@ -45,14 +45,14 @@ EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 
 
-def training_recipe(steps: int) -> dict:
-    """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
+def training_recipe(steps: int, max_staleness_steps: int) -> dict:
+    """Use the maintained Snowball geometry with RLOO-N updates on groups up to ``max_staleness_steps`` old."""
     preset = replace(
         DEFAULT,
         label="snowball-100k",
         max_steps=steps,
         eval_interval=steps,
-        max_staleness_steps=0,
+        max_staleness_steps=max_staleness_steps,
         request_window_tokens=REQUEST_WINDOW_TOKENS,
         max_new_tokens=MAX_NEW_TOKENS,
         batch_policy="full_batch",
@@ -109,6 +109,7 @@ def build_run(
     *,
     selection: ArtifactStep[Artifact],
     steps: int = DEFAULT_STEPS,
+    max_staleness_steps: int = 0,
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
@@ -123,7 +124,7 @@ def build_run(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
-            config_yaml=yaml.safe_dump(training_recipe(steps), sort_keys=False),
+            config_yaml=yaml.safe_dump(training_recipe(steps, max_staleness_steps), sort_keys=False),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=MODEL_ID,
@@ -166,9 +167,16 @@ def build_run(
     "--selection-uri", default=DEFAULT_SELECTION_URI, show_default=True, help="Published task-selection artifact root."
 )
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
+@click.option(
+    "--max-staleness-steps",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Train on prompt groups sampled up to this many updates ago; 0 keeps updates synchronous.",
+)
 @click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
 @rl_build_options
-def main(selection_uri: str, steps: int, export_hf: bool) -> ArtifactStep[SkyRLRun]:
+def main(selection_uri: str, steps: int, max_staleness_steps: int, export_hf: bool) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
@@ -184,6 +192,7 @@ def main(selection_uri: str, steps: int, export_hf: bool) -> ArtifactStep[SkyRLR
         resolve_version(name, None),
         selection=selection,
         steps=steps,
+        max_staleness_steps=max_staleness_steps,
         export_hf=export_hf,
     )
 
