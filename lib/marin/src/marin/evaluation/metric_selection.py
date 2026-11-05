@@ -60,7 +60,7 @@ _CANONICAL_METRIC_NAMES = {
     "pass@1": "pass_at_1",
     "mean_reward": "reward",
 }
-_CODE_BENCHMARKS = frozenset({"humaneval", "humanevalplus", "mbppplus", "cruxeval"})
+_CODE_BENCHMARKS = frozenset({"humaneval", "humaneval-10shot", "humanevalplus", "mbppplus", "cruxeval"})
 
 
 def primary_filter(filters: Iterable[str]) -> str | None:
