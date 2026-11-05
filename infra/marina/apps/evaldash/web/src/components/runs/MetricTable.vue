@@ -1,8 +1,4 @@
 <script setup lang="ts">
-/**
- * One metrics table for a run: declared protocol rows at the top level, or the evaluator's raw
- * metric rows behind the page's fold. Both share this table so the two views cannot drift apart.
- */
 import { formatScore } from '@/utils/formatting'
 import type { MetricRow } from '@/utils/runMetrics'
 

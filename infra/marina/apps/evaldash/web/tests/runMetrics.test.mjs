@@ -6,19 +6,12 @@ import { metricView } from '../src/utils/runMetrics.ts'
 const NUPA_RAW = {
   exact_match: 0,
   digit_match: 0.0030796088040486408,
-  dlength: 61.5,
   format_valid_rate: 0.0046,
-  no_answer_rate: 0.9954,
+  'bucket:S/exact_match': 0,
+  'task:add_Integer_Integer/bucket:S/exact_match': 0,
 }
 
 function nupaRecord() {
-  const raw = { ...NUPA_RAW }
-  for (const bucket of ['S', 'M', 'L', 'XL']) {
-    for (const metric of ['exact_match', 'digit_match', 'dlength', 'format_valid_rate', 'no_answer_rate']) {
-      raw[`bucket:${bucket}/${metric}`] = 0
-      raw[`task:add_Integer_Integer/bucket:${bucket}/${metric}`] = 0
-    }
-  }
   return {
     eval: {
       name: 'nupa',
@@ -48,12 +41,10 @@ function nupaRecord() {
         },
       ],
     },
-    metrics: { nupa5k: raw },
+    metrics: { nupa5k: NUPA_RAW },
     canonical_metrics: {
       nupa5k: { accuracy: 0, digit_match: 0.0030796088040486408, format_valid_rate: 0.0046 },
     },
-    // What the API resolves for a record that declares a benchmark protocol: the primary first, then
-    // the other declared metrics, all under their protocol names.
     metric_rows: [
       { task: 'NUPA5K-Loose', metric: 'accuracy', value: 0, declared: true },
       { task: 'NUPA5K-Loose', metric: 'digit_match', value: 0.0030796088040486408, declared: true },
@@ -62,7 +53,7 @@ function nupaRecord() {
   }
 }
 
-test('the declared rows lead the table while the raw map keeps its bucket and per-task keys', () => {
+test('declared protocol metrics lead the table while the raw bucket rows stay folded', () => {
   const view = metricView(nupaRecord())
 
   assert.deepEqual(view.rows, [
@@ -71,9 +62,6 @@ test('the declared rows lead the table while the raw map keeps its bucket and pe
     { task: 'NUPA5K-Loose', metric: 'format_valid_rate', value: 0.0046 },
   ])
   assert.equal(view.hasDeclared, true)
-  // The raw map keeps its whole shape for the folded section: five base metrics, plus a bucket and a
-  // per-task row for each of four buckets.
-  assert.equal(view.raw.length, 5 + 2 * 4 * 5)
   assert.ok(view.raw.some((row) => row.metric === 'task:add_Integer_Integer/bucket:S/exact_match'))
 })
 

@@ -30,11 +30,7 @@ onMounted(refresh)
 watch(() => props.runId, refresh)
 onViewRefresh(refresh)
 
-// A benchmark's declared protocol metrics lead the table; a record that declares none keeps its
-// raw evaluator list.
-const metrics = computed(() =>
-  data.value ? metricView(data.value) : { rows: [], raw: [], hasDeclared: false },
-)
+const metrics = computed(() => (data.value ? metricView(data.value) : { rows: [], raw: [], hasDeclared: false }))
 const metricRows = computed<MetricRow[]>(() => metrics.value.rows)
 const rawRows = computed<MetricRow[]>(() => metrics.value.raw)
 const showRawMetrics = computed(() => metrics.value.hasDeclared && rawRows.value.length > 0)
@@ -229,7 +225,6 @@ async function copyPath() {
         </div>
       </div>
 
-      <!-- Metrics: the declared protocol metrics up top; the evaluator's full raw map behind a fold -->
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Metrics</h3>
         <div v-if="metricRows.length" class="overflow-x-auto rounded-lg border border-surface-border">
