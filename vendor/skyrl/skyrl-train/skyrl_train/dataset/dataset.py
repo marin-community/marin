@@ -45,6 +45,7 @@ class PromptDataset:
         self.env_class_key = env_class_key
         self.num_workers = num_workers
         self.chat_template_kwargs = dict(chat_template_kwargs or {})
+        self.prompts_dropped_too_long = 0
 
         self.datasets = datasets
         if isinstance(self.datasets, str):
@@ -64,6 +65,7 @@ class PromptDataset:
         max_prompt_length = self.max_prompt_length
         token_count = type(self).prompt_token_count
         template_kwargs = self.chat_template_kwargs
+        input_rows = len(self.dataframe)
         self.dataframe = self.dataframe.filter(
             lambda doc: token_count(tokenizer, doc, prompt_key, chat_template_kwargs=template_kwargs)
             <= max_prompt_length,
@@ -71,6 +73,7 @@ class PromptDataset:
             desc=f"Filtering prompts longer than {self.max_prompt_length} tokens",
         )
 
+        self.prompts_dropped_too_long = input_rows - len(self.dataframe)
         logger.info(f"Filtered dataset size: {len(self.dataframe)}")
 
     def prepare_dataset(self, dataset):

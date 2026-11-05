@@ -39,7 +39,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 EVIDENCE_PATH = "reference/source-evidence.json"
 
@@ -59,6 +59,11 @@ def _text(value: Any) -> str | None:
 def evidence_resource(evidence: Mapping[str, Any]) -> TaskResource:
     """Source fields retained beside the grader for review and audit."""
     return inline_resource(EVIDENCE_PATH, json.dumps(dict(evidence), ensure_ascii=False, sort_keys=True).encode())
+
+
+def source_evidence(task: TaskSpec) -> dict[str, Any]:
+    resource = next(resource for resource in task.resources.verifier if resource.path == EVIDENCE_PATH)
+    return json.loads(resource_bytes(resource))
 
 
 def answer_task(

@@ -467,6 +467,12 @@ config:
       profile: *githubAutomationProfile
       serviceTag: *githubAutomationProfile
       ref: refs/heads/main
+    - name: canary-hero-gb200
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-hero-gb200.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
     - name: pr-review
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-loom-review.yaml@refs/heads/main

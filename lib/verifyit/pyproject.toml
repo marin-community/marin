@@ -39,4 +39,13 @@ only-include = ["src/verifyit"]
 pythonpath = ["src", "tests", "."]
 timeout = 120
 filterwarnings = ["ignore::DeprecationWarning"]
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+markers = [
+    "slow: long-running test",
+    "integration: external service",
+    "data_integration: external data",
+    "cluster: live cluster",
+    "requires_cluster: live cluster",
+    "docker: Docker daemon",
+    "manual: explicit validation",
+]

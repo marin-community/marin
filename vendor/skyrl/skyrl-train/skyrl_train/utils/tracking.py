@@ -16,6 +16,7 @@
 # limitations under the License.
 
 import dataclasses
+import json
 from enum import Enum
 from functools import partial
 from pathlib import Path
@@ -27,6 +28,9 @@ from omegaconf import DictConfig, OmegaConf
 import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+from marinskyrl.resource_locator import join_resource_path
+from marinskyrl.checkpoint_paths import TRACKING_FILENAME
+from skyrl_train.io import io
 
 
 _WANDB_STEP_METRIC = "trainer/global_step"
@@ -67,7 +71,7 @@ class WandbNodeLogger:
 
 # TODO(tgriggs): Test all backends.
 class Tracking:
-    supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console"]
+    supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console", "files"]
 
     def __init__(self, project_name, experiment_name, backends: Union[str, List[str]] = "console", config=None):
         if isinstance(backends, str):
@@ -77,6 +81,9 @@ class Tracking:
 
         self.logger = {}
         self.remote_loggers = []
+
+        if "files" in backends:
+            self.logger["files"] = _FilesAdapter(str(config.trainer.export_path))
 
         if "wandb" in backends:
             import wandb
@@ -103,6 +110,12 @@ class Tracking:
                 ),
             )
             run_id = run.id
+            if config is not None:
+                io.makedirs(str(config.trainer.export_path), exist_ok=True)
+                io.write_bytes_atomic(
+                    join_resource_path(str(config.trainer.export_path), TRACKING_FILENAME),
+                    json.dumps({"wandb_url": run.url}).encode(),
+                )
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
@@ -222,6 +235,25 @@ class Tracking:
                     backend.finish()
             except Exception as error:
                 logger.warning("Tracker backend {} shutdown failed: {}", name, error)
+
+
+class _FilesAdapter:
+    def __init__(self, export_path: str):
+        self.directory = join_resource_path(export_path, "metrics")
+        self.step: int | None = None
+        self.metrics: dict[str, Any] = {}
+        io.makedirs(self.directory, exist_ok=True)
+
+    def log(self, data: dict[str, Any], step: int) -> None:
+        path = join_resource_path(self.directory, f"step-{step:06d}.json")
+        if step != self.step:
+            self.metrics = json.loads(io.read_bytes(path)) if io.exists(path) else {"step": step}
+            self.step = step
+        self.metrics.update(data)
+        io.write_bytes_atomic(path, (json.dumps(self.metrics, default=float, sort_keys=True) + "\n").encode())
+
+    def finish(self) -> None:
+        pass
 
 
 class ConsoleLogger:

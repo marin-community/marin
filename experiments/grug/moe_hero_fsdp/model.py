@@ -1066,9 +1066,9 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
         raise ValueError(f"num_devices must be positive, got {num_devices}")
     expert = 2 if num_devices % 2 == 0 else 1
     data = max(1, num_devices // expert)
-    axis_names = ("replica_dcn", "data", "context", "expert", "model")
+    axis_names = ("replica_dcn", "data", "expert", "context", "model")
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, data, 1, expert, 1),
+        axis_sizes=(1, data, expert, 1, 1),
         axis_names=axis_names,
         axis_types=(jax.sharding.AxisType.Explicit,) * len(axis_names),
     )

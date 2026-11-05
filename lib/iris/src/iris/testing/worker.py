@@ -16,6 +16,7 @@ from iris.cluster.runtime.types import ContainerPhase, ContainerStats, Container
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
 from iris.time_proto import duration_to_proto
 
@@ -72,6 +73,7 @@ class FakeContainerHandle:
         self.stop_calls: list[dict[str, object]] = []
         self._cleaned_up = False
         self._killed = False
+        self._stop_exit_code = 137
 
     @property
     def container_id(self) -> str | None:
@@ -90,15 +92,13 @@ class FakeContainerHandle:
         self.stop_calls.append({"force": force})
         if self.stop_hook is not None:
             self.stop_hook(force)  # type: ignore[operator]
-        if force:
-            # Model real runtimes: once SIGKILL has been delivered the container
-            # reports STOPPED on the next inspect. Tests that need to simulate a
-            # wedged container should override _killed back to False.
+        if force or self.stop_hook is None:
             self._killed = True
+            self._stop_exit_code = 137 if force else 143
 
     def status(self) -> ContainerStatus:
         if self._killed:
-            return ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=137)
+            return ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=self._stop_exit_code)
         idx = min(self._status_cursor, len(self._status_sequence) - 1)
         self._status_cursor += 1
         return self._status_sequence[idx]
@@ -206,4 +206,5 @@ def create_run_task_request(
         task_image=task_image,
     )
     request.timeout.CopyFrom(duration_to_proto(Duration.from_seconds(300)))
+    request.termination_grace.CopyFrom(duration_to_proto(DEFAULT_TERMINATION_GRACE))
     return request

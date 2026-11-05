@@ -30,10 +30,14 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
+from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.inventory import (
+    AAII_CATEGORIES,
     FULL_VALIDATION_FILENAME,
+    HELDOUT_FAMILIES,
+    TASK_MANIFEST_FILENAME,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
     SelectionRecipe,
@@ -41,7 +45,7 @@ from experiments.post_training.task_curation.inventory import (
     validation_task,
 )
 
-FAMILIES = ("calendar", "competitive_coding", "reasoning_gym", "stem", "structural")
+FAMILIES = (*HELDOUT_FAMILIES.values(), "structural")
 
 
 @pytest.fixture(autouse=True)
@@ -84,16 +88,15 @@ def heldout_rows() -> list[dict]:
                 )
                 task["resources"]["verifier"].append(config.model_dump(mode="json"))
             else:
-                dataset = {
-                    "calendar": "ultra_sft_step3200_calendar_v2",
-                    "competitive_coding": "ultra_sft_step3200_comp_coding",
-                    "reasoning_gym": "ultra_sft_step3200_reasoning_gym",
-                    "stem": "ultra_sft_step3200_stem_mcqa",
-                }[family]
+                task["grader"]["environment"] = {
+                    "command_semantics": "linux_process",
+                    "packages_lock": "numpy==2.3.5\n",
+                }
+                dataset = next(dataset for dataset, expected in HELDOUT_FAMILIES.items() if expected == family)
+                task["tags"] = ["agentic"] if index == 0 else []
+                contract = {"dataset": dataset, "pass_rate_passed": 5, "pass_rate_total": 8, "pass_rate": 0.625}
                 task["resources"]["verifier"].append(
-                    inline_resource("config.json", json.dumps({"contract": {"dataset": dataset}}).encode()).model_dump(
-                        mode="json"
-                    )
+                    inline_resource("config.json", json.dumps({"contract": contract}).encode()).model_dump(mode="json")
                 )
             rows.append(
                 {
@@ -149,7 +152,7 @@ def read_tasks(path: Path) -> list[TaskSpec]:
 def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path):
     settings = recipe(tmp_path)
     leaked = [
-        validation_task(row).model_copy(update={"id": f"changed-id-{index}", "answer_format": Boxed()})
+        validation_task(row, {}).model_copy(update={"id": f"changed-id-{index}", "answer_format": Boxed()})
         for index, row in enumerate(heldout_rows()[:21])
     ]
     original = source_task("training-a")
@@ -196,6 +199,70 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
     )[0]
     assert tasks == read_tasks(Path(repeated.path) / TRAIN_FILENAME)
     assert sample == read_tasks(Path(repeated.path) / VALIDATION_FILENAME)
+
+
+def test_selection_imports_image_graders_from_admitted_components(tmp_path):
+    rows = heldout_rows()
+    components = HELDOUT_FAMILIES
+    environments = {
+        family: EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=f"numpy==2.3.{index}\n"
+        )
+        for index, family in enumerate(components.values())
+    }
+    settings = recipe(tmp_path).model_copy(
+        update={
+            "sources": {BLENDS["rlvr1"][dataset].id: family for dataset, family in components.items()},
+            "family_limits": {family: 1 for family in components.values()},
+        }
+    )
+    curated = {}
+    for component, family in settings.sources.items():
+        task = source_task(f"training-{family}")
+        task = task.model_copy(update={"grader": task.grader.model_copy(update={"environment": environments[family]})})
+        curated[component] = admitted_source(tmp_path / family, [task])
+    originals = {}
+    for row in rows:
+        document = json.loads(row["lowered_task_spec"])
+        task = document["task"]
+        if task["source"]["dataset"] != "structure-closure":
+            task["grader"]["environment"] = source_task("image").grader.environment.model_dump(mode="json")
+            task["grader"]["argv"][0] = "python3"
+            task["grader"]["env"] = {"MODE": "historical"}
+            task["grader"]["timeout"] = 330
+        originals[task["id"]] = task
+        row["lowered_task_spec"] = json.dumps(document)
+    pq.write_table(pa.Table.from_pylist(rows), settings.heldout.uri)
+    output = Path(run(task_selection_step(curated, settings))[0].path)
+    full = read_tasks(output / FULL_VALIDATION_FILENAME)
+    manifest = pq.read_table(output / TASK_MANIFEST_FILENAME).to_pylist()
+    assert {row["task_id"] for row in manifest} == {task.id for task in full}
+    by_id = {task.id: task for task in full}
+    for row in manifest:
+        task = by_id[row["task_id"]]
+        original = originals[task.id]
+        family = next(family for family in FAMILIES if task.id.startswith(f"heldout-{family}-"))
+        assert row == {
+            "task_id": task.id,
+            "family": family,
+            "aaii_category": AAII_CATEGORIES[family],
+            "agentic": "agentic" in original["tags"],
+            "grader_kind": "in_process" if family == "structural" else "package",
+            "upstream_pass_rate": None if family == "structural" else 0.625,
+        }
+        if family == "structural":
+            continue
+        assert task.grader.environment == environments[family]
+        assert task.resources.model_dump(mode="json") == original["resources"]
+        assert task.grader.model_dump(mode="json", exclude={"environment"}) == {
+            key: value for key, value in original["grader"].items() if key != "environment"
+        }
+    summary = json.loads((output / "summary.json").read_text())
+    assert summary["grader_kind_counts"] == {
+        "train": {"package": 4, "image": 0, "remote_judge": 0, "in_process": 0},
+        "validation": {"package": 80, "image": 0, "remote_judge": 0, "in_process": 20},
+        "full_validation": {"package": 84, "image": 0, "remote_judge": 0, "in_process": 21},
+    }
 
 
 @pytest.mark.parametrize("shared_id", ["shared-unsampled", "shared-alias"])

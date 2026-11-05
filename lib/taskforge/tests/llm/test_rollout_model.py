@@ -41,7 +41,6 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.test_support import fake_source
-from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import (
     assemble,
     file,
@@ -129,7 +128,6 @@ def shellsim(task: TaskSpec, max_turns: int = 6) -> TaskRolloutSpec:
     )
     spec = lower(
         task,
-        host=MachineHost.LAPTOP,
         task_machine=machine(startup_timeout=30),
         verifier_machine=machine(startup_timeout=30),
         limits=limits,

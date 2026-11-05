@@ -7,10 +7,17 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import httpx
 import pytest
-from verifyit.grade import InvalidTask, Status, grade, run, write_reward
+from verifyit.grade import GradingInfraError, InvalidTask, Status, grade, run, write_reward
 from verifyit.modes import grade_judge
-from verifyit.spec import Constraint, EmptyOutputPolicy, JudgeSpec, parse_spec, render_spec
+from verifyit.spec import (
+    Constraint,
+    EmptyOutputPolicy,
+    JudgeSpec,
+    parse_spec,
+    render_spec,
+)
 
 # The dataset's own reference answer, apostrophe included: the gate must fold case, spacing and
 # punctuation without mangling non-ASCII text.
@@ -37,6 +44,8 @@ class FakeJudgeServer(ThreadingHTTPServer):
     response_fields: dict
     raw_body: str | None
     usage_tokens: list[int]
+    http_statuses: list[int]
+    retry_after: str | None
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -92,7 +101,16 @@ class _Handler(BaseHTTPRequestHandler):
             ).encode()
         if server.raw_body is not None:
             body = server.raw_body.encode()
-        self.send_response(server.http_status)
+        status = (
+            server.http_statuses[min(len(server.requests) - 1, len(server.http_statuses) - 1)]
+            if server.http_statuses
+            else server.http_status
+        )
+        if status != 200 and server.http_statuses:
+            body = json.dumps({"error": {"message": "fixture unavailable"}}).encode()
+        self.send_response(status)
+        if server.retry_after is not None:
+            self.send_header("Retry-After", server.retry_after)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -110,6 +128,8 @@ def fake_judge(monkeypatch):
     server.requests = []
     server.finish_reasons = []
     server.http_status = 200
+    server.http_statuses = []
+    server.retry_after = None
     server.message_fields = {}
     server.response_fields = {}
     server.raw_body = None
@@ -153,6 +173,32 @@ def test_exact_gate_scores_one_without_calling_a_model(tmp_path, unconfigured_ju
 def test_gate_ignores_articles_and_trailing_punctuation(tmp_path, unconfigured_judge):
     reward = grade_judge.grade(JudgeSpec(references=("Paris",)), tmp_path, _workspace(tmp_path, "\\boxed{The Paris.}"))
     assert reward.reward == 1.0
+
+
+def test_label_judge_preserves_long_request_timeout_at_the_http_boundary(fake_judge, monkeypatch):
+    fake_judge.replies = ["PASS"]
+    timeouts = []
+    original_send = httpx.Client.send
+
+    def send(client, request, *args, **kwargs):
+        timeouts.append(request.extensions["timeout"])
+        return original_send(client, request, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "send", send)
+    result = grade_judge.grade_judge_candidate(
+        JudgeSpec(
+            references=("reference",),
+            rubric="labels",
+            exact_gate=False,
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            request_timeout=600,
+        ),
+        "candidate",
+    )
+    assert result.reward == 1
+    assert len(fake_judge.requests) == len(timeouts) == 1
+    assert all(599 < timeout <= 600 for timeout in timeouts[0].values())
 
 
 def test_paraphrase_falls_through_to_the_model(tmp_path, fake_judge):
@@ -720,6 +766,48 @@ def test_direct_candidate_uses_explicit_connection_and_preserves_text(fake_judge
     assert fake_judge.prompts == ["Reference: answer\nCandidate:   candidate\n", "Reference: answer\nCandidate: "]
     assert all(request["model"] == "explicit-model" for request in fake_judge.requests)
     assert "private-test-key" not in repr(connection)
+
+
+@pytest.mark.parametrize(
+    "statuses,retry_after,budget,expected_status,expected_requests",
+    [
+        ([400], None, 10, Status.INFRA_ERROR, 1),
+        ([503, 200], "0.25", 10, Status.SCORED, 2),
+        ([503], None, 10, Status.INFRA_ERROR, 3),
+        ([429], "60", 0.1, Status.INFRA_ERROR, 1),
+    ],
+)
+def test_judge_transport_retries_only_recoverable_failures_and_retains_unscored_evidence(
+    fake_judge, monkeypatch, statuses, retry_after, budget, expected_status, expected_requests
+):
+    fake_judge.http_statuses = statuses
+    fake_judge.retry_after = retry_after
+    fake_judge.replies = ["[[A=B]]"]
+    delays = []
+    monkeypatch.setattr(grade_judge.random, "uniform", lambda *_: 0)
+    monkeypatch.setattr(grade_judge.time, "sleep", delays.append)
+    spec = _label_spec(
+        label_scan="whole", label_case="upper", request_timeout=budget, transport_budget=budget, transport_attempts=3
+    )
+    if expected_status is Status.SCORED:
+        verdict = grade_judge.grade_judge_candidate(spec, "candidate")
+        assert (verdict.status, verdict.reward) == (Status.SCORED, 1)
+        detail = verdict.detail
+    else:
+        with pytest.raises(GradingInfraError) as failure:
+            grade_judge.grade_judge_candidate(spec, "candidate")
+        detail = failure.value.detail
+    assert len(fake_judge.requests) == expected_requests
+    attempts = detail["transport_attempts"]
+    assert [attempt["status"] for attempt in attempts if attempt["outcome"] == "failed"] == [statuses[0]] * (
+        expected_requests - int(expected_status is Status.SCORED)
+    )
+    assert json.loads(attempts[0]["body"]) == {"error": {"message": "fixture unavailable"}}
+    assert "test-key" not in json.dumps(detail)
+    if expected_status is Status.SCORED:
+        assert verdict.reward == 1
+        assert delays == [0.25]
+        assert attempts[-1]["outcome"] == "succeeded"
 
 
 def test_direct_candidate_validates_trusted_constraints_before_empty_gate():

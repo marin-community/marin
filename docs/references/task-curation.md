@@ -1,6 +1,6 @@
 # Task curation
 
-Task curation turns pinned RL datasets into TaskSpec parquet files. Each dataset
+Task curation turns pinned training and evaluation datasets into TaskSpec parquet files. Each dataset
 is declared once as an `RlDataSource` under
 [`experiments/post_training/task_curation/datasets/`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/README.md),
 and the catalog
@@ -14,6 +14,13 @@ sources = all_sources()  # stable Atlas ID -> RlDataSource
 ```
 
 Building the catalog performs no downloads, inference or job submission.
+
+[Evaluation tasks](evaluation-tasks.md) use population-preserving publication and
+carry execution protocols beside canonical tasks. Name them explicitly with
+`--source` and `--mode quick`; the default selection contains training sources.
+`experiments.post_training.task_curation.evaluation.EvalDataset` binds the recipe,
+protocol, and item builder. TaskCompendium owns the reusable source importers and
+corpus publisher; the experiment owns acquisition and artifact graphs.
 
 ## Pipeline overview
 
@@ -133,7 +140,7 @@ Parquet. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
-For the current task-to-training recipe, see the [quick RL loop](../recipes/quick-rl-loop.md).
+For the current task-to-training recipe, see the [Snowball RL experiments](../recipes/snowball-rl.md).
 
 The recipe contains an explicit source allowlist and family quotas. For example,
 this small recipe selects 100 calendar tasks from two admitted sources:
@@ -189,12 +196,19 @@ a shortfall fails before publishing the training files. These rules provide
 exact overlap checks, not semantic decontamination.
 
 The artifact contains `train.parquet`, the per-family evaluation sample in
-`validation.parquet`, the complete exclusion set in `full_validation.parquet`,
-and `summary.json` with the recipe, source paths, eligible/overlap/duplicate/selected
-counts and evaluation IDs. Each Parquet has a `task_spec` JSON column. Source
-TaskSpecs retain their private graders and resources. The historical structural
-heldout tasks use the shared closure converter. SkyRL chooses rollout limits,
-harnesses and verifier backends when it loads these canonical tasks.
+`validation.parquet`, and the complete exclusion set in `full_validation.parquet`.
+These files have a `task_spec` JSON column. `summary.json` records the recipe,
+source paths, eligible/overlap/duplicate/selected counts, evaluation IDs and
+grader-kind counts for each file.
+
+`task_manifest.parquet` records every heldout task's `task_id`, `family`,
+`aaii_category`, `agentic` flag, `grader_kind` and `upstream_pass_rate` (NVIDIA's
+eight-sample rate where available). The evaluation sample is a subset of this
+complete heldout manifest. Historical Nemotron panel tasks use the package
+environment from an admitted task in their matching training component; their
+private grader resources and command stay attached to each task. The historical
+structural heldout tasks use the shared closure converter. SkyRL chooses rollout
+limits, harnesses and verifier backends when it loads these canonical tasks.
 
 ## Dataset-owned invocation
 
@@ -653,7 +667,8 @@ Local graders run in bubblewrap sandboxes on the Zephyr worker, each over a
 private root, so the worker pods need Iris's privileged container profile
 (`--container-profile CONTAINER_PROFILE_PRIVILEGED`). On first use, each worker downloads the environment's lock from its artifact and builds a
 self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
-`/tmp/task-curation-env-<identity>`, with `verifyit` and the placed files from
+`~/.cache/marin/task-runtime/task-curation-env-<identity>` on workstations, or
+`/cache/task-curation/task-curation-env-<identity>` when `/cache` is mounted, with `verifyit` and the placed files from
 `files.tar`; the sandbox mounts that directory, the system directories and each
 placed file at its declared path, runs graders with the declared `env`, and
 concurrent graders on one host build it once.

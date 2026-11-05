@@ -12,6 +12,7 @@ import tarfile
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from shellbox.backends.docker.machine import DockerMachineFactory
@@ -27,7 +28,16 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-from verifyit.spec import RUBRIC_LABELS, JudgeSpec, ScriptSpec, render_spec, spec_from_table
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import (
+    RUBRIC_LABELS,
+    EmptyOutputPolicy,
+    ExactSpec,
+    JudgeSpec,
+    ScriptSpec,
+    render_spec,
+    spec_from_table,
+)
 
 from taskcompendium.ejection import mark_unsolvable
 from taskcompendium.examples.ejection import ejection_examples
@@ -64,6 +74,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import CheckStatus
 from taskcompendium.pipeline.verification import verify_task
+from taskcompendium.runtime import grading as grading_runtime
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
 from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
@@ -238,6 +249,7 @@ class LocalGradingMachine:
 
     root: Path
     workdir: str
+    env: dict[str, str] = field(default_factory=dict)
     remove_exit_code: int = 0
     closed: bool = False
 
@@ -275,7 +287,7 @@ class LocalGradingMachine:
                 archive.extractall(self.root, filter="data")
             return EXITED
         argv = self.local_arguments(command.argv)
-        env = {**os.environ, **command.env}
+        env = {**os.environ, **self.env, **command.env}
         if program == "python3":
             argv[0] = sys.executable
             env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
@@ -307,7 +319,9 @@ class LocalGradingMachines(DockerMachineFactory):
 
     async def create(self, spec):
         (self.root / spec.workdir.lstrip("/")).mkdir(parents=True, exist_ok=True)
-        machine = LocalGradingMachine(root=self.root, workdir=spec.workdir, remove_exit_code=self.remove_exit_code)
+        machine = LocalGradingMachine(
+            root=self.root, workdir=spec.workdir, env=dict(spec.env), remove_exit_code=self.remove_exit_code
+        )
         self.machines.append(machine)
         return machine
 
@@ -339,6 +353,156 @@ def trusted_bootstrap_task(shell_task):
     return TaskSpec.model_validate_json(task.model_dump_json())
 
 
+@pytest.mark.parametrize("content", ["", " \n"])
+@pytest.mark.parametrize("policy", [EmptyOutputPolicy.GRADE, EmptyOutputPolicy.ZERO])
+@pytest.mark.asyncio
+async def test_sandbox_verifyit_honors_the_declared_empty_text_policy(tmp_path, content, policy):
+    package = verifyit_package(ExactSpec(expected=("",), empty_output=policy), environment=GRADER_ENVIRONMENT)
+    task = TaskSpec(
+        id="empty-text",
+        source=Source(dataset="fixture/empty-text", revision="1", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Submit an empty answer."),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        resources=ResourceGroups(verifier=package.resources),
+        grader=package.grader,
+    )
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=content)))
+    )
+    result = await grade_in_sandbox(task, attempt, LocalGradingMachines(tmp_path), GRADER_MACHINE)
+    expected = (Outcome.GRADED, 1.0) if policy is EmptyOutputPolicy.GRADE else (Outcome.SUBMISSION_FAILURE, 0.0)
+    assert (result.status, result.reward) == expected
+
+
+@pytest.mark.parametrize("policy", [EmptyOutputPolicy.GRADE, EmptyOutputPolicy.ZERO])
+@pytest.mark.asyncio
+async def test_script_grader_can_record_metrics_for_empty_answers(tmp_path, shell_task, policy):
+    script = (
+        b"import json, sys\nfrom pathlib import Path\n"
+        b"assert not Path(sys.argv[1]).read_text().strip()\n"
+        b"Path(sys.argv[2]).write_text(json.dumps({'status':'scored','reward':0,"
+        b"'detail':{'metrics':{'instruction_accuracy':0}}}))\n"
+    )
+    task = shell_task.model_copy(
+        update={
+            "answer_type": AnswerType.TEXT,
+            "output_paths": (),
+            "grader": ScriptGrader(
+                argv=("python3", "/tests/grade.py", "/app/answer.txt", "/logs/verifier/verdict.json"),
+                environment=GRADER_ENVIRONMENT,
+                empty_output=policy,
+                reward=FileReward(
+                    files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
+                ),
+            ),
+            "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+        }
+    )
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=" \n")))
+    )
+    result = await grade_in_sandbox(task, attempt, LocalGradingMachines(tmp_path), GRADER_MACHINE)
+    if policy is EmptyOutputPolicy.GRADE:
+        assert (result.status, result.reward, result.detail) == (
+            Outcome.GRADED,
+            0.0,
+            {"metrics": {"instruction_accuracy": 0}},
+        )
+    else:
+        assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+@pytest.mark.parametrize(
+    "status,exit_code,expected",
+    [
+        ("infra_error", 0, Outcome.INFRA_ERROR),
+        ("invalid_task", 0, Outcome.INVALID_TASK),
+        ("scored", 1, Outcome.INFRA_ERROR),
+    ],
+)
+@pytest.mark.asyncio
+async def test_script_verdict_retains_unscored_failures(tmp_path, script_grading_task, status, exit_code, expected):
+    script = (
+        b"import json, sys\nfrom pathlib import Path\n"
+        b"Path(sys.argv[1]).write_text(json.dumps({'status':sys.argv[2],'reward':0,"
+        b"'detail':{'error':'unavailable dependency','metrics':{}}}))\n"
+        b"raise SystemExit(int(sys.argv[3]))\n"
+    )
+    task = script_grading_task.model_copy(
+        update={
+            "grader": script_grading_task.grader.model_copy(
+                update={
+                    "argv": ("python3", "/tests/grade.py", "/logs/verifier/verdict.json", status, str(exit_code)),
+                    "reward": FileReward(
+                        files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
+                    ),
+                }
+            ),
+            "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+        }
+    )
+    result = await grade_in_sandbox(task, GradingAttempt(finished(task)), LocalGradingMachines(tmp_path), GRADER_MACHINE)
+    assert (result.status, result.reward) == (expected, None)
+    if not exit_code:
+        assert result.error == "unavailable dependency"
+
+
+def test_script_judge_receives_explicit_connection_without_serializing_credentials(tmp_path, shell_task, judge_server):
+    script = (
+        b"import json, sys\nfrom dataclasses import asdict\nfrom pathlib import Path\n"
+        b"from verifyit.spec import parse_spec\n"
+        b"from verifyit.modes.grade_judge import grade_judge_candidate\n"
+        b"spec = parse_spec((Path(__file__).parent / 'judge.toml').read_text())\n"
+        b"result = grade_judge_candidate(spec, Path(sys.argv[1]).read_text())\n"
+        b"Path(sys.argv[2]).write_text(json.dumps(asdict(result)))\n"
+    )
+    task = shell_task.model_copy(
+        update={
+            "answer_type": AnswerType.TEXT,
+            "output_paths": (),
+            "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+            "grader": ScriptGrader(
+                argv=("python3", "/tests/grade.py", "/app/answer.txt", "/logs/verifier/verdict.json"),
+                environment=GRADER_ENVIRONMENT,
+                reward=FileReward(
+                    files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
+                ),
+                judge=JudgeSpec(
+                    references=("12",),
+                    rubric=RUBRIC_LABELS,
+                    exact_gate=False,
+                    prompt_template="Reference: {reference}\nCandidate: {candidate}",
+                    label_scores={"PASS": 1.0, "FAIL": 0.0},
+                ),
+            ),
+        }
+    )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
+    connection = JudgeConnection(
+        f"http://127.0.0.1:{judge_server.server_port}/v1", "runtime-private-key", default_model="pinned-judge"
+    )
+    result = grade_task(
+        task,
+        GradingAttempt(
+            ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="twelve")))
+        ),
+        machine_factory=LocalGradingMachines(tmp_path),
+        machine_spec=GRADER_MACHINE,
+        judge_connection=connection,
+    )
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
+    [request] = judge_server.requests
+    assert request["model"] == "pinned-judge"
+    assert request["messages"][-1]["content"] == "Reference: 12\nCandidate: twelve"
+    assert "runtime-private-key" not in task.model_dump_json()
+    assert "runtime-private-key" not in json.dumps(result.diagnostics)
+    assert all(
+        b"runtime-private-key" not in path.read_bytes() for path in (tmp_path / "tests").rglob("*") if path.is_file()
+    )
+
+
 @pytest.mark.parametrize("candidate,expected", [(b"print(42)\n", 1.0), (b"raise RuntimeError('candidate')\n", 0.0)])
 @pytest.mark.asyncio
 async def test_trusted_grader_bootstrap_excludes_submitted_stdlib_names(
@@ -363,6 +527,7 @@ async def test_private_fixture_archive_removed_before_grading_or_grader_never_ru
     assert machines.machines[0].closed
     if remove_exit_code:
         assert (result.status, result.reward, result.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)
+        assert result.verifier_setup_seconds == 0.0
         assert archive.is_file()
         assert not (tmp_path / "logs/verifier/verdict.json").exists()
     else:
@@ -404,14 +569,49 @@ def script_grading_task(trusted_bootstrap_task):
 
 @pytest.mark.parametrize("candidate,reward", [(b"print(42)\n", 1.0), (b"print(0)\n", 0.0)])
 def test_script_grader_scores_captured_files_in_sandbox_and_task_grading(
-    tmp_path, script_grading_task, candidate, reward
+    tmp_path, script_grading_task, candidate, reward, monkeypatch
 ):
-    factory = LocalGradingMachines(tmp_path)
+    clock = [0.0]
+    monkeypatch.setattr(grading_runtime, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    prepare = grading_runtime.prepare_machine_spec
+
+    def prepare_environment(*args):
+        clock[0] += 7
+        return prepare(*args)
+
+    monkeypatch.setattr(grading_runtime, "prepare_machine_spec", prepare_environment)
+
+    class TimedMachine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def upload(self, source, target):
+            clock[0] += 3
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            await self.machine.download(source, target)
+
+        async def run(self, command):
+            clock[0] += 1 if command.argv[0] in {"mkdir", "rm", "tar"} else 11
+            return await self.machine.run(command)
+
+        async def close(self):
+            clock[0] += 100
+            await self.machine.close()
+
+    class TimedFactory(LocalGradingMachines):
+        async def create(self, spec):
+            clock[0] += 2
+            return TimedMachine(await super().create(spec))
+
+    factory = TimedFactory(tmp_path)
     attempt = grading_attempt(finished(script_grading_task), RuntimeEvidence({"/app/numbers.py": candidate}, "{}"))
     sandbox = asyncio.run(grade_in_sandbox(script_grading_task, attempt, factory, GRADER_MACHINE))
     runtime = grade_task(script_grading_task, attempt, machine_factory=factory, machine_spec=GRADER_MACHINE)
     assert (sandbox.status, sandbox.reward) == (Outcome.GRADED, reward)
     assert (runtime.status, runtime.reward) == (Outcome.GRADED, reward)
+    assert sandbox.verifier_setup_seconds == runtime.verifier_setup_seconds == 17.0
     assert (tmp_path / "tests/test.sh").read_bytes() == SCRIPT_GRADER
     assert all(machine.closed for machine in factory.machines)
 

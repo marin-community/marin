@@ -616,14 +616,9 @@ def validate_cfg(cfg: DictConfig):
         gpus_per_node = cfg.trainer.placement.policy_num_gpus_per_node
         validate_colocated_engine_geometry(tensor_pipeline_size=tp_pp_size, gpus_per_node=gpus_per_node)
         num_policy_gpus = cfg.trainer.placement.policy_num_gpus_per_node * cfg.trainer.placement.policy_num_nodes
-        num_rollout_gpus = (
-            cfg.generator.num_inference_engines
-            * cfg.generator.inference_engine_tensor_parallel_size
-            * cfg.generator.inference_engine_pipeline_parallel_size
-            * cfg.generator.inference_engine_data_parallel_size
-        )
-        assert num_policy_gpus == num_rollout_gpus, (
-            f"num_policy_gpus ({num_policy_gpus}) and num_rollout_gpus ({num_rollout_gpus}) must be the same when colocating all models"
+        rollout_gpus = num_rollout_gpus(cfg)
+        assert num_policy_gpus == rollout_gpus, (
+            f"num_policy_gpus ({num_policy_gpus}) and num_rollout_gpus ({rollout_gpus}) must be the same when colocating all models"
         )
 
     else:
@@ -651,6 +646,16 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
             "trainer.algorithm.batch_invariant=true cannot configure a remote inference server; "
             "run the vLLM engines locally so both rollout and trainer activation is guaranteed"
         )
+
+
+def num_rollout_gpus(cfg: DictConfig) -> int:
+    generator = cfg.generator
+    return (
+        generator.num_inference_engines
+        * generator.inference_engine_tensor_parallel_size
+        * generator.inference_engine_pipeline_parallel_size
+        * generator.inference_engine_data_parallel_size
+    )
 
 
 def validate_generator_cfg(cfg: DictConfig):
@@ -683,7 +688,7 @@ def validate_generator_cfg(cfg: DictConfig):
         )
 
     # TODO(tgriggs): use a more modular config validation
-    if cfg.trainer.logger == "wandb":
+    if "wandb" in ([cfg.trainer.logger] if isinstance(cfg.trainer.logger, str) else cfg.trainer.logger):
         require_secret("WANDB_API_KEY")
 
     if cfg.generator.override_existing_update_group == "auto":

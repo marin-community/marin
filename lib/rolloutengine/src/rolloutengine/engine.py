@@ -67,6 +67,8 @@ class _Attempt:
     events: _EventDelivery
     grade: GradeResult
     outputs: dict[str, bytes]
+    setup_seconds: float = 0.0
+    grading_seconds: float | None = None
 
 
 class RolloutEngine:
@@ -139,6 +141,14 @@ class RolloutEngine:
             cleanup_errors = [asdict(error) for error in attempt.cleanup.errors]
             grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
             metrics["cleanup_error_count"] = float(len(cleanup_errors))
+        if (
+            failure is None
+            and attempt.grading_seconds is not None
+            and grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
+            and grade.reward is not None
+        ):
+            metrics["timing/grading"] = attempt.grading_seconds - grade.verifier_setup_seconds
+            metrics["timing/setup"] = attempt.setup_seconds + grade.verifier_setup_seconds
         rollout = replace(rollout, metrics=metrics)
         if failure is None:
             return GradedRollout(rollout, grade)
@@ -178,7 +188,8 @@ class RolloutEngine:
         except Exception as error:
             raise _Interrupted(RolloutOperation.START) from error
         if machine is not None:
-            events.emit(MachineReady(time.monotonic() - started))
+            attempt.setup_seconds = time.monotonic() - started
+            events.emit(MachineReady(attempt.setup_seconds))
         # The harness's resources close after grading, before the machines.
         cleanup = _CleanupScope(resources, attempt.cleanup)
         context = HarnessContext(task, spec.limits, machine, events, cleanup, attempt.run_id)
@@ -221,4 +232,5 @@ class RolloutEngine:
         except Exception as error:
             raise _Interrupted(RolloutOperation.GRADE) from error
         attempt.grade = grade
-        attempt.events.emit(Graded(grade.status, grade.reward, grade.error, grade.failure, time.monotonic() - started))
+        attempt.grading_seconds = time.monotonic() - started
+        attempt.events.emit(Graded(grade.status, grade.reward, grade.error, grade.failure, attempt.grading_seconds))

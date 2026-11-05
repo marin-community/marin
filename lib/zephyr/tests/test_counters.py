@@ -129,18 +129,25 @@ def test_stage_scoped_counters():
         _worker_ctx_var.reset(token)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "Worker counters are keyed by name only (_InProcessWorkerContext._counters and "
+        "CounterSnapshot.counters), so a stage update to an existing pipeline counter merges "
+        "into the pipeline entry: pipeline reads 3 and the stage reads nothing."
+    ),
+)
 def test_stage_scope_isolated_from_pipeline():
-    """Stage and pipeline counters with the same name are stored under the same key but different stage."""
+    """A stage counter and a pipeline counter with the same name keep separate values."""
     worker = _worker()
     token = _worker_ctx_var.set(worker)
     try:
         counters.pipeline.update_counter("metric", 1)
-        # pipeline counter is stored with stage=None; updating via stage("stg")
-        # would share the same key "metric" so we use a different name here
-        counters.stage("stg").update_counter("stg_metric", 2)
+        counters.stage("stg").update_counter("metric", 2)
 
         assert counters.pipeline.get_counters() == {"metric": 1}
-        assert counters.stage("stg").get_counters() == {"stg_metric": 2}
+        assert counters.stage("stg").get_counters() == {"metric": 2}
     finally:
         _worker_ctx_var.reset(token)
 
