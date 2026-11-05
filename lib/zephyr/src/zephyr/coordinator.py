@@ -73,7 +73,14 @@ from zephyr.stats import (
     _push_iris_task_status,
     configure_coordinator_telemetry,
 )
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
+from zephyr.worker_context import (
+    Aggregation,
+    CounterEntry,
+    CounterKey,
+    CounterSnapshot,
+    counters_by_name,
+    merge_counter_entries,
+)
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -304,34 +311,28 @@ class _PipelineExecution:
 
     def fold_counters(self, snapshot: CounterSnapshot) -> None:
         """Fold one completed task snapshot into bounded execution state."""
-        for name, entry in snapshot.counters.items():
-            key = (entry.stage, name, entry.aggregation)
+        for counter_key, entry in snapshot.counters.items():
+            key = (counter_key.stage, counter_key.name, entry.aggregation)
             accumulated = self.completed_totals.get(key)
             if accumulated is None:
-                self.completed_totals[key] = CounterEntry(
-                    entry.value,
-                    entry.aggregation,
-                    entry.stage,
-                    entry.count,
-                )
+                self.completed_totals[key] = CounterEntry(entry.value, entry.aggregation, entry.count)
             else:
                 accumulated.merge(entry)
 
-    def merged_counters(self, stage: str | None = None) -> dict[str, CounterEntry]:
-        """Return merged completed counters for this execution.
-
-        Callers wanting one stage's totals must pass ``stage`` here rather than
-        filter the result: a name recorded under several stages folds into a
-        single entry that keeps whichever stage was folded first, so a later
-        ``entry.stage`` filter would attribute every stage's total to that one
-        stage and drop the rest.
-        """
+    def completed_snapshot(self) -> CounterSnapshot:
+        """Return completed counters for this execution, still keyed by scope."""
         merged, conflicted = merge_counter_entries(
-            (name, entry)
-            for (entry_stage, name, _), entry in self.completed_totals.items()
-            if stage is None or entry_stage == stage
+            (CounterKey(stage, name), entry) for (stage, name, _), entry in self.completed_totals.items()
         )
-        return {k: e for k, e in merged.items() if k not in conflicted}
+        return CounterSnapshot(counters={k: e for k, e in merged.items() if k not in conflicted}, generation=0)
+
+    def merged_counters(self, stage: str | None = None) -> dict[str, CounterEntry]:
+        """Return completed counters for this execution by name.
+
+        With ``stage`` set, only that stage's counters are included. With
+        ``stage=None``, a name recorded under several scopes folds into one entry.
+        """
+        return counters_by_name(self.completed_snapshot().counters, stage)
 
 
 def _aggregate_counter_snapshots(
@@ -348,9 +349,12 @@ def _aggregate_counter_snapshots(
     that stage label are included.
     """
     merged, conflicted = merge_counter_entries(
-        (k, entry) for snap in snapshots for k, entry in snap.counters.items() if stage is None or entry.stage == stage
+        (key.name, entry)
+        for snap in snapshots
+        for key, entry in snap.counters.items()
+        if stage is None or key.stage == stage
     )
-    return {k: e.value for k, e in merged.items() if k not in conflicted}
+    return {name: e.value for name, e in merged.items() if name not in conflicted}
 
 
 class ZephyrCoordinator:
@@ -602,7 +606,7 @@ class ZephyrCoordinator:
                     for (_, execution_id), snapshot in self._worker_counters.items()
                     if execution_id == run.execution_id
                 ]
-                completed = CounterSnapshot(counters=run.merged_counters(), generation=0)
+                completed = run.completed_snapshot()
                 values = _aggregate_counter_snapshots([completed, *live], stage=None)
                 snapshots.append((run.execution_id, run.progress_time_seconds, values))
         for execution_id, progress_time_seconds, counters in snapshots:
@@ -687,7 +691,7 @@ class ZephyrCoordinator:
                     {idx: att for idx, att in run.task_attempts.items() if att > 0},
                     run.stage_monotonic_start,
                     [
-                        CounterSnapshot(counters=run.merged_counters(run.stage_name), generation=0),
+                        run.completed_snapshot(),
                         *(
                             snapshot
                             for (_, execution_id), snapshot in self._worker_counters.items()
@@ -1128,7 +1132,7 @@ class ZephyrCoordinator:
                 only. If None, return totals derived from all registered
                 executions' completed snapshots plus in-flight snapshots,
                 applying per-key aggregation hints.
-            stage: If provided, only include entries with ``entry.stage == stage``.
+            stage: If provided, only include counters recorded under that stage.
                 If None (default), include all entries regardless of stage.
 
         Snapshots are folded with :func:`merge_counter_entries`, the same
@@ -1152,9 +1156,7 @@ class ZephyrCoordinator:
                 ]
                 return _aggregate_counter_snapshots(worker_snapshots, stage)
 
-            all_snaps = [
-                CounterSnapshot(counters=run.merged_counters(stage), generation=0) for run in self._executions.values()
-            ]
+            all_snaps = [run.completed_snapshot() for run in self._executions.values()]
             all_snaps.extend(self._worker_counters.values())
 
         return _aggregate_counter_snapshots(all_snaps, stage)
@@ -1385,9 +1387,7 @@ class ZephyrCoordinator:
             storage_cleanup_safe = self._drain_execution(run)
             with self._lock:
                 run.finish(storage_cleanup_safe=storage_cleanup_safe)
-                final_counters = _aggregate_counter_snapshots(
-                    [CounterSnapshot(counters=run.merged_counters(), generation=0)], stage=None
-                )
+                final_counters = _aggregate_counter_snapshots([run.completed_snapshot()], stage=None)
                 # Keep the final sample ordered after any periodic sample.
                 try:
                     _publish_counter_snapshot(execution_id, run.progress_time_seconds, final_counters)

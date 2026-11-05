@@ -20,7 +20,7 @@ from starlette.types import ASGIApp
 
 from zephyr.plan import PhysicalPlan, PlanNode, plan_nodes
 from zephyr.stats import PipelineMetricPoint
-from zephyr.worker_context import Aggregation, CounterEntry, ShardProgress
+from zephyr.worker_context import Aggregation, CounterEntry, CounterKey, ShardProgress
 
 DEFAULT_COUNTER_LIMIT = 100
 MAX_COUNTER_LIMIT = 500
@@ -233,12 +233,12 @@ def bounded_limit(value: int, default: int, maximum: int) -> int:
     return min(value, maximum)
 
 
-def counter_value(name: str, entry: CounterEntry) -> CounterValue:
+def counter_value(key: CounterKey, entry: CounterEntry) -> CounterValue:
     return CounterValue(
-        name=name,
+        name=key.name,
         value=entry.value,
         aggregation=entry.aggregation,
-        stage=entry.stage or "",
+        stage=key.stage or "",
         observations=entry.count,
     )
 
