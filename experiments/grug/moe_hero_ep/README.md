@@ -295,6 +295,43 @@ evidence, and a live switch needs a rehearsal from the handoff checkpoint and ag
 thresholds; see the
 [context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
 
+### Long-context data
+
+The 262K extension reads the existing Harrier token caches. Each cache is split into virtual streams of documents
+at most 65,536 tokens and above 65,536 tokens. `harrier_long_context_mix.py` gives long tokens eight times the
+sampling weight of short tokens within each cell. For a cell with cooldown weight `w`, short-token total `S`, and
+long-token total `L`, the sampler weights are `w*S/(S+8L)` and `w*8L/(S+8L)`. The two weights sum to the cell's
+cooldown weight. Each virtual stream contains its source tokens once and is shuffled independently. No token cache or
+document index is written. Both launchers build the length-statistics artifact as a training dependency when this
+mix is selected. The scan uses one Zephyr task per Harrier cell, reads only cache offsets, and writes
+small per-cell metadata containing total tokens, tokens in documents strictly above 65,536, 131,072, and
+262,144 tokens, and chunk totals for locating virtual reads. To precompute the same artifact before launching:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.harrier_length_stats
+```
+
+The loader uses these totals for sampling weights and dataset lengths, and builds the chunk index in memory. It reads
+document offsets only for the chunks touched by a batch, resolves batch reads concurrently, and retains at most four
+offset chunks per cell in an LRU cache. The command below reports the long-document token share and passes implied
+by the statistics:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.harrier_long_context_mix
+```
+
+`HERO_USES_LONG_CONTEXT_MIX` in `launch_scaling_ladder.py` selects the mix for the hero. The Harrier skip-to-window
+replay cannot carry over, since the virtual sources have different token counts across phases. Instead
+`LmDataConfig.mixture_start_step` makes the step at the end of `HERO_CONTEXT_PHASES` read the mixture's first
+sequence, so each bucket starts at the beginning of its shuffled order. Without it, a run with no history would read
+at `step * batch`, a position that depends on the rack count and that is 18T tokens in for the hero. A restore at a
+later step continues in place, a retry repeats the same data, and a restore before the start step raises.
+`HERO_CONTEXT_PHASES` and the FLOPs baseline keep their meaning.
+
+Diagnostic arms pass `--long-context-start-step N` with their `--restore-from` step and the same `--seed`. The sequence
+stream then depends only on steps since `N`, so a one-rack arm reads a prefix of what a partial-rack arm reads. The
+sampler advances through each selected bucket's shuffled order and wraps that bucket when it runs out.
+
 Under context parallelism, `attention_context_layout` sets how FA4 assigns query rows to context
 shards. The default, `"zigzag"`, swaps the late half of each shard's queries with its mirror shard so
 every shard does equal causal work; `"contiguous"` keeps each shard's own rows and skips the swap.

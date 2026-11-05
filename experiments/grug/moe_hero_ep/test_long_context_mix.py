@@ -1,0 +1,269 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import dataclasses
+import shutil
+from collections import Counter
+from collections.abc import Callable
+from pathlib import Path
+
+import haliax as hax
+import jax
+import numpy as np
+import pytest
+from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
+from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.formats import TextLmDatasetFormat, preprocessor_for_format
+from levanter.schedule import BatchSchedule
+from levanter.store.cache import write_levanter_cache
+from levanter.tokenizers import load_tokenizer
+from marin.execution.lazy import StepContext
+from zephyr.context import ZephyrContext
+
+from experiments.grug.base.train import build_train_dataset as build_base_dataset
+from experiments.grug.fast_track.train import build_train_dataset as build_fast_track_dataset
+from experiments.grug.moe.train import build_train_dataset as build_moe_dataset
+from experiments.grug.moe_hero_ep import harrier_long_context_mix, launch_scaling_ladder
+from experiments.grug.moe_hero_ep.harrier_length_stats import write_length_stats
+from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
+    LONG_CONTEXT_TAG,
+    harrier_long_context_data_config,
+    long_document_share,
+    long_partition_passes,
+    overall_long_partition_passes,
+    read_length_tokens,
+)
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import _SPEC
+from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
+from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
+from experiments.grug.moe_hero_ep.train import build_train_dataset as build_hero_dataset
+from experiments.grug.moe_hero_fsdp.train import build_train_dataset as build_fsdp_dataset
+from experiments.june_tpu_67b_a2b.moe.train import build_train_dataset as build_june_dataset
+
+SEQ_LEN = 8
+START_STEP = 390_251
+# Bucket: short tokens, long tokens. Token ids encode the bucket and partition.
+TOKENS = {"c01q0": (832, 160), "c02q3": (240, 0)}
+WEIGHTS = {"c01q0": 0.75, "c02q3": 0.25}
+FIRST_ID = {("c01q0", "lte_64k"): 1000, ("c01q0", "gt_64k"): 3000, ("c02q3", "lte_64k"): 5000}
+TOKENIZER_FILES = ("gpt2_tokenizer.json", "tokenizer.json"), ("gpt2_tokenizer_config.json", "tokenizer_config.json")
+LEVANTER_TESTS = Path(__file__).parents[3] / "lib/levanter/tests"
+
+
+@dataclasses.dataclass(frozen=True)
+class HeroStore:
+    store: Path
+    stats_path: Path
+    data_config: Callable[[], LmDataConfig]
+
+
+def _fingerprint_config(step):
+    return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+
+@pytest.fixture
+def zephyr_context(tmp_path):
+    client = LocalClient()
+    context = ZephyrContext(
+        client=client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="length-stats-test",
+    )
+    yield context
+    context.shutdown()
+    client.shutdown(wait=True)
+
+
+@pytest.fixture
+def fake_store(tmp_path, monkeypatch, zephyr_context):
+    """A two-bucket store on disk, with the mix restricted to those buckets."""
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    for source, target in TOKENIZER_FILES:
+        shutil.copy(LEVANTER_TESTS / source, tokenizer_dir / target)
+    metadata = preprocessor_for_format(
+        TextLmDatasetFormat(), load_tokenizer(str(tokenizer_dir)), enforce_bos=True, enforce_eos=True
+    ).metadata
+    store = tmp_path / "store"
+    for cell in TOKENS:
+        docs = []
+        for partition in ("lte_64k", "gt_64k"):
+            first_id = FIRST_ID.get((cell, partition))
+            if first_id is None:
+                continue
+            tokens = TOKENS[cell][partition == "gt_64k"]
+            doc_len = 32 if partition == "gt_64k" else 8
+            ids = np.arange(first_id, first_id + tokens, dtype=np.int32)
+            docs.extend({"input_ids": ids[start : start + doc_len]} for start in range(0, tokens, doc_len))
+        path = store / f"cluster={int(cell[1:3])}/quality={cell[4]}"
+        write_levanter_cache(docs, str(path), metadata=metadata)
+    stats_path = tmp_path / "stats"
+    write_length_stats(
+        str(stats_path), str(store), tuple(TOKENS), thresholds=(8, 16, 32), chunk_rows=8, zephyr_context=zephyr_context
+    )
+    monkeypatch.setattr(harrier_long_context_mix, "_COOLDOWN_WEIGHTS", WEIGHTS)
+    monkeypatch.setattr(harrier_long_context_mix, "LONG_CONTEXT_THRESHOLD", 16)
+
+    def config():
+        built = harrier_long_context_data_config(
+            ctx=StepContext.for_fingerprint(),
+            start_step=START_STEP,
+            max_seq_len=SEQ_LEN,
+            validation=(),
+            store=str(store),
+            stats_path=str(stats_path),
+        )
+        return dataclasses.replace(built, tokenizer=str(tokenizer_dir), mixture_block_size=16)
+
+    return HeroStore(store, stats_path, config)
+
+
+def _partition(token: int) -> tuple[str, str]:
+    first_id = max(first for first in FIRST_ID.values() if first <= token)
+    return next(key for key, value in FIRST_ID.items() if value == first_id)
+
+
+@pytest.mark.parametrize(
+    "build_dataset",
+    [
+        build_base_dataset,
+        build_fast_track_dataset,
+        build_moe_dataset,
+        build_fsdp_dataset,
+        build_hero_dataset,
+        build_june_dataset,
+    ],
+    ids=["base", "fast-track", "moe", "hero-fsdp", "hero-ep", "june"],
+)
+@pytest.mark.parametrize(
+    ("skew", "block_size", "expected_sequences"),
+    [
+        (1, 124, {("c01q0", "lte_64k"): 78, ("c01q0", "gt_64k"): 15, ("c02q3", "lte_64k"): 31}),
+        (8, 132, {("c01q0", "lte_64k"): 39, ("c01q0", "gt_64k"): 60, ("c02q3", "lte_64k"): 33}),
+    ],
+)
+def test_statistics_weight_bucket_sampling_and_preserve_cell_share(
+    fake_store, build_dataset, skew, block_size, expected_sequences
+):
+    data = fake_store.data_config()
+    data = dataclasses.replace(
+        data,
+        components={
+            name: dataclasses.replace(component, long_weight=skew) for name, component in data.components.items()
+        },
+        mixture_block_size=block_size,
+    )
+
+    dataset = build_dataset(
+        data, max_seq_len=SEQ_LEN, batch_schedule=BatchSchedule(1), key=jax.random.PRNGKey(0)
+    ).as_sync_dataset()
+    examples = dataset.get_batch(list(range(START_STEP, START_STEP + block_size)))
+    # EOS and padding sit outside the store's token ids.
+    tokens = Counter(
+        _partition(int(token)) for example in examples for token in np.asarray(example.tokens) if 1000 <= token < 50_000
+    )
+
+    assert tokens == {partition: sequences * SEQ_LEN for partition, sequences in expected_sequences.items()}
+
+
+def test_virtual_buckets_contain_each_source_token_once(fake_store):
+    data = fake_store.data_config()
+    sources = data.train_sets(hax.Axis("position", SEQ_LEN), key=jax.random.PRNGKey(0))
+    assert set(sources) == {"c01q0/short", "c01q0/long", "c02q3/short"}
+    for (cell, partition), first_id in FIRST_ID.items():
+        bucket = sources[f"{cell}/{'long' if partition == 'gt_64k' else 'short'}"].as_sync_dataset()
+        examples = bucket.get_batch(list(range(len(bucket))))
+        actual = np.concatenate([np.asarray(example.tokens) for example in examples])
+        expected = np.arange(first_id, first_id + TOKENS[cell][partition == "gt_64k"])
+        np.testing.assert_array_equal(np.sort(actual), expected)
+    assert data.validation_sets(hax.Axis("position", SEQ_LEN)) == {}
+
+
+def test_read_length_tokens(fake_store):
+    assert read_length_tokens(str(fake_store.stats_path)) == TOKENS
+
+
+def test_reported_share_and_passes(monkeypatch):
+    monkeypatch.setattr(harrier_long_context_mix, "_COOLDOWN_WEIGHTS", {"a": 0.5, "b": 0.5})
+    tokens = {"a": (300, 100), "b": (100, 0)}
+
+    assert long_document_share(tokens, 1) == pytest.approx(0.125)
+    assert long_document_share(tokens, 4) == pytest.approx(0.5 * 400 / 700)
+    # Half of 1000 tokens go to a cell whose 100 long tokens get weight 400/700.
+    assert long_partition_passes(tokens, 4, 1000) == pytest.approx({"a": 500 * 4 / 700})
+    assert overall_long_partition_passes(tokens, 4, 1000) == pytest.approx(500 * 4 / 700)
+
+
+def test_hero_on_starts_the_store_where_its_context_history_ends(monkeypatch):
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_USES_LONG_CONTEXT_MIX", True)
+
+    step = build_ladder_run(run_id="test-long-context-on", size="d6144", version="dev")
+    config = _fingerprint_config(step)
+
+    phases = launch_scaling_ladder.HERO_CONTEXT_PHASES
+    assert config.data.mixture_start_step == phases[-1].end_step
+    assert config.data.prior_context_phases == []
+    assert config.data.target_budget is None
+    # The FLOPs baseline keeps following the context history.
+    assert config.flops_baseline.completed_steps == phases[-1].end_step
+    train_weights = config.data.train_weights
+    assert len(train_weights) == 1
+    cooldown = dict(_SPEC.phase_weights[-1])
+    assert {name: weight for name, weight in train_weights[0][1].items() if weight > 0} == {
+        cell: weight for cell, weight in cooldown.items() if weight > 0
+    }
+    validation = {dep.name for dep in step.deps} & train_weights[0][1].keys()
+    assert validation and all(train_weights[0][1][name] == 0 for name in validation)
+    assert LONG_CONTEXT_TAG in config.trainer.trainer.tracker.tags
+
+
+def test_diagnostic_arms_select_the_same_data_on_any_rack_count():
+    def arm(racks: int):
+        return _fingerprint_config(
+            build_diagnostic_run(
+                run_id=f"test-long-context-{racks}",
+                dp_racks=racks,
+                num_steps=390_251,
+                schedule_steps=390_251,
+                max_seq_len=262_144,
+                batch_size=16 * racks,
+                context_axis_size=4,
+                expert_axis_size=16,
+                long_context_start_step=390_000,
+                version="dev",
+            )
+        )
+
+    one_rack, four_racks = arm(1), arm(4)
+
+    assert one_rack.data == four_racks.data
+    assert one_rack.data.mixture_start_step == 390_000
+    assert LONG_CONTEXT_TAG in one_rack.trainer.trainer.tracker.tags
+
+
+@pytest.mark.parametrize("launcher", ["hero", "diagnostic"])
+def test_statistics_dependency_resolves_in_each_training_prefix(tmp_path, monkeypatch, launcher):
+    if launcher == "hero":
+        monkeypatch.setattr(launch_scaling_ladder, "HERO_USES_LONG_CONTEXT_MIX", True)
+        step = build_ladder_run(run_id="test-stats-dependency", size="d6144", version="dev")
+    else:
+        step = build_diagnostic_run(
+            run_id="test-stats-dependency", dp_racks=1, num_steps=25, long_context_start_step=0, version="dev"
+        )
+
+    for prefix in (tmp_path / "first-region", tmp_path / "second-region"):
+        ctx = StepContext.for_run(
+            output_path=str(prefix / "run"), prefix=str(prefix), runtime_args=step.runtime_args, deps=step.deps
+        )
+        config = step.build_config(ctx)
+        statistics_path = config.data.components["c00q0"].stats_path
+        assert Path(statistics_path).is_relative_to(prefix)
+        dependency = next(dep for dep in step.deps if dep.path(str(prefix)) == statistics_path)
+        stats_config = dependency.build_config(
+            StepContext.for_run(output_path=statistics_path, prefix=str(prefix), deps=dependency.deps)
+        )
+        assert stats_config.output_path == statistics_path
+        assert stats_config.store == ctx.artifact_path(dependency.deps[0])
