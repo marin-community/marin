@@ -8,14 +8,14 @@ import pyarrow.parquet as pq
 import pytest
 
 from eval.chat_benchmarks.GenomeQA import eval_instruct as genomeqa_source
+from eval.chat_benchmarks.GenomeQAMotifMCQ.eval_instruct import GenomeQAMotifMCQBenchmark
 from eval.completion_response import CompletionContentPolicy, CompletionText, completion_response_from_chat_choice
 from eval.contracts.eval_spec import EvalSpec, GraderSpec
 from eval.execution.engine import ItemResult
 from eval.execution.metrics import SourceMetrics
-from eval.chat_benchmarks.GenomeQAMotifMCQ.eval_instruct import GenomeQAMotifMCQBenchmark
 from eval.graders.genomeqa import genomeqa
-from eval.sources.common import SourceOptions
 from eval.limits import ContextWindowExceededError
+from eval.sources.common import SourceOptions
 
 
 def completion(content, *, reasoning=None, finish="stop", refusal=None):

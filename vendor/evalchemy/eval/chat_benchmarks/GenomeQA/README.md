@@ -15,7 +15,7 @@ The source verifies file checksums and preserves question text and option order.
 It reads `SIMPLE_SYSTEM_PROMPT` as a literal from the pinned original runner;
 it never executes that Python file. The runner prompt is not bundled here.
 Figure 8 of the CC BY paper is shorter and is not an interchangeable prompt.
-The rendered prompt hash and source revisions are recorded in result metadata.
+The system-prompt hash and source revisions are recorded in result metadata.
 
 Generation uses one response, temperature 0.7, top-p 0.95, and a 16,384-token
 cap. Conflicting settings fail before generation. Full-prompt context preflight
