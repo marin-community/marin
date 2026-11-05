@@ -479,7 +479,7 @@ def build_evaluation_batch(
                 "evaluation": _evaluation_identity(definition.record_ref),
                 **(
                     {"runtime": definition.cache_runtime_descriptor}
-                    if spec.cache_key is not None and definition.cache_runtime_descriptor is not None
+                    if definition.cache_runtime_descriptor is not None
                     else {}
                 ),
                 "judge": (
@@ -582,7 +582,12 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
     evaluations = []
     for evaluation in batch.evaluations:
         prior = next(
-            (record for record in records if _same_evaluation(record.evaluation, evaluation.identity.eval_ref)),
+            (
+                record
+                for record in records
+                if _same_evaluation(record.evaluation, evaluation.identity.eval_ref)
+                and record.provenance.eval_runtime == evaluation.identity.eval_runtime
+            ),
             None,
         )
         if prior is not None:
