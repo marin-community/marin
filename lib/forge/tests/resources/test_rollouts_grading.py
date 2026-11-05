@@ -79,7 +79,7 @@ async def test_grading_timeout_replays_candidate_on_new_attempt_once() -> None:
     grader = GradingResource(engine, {"task": rollout_spec(arithmetic_task())}, "config")
     assert await grader.grade(GradeCandidate("task", Candidate("12"))) == success
     assert engine.replies == ["12", "12"]
-    assert engine.run_ids == ["task:grade:0", "task:grade:1"]
+    assert len(set(engine.run_ids)) == 2
 
 
 async def test_grading_repeated_timeout_returns_the_second_grade() -> None:

@@ -7,12 +7,11 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import ClassVar, Protocol, override
 
-from rigging.cache import combined_content_hash
 from taskforge.llm.client import RETRYABLE_STATUSES, Attempt, AttemptOutcome, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.client import Completion as ProviderCompletion
 from taskforge.llm.policy import LLMPolicy, ReasoningEffort
 
-from forge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying
+from forge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, canonical_digest
 from forge.effects.issues import Hold, Restart, Transient
 from forge.model.llm import Completion, FinishReason, Message, Sampling, ToolCall, ToolSchema, Usage
 from forge.model.serialization import TOOL_SCHEMA
@@ -71,9 +70,7 @@ class GlmInference(InferenceClient):
 
     @override
     def fingerprint(self) -> Fingerprint:
-        return Fingerprint(
-            "inference", combined_content_hash((self.client.model, self.provider_digest)), ReplayPolicy.CACHE
-        )
+        return Fingerprint("inference", canonical_digest((self.client.model, self.provider_digest)), ReplayPolicy.CACHE)
 
     async def _attempts(self, request: InferenceRequest, attempts: Sequence[Attempt]) -> None:
         # GlmClient owns transport retries. Report them without retrying an exhausted logical call.

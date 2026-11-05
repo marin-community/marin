@@ -16,7 +16,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure
 from taskcompendium.models import AssistantToolCalls, TextMessage
 from taskcompendium.runtime.resources import resource_bytes
 
-from forge.effects.events import Event, Fingerprint, ReplayPolicy
+from forge.effects.events import Event, Fingerprint, ReplayPolicy, event_digest
 from forge.effects.issues import Hold
 from forge.model.controls import Candidate
 from forge.resources.rollouts import Engine, interruption
@@ -91,7 +91,7 @@ class GradingResource:
         )
         for attempt in range(2):
             try:
-                result = await self.engine.run_task(spec, model, run_id=f"{event.task_digest}:grade:{attempt}")
+                result = await self.engine.run_task(spec, model, run_id=f"{event_digest(event)}:grade:{attempt}")
             except RolloutInterrupted as error:
                 raise interruption(error) from error
             if result.grade.failure != GradingFailure.TIMEOUT or attempt == 1:

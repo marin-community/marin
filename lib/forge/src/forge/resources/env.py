@@ -7,18 +7,16 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import ClassVar, Protocol, override
 
-from rigging.cache import combined_content_hash
 from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineTerminated
 from taskcompendium.models import EnvironmentRequirements
 
-from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved
+from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, canonical_digest
 from forge.effects.issues import Hold, Restart, Transient
 
 
@@ -74,7 +72,7 @@ def _stable(result: CommandResult) -> tuple[str, ...]:
 
 class _RecordedEnv(Env):
     def __init__(self, image: str, notify: Notify) -> None:
-        self.digest = combined_content_hash((image,))
+        self.digest = canonical_digest((image,))
         self.notify = notify
         self.closed = False
 
@@ -83,10 +81,10 @@ class _RecordedEnv(Env):
         return Fingerprint("env", self.digest, ReplayPolicy.REEXECUTE)
 
     def _record_command(self, cmd: str, timeout: float, result: CommandResult) -> None:
-        self.digest = combined_content_hash((self.digest, "command", cmd, str(timeout), *_stable(result)))
+        self.digest = canonical_digest((self.digest, "command", cmd, float(timeout), *_stable(result)))
 
     def _record_write(self, path: PurePosixPath, data: bytes) -> None:
-        self.digest = combined_content_hash((self.digest, "write", str(path), sha256(data).hexdigest()))
+        self.digest = canonical_digest((self.digest, "write", str(path), canonical_digest(data)))
 
     @override
     async def restore(self, events: Sequence[Mutation]) -> None:
@@ -195,7 +193,7 @@ class ShellboxEnvFactory(EnvFactory):
             raise Restart("Environment machine terminated during startup") from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
-        image = combined_content_hash((requirements.model_dump_json(), self.runtime.model_dump_json()))
+        image = canonical_digest((requirements, self.runtime))
         return ShellboxEnv(machine, image, self.notify, owned)
 
 
