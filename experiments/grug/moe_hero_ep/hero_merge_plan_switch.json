@@ -1,0 +1,81 @@
+{
+  "checkpoint_root": "s3://marin-us-east-02a/marin/grug/hero-ctx65k-step372k/2026.08.19.2/checkpoints",
+  "source_roots": {
+    "372000": "s3://marin-us-east-02a/marin/grug/hero-gradclip-step356k/2026.08.19.2/checkpoints",
+    "366000": "s3://marin-us-east-02a/marin/grug/hero-gradclip-step356k/2026.08.19.2/checkpoints",
+    "360000": "s3://marin-us-east-02a/marin/grug/hero-gradclip-step356k/2026.08.19.2/checkpoints"
+  },
+  "qk_mult": 1.66,
+  "score_raw_steps": [
+    390000,
+    384000,
+    378000,
+    372000,
+    366000,
+    360000
+  ],
+  "windows": {
+    "X2": [
+      390000,
+      384000
+    ],
+    "X3": [
+      390000,
+      384000,
+      378000
+    ],
+    "X4": [
+      390000,
+      384000,
+      378000,
+      372000
+    ],
+    "X5": [
+      390000,
+      384000,
+      378000,
+      372000,
+      366000
+    ],
+    "X6": [
+      390000,
+      384000,
+      378000,
+      372000,
+      366000,
+      360000
+    ]
+  },
+  "candidates": [
+    {
+      "name": "X2",
+      "mix": {
+        "X2": 1.0
+      }
+    },
+    {
+      "name": "X3",
+      "mix": {
+        "X3": 1.0
+      }
+    },
+    {
+      "name": "X4",
+      "mix": {
+        "X4": 1.0
+      }
+    },
+    {
+      "name": "X5",
+      "mix": {
+        "X5": 1.0
+      }
+    },
+    {
+      "name": "X6",
+      "mix": {
+        "X6": 1.0
+      }
+    }
+  ]
+}

@@ -27,6 +27,7 @@ from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig, _pin_shar
 WEIGHT_SUM_TOLERANCE = 1e-9
 UNIFORM_WEIGHT_TOLERANCE = 1e-12
 FIXED_NORM_OPTIMIZERS = ("muonh", "adamh")
+EXPERT_BANK_PREFIX = "stacked_blocks.stacked.mlp.expert_mlp."
 
 
 class BiasSource(StrEnum):
@@ -50,22 +51,30 @@ class MergeBias:
 
 @dataclass(frozen=True)
 class MergeCandidate:
-    """One merge to score. Without ``bias``, the bias mixes linearly with the other parameters."""
+    """One merge to score. Without ``bias``, the bias mixes linearly with the other parameters.
+
+    With ``expert_banks_only``, only the expert banks take the mix and all else stays the newest source's.
+    """
 
     name: str
     weights: tuple[SourceWeight, ...]
     bias: MergeBias | None = None
     reproject_to_newest: bool = False
+    expert_banks_only: bool = False
 
 
 @dataclass(frozen=True)
 class MergePlan:
-    """Candidates and raw checkpoints to score from ``step-N`` directories under ``checkpoint_root``."""
+    """Candidates and raw checkpoints to score from ``step-N`` directories under ``checkpoint_root``.
+
+    ``source_roots`` names another root for each step that a different run wrote.
+    """
 
     checkpoint_root: str
     qk_mult: float
     score_raw_steps: tuple[int, ...]
     candidates: tuple[MergeCandidate, ...]
+    source_roots: tuple[tuple[int, str], ...] = ()
 
     def __post_init__(self):
         names = [candidate.name for candidate in self.candidates]
@@ -80,6 +89,9 @@ class MergePlan:
             if candidate.bias is not None:
                 steps.update(entry.step for entry in candidate.bias.weights)
         return tuple(sorted(steps, reverse=True))
+
+    def source_path(self, step: int) -> str:
+        return f"{dict(self.source_roots).get(step, self.checkpoint_root)}/step-{step}"
 
 
 @dataclass(frozen=True)
@@ -117,6 +129,7 @@ def merge_plan_from_json(text: str) -> MergePlan:
                 weights=_mix_weights(entry["mix"], windows),
                 bias=None if bias is None else MergeBias(BiasSource(bias["source"]), _mix_weights(bias["mix"], windows)),
                 reproject_to_newest=entry.get("reproject_to_newest", False),
+                expert_banks_only=entry.get("expert_banks_only", False),
             )
         )
     return MergePlan(
@@ -124,6 +137,7 @@ def merge_plan_from_json(text: str) -> MergePlan:
         qk_mult=raw["qk_mult"],
         score_raw_steps=tuple(raw["score_raw_steps"]),
         candidates=tuple(candidates),
+        source_roots=tuple((int(step), root) for step, root in raw.get("source_roots", {}).items()),
     )
 
 
@@ -185,6 +199,14 @@ def reproject_to_reference(params: Transformer, reference: Transformer) -> Trans
         return jax.tree.map(leaf_rescale, labels, params_in, reference_in)
 
     return rescale(params, reference)
+
+
+def with_expert_banks_only(params: Transformer, newest: Transformer) -> Transformer:
+    """Keep ``params`` on the expert banks and take every other leaf from ``newest``."""
+    names = leaf_key_paths(params)
+    return jax.tree.map(
+        lambda name, leaf, other: leaf if name.startswith(EXPERT_BANK_PREFIX) else other, names, params, newest
+    )
 
 
 def _named_leaves(tree: Transformer) -> dict[str, jax.Array]:

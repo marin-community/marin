@@ -12,7 +12,8 @@ stream's final partial sequence is kept with masked right padding, since at long
 are shorter than one sequence.
 
 With a merge plan, the job instead scores raw checkpoints and in-memory merges of them in one newest-first pass,
-under ``eval_merge/<name>/seq_len_<N>/...``. Merge metrics log at a pass index, since the checkpoint steps fall.
+under ``eval_merge/<name>/seq_len_<N>/...`` and ``eval_merge/<name>/mrcr/...``. Merge metrics log at a pass index,
+since the checkpoint steps fall.
 """
 
 import dataclasses
@@ -63,6 +64,7 @@ from experiments.grug.moe_hero_ep.checkpoint_merge import (
     reproject_to_reference,
     running_form,
     weighted_sum,
+    with_expert_banks_only,
     with_mixed_bias,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
@@ -135,8 +137,6 @@ class CheckpointEvalConfig:
     def __post_init__(self):
         if bool(self.checkpoints) == (self.merge is not None):
             raise ValueError("Set exactly one of checkpoints and merge")
-        if self.merge is not None and self.mrcr is not None:
-            raise ValueError("A merge plan does not run MRCR yet; score the chosen merge's MRCR separately")
         if not (self.seq_lens or self.mrcr) or len(set(self.seq_lens)) != len(self.seq_lens):
             raise ValueError(f"seq_lens must be distinct and non-empty without MRCR, got {self.seq_lens}")
         for seq_len in self.seq_lens:
@@ -224,6 +224,40 @@ def _build_evaluators(config: CheckpointEvalConfig, mesh: Mesh) -> dict[int, Tag
     return evaluators
 
 
+def _mrcr_metrics(
+    params: Transformer,
+    config: CheckpointEvalConfig,
+    model: GrugModelConfig,
+    mesh: Mesh,
+    *,
+    name: str,
+    checkpoint_path: str,
+    step: int,
+) -> dict[str, float]:
+    """Paired MRCR for one scored model, with its artifact under ``name`` in the run's own output."""
+    mrcr = config.mrcr
+    if mrcr is None:
+        raise ValueError("_mrcr_metrics needs an MRCR config")
+    return evaluate_mrcr(
+        params,
+        dataclasses.replace(mrcr, output_path=prefix_join(mrcr.output_path, name)),
+        mesh=mesh,
+        mp=config.trainer.mp,
+        implementation=config.dropless_moe_implementation,
+        record={
+            "dataset_revision": MRCR_DATASET_REVISION,
+            "checkpoint_path": checkpoint_path,
+            "checkpoint_step": step,
+            "qk_mult": model.qk_mult,
+            "qk_mult_long_scale": model.qk_mult_long_scale,
+            "log_scaling_n_floor": model.log_scaling_n_floor,
+            "log_scaling_alpha": model.log_scaling_alpha,
+            "context_axis_size": config.context_axis_size,
+            "max_batches": mrcr.max_batches,
+        },
+    )
+
+
 def evaluate_checkpoints(config: CheckpointEvalConfig) -> list[tuple[int, dict[str, float]]]:
     """Each checkpoint's step and dropless metrics, in ``config.checkpoints`` order.
 
@@ -243,25 +277,8 @@ def evaluate_checkpoints(config: CheckpointEvalConfig) -> list[tuple[int, dict[s
             metrics: dict[str, float] = {}
             if config.mrcr is not None:
                 metrics.update(
-                    evaluate_mrcr(
-                        params,
-                        dataclasses.replace(
-                            config.mrcr, output_path=prefix_join(config.mrcr.output_path, f"step-{step}")
-                        ),
-                        mesh=mesh,
-                        mp=config.trainer.mp,
-                        implementation=config.dropless_moe_implementation,
-                        record={
-                            "dataset_revision": MRCR_DATASET_REVISION,
-                            "checkpoint_path": checkpoint.path,
-                            "checkpoint_step": step,
-                            "qk_mult": checkpoint.qk_mult,
-                            "qk_mult_long_scale": model.qk_mult_long_scale,
-                            "log_scaling_n_floor": model.log_scaling_n_floor,
-                            "log_scaling_alpha": model.log_scaling_alpha,
-                            "context_axis_size": config.context_axis_size,
-                            "max_batches": config.mrcr.max_batches,
-                        },
+                    _mrcr_metrics(
+                        params, config, model, mesh, name=f"step-{step}", checkpoint_path=checkpoint.path, step=step
                     )
                 )
             for seq_len, evaluator in evaluators.items():
@@ -299,11 +316,13 @@ def evaluate_merge_plan(config: CheckpointEvalConfig) -> tuple[dict[str, dict[st
     to_host = jax.jit(lambda tree: _tree_to_memory_kind(tree, "pinned_host"))
     to_device = jax.jit(lambda tree: _tree_to_memory_kind(tree, "device"))
 
-    def path_of(step: int) -> str:
-        return prefix_join(plan.checkpoint_root, f"step-{step}")
-
-    def score(name: str, params: Transformer) -> None:
+    def score(name: str, params: Transformer, *, step: int) -> None:
         metrics: dict[str, float] = {}
+        if config.mrcr is not None:
+            mrcr = _mrcr_metrics(
+                params, config, model, mesh, name=name, checkpoint_path=plan.source_path(step), step=step
+            )
+            metrics.update({f"{MERGE_EVAL_PREFIX}/{name}/{key.removeprefix('eval/')}": v for key, v in mrcr.items()})
         for seq_len, evaluator in evaluators.items():
             with jax_config.enable_pgle(False):
                 metrics.update(eval_model(evaluator, params, prefix=f"{MERGE_EVAL_PREFIX}/{name}/seq_len_{seq_len}"))
@@ -312,15 +331,16 @@ def evaluate_merge_plan(config: CheckpointEvalConfig) -> tuple[dict[str, dict[st
 
     with set_mesh(mesh):
         evaluators = _build_evaluators(config, mesh)
-        template = _params_template(dataclasses.replace(config.model, qk_mult=plan.qk_mult), config.trainer.mp)
-        biases = {step: load_router_biases(template, path_of(step), mesh=mesh) for step in read_order}
+        model = dataclasses.replace(config.model, qk_mult=plan.qk_mult)
+        template = _params_template(model, config.trainer.mp)
+        biases = {step: load_router_biases(template, plan.source_path(step), mesh=mesh) for step in read_order}
         newest: Transformer | None = None
         running: Transformer | None = None
         accumulators: dict[str, Transformer] = {}
         for index, step in enumerate(read_order):
-            source, loaded_step = _load_params(template, path_of(step), mesh=mesh)
+            source, loaded_step = _load_params(template, plan.source_path(step), mesh=mesh)
             if loaded_step != step:
-                raise ValueError(f"{path_of(step)} holds step {loaded_step}")
+                raise ValueError(f"{plan.source_path(step)} holds step {loaded_step}")
             logger.info("Loaded merge source %d of %d: step %d", index + 1, len(read_order), step)
             if newest is None:
                 newest = running = to_host(source)
@@ -348,7 +368,7 @@ def evaluate_merge_plan(config: CheckpointEvalConfig) -> tuple[dict[str, dict[st
                     accumulators[candidate.name] = to_host(weighted_sum(terms))
                     del terms
             if step in plan.score_raw_steps:
-                score(f"step-{step}", source)
+                score(f"step-{step}", source, step=step)
             del source
             for candidate in plan.candidates:
                 if last_indices[candidate.name] != index:
@@ -366,10 +386,12 @@ def evaluate_merge_plan(config: CheckpointEvalConfig) -> tuple[dict[str, dict[st
                     del terms
                 if candidate.reproject_to_newest:
                     merged = reproject_to_reference(merged, to_device(newest))
+                if candidate.expert_banks_only:
+                    merged = with_expert_banks_only(merged, to_device(newest))
                 if candidate.bias is not None:
                     merged = with_mixed_bias(merged, candidate.bias, biases)
                 logger.info("Scoring merge candidate %s after step %d", candidate.name, step)
-                score(candidate.name, merged)
+                score(candidate.name, merged, step=step)
                 del merged
             if index >= last_running_index:
                 running = None  # no later candidate reads it

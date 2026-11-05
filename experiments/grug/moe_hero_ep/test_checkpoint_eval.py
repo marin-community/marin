@@ -6,6 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
@@ -36,6 +37,7 @@ from experiments.grug.moe_hero_ep.launch_checkpoint_eval import (
     evaluate_checkpoints,
     evaluate_merge_plan,
 )
+from experiments.grug.moe_hero_ep.mrcr_eval import MrcrEvalConfig
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import _reshard_tree_to_mesh
 
@@ -188,8 +190,17 @@ def _tree_digest(root: Path) -> dict[str, str]:
 
 
 @pytest.mark.timeout(480)
-def test_merge_plan_scores_each_candidate_as_its_recipe_without_writing_to_the_checkpoints(tmp_path):
+def test_merge_plan_scores_each_candidate_as_its_recipe_without_writing_to_the_checkpoints(tmp_path, monkeypatch):
     """Every code path of a pass (running sum, own accumulator, bias mix, reprojection) against direct arithmetic."""
+    mrcr_outputs: dict[str, float] = {}
+
+    def fake_evaluate_mrcr(params, mrcr_config, **_):
+        # MRCR's own scoring has its tests; here it must see the candidate's weights and keep its artifact apart.
+        value = float(jnp.sum(jnp.square(params.token_embed)))
+        mrcr_outputs[mrcr_config.output_path] = value
+        return {"eval/mrcr/embed_norm2": value}
+
+    monkeypatch.setattr(launch_checkpoint_eval, "evaluate_mrcr", fake_evaluate_mrcr)
     config = _tiny_merge_config()
     stream = (np.arange(64) % 61 + 1).astype(np.int32)
     windows = {"T": [40], "U3": [40, 30, 20], "S10": [10]}
@@ -208,7 +219,9 @@ def test_merge_plan_scores_each_candidate_as_its_recipe_without_writing_to_the_c
                     {"name": "blend", "mix": {"T": 0.75, "U3": 0.25}},
                     {"name": "blend+reproject", "mix": {"T": 0.75, "U3": 0.25}, "reproject_to_newest": True},
                     {"name": "sparse", "mix": {"T": 0.5, "S10": 0.5}},
+                    {"name": "blend+experts", "mix": {"T": 0.75, "U3": 0.25}, "expert_banks_only": True},
                 ],
+                "source_roots": {"10": str(tmp_path / "older")},
             }
         )
     )
@@ -237,7 +250,7 @@ def test_merge_plan_scores_each_candidate_as_its_recipe_without_writing_to_the_c
                     save_checkpoint(
                         {"step": jnp.array(step, dtype=jnp.int32), "params": params, "pending_qb_betas": pending[step]},
                         step=step,
-                        checkpoint_path=f"{tmp_path}/checkpoints/step-{step}",
+                        checkpoint_path=plan.source_path(step),
                         is_temporary=False,
                     )
             before = _tree_digest(tmp_path)
@@ -252,6 +265,9 @@ def test_merge_plan_scores_each_candidate_as_its_recipe_without_writing_to_the_c
                 eval_tokens_per_batch=64,
                 dropless_moe_implementation="scatter",
                 compute_bpb=False,
+                mrcr=MrcrEvalConfig(
+                    data_path="unused", output_path="mrcr-output", tokenizer=directory, batch_size=1, max_batches=None
+                ),
             )
             scores, distances = evaluate_merge_plan(eval_config)
             assert _tree_digest(tmp_path) == before
@@ -276,6 +292,11 @@ def test_merge_plan_scores_each_candidate_as_its_recipe_without_writing_to_the_c
                 "blend": mix(blend),
                 "blend+reproject": _reproject_reference(mix(blend), sources[40]),
                 "sparse": mix({40: 0.5, 10: 0.5}),
+                "blend+experts": eqx.tree_at(
+                    lambda params: params.stacked_blocks.stacked.mlp.expert_mlp,
+                    sources[40],
+                    mix(blend).stacked_blocks.stacked.mlp.expert_mlp,
+                ),
             }
 
             eval_mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
@@ -292,11 +313,16 @@ def test_merge_plan_scores_each_candidate_as_its_recipe_without_writing_to_the_c
                     return float(jnp.sum(per_token * loss_weight) / loss_weight.sum())
 
                 reference = {name: direct(params) for name, params in expected.items()}
+                embed_norm2 = {
+                    name: float(np.sum(np.square(np.asarray(params.token_embed)))) for name, params in expected.items()
+                }
 
     prefix = "eval_merge/{}/seq_len_8/paloma/tiny/loss"
     assert set(scores) == set(reference)
     for name, value in reference.items():
         np.testing.assert_allclose(scores[name][prefix.format(name)], value, rtol=1e-4, err_msg=name)
+        np.testing.assert_allclose(scores[name][f"eval_merge/{name}/mrcr/embed_norm2"], embed_norm2[name], rtol=1e-4)
+        np.testing.assert_allclose(mrcr_outputs[f"mrcr-output/{name}"], embed_norm2[name], rtol=1e-4)
     # The recipes are distinct models, so a candidate that silently scored the raw weights would fail above.
     assert len({round(value, 4) for value in reference.values()}) == len(reference)
 
@@ -352,6 +378,19 @@ def test_reprojection_restores_each_fixed_norm_to_the_reference_and_leaves_adam_
             # Adam groups have no fixed norm, so they keep the plain mean.
             np.testing.assert_array_equal(np.asarray(reprojected.token_embed), np.asarray(mean.token_embed))
             np.testing.assert_array_equal(np.asarray(mlp.router), np.asarray(mean.stacked_blocks.stacked.mlp.router))
+
+
+def test_switch_plan_reads_a_nested_chain_across_two_trees_on_one_running_sum():
+    plan_path = Path(launch_checkpoint_eval.__file__).parent / "hero_merge_plan_switch.json"
+    plan = merge_plan_from_json(plan_path.read_text())
+    read_order = plan.source_steps()
+    assert read_order == (390000, 384000, 378000, 372000, 366000, 360000)
+    assert "hero-ctx65k-step372k" in plan.source_path(378000)
+    # The switch-point checkpoint was written by the run that trained at 16K.
+    assert "hero-gradclip-step356k" in plan.source_path(372000)
+    for k, candidate in enumerate(plan.candidates, start=2):
+        form = running_form(candidate.weights, read_order)
+        np.testing.assert_allclose([form.newest, form.running, form.last_index], [0.0, 1 / k, k - 1], atol=1e-12)
 
 
 def test_stage1_plan_reads_each_source_once_newest_first_with_tsa_alpha_on_the_mean():
