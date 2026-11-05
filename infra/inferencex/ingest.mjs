@@ -7,6 +7,9 @@ import { resolve, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 
+const HERO_HOSTS = 4;
+const HERO_GPUS_PER_HOST = 4;
+
 const artifacts = resolve(process.argv[2] ?? '/artifacts');
 const read = (path) => JSON.parse(readFileSync(path, 'utf8'));
 const bundle = read(join(artifacts, 'agentx-source.json'));
@@ -90,15 +93,15 @@ for (const point of bundle.points) {
     const gang = read(join(artifacts, suffix, 'gang.json'));
     const tasks = gang.tasks;
     if (
-      !Array.isArray(tasks) || tasks.length !== 4 ||
-      new Set(tasks.map((task) => task.iris_node_name)).size !== 4 ||
+      !Array.isArray(tasks) || tasks.length !== HERO_HOSTS ||
+      new Set(tasks.map((task) => task.iris_node_name)).size !== HERO_HOSTS ||
       tasks.some((task) =>
         task.status !== 'succeeded' ||
         gang.attempts[task.iris_task_id.replace(/:\d+$/u, '')] !== task.iris_attempt_uid ||
         !isDeepStrictEqual(task.source, source) ||
         task.recipe_fingerprint !== point.manifest.recipe_fingerprint ||
         !point.manifest.placement.nodes.includes(task.iris_node_name) ||
-        task.gpu_uuids.length !== 4) ||
+        task.gpu_uuids.length !== HERO_GPUS_PER_HOST) ||
       new Set(tasks.flatMap((task) => task.gpu_uuids)).size !== hardware.gpus
     ) {
       throw new Error('Hero requires one validated four-host, sixteen-GPU attempt set');
