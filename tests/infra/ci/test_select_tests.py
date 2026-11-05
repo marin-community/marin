@@ -197,7 +197,6 @@ def test_standalone_rollout_dependencies_select_marin_and_experiment_consumers(
         ([], True),
         (["pyproject.toml"], False),
         (["experiments/moe/conftest.py"], False),
-        (["experiments/moe/fixtures/weights.json"], False),
     ],
 )
 def test_full_marin_suite_includes_experiment_tests(
@@ -209,6 +208,55 @@ def test_full_marin_suite_includes_experiment_tests(
     selection = select_changed_tests(changed_files, tmp_path, run_all_tests=run_all_tests)
 
     assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
+
+
+def _experiment_areas(repo_root: Path) -> None:
+    write(repo_root, "experiments/moe/test_optimizer.py", "def test_optimizer():\n    assert True\n")
+    write(repo_root, "experiments/moe/data/test_loader.py", "def test_loader():\n    assert True\n")
+    write(repo_root, "experiments/grug/test_model.py", "def test_model():\n    assert True\n")
+    write(
+        repo_root,
+        "tests/test_moe_configs.py",
+        'CONFIG = "experiments/moe/configs/base.yaml"\n\ndef test_config():\n    assert CONFIG\n',
+    )
+    write(
+        repo_root,
+        "tests/test_moe_tree.py",
+        'from pathlib import Path\n\nROOT = Path("x") / "experiments" / "moe"\n\ndef test_tree():\n    assert ROOT\n',
+    )
+    write(repo_root, "tests/test_root.py", "def test_root():\n    assert True\n")
+
+
+@pytest.mark.parametrize(
+    "changed_file",
+    ["experiments/moe/fixtures/weights.json", "experiments/moe/configs/base.yaml", "experiments/moe/launch.sh"],
+)
+def test_experiment_asset_selects_its_area_and_tests_that_name_it(tmp_path: Path, changed_file: str) -> None:
+    _experiment_areas(tmp_path)
+
+    matrix = select_matrix([changed_file], tmp_path)
+
+    assert leg_paths(matrix, "marin") == [
+        "experiments/moe/data/test_loader.py",
+        "experiments/moe/test_optimizer.py",
+        "tests/test_moe_configs.py",
+        "tests/test_moe_tree.py",
+    ]
+
+
+def test_experiment_readme_selects_no_tests(tmp_path: Path) -> None:
+    _experiment_areas(tmp_path)
+
+    assert select_matrix(["experiments/moe/README.md", "experiments/README.md"], tmp_path) == []
+
+
+def test_asset_directly_in_experiments_runs_full_marin_suite(tmp_path: Path) -> None:
+    _experiment_areas(tmp_path)
+
+    matrix = select_matrix(["experiments/defaults.yaml"], tmp_path)
+
+    assert "tests/test_root.py" in leg_paths(matrix, "marin")
+    assert "experiments/grug/test_model.py" in leg_paths(matrix, "marin")
 
 
 def test_deleted_experiment_source_runs_full_marin_suite(tmp_path: Path) -> None:

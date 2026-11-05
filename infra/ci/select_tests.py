@@ -24,6 +24,7 @@ Usage:
 import argparse
 import ast
 import json
+import re
 import subprocess
 import tomllib
 from collections import defaultdict
@@ -124,11 +125,14 @@ DIFF_DRIVEN_REASON = "diff-driven"
 TEST_DIRS: dict[str, tuple[str, ...]] = {
     **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
     "deploy": ("infra/deploy/tests",),
-    # The Loom Pulumi program imports iac and runs in its environment. Like experiments,
-    # it mixes source and tests, so its non-Python inputs force the scope.
+    # The Loom Pulumi program imports iac and runs in its environment. It mixes source
+    # and tests, so its non-Python inputs force the scope.
     "iac": ("infra/pulumi/tests", "infra/loom"),
     "marin": ("tests", "experiments"),
 }
+
+EXPERIMENTS_DIR = "experiments"
+EXPERIMENT_README = "README.md"
 
 # Files outside a scope's test directories that its tests read. The import graph cannot
 # see these reads, so a change to one runs the whole scope.
@@ -758,6 +762,7 @@ def classify(
     direct_tests: dict[str, list[str]] = defaultdict(list)
     forced: set[str] = set()
     native_changed: set[str] = set()
+    experiment_asset_areas: set[str] = set()
 
     for filepath in changed_files:
         if filepath in broad_triggers:
@@ -804,6 +809,13 @@ def classify(
                     if not (repo_root / filepath).exists():
                         forced.add(scope)
                     break
+                # No test reads a checked-in experiment README.
+                if filepath.startswith(f"{EXPERIMENTS_DIR}/") and filename == EXPERIMENT_README:
+                    break
+                area = experiment_asset_area(filepath)
+                if area is not None:
+                    experiment_asset_areas.add(area)
+                    break
                 # conftest.py, helper modules (stubs, workload scripts, generators), and
                 # non-Python assets (snapshots, fixtures, data files) can all change test
                 # behavior without being directly collectable: run the full scope so the
@@ -823,6 +835,10 @@ def classify(
             if filepath in (f"{package_root}/conftest.py", f"{package_root}/pyproject.toml"):
                 forced.add(scope)
                 break
+
+    if experiment_asset_areas:
+        asset_tests = experiment_asset_tests(experiment_asset_areas, repo_root)
+        direct_tests["marin"] = sorted(set(direct_tests["marin"]) | set(asset_tests))
 
     return ClassifyResult(
         broad=broad,
@@ -941,6 +957,37 @@ def all_test_files(scope: str, repo_root: Path) -> list[str]:
     return sorted(
         str(py.relative_to(repo_root)) for py in _test_tree(scope, repo_root).values() if is_test_module(py.name)
     )
+
+
+def experiment_asset_area(filepath: str) -> str | None:
+    """The ``experiments/<area>`` name owning a non-Python file, or None.
+
+    Python files, and files directly in ``experiments/``, have no area: they keep the
+    import-graph or full-scope handling.
+    """
+    parts = PurePosixPath(filepath).parts
+    if len(parts) < 3 or parts[0] != EXPERIMENTS_DIR or filepath.endswith(".py"):
+        return None
+    return parts[1]
+
+
+def experiment_asset_tests(areas: set[str], repo_root: Path) -> list[str]:
+    """Marin test files that may read a non-Python file under ``experiments/<area>/``.
+
+    Tests read configs and fixtures through paths the import graph cannot see, from
+    anywhere in their area (a sibling ``fixtures/`` directory, ``../datasets``, a
+    campaign config several levels down). Select every test in the area, plus tests
+    elsewhere whose source names the area as ``experiments/<area>`` or
+    ``"experiments" / "<area>"``.
+    """
+    names = "|".join(re.escape(area) for area in sorted(areas))
+    mention = re.compile(rf"""{EXPERIMENTS_DIR}/(?:{names})\b|["']{EXPERIMENTS_DIR}["']\s*/\s*["'](?:{names})["']""")
+    prefixes = tuple(f"{EXPERIMENTS_DIR}/{area}/" for area in areas)
+    return [
+        path
+        for path in all_test_files("marin", repo_root)
+        if path.startswith(prefixes) or mention.search((repo_root / path).read_text(encoding="utf-8", errors="replace"))
+    ]
 
 
 def shard_files(tests: list[str], count: int) -> list[list[str]]:
