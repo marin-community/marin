@@ -159,6 +159,7 @@ CONFIG = model.GrugModelConfig(
     initializer_std=0.1,
     qk_mult=1.3,
     capacity_factor=8.0,
+    sconv=True,
     rope_fused=True,
     attention_implementation="reference",
     moe_implementation="fixed_all_to_all",

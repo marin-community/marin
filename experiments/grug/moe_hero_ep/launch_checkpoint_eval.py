@@ -43,7 +43,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.datasets.mrcr import MRCR_CONTEXT_CAP, mrcr_dataset
+from experiments.datasets.mrcr import MRCR_CONTEXT_CAP, MRCR_DATASET_REVISION, mrcr_dataset
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
@@ -140,6 +140,7 @@ def evaluate_checkpoint(config: CheckpointEvalConfig) -> tuple[int, dict[str, fl
                 mp=config.trainer.mp,
                 implementation=config.dropless_moe_implementation,
                 record={
+                    "dataset_revision": MRCR_DATASET_REVISION,
                     "checkpoint_path": config.checkpoint_path,
                     "checkpoint_step": step,
                     "qk_mult": config.model.qk_mult,
