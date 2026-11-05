@@ -171,7 +171,7 @@ class Context:
     @asynccontextmanager
     async def _scope(self, name: str) -> AsyncIterator[None]:
         owner = _Scope()
-        chain = self._chain.get() + (owner,)
+        chain = (*self._chain.get(), owner)
         token = self._chain.set(chain)
         self._notify(ScopeEntered(name), chain)
         failed = True

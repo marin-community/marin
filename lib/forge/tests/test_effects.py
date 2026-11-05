@@ -67,7 +67,7 @@ async def test_exceptional_scope_cancels_observers_without_masking_primary_error
     ctx = Context(log=EventLog())
     started, cancelled = asyncio.Event(), asyncio.Event()
 
-    async def waiting(event: Note) -> None:
+    async def waiting(_event: Note) -> None:
         started.set()
         try:
             await asyncio.Event().wait()
@@ -88,10 +88,10 @@ async def test_check_awaits_only_declared_issue_kind() -> None:
     ctx = Context(log=EventLog())
     release = asyncio.Event()
 
-    async def hold(event: Note) -> None:
+    async def hold(_event: Note) -> None:
         raise Hold("guard")
 
-    async def restart(event: Note) -> None:
+    async def restart(_event: Note) -> None:
         await release.wait()
         raise Restart("retry")
 
@@ -189,10 +189,10 @@ async def test_none_result_is_a_cache_hit_and_executor_failures_propagate_immedi
     await log.record(Resolved(NoValue(), (), None))
     ctx = Context(log=log)
 
-    async def execute(event: NoValue) -> None:
+    async def execute(_event: NoValue) -> None:
         raise Restart("must not execute")
 
-    async def fail(event: Number) -> int:
+    async def fail(_event: Number) -> int:
         raise Restart("executor exhausted")
 
     ctx.handle(NoValue, execute)
@@ -207,7 +207,7 @@ async def test_none_result_is_a_cache_hit_and_executor_failures_propagate_immedi
 async def test_unawaited_executor_failure_is_reported_at_scope_exit() -> None:
     ctx = Context(log=EventLog())
 
-    async def fail(event: Number) -> int:
+    async def fail(_event: Number) -> int:
         raise Restart("lost effect")
 
     ctx.handle(Number, fail)
@@ -222,10 +222,10 @@ async def test_scope_joins_effects_started_by_observers() -> None:
     log = EventLog()
     ctx = Context(log=log)
 
-    async def start_effect(event: Note) -> None:
+    async def start_effect(_event: Note) -> None:
         ctx.emit(Number(1))
 
-    async def fail(event: Number) -> int:
+    async def fail(_event: Number) -> int:
         raise Restart("observer child failed")
 
     ctx.handle(Number, fail)

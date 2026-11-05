@@ -14,6 +14,9 @@ from pydantic import BaseModel
 
 from forge.effects.issues import LogFailure
 
+BYTES_TAG = "__forge_bytes__"
+MAPPING_TAG = "__forge_mapping__"
+
 
 class ReplayPolicy(StrEnum):
     CACHE = "cache"
@@ -54,7 +57,7 @@ def json_value(value: object) -> object:
     if isinstance(value, PurePath):
         return str(value)
     if isinstance(value, bytes):
-        return {"__forge_bytes__": base64.b64encode(value).decode("ascii")}
+        return {BYTES_TAG: base64.b64encode(value).decode("ascii")}
     if isinstance(value, Enum):
         return json_value(value.value)
     if is_dataclass(value) and not isinstance(value, type):
@@ -62,7 +65,7 @@ def json_value(value: object) -> object:
     if isinstance(value, BaseModel):
         return json_value(value.model_dump(mode="python"))
     if isinstance(value, Mapping):
-        return {"__forge_mapping__": {key: json_value(item) for key, item in value.items()}}
+        return {MAPPING_TAG: {key: json_value(item) for key, item in value.items()}}
     if isinstance(value, (tuple, list)):
         return [json_value(item) for item in value]
     if isinstance(value, float) and value.is_integer():
