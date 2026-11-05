@@ -22,12 +22,13 @@ from experiments.post_training.capability_driven_envs.biotasks_library.pilot_fir
     ideas,
 )
 from experiments.post_training.capability_driven_envs.biotasks_library.taskforge_flow import run_idea
-from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
 from experiments.post_training.taskforge_zephyr import TaskforgeZephyrConfig, run_taskforge_zephyr
 
 DEFAULT_OUTPUT = (
     "s3://marin-us-east-02a/marin4sc/taskforge/task-library/campaigns/biotasks/first3-objective-v1/results.jsonl"
 )
+DEFAULT_RELAY_JOB = "/muchanem/glm53-relay-tok-02a"
 DEFAULT_RELAY_SERVICE = "glm-5.3-tok"
 REVIEW_RUBRIC_VERSION = "biotasks-utility-v1"
 
@@ -111,7 +112,7 @@ def main() -> None:
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--model", default=GLM_MODEL)
     parser.add_argument("--api-key-env", default=GLM_BULK_TOKEN_ENV)
-    parser.add_argument("--relay-job", default=DEFAULT_GLM_RELAY_JOB)
+    parser.add_argument("--relay-job", default=DEFAULT_RELAY_JOB)
     parser.add_argument("--relay-service", default=DEFAULT_RELAY_SERVICE)
     parser.add_argument("--base-url")
     parser.add_argument("--max-workers", type=int, default=4)
