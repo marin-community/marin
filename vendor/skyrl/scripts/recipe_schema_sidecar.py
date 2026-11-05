@@ -8,6 +8,7 @@ from marinskyrl.environment_contract import DebugMode
 from marinskyrl.resource_locator import RolloutModelLoading
 from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
 from skyrl_train.config.query_bias import GrugQueryBiasUpdateMode
+from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyTarget
 from skyrl_train.config.weight_sync_pause import WeightSyncPauseMode
 from skyrl_train.curriculum import SamplingKind, WeightingKind
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
@@ -32,6 +33,12 @@ TYPES = MappingProxyType(
     {
         "terminal_bench": "OpenMap | None",
         "trainer.strategy": 'Literal["megatron"]',
+        "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',
+        "trainer.policy.optimizer_config.lr_decay_steps": "int | None",
+        "trainer.critic.optimizer_config.lr_decay_steps": "int | None",
+        "trainer.policy.megatron_config.nccl_max_channels": "int | None",
+        "trainer.ref.megatron_config.nccl_max_channels": "int | None",
+        "generator.trajectory_reward_shaping.reasoning_span.target": _literal(ReasoningSpanPenaltyTarget),
         "trainer.resume_mode": _literal(ResumeMode),
         "trainer.progress.mode": 'Literal["auto", "tqdm", "logging"]',
         "trainer.debug_mode": _literal(DebugMode),

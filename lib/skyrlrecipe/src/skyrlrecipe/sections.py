@@ -162,6 +162,7 @@ class PolicyOptimizerConfig(Section):
     max_grad_norm: int | float = field(1.0)
     offload_after_step: bool = field(True)
     num_warmup_steps: int = field(0)
+    lr_decay_steps: int | None = field(None)
     scheduler: Literal["constant_with_warmup", "cosine"] = field("constant_with_warmup")
     optimizer_kwargs: OpenMap = field({})
 
@@ -193,6 +194,9 @@ class PolicyMegatronConfig(Section):
     context_parallel_size: int = field(1)
     expert_model_parallel_size: int = field(1)
     expert_tensor_parallel_size: PositiveInt | None = field(None)
+    nccl_max_channels: int | None = field(None)
+    """Optional training channel limit for batch-invariant TP1/ETP1 policies. Weight publication keeps vLLM's channel
+    limit. Null keeps the shared defaults."""
     ddp_config: DdpConfig = Field(default_factory=DdpConfig)
     model_config_kwargs: OpenMap = field({})
     torch_profiler_config: TorchProfilerConfig = Field(default_factory=TorchProfilerConfig)
@@ -267,6 +271,9 @@ class RefMegatronConfig(Section):
     logprob_chunk_size: int = field(1024)
     moe_router_replay: bool = field(False)
     "Replay expert choices captured during rollout."
+    nccl_max_channels: int | None = unset_field()
+    """Optional training channel limit for batch-invariant TP1/ETP1 policies. Weight publication keeps vLLM's channel
+    limit. Null keeps the shared defaults."""
     ddp_config: RefDdpConfig = unset_field()
     torch_profiler_config: RefTorchProfilerConfig = unset_field()
     optimizer_config_kwargs: RefOptimizerConfigKwargs = unset_field()
@@ -312,6 +319,7 @@ class CriticOptimizerConfig(Section):
     max_grad_norm: int | float = field(1.0)
     offload_after_step: bool = field(True)
     num_warmup_steps: int = field(0)
+    lr_decay_steps: int | None = field(None)
     scheduler: Literal["constant_with_warmup", "cosine"] = field("constant_with_warmup")
     optimizer_kwargs: OpenMap = field({})
 
@@ -493,8 +501,13 @@ class RolloutBuffer(Section):
     groups leased for it, waiting for the slowest, so training never favors rollouts that finish quickly. rolling
     fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout
     never blocks training, but quick rollouts train more often and at lower staleness."""
+    max_stale_retries: int = field(1)
+    """How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
+    prompt waits until the prompt order offers it again."""
     max_in_flight: PositiveInt | None = field(None)
-    "Cap on prompt groups generating at once; null bounds generation only by staleness."
+    """Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up;
+    in a run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by
+    n_samples_per_prompt. Elsewhere null bounds generation only by staleness."""
     object_store_root: str | None = field(None)
     """Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then records
     URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps payloads
@@ -550,6 +563,9 @@ class MismatchProbe(Section):
 
 
 class Trainer(Section):
+    hf_export_checkpoint: Literal["latest", "best"] = field("latest")
+    """Best selection queues only the final export, after the last evaluation. latest or best native checkpoint for
+    HF export"""
     evaluation_runner: Literal["training", "task", "harbor"] = field("training")
     "task or harbor selects generated validation for offline preference training"
     trajectory_selector: TrajectorySelector = Field(default_factory=TrajectorySelector)
@@ -596,7 +612,9 @@ class Trainer(Section):
     reset_global_step_on_resume: bool = field(False)
     callbacks: tuple[Callback, ...] | None = field(None)
     ckpt_interval: int = field(5)
-    hf_save_interval: int = unset_field()
+    hf_save_interval: int = field(-1)
+    """A positive interval also exports intermediate checkpoints, and pruning keeps each one until its export
+    completes. -1 exports only the terminal checkpoint."""
     hf_upload_mode: Literal["latest", "all"] = field("latest")
     bf16: bool = field(True)
     epochs: PositiveInt = field(1)
@@ -732,6 +750,14 @@ class SuccessfulLength(Section):
     max_penalty: int | float = field(0.2)
 
 
+class ReasoningSpan(Section):
+    penalty: int | float = field(0.0)
+    "Charged for a malformed reasoning span in any chat turn."
+    target: Literal["rollout", "marker"] = field("rollout")
+    """`rollout` subtracts it once from the reward. `marker` subtracts it from the loop credit at the token where
+    each span goes wrong, or charges the reward when a violation has no such token."""
+
+
 class TrajectoryRewardShaping(Section):
     schema_version: int = field(2)
     enabled: bool = field(False)
@@ -740,6 +766,7 @@ class TrajectoryRewardShaping(Section):
     non_termination: NonTermination = Field(default_factory=NonTermination)
     overlong: Overlong = Field(default_factory=Overlong)
     successful_length: SuccessfulLength = Field(default_factory=SuccessfulLength)
+    reasoning_span: ReasoningSpan = Field(default_factory=ReasoningSpan)
 
 
 class TrajectoryRetention(Section):
@@ -873,7 +900,8 @@ class TrajectoryRunner(Section):
     command_timeout: int = field(120)
     cleanup_timeout: int = field(30)
     shutdown_timeout: int = field(45)
-    max_concurrent_tasks: int = field(32)
+    max_concurrent_tasks: int = field(1024)
+    "Trajectories each rollout worker runs at once; an evaluation runs at most this many across all workers."
     rollout_workers: RolloutWorkers = Field(default_factory=RolloutWorkers)
     "One worker pool executes all task families on the trainer's node."
 
