@@ -27,7 +27,7 @@ the test starts itself (those are the Iris smokes in `iris-smoke-*.yaml`, marker
   terminates it on interruption. Used by the vLLM e2es.
 
 The Snowball serving nightly runs the vLLM backend-parity arms (H100 pp1/pp2
-and v4-32 TP16) through an Iris CPU parent. It reuses the canary monitor for
+and v4-32 TP16) through one Iris CPU parent per cluster. It reuses the canary monitor for
 capacity shutdown and Slack handling. The Levanter arm remains available by hand.
 
 `iris_client` and `marin_gpu_client` build on `open_cluster_client(name)`, which skips
