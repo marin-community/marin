@@ -256,6 +256,24 @@ statistical kinds and known shot counts agree. Saved historical scores and their
 coverage remain unchanged; this compatibility rule requires no model rerun or
 archive rewrite. Producer records keep their metric maps empty.
 
+Dashboard measurements use shared normalization rules for historical and native records:
+
+| Source metric | Canonical metric | Scope |
+| --- | --- | --- |
+| `acc`, `em`, `exact_match`, `exact-match`, `accuracy_avg` | `accuracy` | All benchmarks |
+| `acc_norm`, `acc_norm_nospace` | `normalized_accuracy` | All benchmarks |
+| `pass@1`, `pass_at_1` | `accuracy` | HumanEval, HumanEvalPlus, MBPPPlus and CRUXEval |
+| `pass@1` | `pass_at_1` | Other benchmarks |
+| `mrcr_accuracy` | `accuracy` | MRCR |
+| `mean_reward` | `reward` | All benchmarks |
+
+The rules strip extraction-filter suffixes such as `,none` from the selected metric.
+Selection still uses the recorded primary metric and existing filter priority.
+Raw metric maps retain all source spellings and filter results. Unknown metric names
+remain unchanged; F1, normalized accuracy and pass rates for larger values of k are
+not converted to ordinary accuracy. Normalization changes names, never score values,
+coverage or recorded uncertainty.
+
 See [task curation](task-curation.md) for acquisition and publication,
 [running evaluations](../tutorials/run-lm-evals.md) for the shared launcher, and
 [task rollouts](task-rollouts.md) for single-task execution. Harbor execution remains

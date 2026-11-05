@@ -33,7 +33,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from marin.evaluation.metric_selection import base_metric
+from marin.evaluation.metric_selection import base_metric, canonical_metric_name
 from marin.evaluation.records import MetricKind, RepeatAggregate, RunStatus
 
 ALPHA = 0.05
@@ -546,13 +546,15 @@ def effective_protocol(measurement: Measurement) -> MetricProtocol:
     """Resolve a measurement's declared protocol or its legacy inferred protocol."""
     if measurement.declared and measurement.protocol_metric is not None and measurement.protocol_kind is not None:
         return MetricProtocol(
-            metric=measurement.protocol_metric,
+            metric=canonical_metric_name(measurement.protocol_metric, measurement.benchmark),
             kind=measurement.protocol_kind,
             identity=measurement.protocol_identity,
             num_fewshot=measurement.num_fewshot,
         )
     return MetricProtocol(
-        metric=base_metric(measurement.metric), kind=measurement.kind, num_fewshot=measurement.num_fewshot
+        metric=canonical_metric_name(measurement.metric, measurement.benchmark),
+        kind=measurement.kind,
+        num_fewshot=measurement.num_fewshot,
     )
 
 
@@ -639,7 +641,7 @@ def select(
         if measurement.benchmark in protocols:
             continue
         current = legacy_metrics.get(measurement.benchmark)
-        candidate = LegacyMetric(measurement.created_at, measurement.run_id, base_metric(measurement.metric))
+        candidate = LegacyMetric(measurement.created_at, measurement.run_id, effective_protocol(measurement).metric)
         if current is None or (candidate.created_at, candidate.run_id) > (current.created_at, current.run_id):
             legacy_metrics[measurement.benchmark] = candidate
     chosen: dict[str, dict[str, Measurement]] = {}

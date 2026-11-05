@@ -32,7 +32,7 @@ JUDGE_API_KEY = "EVALUATION_JUDGE_API_KEY"
 
 
 def execution_config(config: EvaluationRunConfig) -> EvaluationRunConfig:
-    """Select network-denied Shellbox bubblewrap for published package-lock graders."""
+    """Default to network-denied Shellbox graders, preserving explicit machine settings."""
     verifier = config.verifier_machine or MachineRuntimeSpec(
         backend=Backend.LOCAL,
         network=NetworkPolicy.DENY,

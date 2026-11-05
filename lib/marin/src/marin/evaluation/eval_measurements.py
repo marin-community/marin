@@ -34,6 +34,7 @@ from marin.evaluation.metric_selection import (
     REPEAT_MEAN_SUFFIX,
     REPEAT_STDERR_SUFFIX,
     base_metric,
+    canonical_metric_name,
     declared_metric,
 )
 from marin.evaluation.records import BenchmarkMetricRef, EvalRunRecord, EvalTaskRef, MetricKind
@@ -139,36 +140,11 @@ def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], boo
                 n_scored=None,
                 kind=kind,
                 declared=True,
-                protocol_metric=_comparison_metric(record, name),
+                protocol_metric=canonical_metric_name(name, record.evaluation.name),
                 protocol_identity=benchmark.identity,
             ),
         )
     return list(scores.values()), missing_primary
-
-
-_LEGACY_METRIC_ALIASES = {
-    "acc": "accuracy",
-    "accuracy": "accuracy",
-    "accuracy_avg": "accuracy",
-    "em": "accuracy",
-    "exact_match": "accuracy",
-    "exact-match": "accuracy",
-    "acc_norm": "normalized_accuracy",
-    "acc_norm_nospace": "normalized_accuracy",
-    "pass@1": "pass_at_1",
-    "mean_reward": "reward",
-}
-
-
-def _comparison_metric(record: EvalRunRecord, name: str) -> str:
-    """Match curated score names to the vocabulary used by historical results."""
-    metric = base_metric(name)
-    metric = _LEGACY_METRIC_ALIASES.get(metric, metric)
-    if record.evaluation.name in {"humaneval", "humanevalplus", "mbppplus", "cruxeval"} and metric == "accuracy":
-        return "pass_at_1"
-    if record.evaluation.name == "mrcr" and metric == "accuracy":
-        return "mrcr_accuracy"
-    return metric
 
 
 def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False) -> tuple[list[_TaskScore], bool]:
@@ -197,7 +173,7 @@ def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False)
         scores[leaf] = _TaskScore(
             leaf=leaf,
             value=value,
-            metric=selected.name if selected is not None else _comparison_metric(record, name),
+            metric=selected.name if selected is not None else canonical_metric_name(name, record.evaluation.name),
             stderr=stderr_for(metrics, name),
             n_scored=task_item_count(metrics),
             kind=selected.kind if selected is not None else None,
@@ -314,6 +290,8 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         if repeat_aggregation is not None
         else _combined_stderr([score.stderr for score in scores])
     )
+    if record.evaluation.name == "mrcr" and not declared:
+        kind = MetricKind.CONTINUOUS
     n_correct = _successes(value, coverage) if kind is MetricKind.BINARY else None
     if n_correct is None and kind is MetricKind.BINARY:
         # A binary metric whose value is not k/n (an unweighted rollup across subtasks) has no
@@ -326,7 +304,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     fewshot_values = {task.num_fewshot for task in record.evaluation.tasks}
     return Measurement(
         benchmark=record.evaluation.name,
-        metric=metric,
+        metric=canonical_metric_name(metric, record.evaluation.name),
         kind=kind,
         value=value,
         coverage=coverage,
