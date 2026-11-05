@@ -6,6 +6,7 @@
 from collections import Counter
 
 import pytest
+
 from infra.marina.apps.rl_data_catalog.load_curriculum import reconcile_population_counts
 
 
@@ -25,7 +26,12 @@ def _counts(denominator: int, assigned: int = 2, insufficient: int = 0) -> Count
 def test_declared_sources_are_exempt_from_denominator_reconciliation():
     selected = {
         "curated": _matched(),
-        "Campaign Release:pointer": {"basis": "declared", "task_count": 7, "ready_count": 0, "insufficient_context_count": 0},
+        "Campaign Release:pointer": {
+            "basis": "declared",
+            "task_count": 7,
+            "ready_count": 0,
+            "insufficient_context_count": 0,
+        },
     }
     full_counts = {"curated": _counts(denominator=2)}
     reconcile_population_counts(selected, full_counts, task_count=2)
@@ -40,7 +46,12 @@ def test_matched_source_denominator_mismatch_fails_the_load():
 def test_statistics_row_for_a_declared_source_fails_the_total():
     selected = {
         "curated": _matched(),
-        "Campaign Release:pointer": {"basis": "declared", "task_count": 7, "ready_count": 0, "insufficient_context_count": 0},
+        "Campaign Release:pointer": {
+            "basis": "declared",
+            "task_count": 7,
+            "ready_count": 0,
+            "insufficient_context_count": 0,
+        },
     }
     full_counts = {"curated": _counts(denominator=2), "Campaign Release:pointer": _counts(denominator=7)}
     with pytest.raises(ValueError, match="differ from release"):
