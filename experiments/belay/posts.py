@@ -78,6 +78,8 @@ def control_label(track: Track, commit: str) -> str:
     if baseline.code == HERO_MFU_BRANCH:
         return f"control: [{baseline.control_name}]({repo}/tree/{commit})"
     recipe = f"[{CONFIG.recipe_name}]({repo}/tree/{CONFIG.recipe_tag})"
+    if baseline.baseline_run:
+        return f"control: current recipe, {recipe} ({baseline.control_name}, its finished run `{baseline.baseline_run}`)"
     return f"control: current recipe, {recipe} ({baseline.control_name})"
 
 
