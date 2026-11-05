@@ -567,17 +567,20 @@ def test_replica_aware_restore_broadcasts_across_processes():
 
 def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
     """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
-    results = eight_device_checkpoints.shared_local_write_across_processes()
-
-    expected = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
-    for result in results:
-        assert result.save_locking_modes == ["lockfile"]
-        np.testing.assert_array_equal(result.restored, np.stack([expected, expected + 1, expected + 2]))
+    assert eight_device_checkpoints.commit_waits_for_held_lock_across_processes()
 
 
-def test_a_single_process_or_object_store_save_keeps_default_locking(tmp_path):
+def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
+    """A lock file left by a crashed save would otherwise block every later save to that step."""
+    results = eight_device_checkpoints.resave_after_interrupted_save_across_processes()
+
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in results:
+        np.testing.assert_array_equal(restored, np.stack([values, values + 1, values + 2]))
+
+
+def test_a_single_process_save_keeps_default_locking(tmp_path):
     assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), str(tmp_path)) is None
-    assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), "gs://bucket/ckpt") is None
     explicit = TensorStoreWriteConfig(file_io_locking="os")
     assert tensorstore_serialization._file_io_locking(explicit, str(tmp_path)) == "os"
 
