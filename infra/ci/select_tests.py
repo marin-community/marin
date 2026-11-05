@@ -60,6 +60,9 @@ class SourceRoot:
     """Repo-relative directory on ``sys.path``, e.g. ``lib/levanter/src``."""
 
 
+EXPERIMENTS_DIR = "experiments"
+EXPERIMENT_README = "README.md"
+
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
     SourceRoot("lib/rolloutengine/src/rolloutengine", "lib/rolloutengine/src"),
@@ -69,7 +72,7 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("infra/loom", "."),
     SourceRoot("infra/shellsim", "."),
-    SourceRoot("experiments", "."),
+    SourceRoot(EXPERIMENTS_DIR, "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
     SourceRoot("infra/marina/apps", "infra/marina/apps"),
@@ -128,11 +131,8 @@ TEST_DIRS: dict[str, tuple[str, ...]] = {
     # The Loom Pulumi program imports iac and runs in its environment. It mixes source
     # and tests, so its non-Python inputs force the scope.
     "iac": ("infra/pulumi/tests", "infra/loom"),
-    "marin": ("tests", "experiments"),
+    "marin": ("tests", EXPERIMENTS_DIR),
 }
-
-EXPERIMENTS_DIR = "experiments"
-EXPERIMENT_README = "README.md"
 
 # Files outside a scope's test directories that its tests read. The import graph cannot
 # see these reads, so a change to one runs the whole scope.
