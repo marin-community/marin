@@ -48,7 +48,6 @@ OLYMPIADBENCH_SUBSET = "OlympiadBench/data/olympiadbench.jsonl"
 AIME24_FILE = "AIME24/data/aime24.json"
 FINANCEBENCH_FILE = "FinanceBench/data/financebench.jsonl"
 
-# A record needs this many words with a letter to produce a 13-gram.
 # A part gets its own view record only when it has this many words with a letter.
 MIN_VIEW_WORDS = 30
 # A test-harness line shared by this many items is boilerplate, not item content.
