@@ -32,6 +32,10 @@ ORCHESTRATION_TOOLS = (
 )
 
 
+class Tau3RuntimeInfrastructureError(RuntimeError):
+    """The benchmark-owned Tau3 runtime failed to serve a relay operation."""
+
+
 @dataclass(frozen=True)
 class RuntimeStatus:
     """Conversation status returned by the tau3 runtime."""
@@ -73,6 +77,8 @@ class Tau3RuntimeClient(Protocol):
     ) -> RuntimeStatus: ...
 
     async def start(self) -> tuple[str, RuntimeStatus]: ...
+
+    async def status(self) -> RuntimeStatus: ...
 
     async def submit_message(self, message: str) -> RuntimeTurn: ...
 
@@ -132,11 +138,19 @@ class Tau3ACPRelay:
                 else observation
             )
             response = (await self._target.prompt(target_prompt)).strip()
+            if response:
+                turns.append(
+                    RelayTurn(observation=observation, target_response=response)
+                )
+            # The target can advance the shared runtime through MCP tools during
+            # its turn. Do not submit a duplicate message after it has ended.
+            status = await self._runtime.status()
+            if status.termination_reason:
+                return RelayResult(turns=tuple(turns), status=status)
             if not response:
                 status = await self._runtime.record_termination("agent_error")
                 return RelayResult(turns=tuple(turns), status=status)
 
-            turns.append(RelayTurn(observation=observation, target_response=response))
             runtime_turn = await self._runtime.submit_message(response)
             status = runtime_turn.status
             if status.termination_reason:

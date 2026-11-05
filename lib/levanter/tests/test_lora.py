@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import tempfile
 
 import equinox as eqx
@@ -10,7 +11,7 @@ import haliax.nn as hnn
 import jax
 import numpy as np
 import optax
-from chex import assert_trees_all_close
+from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax.quantization import DefaultDotGeneralOp, DotGeneralOp
 from safetensors import safe_open
 from levanter.testing.helpers import (
@@ -376,7 +377,7 @@ def test_lora_peft_export_does_not_use_generic_numpy_state_dict(tmp_path, monkey
 
 
 def test_lora_works_with_checkpointer():
-    with tempfile.TemporaryDirectory() as tempdir:
+    with tempfile.TemporaryDirectory() as tempdir, use_test_mesh():
         k0 = jax.random.PRNGKey(0)
         k1 = jax.random.PRNGKey(1)
 
@@ -389,7 +390,8 @@ def test_lora_works_with_checkpointer():
 
         module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
 
-        loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="random"), key=k0)
+        lora_config = LoraConfig(r=8, target_modules=["first"], a_init_mode="random")
+        loraized = loraize(module, lora_config, key=k0)
         lora_filter = lora_trainable_params_filter(loraized)
 
         optimizer = optax.adam(1e-3)
@@ -404,6 +406,22 @@ def test_lora_works_with_checkpointer():
             destination="loraized",
         )
         checkpointer.wait_until_finished()
+
+        # Restore into a state whose LoRA weights came from a different key, so the
+        # comparison below only passes if the checkpoint values were actually loaded.
+        other_loraized = loraize(module, lora_config, key=k1)
+        template = TrainerState.init(optimizer, other_loraized, key=k1, is_trainable=lora_filter)
+        assert not np.allclose(
+            template.model.first.lora.lora_A.weight.array, trainer_state.model.first.lora.lora_A.weight.array
+        )
+
+        restored = checkpointer.load_checkpoint(template.saveable_state, os.path.join(tempdir, "loraized"))
+
+        assert int(restored.step) == int(trainer_state.step)
+        assert_trees_all_equal(
+            eqx.filter(restored, eqx.is_array),
+            eqx.filter(trainer_state.saveable_state, eqx.is_array),
+        )
 
 
 def test_loraize_a_init_mode_zero():

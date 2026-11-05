@@ -4,25 +4,24 @@
 import dataclasses
 import functools
 import importlib.util
-import os
-import subprocess
-import sys
-import textwrap
+import math
 from collections.abc import Callable
-
-import numpy as np
-import pytest
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
+from haliax.nn.ragged_dot import ragged_dot
 from jax._src import config as jax_config
 from jax.extend import core as jax_core
 from jax.extend.backend import get_backend
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
-from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
+from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug._moe.common import (
+    CapacityDrops,
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
     _deinterleave_gate_up,
     _interleave_gate_up,
     _interleave_halves,
@@ -30,28 +29,26 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _scaled_capacity,
     _swiglu_gate_up_backward,
-    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
-    CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _combine_gather_sum
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
-    _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _interleaved_receiver_ranks,
+    _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _receiver_ranks,
 )
-from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug._moe.ep_ragged_all_to_all import (
-    _accepted_assignments,
-    _gather_dispatch_rows,
     _RaggedDotExpertMlp,
     _RoutingWeightGradient,
-    _transport_buffer,
     _TransportBufferSite,
+    _accepted_assignments,
+    _gather_dispatch_rows,
+    _transport_buffer,
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
+from levanter.grug._moe.ep_ring_filtered import _slot_weights, destination_hit_fraction
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -62,7 +59,7 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.devices import use_test_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -627,6 +624,56 @@ def test_combine_skips_dropped_rows_and_differentiates_accepted_zero_weights():
 
     np.testing.assert_allclose(np.asarray(actual), expected, rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(actual_weight_gradient), expected_weight_gradient, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize("topk", [2, 4])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("pair_capacity", [3, 12], ids=["sender-drops", "spare-rows"])
+def test_ring_filtered_slot_weights_gradient_matches_autodiff(topk, dtype, pair_capacity):
+    tokens, num_experts, local_experts = 12, 8, 2
+    ep_size = num_experts // local_experts
+    send_rows = ep_size * pair_capacity
+    rng = np.random.default_rng(5)
+    selected = np.stack([rng.choice(num_experts, size=topk, replace=False) for _ in range(tokens)]).astype(np.int32)
+    token_valid = np.ones(tokens, dtype=bool)
+    token_valid[[2, 7]] = False
+
+    # Each destination shard owns a block of pair_capacity rows, filled first come, first served by token.
+    source = np.full(send_rows, tokens, dtype=np.int32)
+    on_destination = np.zeros((send_rows, topk), dtype=bool)
+    assignment_slot = np.full((tokens, topk), send_rows, dtype=np.int32)
+    filled = np.zeros(ep_size, dtype=np.int32)
+    for t in np.flatnonzero(token_valid):
+        for shard in np.unique(selected[t] // local_experts):
+            if filled[shard] == pair_capacity:
+                continue
+            row = shard * pair_capacity + filled[shard]
+            filled[shard] += 1
+            source[row] = t
+            ks = selected[t] // local_experts == shard
+            on_destination[row, ks] = True
+            assignment_slot[t, ks] = row
+    dropped = (assignment_slot == send_rows) & token_valid[:, None]
+    # Each case exercises its layout: some assignments dropped, or some rows left empty.
+    assert dropped.any() if pair_capacity == 3 else (source == tokens).any()
+
+    safe_source = jnp.asarray(np.minimum(source, tokens - 1))
+    on_destination = jnp.asarray(on_destination)
+    assignment_slot = jnp.asarray(assignment_slot)
+    weights = jnp.asarray(rng.random((tokens, topk)), dtype=dtype)
+    # Nonzero everywhere, so a gradient read from a masked cell would show up.
+    cotangent = jnp.asarray(rng.standard_normal((send_rows, topk)), dtype=jnp.float32)
+
+    def gradient(fn):
+        _, pullback = jax.vjp(lambda w: fn(w, safe_source, on_destination, assignment_slot), weights)
+        return pullback(cotangent)[0]
+
+    actual = jax.jit(lambda: gradient(_slot_weights))()
+    expected = jax.jit(lambda: gradient(_slot_weights.__wrapped__))()
+
+    assert actual.dtype == dtype
+    np.testing.assert_array_equal(np.asarray(actual, np.float32), np.asarray(expected, np.float32))
+    np.testing.assert_array_equal(np.asarray(actual, np.float32)[dropped | ~token_valid[:, None]], 0)
 
 
 def test_portable_expert_mlp_backward_ignores_rows_past_the_active_count():
@@ -1447,25 +1494,14 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     [[True, True, True, True], [True, False, True, True]],
     ids=["all_valid", "padded"],
 )
+@pytest.mark.multidevice
 def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     implementation: MoeImplementation,
     token_valid: list[bool],
 ):
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
-        from levanter.grug.grug_moe import moe_mlp
-
-        assert jax.device_count() == 4
+    with use_test_devices(4) as devices, jax.default_matmul_precision("highest"):
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(2, 2, 1),
+            np.asarray(devices).reshape(2, 2, 1),
             axis_names=("data", "expert", "model"),
             axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
         )
@@ -1475,7 +1511,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
             dtype=jnp.int32,
         )
         combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(1), (4, 2)), axis=-1)
-        token_valid = jnp.asarray(__TOKEN_VALID__)
+        token_valid = jnp.asarray(token_valid)
         w_up_gate = jax.random.normal(jax.random.key(2), (8, 4, 6))
         w_down = jax.random.normal(jax.random.key(3), (8, 3, 4))
         cotangent = jax.random.normal(jax.random.key(4), (4, 4))
@@ -1510,7 +1546,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
         w_down = jax.device_put(w_down, expert_sharding)
         cotangent = jax.device_put(cotangent, batch_sharding)
 
-        implementation = "__IMPLEMENTATION__"
+        implementation = implementation
         extra = {}
         if implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
             extra["pooled_transport_capacity_factor"] = 4.0
@@ -1550,17 +1586,6 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
             )
         assert int(overflow.dropped) == 0
         assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * 2
-    """
-    script = script.replace("__IMPLEMENTATION__", implementation).replace("__TOKEN_VALID__", repr(token_valid))
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1568,23 +1593,12 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     [[True] * 16, [True, False, True, True] * 4],
     ids=["all_valid", "padded"],
 )
+@pytest.mark.multidevice
 def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: list[bool]):
     """`ring_gather_combine` gives `ring`'s values, drops and gradients without token-buffer scatter-adds."""
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import functools
-
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.grug.grug_moe import moe_mlp
-
+    with use_test_devices(4) as devices:
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(2, 2, 1),
+            np.asarray(devices).reshape(2, 2, 1),
             axis_names=("data", "expert", "model"),
             axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
         )
@@ -1595,7 +1609,7 @@ def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: lis
         logits = jax.random.normal(keys[1], (tokens, experts)) + jnp.linspace(2.0, 0.0, experts)
         selected_experts = jax.lax.top_k(logits, topk)[1].astype(jnp.int32)
         combine_weights = jax.nn.softmax(jax.random.normal(keys[2], (tokens, topk)), axis=-1)
-        token_valid = jnp.asarray(__TOKEN_VALID__)
+        token_valid = jnp.asarray(token_valid)
         w_up_gate = jax.random.normal(keys[3], (experts, hidden, 2 * inter))
         w_down = jax.random.normal(keys[4], (experts, inter, hidden))
         cotangent = jax.random.normal(keys[5], (tokens, hidden))
@@ -1656,17 +1670,6 @@ def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: lis
         np.testing.assert_allclose(np.asarray(gather_value), np.asarray(ring_value), rtol=1e-5, atol=1e-5)
         for gather_grad, ring_grad in zip(gather_grads, ring_grads, strict=True):
             np.testing.assert_allclose(np.asarray(gather_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
-    """
-    script = script.replace("__TOKEN_VALID__", repr(token_valid))
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
@@ -1713,31 +1716,20 @@ def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
     ],
     ids=["no_drops", "sender_drops", "receiver_drops", "both_drops_uneven_padding", "all_padding"],
 )
+@pytest.mark.multidevice
 def test_ring_filtered_matches_ring_and_dense_with_drops(
     transport_capacity_factor: float, capacity_factor: float, padding: str
 ):
-    """On 8 expert shards, ring_filtered matches a dense reference that applies its sender capacity and then ring's
+    """On 4 expert shards, ring_filtered matches a dense reference that applies its sender capacity and then ring's
     receiver capacity, and matches ring whenever no sender drops. Gradients include the combine weights, which
     carry the router gradient. The uneven padding leaves shard 0 with no valid tokens."""
-    script = """
-        import math
+    with use_test_devices(4) as devices, jax.default_matmul_precision("highest"):
+        shards, tokens_per_shard, hidden, inter, experts, topk = 4, 48, 8, 6, 32, 4
 
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.grug._moe.ep_ring_filtered import destination_hit_fraction
-        from levanter.grug.grug_moe import moe_mlp
-
-        shards, tokens_per_shard, hidden, inter, experts, topk = 8, 24, 8, 6, 32, 4
-        transport_capacity_factor = __TRANSPORT__
-        capacity_factor = __CAPACITY__
-        padding = "__PADDING__"
         tokens = shards * tokens_per_shard
         local_experts = experts // shards
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, shards, 1),
+            np.asarray(devices).reshape(1, shards, 1),
             axis_names=("data", "expert", "model"),
             axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
         )
@@ -1749,7 +1741,7 @@ def test_ring_filtered_matches_ring_and_dense_with_drops(
         w_down = jax.random.normal(keys[4], (experts, inter, hidden)) / math.sqrt(inter)
         cotangent = jax.random.normal(keys[5], (tokens, hidden))
         if padding == "uneven":
-            # Shard s keeps about s / 7 of its tokens.
+            # Shard s keeps about s / 3 of its tokens.
             keep_fraction = np.repeat(np.arange(shards) / (shards - 1), tokens_per_shard)
             token_valid = np.asarray(jax.random.uniform(keys[6], (tokens,))) < keep_fraction
         else:
@@ -1855,13 +1847,6 @@ def test_ring_filtered_matches_ring_and_dense_with_drops(
         # Each case drops what its parameters ask for; with no valid tokens nothing can drop.
         assert (expected_sender_dropped > 0) == (padding != "all" and transport_capacity_factor < 1.0)
         assert (expected_receiver_dropped > 0) == (padding != "all" and capacity_factor < 1.0)
-    """
-    script = (
-        script.replace("__TRANSPORT__", repr(transport_capacity_factor))
-        .replace("__CAPACITY__", repr(capacity_factor))
-        .replace("__PADDING__", padding)
-    )
-    run_on_cpu_devices(script, device_count=8)
 
 
 def test_ring_filtered_expert_combine_keeps_bf16_sums_in_float32():

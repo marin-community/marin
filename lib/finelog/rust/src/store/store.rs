@@ -328,7 +328,6 @@ impl Store {
             (Some(provider), Some(root)) => Some(Arc::new(CachedObjectStore::new(
                 Arc::new(provider.clone()),
                 root.clone(),
-                Arc::clone(&query_visibility),
                 object_cache_bytes,
             )?) as Arc<dyn ObjectStore>),
             _ => None,
@@ -1339,7 +1338,8 @@ impl Store {
 
     /// The process-wide query-visibility lock. Query/FetchLogs handlers hold the
     /// READ side across the full DataFusion scan; structural mutations that
-    /// unlink segments (`drop_table`, compaction/eviction) take the WRITE side.
+    /// unlink legacy segments or drop a table take the WRITE side. Object-cache
+    /// eviction uses per-file pins; object compaction retains immutable inputs.
     /// See the field doc on [`Store`].
     pub fn query_visibility(&self) -> &tokio::sync::RwLock<()> {
         self.tables.query_visibility()

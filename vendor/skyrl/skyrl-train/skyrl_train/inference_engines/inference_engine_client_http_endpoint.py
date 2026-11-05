@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from skyrl_train.inference_engines.inference_http_backend import InferenceHTTPBackend
 from skyrl_train.inference_engines.vllm.stats import HTTPBridgeStatsAccumulator
+from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
 
 logger = logging.getLogger(__name__)
@@ -345,7 +346,15 @@ async def handle_openai_request(
 
         # ── Streaming branch ──────────────────────────────────────────────
         if request_json.get("stream", False) and endpoint == "/chat/completions":
-            raw_gen = _global_inference_engine_client.chat_completion_stream(payload)
+            if isinstance(_global_inference_engine_client, AgentInferenceBackend):
+                # Installed agents need an HTTP error before SSE starts so their clients can compact and retry.
+                response = await _await_with_disconnect(raw_request, _global_inference_engine_client.chat_completion(payload))
+                if is_engine_error_response(response):
+                    error_code = response["error"]["code"]
+                    return _json_response(response, endpoint=endpoint, bridge_stats=bridge_stats, status_code=error_code)
+                raw_gen = _global_inference_engine_client.stream_chat_completion(response)
+            else:
+                raw_gen = _global_inference_engine_client.chat_completion_stream(payload)
             return StreamingResponse(
                 content=_safe_sse_stream(raw_gen, endpoint=endpoint, bridge_stats=bridge_stats),
                 media_type="text/event-stream",

@@ -13,6 +13,11 @@ from omegaconf import OmegaConf
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
+from skyrl_train.callbacks.base import TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_callbacks
+from skyrl_train.config.utils import get_default_config
+from skyrl_train.dataset.tasks import source_row_task
+from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
 
 from cloud.iris import task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
@@ -22,9 +27,23 @@ from cloud.iris.rl_config_translation import (
     materialize_launch_config,
     parse_rl_config,
 )
+from marinskyrl.inference_placement import validate_expert_block_transport
 from marinskyrl.runtime_options import reference_model_required
-from skyrl_train.dataset.tasks import source_row_task
-from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
+
+
+def test_training_channels_require_compatible_weight_transport() -> None:
+    config = get_default_config()
+    config.trainer.algorithm.batch_invariant = True
+    config.trainer.placement.colocate_all = False
+    config.generator.inference_engine_tensor_parallel_size = 1
+    config.generator.weight_sync_transport = "expert_block"
+    # Expert-block groups inherit training channels; broadcast has its own override.
+    validate_expert_block_transport(config)
+    config.trainer.policy.megatron_config.nccl_max_channels = 8
+    with pytest.raises(ValueError, match="nccl_max_channels"):
+        validate_expert_block_transport(config)
+    config.generator.weight_sync_transport = "broadcast"
+    validate_expert_block_transport(config)
 
 
 def _raw_config() -> dict[str, Any]:
@@ -138,14 +157,20 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
     assert OmegaConf.to_container(resolved_task) == task
 
 
-def test_launch_rejects_terminal_export_without_request_callback(tmp_path):
+def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
     raw = _raw_config()
-    raw["skyrl"]["trainer"].update(export_hf_artifact=True, ckpt_interval=1, hf_save_interval=-1)
+    raw["skyrl"]["trainer"].update(export_hf_artifact=True, ckpt_interval=1)
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
 
-    with pytest.raises(ValueError, match="Terminal HF artifact export"):
-        load_launch_config(path)
+    config = load_launch_config(path)
+    [export_callback] = [
+        callback for callback in create_default_callbacks(config.skyrl) if isinstance(callback, HFModelSaveCallback)
+    ]
+    state = TrainerState(global_step=1, epoch=0, total_steps=3, num_steps_per_epoch=3)
+
+    assert not export_callback.on_step_end(state, TrainerControl()).should_save_hf_model
+    assert export_callback.on_train_end(state, TrainerControl()).should_save_hf_model
 
 
 @pytest.mark.asyncio

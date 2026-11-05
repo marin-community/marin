@@ -31,7 +31,6 @@ from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
     capture_rank_directory,
     capture_rank_name,
     per_worker_capture_token_credit,
-    request_id_for_group,
 )
 from skyrl_train.inference_engines.vllm.route_capture import response_routes
 from skyrl_train.io import io
@@ -63,6 +62,7 @@ from skyrl_train.inference_engines.base import (
     NamedWeightsUpdateRequest,
     LORA_DISK_LOAD_NAME,
     LORA_DISK_PATH_KEY,
+    request_id_for_session,
 )
 from skyrl_train.inference_engines.response_topk import select_response_topk
 from skyrl_train.inference_engines.chat_continuation import EXACT_PROMPT_TOKEN_IDS_KEY
@@ -149,13 +149,27 @@ class SkyRLOpenAIServingChat(OpenAIServingChat):
     """Substitute exact prompt token IDs while retaining vLLM's chat response parser."""
 
     async def render_chat_request(self, request):
-        rendered = await super().render_chat_request(request)
         exact_ids = _exact_chat_prompt_token_ids.get()
-        if exact_ids is None or not isinstance(rendered, tuple):
+        if exact_ids is None:
+            return await super().render_chat_request(request)
+        prompt = TokensPrompt(prompt_token_ids=list(exact_ids))
+        request.build_tok_params(self.model_config).apply_post_tokenization(self.renderer.tokenizer, prompt)
+        if prompt["prompt_token_ids"] != exact_ids:
+            raise ValueError("Exact sampled prompt tokens cannot be padded or truncated")
+        # Use the pinned renderer's decode-side token reuse path. Rendering the
+        # messages first can reject their reconstructed tokens before our exact
+        # sampled prefix is substituted, even though that prefix fits the budget.
+        previous_transfer = request.kv_transfer_params
+        request.kv_transfer_params = {**(previous_transfer or {}), "prompt_token_ids": list(exact_ids)}
+        try:
+            rendered = await super().render_chat_request(request)
+        finally:
+            request.kv_transfer_params = previous_transfer
+        if not isinstance(rendered, tuple):
             return rendered
         conversation, engine_inputs = rendered
         if len(engine_inputs) != 1:
-            raise ValueError("Exact OpenCode continuation requires one rendered prompt")
+            raise ValueError("Exact chat continuation requires one rendered prompt")
         return conversation, [TokensPrompt(prompt_token_ids=list(exact_ids))]
 
     async def create_chat_completion_with_exact_prompt(
@@ -1463,7 +1477,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             if session_ids is None:
                 request_id = uuid4().hex
             else:
-                request_id = request_id_for_group(session_ids[index])
+                request_id = request_id_for_session(session_ids[index])
             request_ids.append(request_id)
             task = asyncio.create_task(self._collect_outputs(prompt, request_id, row_sampling_params))
             tasks.append(task)

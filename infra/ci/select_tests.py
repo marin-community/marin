@@ -61,8 +61,12 @@ class SourceRoot:
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
+    SourceRoot("lib/rolloutengine/src/rolloutengine", "lib/rolloutengine/src"),
+    SourceRoot("lib/shellbox/src/shellbox", "lib/shellbox/src"),
+    SourceRoot("lib/taskcompendium/src/taskcompendium", "lib/taskcompendium/src"),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
+    SourceRoot("infra/loom", "."),
     SourceRoot("infra/shellsim", "."),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
@@ -120,8 +124,24 @@ DIFF_DRIVEN_REASON = "diff-driven"
 TEST_DIRS: dict[str, tuple[str, ...]] = {
     **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
     "deploy": ("infra/deploy/tests",),
-    "iac": ("infra/pulumi/tests",),
+    # The Loom Pulumi program imports iac and runs in its environment. Like experiments,
+    # it mixes source and tests, so its non-Python inputs force the scope.
+    "iac": ("infra/pulumi/tests", "infra/loom"),
     "marin": ("tests", "experiments"),
+}
+
+# Files outside a scope's test directories that its tests read. The import graph cannot
+# see these reads, so a change to one runs the whole scope.
+EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
+    "iac": frozenset(
+        {
+            ".github/actions/launch-loom-run/action.yaml",
+            ".github/workflows/ops-codehealth-refinement.yaml",
+            ".github/workflows/ops-fork-ferry.yaml",
+            ".github/workflows/ops-loom-holistic-review.yaml",
+            ".github/workflows/ops-loom-review.yaml",
+        }
+    ),
 }
 
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
@@ -184,9 +204,11 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     ),
     "harbor-unit": (
         "vendor/harbor/",
+        "lib/shellbox/",
         "lib/finestore/",
         "lib/rigging/",
         "lib/marin/src/marin/evaluation/harbor/",
+        "experiments/evaluation/images/tau3/",
         "experiments/post_training/task_curation/harbor_hub.py",
         "experiments/post_training/task_curation/tests/test_harbor_hub.py",
         "infra/ci/select_tests.py",
@@ -742,6 +764,8 @@ def classify(
             broad = True
             continue
 
+        forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
+
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
         # import graph, so force-select the owning scope and mark it for a source
@@ -1038,10 +1062,10 @@ def accelerator_suite_test_paths(
         selected = all_test_files("levanter", repo_root)
     for test_path in selected:
         markers = markers_for_test_file(repo_root / test_path)
-        # TPU coverage is opt-in, including for full-suite and scheduled runs.
+        # Accelerator and multi-device coverage is opt-in, including for full-suite and scheduled runs.
         if "torch" in markers:
             torch_paths.append(test_path)
-        if "tpu" in markers:
+        if {"tpu", "multidevice"} & markers:
             tpu_paths.append(test_path)
 
     suites: dict[str, list[str]] = {}
