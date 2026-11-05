@@ -1,5 +1,7 @@
 """Context rejection must reach the installed agent without disabling its endpoint."""
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from rolloutengine.engine import RolloutEngine
@@ -65,7 +67,8 @@ def test_streaming_agent_context_error_is_http_400_before_sse_starts():
             assert rejection.json()["error"]["type"] == "context_length_exceeded"
             response = client.post("/v1/chat/completions", json=payload, headers={TRIAL_HEADER: "trial"})
             assert response.status_code == 200
-            assert '"content": "12"' in response.text
+            chunks = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: {")]
+            assert chunks[0]["choices"][0]["delta"]["content"] == "12"
     finally:
         set_global_state(None, None)
 
