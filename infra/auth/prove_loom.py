@@ -9,7 +9,7 @@ import shlex
 import subprocess
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import quote
 
@@ -135,6 +135,13 @@ def isolated_loom(
             fixture = IsolatedLoom(
                 base_url, home / "loom-token", repo, marker if verify_storage_binding is not None else None, session
             )
+            observer_token = fixture.post(
+                "auth/tokens/create", {"name": "isolated lifecycle observer", "expires_in_days": 1}
+            )
+            observer_token_file = directory / "observer.token"
+            observer_token_file.touch(mode=0o600, exist_ok=False)
+            observer_token_file.write_text(observer_token["token"])
+            fixture = replace(fixture, observer_token_file=observer_token_file)
             yield fixture
         finally:
             try:

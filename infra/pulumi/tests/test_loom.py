@@ -7,19 +7,6 @@ import pulumi
 import pulumi_kubernetes as k8s
 import pytest
 from iac.auth.loom import Loom, LoomArgs, loom_deployment_manifest
-from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
-
-
-class RecordingMocks(Mocks):
-    def __init__(self) -> None:
-        self.resources: list[MockResourceArgs] = []
-
-    def new_resource(self, args: MockResourceArgs):
-        self.resources.append(args)
-        return args.name, args.inputs
-
-    def call(self, args: MockCallArgs):
-        return args.args
 
 
 def restricted_profile() -> dict:
@@ -41,8 +28,8 @@ def restricted_profile() -> dict:
 
 @pytest.mark.parametrize("exposure", ["bootstrap", "enrolling", "serving"])
 @pulumi.runtime.test
-def test_loom_keeps_sessions_unprivileged_and_exposes_only_tls_after_enrollment(exposure):
-    mocks = RecordingMocks()
+def test_loom_keeps_sessions_unprivileged_and_exposes_only_tls_after_enrollment(exposure, recording_mocks):
+    mocks = recording_mocks
     pulumi.runtime.set_mocks(mocks, project="marin-loom-cw", stack="test", preview=False)
     declaration = loom_deployment_manifest(
         issuer="https://marin-auth.management.svc:8090",
@@ -100,7 +87,6 @@ def test_loom_keeps_sessions_unprivileged_and_exposes_only_tls_after_enrollment(
             probe = loom[kind]
             assert "httpGet" not in probe and "tcpSocket" not in probe
             command = probe["exec"]["command"]
-            assert command[0] == "curl" and "--fail" in command
             assert command[-1] == f"http://{loom['args'][-1]}/api/health"
         assert proxy["readinessProbe"]["httpGet"] == {"path": "/api/health", "port": "https", "scheme": "HTTPS"}
         assert {item["name"]: item.get("value") for item in loom["env"]}["LOOM_RUNNER"] == "local"

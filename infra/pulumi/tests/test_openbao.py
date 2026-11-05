@@ -7,24 +7,11 @@ import pulumi
 import pulumi_kubernetes as k8s
 from iac.auth.broker import GrantBroker, GrantBrokerArgs
 from iac.auth.openbao import OpenBao, OpenBaoArgs
-from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
-
-
-class RecordingMocks(Mocks):
-    def __init__(self) -> None:
-        self.resources: list[MockResourceArgs] = []
-
-    def new_resource(self, args: MockResourceArgs):
-        self.resources.append(args)
-        return args.name, args.inputs
-
-    def call(self, args: MockCallArgs):
-        return args.args
 
 
 @pulumi.runtime.test
-def test_openbao_exposes_only_verification_endpoints_and_retains_sealed_raft_servers():
-    mocks = RecordingMocks()
+def test_openbao_exposes_only_verification_endpoints_and_retains_sealed_raft_servers(recording_mocks):
+    mocks = recording_mocks
     pulumi.runtime.set_mocks(mocks, project="marin-auth", stack="test", preview=False)
     cluster = OpenBao(
         "openbao",
@@ -91,8 +78,8 @@ def test_openbao_exposes_only_verification_endpoints_and_retains_sealed_raft_ser
 
 
 @pulumi.runtime.test
-def test_grant_broker_publishes_runtime_policy_and_keeps_credentials_in_external_mounts():
-    mocks = RecordingMocks()
+def test_grant_broker_publishes_runtime_policy_and_keeps_credentials_in_external_mounts(recording_mocks):
+    mocks = recording_mocks
     pulumi.runtime.set_mocks(mocks, project="marin-auth", stack="test", preview=False)
     policy = {
         "bao_address": "https://openbao.management.svc:8200",

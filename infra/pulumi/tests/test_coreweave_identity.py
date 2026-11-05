@@ -8,23 +8,10 @@ import pulumi_coreweave as coreweave
 import pytest
 from iac.auth.broker import coreweave_identity_metadata
 from iac.coreweave.identity import CoreweaveIdentity, CoreweaveIdentityPolicies, identity_policy_statements
-from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 from rigging.grants import Permission
 
 ISSUER = "https://auth.example.org/v1/identity/oidc"
 SUBJECT = "ad14b571-2449-4fd5-974e-f525ed965370"
-
-
-class RecordingMocks(Mocks):
-    def __init__(self) -> None:
-        self.resources: list[MockResourceArgs] = []
-
-    def new_resource(self, args: MockResourceArgs):
-        self.resources.append(args)
-        return args.name, args.inputs
-
-    def call(self, args: MockCallArgs):
-        return args.args
 
 
 def test_coreweave_identity_metadata_excludes_credential_references():
@@ -51,8 +38,8 @@ def test_coreweave_identity_metadata_excludes_credential_references():
 
 
 @pulumi.runtime.test
-def test_coreweave_policies_resolve_identity_metadata_with_stable_declared_resource_names():
-    mocks = RecordingMocks()
+def test_coreweave_policies_resolve_identity_metadata_with_stable_declared_resource_names(recording_mocks):
+    mocks = recording_mocks
     pulumi.runtime.set_mocks(mocks, project="marin-buckets", stack="test", preview=False)
     identities = {
         "reader": pulumi.Output.from_input(

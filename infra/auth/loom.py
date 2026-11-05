@@ -146,11 +146,9 @@ class LoomLauncher:
             return self._record_result(run, result)
 
     def observe(self, grant: Grant, template: str) -> None:
-        """Register a native launch before issuing its runtime credential.
-
-        This callback performs no HTTP and takes no session lock: Loom calls it
-        while a launch request can be waiting for Loom on a different thread.
-        """
+        """Register a native launch before issuing its runtime credential."""
+        # Do not take the HTTP session lock: the launch thread may be waiting
+        # for Loom, which calls this endpoint before returning that response.
         with self._connect() as db:
             db.execute(
                 "INSERT OR IGNORE INTO loom_grant_runs "
