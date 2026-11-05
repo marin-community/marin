@@ -1,0 +1,10 @@
+id: X0225
+slug: layer-output-max-vs-rms-over
+name: Layer-output max vs RMS over training
+category: Training dynamics and schedules
+summary: 'Follow-up to X0224 (idea #2, from RavnaBergsndot on #9514): statistic 4 of that suggestion, which needs logging
+  during training. Log the max element and the element RMS of each layer''s output over training, to see whether some layers
+  grow unusually large activations (the GatedNorm paper found activation outliers used implicitly to scale down other activations).'
+source: maintainer
+status: approved
+track: custom
