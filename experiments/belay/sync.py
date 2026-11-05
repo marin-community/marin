@@ -23,13 +23,16 @@ import wandb
 
 from experiments.belay.branch import git
 from experiments.belay.config import CONFIG, COREWEAVE_S3_ENDPOINT
-from experiments.belay.page import call
+from experiments.belay.page import call, mark_reviewed, page_state
 from experiments.belay.registry_entry import require_registry_checkout
 from experiments.belay.submit import iris_jobs
 
 logger = logging.getLogger("belay.sync")
 
 STORAGE_INTERVAL = datetime.timedelta(hours=1)
+# Ideas decided this recently get 👀 (again, harmlessly) on each pass; well past the watch interval.
+REVIEW_REACTION_WINDOW = datetime.timedelta(days=1)
+UNDECIDED_STATES = ("pending", "dismissed")
 WANDB_PATH = CONFIG.wandb_project
 STORAGE_BUCKET = "marin-us-east-02a"
 PLACEHOLDER_BPB_RATIO = "0.4147"
@@ -171,3 +174,17 @@ def sync() -> None:
     measured = call("agent/state")["watcher"]["storage_at"]
     storage_at = None if measured is None else datetime.datetime.fromisoformat(measured)
     Watcher(CONFIG.registry_checkout, token=None, storage_at=storage_at).tick()
+    react_to_reviewed()
+
+
+def react_to_reviewed() -> None:
+    """Mark each #9514 suggestion a maintainer approved or declined with 👀: the app holds no GitHub credentials, so a
+    decision made on the admin page shows on GitHub at the next pass."""
+    state = page_state()
+    since = datetime.datetime.now(datetime.UTC) - REVIEW_REACTION_WINDOW
+    for idea in state.ideas:
+        if idea.origin != "intake" or idea.state in UNDECIDED_STATES:
+            continue
+        if datetime.datetime.fromisoformat(idea.updated_at) < since:
+            continue
+        mark_reviewed(idea, github_posting=state.github_posting)

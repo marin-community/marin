@@ -45,10 +45,9 @@ from experiments.belay.code_change import (
 from experiments.belay.config import CONFIG, TRACKS, WEEKLY_BRANCH, Track
 from experiments.belay.page import (
     Idea,
-    IntakeReaction,
     PageState,
+    mark_reviewed,
     publish_thread,
-    react_to_intake,
     read_thread,
     require_unedited,
     thread_url,
@@ -527,7 +526,7 @@ def test_a_local_page_takes_the_service_token(monkeypatch: pytest.MonkeyPatch) -
     assert "x-belay-token" not in headers[1] and "x-belay-session" not in headers[0]
 
 
-def intake_idea(url: str | None, reply_url: str | None = None) -> Idea:
+def intake_idea(url: str | None) -> Idea:
     origin = "intake" if url else "proposal"
     return Idea(
         3,
@@ -543,24 +542,20 @@ def intake_idea(url: str | None, reply_url: str | None = None) -> Idea:
         None,
         None,
         [],
-        reply_url,
+        "2026-11-05T00:00:00+00:00",
         None,
         None,
         None,
     )
 
 
-def test_a_session_reacts_on_the_suggestion_instead_of_replying() -> None:
+def test_a_reviewed_suggestion_gets_one_reaction_and_no_reply() -> None:
     calls: list[list[str]] = []
     idea = intake_idea("https://github.com/marin-community/marin/issues/9514#issuecomment-41")
-    react_to_intake(idea, IntakeReaction.PICKED_UP, github_posting=True, dry_run=False, gh=calls.append)
-    react_to_intake(idea, IntakeReaction.WON, github_posting=True, dry_run=False, gh=calls.append)
-    assert calls == [
-        ["repos/marin-community/marin/issues/comments/41/reactions", "-X", "POST", "-f", "content=eyes"],
-        ["repos/marin-community/marin/issues/comments/41/reactions", "-X", "POST", "-f", "content=rocket"],
-    ]
-    react_to_intake(idea, IntakeReaction.WON, github_posting=False, dry_run=False, gh=calls.append)
-    assert len(calls) == 2
+    mark_reviewed(idea, github_posting=True, gh=calls.append)
+    assert calls == [["repos/marin-community/marin/issues/comments/41/reactions", "-X", "POST", "-f", "content=eyes"]]
+    mark_reviewed(idea, github_posting=False, gh=calls.append)
+    assert len(calls) == 1
 
 
 def test_status_links_use_the_public_page() -> None:
@@ -582,7 +577,7 @@ def test_code_change_may_read_only_the_sources_the_approved_text_names() -> None
 
 
 def test_an_internal_proposal_gets_no_intake_reaction() -> None:
-    react_to_intake(intake_idea(None), IntakeReaction.PICKED_UP, github_posting=True, dry_run=False, gh=no_github)
+    mark_reviewed(intake_idea(None), github_posting=True, gh=no_github)
 
 
 def test_a_later_stage_keeps_earlier_sections_and_renames_train_time() -> None:

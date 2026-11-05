@@ -85,7 +85,7 @@ A human then decides what happens. Never work around a refusal.
         idea's control at the same code and seed is still running: the two share it);
      3. `checks passed: ...`;
      4. `wrote the X#### thread: ...` (the idea's post on the page's agent log: status `plan`, the planned runs
-        with their steps), then, for a #9514 idea, `reacted eyes on <url>` (a 👀 on its comment; no reply);
+        with their steps);
      5. one `launching belay-X####-<run>` per run;
      6. `next: stop (...)`.
    - **If it refuses because of the priority grant** (a grant below the Track's band), or Iris refuses the band
@@ -165,7 +165,7 @@ no run may be longer than the hours.
    checkpoint under the study's own prefix.
 2. **Run:** `B study X#### --spec <file>`
    - **Expect:** `checks passed: ...`, the spec committed and pushed, `wrote the X#### thread` (status
-     `study plan`), `reacted eyes on <url>` for an intake idea, one
+     `study plan`), one
      `launching belay-X####-<key>` per run, then `next: stop`.
    - **If it refuses with an escalation** (past the budget, no budget, a `hero-mfu` or production-priority run, a
      setting no config field takes): run the escalate command it prints, then stop. A study never adds model code;
@@ -205,7 +205,6 @@ trials (`comment_url`). Nothing is posted on #9451.
      - the registry entry and the trial's analysis report pushed together
        (`pushed ... as <sha> to origin/<registry branch>`);
      - `wrote the X#### thread: ...`;
-     - at a final win of a #9514 idea, `reacted rocket on <url>` (a 🚀 on its comment; other verdicts add nothing);
      - then either the next stage's `launching ...` lines, or `next: stop`.
    - A final win also escalates to the admin page for the adoption decision.
 
@@ -373,7 +372,7 @@ metric and rule. Nothing else spells out a launch.
 | Registry branch | Demo: `marin_belay_v1_registry_demo`. The demo never touches `marin_belay_v1_registry` |
 | Runs | Seed 0; cluster, priority and nodes per Track (`B tracks`). An approver may grant an idea a higher Iris priority (`batch` < `interactive` < `production`); its runs then launch at that band in every stage and study run, and the band used is on each trial (`priority`) and in the spec's `launched:` commands. Analysis CPU jobs stay at `batch` |
 | Budget | A soft cap on nodes across all Belay runs, set on the admin page (default 8); a maintainer may grant one idea more nodes at approval. Sessions read both from the page and never change them |
-| Posts | The idea's thread on the Belay page's agent log. Nothing is posted on #9514: a #9514 idea's comment gets 👀 when a session picks it up and 🚀 at a final win, only when an approver turns GitHub posting on; its result is on the public Status page |
+| Posts | The idea's thread on the Belay page's agent log. Nothing is posted on #9514: `sync` adds 👀 to a #9514 suggestion once a maintainer approves or declines it (only when an approver turns GitHub posting on); its result is on the public Status page |
 
 ## 10. Known limits
 

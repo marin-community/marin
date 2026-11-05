@@ -18,7 +18,6 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields
-from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -61,8 +60,7 @@ class Idea:
     """A maintainer's node grant: this idea's launches may hold up to this many nodes, past the global cap."""
     hidden_removed: list[str] | None
     """What the app removed from the comment before storing the approved text (hidden HTML, invisible characters)."""
-    reply_url: str | None
-    """The session's one reply on the idea's #9514 comment."""
+    updated_at: str
     budget_hours: float | None
     """A study's approved hours (with ``node_grant`` as its nodes): its runs may not pass that budget."""
     priority_grant: str | None
@@ -309,24 +307,27 @@ def publish_thread(registry_id: str, title: str, body: str, idea_id: int | None,
     return thread_url(registry_id)
 
 
-class IntakeReaction(StrEnum):
-    """The reactions a session leaves on an idea's #9514 comment; results themselves live on the Status page."""
-
-    PICKED_UP = "eyes"
-    WON = "rocket"
+REVIEWED_REACTION = "eyes"
+"""The one reaction Belay leaves on a #9514 suggestion: a maintainer approved or declined it. Results live on the
+public Status page."""
 
 
-def react_to_intake(
-    idea: Idea, reaction: IntakeReaction, *, github_posting: bool, dry_run: bool, gh: Callable[[list[str]], str] = gh_api
-) -> None:
-    """Add ``reaction`` to the idea's #9514 comment (GitHub keeps one per reaction and user, so a repeat is a no-op).
-    Only for intake ideas, and only when an approver has turned GitHub posting on."""
+def mark_reviewed(idea: Idea, *, github_posting: bool, gh: Callable[[list[str]], str] = gh_api) -> None:
+    """React 👀 on the idea's #9514 comment (GitHub keeps one per reaction and user, so a repeat is a no-op). Only for
+    intake ideas, and only when an approver has turned GitHub posting on."""
     if idea.url is None or "issuecomment-" not in idea.url:
         return
-    comment_id = idea.url.rsplit("issuecomment-", 1)[1]
-    api = f"repos/{CONFIG.repository}/issues/comments/{comment_id}/reactions"
-    if dry_run or not github_posting:
-        print(f"would react {reaction.value} on {idea.url}")
+    if not github_posting:
+        print(f"would react {REVIEWED_REACTION} on {idea.url}")
         return
-    gh([api, "-X", "POST", "-f", f"content={reaction.value}"])
-    print(f"reacted {reaction.value} on {idea.url}")
+    comment_id = idea.url.rsplit("issuecomment-", 1)[1]
+    gh(
+        [
+            f"repos/{CONFIG.repository}/issues/comments/{comment_id}/reactions",
+            "-X",
+            "POST",
+            "-f",
+            f"content={REVIEWED_REACTION}",
+        ]
+    )
+    print(f"reacted {REVIEWED_REACTION} on {idea.url}")
