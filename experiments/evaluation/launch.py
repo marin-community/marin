@@ -65,7 +65,7 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec, resolve_secret_spec
 
 from experiments.evaluation.evals import (
@@ -153,6 +153,7 @@ class LaunchSpec:
 
 # EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
 POLICY_RECORDS_PREFIXES = (DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX)
+POLICY_RECORD_ROOTS = tuple(StoragePath(prefix) for prefix in POLICY_RECORDS_PREFIXES)
 
 
 def _git_sha() -> str:
@@ -191,12 +192,8 @@ def _capability_origin(cluster: str) -> str:
 
 def _is_catalogued_results_path(path: str) -> bool:
     """Whether `path` is `<root>/<run_id>/results` under a prefix EvalDash scans for `record.json`."""
-    for root in POLICY_RECORDS_PREFIXES:
-        relative = path.rstrip("/").removeprefix(f"{root}/")
-        if relative != path.rstrip("/"):
-            run_id, _, leaf = relative.partition("/")
-            return bool(run_id) and leaf == "results"
-    return False
+    results = StoragePath(path)
+    return results.name == "results" and results.parent.parent in POLICY_RECORD_ROOTS
 
 
 def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
@@ -211,7 +208,7 @@ def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
         prefix = CW_RECORDS_PREFIX
     else:
         prefix = DEFAULT_RECORDS_PREFIX
-    if spec.policy_finalization is not None and "://" in prefix and prefix.rstrip("/") not in POLICY_RECORDS_PREFIXES:
+    if spec.policy_finalization is not None and "://" in prefix and StoragePath(prefix) not in POLICY_RECORD_ROOTS:
         raise ValueError(
             f"policy records prefix {prefix!r} is not catalogued by EvalDash; use one of {POLICY_RECORDS_PREFIXES}"
         )
