@@ -155,6 +155,10 @@ result is a report (`report.md` and figures) on the registry branch; there is no
 budget (nodes, hours) bounds it: the runs launch together, so their nodes together may not pass the node budget and
 no run may be longer than the hours.
 
+0. **If the runs need code that does not exist yet** (a statistic logged during training, say): add it first as a
+   default-off flag with `B code-change X#### --start` / `--finish --model-set <flag>=<on value>`, under the same
+   rules and gates as section 1b. The runs then turn it on in their `flags`. Analysis that reads only saved
+   parameters needs no model code.
 1. **Write the spec** to a file outside the repository, for example `/tmp/X####.study.yaml`:
    ```yaml
    experiment: X####
@@ -166,7 +170,7 @@ no run may be longer than the hours.
        track: <a Track from section 9 whose command the run uses>
        seed: 0
        variant: <what this run is>
-       flags: []            # extra launcher flags; --model-set/--opt-set only with existing fields
+       flags: []            # extra launcher flags; --model-set/--opt-set with existing fields (step 0 adds new ones)
        hours: <your estimate of the run's wall time>
    analysis:
      - script: experiments/belay/studies/X####.py
@@ -181,13 +185,13 @@ no run may be longer than the hours.
      `study plan`), one
      `launching belay-X####-<key>` per run, then `next: stop`.
    - **If it refuses with an escalation** (past the budget, no budget, a `hero-mfu` or production-priority run, a
-     setting no config field takes): run the escalate command it prints, then stop. A study never adds model code;
-     an idea that needs it is not a study.
-3. **The analysis script** goes in through `B code-change X#### --start` / `--finish`, which for a study allows only
+     setting no config field takes): run the escalate command it prints, then stop. A setting that needs a new
+     field is step 0, not an escalation.
+3. **The analysis script** goes in through `B code-change X#### --start` / `--finish`, as
    `experiments/belay/studies/X####.py`. It defines `analyze(params, out_dir)`: `params` maps each checkpoint array
-   path (`params/...`) to a NumPy array; it writes `report.md` and any PNG figures it links into `out_dir`. The gates:
-   only that file changed (no model code), it writes its report on a tiny synthetic checkpoint on CPU, and
-   pre-commit passes. Write it while the runs train, or after.
+   path (`params/...`) to a NumPy array; it writes `report.md` and any PNG figures it links into `out_dir`. Its gates:
+   it writes its report on a tiny synthetic checkpoint on CPU, and pre-commit passes. Any other file in the same
+   change is model code and gets the section 1b gates. Write it while the runs train, or after.
 4. When the runs finish, `B run-finished X####` marks the thread `study analysis` and prints each analysis step's
    `B analyze` command (section 2e).
 

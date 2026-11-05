@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from experiments.belay.code_change import refuse_outside_study
+from experiments.belay.code_change import refuse_outside_allowed, study_change_parts
 from experiments.belay.config import TRACKS, Track
 from experiments.belay.study import (
     Budget,
@@ -118,12 +118,14 @@ def test_a_resume_from_outside_the_prefix_is_refused() -> None:
         check_study(parse_study(spec_with(**run)), Budget(nodes=64, hours=100))
 
 
-def test_the_analysis_script_is_the_only_code_a_study_adds() -> None:
+def test_a_study_change_is_its_script_plus_gated_model_code() -> None:
     script = script_path("X0300")
     assert script == "experiments/belay/studies/X0300.py"
-    refuse_outside_study([script], script)
-    with pytest.raises(SystemExit, match="no model code"):
-        refuse_outside_study([script, "experiments/grug/fast_track/model.py"], script)
+    assert study_change_parts([script], script) == ([], True)
+    flag = ["experiments/grug/fast_track/model.py", "tests/grug/test_fast_track_activation_stats.py"]
+    assert study_change_parts([script, *flag], script) == (flag, True)
+    with pytest.raises(SystemExit, match="only experiments/grug/fast_track/"):
+        refuse_outside_allowed(study_change_parts([script, "experiments/belay/page.py"], script)[0])
 
 
 def test_a_study_post_reads_as_a_study_with_no_verdict() -> None:

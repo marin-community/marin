@@ -71,10 +71,10 @@ from experiments.belay.code_change import (
     refuse_flag_off_change,
     refuse_leak,
     refuse_outside_allowed,
-    refuse_outside_study,
     run_precommit,
     run_study_selftest,
     run_tests,
+    study_change_parts,
 )
 from experiments.belay.config import (
     CHECKPOINT_TAG_PREFIX,
@@ -978,7 +978,7 @@ def apply_recorded_code(repo: Path, registry_id: str) -> list[str]:
 
 
 STUDY_CODE_RULES = """Rules for a study's analysis script (code-change --finish checks every one):
-  1. Edit only {script}: no model code, no other file.
+  1. The script is {script}; any other change must be model code by the code-change rules below.
   2. Define analyze(params, out_dir): params maps each checkpoint array path (params/...) to a NumPy array; write
      report.md (and any PNG figures it links) into out_dir. Read nothing else.
   3. It must write its report on a tiny synthetic checkpoint, on CPU (the gate runs it).
@@ -994,7 +994,11 @@ def code_change_start(registry_id: str) -> None:
         repo, branch = code_checkout(registry_id)
         require_clean_pushed_head(repo, branch)
         print(f"{registry_id}: edit {repo} on {branch}.\n{STUDY_CODE_RULES.format(script=script_path(registry_id))}")
-        say_next(f"{BELAY} code-change {registry_id} --finish")
+        print(f"A study may also add model code its runs need (extra logging, say), by these rules:\n{CODE_RULES}")
+        say_next(
+            f"{BELAY} code-change {registry_id} --finish   (with --model-set/--opt-set <flag>=<on value> when it adds "
+            "a flag)"
+        )
         return
     repo, branch = code_checkout(registry_id)
     require_clean_pushed_head(repo, branch)
@@ -1011,31 +1015,46 @@ def code_change_start(registry_id: str) -> None:
     say_next(f"{BELAY} code-change {registry_id} --finish --model-set <flag>=<on value>   (or --opt-set)")
 
 
-def study_code_finish(registry_id: str, repo: Path, branch: str, paths: list[str], *, dry_run: bool) -> None:
-    """A study's gates: only its analysis script changed (no model code), it writes a report on a tiny synthetic
-    checkpoint on CPU, and pre-commit passes; then commit and push it."""
-    script = script_path(registry_id)
-    refuse_outside_study(paths, script)
-    print(f"1. paths ok: {paths} (no model code)")
-    run_study_selftest(repo, script)
-    print("2. it writes its report on a tiny synthetic checkpoint, on CPU")
-    run_precommit(repo, paths)
-    print("3. pre-commit passes")
-    run_git(repo, ["add", "--", script], dry_run=dry_run)
-    run_git(repo, ["commit", "--quiet", "-m", f"{registry_id}: study analysis script"], dry_run=dry_run)
-    run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
-    say_next(f"stop, or if the study's runs have finished: {BELAY} run-finished {registry_id}")
-
-
 def code_change_finish(registry_id: str, settings: list[tuple[str, str]], *, dry_run: bool) -> None:
-    """Run every check on the uncommitted change, then commit and push it to its code branch."""
+    """Run every check on the uncommitted change, then commit and push it to its code branch. A study's change may be
+    its analysis script, new default-off flags its runs use, or both; each part gets its own gates."""
     repo, branch = code_checkout(registry_id)
     paths = changed_paths(repo)
     if not paths:
         raise SystemExit(f"refusing: nothing changed.\nnext: {BELAY} code-change {registry_id} --start")
-    if is_study_entry(registry_id):
-        study_code_finish(registry_id, repo, branch, paths, dry_run=dry_run)
+    study = is_study_entry(registry_id)
+    script = script_path(registry_id) if study else ""
+    model_paths, script_changed = study_change_parts(paths, script) if study else (paths, False)
+    names: set[str] = set()
+    if model_paths:
+        names = gate_flags(registry_id, repo, model_paths, settings)
+    if script_changed:
+        gate_study_script(repo, script)
+    parts = sorted(names) + (["study analysis script"] if script_changed else [])
+    message = f"{registry_id}: {', '.join(parts)}" + (" (default off)" if names else "")
+    run_git(repo, ["add", "--", *paths], dry_run=dry_run)
+    run_git(repo, ["commit", "--quiet", "-m", message], dry_run=dry_run)
+    run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
+    if names and not dry_run:
+        commit = git(repo, "rev-parse", "HEAD")
+        path = record_code_commit(registry_id, commit, dry_run=False)
+        commit_and_push([path], f"Belay registry: {registry_id} code commit {commit[:10]}", dry_run=False)
+    flags_text = " ".join(f"{option} {s}" for option, s in settings)
+    if study:
+        say_next(
+            f"{BELAY} study {registry_id} --spec <file>   (its runs may use {flags_text or 'the new flags'}), or, if "
+            f"the study's runs have finished: {BELAY} run-finished {registry_id}"
+        )
         return
+    idea = page_state().idea_for(registry_id)
+    idea_id = "<N>" if idea is None else idea.id
+    say_next(f'{BELAY} new-idea --idea-id {idea_id} --category "<category>" --variant "<what changes>" {flags_text}')
+
+
+def gate_flags(registry_id: str, repo: Path, paths: list[str], settings: list[tuple[str, str]]) -> set[str]:
+    """The code-change gates (RUNBOOK section 1b) on model code: allowed paths with a test, new flags that default
+    off, flag off bit-identical to HEAD, flag on leaks no future tokens, its tests and pre-commit pass. Returns the
+    new flags' names."""
     revert = f"next: git -C {repo} checkout -- . && git -C {repo} clean -fd experiments/grug/fast_track tests/grug"
     refuse_outside_allowed(paths)
     print(f"1. paths ok: {paths}")
@@ -1063,18 +1082,15 @@ def code_change_finish(registry_id: str, settings: list[tuple[str, str]], *, dry
     print("5. the change's tests pass on CPU")
     run_precommit(repo, paths)
     print("6. pre-commit passes")
-    message = f"{registry_id}: {', '.join(sorted(names))} (default off)"
-    run_git(repo, ["add", "--", *paths], dry_run=dry_run)
-    run_git(repo, ["commit", "--quiet", "-m", message], dry_run=dry_run)
-    run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
-    if not dry_run:
-        commit = git(repo, "rev-parse", "HEAD")
-        path = record_code_commit(registry_id, commit, dry_run=False)
-        commit_and_push([path], f"Belay registry: {registry_id} code commit {commit[:10]}", dry_run=False)
-    idea = page_state().idea_for(registry_id)
-    idea_id = "<N>" if idea is None else idea.id
-    flags_text = " ".join(f"{option} {s}" for option, s in settings)
-    say_next(f'{BELAY} new-idea --idea-id {idea_id} --category "<category>" --variant "<what changes>" {flags_text}')
+    return names
+
+
+def gate_study_script(repo: Path, script: str) -> None:
+    """A study's analysis script: it writes its report on a tiny synthetic checkpoint on CPU, and pre-commit passes."""
+    run_study_selftest(repo, script)
+    print("the analysis script writes its report on a tiny synthetic checkpoint, on CPU")
+    run_precommit(repo, [script])
+    print("the analysis script passes pre-commit")
 
 
 # ---------- 1c. study (custom track) ----------

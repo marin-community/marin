@@ -140,13 +140,10 @@ def run_tests(repo: Path, paths: list[str]) -> None:
         raise SystemExit(f"refusing: the change's tests fail:\n{result.stdout[-3000:]}\nnext: fix them, then --finish")
 
 
-def refuse_outside_study(paths: list[str], script: str) -> None:
-    """A study's code change is its one analysis script: no model code, no other file."""
-    if paths != [script]:
-        raise SystemExit(
-            f"refusing: a study's change is only {script} (no model code); it touches {paths}.\n"
-            "next: git checkout -- <the other paths> (and delete new files there), then run code-change --finish"
-        )
+def study_change_parts(paths: list[str], script: str) -> tuple[list[str], bool]:
+    """A study's change split for its gates: the model-code paths (code-change rules, section 1b) and whether its
+    analysis script changed."""
+    return [p for p in paths if p != script], script in paths
 
 
 def run_study_selftest(repo: Path, script: str) -> None:
