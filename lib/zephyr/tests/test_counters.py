@@ -112,7 +112,6 @@ def test_zephyr_execution_result_empty():
 
 
 def test_stage_scoped_counters():
-    """Stage-scoped counters are keyed by stage, not by a name prefix."""
     worker = _worker()
     token = _worker_ctx_var.set(worker)
     try:
@@ -144,7 +143,6 @@ def test_stage_scope_isolated_from_pipeline():
 
 
 def test_coordinator_reports_same_name_stage_counter_under_its_stage():
-    """A worker snapshot keeps a stage counter apart from a pipeline counter of the same name."""
     worker = _worker()
     token = _worker_ctx_var.set(worker)
     try:
