@@ -5,11 +5,13 @@
 
 import json
 from collections import deque
-from functools import partial
+from collections.abc import Callable
 from types import MappingProxyType
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
+from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -17,11 +19,7 @@ from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import (
-    checked_openai_chat_document,
-    load_parquet_batched,
-    pinned_jsonl_ids,
-)
+from marin.datakit.download.rollout_transforms import checked_openai_chat_document, load_parquet_batched
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nvidia/Open-SWE-Traces"
@@ -91,9 +89,8 @@ QWEN38_SOURCES = frozenset(
     }
 )
 EXCLUSION_DATASET_ID = "Min-Li/marin-sft-data-audit"
-EXCLUSION_REVISION = "5cc076cc822550f96287c861cf70c00c7ee8b4a6"
-EXCLUSION_FILE = "open_swe/pinned_f967cba3/exclusions.jsonl"
-EXCLUSION_LIST_SIZE = 8614
+EXCLUSION_REVISION = "fb186cd8902777e24cb4c433398aaec9af0ecd6b"
+EXCLUSION_FILE = "open_swe/pinned_f967cba3/exclusions.parquet"
 
 # The Qwen3.8-27B mini-swe-agent teacher was prompted with the NeMo-Skills template
 # nemo_skills/prompt/config/eval/swe-bench/mini-swe-agent/swebench.yaml at commit
@@ -138,12 +135,10 @@ def restore_solution_originality(row: dict) -> dict:
     return {**row, "messages": [messages[0], {**messages[1], "content": restored_task}, *messages[2:]]}
 
 
-def repaired_qwen38_rows(row: dict, excluded_trajectory_ids: frozenset[str]) -> list[dict]:
-    """Drop an excluded Qwen3.8 trace, or restore the Solution Originality section of a kept one."""
-    if row["trajectory_id"] in excluded_trajectory_ids:
-        counters.pipeline.update_counter("open_swe_traces/audit_exclusion_filtered", 1)
-        return []
-    return [restore_solution_originality(row)]
+def excluded_trajectory_ids(exclusion_path: str) -> frozenset[str]:
+    """Load the pinned Qwen3.8 trace exclusions from the downloaded Parquet file."""
+    with open_url(prefix_join(exclusion_path, EXCLUSION_FILE), "rb") as source:
+        return frozenset(pq.read_table(source, columns=["trajectory_id"]).column("trajectory_id").to_pylist())
 
 
 def row_to_chat_doc(row: dict) -> list[dict]:
@@ -178,22 +173,24 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     )
 
 
-def transform_chat(input_path: str, output_path: str, exclusion_path: str | None = None) -> None:
-    """Write the chat documents of one partition.
-
-    The Qwen3.8 partitions pass ``exclusion_path``: their listed traces are dropped and the kept ones get the
-    Solution Originality section back.
-    """
-    rows = Dataset.from_files(prefix_join(input_path, "**/*.parquet")).flat_map(load_parquet_batched)
-    if exclusion_path is not None:
-        trajectory_ids = pinned_jsonl_ids(
-            prefix_join(exclusion_path, EXCLUSION_FILE), "trajectory_id", EXCLUSION_LIST_SIZE
+def transform_chat(
+    input_path: str,
+    output_path: str,
+    *,
+    excluded_ids: frozenset[str],
+    repair_row: Callable[[dict], dict],
+) -> None:
+    pipeline = (
+        Dataset.from_files(prefix_join(input_path, "**/*.parquet"))
+        .flat_map(load_parquet_batched)
+        .filter(lambda row: row["trajectory_id"] not in excluded_ids)
+        .map(repair_row)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=SOURCE_CHAT_SCHEMA,
+            skip_existing=True,
         )
-        rows = rows.flat_map(partial(repaired_qwen38_rows, excluded_trajectory_ids=trajectory_ids))
-    pipeline = rows.flat_map(row_to_chat_doc).write_parquet(
-        prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
-        schema=SOURCE_CHAT_SCHEMA,
-        skip_existing=True,
     )
     ZephyrContext(name="open-swe-traces-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
@@ -202,7 +199,6 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
     """Download one Open-SWE-Traces partition and normalize its structured chat."""
     glob, _ = OPEN_SWE_TRACES_PARTITIONS[source_name]
     raw = download_hf_step(f"raw/{source_name}", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=[glob])
-    exclusions = None
     if source_name in QWEN38_SOURCES:
         exclusions = download_hf_step(
             "raw/open-swe-traces-audit-exclusions",
@@ -210,13 +206,24 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
             revision=EXCLUSION_REVISION,
             hf_urls_glob=[EXCLUSION_FILE],
         )
+        deps = [raw, exclusions]
+
+        def transform(output_path: str) -> None:
+            transform_chat(
+                raw.output_path,
+                output_path,
+                excluded_ids=excluded_trajectory_ids(exclusions.output_path),
+                repair_row=restore_solution_originality,
+            )
+
+    else:
+        deps = [raw]
+
+        def transform(output_path: str) -> None:
+            transform_chat(raw.output_path, output_path, excluded_ids=frozenset(), repair_row=lambda row: row)
+
     processed = StepSpec(
-        name=f"processed-chat/{source_name}",
-        deps=[raw] if exclusions is None else [raw, exclusions],
-        fn=lambda output_path: transform_chat(
-            raw.output_path, output_path, None if exclusions is None else exclusions.output_path
-        ),
-        hash_attrs={"version": TRANSFORM_VERSION},
+        name=f"processed-chat/{source_name}", deps=deps, fn=transform, hash_attrs={"version": TRANSFORM_VERSION}
     )
     return processed, normalize_chat_step(
         name=f"normalized-chat/{source_name}", download=processed, output_schema=SOURCE_CHAT_SCHEMA

@@ -5,7 +5,7 @@ import json
 
 from marin.datakit.chat_normalize import validate_chat_messages, validate_tool_definitions
 from marin.datakit.chat_render import render_chat_record
-from marin.datakit.download.open_swe_traces import repaired_qwen38_rows, row_to_chat_doc
+from marin.datakit.download.open_swe_traces import restore_solution_originality, row_to_chat_doc
 from openai_harmony import Message
 
 
@@ -63,13 +63,13 @@ def test_open_swe_traces_renders_prompt_reasoning_and_parallel_tool_calls():
     assert "I fixed the assertion." in rendered
 
 
-def qwen38_row(trajectory_id: str) -> dict:
+def test_open_swe_qwen38_task_gets_solution_originality_section_back():
     task = (
         "<instructions>\nFix the failing test.\n"
         "<CRITICAL>\n- Submit in a separate command.\n</CRITICAL>\n</instructions>"
     )
-    return {
-        "trajectory_id": trajectory_id,
+    row = {
+        "trajectory_id": "trajectory-1",
         "resolved": 1,
         "tools": [],
         "messages": [
@@ -78,11 +78,7 @@ def qwen38_row(trajectory_id: str) -> dict:
             {"role": "assistant", "content": "Implemented the fix."},
         ],
     }
-
-
-def test_open_swe_qwen38_kept_trace_restores_solution_originality_section():
-    [row] = repaired_qwen38_rows(qwen38_row("trajectory-kept"), frozenset({"trajectory-excluded"}))
-    [doc] = row_to_chat_doc(row)
+    [doc] = row_to_chat_doc(restore_solution_originality(row))
     rendered = render_chat_record(doc)["text"]
 
     assert (
@@ -92,7 +88,3 @@ def test_open_swe_qwen38_kept_trace_restores_solution_originality_section():
     assert "your solution will be DISCARDED regardless of its correctness!\n</instructions>" in rendered
     assert rendered.count("## Solution Originality") == 1
     assert "Implemented the fix." in rendered
-
-
-def test_open_swe_qwen38_excluded_trace_is_dropped():
-    assert repaired_qwen38_rows(qwen38_row("trajectory-excluded"), frozenset({"trajectory-excluded"})) == []
