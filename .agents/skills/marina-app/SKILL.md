@@ -34,6 +34,9 @@ modules. A declared `build_command` can generate `dist/`. Maintained sources dec
 the stable `applet_id` and optional shared build inputs in `source_paths` within
 the same `applet.toml`, as the named apps do for `infra/marina/web`. Keep existing UUIDs,
 names, database schemas and data locations when updating an application.
+Add every new maintained app to
+[`.github/marina-app-releases.toml`](../../../.github/marina-app-releases.toml)
+with its test paths and release policy.
 
 Prefer plain HTML/JavaScript for small reports and Vue/Vite for substantial client
 state. UUID apps need relative asset/API URLs, Vite `base: "./"`, and hash routing.
@@ -112,6 +115,8 @@ refreshes its checkout and repeats those checks. A live-version conflict stops
 the job. Set the policy flag to `false` for releases
 that need operator coordination; Snowball tree has its own nightly workflow.
 The daily drift workflow checks all maintained apps, including manual ones.
+An app whose live revision has no Git provenance needs one inspected manual
+release before automatic releases begin.
 
 For a manual release, use a clean checkout at current remote main by default:
 

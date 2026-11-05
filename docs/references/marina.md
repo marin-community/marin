@@ -93,7 +93,8 @@ access. Initial named registration and host bindings still require an operator.
 ### Release on merge
 
 The [release policy](https://github.com/marin-community/marin/blob/main/.github/marina-app-releases.toml)
-lists every maintained app. Set `release_on_merge = false` when a release
+lists every maintained app and its test paths. Add an entry when adding an app.
+Set `release_on_merge = false` when a release
 requires operator coordination, such as pausing a job or selecting a new serving
 catalog. The existing Snowball tree nightly workflow remains separate.
 
@@ -110,7 +111,8 @@ trying again.
 The [daily drift check](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-app-release-drift.yaml)
 checks every maintained app, including manual ones, and reports commits absent
 from the selected release. A legacy release without Git provenance is reported
-as `unrecorded` until its next reviewed release. A failed app job does not stop
+as `unrecorded`; it requires an inspected manual release before automation
+can publish later changes. A failed app job does not stop
 other apps' jobs. Migrations needing live coordination should keep their app
 manual until that procedure is complete.
 

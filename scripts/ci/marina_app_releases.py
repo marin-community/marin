@@ -150,7 +150,9 @@ def release_once(policy: AppPolicy, record_path: Path, *, initial_version: int |
         return record
     if initial_version is not None and before["version"] != initial_version:
         raise RuntimeError(f"{policy.name}: live version changed during source refresh; inspect before releasing")
-    if state not in {"different", "unrecorded"}:
+    if state == "unrecorded":
+        raise RuntimeError(f"{policy.name}: live source has no Git provenance; release manually before automation")
+    if state != "different":
         raise RuntimeError(f"{policy.name}: refusing to release source in state {state!r}")
 
     subprocess.run(
@@ -184,7 +186,12 @@ def release_once(policy: AppPolicy, record_path: Path, *, initial_version: int |
         raise
     record.update(action="released", published=published, verification="pending")
     write_record(record_path, record)
-    after = marina("release-status", policy.path, root=root)
+    try:
+        after = marina("release-status", policy.path, root=root)
+    except subprocess.CalledProcessError:
+        record["verification"] = "failed"
+        write_record(record_path, record)
+        raise
     record["after"] = after
     record["verification"] = (
         "passed" if after["state"] == "current" and after["version"] == published["version"] else "failed"
@@ -229,9 +236,13 @@ def main() -> None:
     configured = policies()
     if arguments.command == "select":
         changed = set(git("diff", "--name-only", arguments.before, arguments.after).splitlines())
-        print(json.dumps({"include": [{"name": name} for name in changed_apps(changed, configured)]}))
+        print(
+            json.dumps(
+                {"include": [{"name": name} for name in changed_apps(changed, configured)]}, separators=(",", ":")
+            )
+        )
     elif arguments.command == "all":
-        print(json.dumps({"include": [{"name": name} for name in sorted(configured)]}))
+        print(json.dumps({"include": [{"name": name} for name in sorted(configured)]}, separators=(",", ":")))
     elif arguments.command == "release":
         print(json.dumps(release(configured[arguments.app], arguments.record)))
     else:

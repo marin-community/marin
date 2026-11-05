@@ -6,11 +6,12 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from scripts.ci.marina_app_releases import AppPolicy, changed_apps, drift, release
+from scripts.ci.marina_app_releases import ROOT, AppPolicy, changed_apps, drift, release
 
 
 def fake_uv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: dict, *, mode: str = "conflict") -> Path:
@@ -63,6 +64,25 @@ def test_select_changed_app_and_shared_input_respects_manual_policy():
     assert changed_apps({".github/marina-app-releases.toml"}, policies) == []
 
 
+def test_selector_checks_policy_completeness_and_emits_empty_matrix():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/ci/marina_app_releases.py",
+            "select",
+            "--before",
+            "HEAD",
+            "--after",
+            "HEAD",
+        ],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert result.stdout.strip() == '{"include":[]}'
+
+
 def test_drift_names_unreleased_source_commit(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q", tmp_path], check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
@@ -111,6 +131,15 @@ def test_release_conflict_keeps_inspected_base_version_and_does_not_retry(tmp_pa
     test_command = next(args for args in arguments if "pytest" in args)
     assert test_command[test_command.index("-m") + 1] == "not slow and not cluster"
     assert json.loads(record_path.read_text())["action"] == "validated"
+
+
+def test_release_refuses_unrecorded_live_source(tmp_path, monkeypatch):
+    calls = fake_uv(tmp_path, monkeypatch, {"state": "unrecorded", "version": 6})
+
+    with pytest.raises(RuntimeError, match="release manually before automation"):
+        release(AppPolicy("evaldash", True, (), ()), tmp_path / "release.json", root=tmp_path)
+
+    assert all("--base-version" not in json.loads(line) for line in calls.read_text().splitlines())
 
 
 def test_release_refreshes_stale_main_and_revalidates_before_publishing(tmp_path, monkeypatch):
