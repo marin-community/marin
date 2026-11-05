@@ -87,6 +87,7 @@ def build_diagnostic_run(
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     log_scaling_n_floor: int | None = None,
+    log_scaling_alpha: float | None = None,
     restore_from: str | None = None,
     moe_implementation: str | None = None,
     ce_grad_in_forward_token_block_size: int | None = None,
@@ -160,6 +161,7 @@ def build_diagnostic_run(
             ("qk_mult", qk_mult),
             ("qk_mult_long_scale", qk_mult_long_scale),
             ("log_scaling_n_floor", log_scaling_n_floor),
+            ("log_scaling_alpha", log_scaling_alpha),
             ("moe_implementation", moe_implementation),
             ("ce_grad_in_forward_token_block_size", ce_grad_in_forward_token_block_size),
         )
@@ -558,9 +560,16 @@ def build_diagnostic_run(
     type=click.IntRange(min=1),
     default=None,
     help=(
-        "Scale each global-layer query seeing n keys in its document by 1 + 0.1 * ln(max(n / this value, 1)), "
-        "on top of --qk-mult and --qk-mult-long-scale. Defaults to off."
+        "Scale each global-layer query seeing n keys in its document by "
+        "1 + --log-scaling-alpha * ln(max(n / this value, 1)), on top of --qk-mult and --qk-mult-long-scale. "
+        "Defaults to off."
     ),
+)
+@click.option(
+    "--log-scaling-alpha",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Slope of the log scaling. Required with --log-scaling-n-floor.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @build_options
@@ -598,6 +607,7 @@ def main(
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
     log_scaling_n_floor: int | None,
+    log_scaling_alpha: float | None,
     restore_from: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
@@ -619,6 +629,7 @@ def main(
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
         log_scaling_n_floor=log_scaling_n_floor,
+        log_scaling_alpha=log_scaling_alpha,
         restore_from=restore_from,
         moe_implementation=moe_implementation,
         ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
