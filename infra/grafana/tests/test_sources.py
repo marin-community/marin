@@ -268,6 +268,7 @@ def test_controller_non_200_raises_upstream_error():
 def _run(conclusion, status="completed", started="2026-07-17T03:00:00Z", updated="2026-07-17T03:05:00Z"):
     return {
         "id": 1,
+        "run_attempt": 1,
         "conclusion": conclusion,
         "status": status,
         "head_sha": "abcdef1234567890",
@@ -316,8 +317,11 @@ def test_nightlies_mark_a_green_run_skipped_only_when_its_skip_step_ran(skip_ste
 
     (cell,) = [row for row in rows if row["lane_id"] == lane.id and row["url"] == "https://x"]
     assert cell["state"] == state
-    # A completed run never changes, so its jobs are read once.
+    # A completed attempt never changes, so its jobs are read once; a re-run is a new attempt.
     assert len(jobs_requests) == 1
+    run["run_attempt"] = 2
+    source.nightlies()
+    assert len(jobs_requests) == 2
 
 
 def test_builds_maps_state_and_finalized_success_rate():
@@ -826,6 +830,7 @@ def test_nightlies_endpoint_returns_linked_long_cells():
                 "workflow_runs": [
                     {
                         "id": 1,
+                        "run_attempt": 1,
                         "status": "completed",
                         "conclusion": "success",
                         "head_sha": "abcdef1234567890",

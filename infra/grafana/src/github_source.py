@@ -106,9 +106,10 @@ class GithubSource:
         # REST ferry/nightly panels still work but rate-limit fast, and the GraphQL
         # build panel returns no data.
         self._client = httpx.Client(timeout=timeout, headers=headers, auth=auth)
-        # Whether each completed run took its lane's skip step. A completed run never
-        # changes, so this costs one jobs request per run for the life of the process.
-        self._skipped_by_run: dict[int, bool] = {}
+        # Whether each completed run attempt took its lane's skip step, keyed by (run id,
+        # attempt). A re-run keeps its run id, but a completed attempt never changes, so
+        # this costs one jobs request per attempt for the life of the process.
+        self._skipped_by_attempt: dict[tuple[int, int], bool] = {}
 
     def _get(self, url: str, params: dict | None = None) -> dict:
         try:
@@ -202,18 +203,18 @@ class GithubSource:
         """
         if lane.skip_step is None or run["status"] != "completed" or run.get("conclusion") != "success":
             return False
-        run_id = run["id"]
-        if run_id not in self._skipped_by_run:
+        attempt = (run["id"], run["run_attempt"])
+        if attempt not in self._skipped_by_attempt:
             jobs = self._get(
-                f"{GITHUB_API_BASE}/repos/{lane.repository}/actions/runs/{run_id}/jobs",
+                f"{GITHUB_API_BASE}/repos/{lane.repository}/actions/runs/{attempt[0]}/attempts/{attempt[1]}/jobs",
                 params={"per_page": 100},
             ).get("jobs", [])
-            self._skipped_by_run[run_id] = any(
+            self._skipped_by_attempt[attempt] = any(
                 step["name"] == lane.skip_step and step.get("conclusion") == "success"
                 for job in jobs
                 for step in job.get("steps", [])
             )
-        return self._skipped_by_run[run_id]
+        return self._skipped_by_attempt[attempt]
 
     def _nightly_lane_snapshot(self, lane: NightlyLane, now: datetime) -> NightlyLaneSnapshot:
         """Fetch one lane's recent scheduled runs; a failure becomes an error snapshot, not a raise."""
