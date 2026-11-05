@@ -36,18 +36,6 @@ FILLER_COUNT = 120
 FILLER_MAX_TOKENS = 256
 
 # The NCCL block the pinned vLLM's override_envs_for_invariance() applies, made conditional.
-NCCL_BLOCK = """    # NCCL determinism settings
-    os.environ["NCCL_LAUNCH_MODE"] = "GROUP"
-    os.environ["NCCL_COLLNET_ENABLE"] = "0"
-    os.environ["NCCL_NVLS_ENABLE"] = "0"
-    os.environ["NCCL_P2P_NET_DISABLE"] = "1"
-    os.environ["NCCL_MIN_NCHANNELS"] = "1"
-    os.environ["NCCL_MAX_NCHANNELS"] = "1"
-    os.environ["NCCL_PROTO"] = "Simple"
-    os.environ["NCCL_ALGO"] = "allreduce:tree"
-    os.environ["NCCL_NTHREADS"] = "1"
-    os.environ["NCCL_SOCKET_NTHREADS"] = "1"
-"""
 NCCL_BLOCK_GUARDED = f"""    # NCCL determinism settings (Marin benchmark guards: {NCCL_GUARD_ENV}=1 keeps all NCCL
     # defaults; {NCCL_CHANNELS_GUARD_ENV}=1 keeps only the channel count at its default)
     if os.environ.get("{NCCL_GUARD_ENV}") != "1":
@@ -144,19 +132,28 @@ def stage_model(model_uri: str, stage_dir: Path) -> Path | None:
 
 
 def guard_nccl_pins(venv: Path) -> Path:
-    """Make the pinned vLLM's NCCL pins conditional on an environment variable."""
+    """Make the pinned vLLM's NCCL pins conditional on environment variables.
+
+    The venv links site-packages from the node's shared uv cache, so the patched module is
+    written as a regular file in place of the symlink and the cache stays untouched.
+    """
     matches = list(venv.glob("lib/python3.*/site-packages/vllm/model_executor/determinism/batch_invariant.py"))
     if len(matches) != 1:
         raise RuntimeError(f"expected one batch_invariant.py under {venv}, found {matches}")
     path = matches[0]
-    source = path.read_text()
-    if NCCL_BLOCK_GUARDED in source:
+    lines = path.read_text().splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines) if line.strip().startswith("# NCCL determinism settings")]
+    ends = [i for i, line in enumerate(lines) if 'os.environ["NCCL_SOCKET_NTHREADS"] = "1"' in line]
+    if len(starts) != 1 or len(ends) != 1 or ends[0] <= starts[0]:
+        raise RuntimeError(f"{path} does not contain one NCCL settings block: starts={starts} ends={ends}")
+    patched = "".join(lines[: starts[0]]) + NCCL_BLOCK_GUARDED + "".join(lines[ends[0] + 1 :])
+    if patched == "".join(lines):
         return path
-    if NCCL_GUARD_ENV in source:
-        raise RuntimeError(f"{path} carries an older benchmark guard; use a fresh environment")
-    if source.count(NCCL_BLOCK) != 1:
-        raise RuntimeError(f"{path} does not contain the expected NCCL block exactly once")
-    path.write_text(source.replace(NCCL_BLOCK, NCCL_BLOCK_GUARDED))
+    if path.is_symlink():
+        path.unlink()
+    path.write_text(patched)
+    for cached in path.parent.glob("__pycache__/batch_invariant.*.pyc"):
+        cached.unlink()
     log(f"guarded NCCL pins in {path}")
     return path
 
