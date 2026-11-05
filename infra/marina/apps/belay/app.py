@@ -285,16 +285,24 @@ class Approval(BaseModel):
     """An Iris priority band for the idea's runs, above its Track's band; None keeps the Track's band."""
 
 
-class IntakeApproval(BaseModel):
-    """A #9514 comment an approver approves from the admin page, as GitHub serves it."""
+class IntakeReview(BaseModel):
+    """A #9514 comment an approver decides on from the admin page, as GitHub serves it."""
 
     comment_id: str
     url: str
     author: str
     body: str
     shown: str
-    """The visible text the admin page showed the approver; the approval stores exactly this."""
+    """The visible text the admin page showed the approver; the decision stores exactly this."""
     posted_at: datetime.datetime
+
+
+class IntakeDecline(IntakeReview):
+    note: str = Field(min_length=1)
+    """The approver's reason, shown with the declined idea."""
+
+
+class IntakeApproval(IntakeReview):
     nodes: int | None = Field(default=None, ge=1)
     hours: float | None = Field(default=None, gt=0)
     """A study's budget hours (custom track): with the node grant, the most its runs may use."""
@@ -650,8 +658,8 @@ DECLINABLE_STATES = (IdeaState.PENDING, IdeaState.APPROVED)
 
 
 def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[str, str]:
-    """Close an idea without running it; refuses (writing nothing) an unknown idea or one already planned, running
-    or closed."""
+    """Close an idea without running it, dropping its unclaimed approval event; refuses (writing nothing) an unknown
+    idea or one already planned, running or closed."""
     rows = _rows(conn, "SELECT state FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
     if not rows:
         raise HTTPException(404, f"no idea {idea_id}")
@@ -660,6 +668,10 @@ def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[
     conn.execute(
         text("UPDATE ideas SET state = 'declined', note = :n, updated_at = now() WHERE id = :id"),
         {"n": f"Declined by {login}: {note or 'no reason given'}", "id": idea_id},
+    )
+    # An approved idea's queued approval must not reach a session after the decline.
+    conn.execute(
+        text("DELETE FROM events WHERE kind = 'approved' AND ref = :ref AND session_id IS NULL"), {"ref": str(idea_id)}
     )
     _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} declined idea #{idea_id}"))
     return {"state": IdeaState.DECLINED.value}
@@ -781,9 +793,9 @@ def note_overdue_runs(conn: Connection) -> int:
     return len(overdue)
 
 
-def approve_intake_comment(conn: Connection, comment: IntakeApproval, login: str) -> dict[str, Any]:
-    """Approve a #9514 comment straight from the admin page: record it as an intake idea and queue it, unless the
-    registry already holds it. Its visible text, as stored here, is the only text a session reads."""
+def _record_reviewed_comment(conn: Connection, comment: IntakeReview) -> dict[str, Any]:
+    """Record a #9514 comment an approver reviewed as an intake idea, refusing one whose submitted body no longer
+    strips to the text the page showed, or that the registry already holds; returns its idea row."""
     if comment.url != f"{INTAKE_URL_PREFIX}{comment.comment_id}":
         raise HTTPException(422, f"{comment.url} is not #9514 comment {comment.comment_id}")
     if visible_text(comment.body)[0] != comment.shown:
@@ -801,10 +813,25 @@ def approve_intake_comment(conn: Connection, comment: IntakeApproval, login: str
     idea = _rows(conn, "SELECT id, state, registry_id FROM ideas WHERE comment_id = :c", c=comment.comment_id)[0]
     if idea["state"] == IdeaState.RECORDED:
         raise HTTPException(409, f"already run as {idea['registry_id']}")
+    return idea
+
+
+def approve_intake_comment(conn: Connection, comment: IntakeApproval, login: str) -> dict[str, Any]:
+    """Approve a #9514 comment straight from the admin page: record it as an intake idea and queue it, unless the
+    registry already holds it. Its visible text, as stored here, is the only text a session reads."""
+    idea = _record_reviewed_comment(conn, comment)
     grants = {"node_grant": comment.nodes, "budget_hours": comment.hours, "priority": comment.priority}
     if not approve_idea(conn, idea["id"], login, **grants):
         raise HTTPException(409, f"idea {idea['id']} is already {idea['state']}")
     return {"state": IdeaState.APPROVED.value, "idea_id": idea["id"]}
+
+
+def decline_intake_comment(conn: Connection, comment: IntakeDecline, login: str) -> dict[str, Any]:
+    """Decline a #9514 comment straight from the admin page, with the approver's reason; it is never queued."""
+    idea = _record_reviewed_comment(conn, comment)
+    if idea["state"] != IdeaState.PENDING:
+        raise HTTPException(409, f"idea {idea['id']} is already {idea['state']}; Reload before deciding again")
+    return {**decline_idea(conn, idea["id"], login, comment.note), "idea_id": idea["id"]}
 
 
 def requeue_idea(
@@ -1193,6 +1220,12 @@ def create_api(services: Services) -> RegisteredApi:
         """Approve a #9514 comment the admin page read live from GitHub."""
         with engine.begin() as conn:
             return approve_intake_comment(conn, comment, approver_login(_settings(conn), caller))
+
+    @admin.post("/intake/decline")
+    def decline_intake(comment: IntakeDecline, caller: str = Depends(approver)) -> dict[str, Any]:
+        """Decline a #9514 comment the admin page read live from GitHub, with a reason."""
+        with engine.begin() as conn:
+            return decline_intake_comment(conn, comment, approver_login(_settings(conn), caller))
 
     @admin.post("/ideas/{idea_id}/approve")
     def approve(idea_id: int, approval: Approval | None = None, caller: str = Depends(approver)) -> dict[str, str]:
