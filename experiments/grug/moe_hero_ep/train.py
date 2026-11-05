@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import collections
 import dataclasses
 import functools
 import gc
@@ -1109,6 +1110,41 @@ def _make_train_step(
     return train_step
 
 
+def _log_restore_rehearsal(template: PyTree, restored: PyTree, opt_state: PyTree) -> None:
+    """Rehearsal-only (interim branch): report restored dtypes against the run's template, and optimizer counters.
+
+    A restored leaf takes the dtype stored in the checkpoint, whatever the template says, so restore cannot notice one.
+    """
+    if jax.process_index() != 0:
+        return
+    wanted = jax.tree_util.tree_flatten_with_path(template)[0]
+    got = jax.tree_util.tree_flatten_with_path(restored)[0]
+    if [path for path, _ in wanted] != [path for path, _ in got]:
+        logger.warning("RESTORE-TREE-MISMATCH template=%d restored=%d leaves", len(wanted), len(got))
+    pairs = [
+        (path, wanted_leaf.dtype, got_leaf.dtype)
+        for (path, wanted_leaf), (_, got_leaf) in zip(wanted, got, strict=False)
+        if hasattr(wanted_leaf, "dtype") and hasattr(got_leaf, "dtype")
+    ]
+    logger.info("RESTORE-DTYPES %s", dict(collections.Counter((str(a), str(b)) for _, a, b in pairs)))
+    for path, wanted_dtype, got_dtype in pairs:
+        if wanted_dtype != got_dtype:
+            logger.warning(
+                "RESTORE-DTYPE-MISMATCH %s template=%s restored=%s",
+                jax.tree_util.keystr(path),
+                wanted_dtype,
+                got_dtype,
+            )
+    counts = sorted(
+        {
+            int(np.asarray(leaf.addressable_data(0)))
+            for leaf in jax.tree.leaves(opt_state)
+            if isinstance(leaf, jax.Array) and jnp.issubdtype(leaf.dtype, jnp.integer) and leaf.ndim == 0
+        }
+    )
+    logger.info("RESTORE-OPT-COUNTS %s", counts)
+
+
 def _check_restored_step(restored_step: int, stop_step: int) -> None:
     """Reject a restore past the stop step, which would otherwise train nothing and report success.
 
@@ -1223,6 +1259,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
         if released_initial_state:
             state = restore_template_from(state)
+        restore_template = state
 
         state = restore_grug_state_from_checkpoint(
             state,
@@ -1236,6 +1273,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
         if config.trainer.master_param_mode == MasterParamMode.DEVICE:
             state = take_master_as_params(state)
+        _log_restore_rehearsal(restore_template, state, state.opt_state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
         dump_grug_state_sharding_run_artifact(
@@ -1314,19 +1352,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         stop_step = config.stop_step
         restored_step = int(state.step)
         _check_restored_step(restored_step, stop_step)
-        # Rehearsal-only (interim branch): the optimizer's integer counters read from the restored state.
-        if jax.process_index() == 0:
-            logger.info(
-                "RESTORE-OPT-COUNTS step=%d %s",
-                restored_step,
-                sorted(
-                    {
-                        int(np.asarray(leaf.addressable_data(0)))
-                        for leaf in jax.tree.leaves(state.opt_state)
-                        if isinstance(leaf, jax.Array) and jnp.issubdtype(leaf.dtype, jnp.integer) and leaf.ndim == 0
-                    }
-                ),
-            )
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=stop_step)
