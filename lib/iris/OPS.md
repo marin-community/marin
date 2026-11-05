@@ -684,6 +684,11 @@ Namespaces:
   ) WHERE rn = 1;
   ```
 
+  Rows can be lost without blocking the controller: a failed snapshot (logged
+  as `controller rows: snapshot failed`) or a failed Finelog flush drops that
+  transaction's rows. To find gaps, compare daily row counts with the
+  controller DB.
+
   History is kept in the archive (remote retention is `retain_forever`). The
   storage policies (5 years; 8 GiB for `iris.task_attempt`, 4 GiB each for the
   other two) bound only the hub's local copy; older segments are read back from

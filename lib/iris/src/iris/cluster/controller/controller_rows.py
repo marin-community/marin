@@ -14,8 +14,12 @@ Only work this controller executes is written: rows for jobs whose ``cluster`` i
 ``LOCAL_CLUSTER``. A job handed off to a federation peer, and the mirror rows of
 a peer's jobs and attempts, are written by the peer that runs them, so every job
 has one writer and one key.
+
+A failed snapshot is logged and drops that transaction's rows; it never rolls
+back the controller's own writes.
 """
 
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -31,6 +35,8 @@ from iris.cluster.controller.schema import job_config_table, jobs_table, task_at
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName
 from iris.rpc import job_pb2
+
+logger = logging.getLogger(__name__)
 
 _MEMO_KEY = "controller_rows"
 # Keeps each IN list under SQLite's 999 bound parameters (an attempt key is two).
@@ -84,7 +90,7 @@ def _marked(cur: RowCursor) -> _Marked | None:
     if marked is None:
         marked = _Marked()
         cur.memo[_MEMO_KEY] = marked
-        cur.register_pre_commit(lambda: _snapshot(cur, tables, marked))
+        cur.register_pre_commit(lambda: _snapshot_or_drop(cur, tables, marked))
         cur.register(lambda: _write(tables, marked))
     assert isinstance(marked, _Marked)
     return marked
@@ -130,6 +136,26 @@ def _write(tables: ControllerRowTables, marked: _Marked) -> None:
 
 def _dt(value: Timestamp | None) -> datetime | None:
     return value.as_naive_utc() if value is not None else None
+
+
+def _snapshot_or_drop(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> None:
+    """Snapshot the marked rows; on failure, log and drop them so the transaction still commits.
+
+    These rows are a telemetry copy: a bug here must not block scheduling.
+    """
+    try:
+        _snapshot(cur, tables, marked)
+    except Exception:
+        logger.exception(
+            "controller rows: snapshot failed, dropping %d job, %d attempt rows (jobs %s, attempts %s)",
+            len(marked.jobs),
+            len(marked.attempts),
+            [j.to_wire() for j in list(marked.jobs)[:5]],
+            [(t.to_wire(), a) for t, a in list(marked.attempts)[:5]],
+        )
+        marked.rows.clear()
+        marked.config_rows.clear()
+        marked.attempt_rows.clear()
 
 
 def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> None:

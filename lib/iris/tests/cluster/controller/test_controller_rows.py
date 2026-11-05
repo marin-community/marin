@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 
 import pytest
-from iris.cluster.controller import ops, writes
+from iris.cluster.controller import controller_rows, ops, writes
 from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.ops.task import Assignment
@@ -195,6 +195,20 @@ def test_rolled_back_transaction_writes_no_rows(state):
             )
             raise RuntimeError("abort")
 
+    assert (rows.jobs, rows.job_configs, rows.attempts) == ([], [], [])
+
+
+def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, monkeypatch):
+    rows = _attach(state, "marin")
+
+    def broken_snapshot(cur, tables, marked):
+        marked.rows.append(object())  # a partial snapshot must be dropped too
+        raise RuntimeError("snapshot bug")
+
+    monkeypatch.setattr(controller_rows, "_snapshot", broken_snapshot)
+    tasks = submit_job(state, "train", make_job_request("train"))
+
+    assert len(tasks) == 1
     assert (rows.jobs, rows.job_configs, rows.attempts) == ([], [], [])
 
 
