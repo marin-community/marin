@@ -35,7 +35,20 @@ from experiments.belay.__main__ import (
     write_spec,
 )
 from experiments.belay.analysis import Header, series_from_rows, write_report
-from experiments.belay.branch import cut_fresh_week, git, require_clean_pushed_head, require_week_branch
+from experiments.belay.branch import (
+    OURS_MARKER,
+    SPLIT_MARKER,
+    THEIRS_MARKER,
+    Rollover,
+    abort_rollover,
+    carry,
+    cut_fresh_week,
+    finish_port,
+    git,
+    load_rollover,
+    require_clean_pushed_head,
+    require_week_branch,
+)
 from experiments.belay.code_change import (
     Probe,
     named_sources,
@@ -129,22 +142,55 @@ def test_a_fresh_week_is_the_recipe_plus_only_the_carried_commits(repo: Path) ->
     git(repo, "push", "--quiet", "origin", CONFIG.base_branch)
     week = CONFIG.week_branch(MONDAY)
 
-    assert cut_fresh_week(repo, week, [winner], dry_run=False) is None
+    assert cut_fresh_week(repo, Rollover(week, [winner], {winner: "X0001"}), dry_run=False) is None
 
     assert git(repo, "rev-parse", "HEAD~1") == git(repo, "rev-parse", f"origin/{CONFIG.base_branch}")
     assert (repo / "winner.txt").exists() and (repo / "recipe_fix.txt").exists()
     assert not (repo / "loser.txt").exists()
 
 
-def test_a_carried_commit_that_conflicts_with_the_recipe_is_refused(repo: Path) -> None:
+def conflicting_week(repo: Path) -> tuple[str, Rollover]:
+    """The recipe changed the winner's file, so carrying the winner conflicts; the cut waits for a port."""
     winner = commit_of(repo, "winner.txt")
     git(repo, "checkout", "--quiet", CONFIG.base_branch)
     commit_file(repo, "winner.txt", "the recipe changed this file too\n")
     git(repo, "push", "--quiet", "origin", CONFIG.base_branch)
+    rollover = Rollover(CONFIG.week_branch(MONDAY), [winner], {winner: "X0001"})
+    assert cut_fresh_week(repo, rollover, dry_run=False) == winner
+    return winner, rollover
 
-    assert cut_fresh_week(repo, CONFIG.week_branch(MONDAY), [winner], dry_run=False) == winner
+
+def test_a_conflicting_carry_waits_for_a_port_and_pushes_nothing(repo: Path) -> None:
+    winner, _ = conflicting_week(repo)
     assert git(repo, "rev-parse", "HEAD") == git(repo, "rev-parse", f"origin/{CONFIG.base_branch}")
     assert not git(repo, "ls-remote", "--heads", "origin", CONFIG.week_branch(MONDAY))
+    assert load_rollover(repo).commits == [winner]
+
+
+def test_a_port_commits_once_resolved_and_records_the_new_commit(repo: Path) -> None:
+    winner, rollover = conflicting_week(repo)
+    with pytest.raises(SystemExit, match="still conflicted"):
+        finish_port(repo, rollover)
+    (repo / "winner.txt").write_text(f"{OURS_MARKER}HEAD\nrecipe\n{SPLIT_MARKER}\nwinner\n{THEIRS_MARKER}x\n")
+    git(repo, "add", "winner.txt")
+    with pytest.raises(SystemExit, match="conflict markers remain"):
+        finish_port(repo, rollover)
+    (repo / "winner.txt").write_text("the recipe changed this file too\nX0001: winner (default off)\n")
+    git(repo, "add", "winner.txt")
+    ported = finish_port(repo, rollover)
+    assert rollover.ports == {winner: ported}
+    assert git(repo, "log", "-1", "--format=%s", ported) == git(repo, "log", "-1", "--format=%s", winner)
+    assert carry(repo, rollover) is None
+    assert git(repo, "rev-parse", "HEAD~1") == git(repo, "rev-parse", f"origin/{CONFIG.base_branch}")
+
+
+def test_an_aborted_port_leaves_the_recipe_and_nothing_pending(repo: Path) -> None:
+    conflicting_week(repo)
+    abort_rollover(repo)
+    assert git(repo, "rev-parse", "HEAD") == git(repo, "rev-parse", f"origin/{CONFIG.base_branch}")
+    assert not git(repo, "status", "--porcelain", "--untracked-files=no")
+    with pytest.raises(SystemExit, match="no weekly rollover"):
+        load_rollover(repo)
 
 
 def test_only_ideas_in_play_are_carried() -> None:
@@ -349,7 +395,7 @@ def test_comment_edited_after_approval_refused() -> None:
 def test_first_spec_on_a_fresh_weekly_branch(repo: Path) -> None:
     """A weekly branch cut fresh from the recipe has no runs/ directory yet; the first spec creates it."""
     branch = CONFIG.week_branch(MONDAY)
-    assert cut_fresh_week(repo, branch, [], dry_run=False) is None
+    assert cut_fresh_week(repo, Rollover(branch, [], {}), dry_run=False) is None
     git(repo, "push", "--quiet", "-u", "origin", branch)
     spec = write_spec(repo, branch, SPEC, dry_run=False)
     assert (repo / "experiments/belay/runs/X0001.yaml").read_text() == SPEC

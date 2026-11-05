@@ -66,6 +66,18 @@ def record_code_commit(registry_id: str, commit: str, *, dry_run: bool) -> Path:
     return path
 
 
+def replace_code_commit(registry_id: str, old: str, new: str) -> Path:
+    """Swap one of an idea's code commits for its port onto a newer recipe, in place."""
+    path = entry_path(registry_id)
+    entry = yaml.safe_load(path.read_text())
+    commits = entry.get("code_commits") or []
+    if old not in commits:
+        raise SystemExit(f"refusing: {registry_id} does not record code commit {old[:10]}")
+    entry["code_commits"] = [new if c == old else c for c in commits]
+    path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
+    return path
+
+
 def load_entry(registry_id: str) -> dict:
     return yaml.safe_load(entry_path(registry_id).read_text())
 

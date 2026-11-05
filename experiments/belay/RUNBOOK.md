@@ -273,7 +273,20 @@ ideas stay behind on the old branch; settings-only ideas carry nothing.
        `carrying <commit> X####: <flag> (default off)` line per carried commit;
      - the push, then `on <branch>: origin/marin_belay_v1_recipe plus <n> carried commit(s)`;
      - `next: B start ...`.
-   - **If a carried commit conflicts, or the carried code fails its code-change gates on the recipe:** it pushes
+   - **If a carried commit conflicts** (`... conflicts in: <files>`), port it; the recipe moved under it, which is
+     routine and not a reason to stop:
+     1. Read the idea's own change: `git show <commit>` (the line names it).
+     2. In each conflicted file, keep the recipe's code and re-apply only that change. Resolve context only:
+        nothing the commit did not do, no other idea's code, no edits outside `experiments/grug/fast_track/` and
+        `tests/grug/test_fast_track_*`. Leave no conflict marker, then `git add` each file.
+     3. **Run:** `B weekly-rollover --continue`. It commits the port with the original subject, carries the rest
+        (porting another conflict the same way), runs the code-change gates on everything carried, pushes, and
+        records each port as its idea's code commit on the registry
+        (`... code ported to belay-ckpt-<date>`).
+     4. **If the change has nowhere to go** (the code it changes is gone from the recipe, so a port would mean
+        rewriting the idea), or `--continue` still refuses after a fix: `B weekly-rollover --abort`, then run the
+        escalate command it prints, then stop.
+   - **If the conflict is outside those paths, or the carried code fails its gates on the recipe:** it pushes
      nothing; run the escalate command it prints, then stop.
 2. Go back to section 0.
 
