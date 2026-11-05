@@ -9,8 +9,10 @@ import pytest
 
 from eval.chat_benchmarks.GenomeQA import eval_instruct as genomeqa_source
 from eval.completion_response import CompletionContentPolicy, CompletionText, completion_response_from_chat_choice
-from eval.contracts.aggregation import complete_macro
 from eval.contracts.eval_spec import EvalSpec, GraderSpec
+from eval.execution.engine import ItemResult
+from eval.execution.metrics import SourceMetrics
+from eval.chat_benchmarks.GenomeQAMotifMCQ.eval_instruct import GenomeQAMotifMCQBenchmark
 from eval.graders.genomeqa import genomeqa
 from eval.sources.common import SourceOptions
 from eval.limits import ContextWindowExceededError
@@ -34,7 +36,7 @@ def question(options="ABCD"):
         "binary/6_motif/1",
         0,
         (),
-        GraderSpec("genomeqa", {"options": options}),
+        GraderSpec("genomeqa", {"options": options, "cell_weight": 1}),
         target="B",
     )
 
@@ -63,27 +65,6 @@ def test_final_answer_grading_preserves_protocol(response, options, correct, fai
     assert grade.metrics["accuracy"] == correct
     assert grade.audit["genomeqa_parsing"]["failure"] == failure
     assert grade.filtered_resps == (["B"] if correct else [""])
-
-
-def test_macro_preserves_cell_weight_and_missing_population():
-    expected = {"large/binary": 500, "large/mcq": 500, "motif/binary": 100, "motif/mcq": 100}
-    groups = {"macro": tuple(expected), "large": ("large/binary", "large/mcq"), "motif": ("motif/binary", "motif/mcq")}
-    counts = {"large/binary": (500, 500), "large/mcq": (0, 500), "motif/binary": (100, 100), "motif/mcq": (100, 100)}
-    result = complete_macro(counts, expected, groups)
-    assert result["macro"] == 0.75
-    assert result["accuracy"] == pytest.approx(700 / 1200)
-    assert result["num_solved"] == 700
-    assert result["large"] == 0.5
-    assert result["motif"] == 1
-    partial = complete_macro({**counts, "motif/mcq": (99, 99)}, expected, groups)
-    assert "macro" not in partial and "motif" not in partial
-    assert partial["large"] == 0.5
-    assert partial["motif/mcq/partial_accuracy"] == 1
-    assert partial["motif/mcq/missing"] == 1
-    missing = complete_macro({**counts, "motif/mcq": (0, 0)}, expected, groups)
-    assert "macro" not in missing and "motif/mcq/partial_accuracy" not in missing
-    empty = complete_macro({cell: (0, size) for cell, size in expected.items()}, expected, groups)
-    assert empty["macro"] == 0 and empty["complete"]
 
 
 @pytest.fixture
@@ -134,10 +115,10 @@ def test_source_preserves_full_population_and_request_identity(synthetic_files):
     assert specs[0].source_id != specs[2600].source_id
     assert specs[0].requests[0].generation["max_gen_toks"] == 16384
     assert "metadata" not in str(specs[0].requests[0].prompt)
-    motif = genomeqa_source.GenomeQAMotifMCQBenchmark()
+    motif = GenomeQAMotifMCQBenchmark()
     selected = list(motif.iter_specs(replace(options, task="GenomeQAMotifMCQ")))
     assert len(selected) == 100
-    assert all(spec.tags == {"cell": "6_motif/mcq"} for spec in selected)
+    assert all(spec.tags["cell"] == "6_motif/mcq" for spec in selected)
 
 
 @pytest.mark.parametrize(
@@ -157,3 +138,32 @@ def test_long_prompt_is_rejected_without_sequence_truncation(synthetic_files):
     )
     with pytest.raises(ContextWindowExceededError):
         next(specs)
+
+
+def test_existing_reducer_preserves_macro_subtasks_and_actual_correct_counts(synthetic_files):
+    source = genomeqa_source.GenomeQABenchmark()
+    options = SourceOptions("GenomeQA", source.SOURCE, context_length=32768, prompt_token_count=lambda _: 100)
+    reducer = SourceMetrics(repeated=False, policy=source.REDUCER)
+    for spec in source.iter_specs(options):
+        # The 200 motif questions pass; all 5,000 questions in larger cells fail.
+        response = "Answer: B" if spec.tags["subtask"] == "6_motif" else "Answer: A"
+        grade = genomeqa(spec, [response])
+        reducer.add(ItemResult(spec, (response,), grade, {"sample_id": spec.source_id}))
+    metrics = reducer.finish("GenomeQA")["results"]["GenomeQA"]
+    assert metrics["genomeqa_macro"] == pytest.approx(1 / 6)
+    assert metrics["accuracy"] == pytest.approx(1 / 26)
+    assert metrics["num_solved"] == 200
+    assert metrics["num_total"] == 5200
+    for question_format in ("binary", "mcq"):
+        assert metrics[f"{question_format}/genomeqa_macro"] == pytest.approx(1 / 6)
+        assert metrics[f"6_motif/{question_format}/accuracy"] == 1
+        assert metrics[f"count_6_motif/{question_format}"] == 100
+        assert metrics[f"1_enhancer_vs_promoter/{question_format}/accuracy"] == 0
+    assert metrics["6_motif/genomeqa_macro"] == 1
+    assert metrics["1_enhancer_vs_promoter/genomeqa_macro"] == 0
+
+
+def test_source_rejects_population_subset_before_model_requests(synthetic_files):
+    source = genomeqa_source.GenomeQABenchmark()
+    with pytest.raises(ValueError, match="complete population"):
+        next(source.iter_specs(SourceOptions("GenomeQA", source.SOURCE, limit=100)))

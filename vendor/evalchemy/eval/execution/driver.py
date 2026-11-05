@@ -264,6 +264,8 @@ async def run_evaluations(
                     FailureCategory.MALFORMED_MODEL_RESPONSE,
                 )
             )
+        if not predict_only and plan.benchmark is not None and plan.benchmark.REQUIRES_FULL_COVERAGE and score_count != expected:
+            plan.errors.append(SampleCoverageError(f"benchmark requires {expected} grades; received {score_count}"))
         document = None
         if not plan.errors and not predict_only:
             try:

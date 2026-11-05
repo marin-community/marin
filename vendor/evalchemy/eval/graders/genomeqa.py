@@ -5,8 +5,9 @@ from collections.abc import Sequence
 from typing import Any
 
 from eval.chat_benchmarks.GPQADiamond.testing_utils import get_multiple_choice_answer
-from eval.completion_response import CompletionContentPolicy, CompletionText, final_response_text
+from eval.completion_response import CompletionContentPolicy, CompletionText
 from eval.contracts.eval_spec import EvalSpec, Grade
+from eval.graders.answer_extraction import final_response_text
 
 _ANSWER = re.compile(r"\bAnswer\s*:\s*\**\s*\[?([A-Za-z])\]?(?![A-Za-z])", re.IGNORECASE)
 _LETTER = re.compile(r"(?<![A-Za-z])([A-Z])(?![A-Za-z])")
@@ -49,14 +50,17 @@ def genomeqa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
             else:
                 # Feed only the validated candidate to the shared extractor, never analysis.
                 answer = get_multiple_choice_answer(f"Answer: {candidate}")
+    correct = float(failure is None and answer == spec.target)
     return Grade(
         {
-            "accuracy": float(failure is None and answer == spec.target),
+            "accuracy": correct,
+            "genomeqa_macro": correct,
             "unanswered": float(not answer),
             "truncation": float(failure == "truncation"),
             "refusal": float(failure == "refusal"),
             "parse_failure": float(failure in {"missing_answer", "conflicting_answers", "invalid_option"}),
         },
         audit={"genomeqa_parsing": {"selected_span": selected, "answer": answer, "failure": failure}},
+        weights={"genomeqa_macro": spec.grader.reference["cell_weight"]},
         filtered_resps=[answer],
     )

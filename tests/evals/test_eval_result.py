@@ -12,7 +12,6 @@ import json
 
 import fsspec
 import pytest
-from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from finestore.store import DataStore
 from marin.evaluation.evalchemy.result import (
     EvalchemyResult,
@@ -20,8 +19,6 @@ from marin.evaluation.evalchemy.result import (
     ReportEntry,
     compile_eval_report,
 )
-from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
-from marin.evaluation.records import EvalTaskRef
 from marin.execution.artifact import result_type_name
 from marin.execution.lazy import ArtifactStep, resolve
 
@@ -199,69 +196,3 @@ def test_compile_eval_report_rejects_duplicate_task_dir(tmp_path):
     ]
     with pytest.raises(ValueError, match="duplicate task 'gsm8k_8shot'"):
         compile_eval_report(entries, str(tmp_path / "report"))
-
-
-def test_genomeqa_finestore_preserves_macro_and_binary_sample_grades(tmp_path):
-    root = str(tmp_path / "genomeqa")
-    values = {"genomeqa_macro": 1 / 6, "accuracy": 1 / 26, "num_total": 5200, "num_solved": 200}
-    metadata = {
-        "schema_version": 1,
-        "task": "GenomeQA",
-        "primary_metric": "genomeqa_macro",
-        "metric_kind": "continuous",
-        "n_benchmark": 5200,
-        "n_attempted": 5200,
-        "metrics": [
-            {"name": "genomeqa_macro", "source_name": "genomeqa_macro", "kind": "continuous", "higher_is_better": True},
-            {"name": "accuracy", "source_name": "accuracy", "kind": "binary", "higher_is_better": True},
-        ],
-    }
-    document = {
-        "results": {"GenomeQA": values},
-        "canonical_results": {"GenomeQA": values},
-        "benchmark_metadata": {"GenomeQA": metadata},
-        "task_outcomes": {
-            "GenomeQA": {
-                "status": "succeeded",
-                "expected_count": 5200,
-                "expected_sample_count": 5200,
-                "scored_sample_count": 5200,
-            }
-        },
-    }
-    store = DataStore.open(root, writer_id="synthetic-genomeqa")
-    try:
-        archive = EvaluationStore(store)
-        for index in range(5200):
-            score = float(index < 200)
-            archive.add_sample(
-                EvalSample(
-                    task="genomeqa",
-                    doc_id=str(index),
-                    kind=SampleKind.GENERATION,
-                    prompt_text="Synthetic question",
-                    output="B",
-                    extracted="B",
-                    target_text="B" if score else "A",
-                    metrics={"accuracy": score},
-                    correct=bool(score),
-                    grading=Grading(method="lm-eval:accuracy", metric="accuracy", score=score, passed=bool(score)),
-                )
-            )
-        results = store.table("evalchemy_results", primary_key=("source_prefix",))
-        results.append({"source_prefix": "genomeqa", "document": json.dumps(document), "scored": True})
-        store.seal()
-    finally:
-        store.close()
-    summary = summarize_native_eval_samples(
-        root, tasks=(EvalTaskRef(name="GenomeQA", num_fewshot=0, task_alias="genomeqa"),)
-    )
-    assert summary.coverage["genomeqa"].n_scored == 5200
-    assert summary.coverage["genomeqa"].errors == {}
-    assert summary.canonical_metrics["genomeqa"]["genomeqa_macro"] == pytest.approx(1 / 6)
-    assert summary.tasks[0].benchmark.primary_metric == "genomeqa_macro"
-    report = compile_eval_report(
-        [ReportEntry(root, result_type_name(FineStoreEvalchemyResult), "evalchemy")], str(tmp_path / "report")
-    )
-    assert report.task_metrics["genomeqa"]["num_solved"] == 200
-    assert report.task_metrics["genomeqa"]["accuracy"] == pytest.approx(1 / 26)

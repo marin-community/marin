@@ -61,8 +61,6 @@ class ReducerSpec:
     group_weights: Mapping[str, float] = field(default_factory=dict)
     trial_metric: str | None = "accuracy"
     selected_trial: int | None = None
-    expected_groups: Mapping[str, int] = field(default_factory=dict)
-    macro_groups: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

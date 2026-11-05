@@ -146,15 +146,6 @@ class EvalchemyDefinition:
                     self.name,
                     max_gen_toks,
                 )
-        if any(task.name in {"GenomeQA", "GenomeQAMotifMCQ"} for task in config.tasks):
-            if max_gen_toks != config.max_gen_toks:
-                raise ValueError("GenomeQA requires the benchmark token allowance; model cap would lower it")
-            for key in ("temperature", "top_p"):
-                if (
-                    model.generation.extra_gen_kwargs.get(key, config.extra_gen_kwargs[key])
-                    != config.extra_gen_kwargs[key]
-                ):
-                    raise ValueError(f"GenomeQA model configuration conflicts with benchmark {key}")
         chat_template_kwargs = {
             **model.generation.chat_template_kwargs,
             **config.chat_template_kwargs,

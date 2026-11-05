@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
@@ -94,8 +94,6 @@ class BenchmarkReducerRef(TypedDict):
     group_weights: dict[str, float]
     trial_metric: str | None
     selected_trial: int | None
-    expected_groups: NotRequired[dict[str, int]]
-    macro_groups: NotRequired[dict[str, tuple[str, ...]]]
 
 
 class BenchmarkPromptLengthRef(TypedDict):

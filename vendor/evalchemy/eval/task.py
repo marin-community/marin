@@ -36,6 +36,7 @@ class BaseBenchmark(ABC):
     METRIC_KIND_OVERRIDES: Mapping[str, MetricKind | str] = MappingProxyType({})
     REQUIRES_JUDGE = False
     EMPTY_RESPONSE_POLICY = EmptyResponsePolicy.FAIL_TASK
+    REQUIRES_FULL_COVERAGE = False
 
     def __init__(self, logger=None, system_instruction=None, num_samples=1, pass_at_k=None):
         self.logger = logger or logging.getLogger(type(self).__name__)

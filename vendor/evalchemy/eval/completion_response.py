@@ -168,15 +168,3 @@ def completion_response_from_chat_choice(response: Mapping[str, Any], choice: Ma
         provider_metadata=provider_metadata,
         raw_choice=dict(choice),
     )
-
-
-_REASONING_END_MARKERS = ("</think>", "<|end_think|>")
-
-
-def final_response_text(response: str) -> str:
-    """Return final answer content without a preceding reasoning trace."""
-    reasoning_end = max(
-        (index + len(marker) for marker in _REASONING_END_MARKERS if (index := response.rfind(marker)) >= 0),
-        default=0,
-    )
-    return response[reasoning_end:]

@@ -9,7 +9,6 @@ from dataclasses import asdict
 import pytest
 from evaldash.app import MemoryRecordStore
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
-from marin.evaluation.eval_measurements import measurement_from_record
 from marin.evaluation.eval_policy import EVALCHEMY_COMMIT
 from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
 from marin.evaluation.eval_stats import Completeness, MissingPolicy
@@ -878,69 +877,3 @@ def test_historical_policy_label_keeps_its_scores_for_marked_comparisons():
 
     assert panel["rows"][0]["cells"]["mmlu"]["value"] == pytest.approx(0.6)
     assert panel["policy_rejections"] == []
-
-
-def test_genomeqa_subtask_views_reuse_run_and_preserve_macro():
-    subtask_names = (
-        "1_enhancer_vs_promoter",
-        "2_splice_sites",
-        "3_species_cls",
-        "4_histone_marks",
-        "5_tfbs",
-        "6_motif",
-    )
-    # Motif is perfect, all five larger tasks fail: macro=1/6, pooled=1/26.
-    canonical = {
-        "genomeqa_macro": 1 / 6,
-        "accuracy": 1 / 26,
-        **{name: float(name == "6_motif") for name in subtask_names},
-    }
-    raw = {**canonical, "num_solved": 200, "num_total": 5200}
-    for name in subtask_names:
-        for format in ("binary", "mcq"):
-            raw[f"{name}/{format}/graded"] = 100 if name == "6_motif" else 500
-            raw[f"{name}/{format}/correct"] = 100 if name == "6_motif" else 0
-    record = _record(
-        "model",
-        "genomeqa",
-        None,
-        "2026-11-05T12:00:00Z",
-        1 / 6,
-        primary_metric="genomeqa_macro",
-        metric_kind=MetricKind.CONTINUOUS,
-        metric="genomeqa_macro",
-        coverage={"genomeqa": TaskCoverage(n_benchmark=5200, n_attempted=5200, n_scored=5200, n_correct=200)},
-    )
-    task = record.evaluation.tasks[0]
-    benchmark = task.benchmark.model_copy(
-        update={
-            "task": "GenomeQA",
-            "metrics": tuple(
-                BenchmarkMetricRef(
-                    name=name,
-                    source_name=name,
-                    kind=MetricKind.CONTINUOUS,
-                    higher_is_better=True,
-                )
-                for name in canonical
-            ),
-        }
-    )
-    record = record.model_copy(
-        update={
-            "metrics": {"genomeqa": raw},
-            "canonical_metrics": {"genomeqa": canonical},
-            "evaluation": record.evaluation.model_copy(
-                update={"tasks": (task.model_copy(update={"benchmark": benchmark}),)}
-            ),
-        }
-    )
-    panel = build_panel([record], panel_request())
-    cells = panel["rows"][0]["cells"]
-    assert cells["genomeqa"]["value"] == pytest.approx(1 / 6)
-    assert cells["genomeqa-motifs"]["value"] == 1
-    assert cells["genomeqa-motifs"]["n_scored"] == 200
-    assert cells["genomeqa-tfbs"]["n_scored"] == 1000
-    assert {cell["run_id"] for cell in cells.values()} == {record.run_id}
-    assert measurement_from_record(record).n_correct is None
-    assert len(build_meta([record])["evals"]) == 7

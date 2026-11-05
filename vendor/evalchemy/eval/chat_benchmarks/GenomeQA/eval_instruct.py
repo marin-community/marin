@@ -32,11 +32,6 @@ SUBTASKS = (
 )
 FORMATS = ("binary", "mcq")
 CELL_COUNTS = {f"{task}/{format}": 100 if task == "6_motif" else 500 for task in SUBTASKS for format in FORMATS}
-MACRO_GROUPS = {
-    "genomeqa_macro": tuple(CELL_COUNTS),
-    **{task: tuple(f"{task}/{format}" for format in FORMATS) for task in SUBTASKS},
-    **{format: tuple(f"{task}/{format}" for task in SUBTASKS) for format in FORMATS},
-}
 FILE_HASHES = {
     "binary": "0ef4c3d33541980e3fded9a5b23a952296ce3c51cb0415b42c0299a61c21938a",
     "mcq": "c1cbb51449eb8a5241890337c88dc1bc0a58974b8eb4cb8bc49f310b12faeb75",
@@ -68,11 +63,20 @@ def render_question(row: dict) -> str:
 
 class GenomeQABenchmark(BaseBenchmark):
     SOURCE = SourceRef(DATASET, "train", REVISION)
-    METRICS = ("genomeqa_macro", "accuracy", *SUBTASKS, *FORMATS, *CELL_COUNTS)
+    METRICS = (
+        "genomeqa_macro",
+        "accuracy",
+        *(f"{group}/genomeqa_macro" for group in (*SUBTASKS, *FORMATS)),
+        *(f"{cell}/accuracy" for cell in CELL_COUNTS),
+    )
     PRIMARY_METRIC = "genomeqa_macro"
     METRIC_KIND_OVERRIDES = {"genomeqa_macro": MetricKind.CONTINUOUS}
-    REDUCER = ReducerSpec(name="complete_macro", expected_groups=CELL_COUNTS, macro_groups=MACRO_GROUPS)
+    REDUCER = ReducerSpec(
+        groups={tag: "{group}/{metric}" for tag in ("cell", "subtask", "format")},
+        trial_metric=None,
+    )
     EMPTY_RESPONSE_POLICY = EmptyResponsePolicy.SCORE
+    REQUIRES_FULL_COVERAGE = True
     CELLS = CELL_COUNTS
 
     def __init__(self, logger=None):
@@ -83,6 +87,8 @@ class GenomeQABenchmark(BaseBenchmark):
         return sum(self.CELLS.values())
 
     def iter_specs(self, options: SourceOptions):
+        if options.limit is not None:
+            raise ValueError("GenomeQA requires a complete population; use GenomeQAMotifMCQ for the 100-item check")
         if options.num_samples != 1:
             raise ValueError("GenomeQA requires exactly one response per question")
         if options.system_instruction:
@@ -109,8 +115,15 @@ class GenomeQABenchmark(BaseBenchmark):
             source_id=lambda row: f"{row['format']}/{row['subtask']}/{row['id']}",
             generation_kwargs=GENERATION,
             seed_repeats=False,
-            reference=lambda row: {"options": ascii_uppercase[: len(row["options"])]},
-            tags=lambda row: {"cell": f"{row['subtask']}/{row['format']}"},
+            reference=lambda row: {
+                "options": ascii_uppercase[: len(row["options"])],
+                "cell_weight": max(CELL_COUNTS.values()) / CELL_COUNTS[f"{row['subtask']}/{row['format']}"],
+            },
+            tags=lambda row: {
+                "cell": f"{row['subtask']}/{row['format']}",
+                "subtask": row["subtask"],
+                "format": row["format"],
+            },
         ):
             ensure_context_window(
                 context_length=context,
@@ -167,10 +180,3 @@ class GenomeQABenchmark(BaseBenchmark):
                 "prompt_source": PROMPT_URL,
             }
         }
-
-
-class GenomeQAMotifMCQBenchmark(GenomeQABenchmark):
-    METRIC_KIND_OVERRIDES = {"genomeqa_macro": MetricKind.BINARY}
-    CELLS = {"6_motif/mcq": 100}
-    METRICS = ("genomeqa_macro", "accuracy", "6_motif/mcq")
-    REDUCER = ReducerSpec(name="complete_macro", expected_groups=CELLS, macro_groups={"genomeqa_macro": tuple(CELLS)})

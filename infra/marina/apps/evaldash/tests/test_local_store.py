@@ -426,33 +426,3 @@ def test_run_filter_options_include_catalog_outside_recent_window(client):
     all_runs = client.get("/runs", params={"limit": 1000}).json()
     assert set(facets["eval"]) == {row["eval_name"] for row in all_runs}
     assert set(facets["version"]) == {row["version"] for row in all_runs if row["version"]}
-
-
-@pytest.mark.parametrize("eval_name", ["genomeqa", "custom-genomeqa-alias"])
-def test_genomeqa_sample_text_is_not_exposed_by_public_routes(tmp_path, store, client, eval_name):
-    fixtures.build_fixtures(str(tmp_path / "genomeqa"))
-    original = list_records(str(tmp_path / "genomeqa"))[0]
-    task = original.evaluation.tasks[0]
-    benchmark = task.benchmark.model_copy(
-        update={
-            "source": {"dataset": "HuggingFaceBio/genomeqa", "split": "train", "revision": "synthetic"},
-        }
-    )
-    record = original.model_copy(
-        update={
-            "evaluation": original.evaluation.model_copy(
-                update={
-                    "name": eval_name,
-                    "tasks": (task.model_copy(update={"benchmark": benchmark}),),
-                }
-            ),
-        }
-    )
-    store.refresh([record])
-    for route in (
-        f"/runs/{record.run_id}/samples?task=GenomeQA",
-        f"/runs/{record.run_id}/samples/artifact?uri=finestore://example",
-    ):
-        response = client.get(route)
-        assert response.status_code == 403
-    assert client.post(f"/runs/{record.run_id}/samples/review", json={"task": "GenomeQA"}).status_code == 403

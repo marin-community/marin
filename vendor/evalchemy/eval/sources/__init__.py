@@ -2,7 +2,7 @@
 
 SOURCES = {
     "GenomeQA": ("eval.chat_benchmarks.GenomeQA.eval_instruct", "GenomeQABenchmark"),
-    "GenomeQAMotifMCQ": ("eval.chat_benchmarks.GenomeQA.eval_instruct", "GenomeQAMotifMCQBenchmark"),
+    "GenomeQAMotifMCQ": ("eval.chat_benchmarks.GenomeQAMotifMCQ.eval_instruct", "GenomeQAMotifMCQBenchmark"),
     'AIME24': ('eval.chat_benchmarks.AIME24.eval_instruct', 'AIME24Benchmark'),
     'AIME25': ('eval.chat_benchmarks.AIME25.eval_instruct', 'AIME25Benchmark'),
     'AIW': ('eval.chat_benchmarks.AIW.eval_instruct', 'AIWBenchmark'),
