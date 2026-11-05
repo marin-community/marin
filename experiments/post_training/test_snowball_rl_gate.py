@@ -379,23 +379,43 @@ def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_run
         metrics={"policy/raw_grad_norm": float("nan")},
         argv=("--preset", "speed-medium"),
     )
-    for root, reason in (
-        (wrong, "not a recorded speed-medium"),
-        (old, "revision differs"),
-        (unfinished, "not a recorded speed-medium"),
-        (failed, "run crashed"),
-        (incomplete, "failed invariants"),
-    ):
+    controls(recorded_runs, "learning-medium")
+    recorded_runs("learning-medium", "users/test/panel-candidate", argv=("--preset", "learning-medium"))
+    other_panel = recorded_runs(
+        "learning-medium",
+        "users/test/other-panel",
+        argv=("--preset", "learning-medium"),
+        first_panel_task="other-heldout-task",
+    )
+    missing_record = first.parents[1] / "missing-record" / presets.PRESET_REVISION
+    panel_original = rescore("learning-medium", "--candidate", "users/test/panel-candidate")
+    cases = [
+        ("speed-medium", root, reason)
+        for root, reason in (
+            (wrong, "not a recorded speed-medium"),
+            (old, "revision differs"),
+            (unfinished, "not a recorded speed-medium"),
+            (failed, "run crashed"),
+            (incomplete, "failed invariants"),
+            (missing_record, "record"),
+        )
+    ]
+    cases.append(("learning-medium", other_panel, "panel task IDs differ"))
+    for preset_name, root, reason in cases:
+        candidate_name = (
+            "users/test/panel-candidate" if preset_name == "learning-medium" else "users/test/baseline-candidate"
+        )
+        expected = panel_original if preset_name == "learning-medium" else original
         ref = f"{root.relative_to(first.parents[3]).parent}@{root.name}"
         rejected = CliRunner().invoke(
-            gate.main, ["--preset", "speed-medium", "--candidate", "users/test/baseline-candidate", "--baseline", ref]
+            gate.main, ["--preset", preset_name, "--candidate", candidate_name, "--baseline", ref]
         )
         assert rejected.exit_code == 0, (ref, rejected.output, rejected.exception)
         payload = json.loads(rejected.output.strip().splitlines()[-1])
-        assert (payload["verdict"], payload["label"]) == (original["verdict"], original["label"])
+        assert (payload["verdict"], payload["label"]) == (expected["verdict"], expected["label"])
         assert payload["vs_baseline"] == [] and reason in payload["vs_baseline_reason"]
         refused = CliRunner().invoke(
-            snowball.main, ["--preset", "speed-medium", "--version", presets.PRESET_REVISION, "--baseline", ref]
+            snowball.main, ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--baseline", ref]
         )
         assert refused.exit_code == 2 and reason in refused.output
 

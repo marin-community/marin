@@ -716,7 +716,7 @@ def _write_gate(
                     + baseline_declared
                     + baseline_details
                 )
-        except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
+        except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError, click.BadParameter) as error:
             baseline_reason = str(error)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
         reason = str(error)
