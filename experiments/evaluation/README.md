@@ -21,7 +21,7 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 Remove `--dry-run` to submit. The command waits for the orchestrator and prints
-each evaluation's metrics. Add `--no-wait` to return after submission.
+each evaluation's result location (and Harbor metrics). Add `--no-wait` to return after submission.
 
 Choose exactly one model source:
 
@@ -80,9 +80,9 @@ uv run python -m experiments.evaluation.cli launch \
   --federated_cluster cw-rno2a --limit 2
 ```
 
-Curated evaluations that need an external judge declare a `judge` block in their
-configuration. It supplies the endpoint, model, and secret reference. Records
-omit the secret reference and resolved credential.
+Curated evaluations that need an external judge declare its deployment and model
+identity in `judge`, its URL in `judge_endpoint`, and ordered secret references in
+`judge_api_key`. Records omit secret references and resolved credentials.
 
 ## Evaluation files and runtimes
 
@@ -129,7 +129,9 @@ Each evaluation has its own generated `run_id` and writes:
 ```
 
 The record contains the resolved model and evaluator settings, runtime
-provenance, hardware, status, metrics, coverage, result path, and Iris job IDs.
+provenance, hardware, status, result path, and Iris job IDs. Harbor also writes
+metrics and coverage there. Curated metric maps remain empty until Evaldash
+derives scores and coverage in its own catalog.
 Evaluations in one launch share a `group_id`, which is the launch ID set by
 `--run-id` when supplied. Failure records include available child log tails.
 

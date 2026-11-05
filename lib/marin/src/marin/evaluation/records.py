@@ -121,7 +121,7 @@ class BenchmarkMetadataRef(BaseModel):
     reducers: tuple[BenchmarkReducerRef, ...] = ()
     prompt_length: BenchmarkPromptLengthRef | None = None
     requires_judge: bool = False
-    identity: str | None = None
+    identity: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_protocol(self) -> "BenchmarkMetadataRef":
@@ -371,7 +371,7 @@ class EvalRef(BaseModel):
     )
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
-    curated: CuratedRef | None = None
+    curated: CuratedRef | None = Field(default=None, exclude_if=lambda value: value is None)
     harbor: HarborRef | None = None
     postprocessing: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
     """Named final-score protocols and their frozen JSON configurations."""
