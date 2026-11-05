@@ -66,9 +66,11 @@ def base_metric(name: str) -> str:
 
 
 def declared_metric(metrics: Mapping[str, float], declared: str | None) -> tuple[str, float] | None:
-    """Pick a declared base metric, applying the standard extraction-filter priority."""
+    """Resolve an exact filtered metric, or a base name under extraction-filter priority."""
     if declared is None:
         return primary_metric(metrics)
+    if "," in declared:
+        return (declared, metrics[declared]) if declared in metrics else None
     candidates = {name: value for name, value in metrics.items() if base_metric(name) == declared}
     for metric_filter in FILTER_PRIORITY:
         filtered = sorted(name for name in candidates if name.endswith(f",{metric_filter}"))
