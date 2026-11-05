@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
+from typing import Literal, TypeAlias, TypeVar
 
 import equinox as eqx
 import jax
@@ -53,6 +53,13 @@ from levanter.data.text.formats import (
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
     TextLmDatasetFormat,
+    TokenSeqDict,
+)
+from levanter.data.text.length_bucket import (
+    LengthBucket,
+    LengthBucketIndex,
+    LengthBucketTokenSeqDataset,
+    load_bucket_length_stats,
 )
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule, IntSchedule
@@ -69,11 +76,6 @@ T = TypeVar("T")
 
 logger = logging.getLogger("levanter.data.text")
 CACHE_METADATA_WORKERS = 32
-
-
-class TokenSeqDict(TypedDict):
-    input_ids: np.ndarray
-    loss_weights: NotRequired[np.ndarray]
 
 
 class TokenSeqDataset(AsyncDataset[TokenSeqDict]):
@@ -357,6 +359,19 @@ class ConcatDatasetComponent(DatasetComponentBase):
     """A logical component formed by concatenating cache-backed children."""
 
     children: dict[str, DatasetComponent]
+    tags: list[str] | None = None
+
+
+@DatasetComponentBase.register_subclass("length_skew")
+@dataclass(frozen=True)
+class LengthSkewDatasetComponent(DatasetComponentBase):
+    """Repeat the virtual long-document stream of one cache within a mixture component."""
+
+    child: DatasetComponent
+    threshold: int
+    long_repetitions: int
+    stats_path: str
+    stats_key: str
     tags: list[str] | None = None
 
 
@@ -903,6 +918,44 @@ class LmDataConfig:
                     datasets[name] = ConcatDataset(child_datasets)
                 continue
 
+            if isinstance(component, LengthSkewDatasetComponent):
+                cache = caches.get(name)
+                if cache is None:
+                    if split == "train":
+                        raise ValueError(f"No cache available for length-skew component {name}")
+                    continue
+                if not isinstance(component.child.format, TextLmDatasetFormat) or _effective_pack(component.child):
+                    raise ValueError("Length skew requires an unpacked text cache")
+                stats = load_bucket_length_stats(component.stats_path)
+                cell_stats = stats.buckets[component.stats_key]
+                long_tokens = cell_stats.tokens_above[component.threshold]
+                short_tokens = cell_stats.total_tokens - long_tokens
+                index = LengthBucketIndex(
+                    cache,
+                    component.threshold,
+                    statistics=cell_stats,
+                    chunk_rows=stats.chunk_rows,
+                )
+                children: dict[str, AsyncDataset[GrugLmExample]] = {}
+                for bucket, repetitions, tokens in (
+                    (LengthBucket.SHORT, 1, short_tokens),
+                    (LengthBucket.LONG, component.long_repetitions, long_tokens),
+                ):
+                    if tokens < Pos.size:
+                        continue
+                    token_dataset = LengthBucketTokenSeqDataset(index, Pos.size, bucket=bucket)
+                    lm_dataset = CausalLmDataset(
+                        token_dataset,
+                        Pos,
+                        eos_id=self.the_tokenizer.eos_token_id,
+                        block_cross_document_attention=self.block_cross_document_attention,
+                    )
+                    children.update({f"{bucket}-{copy}": lm_dataset for copy in range(repetitions)})
+                if not children:
+                    raise ValueError(f"Length-skew component {name} has no {Pos.size}-token sequences")
+                datasets[name] = ConcatDataset(children)
+                continue
+
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
 
@@ -1146,6 +1199,9 @@ class LmDataConfig:
             if isinstance(component, ConcatDatasetComponent):
                 for child_name, child in component.children.items():
                     items.append((f"{name}/{child_name}", child))
+                continue
+            if isinstance(component, LengthSkewDatasetComponent):
+                items.append((name, component.child))
                 continue
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")

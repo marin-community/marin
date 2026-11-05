@@ -275,23 +275,29 @@ evidence, and a live switch needs a rehearsal from the handoff checkpoint and ag
 thresholds; see the
 [context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
 
-### Long-context store
+### Long-context data
 
-The 262K extension can train on a store that splits each Harrier bucket by document length.
-`harrier_long_context_mix.py` builds it: each bucket concatenates its partition of shorter documents with
-`LONG_CONTEXT_SKEW` (4) copies of its partition of documents around 64K tokens and longer, and the bucket keeps its cooldown
-weight, so the skew changes mass only inside the bucket. A bucket with no long tokens has no long children. The store
-is expected at `{LONG_CONTEXT_STORE_URI}/cluster=C/quality=Q/length={lte_64k,gt_64k}`, each partition a flat cache with
-its own `shard_ledger.json`. After a store lands, set `LONG_CONTEXT_STORE_URI` and run this command, which reads only
-the ledgers, writes the token table `harrier_long_context_mix.json`, and prints the long-document token share and
-the passes over the long partition. With an empty table the mix refuses to build.
+The 262K extension reads the existing Harrier token caches. Each cache is split into virtual streams of documents
+at most 65,536 tokens and above 65,536 tokens. `harrier_long_context_mix.py` concatenates one short stream with
+eight references to the long stream within each cell, preserving the cell's cooldown weight. No token cache or
+document index is written. Before training, run the length-statistics step. It reads only cache offsets and writes
+small per-cell metadata containing total tokens, tokens in documents strictly above 65,536, 131,072, and
+262,144 tokens, and chunk totals for locating virtual reads:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.harrier_length_stats
+```
+
+The loader uses these totals for dataset lengths and builds the chunk index in memory. It reads document offsets
+only for the chunks touched by a batch. The command below reports the long-document token share and passes implied
+by the statistics:
 
 ```bash
 uv run python -m experiments.grug.moe_hero_ep.harrier_long_context_mix
 ```
 
 `HERO_USES_LONG_CONTEXT_MIX` in `launch_scaling_ladder.py` selects the mix for the hero. The Harrier skip-to-window
-replay cannot carry over, since it requires one set of sources and token counts across phases. Instead
+replay cannot carry over, since the virtual sources have different token counts across phases. Instead
 `LmDataConfig.mixture_start_step` makes the step at the end of `HERO_CONTEXT_PHASES` read the mixture's first
 sequence, so each bucket starts at the beginning of its shuffled order. Without it, a run with no history would read
 at `step * batch`, a position that depends on the rack count and that is 18T tokens in for the hero. A restore at a
@@ -299,8 +305,8 @@ later step continues in place, a retry repeats the same data, and a restore befo
 `HERO_CONTEXT_PHASES` and the FLOPs baseline keep their meaning.
 
 Diagnostic arms pass `--long-context-start-step N` with their `--restore-from` step and the same `--seed`. The sequence
-stream then depends only on steps since `N`, so a one-rack arm reads a prefix of what a partial-rack arm reads. Long
-partitions are repeated in the concatenation, so repeats start inside the first pass, and a bucket wraps to the start
+stream then depends only on steps since `N`, so a one-rack arm reads a prefix of what a partial-rack arm reads. The
+virtual long stream is repeated in the concatenation, so repeats start inside the first pass, and a bucket wraps to the start
 of the same shuffled order when it runs out.
 
 Under context parallelism, `attention_context_layout` sets how FA4 assigns query rows to context

@@ -1,90 +1,64 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The hero's 262K extension: the Harrier cooldown weights on a store split by document length.
+"""Hero long-context mixture over virtual document-length buckets in the existing Harrier caches."""
 
-Each Harrier bucket concatenates its partition of short documents with ``LONG_CONTEXT_SKEW`` copies of its
-partition of documents around 64K tokens and longer (the store sets the boundary), so the long documents gain
-mass inside the bucket while the bucket keeps its cooldown weight. Sources differ from the Harrier store, so the
-Harrier context history cannot replay here. The mixture instead starts at a chosen training step
-(``LmDataConfig.mixture_start_step``).
-
-Run this module to read the store's token counts into ``harrier_long_context_mix.json`` and print the skewed
-token share and the passes over the long partition.
-"""
-
-import json
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import click
-from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig
+from levanter.data.text.datasets import DatasetComponent, LengthSkewDatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
-from levanter.store.cache import CacheLedger
+from levanter.data.text.length_bucket import load_bucket_length_stats
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.processing.tokenize.tokenize import TokenizedCache
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe.launch_datakit_moe_mix import _MIXTURE_BLOCK_SIZE
-from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import _SPEC, _shuffle_config, validation_components
+from experiments.grug.moe_hero_ep.harrier_length_stats import length_stats_step
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
+    _SPEC,
+    HARRIER_MIX_2026_08_18_STORE,
+    _shuffle_config,
+    validation_components,
+)
 from experiments.marin_tokenizer import marin_tokenizer
 
-# Provisional until the store lands. Refresh the token table after changing it.
-LONG_CONTEXT_STORE_URI = "s3://marin-us-east-02a/marin/datakit/store_long_context_pending"
-LONG_CONTEXT_SKEW = 4
+LONG_CONTEXT_THRESHOLD = 65_536
+LONG_CONTEXT_SKEW = 8
 LONG_CONTEXT_TAG = f"harrier-long-context-skew-{LONG_CONTEXT_SKEW}"
-SHORT_PARTITION = "lte_64k"
-LONG_PARTITION = "gt_64k"
-# Extension length to report passes for: what each finalist 262K extension trains.
 REPORTED_TRAINING_TOKENS = 200_000_000_000
-
-_TOKEN_TABLE_PATH = Path(__file__).with_name("harrier_long_context_mix.json")
 _COOLDOWN_WEIGHTS = {cell: weight for cell, weight in _SPEC.phase_weights[-1] if weight > 0}
 
 LengthTokens = Mapping[str, tuple[int, int]]
-"""Short-partition and long-partition token counts by bucket."""
 
 
-def _load_length_tokens() -> dict[str, tuple[int, int]]:
-    return {cell: (short, long) for cell, (short, long) in json.loads(_TOKEN_TABLE_PATH.read_text()).items()}
+def read_length_tokens(stats_path: str) -> dict[str, tuple[int, int]]:
+    """Read short and long token totals from the length-statistics step output."""
+    stats = load_bucket_length_stats(stats_path)
+    return {
+        cell: (
+            row.total_tokens - row.tokens_above[LONG_CONTEXT_THRESHOLD],
+            row.tokens_above[LONG_CONTEXT_THRESHOLD],
+        )
+        for cell, row in stats.buckets.items()
+    }
 
 
-def _partition_cache_dir(store: str, cell: str, partition: str) -> str:
-    return prefix_join(store, f"cluster={int(cell[1:3])}/quality={int(cell[4])}/length={partition}")
-
-
-def _bucket_component(
-    store: str, cell: str, short_tokens: int, long_tokens: int, max_seq_len: int
-) -> ConcatDatasetComponent:
-    def child(partition: str) -> DatasetComponent:
-        return DatasetComponent(
+def _bucket_component(store: str, cell: str, stats_path: str) -> LengthSkewDatasetComponent:
+    return LengthSkewDatasetComponent(
+        child=DatasetComponent(
             source=None,
-            cache_dir=_partition_cache_dir(store, cell, partition),
+            cache_dir=prefix_join(store, f"cluster={int(cell[1:3])}/quality={int(cell[4])}"),
             format=TextLmDatasetFormat(),
-            tags=[cell, partition],
+            tags=[cell],
             flat_cache=True,
-        )
-
-    # A partition shorter than one sequence serves nothing at this context.
-    children = {f"{cell}-{SHORT_PARTITION}": child(SHORT_PARTITION)} if short_tokens >= max_seq_len else {}
-    if long_tokens >= max_seq_len:
-        children |= {f"{cell}-{LONG_PARTITION}-{copy}": child(LONG_PARTITION) for copy in range(LONG_CONTEXT_SKEW)}
-    if not children:
-        raise ValueError(f"Bucket {cell} has no {max_seq_len}-token sequence: {short_tokens=}, {long_tokens=}")
-    return ConcatDatasetComponent(children=children, tags=[cell])
-
-
-def _checked_length_tokens(length_tokens: LengthTokens) -> LengthTokens:
-    if not length_tokens:
-        raise ValueError(
-            f"The long-context token table is empty. Set LONG_CONTEXT_STORE_URI, then run "
-            f"`uv run python -m experiments.grug.moe_hero_ep.harrier_long_context_mix` to fill {_TOKEN_TABLE_PATH.name}"
-        )
-    if missing := _COOLDOWN_WEIGHTS.keys() - length_tokens.keys():
-        raise ValueError(f"The long-context token table lacks weighted buckets: {sorted(missing)}")
-    return length_tokens
+        ),
+        threshold=LONG_CONTEXT_THRESHOLD,
+        long_repetitions=LONG_CONTEXT_SKEW,
+        stats_path=stats_path,
+        stats_key=cell,
+        tags=[cell],
+    )
 
 
 def harrier_long_context_data_config(
@@ -93,19 +67,13 @@ def harrier_long_context_data_config(
     start_step: int,
     max_seq_len: int,
     validation: Sequence[ArtifactStep[TokenizedCache]],
-    store: str = LONG_CONTEXT_STORE_URI,
-    length_tokens: LengthTokens | None = None,
+    store: str | None = None,
+    stats_path: str | None = None,
 ) -> LmDataConfig:
-    """Train on the cooldown weights over the skewed store, reading its first sequence at ``start_step``.
-
-    The training sequence stream depends only on steps since ``start_step`` and the trainer seed, so arms on
-    different rack counts read prefixes of one stream. The extension is short and expensive, thus it never uses
-    simulated epoching.
-    """
-    tokens = _checked_length_tokens(_load_length_tokens() if length_tokens is None else length_tokens)
-    components = {
-        cell: _bucket_component(store, cell, *tokens[cell], max_seq_len=max_seq_len) for cell in _COOLDOWN_WEIGHTS
-    }
+    """Train on cooldown weights over virtual length buckets from the existing Harrier store."""
+    store = store or ctx.artifact_path(HARRIER_MIX_2026_08_18_STORE)
+    stats_path = stats_path or length_stats_step().output_path
+    components = {cell: _bucket_component(store, cell, stats_path) for cell in _COOLDOWN_WEIGHTS}
     val_components = validation_components(ctx, validation)
     if collisions := components.keys() & val_components.keys():
         raise ValueError(f"validation components collide with Harrier buckets: {sorted(collisions)}")
@@ -130,7 +98,7 @@ def long_document_share(length_tokens: LengthTokens, skew: int) -> float:
 
 
 def long_partition_passes(length_tokens: LengthTokens, skew: int, training_tokens: int) -> dict[str, float]:
-    """Return how many times ``training_tokens`` of training reads each bucket's long partition."""
+    """Return how many times training reads each bucket's long-document stream."""
     return {
         cell: weight * training_tokens * skew / (length_tokens[cell][0] + skew * length_tokens[cell][1])
         for cell, weight in _COOLDOWN_WEIGHTS.items()
@@ -144,55 +112,19 @@ def overall_long_partition_passes(length_tokens: LengthTokens, skew: int, traini
     return long_document_share(length_tokens, skew) * training_tokens / long_tokens
 
 
-def _partition_tokens(store: str, cell: str, partition: str) -> int:
-    ledger = CacheLedger.load(_partition_cache_dir(store, cell, partition))
-    if not ledger.is_finished:
-        raise ValueError(f"Unfinished partition {partition} of bucket {cell}")
-    return ledger.field_counts["input_ids"]
-
-
-def read_length_tokens(store: str, cells: Sequence[str]) -> dict[str, tuple[int, int]]:
-    """Read each bucket's token counts from the store's ledgers. Only a long partition may be absent."""
-
-    def counts(cell: str) -> tuple[int, int]:
-        short_tokens = _partition_tokens(store, cell, SHORT_PARTITION)
-        try:
-            return short_tokens, _partition_tokens(store, cell, LONG_PARTITION)
-        except FileNotFoundError:
-            click.echo(f"{cell} has no {LONG_PARTITION} partition; counting it as empty")
-            return short_tokens, 0
-
-    with ThreadPoolExecutor(max_workers=32) as pool:
-        return dict(zip(cells, pool.map(counts, cells), strict=True))
-
-
-def _print_report(length_tokens: LengthTokens) -> None:
-    short_total = sum(short for short, _ in length_tokens.values())
-    long_total = sum(long for _, long in length_tokens.values())
-    corpus_share = long_total / (short_total + long_total)
-    click.echo(f"tokens: short {short_total:,}, long {long_total:,}, corpus long share {corpus_share:.3%}")
-    click.echo(
-        f"long-document share at the cooldown weights: 1x {long_document_share(length_tokens, 1):.3%}, "
-        f"{LONG_CONTEXT_SKEW}x {long_document_share(length_tokens, LONG_CONTEXT_SKEW):.3%}"
-    )
-    passes = long_partition_passes(length_tokens, LONG_CONTEXT_SKEW, REPORTED_TRAINING_TOKENS)
-    overall = overall_long_partition_passes(length_tokens, LONG_CONTEXT_SKEW, REPORTED_TRAINING_TOKENS)
-    most = sorted(passes.items(), key=lambda item: -item[1])[:5]
-    click.echo(
-        f"{REPORTED_TRAINING_TOKENS / 1e9:.0f}B tokens: {overall:.3f} long passes overall; most-read buckets "
-        + ", ".join(f"{cell} {count:.2f}" for cell, count in most)
-    )
-    click.echo("per bucket: " + " ".join(f"{cell}={count:.3f}" for cell, count in sorted(passes.items())))
-
-
 @click.command()
 def main() -> None:
-    """Write LONG_CONTEXT_STORE_URI's token table next to this module and print its share and passes."""
-    configure_coreweave_s3()
-    length_tokens = read_length_tokens(LONG_CONTEXT_STORE_URI, list(_COOLDOWN_WEIGHTS))
-    rows = ",\n".join(f'"{cell}": [{short}, {long}]' for cell, (short, long) in sorted(length_tokens.items()))
-    _TOKEN_TABLE_PATH.write_text("{\n" + rows + "\n}\n")
-    _print_report(length_tokens)
+    """Report the skew implied by the published Harrier length statistics."""
+    length_tokens = read_length_tokens(length_stats_step().output_path)
+    short_total = sum(short for short, _ in length_tokens.values())
+    long_total = sum(long for _, long in length_tokens.values())
+    click.echo(f"tokens: short {short_total:,}, long {long_total:,}")
+    click.echo(f"long-document share: {long_document_share(length_tokens, LONG_CONTEXT_SKEW):.3%}")
+    click.echo(
+        f"{REPORTED_TRAINING_TOKENS / 1e9:.0f}B tokens: "
+        f"{overall_long_partition_passes(length_tokens, LONG_CONTEXT_SKEW, REPORTED_TRAINING_TOKENS):.3f} "
+        "long passes overall"
+    )
 
 
 if __name__ == "__main__":

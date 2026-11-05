@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import dataclasses
 import shutil
 from collections import Counter
@@ -11,12 +12,14 @@ import jax
 import numpy as np
 import pytest
 from levanter.data.text.formats import TextLmDatasetFormat, preprocessor_for_format
+from levanter.data.text.length_bucket import document_length_stats, load_bucket_length_stats
 from levanter.schedule import BatchSchedule
-from levanter.store.cache import write_levanter_cache
+from levanter.store.cache import TreeCache, write_levanter_cache
 from levanter.tokenizers import load_tokenizer
 from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep import harrier_long_context_mix, launch_scaling_ladder
+from experiments.grug.moe_hero_ep import harrier_length_stats, harrier_long_context_mix, launch_scaling_ladder
+from experiments.grug.moe_hero_ep.harrier_length_stats import write_length_stats
 from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
     LONG_CONTEXT_SKEW,
     LONG_CONTEXT_TAG,
@@ -37,10 +40,9 @@ from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
 SEQ_LEN = 8
 START_STEP = 390_251
 # Bucket: short tokens, long tokens. Token ids encode the bucket and partition.
-TOKENS = {"c01q0": (800, 160), "c02q3": (240, 0)}
+TOKENS = {"c01q0": (832, 160), "c02q3": (240, 0)}
 WEIGHTS = {"c01q0": 0.75, "c02q3": 0.25}
 FIRST_ID = {("c01q0", "lte_64k"): 1000, ("c01q0", "gt_64k"): 3000, ("c02q3", "lte_64k"): 5000}
-HERO_LENGTH_TOKENS = {cell: (10**12, 10**11) for cell, _ in _SPEC.available_tokens}
 TOKENIZER_FILES = ("gpt2_tokenizer.json", "tokenizer.json"), ("gpt2_tokenizer_config.json", "tokenizer_config.json")
 LEVANTER_TESTS = Path(__file__).parents[3] / "lib/levanter/tests"
 
@@ -60,13 +62,24 @@ def fake_store(tmp_path, monkeypatch):
         TextLmDatasetFormat(), load_tokenizer(str(tokenizer_dir)), enforce_bos=True, enforce_eos=True
     ).metadata
     store = tmp_path / "store"
-    for (cell, partition), first_id in FIRST_ID.items():
-        tokens = TOKENS[cell][partition == "gt_64k"]
-        ids = np.arange(first_id, first_id + tokens, dtype=np.int32)
-        docs = ({"input_ids": ids[start : start + 16]} for start in range(0, tokens, 16))
-        path = store / f"cluster={int(cell[1:3])}/quality={cell[4]}/length={partition}"
+    for cell in TOKENS:
+        docs = []
+        for partition in ("lte_64k", "gt_64k"):
+            first_id = FIRST_ID.get((cell, partition))
+            if first_id is None:
+                continue
+            tokens = TOKENS[cell][partition == "gt_64k"]
+            doc_len = 32 if partition == "gt_64k" else 8
+            ids = np.arange(first_id, first_id + tokens, dtype=np.int32)
+            docs.extend({"input_ids": ids[start : start + doc_len]} for start in range(0, tokens, doc_len))
+        path = store / f"cluster={int(cell[1:3])}/quality={cell[4]}"
         write_levanter_cache(docs, str(path), metadata=metadata)
+    stats_path = tmp_path / "stats"
+    monkeypatch.setattr(harrier_length_stats, "LENGTH_THRESHOLDS", (8, 16, 32))
+    monkeypatch.setattr(harrier_length_stats, "DOCUMENT_CHUNK_ROWS", 8)
+    write_length_stats(str(stats_path), str(store), tuple(TOKENS))
     monkeypatch.setattr(harrier_long_context_mix, "_COOLDOWN_WEIGHTS", WEIGHTS)
+    monkeypatch.setattr(harrier_long_context_mix, "LONG_CONTEXT_THRESHOLD", 16)
 
     def config(**kwargs):
         built = harrier_long_context_data_config(
@@ -75,12 +88,12 @@ def fake_store(tmp_path, monkeypatch):
             max_seq_len=SEQ_LEN,
             validation=(),
             store=str(store),
-            length_tokens=TOKENS,
+            stats_path=str(stats_path),
             **kwargs,
         )
         return dataclasses.replace(built, tokenizer=str(tokenizer_dir), mixture_block_size=16)
 
-    return store, config
+    return store, stats_path, config
 
 
 def _partition(token: int) -> tuple[str, str]:
@@ -89,9 +102,9 @@ def _partition(token: int) -> tuple[str, str]:
 
 
 def test_skew_multiplies_long_mass_inside_the_bucket_and_keeps_outer_weights(fake_store):
-    _, config = fake_store
+    _, _, config = fake_store
     data = config()
-    bucket_sequences = {"c01q0": (800 + LONG_CONTEXT_SKEW * 160) // SEQ_LEN, "c02q3": 240 // SEQ_LEN}
+    bucket_sequences = {"c01q0": (832 + LONG_CONTEXT_SKEW * 160) // SEQ_LEN, "c02q3": 240 // SEQ_LEN}
     block_reads = {"c01q0": 12, "c02q3": 4}
     # Whole blocks that read c01q0 exactly once through its concatenated partitions.
     blocks = bucket_sequences["c01q0"] // block_reads["c01q0"]
@@ -114,23 +127,27 @@ def test_skew_multiplies_long_mass_inside_the_bucket_and_keeps_outer_weights(fak
     assert (
         sum(count for (cell, _), count in tokens.items() if cell == "c02q3") / SEQ_LEN == blocks * block_reads["c02q3"]
     )
-    assert tokens["c01q0", "gt_64k"] / tokens["c01q0", "lte_64k"] == pytest.approx(LONG_CONTEXT_SKEW * 160 / 800)
+    assert tokens["c01q0", "gt_64k"] / tokens["c01q0", "lte_64k"] == pytest.approx(LONG_CONTEXT_SKEW * 160 / 832)
 
 
 def test_bucket_without_long_tokens_reads_only_short_documents(fake_store):
-    _, config = fake_store
+    _, _, config = fake_store
     data = config()
 
-    assert set(data.components["c02q3"].children) == {"c02q3-lte_64k"}
-    assert len(data.components["c01q0"].children) == 1 + LONG_CONTEXT_SKEW
     bucket = data.train_sets(hax.Axis("position", SEQ_LEN), key=jax.random.PRNGKey(0))["c02q3"].as_sync_dataset()
     assert len(bucket) == 240 // SEQ_LEN
 
 
-def test_store_counts_read_from_ledgers_with_an_absent_partition_as_empty(fake_store):
-    store, _ = fake_store
+def test_store_counts_read_from_document_offsets(fake_store):
+    store, stats_path, _ = fake_store
+    cache = TreeCache.load(str(store / "cluster=1/quality=0"), {"input_ids": np.empty(0, dtype=np.int32)})
 
-    assert read_length_tokens(str(store), list(TOKENS)) == TOKENS
+    assert read_length_tokens(str(stats_path)) == TOKENS
+    counts = asyncio.run(document_length_stats(cache, thresholds=(8, 16, 32), chunk_rows=8))
+    written = load_bucket_length_stats(str(stats_path))
+    assert written.buckets["c01q0"] == counts
+    assert counts.total_tokens == 992
+    assert counts.tokens_above == {8: 160, 16: 160, 32: 0}
 
 
 def test_reported_share_and_passes(monkeypatch):
@@ -164,7 +181,6 @@ def test_hero_off_builds_the_harrier_config_it_always_built():
 
 def test_hero_on_starts_the_store_where_its_context_history_ends(monkeypatch):
     monkeypatch.setattr(launch_scaling_ladder, "HERO_USES_LONG_CONTEXT_MIX", True)
-    monkeypatch.setattr(harrier_long_context_mix, "_load_length_tokens", lambda: HERO_LENGTH_TOKENS)
 
     step = build_ladder_run(run_id="test-long-context-on", size="d6144", version="dev")
     config = _fingerprint_config(step)
@@ -187,7 +203,6 @@ def test_hero_on_starts_the_store_where_its_context_history_ends(monkeypatch):
 
 
 def test_diagnostic_arms_select_the_same_data_on_any_rack_count(monkeypatch):
-    monkeypatch.setattr(harrier_long_context_mix, "_load_length_tokens", lambda: HERO_LENGTH_TOKENS)
 
     def arm(racks: int):
         return _fingerprint_config(
