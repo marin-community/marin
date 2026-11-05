@@ -132,6 +132,27 @@ def test_log_scaling_scales_only_rows_beyond_the_floor_and_matches_a_uniform_sca
     np.testing.assert_allclose(scaled[:, -1], uniform[:, -1], rtol=1e-5, atol=1e-5)
 
 
+def test_log_scaling_default_slope_keeps_the_factor():
+    visible_keys = jnp.asarray([[1, 65536, 131072, 262144]], dtype=jnp.int32)
+    factor = model.log_scaling_factor(visible_keys, 65536, model.GrugModelConfig.log_scaling_alpha)
+    # Literal values of 1 + 0.1 * ln(n / 65536), so a changed default cannot pass unnoticed.
+    np.testing.assert_allclose(factor, [[1.0, 1.0, 1.0693147, 1.1386294]], rtol=1e-6)
+
+
+def test_log_scaling_alpha_reaches_the_logits():
+    base = dataclasses.replace(_log_scaling_config(), log_scaling_n_floor=4)
+    tokens = _log_scaling_tokens(base)
+    default = _log_scaling_logits(base, tokens)
+    steeper = _log_scaling_logits(dataclasses.replace(base, log_scaling_alpha=0.3), tokens)
+    unscaled = dataclasses.replace(base, log_scaling_n_floor=None)
+    # The last row sees 8 keys, twice the floor.
+    uniform = _log_scaling_logits(dataclasses.replace(unscaled, qk_mult_long_scale=1 + 0.3 * math.log(2)), tokens)
+
+    np.testing.assert_allclose(steeper[:, :4], default[:, :4], rtol=1e-5, atol=1e-5)
+    assert np.max(np.abs(steeper[:, -1] - default[:, -1])) > 1e-4
+    np.testing.assert_allclose(steeper[:, -1], uniform[:, -1], rtol=1e-5, atol=1e-5)
+
+
 def test_log_scaling_counts_keys_from_the_document_start_and_skips_padding():
     base = _log_scaling_config()
     tokens = _log_scaling_tokens(base)

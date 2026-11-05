@@ -169,6 +169,7 @@ def evaluate_checkpoint(config: CheckpointEvalConfig) -> tuple[int, dict[str, fl
                     "qk_mult": config.model.qk_mult,
                     "qk_mult_long_scale": config.model.qk_mult_long_scale,
                     "log_scaling_n_floor": config.model.log_scaling_n_floor,
+                    "log_scaling_alpha": config.model.log_scaling_alpha,
                     "context_axis_size": config.context_axis_size,
                     "max_batches": config.mrcr.max_batches,
                 },
@@ -239,6 +240,7 @@ def build_checkpoint_eval(
     qk_mult: float,
     qk_mult_long_scale: float,
     log_scaling_n_floor: int | None = None,
+    log_scaling_alpha: float = HERO_MODEL_CONFIG.log_scaling_alpha,
     seq_lens: tuple[int, ...] = HERO_EVAL_SEQ_LENS,
     context_axis_size: int = 1,
     nodes: int = HERO_EP_NODES,
@@ -249,8 +251,9 @@ def build_checkpoint_eval(
 ) -> ArtifactStep[HeroThroughputResult]:
     """``nodes`` evaluating the hero's model from ``checkpoint_path`` at ``seq_lens`` and, optionally, on MRCR.
 
-    Only ``qk_mult``, ``qk_mult_long_scale`` and ``log_scaling_n_floor`` differ from the hero's model. An eval
-    batch holds a rack's 4,194,304 tokens at the full 16 nodes, and the same tokens per GPU on fewer. Capacity
+    Only ``qk_mult``, ``qk_mult_long_scale``, ``log_scaling_n_floor`` and ``log_scaling_alpha`` differ from the
+    hero's model. An eval batch holds a rack's 4,194,304 tokens at the full 16 nodes, and the same tokens per GPU
+    on fewer. Capacity
     does not enter the dropless eval.
     """
     if not run_id.strip():
@@ -268,6 +271,7 @@ def build_checkpoint_eval(
             qk_mult=qk_mult,
             qk_mult_long_scale=qk_mult_long_scale,
             log_scaling_n_floor=log_scaling_n_floor,
+            log_scaling_alpha=log_scaling_alpha,
             attention_context_layout=attention_context_layout,
         )
     )
@@ -370,6 +374,13 @@ def build_checkpoint_eval(
     help="Fixed log scaling of global-layer queries past this many keys in their document.",
 )
 @click.option(
+    "--log-scaling-alpha",
+    type=click.FloatRange(min=0, min_open=True),
+    default=HERO_MODEL_CONFIG.log_scaling_alpha,
+    show_default=True,
+    help="Slope of the log scaling set by --log-scaling-n-floor.",
+)
+@click.option(
     "--seq-len",
     "seq_lens",
     type=click.IntRange(min=2),
@@ -409,6 +420,7 @@ def main(
     qk_mult: float,
     qk_mult_long_scale: float,
     log_scaling_n_floor: int | None,
+    log_scaling_alpha: float,
     seq_lens: tuple[int, ...],
     no_held_out: bool,
     context_axis_size: int,
@@ -423,6 +435,7 @@ def main(
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
         log_scaling_n_floor=log_scaling_n_floor,
+        log_scaling_alpha=log_scaling_alpha,
         seq_lens=() if no_held_out else tuple(seq_lens),
         context_axis_size=context_axis_size,
         nodes=nodes,
