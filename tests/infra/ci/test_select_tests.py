@@ -244,6 +244,23 @@ def test_experiment_asset_selects_its_area_and_tests_that_name_it(tmp_path: Path
     ]
 
 
+def test_experiment_asset_selects_tests_that_import_its_area(tmp_path: Path) -> None:
+    """A test that reaches the asset through an area module is selected by import."""
+    write(tmp_path, "experiments/__init__.py")
+    write(tmp_path, "experiments/datakit/__init__.py")
+    write(tmp_path, "experiments/datakit/manifest.py", 'PATH = "manifest.json"\n')
+    write(
+        tmp_path,
+        "tests/datakit/test_manifest.py",
+        "from experiments.datakit import manifest\n\ndef test_manifest():\n    assert manifest.PATH\n",
+    )
+    write(tmp_path, "tests/test_root.py", "def test_root():\n    assert True\n")
+
+    matrix = select_matrix(["experiments/datakit/manifest.json"], tmp_path)
+
+    assert leg_paths(matrix, "marin") == ["tests/datakit/test_manifest.py"]
+
+
 def test_experiment_readme_selects_no_tests(tmp_path: Path) -> None:
     _experiment_areas(tmp_path)
 

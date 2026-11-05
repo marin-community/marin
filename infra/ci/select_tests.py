@@ -839,6 +839,7 @@ def classify(
     if experiment_asset_areas:
         asset_tests = experiment_asset_tests(experiment_asset_areas, repo_root)
         direct_tests["marin"] = sorted(set(direct_tests["marin"]) | set(asset_tests))
+        src_modules.update(experiment_area_modules(experiment_asset_areas, repo_root))
 
     return ClassifyResult(
         broad=broad,
@@ -971,6 +972,21 @@ def experiment_asset_area(filepath: str) -> str | None:
     return parts[1]
 
 
+def experiment_area_modules(areas: set[str], repo_root: Path) -> set[str]:
+    """Non-test modules under ``experiments/<area>/``, as changed sources for the import graph.
+
+    An area module can load one of the area's files for tests elsewhere that import it,
+    e.g. ``experiments.datakit.hero_data`` reads ``hero_data_paths.json`` for
+    ``tests/datakit/test_hero_data.py``.
+    """
+    return {
+        module
+        for area in areas
+        for py in (repo_root / EXPERIMENTS_DIR / area).rglob("*.py")
+        if not is_test_module(py.name) and (module := path_to_module(py, repo_root))
+    }
+
+
 def experiment_asset_tests(areas: set[str], repo_root: Path) -> list[str]:
     """Marin test files that may read a non-Python file under ``experiments/<area>/``.
 
@@ -978,7 +994,8 @@ def experiment_asset_tests(areas: set[str], repo_root: Path) -> list[str]:
     anywhere in their area (a sibling ``fixtures/`` directory, ``../datasets``, a
     campaign config several levels down). Select every test in the area, plus tests
     elsewhere whose source names the area as ``experiments/<area>`` or
-    ``"experiments" / "<area>"``.
+    ``"experiments" / "<area>"``. Tests that reach the file through an area module are
+    selected by the import graph (see ``experiment_area_modules``).
     """
     names = "|".join(re.escape(area) for area in sorted(areas))
     mention = re.compile(rf"""{EXPERIMENTS_DIR}/(?:{names})\b|["']{EXPERIMENTS_DIR}["']\s*/\s*["'](?:{names})["']""")
