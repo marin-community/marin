@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score one hero checkpoint with the dropless held-out eval at several eval lengths, without training.
+"""Score hero checkpoints with the dropless held-out eval at several eval lengths, without training.
 
-The job restores only the checkpoint's parameters, directly onto the expert-collapsed mesh that the
+The job restores each checkpoint's parameters in turn, directly onto the expert-collapsed mesh that the
 training-time dropless eval uses (`expert` folded into `data`), and runs Paloma and Uncheatable once per
-eval length under the local dropless MoE backend. Each length logs under
-``eval_dropless/seq_len_<N>/...`` at the checkpoint's step. Nothing is written to the checkpoint's tree.
+eval length under the local dropless MoE backend. Each checkpoint keeps its own ``qk_mult``. Each length logs
+under ``eval_dropless/seq_len_<N>/...`` at the checkpoint's step, so one W&B run holds the whole sweep.
+Nothing is written to a checkpoint's tree.
 """
 
 import dataclasses
@@ -84,14 +85,23 @@ CHECKPOINT_EVAL_MAX_RETRIES = 3
 
 
 @dataclass(frozen=True)
+class EvalCheckpoint:
+    """A checkpoint directory (``step-N``) and the ``qk_mult`` its model trained with."""
+
+    path: str
+    qk_mult: float
+
+
+@dataclass(frozen=True)
 class CheckpointEvalConfig:
-    """Dropless held-out eval of one checkpoint at several eval lengths."""
+    """Dropless held-out eval of checkpoints, in order, at several eval lengths."""
 
     model: GrugModelConfig
+    """The model; each checkpoint replaces only its ``qk_mult``."""
     data: LmDataConfig
     trainer: TrainerConfig
     resources: ResourceConfig
-    checkpoint_path: str
+    checkpoints: tuple[EvalCheckpoint, ...]
     seq_lens: tuple[int, ...]
     # Sequences per eval batch at each length are this budget divided by the length.
     eval_tokens_per_batch: int
@@ -101,6 +111,8 @@ class CheckpointEvalConfig:
     processes_per_task: int = 1
 
     def __post_init__(self):
+        if not self.checkpoints:
+            raise ValueError("checkpoints must not be empty")
         if not self.seq_lens or len(set(self.seq_lens)) != len(self.seq_lens):
             raise ValueError(f"seq_lens must be non-empty and distinct, got {self.seq_lens}")
         for seq_len in self.seq_lens:
@@ -121,14 +133,14 @@ def load_checkpoint_params(
     return loaded["params"], int(loaded["step"])
 
 
-def evaluate_checkpoint(config: CheckpointEvalConfig) -> tuple[int, dict[str, float]]:
-    """Return the checkpoint step and the dropless metrics at every eval length."""
+def evaluate_checkpoints(config: CheckpointEvalConfig) -> list[tuple[int, dict[str, float]]]:
+    """Each checkpoint's step and dropless metrics at every eval length, in ``config.checkpoints`` order (logged at
+    each step, which must therefore increase)."""
     # Fold `expert` into `data` as the training-time dropless eval does; the local backend needs expert=1.
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
-    metrics: dict[str, float] = {}
+    results: list[tuple[int, dict[str, float]]] = []
     with set_mesh(mesh):
-        params, step = load_checkpoint_params(config.model, config.checkpoint_path, mesh=mesh, mp=config.trainer.mp)
-        logger.info("Loaded parameters of step %d from %s", step, config.checkpoint_path)
+        evaluators = {}
         for seq_len in config.seq_lens:
             eval_cfg = GrugEvalConfig(
                 eval_batch_size=config.eval_tokens_per_batch // seq_len,
@@ -138,7 +150,7 @@ def evaluate_checkpoint(config: CheckpointEvalConfig) -> tuple[int, dict[str, fl
                 dropless_eval=True,
                 dropless_eval_moe_implementation=config.dropless_moe_implementation,
             )
-            evaluator = build_tagged_evaluator(
+            evaluators[seq_len] = build_tagged_evaluator(
                 data_config=config.data,
                 max_seq_len=seq_len,
                 mesh=mesh,
@@ -146,13 +158,23 @@ def evaluate_checkpoint(config: CheckpointEvalConfig) -> tuple[int, dict[str, fl
                 mp=config.trainer.mp,
                 model_transform=functools.partial(_to_dropless_local, implementation=config.dropless_moe_implementation),
             )
-            if evaluator is None:
+            if evaluators[seq_len] is None:
                 raise ValueError("The data config has no validation sets")
-            with jax_config.enable_pgle(False):
-                length_metrics = eval_model(evaluator, params, prefix=f"{DROPLESS_EVAL_PREFIX}/seq_len_{seq_len}")
-            levanter.tracker.log(length_metrics, step=step)
-            metrics.update(length_metrics)
-    return step, metrics
+        for checkpoint in config.checkpoints:
+            model = dataclasses.replace(config.model, qk_mult=checkpoint.qk_mult)
+            params, step = load_checkpoint_params(model, checkpoint.path, mesh=mesh, mp=config.trainer.mp)
+            if results and step <= results[-1][0]:
+                raise ValueError(f"checkpoint steps must increase: {checkpoint.path} is step {step}")
+            logger.info("Loaded parameters of step %d (qk_mult %g) from %s", step, checkpoint.qk_mult, checkpoint.path)
+            metrics: dict[str, float] = {}
+            for seq_len, evaluator in evaluators.items():
+                with jax_config.enable_pgle(False):
+                    length_metrics = eval_model(evaluator, params, prefix=f"{DROPLESS_EVAL_PREFIX}/seq_len_{seq_len}")
+                metrics.update(length_metrics)
+            levanter.tracker.log(metrics, step=step)
+            results.append((step, metrics))
+            del params  # free the parameters before loading the next checkpoint
+    return results
 
 
 def _evaluate_checkpoint_local(config: CheckpointEvalConfig) -> None:
@@ -160,7 +182,7 @@ def _evaluate_checkpoint_local(config: CheckpointEvalConfig) -> None:
         set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
     config.trainer.initialize()
     levanter.tracker.log_configuration(config)
-    evaluate_checkpoint(config)
+    evaluate_checkpoints(config)
     levanter.tracker.current_tracker().finish()
 
 
@@ -189,20 +211,19 @@ def run_checkpoint_eval(config: CheckpointEvalConfig) -> None:
 def build_checkpoint_eval(
     *,
     run_id: str,
-    checkpoint_path: str,
-    qk_mult: float,
+    checkpoints: tuple[EvalCheckpoint, ...],
     qk_mult_long_scale: float,
     seq_lens: tuple[int, ...] = HERO_EVAL_SEQ_LENS,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """One rack evaluating the hero's 16K-phase model from ``checkpoint_path`` at ``seq_lens``.
+    """One rack evaluating the hero's model from each of ``checkpoints`` in turn, at ``seq_lens``.
 
-    Only ``qk_mult`` and ``qk_mult_long_scale`` differ from the hero's 16K model. Every eval batch holds
-    one hero rack's 4,194,304 tokens, one 65K sequence per GPU.
+    Only each checkpoint's ``qk_mult`` and the shared ``qk_mult_long_scale`` differ from the hero's 16K model.
+    Every eval batch holds one hero rack's 4,194,304 tokens.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
-    model = dataclasses.replace(HERO_16K_MODEL_CONFIG, qk_mult=qk_mult, qk_mult_long_scale=qk_mult_long_scale)
+    model = dataclasses.replace(HERO_16K_MODEL_CONFIG, qk_mult_long_scale=qk_mult_long_scale)
     resources = ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,
@@ -252,7 +273,7 @@ def build_checkpoint_eval(
             data=data,
             trainer=trainer,
             resources=ctx.runtime_arg("resources"),
-            checkpoint_path=checkpoint_path,
+            checkpoints=checkpoints,
             seq_lens=seq_lens,
             eval_tokens_per_batch=HERO_TOKENS_PER_RACK,
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
@@ -272,8 +293,14 @@ def build_checkpoint_eval(
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for the artifact and W&B names.")
-@click.option("--checkpoint", "checkpoint_path", required=True, help="Concrete checkpoint directory (step-N).")
-@click.option("--qk-mult", type=click.FloatRange(min=0, min_open=True), required=True, help="Q multiplier, all layers.")
+@click.option(
+    "--checkpoint",
+    "checkpoints",
+    type=(str, click.FloatRange(min=0, min_open=True)),
+    multiple=True,
+    required=True,
+    help="A checkpoint directory (step-N) and its Q multiplier for all layers; repeat, in increasing step order.",
+)
 @click.option(
     "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
@@ -292,12 +319,11 @@ def build_checkpoint_eval(
 )
 @build_options
 def main(
-    run_id: str, checkpoint_path: str, qk_mult: float, qk_mult_long_scale: float, seq_lens: tuple[int, ...]
+    run_id: str, checkpoints: tuple[tuple[str, float], ...], qk_mult_long_scale: float, seq_lens: tuple[int, ...]
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_checkpoint_eval(
         run_id=run_id,
-        checkpoint_path=checkpoint_path,
-        qk_mult=qk_mult,
+        checkpoints=tuple(EvalCheckpoint(path, qk) for path, qk in checkpoints),
         qk_mult_long_scale=qk_mult_long_scale,
         seq_lens=tuple(seq_lens),
     )
