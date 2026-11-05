@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,3 +75,34 @@ async def test_stale_chunk_statistics_fail_on_read(source_cache):
 
     with pytest.raises(ValueError, match="disagree with document offsets"):
         await dataset.get_batch([0])
+
+
+@pytest.mark.asyncio
+async def test_batch_offset_reads_overlap_and_reuse_cached_chunks(source_cache, monkeypatch):
+    cache = source_cache.cache
+    stats = await document_length_stats(cache, thresholds=(5,), chunk_rows=3)
+    index = LengthBucketIndex(cache, 5, statistics=stats, chunk_rows=3, cached_chunks=2)
+    dataset = LengthBucketTokenSeqDataset(index, 3, bucket=LengthBucket.SHORT)
+    reads: Counter[int] = Counter()
+    both_started = asyncio.Event()
+    read_offsets = cache.flat_field_document_offsets
+
+    async def tracked_offsets(field, start, stop):
+        reads[start] += 1
+        if 0 in reads and 3 in reads:
+            both_started.set()
+        # A serial batch cannot release this gate. The timeout only bounds a deadlock on regression.
+        await asyncio.wait_for(both_started.wait(), timeout=5)
+        return await read_offsets(field, start, stop)
+
+    monkeypatch.setattr(cache, "flat_field_document_offsets", tracked_offsets)
+    rows = await dataset.get_batch([0, 3, 0])
+    for row, expected in zip(rows, ([0, 1, 2], [38, 39, 40], [0, 1, 2]), strict=True):
+        np.testing.assert_array_equal(row["input_ids"], expected)
+    assert reads == {0: 1, 3: 1}
+
+    await dataset.get_batch([0])
+    await dataset.get_batch([5])
+    await dataset.get_batch([0])
+    await dataset.get_batch([3])
+    assert reads == {0: 1, 3: 2, 6: 1}

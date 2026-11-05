@@ -290,7 +290,8 @@ uv run python -m experiments.grug.moe_hero_ep.harrier_length_stats
 ```
 
 The loader uses these totals for dataset lengths and builds the chunk index in memory. It reads document offsets
-only for the chunks touched by a batch. The command below reports the long-document token share and passes implied
+only for the chunks touched by a batch, resolves batch reads concurrently, and retains at most four offset chunks
+per cell in an LRU cache. The command below reports the long-document token share and passes implied
 by the statistics:
 
 ```bash

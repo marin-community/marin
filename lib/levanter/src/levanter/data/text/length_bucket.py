@@ -5,6 +5,7 @@
 
 import asyncio
 import threading
+from collections import OrderedDict
 from collections.abc import Sequence
 from enum import StrEnum
 from functools import lru_cache
@@ -15,10 +16,11 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter.data.dataset import AsyncDataset
 from levanter.data.text.formats import TokenSeqDict
-from levanter.store.cache import TreeCache
+from levanter.store.cache import TreeCache, _await_shared_open
 
 DOCUMENT_CHUNK_ROWS = 65_536
 LENGTH_STATS_FILE = "length_stats.json"
+_CACHED_OFFSET_CHUNKS = 4
 
 
 class LengthBucket(StrEnum):
@@ -84,10 +86,14 @@ class LengthBucketIndex:
         *,
         statistics: DocumentLengthStats,
         chunk_rows: int = DOCUMENT_CHUNK_ROWS,
+        cached_chunks: int = _CACHED_OFFSET_CHUNKS,
     ):
+        if cached_chunks <= 0:
+            raise ValueError("cached_chunks must be positive")
         self.cache = cache
         self.threshold = threshold
         self.chunk_rows = chunk_rows
+        self.cached_chunks = cached_chunks
         row_count = cache.flat_field_num_rows("input_ids")
         if statistics.num_documents != row_count:
             raise ValueError(f"Length statistics have the wrong document count for {cache.cache_dir}")
@@ -109,15 +115,24 @@ class LengthBucketIndex:
             raise ValueError(f"Length statistics disagree within {cache.cache_dir}")
         self._prefixes = {LengthBucket.SHORT: short, LengthBucket.LONG: long}
         self._lock = threading.Lock()
-        self._cached_chunk: tuple[int, np.ndarray] | None = None
+        self._offset_chunks: OrderedDict[int, np.ndarray] = OrderedDict()
+        self._pending_chunks: dict[tuple[asyncio.AbstractEventLoop, int], asyncio.Task[np.ndarray]] = {}
 
     def token_count(self, bucket: LengthBucket) -> int:
         return int(self._prefixes[bucket][-1])
 
     async def _chunk_offsets(self, chunk: int) -> np.ndarray:
+        offsets = await _await_shared_open(
+            self._offset_chunks, self._pending_chunks, self._lock, chunk, lambda: self._read_chunk_offsets(chunk)
+        )
         with self._lock:
-            if self._cached_chunk is not None and self._cached_chunk[0] == chunk:
-                return self._cached_chunk[1]
+            self._offset_chunks[chunk] = offsets
+            self._offset_chunks.move_to_end(chunk)
+            while len(self._offset_chunks) > self.cached_chunks:
+                self._offset_chunks.popitem(last=False)
+        return offsets
+
+    async def _read_chunk_offsets(self, chunk: int) -> np.ndarray:
         start = chunk * self.chunk_rows
         stop = min(start + self.chunk_rows, self.cache.flat_field_num_rows("input_ids"))
         offsets = await self.cache.flat_field_document_offsets("input_ids", start, stop)
@@ -132,8 +147,6 @@ class LengthBucketIndex:
                 raise ValueError(
                     f"Length statistics disagree with document offsets at {self.cache.cache_dir}, chunk {chunk}"
                 )
-        with self._lock:
-            self._cached_chunk = chunk, offsets
         return offsets
 
     async def source_spans(self, *, bucket: LengthBucket, start: int, length: int) -> list[tuple[int, int]]:
@@ -189,10 +202,12 @@ class LengthBucketTokenSeqDataset(AsyncDataset[TokenSeqDict]):
         if min(indices) < 0 or max(indices) >= dataset_len:
             raise ValueError("Requested indices beyond the end of the dataset")
 
-        spans_by_sequence = [
-            await self.index.source_spans(bucket=self.bucket, start=index * self.seq_len, length=self.seq_len)
-            for index in indices
-        ]
+        spans_by_sequence = await asyncio.gather(
+            *(
+                self.index.source_spans(bucket=self.bucket, start=index * self.seq_len, length=self.seq_len)
+                for index in indices
+            )
+        )
 
         async def read(spans: list[tuple[int, int]]) -> TokenSeqDict:
             pieces = await asyncio.gather(
