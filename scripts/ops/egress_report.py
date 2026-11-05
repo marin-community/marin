@@ -143,9 +143,12 @@ def _compose_message(
     hours: float,
     date: str,
     total: int,
+    gs_lines: int,
+    region_known_lines: int,
     offenders: list[tuple[str, int]],
     report_url: str,
 ) -> str:
+    coverage = f"{region_known_lines / gs_lines:.0%}"
     if offenders:
         shown = offenders[:MAX_OFFENDERS_IN_MESSAGE]
         offender_section = "**Potential large-egress contributors:**\n" + "\n".join(
@@ -155,12 +158,14 @@ def _compose_message(
             extra = len(offenders) - MAX_OFFENDERS_IN_MESSAGE
             offender_section += f"\n- _(+{extra} more in the report)_"
     else:
-        offender_section = "_No offenders today._"
+        offender_section = f"_No offenders among the {coverage} of lines with a known region._"
 
     return (
         f"**Daily cross-region egress report** ({hours:.0f}h window, UTC {date})\n"
         f"- total cross-region mentions: **{total}**\n"
-        f"- report: {report_url}\n\n"
+        f"- worker region known for **{coverage}** of {gs_lines:,} `gs://` log lines\n"
+        # Angle brackets suppress Discord's link embed.
+        f"- report: <{report_url}>\n\n"
         f"{offender_section}"
     )
 
@@ -187,6 +192,9 @@ def main(hours: float, channel: str, dry_run: bool) -> None:
     _run_cross_region_on_iris(hours, now.isoformat(), output_dir, run_id)
     summary = _fetch_outputs(output_dir, outdir)
 
+    gs_lines = summary["total_gs_log_lines"]
+    if not gs_lines:
+        raise RuntimeError(f"No gs:// log lines in the {hours:.0f}h window; the log scan found no data.")
     total = summary["cross_region_path_mentions"]
     large_users: dict[str, int] = summary.get("cross_region_large_users") or {}
     offenders = [(u, n) for u, n in large_users.items() if n >= LARGE_TIER_USER_THRESHOLD and u != "<unknown>"]
@@ -195,7 +203,7 @@ def main(hours: float, channel: str, dry_run: bool) -> None:
     description = f"Marin cross-region egress {date} ({hours:.0f}h window)"
 
     if dry_run:
-        report_url = "<dry-run gist URL>"
+        report_url = "dry-run-gist-url"
     else:
         report_url = _create_gist(outdir, description)
 
@@ -203,6 +211,8 @@ def main(hours: float, channel: str, dry_run: bool) -> None:
         hours=hours,
         date=date,
         total=total,
+        gs_lines=gs_lines,
+        region_known_lines=summary["matched_gs_log_lines"],
         offenders=offenders,
         report_url=report_url,
     )
