@@ -49,8 +49,11 @@ Use disposable PostgreSQL 17 with two LOGIN roles created through SQL, both
 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`, and an `inferencex` database.
 Initialize local/socket authentication with `scram-sha-256`, too; PostgreSQL's
 default local `trust` rule would accept an incorrect password on that socket.
-As its administrator, apply `roles.sql`. Run migrations **as the writer** so its default
-privileges grant the reader SELECT on later tables. The upstream migration command is:
+As its administrator, apply `roles.sql`. As `inferencex_writer`, apply
+`reader-defaults.sql` before running migrations **as the writer**. This grants the
+reader SELECT on future tables without giving the administrator membership in the
+writer role. Cloud SQL's administrative login can create roles without having that
+membership. The upstream migration command is:
 
 ```sh
 docker run --rm --network host --entrypoint bun \
@@ -173,6 +176,10 @@ without printing it. Keep credentials and real-identity previews private.
 
 1. Preview `infra/cloudsql`, stack `marin-cloudsql`. Apply only the new `inferencex`
    database and its two empty password-secret shells. Stop on unrelated shared-instance drift.
+   If the stack contains additional application resources absent from this checkout,
+   target only `db-inferencex`, `secret-cloudsql-inferencex-reader-password` and
+   `secret-cloudsql-inferencex-writer-password` using their preview URNs. Preserve
+   existing stack outputs as well as resources.
 2. Initialize `infra/inferencex`, stack `marin-inferencex`, with its committed KMS provider.
    Preview it, then target only the explicit GCP provider, `inferencex` component,
    runtime `sa`, Artifact Registry `repo`, and `invalidate-secret` shell. Read exact URNs
@@ -181,8 +188,8 @@ without printing it. Keep credentials and real-identity previews private.
    The reviewer applies its `marin` stack, excluding the service IAP/invoker bindings until
    the service exists. Inspect the preview and leave unrelated resources untouched.
 4. Through an authenticated Cloud SQL proxy, create `inferencex_reader` and
-   `inferencex_writer` as restricted native LOGIN roles with SQL. Apply `roles.sql`, then
-   run migrations as the writer. Store generated passwords and a separate invalidation
+   `inferencex_writer` as restricted native LOGIN roles with SQL. Apply `roles.sql` as the administrator, then `reader-defaults.sql` and
+   migrations as the writer. Store generated passwords and a separate invalidation
    secret in their Secret Manager shells. Avoid Cloud SQL's elevated default user membership.
 5. Preview/apply the application leaf. It uses the shared Cloud Run component, builds and
    pushes the image, attaches the SQL socket, enables IAP and creates the DNS-only CNAME
