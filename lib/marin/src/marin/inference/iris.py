@@ -438,6 +438,7 @@ def _register_dashboard(
     backend_name: str,
     streaming: bool,
     chat_template_content: str | None,
+    worker_metrics_url: str | None = None,
 ) -> Iterator[None]:
     job_info = get_job_info()
     if job_info is None:
@@ -463,6 +464,7 @@ def _register_dashboard(
         model_id=model.endpoint.model,
         info=info,
         request_timeout_seconds=service.controller_proxy_timeout_seconds,
+        worker_metrics_url=worker_metrics_url,
     )
     with serve_app_background(app, serving_socket):
         address = f"http://{job_info.advertise_host}:{serving_port}"
@@ -510,7 +512,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
         _run_tpu_service(service)
         return
     geometry = service.iris.serving_geometry
-    if geometry is not None and geometry.task_count > 1:
+    if geometry is not None and (geometry.task_count > 1 or geometry.data_parallel_size_local is not None):
         _run_pipeline_service(service)
         return
     broker = _broker_config(service.instances, service.broker)
@@ -524,6 +526,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
                 backend_name=local_session.backend_name,
                 streaming=True,
                 chat_template_content=local_session.chat_template_content,
+                worker_metrics_url=local_session.metrics_url,
             ):
                 _block_until_timeout(local_session.check_alive, service.timeout_hours)
         return
@@ -577,6 +580,7 @@ def _ready_vllm_dashboard(service, model, environment, *, tensor_parallel_size, 
         backend_name=backend_name,
         streaming=True,
         chat_template_content=_model_tool_chat_template(model),
+        worker_metrics_url=f"{environment.worker_server_url.removesuffix(OPENAI_API_SUFFIX)}/metrics",
     ):
         yield
 
@@ -639,6 +643,7 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         pipeline_parallel_size=geometry.pipeline_parallel_size,
         tensor_parallel_size=geometry.tensor_parallel_size,
         data_parallel_size=geometry.data_parallel_size,
+        data_parallel_size_local=geometry.local_data_parallel_size,
     ) as launch:
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
             if launch.is_leader:
