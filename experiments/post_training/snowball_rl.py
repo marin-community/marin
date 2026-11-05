@@ -120,6 +120,10 @@ from experiments.post_training.task_curation.inventory import (
 RUN_TIMEOUT_HOURS = 72
 
 
+DEFAULT_WANDB_ENTITY = "marin-community"
+_FAILED_RUN_STATES = {"failed", "killed", "worker_failed", "unschedulable"}
+
+
 def training_config(
     preset: presets.Preset,
     settings: tuple[presets.Setting, ...] = (),
@@ -456,7 +460,7 @@ def build_run(
         "evaluations": sorted(selected),
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
-    wandb_entity = os.environ.get("WANDB_ENTITY") or "marin-community"
+    wandb_entity = os.environ.get("WANDB_ENTITY") or DEFAULT_WANDB_ENTITY
     runs = []
     for replicate in range(replicates):
         name = presets.run_name(preset, provenance, inputs_hash, replicate, control=control)
@@ -586,7 +590,7 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
                 "version": step.version,
                 "state": state,
                 "iris_job_id": result.iris_job_id if result else None,
-                "wandb_entity": team or "marin-community",
+                "wandb_entity": team or DEFAULT_WANDB_ENTITY,
                 **tracking,
                 **({"grafana_links": grafana} if grafana else {}),
                 "latest_completed_update": _completed_update(
@@ -619,7 +623,7 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
             if reason:
                 verdict["rl_path_changes_reason"] = reason
         else:
-            crashed = next((row for row in rows if str(row["state"]).lower() in ("failed", "killed")), None)
+            crashed = next((row for row in rows if str(row["state"]).lower() in _FAILED_RUN_STATES), None)
             if crashed is not None:
                 verdict = {"verdict": "fail", "reason": "run crashed", "iris_job_id": crashed["iris_job_id"]}
     return {
@@ -644,10 +648,6 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
     }
 
 
-def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
-    click.echo(yaml.safe_dump(_status(run, preset), sort_keys=False))
-
-
 def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Preset) -> None:
     with _iris_client() as client:
         while (parent := client.job_status(job)).state not in TERMINAL_JOB_STATES:
@@ -662,22 +662,16 @@ def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Pre
         next((step for step in handles if step.artifact_type is snowball_rl_gate.GateReport), None),
     )
     snapshot = _status(run, preset)
-    failed = any(
-        str(row["state"]).lower() in {"failed", "killed", "worker_failed", "unschedulable"} for row in snapshot["runs"]
-    )
+    failed = any(str(row["state"]).lower() in _FAILED_RUN_STATES for row in snapshot["runs"])
     complete = bool(run.runs) and all(str(row["state"]).lower() in {"succeeded", "success"} for row in snapshot["runs"])
     markdown = None
     if run.gate is not None:
         gate_root = run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))
         marker = get_status_path(gate_root)
-        failed = failed or (presets.exists(marker) and presets.read_text(marker).strip() == "FAILED")
+        state = presets.read_text(marker).strip() if presets.exists(marker) else None
+        failed = failed or state == "FAILED"
         markdown = str(snapshot.get("report", "")).removesuffix(".json") + ".md"
-        complete = (
-            complete
-            and presets.exists(marker)
-            and presets.read_text(marker).strip() == "SUCCESS"
-            and presets.exists(markdown)
-        )
+        complete = complete and state == "SUCCESS" and presets.exists(markdown)
     if failed:
         snapshot.update(verdict="fail", reason="run or gate step failed")
     elif not complete:
@@ -690,17 +684,8 @@ def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Pre
 
 
 def _run_command(function: Callable) -> click.Command:
-    command = presets.run_command(help_text=__doc__)(function)
-    command.params.append(
-        click.Option(
-            ["--baseline", "baselines"],
-            multiple=True,
-            metavar="NAME@VERSION",
-            help="Compare with earlier finished runs; the verdict still uses pinned controls. Repeatable.",
-        )
-    )
-    command.params.append(
-        click.Option(["--wait"], is_flag=True, help="Wait after --run; exit 0 for PASS, 1 for FAIL, 2 for INVALID.")
+    command = click.option("--wait", is_flag=True, help="Wait after --run; exit 0 for PASS, 1 for FAIL, 2 for INVALID.")(
+        presets.run_command(help_text=__doc__)(function)
     )
 
     @wraps(function)
@@ -766,7 +751,7 @@ def main(
             click.echo(
                 "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
             )
-    _print_status(run, preset)
+    click.echo(yaml.safe_dump(_status(run, preset), sort_keys=False))
     return (*run.runs, *((run.gate,) if run.gate else ()))
 
 

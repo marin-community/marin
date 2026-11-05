@@ -248,7 +248,7 @@ def evaluation_response_metrics(trajectory_batch: TrajectoryBatch) -> Dict[str, 
             trajectory_batch["response_ids"],
             trajectory_batch["rewards"],
             trajectory_batch["env_metrics"],
-            trajectory_batch["env_classes"],
+            None,
             verification_results=trajectory_batch.get("verification_results"),
         )
         metrics.update(

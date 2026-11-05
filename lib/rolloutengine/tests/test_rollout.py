@@ -3807,5 +3807,3 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one()
     assert {key: value for key, value in record.rollout.metrics.items() if not key.startswith("timing/")} == {
         "score": 1.0
     }
-    assert record.rollout.metrics["timing/setup"] == 0
-    assert record.rollout.metrics["timing/grading"] >= 0

@@ -586,6 +586,7 @@ def _compare(
     details.update({metric.key: metric for metric in telemetry if metric.key in noise and metric.key not in guard_keys})
     counts = Counter(map(_breakdown_group, (*details, *(key for key in declared if key.startswith(prefixes)))))
     reported = []
+    reference = baselines or [run for group in controls.values() for run in group]
     for metric in (*declared.values(), *details.values()):
         row = _comparison(
             metric,
@@ -605,7 +606,6 @@ def _compare(
             if all(initial is not None for _, initial in slices)
             else None
         )
-        reference = baselines or [run for group in controls.values() for run in group]
         control_values = [run.values[metric.key] for run in reference if metric.key in run.values]
         reported.append(
             ReportedComparison(
@@ -821,7 +821,6 @@ def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
         return None, GateInputs()
     argv = (receipt.result.provenance or {}).get("command_line", []) if receipt else []
     command = presets.run_command()(lambda **kwargs: ())
-    command.params.append(click.Option(["--baseline", "baselines"], multiple=True))
     context = command.make_context(
         "snowball", list(argv), resilient_parsing=True, ignore_unknown_options=True, allow_extra_args=True
     )

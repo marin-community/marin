@@ -39,6 +39,13 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
     config = get_default_config().generator
     tokenizer = SimpleNamespace(eos_token_id=2)
     inputs, rollouts = [], []
+    turn = ModelTurn(
+        message={"role": "assistant", "content": "answer"},
+        prompt_token_ids=(1,),
+        response_token_ids=(2,),
+        logprobs=(-0.1,),
+        stop_reason="stop",
+    )
     for index, duration in enumerate((1.0, 3.0, 5.0, 101.0, None)):
         turn_count = 1 if duration == 101.0 else 2
         task = text_task(str(index)).model_copy(
@@ -50,16 +57,7 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
                 metric_class="taskcompendium" if index % 2 else "other",
             )
         )
-        turns = tuple(
-            ModelTurn(
-                message={"role": "assistant", "content": "answer"},
-                prompt_token_ids=(1,),
-                response_token_ids=(2,),
-                logprobs=(-0.1,),
-                stop_reason="stop",
-            )
-            for _ in range(turn_count)
-        )
+        turns = (turn,) * turn_count
         rollouts.append(
             TrainingRollout(
                 task_id=task.id,

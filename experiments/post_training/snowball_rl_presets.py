@@ -851,6 +851,13 @@ def run_command(*, help_text: str | None = None):
                 "A training metric the controls never recorded is refused before launch.",
             ),
             click.option(
+                "--baseline",
+                "baselines",
+                multiple=True,
+                metavar="NAME@VERSION",
+                help="Compare with earlier finished runs; the verdict still uses pinned controls. Repeatable.",
+            ),
+            click.option(
                 "--tasks",
                 "tasks_name",
                 metavar="NAME@VERSION",
@@ -893,7 +900,7 @@ def run_command(*, help_text: str | None = None):
                 type=click.IntRange(1, 5),
                 default=1,
                 show_default=True,
-                help="Identical copies of a short or medium preset, sharing one seed. The gate compares their "
+                help="Identical copies of a gated preset, sharing one seed. The gate compares their "
                 "mean with the controls; more copies narrow the tolerance. Not for train-long.",
             ),
             click.option(

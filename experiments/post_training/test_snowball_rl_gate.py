@@ -107,6 +107,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         answers=None,
         missing_receipt=False,
         unresolved_receipt=False,
+        first_panel_task="task-0",
     ):
         preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
         root = tmp_path / name / version
@@ -163,7 +164,13 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                 row["generate/wall_seconds"] = 1.0
             if step != omit_step:
                 _json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
-        launch = {"inputs": {"validation_data": [{"uri": str(panel)}]}}
+        run_panel = panel
+        if first_panel_task != "task-0":
+            run_panel = root / "heldout"
+            run_panel.mkdir()
+            manifest = [{**row, "task_id": first_panel_task} if row["task_id"] == "task-0" else row for row in tasks]
+            pq.write_table(pa.Table.from_pylist(manifest), run_panel / presets.TASK_MANIFEST_FILENAME)
+        launch = {"inputs": {"validation_data": [{"uri": str(run_panel)}]}}
         if unresolved_receipt:
             launch |= {
                 "artifacts": {"attempts_root": str(root / "attempts")},
@@ -189,7 +196,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
             for step, average in sessions.items():
                 rows = answers or [
                     _answer(
-                        f"train-task-{i}" if evaluation.file == "train" else f"task-{i}",
+                        f"train-task-{i}" if evaluation.file == "train" else f"task-{i}" if i else first_panel_task,
                         (float(i < mixed and attempt == 0) if evaluation.file == "train" else average),
                         tokens=(preset.recipe.fixed_reply_tokens or 1) if fixed else 1,
                         error="GraderUnavailable" if i < unscored else None,
@@ -343,15 +350,8 @@ def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_run
     assert report["run"]["baselines"] == sorted(set(references))
     rows = {row["metric"]: row for row in report["vs_baseline"]}
     timing = rows["speed/update_seconds"]
-    assert [timing[key] for key in ("run", "control", "n_run", "n_control", "df", "delta", "change")] == [
-        101.5,
-        22,
-        1,
-        2,
-        3,
-        -79.5,
-        "worse",
-    ]
+    expected = {"run": 101.5, "control": 22, "n_run": 1, "n_control": 2, "df": 3, "delta": -79.5, "change": "worse"}
+    assert {key: timing[key] for key in expected} == expected
     assert timing["sd"] == pytest.approx(math.sqrt(5 / 3))
     assert timing["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 2, 3) * math.sqrt(5 / 3) * math.sqrt(1.5))
     startup = rows["startup/init_weight_sync_state"]
@@ -507,8 +507,6 @@ def test_rescore_reports_candidate_and_control_contracts(
 ):
     if preset == "speed-long":
         monkeypatch.setitem(gate.CONTROLS, preset, (gate.ControlPin(preset, "09026fd100", presets.PRESET_REVISION, 4),))
-        option = next(option for option in gate.main.params if option.name == "preset_name")
-        monkeypatch.setattr(option.type, "choices", tuple(sorted(gate.CONTROLS)))
     controls(recorded_runs, preset, **control_fault)
     source = recorded_runs(preset, f"users/test/{preset}", score=0.495, **fault)
     report = rescore(
@@ -957,21 +955,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     recovered = rescore(preset, "--candidate", built.runs[0].name)
     assert recovered["run"]["baselines"] == [baseline] and recovered["vs_baseline"]
     assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
-    other = recorded_runs(preset, "users/test/other-panel", argv=("--preset", preset))
-    panel_copy = tmp_path / "other-panel"
-    shutil.copytree(presets.default_selection().path(), panel_copy)
-    manifest = pq.read_table(panel_copy / presets.TASK_MANIFEST_FILENAME).to_pylist()
-    manifest[0]["task_id"] = "other-heldout-task"
-    pq.write_table(pa.Table.from_pylist(manifest), panel_copy / presets.TASK_MANIFEST_FILENAME)
-    launch = json.loads((other / "resolved-launch.yaml").read_text())
-    launch["config"]["inputs"]["validation_data"][0]["uri"] = str(panel_copy)
-    _json(other / "resolved-launch.yaml", launch)
-    for dump in other.glob("exports/dumped_evals/*/panel.jsonl"):
-        rows = [json.loads(line) for line in dump.read_text().splitlines()]
-        for row in rows:
-            if row["task_id"] == "task-0":
-                row["task_id"] = "other-heldout-task"
-        dump.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    recorded_runs(preset, "users/test/other-panel", argv=("--preset", preset), first_panel_task="other-heldout-task")
     refused = CliRunner().invoke(
         snowball.main,
         [
