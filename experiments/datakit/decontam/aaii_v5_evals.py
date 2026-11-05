@@ -27,9 +27,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from huggingface_hub import HfFileSystem, hf_hub_download
+from huggingface_hub import HfFileSystem
 
-from experiments.datakit.decontam.pinned_evals import PinnedEval, fetch_cached, item_records
+from experiments.datakit.decontam.pinned_evals import PinnedEval, fetch_cached, hf_file, item_records
 
 # A file whose exact content appears in this many tasks of one eval is harness
 # boilerplate (shared test runners, helper scripts), not task content.
@@ -257,10 +257,6 @@ def automationbench(cache_dir: Path) -> list[dict[str, str]]:
     return rows
 
 
-def _hf_file(repo: str, revision: str, filename: str, cache_dir: Path) -> Path:
-    return Path(hf_hub_download(repo, filename, repo_type="dataset", revision=revision, cache_dir=str(cache_dir / "hf")))
-
-
 def aa_briefcase_lite(cache_dir: Path) -> list[dict[str, str]]:
     """The public example week of AA-Briefcase; the scored tasks are private.
 
@@ -273,7 +269,7 @@ def aa_briefcase_lite(cache_dir: Path) -> list[dict[str, str]]:
     name = "aa_briefcase_lite"
 
     def read(filename: str) -> str:
-        return _hf_file(BRIEFCASE_REPO, BRIEFCASE_REVISION, filename, cache_dir).read_text(encoding="utf-8")
+        return Path(hf_file((BRIEFCASE_REPO, BRIEFCASE_REVISION), filename, cache_dir)).read_text(encoding="utf-8")
 
     tasks = [json.loads(line) for line in read("tasks.jsonl").splitlines() if line.strip()]
     checks = json.loads(read("grader/grading_rubric_w1.json"))["checks"]
@@ -297,7 +293,7 @@ def aa_briefcase_lite(cache_dir: Path) -> list[dict[str, str]]:
 def aa_omniscience_v1_1(cache_dir: Path) -> list[dict[str, str]]:
     """The public 10% subset of AA-Omniscience v1.1; record is question and answer."""
     name = "aa_omniscience_v1_1"
-    path = _hf_file(OMNISCIENCE_REPO, OMNISCIENCE_REVISION, "AA-Omniscience_dataset_public.csv", cache_dir)
+    path = Path(hf_file((OMNISCIENCE_REPO, OMNISCIENCE_REVISION), "AA-Omniscience_dataset_public.csv", cache_dir))
     with path.open(encoding="utf-8", newline="") as f:
         items = list(csv.DictReader(f))
     return [row for r in items for row in item_records(name, r["question_id"], [r["question"], r["answer"]])]
@@ -326,7 +322,7 @@ def gdp_pdf_rows(items: list[dict]) -> list[dict[str, str]]:
 
 
 def gdp_pdf(cache_dir: Path) -> list[dict[str, str]]:
-    path = _hf_file(GDP_PDF_REPO, GDP_PDF_REVISION, "data.parquet", cache_dir)
+    path = Path(hf_file((GDP_PDF_REPO, GDP_PDF_REVISION), "data.parquet", cache_dir))
     return gdp_pdf_rows(pq.read_table(path).to_pylist())
 
 

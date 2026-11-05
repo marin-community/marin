@@ -8,6 +8,7 @@ import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+from huggingface_hub import hf_hub_download
 from marin.datakit.decon import DEFAULT_PARAGRAPH_DELIMITER
 
 from experiments.datakit.decontam.config import NGRAM_LENGTH
@@ -79,6 +80,12 @@ def fetch_cached(url: str, path: Path) -> bytes:
         with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response:
             path.write_bytes(response.read())
     return path.read_bytes()
+
+
+def hf_file(repo_rev: tuple[str, str], filename: str, cache_dir: Path) -> str:
+    """Return the local path of ``filename`` in a Hugging Face dataset repo at a pinned revision."""
+    repo, revision = repo_rev
+    return hf_hub_download(repo, filename, repo_type="dataset", revision=revision, cache_dir=str(cache_dir / "hf"))
 
 
 def markable(text: str) -> str:

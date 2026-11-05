@@ -22,9 +22,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from huggingface_hub import HfFileSystem, hf_hub_download
+from huggingface_hub import HfFileSystem
 
-from experiments.datakit.decontam.pinned_evals import PinnedEval, item_records, paragraphs
+from experiments.datakit.decontam.pinned_evals import PinnedEval, hf_file, item_records, paragraphs
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHAT_BENCHMARKS = REPO_ROOT / "vendor/evalchemy/eval/chat_benchmarks"
@@ -57,11 +57,6 @@ MRCR_MAX_TOKENS = 65_536
 MRCR_MAX_CHARS_PER_TOKEN = 10
 MRCR_MAX_CHARS = MRCR_MAX_TOKENS * MRCR_MAX_CHARS_PER_TOKEN
 MRCR_FILES = tuple(f"{n}needle/{n}needle_{part}.parquet" for n in (2, 4, 8) for part in (0, 1))
-
-
-def hf_file(repo_rev: tuple[str, str], filename: str, cache_dir: Path) -> str:
-    repo, revision = repo_rev
-    return hf_hub_download(repo, filename, repo_type="dataset", revision=revision, cache_dir=str(cache_dir / "hf"))
 
 
 def read_jsonl(path: str | Path) -> list[dict]:
