@@ -157,6 +157,16 @@ flatten is rejected at the Snowball RMSNorm boundary when its later leading
 axis is genuinely partitioned. A length-one context axis is accepted because
 it does not partition the rows.
 
+### Opt-in Snowball shared attention forward
+
+Snowball’s `shared_attention_implementation="fixed_schedule"` is a bounded
+forward selector for the H128/E2top1/I32/sharedI32/Q2/KV1/D128/V23 fixture:
+four 256-token slots with 128-token pages. The public boundary rejects
+noncausal, sliding-window, and segmented masks before per-layer normalization.
+Cached decode writes use the physical page map supplied by `PageBatchInfo`,
+with placement checks at positions 127 and 128. The selector is runtime-only;
+checkpoint fields and the native default remain unchanged.
+
 Snowball Q/K projection has a separate runtime-only
 `qk_rms_norm_implementation` selector. Its default is the existing native
 non-parametric RMSNorm; `reference` and `pallas_tpu` reuse

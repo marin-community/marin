@@ -147,6 +147,196 @@ def test_snowball_config_hf_roundtrip():
     assert "gated_norm_implementation" not in hf.to_dict()
 
 
+def _bounded_shared_attention_config(**overrides) -> SnowballConfig:
+    values = dict(
+        vocab_size=23,
+        hidden_dim=128,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=32,
+        num_experts=2,
+        num_experts_per_token=1,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=128,
+        max_seq_len=256,
+        attention_implementation="reference",
+        inference_attention_implementation="reference",
+        shared_attention_implementation="fixed_schedule",
+    )
+    values.update(overrides)
+    return SnowballConfig(**values)
+
+
+def test_snowball_shared_attention_rejects_public_masks_and_width_outside_fixture():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballTransformer.init(_bounded_shared_attention_config(), key=jax.random.key(0))
+        tokens = jnp.zeros((4, 256), dtype=jnp.int32)
+        with pytest.raises(ValueError, match="unsegmented causal mask"):
+            model(tokens, AttentionMask(is_causal=False))
+        with pytest.raises(ValueError, match="unsegmented causal mask"):
+            model(tokens, AttentionMask.causal().with_sliding_window(16))
+
+        width64 = _bounded_shared_attention_config(shared_expert_intermediate_dim=64)
+        model = SnowballTransformer.init(width64, key=jax.random.key(0))
+        with pytest.raises(ValueError, match="bounded fixture"):
+            model(tokens)
+
+
+@pytest.mark.timeout(120)
+def test_snowball_shared_attention_public_decode_preserves_explicit_layout_at_page_boundaries():
+    run_on_cpu_devices(
+        """
+        import dataclasses
+        import equinox as eqx
+        import haliax as hax
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from haliax import Axis
+        from jax.sharding import AxisType, Mesh, PartitionSpec as P
+
+        from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape((1, 4, 1, 1, 1)),
+            axes,
+            axis_types=(AxisType.Explicit,) * len(axes),
+        )
+        config = SnowballConfig(
+            vocab_size=23,
+            hidden_dim=128,
+            intermediate_dim=32,
+            shared_expert_intermediate_dim=32,
+            num_experts=2,
+            num_experts_per_token=1,
+            num_layers=1,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=128,
+            max_seq_len=256,
+            attention_implementation="reference",
+            inference_attention_implementation="reference",
+            moe_implementation="scatter",
+            shared_attention_implementation="fixed_schedule",
+        )
+        expected_output = P(("replica_dcn", "data", "expert"), "model")
+        page_maps = (
+            np.asarray([[0, 1], [2, 3], [4, 5], [6, 7]], dtype=np.int32),
+            np.asarray([[6, 1], [7, 0], [4, 3], [5, 2]], dtype=np.int32),
+        )
+        slot_ids = np.asarray([2, 0, 3, 1], dtype=np.int32)
+
+        def batch(length, page_map, *, cached_position=None):
+            if cached_position is None:
+                positions = np.tile(np.arange(length, dtype=np.int32), 4)
+                seq_lens = np.full(4, length, dtype=np.int32)
+            else:
+                positions = np.full(4, cached_position, dtype=np.int32)
+                seq_lens = np.full(4, cached_position + 1, dtype=np.int32)
+            rows = np.repeat(np.arange(4), positions.size // 4)
+            destinations = page_map[rows, positions // 128] * 128 + positions % 128
+            return (
+                hax.named(jnp.arange(positions.size, dtype=jnp.int32) % 23, "position"),
+                hax.named(jnp.asarray(positions), "position"),
+                PageBatchInfo(
+                    slot_ids=hax.named(jnp.asarray(slot_ids), "seq"),
+                    page_indices=hax.named(jnp.asarray(page_map), ("seq", "page")),
+                    seq_lens=hax.named(jnp.asarray(seq_lens), "seq"),
+                    cu_q_lens=hax.named(jnp.arange(5, dtype=jnp.int32) * (positions.size // 4), "seq"),
+                    num_seqs=jnp.asarray(4, dtype=jnp.int32),
+                    new_token_dests=hax.named(jnp.asarray(destinations), "position"),
+                    page_size=128,
+                ),
+            )
+
+        with jax.set_mesh(mesh):
+            fixed = SnowballLMHeadModel.init(Axis("vocab", 23), config, key=jax.random.key(0))
+            native = SnowballLMHeadModel.init(
+                Axis("vocab", 23), dataclasses.replace(config, shared_attention_implementation="native"), key=jax.random.key(0)
+            )
+            cache = fixed.initial_cache(PageTableSpec(8, 128, 4), dtype=jnp.bfloat16)
+            for page_map in page_maps:
+                for length in (1, 2, 128):
+                    tokens, positions, info = batch(length, page_map)
+                    for model in (fixed, native):
+                        logits, _ = eqx.filter_eval_shape(model.decode, tokens, cache, info, positions)
+                        assert logits.array.sharding.spec == expected_output
+                for cached_position in (127, 128):
+                    tokens, positions, info = batch(1, page_map, cached_position=cached_position)
+                    for model in (fixed, native):
+                        logits, _ = eqx.filter_eval_shape(model.decode, tokens, cache, info, positions)
+                        assert logits.array.sharding.spec == expected_output
+        """,
+        device_count=4,
+    )
+
+
+@pytest.mark.timeout(120)
+def test_snowball_shared_attention_cache_writes_follow_nonidentity_page_map_for_both_kv():
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        import haliax as hax
+        from haliax import Axis
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+        from levanter.layers.kv_cache import KvPageCache
+        from levanter.models.snowball import SnowballAttention, SnowballConfig
+
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+        mesh = Mesh(np.asarray(jax.devices()).reshape((1, 4, 1, 1, 1)), axes, axis_types=(AxisType.Explicit,) * 5)
+        cfg = SnowballConfig(
+            vocab_size=23, hidden_dim=128, intermediate_dim=32, shared_expert_intermediate_dim=32,
+            num_experts=2, num_experts_per_token=1, num_layers=1, num_heads=2, num_kv_heads=1,
+            head_dim=128, max_seq_len=256, attention_implementation="reference",
+            inference_attention_implementation="reference", shared_attention_implementation="fixed_schedule",
+        )
+        page_map = jnp.asarray([[6, 1], [7, 0], [4, 3], [5, 2]], dtype=jnp.int32)
+        positions = jnp.tile(jnp.asarray([127, 128], dtype=jnp.int32), 4)
+        rows = jnp.repeat(jnp.arange(4), 2)
+        destinations = page_map[rows, positions // 128] * 128 + positions % 128
+        info = PageBatchInfo(
+            slot_ids=hax.named(jnp.asarray([2, 0, 3, 1], dtype=jnp.int32), "seq"),
+            page_indices=hax.named(page_map, ("seq", "page")),
+            seq_lens=hax.named(jnp.full((4,), 129, dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.arange(5, dtype=jnp.int32) * 2, "seq"),
+            num_seqs=jnp.asarray(4, dtype=jnp.int32),
+            new_token_dests=hax.named(destinations, "position"),
+            page_size=128,
+        )
+        with jax.set_mesh(mesh):
+            attention = SnowballAttention.init(cfg, key=jax.random.key(19))
+            cache = KvPageCache.init(PageTableSpec(8, 128, 4), Axis("kv_head", 1), Axis("head_size", 128), dtype=jnp.bfloat16)
+            sentinel = jax.sharding.reshard(jnp.full((8, 128, 2, 128), 7, dtype=jnp.bfloat16), cache.kv_pages.array.sharding)
+            cache = KvPageCache(hax.named(sentinel, cache.kv_pages.axes))
+            x = jnp.reshape((jnp.arange(8 * 128, dtype=jnp.float32) + 0.125) / 91, (8, 1, 128))
+            x = jax.device_put(x, NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, None)))
+            _, keys, values = attention._project_qkv(x, disable_rope=True, position_ids=positions[:, None])
+            updated = eqx.filter_jit(
+                lambda value, state, batch, pos: attention.decode(value, state, batch, pos, use_long=True)[1]
+            )(x, cache, info, positions)
+
+        expected = np.full((8, 128, 2, 128), 7, dtype=np.asarray(jnp.asarray(0, dtype=jnp.bfloat16)).dtype)
+        for row, destination in enumerate(np.asarray(destinations)):
+            page, offset = divmod(int(destination), 128)
+            expected[page, offset, 0] = np.asarray(keys[:, 0].astype(jnp.bfloat16))[row]
+            expected[page, offset, 1] = np.asarray(values[:, 0].astype(jnp.bfloat16))[row]
+        actual = np.asarray(updated.kv_pages.array)
+        np.testing.assert_array_equal(actual, expected)
+        assert updated.kv_pages.array.dtype == jnp.bfloat16
+        assert np.any(np.asarray(keys[:, 0]) != np.asarray(keys[:, 0].astype(jnp.bfloat16)).astype(np.float32))
+        assert np.any(np.asarray(values[:, 0]) != np.asarray(values[:, 0].astype(jnp.bfloat16)).astype(np.float32))
+        """,
+        device_count=4,
+    )
+
+
 def test_snowball_gated_norm_fixed_schedule_matches_reference_and_vjp(monkeypatch):
     def reference_linear(x, weight):
         return jax.lax.dot_general(
