@@ -3,6 +3,7 @@
 
 """ClusterClient protocol defining the interface for cluster client implementations."""
 
+from collections.abc import Sequence
 from typing import Protocol
 
 from finelog.rpc import logging_pb2
@@ -34,12 +35,14 @@ class ClusterClient(Protocol):
         max_retries_preemption: int = 1000,
         max_task_failures: int = 0,
         timeout: Duration | None = None,
+        termination_grace: Duration | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+        egress_allow: Sequence[job_pb2.EgressRule] = (),
         submit_argv: list[str] | None = None,
     ) -> JobName: ...
 

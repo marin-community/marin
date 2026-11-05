@@ -32,7 +32,6 @@ from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
     capture_rank_directory,
     capture_rank_name,
     per_worker_capture_token_credit,
-    request_id_for_group,
 )
 from skyrl_train.inference_engines.vllm.route_capture import response_routes
 from skyrl_train.io import io
@@ -68,6 +67,7 @@ from skyrl_train.inference_engines.base import (
     NamedWeightsUpdateRequest,
     LORA_DISK_LOAD_NAME,
     LORA_DISK_PATH_KEY,
+    request_id_for_session,
 )
 from skyrl_train.inference_engines.response_topk import (
     CHAT_LOGPROB_FLOOR,
@@ -1819,7 +1819,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             if session_ids is None:
                 request_id = uuid4().hex
             else:
-                request_id = request_id_for_group(session_ids[index])
+                request_id = request_id_for_session(session_ids[index])
             request_ids.append(request_id)
             task = asyncio.create_task(self._collect_outputs(prompt, request_id, row_sampling_params))
             tasks.append(task)
