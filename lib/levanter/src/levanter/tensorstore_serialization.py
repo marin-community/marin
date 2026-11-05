@@ -17,7 +17,7 @@ import zlib
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache, partial
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Literal, Optional, Sequence
 
 import equinox
 import haliax as hax
@@ -47,6 +47,7 @@ from levanter.utils.byte_budget import HostByteBudget
 logger = logging.getLogger(__name__)
 
 ARRAY_DRIVER = "zarr3"
+FileIoLocking = Literal["os", "lockfile", "none"]
 KVSTORE_DRIVER = "ocdbt"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
@@ -224,6 +225,15 @@ class TensorStoreWriteConfig:
     data_copy_concurrency: int = 16
     """Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data."""
 
+    file_io_locking: FileIoLocking | None = None
+    """How TensorStore's file driver locks a key while committing it.
+
+    None picks ``lockfile`` when several processes save to a local path, and TensorStore's default
+    otherwise. The default advisory OS locks do not exclude writers on different NFS clients, which
+    then race on the OCDBT manifest commit (``Failed to rename ... manifest.ocdbt.__lock``); an
+    exclusively created lock file is enforced by the NFS server.
+    """
+
     def __post_init__(self) -> None:
         if self.max_write_replicas < 1:
             raise ValueError(f"max_write_replicas must be at least 1, got {self.max_write_replicas}")
@@ -287,11 +297,21 @@ def _tensorstore_read_context(config: TensorStoreReadConfig) -> ts.Context:
     return ts.Context(spec)
 
 
-def _tensorstore_write_context(config: TensorStoreWriteConfig) -> ts.Context:
+def _file_io_locking(config: TensorStoreWriteConfig, checkpoint_dir: str) -> FileIoLocking | None:
+    if config.file_io_locking is not None:
+        return config.file_io_locking
+    if jax.process_count() > 1 and build_kvstore_spec(checkpoint_dir)["driver"] == "file":
+        return "lockfile"
+    return None
+
+
+def _tensorstore_write_context(config: TensorStoreWriteConfig, file_io_locking: FileIoLocking | None) -> ts.Context:
     spec = ts_impl._TS_CONTEXT.spec.to_json()
     spec["cache_pool"] = {"total_bytes_limit": config.cache_pool_bytes}
     spec["cache_pool#remote"] = {"total_bytes_limit": config.cache_pool_bytes}
     spec["data_copy_concurrency"] = {"limit": config.data_copy_concurrency}
+    if file_io_locking is not None:
+        spec["file_io_locking"] = {"mode": file_io_locking}
     return ts.Context(spec)
 
 
@@ -668,6 +688,7 @@ def tree_serialize_leaves_tensorstore(
         plans,
         manager,
         write_config,
+        _file_io_locking(write_config, str(checkpoint_dir)),
         commit_callback,
         on_local_commit,
         on_staged,
@@ -690,6 +711,7 @@ def _serialize_arrays(
     plans: Sequence[_WritePlan],
     manager: array_ser.GlobalAsyncCheckpointManager,
     config: TensorStoreWriteConfig,
+    file_io_locking: FileIoLocking | None,
     commit_callback: Callable,
     on_local_commit: Optional[Callable[[str], None]],
     on_staged: Optional[Callable[[int], None]],
@@ -706,7 +728,7 @@ def _serialize_arrays(
 
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
-    context = _tensorstore_write_context(config)
+    context = _tensorstore_write_context(config, file_io_locking)
     gate = HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 

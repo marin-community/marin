@@ -565,6 +565,23 @@ def test_replica_aware_restore_broadcasts_across_processes():
     eight_device_checkpoints.replica_aware_restore_across_processes()
 
 
+def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
+    """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
+    results = eight_device_checkpoints.shared_local_write_across_processes()
+
+    expected = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for result in results:
+        assert result.file_io_locking == "lockfile"
+        np.testing.assert_array_equal(result.restored, np.stack([expected, expected + 1, expected + 2]))
+
+
+def test_a_single_process_or_object_store_save_keeps_default_locking(tmp_path):
+    assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), str(tmp_path)) is None
+    assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), "gs://bucket/ckpt") is None
+    explicit = TensorStoreWriteConfig(file_io_locking="os")
+    assert tensorstore_serialization._file_io_locking(explicit, str(tmp_path)) == "os"
+
+
 def test_checkpoint_written_on_one_mesh_loads_on_another():
     """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
     run_on_eight_devices(eight_device_checkpoints.a_checkpoint_loads_on_another_mesh)

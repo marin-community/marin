@@ -21,6 +21,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
+from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
@@ -28,6 +29,7 @@ from levanter.tensorstore_serialization import (
     ReplicaRestoreMode,
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
+    _file_io_locking,
     _replica_staging_sharding,
     _shard_write_region,
     plan_array_write,
@@ -131,6 +133,62 @@ def replica_aware_restore_across_processes() -> None:
             np.testing.assert_array_equal(result.arrays[name], expected[name])
         assert result.memory_kinds == {_PINNED_HOST_MEMORY_KIND}
     assert sum(result.tensorstore_chunk_reads for result in results) == len(expected)
+
+
+@dataclass(frozen=True)
+class _SharedLocalWriteResult:
+    file_io_locking: str | None
+    restored: np.ndarray
+
+
+def _shared_local_write(process_id: int, coordinator: str, checkpoint_path: str) -> _SharedLocalWriteResult:
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        os.environ.pop(name, None)
+    jax.distributed.initialize(
+        coordinator_address=coordinator,
+        num_processes=DISTRIBUTED_PROCESS_COUNT,
+        process_id=process_id,
+        local_device_ids=[process_id],
+    )
+    try:
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        split = NamedSharding(mesh, P("replica"))
+        expected = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+        with jax.set_mesh(mesh):
+            # Each process holds, and so must write, half of every array.
+            source = {
+                name: jax.make_array_from_callback(expected.shape, split, lambda index, o=offset: expected[index] + o)
+                for offset, name in enumerate(("a", "b", "c"))
+            }
+            tree_serialize_leaves_tensorstore(checkpoint_path, source)
+            restored = tree_deserialize_leaves_tensorstore(
+                checkpoint_path,
+                {name: jax.ShapeDtypeStruct(expected.shape, expected.dtype, sharding=split) for name in source},
+            )
+            gathered = np.stack(
+                [np.asarray(multihost_utils.process_allgather(restored[name], tiled=True)) for name in source]
+            )
+        return _SharedLocalWriteResult(_file_io_locking(TensorStoreWriteConfig(), checkpoint_path), gathered)
+    finally:
+        jax.distributed.shutdown()
+
+
+def shared_local_write_across_processes() -> list[_SharedLocalWriteResult]:
+    with TemporaryDirectory() as tmpdir:
+        with socket.socket() as listener:
+            listener.bind((_LOOPBACK_ADDRESS, 0))
+            port = listener.getsockname()[1]
+        coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
+
+        with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
+            with ProcessPoolExecutor(
+                max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
+            ) as pool:
+                futures = [
+                    pool.submit(_shared_local_write, process_id, coordinator, f"{tmpdir}/ckpt")
+                    for process_id in range(DISTRIBUTED_PROCESS_COUNT)
+                ]
+                return [future.result() for future in futures]
 
 
 def _mesh(shape: tuple[int, int] = (2, 4)) -> Mesh:
