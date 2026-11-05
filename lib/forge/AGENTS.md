@@ -27,3 +27,7 @@ effects, never whole stages.
 - Do not edit `lib/taskforge`; it remains frozen during the rewrite.
 - Report verbatim copies from `origin/mark/taskforge-integration` separately as
   copied lines; they are exempt from the work-package library line budgets.
+
+`Event` alone uses an explicit covariant `TypeVar`: PEP 695 infers invariance
+for its phantom result type. Its event-class registry is the module-state
+exception needed for typed replay; logs never dynamically import classes.
