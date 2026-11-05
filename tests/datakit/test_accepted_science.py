@@ -10,11 +10,19 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.sft_sources import all_sft_sources
 
+from experiments.datasets.accepted_science import candidate_sft_sources
+
 
 def test_accepted_science_preserves_duplicate_rows_and_serialized_text(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     all_sft_sources.cache_clear()
-    source = all_sft_sources()["nemotron_sft_v3/science_v2/rqa"]
+    original = all_sft_sources()
+    candidate = candidate_sft_sources()
+    changed = {key for key in original if candidate[key] is not original[key]}
+    assert changed == {f"nemotron_sft_v3/science_v2/{part}" for part in ("rqa", "so", "syn_mcq", "vendor")}
+    assert candidate.keys() == original.keys()
+    assert all(candidate[key].rough_token_count_b == original[key].rough_token_count_b for key in original)
+    source = candidate["nemotron_sft_v3/science_v2/rqa"]
     text = (
         "<|start_header_id|>user<|end_header_id|>Keep this spacing:"
         + " " * 512

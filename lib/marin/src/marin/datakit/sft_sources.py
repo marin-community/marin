@@ -18,7 +18,6 @@ from marin.datakit.download.glm53_compaction import glm53_compaction_chat_normal
 from marin.datakit.download.glm53_format_following import glm53_format_following_chat_normalize_steps
 from marin.datakit.download.glm_kernelgym_rollouts import glm_kernelgym_rollouts_chat_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_chat_normalize_steps
-from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.massive import massive_chat_normalize_steps
 from marin.datakit.download.nemotron_sft_v3 import nemotron_sft_v3_chat_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_chat_normalize_steps
@@ -33,8 +32,8 @@ from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_c
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_chat_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_chat_normalize_steps
 from marin.datakit.download.synthetic_misconceptions import synthetic_misconceptions_chat_normalize_steps
-from marin.datakit.normalize import DedupMode, normalize_step
-from marin.datakit.sources import DatakitSource, all_sources
+from marin.datakit.normalize import normalize_step
+from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 
 
@@ -158,8 +157,8 @@ NEMOTRON_SFT_V3_TOKEN_COUNTS_B: Mapping[str, float] = MappingProxyType(
 
 
 @cache
-def all_sft_sources() -> dict[str, DatakitChatSource | DatakitSource]:
-    """Return structured chat and already-rendered SFT sources."""
+def all_sft_sources() -> dict[str, DatakitChatSource]:
+    """Return SFT sources with Harmony-to-text normalization pipelines."""
     penfever_steps = cache(penfever_rollouts_chat_normalize_steps)
     nemotron_steps = cache(nemotron_sft_chat_normalize_steps)
     nemotron_v3_steps = cache(nemotron_sft_v3_chat_normalize_steps)
@@ -215,7 +214,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource | DatakitSource]:
     token_counts["synthetic-misconceptions-conversations"] = 0.002
     # 09-21-tokenizer count of the relay rows plus a four-bytes-per-token estimate for the Kimi traces.
     token_counts[CALIBFORGE_RELAY_SOURCE] = 0.32
-    sources: dict[str, DatakitChatSource | DatakitSource] = {
+    return {
         name: DatakitChatSource(
             name=name,
             chat_steps=factory(),
@@ -223,29 +222,3 @@ def all_sft_sources() -> dict[str, DatakitChatSource | DatakitSource]:
         )
         for name, factory in rows
     }
-    # These approved rows are already rendered. Preserve their bytes and multiplicity;
-    # sending them through Harmony or ordinary dedup would change the sealed corpus.
-    science = download_hf_step(
-        "raw/science-accepted-20261105",
-        hf_dataset_id="open-athena/Nemotron-SFT-Science-v2-GLM-Accepted-2026.11.05",
-        revision="1583049c1df02b418e07d14047eb37db9df46eba",
-        hf_urls_glob=["data/*/*.jsonl.gz"],
-    )
-    for component in ("rqa", "so", "syn_mcq", "vendor"):
-        name = f"nemotron_sft_v3/science_v2/{component}"
-        normalized = normalize_step(
-            name=f"normalized/sft/science-accepted-20261105/{component}",
-            download=science,
-            relative_input_path=f"data/{component}",
-            file_extensions=(".jsonl.gz",),
-            dedup_mode=DedupMode.NONE,
-            # The seal verifies every entire text is shorter than this bound.
-            max_whitespace_run_chars=16_777_216,
-            bare=True,
-        )
-        sources[name] = DatakitSource(
-            name=name,
-            normalize_steps=(science, normalized),
-            rough_token_count_b=NEMOTRON_SFT_V3_TOKEN_COUNTS_B[name],
-        )
-    return sources
