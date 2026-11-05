@@ -233,12 +233,14 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
         finally:
             running.cancel()
             await asyncio.gather(running, return_exceptions=True)
-            if foreground_kind == "zombie-descendant":
-                await adapter.exec(
-                    "if test -s background.pid; then kill -TERM $(cat background.pid); "
-                    "until test -f descendant-reaped; do sleep 0.01; done; fi",
-                    timeout_sec=5,
-                )
-            await agent.cleanup(adapter)
-            await adapter.exec("tmux kill-server")
-            await adapter.stop(delete=True)
+            try:
+                if foreground_kind == "zombie-descendant":
+                    await adapter.exec(
+                        "if test -s background.pid; then kill -TERM $(cat background.pid); "
+                        "until test -f descendant-reaped; do sleep 0.01; done; fi",
+                        timeout_sec=5,
+                    )
+            finally:
+                await agent.cleanup(adapter)
+                await adapter.exec("tmux kill-server")
+                await adapter.stop(delete=True)
