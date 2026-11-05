@@ -45,6 +45,8 @@ from forge.model.review import (
     ValidationResult,
 )
 from forge.model.source import PlannedSlot, ProposalBatch, SlotFailure, SlotProposal
+from forge.model.stage import Exit, Stage
+from forge.model.verdict import GraderCheck
 from forge.model.workpiece import Conversation, Submission, Terminal, Workpiece
 from forge.policy import Policy, Prompt
 
@@ -98,6 +100,9 @@ PLANNED_SLOT = TypeAdapter(PlannedSlot)
 SLOT_PROPOSAL = TypeAdapter(SlotProposal)
 SLOT_FAILURE = TypeAdapter(SlotFailure)
 PROPOSAL_BATCH = TypeAdapter(ProposalBatch)
+STAGE = TypeAdapter(Stage)
+EXIT = TypeAdapter(Exit)
+GRADER_CHECK = TypeAdapter(GraderCheck)
 
 
 def proposal_request_fields(proposal_id: str, source: SourceRef) -> dict[str, Any]:
