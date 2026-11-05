@@ -19,7 +19,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
-from marinskyrl.checkpoint_paths import policy_export_path
+from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
 from marinskyrl.hf_model import validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.resource_locator import join_resource_path
@@ -106,7 +106,9 @@ def _prepare_config(config: DictConfig) -> DictConfig:
 
 def _exported_policy(config: DictConfig) -> ExportedPolicy:
     checkpoint_root = str(config.artifacts.checkpoint_root)
-    global_step = terminal_checkpoint_step(checkpoint_root)
+    global_step = selected_export_step(
+        checkpoint_root, str(config.skyrl.trainer.hf_export_checkpoint), terminal_checkpoint_step(checkpoint_root)
+    )
     policy_uri = policy_export_path(str(config.artifacts.export_root), global_step)
     root = StoragePath(policy_uri)
     names = {(directory / name).relative_to(root) for directory, _, files in root.walk() for name in files}

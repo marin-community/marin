@@ -20,6 +20,7 @@ from levanter.data.sharded_datasource import TextUrlDataSource
 from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
+    CacheOptions,
     SerialCacheWriter,
     ShardedCacheLayout,
     TreeCache,
@@ -397,16 +398,21 @@ def test_full_end_to_end_cache():
         check_datasets_equal(all_data, expected)
 
 
-def test_full_end_to_end_cache_with_groups():
+def test_full_end_to_end_cache_with_partial_processor_batches():
+    """Shards processed in several batches, ending in a short one, keep every row in order."""
+    rows_per_shard = 10
+    batch_size = 3
+    assert rows_per_shard % batch_size != 0
     td = tempfile.TemporaryDirectory()
     with td as tmpdir:
         cache = build_or_load_cache(
             tmpdir,
-            SimpleShardSource(num_shards=5),
+            SimpleShardSource(num_shards=5, rows_per_shard=rows_per_shard),
             TestProcessor(),
+            CacheOptions(batch_size=batch_size),
         )
 
-        expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=5))
+        expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=5, rows_per_shard=rows_per_shard))
 
         all_data = cache[:]
 
@@ -523,23 +529,6 @@ def test_shard_cache_fails_with_multiple_shards_with_the_same_name():
             build_or_load_cache(tmpdir, dataset, TestProcessor())
 
 
-@pytest.mark.asyncio
-async def test_shard_cache_fails_gracefully_with_unknown_file_type_async():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with open(f"{tmpdir}/data.not_a_real_extension", "w") as f:
-            f.write("")
-
-        dataset = TextUrlDataSource(
-            [f"{tmpdir}/data.not_a_real_extension"],
-        )
-
-        with pytest.raises(ZephyrWorkerError):
-            build_or_load_cache(tmpdir, dataset, TestProcessor())
-
-        with pytest.raises(ZephyrWorkerError):
-            build_or_load_cache(tmpdir, dataset, TestProcessor())
-
-
 def test_shard_cache_fails_gracefully_with_unknown_file_type():
     with tempfile.TemporaryDirectory() as tmpdir:
         with open(f"{tmpdir}/data.not_a_real_extension", "w") as f:
@@ -560,13 +549,16 @@ def _make_levanter_records(n: int) -> list[dict[str, list[int]]]:
     return [{"input_ids": [i, i + 100], "attention_mask": [1, 1]} for i in range(n)]
 
 
-def test_write_levanter_cache_end_to_end():
+@pytest.mark.parametrize("max_pending_batches", [1, 128])
+def test_write_levanter_cache_end_to_end(max_pending_batches):
     """Write records and verify they can be read back."""
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = str(Path(tmpdir) / "cache")
         records = _make_levanter_records(8)
 
-        result = write_levanter_cache(iter(records), output_path, metadata={})
+        result = write_levanter_cache(
+            iter(records), output_path, metadata={}, batch_size=2, max_pending_batches=max_pending_batches
+        )
 
         assert result["path"] == output_path
         assert result["count"] == len(records)

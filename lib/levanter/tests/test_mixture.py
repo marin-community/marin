@@ -33,6 +33,25 @@ def key():
     return jax.random.PRNGKey(42)
 
 
+@pytest.mark.asyncio
+async def test_integer_allocation_does_not_repeat_or_omit_examples():
+    block_size = 64_000
+    split = 1001
+    sources = {
+        "small": ListAsyncDataset(list(range(split))),
+        "large": ListAsyncDataset(list(range(split, block_size))),
+    }
+    mixture = MixtureDataset(
+        sources,
+        {"small": split / block_size, "large": (block_size - split) / block_size},
+        block_size,
+        key=key(),
+        randomize_blocks=False,
+    )
+    samples = await mixture.get_batch(list(range(block_size)))
+    assert sorted(samples) == list(range(block_size))
+
+
 class InfiniteCounterDataset(AsyncDataset[int]):
     async def async_len(self) -> int:
         raise ValueError("Infinite dataset has no length")

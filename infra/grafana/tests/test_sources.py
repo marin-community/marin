@@ -285,8 +285,8 @@ def test_ferries_shape_and_success_rate():
         return httpx.Response(200, json={"workflow_runs": [_run("success"), _run("failure")]})
 
     rows = _github(handler).ferries()
-    # 5 tiers across the 3 configured ferry groups, 2 runs each.
-    assert len(rows) == 10
+    # 6 tiers across the 4 configured ferry groups, 2 runs each.
+    assert len(rows) == 12
     first = rows[0]
     assert first["sha"] == "abcdef1" and first["duration_seconds"] == 300 and first["success_rate"] == 0.5
     assert first["group"] == "Canary ferry"
