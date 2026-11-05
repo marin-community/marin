@@ -5,6 +5,10 @@ import hashlib
 import json
 from pathlib import Path
 
+from experiments.post_training.capability_driven_envs.biotasks_library.import_repositories import (
+    _git_blob_sha1,
+    _selected_documents,
+)
 from experiments.post_training.capability_driven_envs.biotasks_library.import_reviewed import (
     BIOTASKS_REVISION,
     RELEASE_STATUS,
@@ -95,3 +99,20 @@ def test_materialize_verifies_and_content_addresses_source_bytes(tmp_path: Path)
     catalog = json.loads((output / "campaigns" / "biotasks" / "fixture" / "source-catalog.jsonl").read_text())
     assert catalog["source_sha256"] == digest
     assert catalog["object_uri"].endswith(digest)
+
+
+def test_repository_evidence_selection_is_bounded_and_prefers_small_documents():
+    observation = {
+        "notebooks": [
+            {"path": "large.ipynb", "size": 2_000_000, "sha": "large"},
+            {"path": "c.Rmd", "size": 300, "sha": "c"},
+            {"path": "a.ipynb", "size": 100, "sha": "a"},
+            {"path": "b.qmd", "size": 200, "sha": "b"},
+            {"path": "d.Rnw", "size": 400, "sha": "d"},
+        ]
+    }
+
+    selected = _selected_documents(observation)
+
+    assert [row["path"] for row in selected] == ["a.ipynb", "b.qmd", "c.Rmd"]
+    assert _git_blob_sha1(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a"
