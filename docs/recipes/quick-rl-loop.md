@@ -96,6 +96,12 @@ entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
 `--steps 25` for the normal iteration. Each run starts from the pinned SFT model.
 The selected data stays cached; training does not curate or resample it.
 
+Updates are synchronous by default: the engines generate a batch, then wait
+while the trainer consumes it. `--max-staleness-steps N` lets the engines keep
+generating during training and weight sync and trains on prompt groups sampled
+up to N updates earlier. Record the setting with each comparison; it changes
+both iteration time and which policy produced each training sample.
+
 The launcher binds `train.parquet` and `validation.parquet` from that artifact.
 Evaluation attempts the fixed panel before training and after the last update,
 and saves task-level verifier outcomes. Under the run artifact's `exports/`,
