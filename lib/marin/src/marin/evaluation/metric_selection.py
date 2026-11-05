@@ -86,6 +86,8 @@ def declared_sample_metric(metrics: Mapping[str, float], declared: str | None) -
     picked = declared_metric(metrics, declared)
     if picked is not None or declared is None:
         return picked
+    if declared == "genomeqa_macro":
+        return declared_metric(metrics, "accuracy")
     if declared == MRCR_RUN_METRIC:
         return declared_metric(metrics, MRCR_SAMPLE_METRIC)
     if declared in PASS_AT_ONE_METRICS:

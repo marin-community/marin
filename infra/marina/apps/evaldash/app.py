@@ -1223,6 +1223,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         if not task:
             return JSONResponse({"error": "task is required"}, status_code=400)
         typed_record = EvalRunRecord.model_validate(record)
+        if not samples.public_sample_text_allowed(typed_record):
+            return JSONResponse({"error": "Sample browsing is unavailable for this benchmark"}, status_code=403)
         metric = samples.sample_metric(typed_record, task)
         payload = await asyncio.to_thread(
             samples.fetch_samples,
@@ -1243,6 +1245,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        if not samples.public_sample_text_allowed(EvalRunRecord.model_validate(record)):
+            return JSONResponse({"error": "Sample browsing is unavailable for this benchmark"}, status_code=403)
         uri = params.get("uri")
         if not uri:
             return JSONResponse({"error": "uri is required"}, status_code=400)
@@ -1254,6 +1258,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        if not samples.public_sample_text_allowed(EvalRunRecord.model_validate(record)):
+            return JSONResponse({"error": "Sample browsing is unavailable for this benchmark"}, status_code=403)
         body = await request.json()
         task = body.get("task")
         if not task:

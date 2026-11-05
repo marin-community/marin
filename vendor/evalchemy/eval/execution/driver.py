@@ -33,7 +33,7 @@ from eval.graders.answer_equivalence import JudgeConfig
 from eval.graders.specs import GRADERS
 from eval.robust_api import completion_response_text_unavailable
 from eval.sources.common import SourceOptions
-from eval.task import BaseBenchmark
+from eval.task import BaseBenchmark, EmptyResponsePolicy
 from eval.sources.lm_eval import LMEvalMetrics, LMEvalSource
 
 logger = logging.getLogger(__name__)
@@ -254,7 +254,9 @@ async def run_evaluations(
             for category, count in dropped[task].items():
                 failures[category] = max(failures[category], count)
             response_summary.update(engine.response_summary[task])
-        if completion_response_text_unavailable(response_summary):
+        if completion_response_text_unavailable(response_summary) and (
+            plan.benchmark is None or plan.benchmark.EMPTY_RESPONSE_POLICY is EmptyResponsePolicy.FAIL_TASK
+        ):
             plan.errors.append(
                 ItemFailure(
                     FailurePhase.GENERATION,

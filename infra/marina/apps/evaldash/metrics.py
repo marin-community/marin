@@ -45,6 +45,7 @@ from marin.evaluation.eval_stats import (
     panel_aggregate,
     select,
 )
+from marin.evaluation.genomeqa import SUBTASK_VIEWS, subtask_records
 from marin.evaluation.metric_selection import PUBLICATION_METRIC_POLICY
 from marin.evaluation.records import EvalRunRecord, RunStatus
 from marin.execution.step_status import STATUS_SUCCESS
@@ -74,6 +75,7 @@ EVAL_SUITES: dict[str, tuple[str, ...]] = {
         "gsm8k-0shot",
     ),
     "Chat / Math": ("math500", "aime24", "olympiadbench"),
+    "Biology": ("genomeqa", *SUBTASK_VIEWS.values()),
     "Long context": ("mrcr", "graphwalks"),
     "Code": ("humaneval", "humanevalplus", "mbppplus"),
 }
@@ -179,7 +181,8 @@ def _panel_records(records: list[EvalRunRecord], cohort_version: str | None = No
     """Return policy-compliant, non-smoke records for the selected cohort."""
     return [
         record
-        for record in records
+        for original in records
+        for record in (original, *subtask_records(original))
         if not record.evaluation.name.endswith(SMOKE_SUFFIX)
         if cohort_version is None or record.version == cohort_version
         if not record_policy_violations(record)

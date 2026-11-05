@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from eval.completion_response import CompletionClassification, CompletionText
 from eval.contracts.sample_results import record_sample_metrics
-from eval.graders.answer_extraction import final_response_text
+from eval.completion_response import final_response_text
 
 
 def extract_answer(text: str) -> Optional[str]:

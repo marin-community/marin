@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 from eval.execution.engine import ItemResult
 from eval.execution.grading import MeanMetrics, TrialMetrics
-from eval.contracts.aggregation import outcome_report
+from eval.contracts.aggregation import complete_macro, outcome_report
 from eval.contracts.eval_spec import ReducerSpec
 from eval.execution.paired import PairedConditions
 
@@ -62,6 +62,16 @@ class SourceMetrics:
             self.pass_at_k.add(result)
 
     def finish(self, task: str) -> dict:
+        if self.policy.name == "complete_macro":
+            metrics = complete_macro(
+                {cell: (self.groups["cell", cell].sums["accuracy"], self.groups["cell", cell].counts["accuracy"])
+                 for cell in self.policy.expected_groups}, self.policy.expected_groups, self.policy.macro_groups,
+            )
+            for cell in self.policy.expected_groups:
+                for name, total in self.groups["cell", cell].sums.items():
+                    if name != "accuracy":
+                        metrics[f"{cell}/{name}"] = total
+            return {"results": {task: metrics}}
         metrics = self.means.finish()
         count = len(self.examples)
         if self.policy.name == "rounded_split_mean":

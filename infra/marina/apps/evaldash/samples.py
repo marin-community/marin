@@ -336,6 +336,19 @@ def _task_table(results_path: str, task: str) -> pa.Table | None:
     return _legacy_load_table(_fs, paths) if paths else None
 
 
+def public_sample_text_allowed(record: EvalRunRecord) -> bool:
+    """Keep GenomeQA questions and echoed responses in controlled run storage."""
+    return not (
+        record.evaluation.name.startswith("genomeqa")
+        or any(
+            task.benchmark is not None
+            and task.benchmark.source is not None
+            and task.benchmark.source["dataset"] == "HuggingFaceBio/genomeqa"
+            for task in record.evaluation.tasks
+        )
+    )
+
+
 def sample_metric(record: EvalRunRecord, sample_task: str) -> BenchmarkMetricRef | None:
     """Resolve the publication metric or the evaluator's recorded default."""
     selected = PUBLICATION_METRICS.get(record.evaluation.name)

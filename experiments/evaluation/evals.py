@@ -54,7 +54,13 @@ _DAYTONA_EGRESS: tuple[str, ...] = ("app.daytona.io", "*.app.daytona.io")
 # Harbor's dataset registry, a Supabase project (Harbor's HARBOR_SUPABASE_URL).
 _HARBOR_REGISTRY_EGRESS: tuple[str, ...] = ("hlqxxzsirfrgeqasvaps.supabase.co",)
 # MRCR loads tiktoken's o200k_base encoding, which tiktoken downloads at import.
-_EVALCHEMY_EGRESS: Mapping[str, tuple[str, ...]] = MappingProxyType({"mrcr": ("openaipublic.blob.core.windows.net",)})
+_EVALCHEMY_EGRESS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "mrcr": ("openaipublic.blob.core.windows.net",),
+        "genomeqa": ("raw.githubusercontent.com",),
+        "genomeqa-motif-mcq": ("raw.githubusercontent.com",),
+    }
+)
 
 # Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
 _EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
@@ -140,6 +146,15 @@ class EvalchemyDefinition:
                     self.name,
                     max_gen_toks,
                 )
+        if any(task.name in {"GenomeQA", "GenomeQAMotifMCQ"} for task in config.tasks):
+            if max_gen_toks != config.max_gen_toks:
+                raise ValueError("GenomeQA requires the benchmark token allowance; model cap would lower it")
+            for key in ("temperature", "top_p"):
+                if (
+                    model.generation.extra_gen_kwargs.get(key, config.extra_gen_kwargs[key])
+                    != config.extra_gen_kwargs[key]
+                ):
+                    raise ValueError(f"GenomeQA model configuration conflicts with benchmark {key}")
         chat_template_kwargs = {
             **model.generation.chat_template_kwargs,
             **config.chat_template_kwargs,
@@ -359,6 +374,8 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "ifbench",
     "mrcr",
     "graphwalks",
+    "genomeqa",
+    "genomeqa-motif-mcq",
 )
 
 EVALS: dict[str, EvaluationDefinition] = {

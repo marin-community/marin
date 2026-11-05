@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+from enum import StrEnum
 from abc import ABC, abstractmethod
 from types import MappingProxyType
 from typing import Mapping
@@ -18,6 +19,11 @@ from eval.passk import parse_pass_at_k
 from eval import sources
 
 
+class EmptyResponsePolicy(StrEnum):
+    FAIL_TASK = "fail_task"
+    SCORE = "score"
+
+
 class BaseBenchmark(ABC):
     """Data source: metadata, static preparation, and an iterator of EvalSpec."""
 
@@ -29,6 +35,7 @@ class BaseBenchmark(ABC):
     METRIC_NAME_OVERRIDES: Mapping[str, str] = MappingProxyType({})
     METRIC_KIND_OVERRIDES: Mapping[str, MetricKind | str] = MappingProxyType({})
     REQUIRES_JUDGE = False
+    EMPTY_RESPONSE_POLICY = EmptyResponsePolicy.FAIL_TASK
 
     def __init__(self, logger=None, system_instruction=None, num_samples=1, pass_at_k=None):
         self.logger = logger or logging.getLogger(type(self).__name__)
