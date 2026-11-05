@@ -469,7 +469,10 @@ def test_every_table_has_hardware_steps_and_time(track: Track) -> None:
 
 def test_control_rows_name_and_link_the_control() -> None:
     assert control_label(Track.SPEEDRUN, "abc") == f"control: current recipe, {RECIPE} (speedrun d512)"
-    assert control_label(Track.COMPETITIVE_D1024, "abc") == f"control: current recipe, {RECIPE} (competitive d1024)"
+    assert (
+        control_label(Track.COMPETITIVE_D1024, "abc")
+        == f"control: current recipe, {RECIPE} (competitive d1024, its finished run `s7n-d1024`)"
+    )
     tracks = "https://github.com/marin-community/marin/blob/abc/experiments/grug/fast_track/belay_tracks.py"
     assert control_label(Track.MOE_D768, "abc") == f"control: [Basic MoE d768]({tracks})"
     assert control_label(Track.VANILLA_D512, "abc") == f"control: [Vanilla Track d512]({tracks})"

@@ -185,6 +185,9 @@ class Baseline:
     expected_minutes: int | None = None
     """Rough wall time of one run, submission to final eval (an estimate). A session waits only for runs due within
     its budget; the app flags a run still going well past it. None: no launch recipe."""
+    baseline_run: str | None = None
+    """A finished run of the recipe itself on this Track (its W&B name), which every variant is compared against
+    instead of a new same-commit control. Only for a Track whose baseline is the recipe, run once at full length."""
 
 
 H100 = "8xH100"
@@ -199,6 +202,9 @@ COMPETITIVE_STEPS = {"d512": 10767, "d768": 30389, "d1024": 39210, "d1280": 2002
 # Rough wall minutes of one run per rung, submission to final eval (estimates; the overdue check allows 30 more).
 VANILLA_MOE_MINUTES = {"d512": 30, "d768": 90, "d1024": 150, "d1280": 360}
 COMPETITIVE_MINUTES = {"d512": 180, "d768": 720, "d1024": 1080, "d1280": 1440}
+# The recipe's own ladder (Belay Ckpt Oct 20 2026, s7n): every rung finished at COMPETITIVE_STEPS on the same launch
+# and data cache as the competitive Tracks, so a variant is compared against it rather than a fresh control.
+COMPETITIVE_BASELINE_RUNS = {"d512": "s7n-d512", "d768": "s7n-d768", "d1024": "s7n-d1024", "d1280": "s7n-d1280L16"}
 
 
 def _vanilla_or_moe(track: str, size: str) -> Baseline:
@@ -238,6 +244,7 @@ def _competitive(size: str, nodes: int, shape: str = "") -> Baseline:
         control_name=f"competitive {size}",
         baseline_steps=COMPETITIVE_STEPS[size],
         expected_minutes=COMPETITIVE_MINUTES[size],
+        baseline_run=COMPETITIVE_BASELINE_RUNS[size],
     )
 
 
