@@ -1,9 +1,9 @@
 # Marin inference performance dashboard
 
 This leaf packages an internal build of the pinned InferenceX-app as a standalone
-Next.js service. Its Pulumi configuration targets `https://performance.oa.dev`
+Next.js service. Its Pulumi configuration targets `https://knotmeter.oa.dev`
 and uses Cloud Run's native IAP gate for the service and its APIs.
-The global IAM stack reuses Grafana's viewer grants and adds the existing GitHub Iris
+The global IAM stack reuses Marina's human viewer grants and adds the existing GitHub Iris
 identity for cache refresh. No anonymous invoker is granted. The web process receives
 only the `inferencex_reader` password. The import Action receives `inferencex_writer`.
 
@@ -159,53 +159,44 @@ convention. Iris submission/start times and raw profiling start/end times retain
 actual queue delay and measurement window. A later collector date is not substituted
 for the source date.
 
-## Production activation after human review
+## Production deployment
 
-No resources are deployed by opening this PR. The IAM change follows
-`.agents/skills/add-grant/SKILL.md`: a second person reviews the grant before merge/apply.
-The app leaf is intentionally absent from automatic deployment targets. Use Pulumi
-directly, following `infra/pulumi.md`. Keep real-identity previews and passwords private.
+Application code may be deployed from a committed, pushed draft branch. New IAM grants
+require a second person to run `review-grant`; only the global `marin` stack owns them.
+Keep the service IAP-protected while that review is pending. Scheduled benchmark submission
+and automatic ingestion remain disabled until the runner owner's end-to-end validation.
 
-1. Merge the reviewed dashboard and runner changes. Install the repository's locked
-   deploy environment (`uv sync --all-packages --extra deploy`). With the normal operator
-   identity, preview/apply `infra/cloudsql`, stack `marin-cloudsql`; this adds the
-   `inferencex` database and the two empty password-secret shells to the existing instance.
-2. Initialize `infra/inferencex`, stack `marin-inferencex`, with the configured GCP KMS
-   provider. For first creation, target only the explicit GCP provider, `inferencex`
-   component, its `sa` and `repo` children, and `invalidate-secret`. Read exact URNs from
-   the private preview. These are the runtime account, Artifact Registry repository and
-   empty invalidation-secret shell; leave the service/image/domain resources for step 5.
-3. Review/apply global IAM in `infra/pulumi`, stack `marin`, excluding the two new service
-   bindings until the service exists. Their logical names are
-   `iap-run-service-us-central1-marin-inferencex-roles-iap-httpsresourceaccessor` and
-   `run-service-us-central1-marin-inferencex-roles-run-invoker`. Use their full preview URNs
-   with Pulumi's `--exclude`. Review drift; do not replace existing policies manually.
-4. Through an authenticated Cloud SQL proxy, create the two restricted LOGIN roles using
-   SQL, apply `roles.sql`, and store each generated password in the matching Secret Manager
-   secret. Avoid [Cloud SQL's default elevated user membership](https://docs.cloud.google.com/sql/docs/postgres/users).
-   Store a separately generated
-   invalidation secret in `marin-inferencex-invalidate-secret`. Run upstream migrations as
-   the writer. Passwords and secret versions stay outside Pulumi state and Git.
-5. Preview/apply the full `marin-inferencex` leaf. It builds and pushes the web image,
-   attaches the existing SQL socket, configures IAP and creates a DNS-only CNAME and Cloud
-   Run domain mapping. The public build origin must match `custom_domain`; update
-   `settings.json` and stack configuration together when changing it. Wait for the managed
-   certificate. Then apply the global IAM stack without the two exclusions. A service
-   created before those bindings is inaccessible, not public.
-6. Build/push the `ingest` target to the same repository. Set repository variable
-   `INFERENCEX_INGEST_IMAGE` to its **digest** reference, for example
-   `us-central1-docker.pkg.dev/hai-gcp-models/marin-inferencex/ingest@sha256:...`.
-   This is a separate image target from the smaller standalone web runtime.
-7. Verify an authorized viewer can load the root, which redirects to Snowball Agentic
-   Traces/BF16/output tokens per GPU/P90, and an unauthenticated caller cannot read APIs.
-   Verify the reader role cannot write and the GitHub identity can use the writer secret
-   and IAP-protected invalidation endpoint. Do not infer live IAP/TLS behavior from mocks.
-8. Set `AGENTX_STATE_ROOT` as described in the
-   [runner runbook](../../experiments/evaluation/agentx/README.md), then
-   `INFERENCEX_INGEST_ENABLED=true`. Submit an H100 run, collect it, and inspect the import
-   Action and API/UI values. Retry its collection/import to confirm idempotence. Only then
-   enable `AGENTX_WEEKLY_ENABLED=true` for Snowball's selected three-load grid.
-   Hero calibration and weekly-load selection remain deferred.
+Use the locked deploy environment (`uv sync --package marin-iac --extra deploy --group test`).
+Pulumi reads its GCS backend and KMS provider from the committed project files. Supply
+`CLOUDFLARE_API_TOKEN` from the existing `cloudflare-oa-dns-token` Secret Manager secret
+without printing it. Keep credentials and real-identity previews private.
+
+1. Preview `infra/cloudsql`, stack `marin-cloudsql`. Apply only the new `inferencex`
+   database and its two empty password-secret shells. Stop on unrelated shared-instance drift.
+2. Initialize `infra/inferencex`, stack `marin-inferencex`, with its committed KMS provider.
+   Preview it, then target only the explicit GCP provider, `inferencex` component,
+   runtime `sa`, Artifact Registry `repo`, and `invalidate-secret` shell. Read exact URNs
+   from that preview. These resources must exist before their IAM bindings can be applied.
+3. A second person reviews the focused grant PR's decrypted principals and scoped roles.
+   The reviewer applies its `marin` stack, excluding the service IAP/invoker bindings until
+   the service exists. Inspect the preview and leave unrelated resources untouched.
+4. Through an authenticated Cloud SQL proxy, create `inferencex_reader` and
+   `inferencex_writer` as restricted native LOGIN roles with SQL. Apply `roles.sql`, then
+   run migrations as the writer. Store generated passwords and a separate invalidation
+   secret in their Secret Manager shells. Avoid Cloud SQL's elevated default user membership.
+5. Preview/apply the application leaf. It uses the shared Cloud Run component, builds and
+   pushes the image, attaches the SQL socket, enables IAP and creates the DNS-only CNAME
+   and domain mapping for `knotmeter.oa.dev`. Apply the reviewed service bindings after
+   Cloud Run exists. An ungranted service remains inaccessible. Wait for managed TLS.
+6. Build/push the `ingest` target to the same Artifact Registry repository. Give the runner
+   owner its immutable digest as `INFERENCEX_INGEST_IMAGE`, the IAP audience from
+   `.github/workflows/inferencex-ingest.yaml`, and `DASHBOARD_URL=https://knotmeter.oa.dev`.
+   Import the saved source bundles, refresh the cache and repeat an import to check identities.
+7. Verify authorized browser charts, point details and timelines; anonymous denial at both
+   hostnames and APIs; reader write rejection; and `github-iris` import/cache refresh.
+   Record Cloud Run's serving revision and image digest. Report any interactive login check
+   separately. The runner owner controls `INFERENCEX_INGEST_ENABLED`, `AGENTX_STATE_ROOT`
+   and `AGENTX_WEEKLY_ENABLED` after validating the complete Action-to-dashboard path.
 
 Automatic imports accept collection completions from this repository's default branch.
 An operator can explicitly retry a reviewed collector from another branch:
@@ -255,6 +246,6 @@ processed-bundle SHA256, all native attempt metadata and validation receipts. Ap
 organization's retention policy there only after preserving a restore reference. The web
 database is a derived view; archived raw results are the reproduction source.
 
-The remaining live acceptance gates are the reviewed merge, IAM/SQL secret bootstrap,
-Cloud Run/IAP/vanity-TLS rollout and enabled scheduled workflows. Local production-image
-acceptance and temporary-branch GitHub execution do not claim these gates have passed.
+Live acceptance requires deployed IAM, SQL roles, Cloud Run, managed TLS, source imports
+and authenticated API/browser checks. Local image acceptance alone does not prove these.
+Enabling scheduled workflows is a separate runner-owner validation step.

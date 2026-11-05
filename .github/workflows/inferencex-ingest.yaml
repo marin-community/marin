@@ -93,7 +93,7 @@ jobs:
           DATABASE_NAME: inferencex
           DATABASE_DRIVER: postgres
           DATABASE_SSL: 'false'
-          DASHBOARD_URL: https://performance.oa.dev
+          DASHBOARD_URL: https://knotmeter.oa.dev
         run: |
           set -euo pipefail
           DATABASE_PASSWORD="$(gcloud secrets versions access latest --secret=cloudsql-inferencex-writer-password --project=hai-gcp-models)"

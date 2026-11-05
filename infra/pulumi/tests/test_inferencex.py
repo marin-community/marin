@@ -5,7 +5,7 @@ import runpy
 from pathlib import Path
 
 import pulumi
-from iac.gcp import grafana, inferencex
+from iac.gcp import inferencex, marina
 from iac.gcp.iam import GcpEncryptedMember
 from iac.gcp.iam_config import load_iam_config
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
@@ -16,10 +16,19 @@ def test_inferencex_reuses_viewers_and_separates_reader_and_writer_access() -> N
     principals = {p.principal_id: GcpEncryptedMember(p.ciphertext) for p in load_iam_config().principals}
     grants = inferencex.iam_grants(project, principals)
     viewers = grants.cloud_run_iap[0].iap_grants
-    original = grafana.iam_grants(project, principals).cloud_run_iap[0].iap_grants
+    original = marina.iam_grants(project, principals).cloud_run_iap[0].iap_grants
     ingest = f"serviceAccount:github-iris@{project}.iam.gserviceaccount.com"
     runtime = f"serviceAccount:marin-inferencex@{project}.iam.gserviceaccount.com"
-    assert [(g.role, g.members[:-1]) for g in viewers] == [(g.role, g.members) for g in original]
+    marina_automation = {
+        f"serviceAccount:marin-cd-cloud-run-deploy@{project}.iam.gserviceaccount.com",
+        f"serviceAccount:loom-vm@{project}.iam.gserviceaccount.com",
+        f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
+    }
+    expected = [(g.role, tuple(m for m in g.members if m not in marina_automation)) for g in original]
+    assert [(g.role, g.members[:-1]) for g in viewers] == expected
+    assert grants.cloud_run_iap[0].service_grants[0].members == (
+        "serviceAccount:service-748532799086@gcp-sa-iap.iam.gserviceaccount.com",
+    )
     assert all(g.members[-1] == ingest for g in viewers)
     secrets = {s.secret: {m for g in s.grants for m in g.members} for s in grants.secrets}
     assert secrets["cloudsql-inferencex-reader-password"] == {runtime}
@@ -53,7 +62,7 @@ def test_dashboard_graph_has_iap_socket_and_only_reader_credentials() -> pulumi.
     pulumi.runtime.set_mocks(mocks, project="marin-inferencex", stack="test", preview=False)
     pulumi.runtime.set_all_config(
         {
-            "marin-inferencex:custom_domain": "performance.oa.dev",
+            "marin-inferencex:custom_domain": "knotmeter.oa.dev",
             "marin-inferencex:dns_zone_id": "test-zone",
         }
     )
