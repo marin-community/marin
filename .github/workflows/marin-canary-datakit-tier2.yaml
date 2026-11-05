@@ -13,8 +13,11 @@ jobs:
   datakit-tier2-ferry:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    outputs:
+      resource_exhausted: ${{ steps.wait.outputs.resource_exhausted }}
     concurrency:
-      group: datakit-tier2-ferry
+      # A run on a branch must not cancel the scheduled run on main.
+      group: datakit-tier2-ferry-${{ github.ref }}
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-tier2-ferry-${{ github.run_id }}-${{ github.run_attempt }}
@@ -103,11 +106,13 @@ jobs:
         id: wait
         shell: bash -l {0}
         run: |
+          # Oct 28 completed in 5h26m after a worker failure and retry.
+          # Leave 14m under the 350m job limit for failure diagnostics.
           uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
-            --timeout 14400 \
+            --timeout 20200 \
             --resource-exhaustion-policy shutdown \
             --github-output
 
@@ -130,6 +135,12 @@ jobs:
           name: datakit-tier2-perf-report
           path: perf-report.json
           retention-days: 90
+
+      - name: Note a skipped day
+        if: steps.wait.outputs.resource_exhausted == 'true'
+        run: |
+          echo "::notice title=Datakit Tier 2 Ferry skipped::Iris cancelled the ferry because it could not get capacity."
+          echo "Skipped: Iris cancelled the ferry because it could not get capacity." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Capture failure diagnostics
         if: failure() || cancelled()
@@ -189,3 +200,17 @@ jobs:
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Datakit Tier 2 Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # A day skipped for lack of capacity finishes green, so it gets its own, non-failure message.
+  notify-skipped:
+    needs: datakit-tier2-ferry
+    if: always() && needs.datakit-tier2-ferry.outputs.resource_exhausted == 'true' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":white_circle: *Datakit Tier 2 Ferry skipped*: no capacity, so it did not run. This is not a failure.\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

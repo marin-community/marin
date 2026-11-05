@@ -1,11 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from typer.testing import CliRunner
-
 from harbor.cli.main import app
 from harbor.models.job.config import JobConfig
 from harbor.models.trial.config import TrialConfig
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -30,7 +29,9 @@ def _capture_job_config(monkeypatch, tmp_path: Path) -> list[JobConfig]:
         async def run(self):
             return SimpleNamespace(started_at=None, finished_at=None)
 
-    async def create(config: JobConfig) -> FakeJob:
+    async def create(
+        config: JobConfig, *, host_capabilities, guest_environment
+    ) -> FakeJob:
         captured.append(config)
         return FakeJob(config)
 
@@ -41,9 +42,6 @@ def _capture_job_config(monkeypatch, tmp_path: Path) -> list[JobConfig]:
     )
     monkeypatch.setattr(
         "harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None
-    )
-    monkeypatch.setattr(
-        "harbor.cli.jobs._confirm_host_env_access", lambda *_, **__: None
     )
     monkeypatch.setattr("harbor.cli.jobs.print_job_results_tables", lambda _: None)
     return captured
@@ -83,7 +81,6 @@ def test_run_skill_flags_append_to_config_file_agents(
             str(first),
             "--skills",
             str(skills_root),
-            "--yes",
         ],
     )
 
@@ -108,7 +105,9 @@ def test_trial_start_skill_flags_are_repeatable(tmp_path: Path, monkeypatch) -> 
                 verifier_result=None,
             )
 
-    async def create(config: TrialConfig) -> FakeTrial:
+    async def create(
+        config: TrialConfig, *, host_capabilities, guest_environment
+    ) -> FakeTrial:
         captured.append(config)
         return FakeTrial()
 

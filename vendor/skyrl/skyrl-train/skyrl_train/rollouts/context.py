@@ -203,7 +203,12 @@ class TrainingContext:
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
         return cls(
-            PromptLoader(dataset, prompt_order_from_config(config, dataset), batch_size=batch_size),
+            PromptLoader(
+                dataset,
+                prompt_order_from_config(config, dataset),
+                batch_size=batch_size,
+                max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
+            ),
             buffer_config,
             start_rollout_buffer(buffer_config),
             RolloutContentPolicy(admission, selection),

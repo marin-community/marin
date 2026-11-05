@@ -1,8 +1,8 @@
 // Per-sample outcome and a short "why" hint, derived from the fields the reader already returns.
 // Kept here (not persisted) so the list and the viewer render the same summary from one place.
-import type { SampleRow } from '@/types/api'
+import type { SampleCounts, SampleRow } from '@/types/api'
 
-export type SampleOutcome = 'passed' | 'failed' | 'ungraded' | 'errored'
+export type SampleOutcome = 'passed' | 'failed' | 'scored' | 'ungraded' | 'errored'
 
 // The correctness filters a sample list offers. 'ungraded' is a real bucket, not a synonym for wrong.
 export type SampleFilter = 'all' | 'correct' | 'incorrect' | 'ungraded'
@@ -10,9 +10,9 @@ export type SampleFilter = 'all' | 'correct' | 'incorrect' | 'ungraded'
 const GSM8K_FINAL_ANSWER_MARKER = '#### '
 
 /** The filters to show for a task: 'ungraded' only appears once the task reports unscored samples. */
-export function sampleFilters(ungradedCount: number | null | undefined): SampleFilter[] {
-  const base: SampleFilter[] = ['all', 'correct', 'incorrect']
-  return (ungradedCount ?? 0) > 0 ? [...base, 'ungraded'] : base
+export function sampleFilters(counts: SampleCounts | null | undefined): SampleFilter[] {
+  const base: SampleFilter[] = counts?.correct === null ? ['all'] : ['all', 'correct', 'incorrect']
+  return (counts?.ungraded ?? 0) > 0 ? [...base, 'ungraded'] : base
 }
 
 /** The grader's recorded error, if it emitted one (Harbor writes `{reward, error}` into detail). */
@@ -27,14 +27,10 @@ function graderError(row: SampleRow): string | null {
   }
 }
 
-/**
- * One sample's outcome. A recorded grader error is `errored`; an unscored sample (no primary metric,
- * `correct === null`) is `ungraded`; otherwise pass/fail follows `correct`. `errored` is only claimed
- * when the grader actually reported one — it is never inferred from an empty answer.
- */
+/** A grader error takes precedence; continuous scores have a scored outcome without pass/fail. */
 export function sampleOutcome(row: SampleRow): SampleOutcome {
   if (graderError(row)) return 'errored'
-  if (row.correct === null || row.correct === undefined) return 'ungraded'
+  if (row.correct === null || row.correct === undefined) return row.grading?.score != null ? 'scored' : 'ungraded'
   return row.correct ? 'passed' : 'failed'
 }
 
@@ -42,6 +38,7 @@ const OUTCOME_CHIP_CLASS: Record<SampleOutcome, string> = {
   passed: 'bg-status-success-bg text-status-success border-status-success-border',
   failed: 'bg-status-danger-bg text-status-danger border-status-danger-border',
   errored: 'bg-status-warning-bg text-status-warning border-status-warning-border',
+  scored: 'bg-surface-sunken text-text-muted border-surface-border',
   ungraded: 'bg-surface-sunken text-text-muted border-surface-border',
 }
 
@@ -76,6 +73,8 @@ export function gsm8kGradedReference(row: SampleRow): string | null {
 export function sampleHint(row: SampleRow): string {
   const error = graderError(row)
   if (error) return `errored: ${truncate(error)}`
+
+  if (sampleOutcome(row) === 'scored') return `score ${row.grading?.score}`
 
   if (row.kind === 'multiple_choice') {
     const pick = row.model_choice !== null ? (row.choices?.[row.model_choice]?.label ?? '?') : '—'

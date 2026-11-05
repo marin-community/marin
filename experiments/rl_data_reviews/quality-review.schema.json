@@ -52,20 +52,12 @@
         "marinskyrl_python_tree_sha256": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
-        },
-        "harbor_commit": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^[a-f0-9]{40}$"
         }
       },
       "required": [
         "marinskyrl_commit",
         "marinskyrl_dirty",
-        "marinskyrl_python_tree_sha256",
-        "harbor_commit"
+        "marinskyrl_python_tree_sha256"
       ],
       "additionalProperties": false
     }

@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, StringArray};
 use buffa::{Enumeration, MessageField};
-use connectrpc::{ConnectError, RequestContext, ServiceResult};
+use connectrpc::{ConnectError, RequestContext, ServiceRequest, ServiceResult};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::logging::{
-    FetchLogsResponse, LogEntry, LogEntryView, LogLevel, LogService, MatchScope,
-    OwnedFetchLogsRequestView, OwnedPushLogsRequestView, PushLogsResponse, Timestamp,
+    FetchLogsRequest, FetchLogsResponse, LogEntry, LogEntryView, LogLevel, LogService, MatchScope,
+    PushLogsRequest, PushLogsResponse, Timestamp,
 };
 use crate::query::fetch_log_rows;
 use crate::query::make_ctx;
@@ -249,7 +249,7 @@ struct PreparedFetchLogs {
 }
 
 fn prepare_fetch_logs(
-    request: OwnedFetchLogsRequestView,
+    request: &crate::proto::finelog::logging::FetchLogsRequestView<'_>,
 ) -> Result<PreparedFetchLogs, ConnectError> {
     // Wire UNSPECIFIED (and an unset field) maps to REGEX so clients that
     // encode a regex pattern in `source` without setting match_scope keep
@@ -463,7 +463,9 @@ impl LogServiceImpl {
         snapshot: NamespaceSnapshot,
         request: &PreparedFetchLogs,
     ) -> Result<QueriedLogRows, ConnectError> {
-        let table_bound = self.store.object_query_bound();
+        let table_bound = snapshot
+            .read_deadline
+            .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()));
         let provider_started = Instant::now();
         let provider = self
             .store
@@ -472,6 +474,16 @@ impl LogServiceImpl {
         let provider_elapsed = provider_started.elapsed();
 
         let query_ctx = make_ctx();
+        crate::query::bind_read_deadline(
+            &query_ctx,
+            ctx.time_remaining()
+                .map(|remaining| tokio::time::Instant::now() + remaining),
+        );
+        let admission = query_ctx
+            .copied_config()
+            .get_extension::<crate::store::object_store::QueryCacheAdmission>()
+            .unwrap();
+        let fills = admission.cancel_on_drop(query_timeout(ctx.time_remaining(), table_bound));
         let read = fetch_log_rows(
             &query_ctx,
             provider,
@@ -490,9 +502,17 @@ impl LogServiceImpl {
                     timeout.as_millis()
                 ))
             },
-            |error| ConnectError::internal(format!("log read failed: {error}")),
+            |error| {
+                let message = format!("log read failed: {error}");
+                if crate::query::is_read_deadline(&error) {
+                    ConnectError::deadline_exceeded(message)
+                } else {
+                    ConnectError::internal(message)
+                }
+            },
         )
         .await?;
+        fills.complete();
         Ok(QueriedLogRows {
             rows,
             provider_elapsed,
@@ -598,7 +618,7 @@ impl LogService for LogServiceImpl {
     async fn push_logs(
         &self,
         ctx: RequestContext,
-        request: OwnedPushLogsRequestView,
+        request: ServiceRequest<'_, PushLogsRequest>,
     ) -> ServiceResult<PushLogsResponse> {
         // Empty entries -> empty response, no append.
         if request.entries.is_empty() {
@@ -625,10 +645,10 @@ impl LogService for LogServiceImpl {
     async fn fetch_logs(
         &self,
         ctx: RequestContext,
-        request: OwnedFetchLogsRequestView,
+        request: ServiceRequest<'_, FetchLogsRequest>,
     ) -> ServiceResult<FetchLogsResponse> {
         let request_started = Instant::now();
-        let mut request = prepare_fetch_logs(request)?;
+        let mut request = prepare_fetch_logs(request.view())?;
 
         // Hold the query-visibility READ guard across the whole scan: like
         // Query, DataFusion opens the snapshotted `log` parquet files lazily

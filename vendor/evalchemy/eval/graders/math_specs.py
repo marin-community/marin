@@ -106,7 +106,7 @@ def nupa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     return Grade({
         "exact_match": score.exact_match, "digit_match": score.digit_match, "dlength": score.dlength,
         "format_valid_rate": score.format_valid, "no_answer_rate": score.no_answer,
-    }, filtered_resps=[scorer.extract_answer(str(responses[-1]), answer_format)])
+    }, filtered_resps=[score.extracted_answer])
 
 def math_equivalence(spec: EvalSpec, responses: Sequence[Any]) -> Grade | JudgePlan:
     try:

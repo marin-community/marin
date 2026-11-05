@@ -739,6 +739,7 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
     reference = config.build(Vocab, key=reference_key)
     trainer = _CapturingTrainer()
     converter = _CapturingConverter()
+    chat_template = "{% for message in messages %}{{ message.content }}{% endfor %}"
 
     adapter.install_export_hooks(
         trainer=trainer,
@@ -747,6 +748,7 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
         export=AdaptorExportConfig(
             hf_save_steps=1,
             merged_hf_save_path="/tmp/export",
+            chat_template=chat_template,
         ),
     )
 
@@ -754,8 +756,9 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
     hook(SimpleNamespace(step=1, eval_model=DpoModel(policy=policy, reference=reference)))
 
     assert len(converter.calls) == 1
-    saved_model, _, _ = converter.calls[0]
+    saved_model, _, kwargs = converter.calls[0]
     assert isinstance(saved_model, Gpt2LMHeadModel)
+    assert kwargs["chat_template"] == chat_template
 
 
 def test_separate_reference_lora_peft_export_saves_policy_adapter(tmp_path):
