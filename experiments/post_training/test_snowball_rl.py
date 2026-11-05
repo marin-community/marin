@@ -56,7 +56,10 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
         layouts = (presets.L112, presets.P40) if name == "train-long" else (None,)
         for layout in layouts:
             run = snowball.build_run(
-                preset, tasks=selection if preset.focus == presets.Focus.DATA else None, layout=layout
+                preset,
+                tasks=selection if preset.focus == presets.Focus.DATA else None,
+                layout=layout,
+                control=name == "speed-long",
             )
             for index, step in enumerate(run.runs):
                 path = tmp_path / f"{name}-{layout.name if layout else 'default'}-{index}.yaml"
@@ -168,10 +171,10 @@ def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch
         StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
     expected = {
-        "speed-short": "9d57955c",
-        "data-short": "197e2bb5",
-        "speed-medium": "a6f6a4c9",
-        "learning-medium": "db178fe3",
+        "speed-short": "01291323",
+        "data-short": "aea96ee0",
+        "speed-medium": "13f69efa",
+        "learning-medium": "cff794ee",
     }
     paths = []
     for name in expected:
@@ -256,7 +259,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
         next(
             value for value in run().runtime_args.values() if isinstance(value, adapter.IrisSkyRLExecution)
         ).wandb_entity
-        is None
+        == "marin-community"
     )
     monkeypatch.setenv("WANDB_ENTITY", "another-team")
     assert name() == original_name

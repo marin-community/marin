@@ -19,7 +19,7 @@ table. Its exit code is 0 for PASS or completed train-long/control collection,
 1 for FAIL and 2 for INVALID. Submission without `--wait` returns 0 when accepted.
 The status lists the latest completed update and the W&B URL when the tracker has
 saved one. Set `WANDB_ENTITY` before submission to choose the W&B team; an unset
-value uses `dogml`. The team changes neither run identity nor pinned configuration.
+value uses `marin-community`. The team changes neither run identity nor pinned configuration.
 
 | preset | allocation | workload | measurement |
 |---|---|---|---|

@@ -38,7 +38,7 @@ block, including the verdict of a finished gated run; --run submits it. --wait p
 and prints the final status and report, exiting 0 for PASS, 1 for FAIL, 2 for INVALID.
 --baseline NAME@VERSION adds a comparison with earlier finished runs; the verdict uses the
 pinned controls. Status includes each run's latest completed update and saved W&B URL.
-Set WANDB_ENTITY before submission to choose the W&B team; unset uses dogml.
+Set WANDB_ENTITY before submission to choose the W&B team; unset uses marin-community.
 --version dev satisfies
 the launcher; Snowball steps use PRESET_REVISION. Guide: docs/recipes/snowball-rl.md.
 
@@ -152,7 +152,7 @@ def training_config(
             "resume_mode": "latest" if preset.focus == presets.Focus.TRAIN else "none",
             "seed": presets.SEED,
             "logger": ["console", "files", "wandb"],
-            "project_name": "snowball-rl",
+            "project_name": "marin-snowball-rl",
             "tracker_commit_each_step": True,
             "training_metrics": True,
             "rollout_spans": True,
@@ -450,7 +450,7 @@ def build_run(
         "evaluations": sorted(selected),
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
-    wandb_entity = os.environ.get("WANDB_ENTITY") or None
+    wandb_entity = os.environ.get("WANDB_ENTITY") or "marin-community"
     runs = []
     for replicate in range(replicates):
         name = presets.run_name(preset, provenance, inputs_hash, replicate, control=control)
@@ -540,7 +540,7 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
                 "version": step.version,
                 "state": state,
                 "iris_job_id": result.iris_job_id if result else None,
-                "wandb_entity": team or "dogml",
+                "wandb_entity": team or "marin-community",
                 **tracking,
                 "latest_completed_update": _completed_update(
                     path, generating=preset.recipe.layout.role_plan.generate_only
@@ -666,7 +666,11 @@ def _run_command(function: Callable) -> click.Command:
             if wait and job is not None:
                 _wait_for_run(job, handles, presets.PRESETS[kwargs["preset_name"]])
 
-        return build_options_with_runner(function, runner)(*args, **kwargs)
+        try:
+            return build_options_with_runner(function, runner)(*args, **kwargs)
+        except scoring.InvalidComparison as error:
+            click.echo(json.dumps({"preset": kwargs["preset_name"], "verdict": "invalid", "reason": str(error)}))
+            raise click.exceptions.Exit(2) from error
 
     command.callback = callback
     return command

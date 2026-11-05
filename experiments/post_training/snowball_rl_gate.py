@@ -47,7 +47,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
-GATE_REVISION = "2026.11.05"
+GATE_REVISION = "2026.11.05.1"
 GATE_REPORT_FILENAME = "gate_report.json"
 GRADER_ERROR_LIMIT = 0.01
 OUTCOME_PREFIX = "generate/outcome/"
@@ -130,15 +130,13 @@ def parse_requirement(text: str) -> Requirement:
 
 
 def check_requirements(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
-    """Refuse, before any GPU step, a requirement whose key the gate does not compute for control r0."""
+    """Validate a candidate's control pin and user requirements before GPU submission."""
+    pins = _pins(preset.name) if not control and preset.focus != presets.Focus.TRAIN else ()
     if not requirements:
         return
-    if control or preset.name not in CONTROLS:
+    if control or preset.focus == presets.Focus.TRAIN:
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
-    pins = _pins(preset.name)
-    if not pins:
-        return  # gate_step names the missing control pin.
     rates_path = _pass_rates_path(preset)
     rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
     reference = _load_run(_control_path(preset, pins[0], 0), preset, rates)
@@ -743,7 +741,16 @@ def _write_gate(
 
 
 def _pins(preset: str) -> tuple[ControlPin, ...]:
-    return tuple(pin for pin in CONTROLS[preset] if pin.revision == presets.PRESET_REVISION)
+    known = CONTROLS.get(preset, ())
+    pins = tuple(pin for pin in known if pin.revision == presets.PRESET_REVISION)
+    if not pins:
+        name, replicas = (known[0].preset, known[0].runs) if known else (preset, 4)
+        raise InvalidComparison(
+            f"no control pin for {preset} at {presets.PRESET_REVISION}; collect with "
+            f"python -m experiments.post_training.snowball_rl --preset {name} "
+            f"--version {presets.PRESET_REVISION} --control --replicates {replicas} --run"
+        )
+    return pins
 
 
 def _control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
@@ -802,12 +809,6 @@ def gate_step(
     preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, inputs: GateInputs
 ) -> ArtifactStep[GateReport]:
     pins = _pins(preset.name)
-    if not pins:
-        raise click.BadParameter(
-            f"no control pin for {preset.name} at {presets.PRESET_REVISION}; collect with "
-            f"python -m experiments.post_training.snowball_rl --preset {CONTROLS[preset.name][0].preset} "
-            f"--version {presets.PRESET_REVISION} --control --replicates {CONTROLS[preset.name][0].runs} --run"
-        )
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pins[0].main_commit}"
     return _gate_artifact(name, preset, runs, inputs)
 
@@ -872,7 +873,7 @@ def _baseline_runs(
 @click.option(
     "--preset",
     "preset_name",
-    type=click.Choice(sorted(CONTROLS)),
+    type=click.Choice(sorted(name for name, preset in presets.PRESETS.items() if preset.focus != presets.Focus.TRAIN)),
     required=True,
     help="Gated preset whose pinned controls to compare with.",
 )
@@ -913,7 +914,12 @@ def main(
 ) -> None:
     if (candidate_name is None) == (leave_out is None):
         raise click.UsageError("choose --candidate NAME[@VERSION] or --leave-out r<index>")
-    preset, pins = presets.PRESETS[preset_name], _pins(preset_name)
+    preset = presets.PRESETS[preset_name]
+    try:
+        pins = _pins(preset_name)
+    except InvalidComparison as error:
+        click.echo(json.dumps({"preset": preset_name, "verdict": "invalid", "reason": str(error)}))
+        raise click.exceptions.Exit(2) from error
     index = None
     if leave_out is not None:
         if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pins[0].runs:

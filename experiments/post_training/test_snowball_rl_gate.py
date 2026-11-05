@@ -254,7 +254,20 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
         legacy_report = rescore("speed-medium", "--leave-out", "r0")
     legacy_record = Path(legacy_report["report"]).parent / RECORD_FILENAME
     _json(legacy_record, json.loads(legacy_record.read_text()) | {"result_type": "__main__.GateReport"})
+    with monkeypatch.context() as lower_gate:
+        lower_gate.setattr(gate, "GATE_REVISION", "2026.11.05")
+        lower_report = rescore("speed-medium", "--leave-out", "r0")
+    lower_path = Path(lower_report.pop("report"))
+    lower_report["reported"] = [
+        row for row in lower_report["reported"] if not row["metric"].startswith(("timing/grading/", "timing/setup/"))
+    ]
+    _json(lower_path, lower_report)
+    lower_record = lower_path.parent / RECORD_FILENAME
+    _json(lower_record, json.loads(lower_record.read_text()) | {"result": lower_report})
     report = rescore("speed-medium", "--leave-out", "r0")
+    assert {f"timing/{phase}/{stat}" for phase in ("grading", "setup") for stat in ("mean", "p50", "p95", "max")} <= {
+        row["metric"] for row in report["reported"]
+    }
     timing, mismatch = report["guards"]
     assert [timing[key] for key in ("run", "control", "sd", "df", "n_run", "n_control", "delta")] == [
         100,
@@ -934,9 +947,27 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         ("child", 0),
         ("control", 0),
         ("generate", 0),
+        ("unpinned", 2),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
+    if case == "unpinned":
+        client = MagicMock(spec=IrisClient)
+        client.submit.side_effect = AssertionError("an unpinned candidate submitted a coordinator")
+        monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+        for command, arguments in (
+            (snowball.main, ["--preset", "speed-long", "--version", presets.PRESET_REVISION, "--run", "--wait"]),
+            (gate.main, ["--preset", "speed-long", "--candidate", "tests/unpinned"]),
+        ):
+            refused = CliRunner().invoke(command, arguments)
+            assert refused.exit_code == expected, (refused.output, refused.exception)
+            payload = json.loads(refused.output)
+            assert payload["preset"] == "speed-long" and payload["verdict"] == "invalid"
+            assert payload["reason"].endswith(
+                "python -m experiments.post_training.snowball_rl --preset speed-long "
+                f"--version {presets.PRESET_REVISION} --control --replicates 4 --run"
+            )
+        return
     preset_name = "speed-short" if case == "generate" else "speed-medium"
     controls(recorded_runs, preset_name)
     preset = presets.PRESETS[preset_name]
