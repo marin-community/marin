@@ -114,6 +114,8 @@ class Trial:
     """The delta is derived from other trials rather than measured against its own control."""
     node_grant: int | None = None
     """A maintainer's node grant the trial ran under (its launches could pass the global node cap up to this)."""
+    priority: str | None = None
+    """The Iris priority band the trial's runs launched at (the Track's band, or an approver's grant)."""
 
 
 @dataclass(frozen=True)
