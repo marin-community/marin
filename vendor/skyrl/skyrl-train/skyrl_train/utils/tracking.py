@@ -29,6 +29,7 @@ import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from marinskyrl.resource_locator import join_resource_path
+from marinskyrl.checkpoint_paths import TRACKING_FILENAME
 from skyrl_train.io import io
 
 
@@ -109,6 +110,12 @@ class Tracking:
                 ),
             )
             run_id = run.id
+            if config is not None:
+                io.makedirs(str(config.trainer.export_path), exist_ok=True)
+                io.write_bytes_atomic(
+                    join_resource_path(str(config.trainer.export_path), TRACKING_FILENAME),
+                    json.dumps({"wandb_url": run.url}).encode(),
+                )
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run

@@ -5,11 +5,13 @@ import hashlib
 import inspect
 import json
 import math
+import shutil
 import subprocess
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import click
 import marin.rl.skyrl as adapter
@@ -18,6 +20,9 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
+from iris.client.client import IrisClient
+from iris.cluster.types import JobName
+from iris.resources.state import JobState
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, run
@@ -127,6 +132,9 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         (root / ".executor_status").write_text("SUCCESS")
         for step in (0,) if preset.recipe.layout.role_plan.generate_only else range(1, preset.updates + 1):
             row = {f"generate/outcome/{outcome}": 0.0 for outcome in (*Outcome, "rollout_failure")}
+            row |= {"step": step, "trainer/global_step": step}
+            if not preset.recipe.layout.role_plan.generate_only:
+                row["timing/step_wall/unaccounted"] = 0.0
             row |= {metric.key: 0.0 for metric in preset.reported if metric.key.startswith("timing/step_wall/")}
             row |= {
                 "generate/outcome/graded": 512.0,
@@ -264,6 +272,7 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
         "invariants",
         "guards",
         "reported",
+        "vs_baseline",
         "gaps",
     }
     pin = gate.CONTROLS["speed-medium"][0]
@@ -282,6 +291,59 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
         {"report": str(artifact), **report}
     ]
     assert before == {path: hashlib.sha256(path.read_bytes()).digest() for path in before}
+
+
+def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_runs):
+    controls(recorded_runs, "speed-medium")
+    candidate = recorded_runs("speed-medium", "users/test/baseline-candidate", speed=101.5)
+    first = recorded_runs("speed-medium", "users/test/baseline-a", speed=20, argv=("--preset", "speed-medium"))
+    recorded_runs("speed-medium", "users/test/baseline-b", speed=24, argv=("--preset", "speed-medium"))
+    alias = first.parents[1] / "baseline-alias" / presets.PRESET_REVISION
+    record = json.loads((first / RECORD_FILENAME).read_text())
+    _json(alias / RECORD_FILENAME, record | {"name": "users/test/baseline-alias", "source": str(first)})
+    references = [
+        f"users/test/{name}@{presets.PRESET_REVISION}"
+        for name in ("baseline-b", "baseline-a", "baseline-a", "baseline-alias")
+    ]
+    original = rescore("speed-medium", "--candidate", "users/test/baseline-candidate")
+    report = rescore(
+        "speed-medium",
+        "--candidate",
+        "users/test/baseline-candidate",
+        *(item for ref in references for item in ("--baseline", ref)),
+    )
+    assert (report["verdict"], report["label"]) == (original["verdict"], original["label"]) == ("pass", "no change")
+    assert report["guards"] == original["guards"] and report["reported"] == original["reported"]
+    assert report["report"] != original["report"]
+    assert report["run"]["baselines"] == sorted(set(references))
+    rows = {row["metric"]: row for row in report["vs_baseline"]}
+    timing = rows["speed/update_seconds"]
+    assert [timing[key] for key in ("run", "control", "n_run", "n_control", "df", "delta", "change")] == [
+        101.5,
+        22,
+        1,
+        2,
+        3,
+        -79.5,
+        "worse",
+    ]
+    assert timing["sd"] == pytest.approx(math.sqrt(5 / 3))
+    assert timing["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 2, 3) * math.sqrt(5 / 3) * math.sqrt(1.5))
+    startup = rows["startup/init_weight_sync_state"]
+    assert startup["control"] == pytest.approx(2.2)
+    assert startup["tolerance"] == pytest.approx(t.ppf(0.975, 3) * math.sqrt(5 / 3) / 10 * math.sqrt(1.5))
+    assert "## Vs baseline" in Path(report["report"]).with_suffix(".md").read_text()
+    wrong = recorded_runs("speed-medium", "users/test/wrong-baseline", argv=("--preset", "learning-medium"))
+    old = recorded_runs(
+        "speed-medium", "users/test/old-baseline", version="2026.10.26", argv=("--preset", "speed-medium")
+    )
+    unfinished = recorded_runs("speed-medium", "users/test/unfinished-baseline", missing_receipt=True)
+    for root in (candidate, wrong, old, unfinished):
+        ref = f"{root.relative_to(first.parents[3]).parent}@{root.name}"
+        rejected = CliRunner().invoke(
+            gate.main, ["--preset", "speed-medium", "--candidate", "users/test/baseline-candidate", "--baseline", ref]
+        )
+        assert rejected.exit_code == 2, (ref, rejected.output, rejected.exception)
 
 
 VLLM = "vllm/median_generation_throughput"
@@ -670,10 +732,43 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     assert [(row["name"], row["holds"]) for row in report["invariants"] if row["name"].startswith("require/")] == [
         ("require/" + REQUIREMENT.split("<=")[0], True)
     ]
+    assert "wandb_url" not in status(preset, argv)["runs"][0]
+    _json(source / "exports/tracking.json", {"wandb_url": "https://wandb.example/team/project/runs/actual-id"})
+    _json(source / "exports/metrics/step-000026.json", {"step": 26, "startup/load_checkpoints": 3.0})
+    (source / "exports/metrics/step-000027.json").write_text("{")
     printed = status(preset, argv)
+    assert printed["runs"][0]["wandb_url"] == "https://wandb.example/team/project/runs/actual-id"
+    assert printed["runs"][0]["latest_completed_update"] == 25
+    for step in (26, 27):
+        (source / f"exports/metrics/step-{step:06d}.json").unlink()
     assert timers.keys() <= {row["key"] for row in printed["reported_metrics"]}
     assert (printed["verdict"], printed["label"]) == (report["verdict"], report["label"])
     assert printed["report"].endswith("gate_report.json") and "rl_path_changes_since_control" in printed
+    recorded_runs(preset, "users/test/earlier-" + preset, score=0.49, argv=("--preset", preset))
+    baseline = f"users/test/earlier-{preset}@{presets.PRESET_REVISION}"
+    with_baseline = status(preset, [*argv, "--baseline", baseline])
+    assert with_baseline["runs"][0]["name"] == printed["runs"][0]["name"]
+    assert "report" not in with_baseline
+    receipt = json.loads((source / "terminal.json").read_text())
+    receipt["result"]["provenance"]["command_line"] += ["--baseline", baseline]
+    _json(source / "terminal.json", receipt)
+    recovered = rescore(preset, "--candidate", built.runs[0].name)
+    assert recovered["run"]["baselines"] == [baseline] and recovered["vs_baseline"]
+    assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
+    recorded_runs(preset, "users/test/other-panel", drop_task=True, argv=("--preset", preset))
+    refused = CliRunner().invoke(
+        snowball.main,
+        [
+            "--preset",
+            preset,
+            "--version",
+            presets.PRESET_REVISION,
+            *argv,
+            "--baseline",
+            f"users/test/other-panel@{presets.PRESET_REVISION}",
+        ],
+    )
+    assert refused.exit_code == 2 and "panel task IDs differ" in refused.output
     if preset == "learning-medium":
         later = recorded_runs(preset, "users/test/later-replicate", score=0.495)
         receipt = json.loads((later / "terminal.json").read_text())
@@ -696,6 +791,71 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         "run crashed",
         "/tests/native-run",
     )
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("pass", 0),
+        ("fail", 1),
+        ("invalid", 2),
+        ("missing", 2),
+        ("parent", 1),
+        ("runtime", 1),
+        ("no-wait", 0),
+        ("submit", 1),
+        ("child", 0),
+        ("control", 0),
+    ],
+)
+def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
+    controls(recorded_runs, "speed-medium")
+    preset = presets.PRESETS["speed-medium"]
+    built = snowball.build_run(preset, control=case == "control")
+    source = recorded_runs(preset, built.runs[0].name, speed=150 if case == "fail" else 101)
+    if case == "invalid":
+        receipt = json.loads((source / "terminal.json").read_text())
+        receipt["result"]["provenance"] = None
+        _json(source / "terminal.json", receipt)
+    if case not in {"missing", "control"}:
+        run(built.gate)
+    if case == "runtime":
+        receipt = json.loads((source / "terminal.json").read_text())
+        receipt["result"]["state"] = "failed"
+        _json(source / "terminal.json", receipt)
+    if case == "parent":
+        shutil.rmtree(source)
+    job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
+    client = MagicMock(spec=IrisClient)
+    client.submit.return_value.job_id = job
+    final = JobState.FAILED if case == "parent" else JobState.SUCCEEDED
+    states = iter((JobState.PENDING, JobState.RUNNING, final))
+
+    def status(identifier):
+        if identifier != job:
+            raise KeyError(identifier)
+        return SimpleNamespace(state=next(states))
+
+    client.job_status.side_effect = status
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    elapsed = []
+    monkeypatch.setattr(snowball, "time", SimpleNamespace(sleep=elapsed.append))
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    if case == "submit":
+        client.submit.side_effect = ConnectionError("submission failed")
+    if case == "child":
+        monkeypatch.setattr(snowball, "submit_or_run", lambda *args: None)
+    arguments = ["--preset", "speed-medium", "--version", presets.PRESET_REVISION, "--run"]
+    if case != "no-wait":
+        arguments.append("--wait")
+    if case == "control":
+        arguments.append("--control")
+    result = CliRunner().invoke(snowball.main, arguments)
+    assert result.exit_code == expected, (result.output, result.exception)
+    assert sum(elapsed) == (0 if case in {"no-wait", "submit", "child"} else 120)
+    if case in {"pass", "fail", "invalid"}:
+        assert "# speed-medium" in result.output
 
 
 def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):

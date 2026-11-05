@@ -3,8 +3,8 @@
 
 """Run a Snowball RL experiment from a preset; gated presets compare the run with pinned controls.
 
-Every preset except train-long is gated: it reports PASS, FAIL or INVALID against control runs of
-the same preset, with a change label. Choose the preset by what the change can affect. Each entry
+Calibrated presets report PASS, FAIL or INVALID against control runs of the same preset, with a
+change label. Choose the preset by what the change can affect. Each entry
 gives what the preset runs, its cost, what it measures and the changes it is for:
 
 \b
@@ -14,6 +14,9 @@ gives what the preset runs, its cost, what it measures and the changes it is for
   speed-medium     10 sync updates, every reply 4,096 tokens; 40 H100, about 40 min. Measures
                    median update time and trainer-vs-engine log-prob mismatch. For trainer
                    speed, weight sync and startup.
+  speed-long       20 async updates with staleness 2 and TIS, replies up to 8,192 tokens;
+                   40 H100, target 45-75 min. Measures update time and learner/engine
+                   tokens/s per GPU. For the async loop, grading and admission speed.
   learning-medium  25 sync updates, then the 910-task panel; 40 H100, about 2 h. Measures the
                    panel score. For loss, estimator, optimizer, schedule, reward shaping,
                    batch shape and --init.
@@ -31,12 +34,19 @@ An engine change runs speed-short, then speed-medium. A trainer kernel, parallel
 change runs speed-medium, then learning-medium. A new task selection runs data-short, then
 data-medium. --require adds a condition of your own, such as a mismatch bound on a speed run or
 a per-category score on a learning run. Without --run the command prints the plan and the status
-block, including the verdict of a finished gated run; --run submits it. --version dev satisfies
+block, including the verdict of a finished gated run; --run submits it. --wait polls every 60 s
+and prints the final status and report, exiting 0 for PASS, 1 for FAIL, 2 for INVALID.
+--baseline NAME@VERSION adds a comparison with earlier finished runs; the verdict uses the
+pinned controls. Status includes each run's latest completed update and saved W&B URL.
+Set WANDB_ENTITY before submission to choose the W&B team; unset uses dogml.
+--version dev satisfies
 the launcher; Snowball steps use PRESET_REVISION. Guide: docs/recipes/snowball-rl.md.
 
 \b
 Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
   --preset speed-medium --version dev --run
+  --preset speed-medium --version dev --run --wait
+  --preset speed-medium --baseline EARLIER_RUN@2026.10.27 --version dev --run --wait
   --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo --version dev --run
   --preset speed-medium --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
   --preset learning-medium --require 'panel-910/aaii_category/coding/mean>=control' --version dev --run
@@ -50,20 +60,30 @@ import json
 import math
 import os
 import subprocess
+import time
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
+from functools import wraps
+from pathlib import Path
 
 import click
 import yaml
+from iris.cli.connect import open_iris_client
+from iris.cluster.types import JobName
+from iris.resources.state import TERMINAL_JOB_STATES, JobState
 from iris.rpc import job_pb2
 from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_status import get_status_path
+from marin.experiment.cli import build_options_with_runner
+from marin.rl.cli import submit_or_run
 from marin.rl.skyrl import (
     BEST_CHECKPOINT_CALLBACK,
     IRIS_HUB_CLUSTER_CONFIG,
     SKYRL_TEMPORARY_STORAGE_TTL_DAYS,
+    TRACKING_FILENAME,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
@@ -84,6 +104,7 @@ from rigging.provenance import Provenance, git_output
 
 from experiments.post_training import snowball_rl_gate
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     GraderKind,
@@ -350,9 +371,12 @@ def build_run(
     replicates: int = 1,
     control: bool = False,
     requirements: tuple[str, ...] = (),
+    baselines: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
     snowball_rl_gate.check_requirements(preset, requirements, control=control)
+    if baselines and (control or preset.name not in snowball_rl_gate.CONTROLS):
+        raise click.BadParameter("--baseline needs a gated candidate preset, without --control")
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
@@ -446,7 +470,7 @@ def build_run(
         runs.append(run)
     gate = (
         snowball_rl_gate.gate_step(
-            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements)
+            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements, baselines)
         )
         if preset.name in snowball_rl_gate.CONTROLS and not control
         else None
@@ -465,7 +489,23 @@ def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str
     return [{"path": path, "status": status} for status, path in zip(fields[::2], fields[1::2], strict=True)], None
 
 
-def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
+def _completed_update(path: str, *, generating: bool) -> int | None:
+    for metric in reversed(scoring.paths(StoragePath(path) / "exports/metrics/step-*.json")[-3:]):
+        try:
+            values = json.loads(presets.read_text(metric))
+            step = int(str(metric).rsplit("step-", 1)[-1].removesuffix(".json"))
+            if not isinstance(values, dict):
+                continue
+            key = "generate/wall_seconds" if generating else "timing/step_wall/unaccounted"
+            completed = step == 0 if generating else values.get("trainer/global_step") == step
+            if completed and math.isfinite(values.get(key, math.nan)):
+                return step
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _status(run: SnowballRun, preset: presets.Preset) -> dict:
     rows = []
     planned = []
     for step in run.runs:
@@ -478,6 +518,12 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.result if receipt is not None else None
+        tracking_path = StoragePath(path) / "exports" / TRACKING_FILENAME
+        tracking = (
+            {"wandb_url": json.loads(presets.read_text(tracking_path))["wandb_url"]}
+            if presets.exists(tracking_path)
+            else {}
+        )
         team = receipt.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
         state = (
             result.state
@@ -495,6 +541,10 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
                 "state": state,
                 "iris_job_id": result.iris_job_id if result else None,
                 "wandb_entity": team or "dogml",
+                **tracking,
+                "latest_completed_update": _completed_update(
+                    path, generating=preset.recipe.layout.role_plan.generate_only
+                ),
                 "cluster": execution.cluster,
                 "allocation": {
                     **planned[-1]["iris"]["allocation"],
@@ -525,36 +575,104 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
             crashed = next((row for row in rows if str(row["state"]).lower() in ("failed", "killed")), None)
             if crashed is not None:
                 verdict = {"verdict": "fail", "reason": "run crashed", "iris_job_id": crashed["iris_job_id"]}
-    click.echo(
-        yaml.safe_dump(
-            {
-                "preset": preset.name,
-                "code": asdict(Provenance.capture(presets.REPO_ROOT)),
-                "inputs": {
-                    "model": planned[0]["inputs"]["model"]["identity"],
-                    **{
-                        name: [source["identity"] for source in planned[0]["inputs"][name]]
-                        for name in ("train_data", "validation_data")
-                    },
-                },
-                "context_budget": planned[0]["skyrl"]["context_budget"],
-                "updates": (
-                    0 if preset.recipe.layout.role_plan.generate_only else planned[0]["skyrl"]["trainer"]["max_steps"]
-                ),
-                "measured_updates": list(preset.measured),
-                "budget_estimate": preset.budget,
-                "guards": [metric.key for metric in preset.guards],
-                "reported_metrics": [{**asdict(metric), "window": metric.window.value} for metric in preset.reported],
-                "gaps": [gap.value for gap in preset.gaps],
-                "runs": rows,
-                **verdict,
+    return {
+        "preset": preset.name,
+        "code": asdict(Provenance.capture(presets.REPO_ROOT)),
+        "inputs": {
+            "model": planned[0]["inputs"]["model"]["identity"],
+            **{
+                name: [source["identity"] for source in planned[0]["inputs"][name]]
+                for name in ("train_data", "validation_data")
             },
-            sort_keys=False,
+        },
+        "context_budget": planned[0]["skyrl"]["context_budget"],
+        "updates": 0 if preset.recipe.layout.role_plan.generate_only else planned[0]["skyrl"]["trainer"]["max_steps"],
+        "measured_updates": list(preset.measured),
+        "budget_estimate": preset.budget,
+        "guards": [metric.key for metric in preset.guards],
+        "reported_metrics": [{**asdict(metric), "window": metric.window.value} for metric in preset.reported],
+        "gaps": [gap.value for gap in preset.gaps],
+        "runs": rows,
+        **verdict,
+    }
+
+
+def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
+    click.echo(yaml.safe_dump(_status(run, preset), sort_keys=False))
+
+
+def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Preset) -> None:
+    with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=presets.REPO_ROOT) as client:
+        while (parent := client.job_status(job)).state not in TERMINAL_JOB_STATES:
+            time.sleep(60)
+    if parent.state != JobState.SUCCEEDED:
+        click.echo(
+            yaml.safe_dump({"preset": preset.name, "verdict": "fail", "reason": f"coordinator {job} is {parent.state}"})
+        )
+        raise click.exceptions.Exit(1)
+    run = SnowballRun(
+        tuple(step for step in handles if step.artifact_type is SkyRLRun),
+        next((step for step in handles if step.artifact_type is snowball_rl_gate.GateReport), None),
+    )
+    snapshot = _status(run, preset)
+    failed = any(
+        str(row["state"]).lower() in {"failed", "killed", "worker_failed", "unschedulable"} for row in snapshot["runs"]
+    )
+    complete = bool(run.runs) and all(str(row["state"]).lower() in {"succeeded", "success"} for row in snapshot["runs"])
+    markdown = None
+    if run.gate is not None:
+        gate_root = run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))
+        marker = get_status_path(gate_root)
+        failed = failed or (presets.exists(marker) and presets.read_text(marker).strip() == "FAILED")
+        markdown = str(snapshot.get("report", "")).removesuffix(".json") + ".md"
+        complete = (
+            complete
+            and presets.exists(marker)
+            and presets.read_text(marker).strip() == "SUCCESS"
+            and presets.exists(markdown)
+        )
+    if failed:
+        snapshot.update(verdict="fail", reason="run or gate step failed")
+    elif not complete:
+        snapshot.update(verdict="invalid", reason="coordinator finished without complete run and gate evidence")
+    click.echo(yaml.safe_dump(snapshot, sort_keys=False))
+    if complete and markdown is not None:
+        click.echo(presets.read_text(markdown))
+    verdict = snapshot.get("verdict", "pass" if run.gate is None else "invalid")
+    raise click.exceptions.Exit({"pass": 0, "fail": 1, "invalid": 2}[verdict])
+
+
+def _run_command(function: Callable) -> click.Command:
+    command = presets.run_command(help_text=__doc__)(function)
+    command.params.append(
+        click.Option(
+            ["--baseline", "baselines"],
+            multiple=True,
+            metavar="NAME@VERSION",
+            help="Compare with earlier finished runs; the verdict still uses pinned controls. Repeatable.",
         )
     )
+    command.params.append(
+        click.Option(["--wait"], is_flag=True, help="Wait after --run; exit 0 for PASS, 1 for FAIL, 2 for INVALID.")
+    )
+
+    @wraps(function)
+    def callback(*args, wait: bool = False, **kwargs):
+        if wait and not kwargs.get("do_run"):
+            raise click.BadParameter("--wait requires --run")
+
+        def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
+            job = submit_or_run("experiments.post_training.snowball_rl", handles, max_concurrent, os.environ)
+            if wait and job is not None:
+                _wait_for_run(job, handles, presets.PRESETS[kwargs["preset_name"]])
+
+        return build_options_with_runner(function, runner)(*args, **kwargs)
+
+    command.callback = callback
+    return command
 
 
-@presets.run_command(help_text=__doc__)
+@_run_command
 def main(
     preset_name: str,
     settings: tuple[str, ...],
@@ -566,6 +684,7 @@ def main(
     replicates: int,
     control: bool,
     requirements: tuple[str, ...],
+    baselines: tuple[str, ...],
 ) -> tuple[ArtifactStep, ...]:
     if init_name and "@" not in init_name:
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
@@ -582,6 +701,7 @@ def main(
         replicates=replicates,
         control=control,
         requirements=requirements,
+        baselines=baselines,
     )
     if resume_name and (presets.REPO_ROOT / ".git").exists():
         source_tree = presets.run_tree_hash(resume_name)
