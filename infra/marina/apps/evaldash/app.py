@@ -147,7 +147,7 @@ class PanelCellResponse(BaseModel):
     created_at: str
     version: str | None
     git_sha: str
-    eval_runtime: str
+    eval_runtime: str | None
 
 
 class MissingCellResponse(BaseModel):
@@ -1223,6 +1223,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         if not task:
             return JSONResponse({"error": "task is required"}, status_code=400)
         typed_record = EvalRunRecord.model_validate(record)
+        metric = samples.sample_metric(typed_record, task)
         payload = await asyncio.to_thread(
             samples.fetch_samples,
             record.get("results_path"),
@@ -1231,7 +1232,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             limit=_parse_int(limit, default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
             correct=correct or "all",
             extraction_filter=extraction_filter or None,
-            primary_metric_name=samples.declared_primary_metric(typed_record, task),
+            primary_metric_name=metric.source_name if metric is not None else None,
+            primary_metric_kind=metric.kind if metric is not None else None,
         )
         return payload
 

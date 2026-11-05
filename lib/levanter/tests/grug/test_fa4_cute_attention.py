@@ -297,8 +297,8 @@ def test_fa4_accepts_unit_context_axis(monkeypatch, context_entry):
     monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_unsharded_forward)
     mesh = AbstractMesh(
-        axis_sizes=(1, 2, 1, 8, 1),
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_sizes=(1, 2, 8, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     batch_axes = ("replica_dcn", "data", "expert")
@@ -368,6 +368,34 @@ def test_context_sharded_segment_ids_preserve_global_bounds():
                     actual = jax.jit(bounds)(ids)
                 for actual_array, expected_array in zip(actual, expected, strict=True):
                     np.testing.assert_array_equal(np.asarray(actual_array), np.asarray(expected_array))
+
+
+@pytest.mark.multidevice
+def test_packed_bounds_with_singleton_batch_mesh_axes():
+    # A length-1 batch axis named in the sharding cannot be physically partitioned;
+    # bounds must still build and match the unsharded result.
+    with use_test_devices(2) as devices:
+        segment_ids = jnp.asarray([[0, 0, 0, 1, 1, 1, -1, -1]], dtype=jnp.int32)
+
+        def bounds(ids):
+            return fa4_cute_segment_bounds(
+                AttentionMask.causal().with_segment_ids(ids),
+                batch_size=1,
+                seq_len=8,
+                sliding_window=None,
+            )
+
+        expected = bounds(segment_ids)
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 1, 1, 2, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        with jax.set_mesh(mesh):
+            ids = jax.device_put(segment_ids, NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None)))
+            actual = jax.jit(bounds)(ids)
+        for actual_array, expected_array in zip(actual, expected, strict=True):
+            np.testing.assert_array_equal(np.asarray(actual_array), np.asarray(expected_array))
 
 
 @pytest.mark.multidevice
@@ -744,8 +772,8 @@ def test_real_gpu_fa4_cute_cp2_matches_cp1_sm90(mask_kind):
     results = []
     for context_size in (1, 2):
         mesh = Mesh(
-            np.asarray(jax.devices()[:context_size]).reshape(1, 1, context_size, 1, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            np.asarray(jax.devices()[:context_size]).reshape(1, 1, 1, context_size, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         with jax.set_mesh(mesh):

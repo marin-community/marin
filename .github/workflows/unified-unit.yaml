@@ -363,11 +363,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Install local sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap umoci busybox-static
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "vendor/harbor/uv.lock"
+      - name: Require local namespace support
+        run: |
+          uv run --isolated --project vendor/harbor --frozen --extra runtime python -c \
+            'from shellbox.backends.local.machine import LocalMachineFactory; LocalMachineFactory()'
       - name: Check Harbor lock and offline runtime
         run: uv run --no-project infra/ci/run_harbor_tests.py
 
@@ -551,7 +559,8 @@ jobs:
         run: |
           uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
             infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py skyrl-train/tests/test_*.py \
-            skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py
+            skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py \
+            skyrl-train/tests/cpu/test_compact_distillation.py
 
   unit_tests:
     name: unit-tests

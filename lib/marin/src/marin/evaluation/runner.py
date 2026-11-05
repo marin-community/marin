@@ -11,6 +11,8 @@ from enum import StrEnum
 from functools import partial
 from typing import NoReturn, Protocol
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fray.client import JobHandle
 from iris.client.client import Job, iris_ctx
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -200,7 +202,7 @@ class EvaluationIdentity:
     created_at: str
     output_dir: str
     eval_ref: EvalRef
-    eval_runtime: str
+    eval_runtime: str | None = None
 
 
 @dataclass(frozen=True)
@@ -554,7 +556,7 @@ def _run_one_evaluation(
             job_id=orchestrator_job_id,
             attributes={
                 "eval_name": evaluation.identity.eval_ref.name,
-                "eval_runtime": evaluation.identity.eval_runtime,
+                **({"eval_runtime": evaluation.identity.eval_runtime} if evaluation.identity.eval_runtime else {}),
                 "group_id": batch.group_id,
             },
         )
@@ -706,7 +708,9 @@ def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceS
     """Return an eval session that reaches the serving endpoint directly."""
     try:
         address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
-    except ConnectionError as exc:
+    except ConnectError as exc:
+        if exc.code != Code.NOT_FOUND:
+            raise
         raise InferenceUnavailable("inference endpoint registration is unavailable") from exc
     endpoint = replace(session.model.endpoint, base_url=f"{address}{OPENAI_API_SUFFIX}")
     return replace(

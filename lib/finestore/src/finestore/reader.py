@@ -8,6 +8,7 @@ from __future__ import annotations
 import functools
 import io
 import itertools
+import json
 import threading
 import time
 from collections import OrderedDict, defaultdict
@@ -783,6 +784,14 @@ class _ReadOperations:
     def read_blob(self, name: str) -> bytes | None:
         """Return a named blob, or ``None`` when it is absent."""
         return self.read_blobs((name,)).get(name)
+
+    def blob_metadata(self, name: str) -> dict[str, object] | None:
+        """Return a blob's metadata from this pinned snapshot, or ``None`` if absent."""
+        rows = self._blob_descriptors((name,))
+        if rows is None or rows.num_rows == 0:
+            return None
+        descriptor = BlobDescriptor.from_row(rows.slice(0, 1).to_pylist()[0])
+        return json.loads(descriptor.metadata_json) if descriptor.metadata_json is not None else {}
 
     def read_blobs(self, names: Sequence[str]) -> dict[str, bytes]:
         """Read named blobs, omitting absent names."""

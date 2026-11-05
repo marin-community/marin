@@ -93,7 +93,7 @@ def validated_batch_axis_size(
 
     Context and model axes do not partition the batch.
     """
-    replica, data, _context, expert, _model = compact_grug_mesh_shape(
+    replica, data, expert, _context, _model = compact_grug_mesh_shape(
         process_count=device_count,
         local_device_count=1,
         expert_axis_size=expert_axis_size,

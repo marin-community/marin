@@ -4,6 +4,27 @@
 """Select the lm-eval metric and extraction filter Marin presents as primary."""
 
 from collections.abc import Iterable, Mapping
+from types import MappingProxyType
+
+from marin.evaluation.records import BenchmarkMetricRef, MetricKind
+
+PUBLICATION_METRIC_POLICY = "marin-2026-10-16-v1"
+PUBLICATION_METRICS: Mapping[str, BenchmarkMetricRef] = MappingProxyType(
+    {
+        "piqa": BenchmarkMetricRef(
+            name="normalized_accuracy", source_name="acc_norm", kind=MetricKind.BINARY, higher_is_better=True
+        ),
+        "ifbench": BenchmarkMetricRef(
+            name="strict_prompt_accuracy",
+            source_name="strict_prompt_accuracy",
+            kind=MetricKind.BINARY,
+            higher_is_better=True,
+        ),
+        "truthfulqa": BenchmarkMetricRef(
+            name="accuracy", source_name="acc", kind=MetricKind.CONTINUOUS, higher_is_better=True
+        ),
+    }
+)
 
 # Headline metric for a task, matched after stripping lm-eval's ``,<filter>`` suffix.
 # ``acc_norm`` outranks ``acc`` where both exist; ``accuracy`` covers Evalchemy's chat-native tasks.

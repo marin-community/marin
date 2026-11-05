@@ -3,6 +3,7 @@
 
 """The core types: model requests and turns, rollout records and events, exceptions, and the task rollout spec."""
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -71,6 +72,20 @@ class TokenUsage:
     completion_tokens: int
 
 
+class ModelResponseError(ValueError):
+    """An unusable endpoint response retained as JSON-safe failure evidence."""
+
+    def __init__(self, message: str, *, response: dict[str, Any]):
+        super().__init__(message)
+        self.response = response
+        self.response_json: str | None = None
+        try:
+            json.dumps(response, allow_nan=False)
+        except ValueError:
+            self.response_json = json.dumps(response, allow_nan=True)
+            self.response = json.loads(self.response_json, parse_constant=lambda _value: None)
+
+
 @dataclass(frozen=True)
 class ModelTurn:
     """The transport's answer to one ``ModelRequest``: the parsed message and the exact tokens.
@@ -113,6 +128,10 @@ class ModelTurn:
 
 Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
 """The policy under rollout: it serves one model request and returns the exact turn."""
+
+
+class ContextWindowExceeded(RuntimeError):
+    """Reject one request while allowing the harness to compact and send another."""
 
 
 class GenerationLimitReached(Exception):

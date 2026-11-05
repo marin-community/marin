@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import dataclasses
+import os
+import subprocess
+import sys
+import textwrap
 from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -135,3 +139,48 @@ def test_execution_requires_a_complete_federated_route() -> None:
             _execution(),
             parent_cluster_config=None,
         )
+
+
+def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
+    module = tmp_path / "spawnable_rl.py"
+    module.write_text(
+        textwrap.dedent(
+            """\
+        import multiprocessing
+        import click
+        from marin.rl.cli import rl_build_options
+
+        @click.command()
+        @rl_build_options
+        def main():
+            return []
+
+        def worker(queue):
+            queue.put(42)
+
+        if __name__ == "__main__":
+            context = multiprocessing.get_context("spawn")
+            queue = context.Queue()
+            process = context.Process(target=worker, args=(queue,))
+            process.start()
+            try:
+                assert queue.get(timeout=30) == 42
+                process.join(timeout=10)
+                assert process.exitcode == 0
+            finally:
+                if process.is_alive():
+                    process.kill()
+                    process.join()
+                queue.close()
+    """
+        )
+    )
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), *sys.path])}
+    result = subprocess.run(
+        [sys.executable, "-m", "spawnable_rl"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=50,
+    )
+    assert result.returncode == 0, result.stderr

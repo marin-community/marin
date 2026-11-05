@@ -316,8 +316,8 @@ def test_context_parallel_path_keeps_the_channel_axis_gate(model_size, should_re
     """The halo path shards the sequence by design, but a genuinely sharded channel axis must
     still raise there, exactly as on the unsharded path, instead of being silently all-gathered."""
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, 1, 2, 1, model_size),
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_sizes=(1, 1, 1, 2, model_size),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(jax.sharding.AxisType.Explicit,) * 5,
     )
     weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=11, dtype=jnp.float32, packed=True)
@@ -364,7 +364,7 @@ def test_context_axis_named_in_batch_axes_shards_only_the_sequence():
     """Grug's token axes list ``context`` next to the batch axes; it must not be spelled twice."""
     mesh = jax.sharding.AbstractMesh(
         axis_sizes=(2, 2, 2),
-        axis_names=("data", "context", "expert"),
+        axis_names=("data", "expert", "context"),
         axis_types=(jax.sharding.AxisType.Explicit,) * 3,
     )
     weight, x, segment_ids, _ = _inputs(4, 32, 8, 4, seed=11, dtype=jnp.float32, packed=True)

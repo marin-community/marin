@@ -472,6 +472,11 @@ impl LogServiceImpl {
         let provider_elapsed = provider_started.elapsed();
 
         let query_ctx = make_ctx();
+        let admission = query_ctx
+            .copied_config()
+            .get_extension::<crate::store::object_store::QueryCacheAdmission>()
+            .unwrap();
+        let fills = admission.cancel_on_drop(query_timeout(ctx.time_remaining(), None));
         let read = fetch_log_rows(
             &query_ctx,
             provider,
@@ -493,6 +498,7 @@ impl LogServiceImpl {
             |error| ConnectError::internal(format!("log read failed: {error}")),
         )
         .await?;
+        fills.complete();
         Ok(QueriedLogRows {
             rows,
             provider_elapsed,

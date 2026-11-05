@@ -48,7 +48,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
-from levanter.grug._moe.ep_ring_filtered import _down_project_combine, destination_hit_fraction
+from levanter.grug._moe.ep_ring_filtered import _down_project_combine, _slot_weights, destination_hit_fraction
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -624,6 +624,56 @@ def test_combine_skips_dropped_rows_and_differentiates_accepted_zero_weights():
 
     np.testing.assert_allclose(np.asarray(actual), expected, rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(actual_weight_gradient), expected_weight_gradient, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize("topk", [2, 4])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("pair_capacity", [3, 12], ids=["sender-drops", "spare-rows"])
+def test_ring_filtered_slot_weights_gradient_matches_autodiff(topk, dtype, pair_capacity):
+    tokens, num_experts, local_experts = 12, 8, 2
+    ep_size = num_experts // local_experts
+    send_rows = ep_size * pair_capacity
+    rng = np.random.default_rng(5)
+    selected = np.stack([rng.choice(num_experts, size=topk, replace=False) for _ in range(tokens)]).astype(np.int32)
+    token_valid = np.ones(tokens, dtype=bool)
+    token_valid[[2, 7]] = False
+
+    # Each destination shard owns a block of pair_capacity rows, filled first come, first served by token.
+    source = np.full(send_rows, tokens, dtype=np.int32)
+    on_destination = np.zeros((send_rows, topk), dtype=bool)
+    assignment_slot = np.full((tokens, topk), send_rows, dtype=np.int32)
+    filled = np.zeros(ep_size, dtype=np.int32)
+    for t in np.flatnonzero(token_valid):
+        for shard in np.unique(selected[t] // local_experts):
+            if filled[shard] == pair_capacity:
+                continue
+            row = shard * pair_capacity + filled[shard]
+            filled[shard] += 1
+            source[row] = t
+            ks = selected[t] // local_experts == shard
+            on_destination[row, ks] = True
+            assignment_slot[t, ks] = row
+    dropped = (assignment_slot == send_rows) & token_valid[:, None]
+    # Each case exercises its layout: some assignments dropped, or some rows left empty.
+    assert dropped.any() if pair_capacity == 3 else (source == tokens).any()
+
+    safe_source = jnp.asarray(np.minimum(source, tokens - 1))
+    on_destination = jnp.asarray(on_destination)
+    assignment_slot = jnp.asarray(assignment_slot)
+    weights = jnp.asarray(rng.random((tokens, topk)), dtype=dtype)
+    # Nonzero everywhere, so a gradient read from a masked cell would show up.
+    cotangent = jnp.asarray(rng.standard_normal((send_rows, topk)), dtype=jnp.float32)
+
+    def gradient(fn):
+        _, pullback = jax.vjp(lambda w: fn(w, safe_source, on_destination, assignment_slot), weights)
+        return pullback(cotangent)[0]
+
+    actual = jax.jit(lambda: gradient(_slot_weights))()
+    expected = jax.jit(lambda: gradient(_slot_weights.__wrapped__))()
+
+    assert actual.dtype == dtype
+    np.testing.assert_array_equal(np.asarray(actual, np.float32), np.asarray(expected, np.float32))
+    np.testing.assert_array_equal(np.asarray(actual, np.float32)[dropped | ~token_valid[:, None]], 0)
 
 
 def test_portable_expert_mlp_backward_ignores_rows_past_the_active_count():

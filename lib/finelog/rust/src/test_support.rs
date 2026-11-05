@@ -34,6 +34,7 @@ pub fn unique_dir(tag: &str) -> std::path::PathBuf {
 pub enum ObjectOp {
     Write,
     Read,
+    ReadRange,
     LocalPath,
     List,
     CompareAndSwap,
@@ -160,6 +161,7 @@ pub struct FaultInjectingObjectStore {
     inner: Arc<dyn ObjectStore>,
     faults: Mutex<Vec<ObjectFault>>,
     calls: Mutex<Vec<ObjectCall>>,
+    ranges: Mutex<Vec<(ObjectId, std::ops::Range<u64>)>>,
 }
 
 impl FaultInjectingObjectStore {
@@ -168,6 +170,7 @@ impl FaultInjectingObjectStore {
             inner,
             faults: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
+            ranges: Mutex::new(Vec::new()),
         })
     }
 
@@ -183,6 +186,17 @@ impl FaultInjectingObjectStore {
     /// Forget the recorded history, so the next assertion covers one phase.
     pub fn clear_calls(&self) {
         self.calls.lock().unwrap().clear();
+        self.ranges.lock().unwrap().clear();
+    }
+
+    pub fn ranges_for(&self, id: &ObjectId) -> Vec<std::ops::Range<u64>> {
+        self.ranges
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(object, _)| object == id)
+            .map(|(_, range)| range.clone())
+            .collect()
     }
 
     /// Disarm every armed fault — the outage ends.
@@ -281,6 +295,21 @@ async fn lost(error: StatsError, gate: Option<Arc<FaultGate>>) -> StatsError {
 
 #[async_trait]
 impl ObjectStore for FaultInjectingObjectStore {
+    async fn read_range(
+        &self,
+        reference: &ObjectReference,
+        range: std::ops::Range<u64>,
+    ) -> Result<Option<bytes::Bytes>, StatsError> {
+        self.ranges
+            .lock()
+            .unwrap()
+            .push((reference.id.clone(), range.clone()));
+        self.execute(ObjectOp::ReadRange, reference.id.as_str(), || {
+            self.inner.read_range(reference, range)
+        })
+        .await
+    }
+
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         self.execute(ObjectOp::Write, id.as_str(), || self.inner.write(id, bytes))
             .await
@@ -337,6 +366,14 @@ impl ObjectStore for FaultInjectingObjectStore {
         query: &crate::store::object_store::QueryCacheAdmission,
     ) {
         self.inner.warm_query(reference, query)
+    }
+
+    async fn pin_cached_path(
+        &self,
+        reference: &ObjectReference,
+        pins: &crate::store::object_store::CachePins,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        self.inner.pin_cached_path(reference, pins).await
     }
 
     async fn compare_and_swap(
