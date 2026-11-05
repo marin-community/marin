@@ -4,8 +4,8 @@
 """One deterministic task: its conversation, environment, grader, and answer format.
 
 A grader is one of three kinds. ``VerifyitGrader`` names a verifyit mode, graded in process
-against the extracted answer or, with an environment, by the verifyit command in a fresh
-machine. ``ScriptGrader`` runs a command in a fresh machine and reads its reward. ``NoGrader``
+against the extracted answer, by a host judge for judge mode, or, with an environment, by the verifyit command in a
+fresh machine. ``ScriptGrader`` runs a command in a fresh machine and reads its reward. ``NoGrader``
 records why a task cannot be graded. The answer format says how the final answer is requested from the model
 and extracted from its conversation.
 """
@@ -551,8 +551,8 @@ def verifyit_answer_file(spec: Spec) -> str | None:
 class VerifyitGrader(BaseModel):
     """A verifyit mode and its configuration table, without the ``mode`` key.
 
-    Without an environment the mode must be one verifyit grades in process, against the answer
-    extracted from the conversation. With an environment, the verifyit command grades in a fresh
+    Without an environment the mode is graded in process against the extracted answer, except judge mode, which the
+    runtime sends to its explicit host judge connection. With an environment, the verifyit command grades in a fresh
     machine built from it, with verifier resources under ``/tests``.
     """
 
@@ -578,7 +578,7 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
     """Build the verifyit specification; in-process modes also pass their mode's validation."""
     try:
         _require_finite_json(grader.parameters)
-        if grader.environment is None:
+        if grader.environment is None and grader.mode != "judge":
             return candidate_spec(grader.mode, grader.parameters)
         if "mode" in grader.parameters:
             raise ValueError("Verifier parameters must not override the mode")

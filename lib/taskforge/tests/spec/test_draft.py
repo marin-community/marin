@@ -3,8 +3,9 @@
 
 """Invariants: graders reject wrong and accept right answers once lowered and run; grader files live only in
 ``resources.verifier`` and ``assemble`` refuses copies of them, or files under the grader roots, that the agent sees;
-``answer_grader`` refuses modes without an environment and ``GRADER_BASE_IMAGE``; ``assemble`` refuses an answer the
-grader cannot see; the verifier machine's network is ``DENY``; machines lower onto the backend they declare."""
+``answer_grader`` refuses non-host modes without an environment and ``GRADER_BASE_IMAGE``; ``assemble`` refuses an
+answer the grader cannot see; the verifier machine's network is ``DENY``; machines lower onto the backend they
+declare."""
 
 import json
 import shlex
@@ -50,6 +51,7 @@ from taskcompendium.models import (
 from verifyit.spec import (
     ExactSpec,
     FunctionCall,
+    JudgeSpec,
     MathSpec,
     McqSpec,
     NumericSpec,
@@ -345,6 +347,12 @@ async def test_predicted_action_grader_grades_a_native_action():
     rewards = [(await run(lowered, [call(city)])).grade.reward for city in ("Paris", "Rome")]
 
     assert rewards == [1.0, 0.0]
+
+
+def test_answer_grader_packages_a_host_judge_without_a_sandbox_environment():
+    package = answer_grader(JudgeSpec(references=("reference",), model="judge"))
+
+    assert isinstance(package.grader, VerifyitGrader) and package.grader.environment is None
 
 
 def test_answer_grader_needs_an_environment_with_verifyit_for_a_mode_that_does_not_grade_in_process():
