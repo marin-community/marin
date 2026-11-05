@@ -205,10 +205,8 @@ def test_no_scored_token_overlaps_the_answer_prefix_when_the_boundary_would_merg
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     row = _row(filler="x" * 300, nonce="Ab3dE5gpre", target="fix")
-    characters = set(
-        row["prompt"] + row["answer"] + _CharTokenizer.eos_token + "".join(json.loads(row["prompt"])[0]["content"])
-    )
-    characters |= set("\n: UA" + "".join(message["content"] for message in json.loads(row["prompt"])))
+    rendered = "".join(message["content"] for message in json.loads(row["prompt"]))
+    characters = set(rendered + row["answer"] + _CharTokenizer.eos_token + "\n: UA")
     tokenizer = _BoundaryMergingTokenizer(characters)
     monkeypatch.setattr(mrcr, "load_tokenizer", lambda _: tokenizer)
     _write_rows(tmp_path / "input", [row])
