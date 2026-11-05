@@ -92,13 +92,3 @@ test('rows the API reports as undeclared are the whole top table and need no fol
   ])
   assert.equal(view.hasDeclared, false)
 })
-
-test('a record with no resolved rows falls back to the raw map', () => {
-  const record = nupaRecord()
-  record.metric_rows = []
-
-  const view = metricView(record)
-
-  assert.equal(view.rows.length, Object.keys(record.metrics.nupa5k).length)
-  assert.deepEqual(view.rows, view.raw)
-})

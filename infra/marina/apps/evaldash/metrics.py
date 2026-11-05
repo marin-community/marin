@@ -22,6 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from marin.evaluation.eval_measurements import (
+    MetricRow,
     declared_metric_gap,
     declared_metric_rows,
     measurement_from_record,
@@ -514,15 +515,14 @@ def record_headline(record: EvalRunRecord, protocol: MetricProtocol | None = Non
     return cell_payload(measurement)
 
 
-def run_metric_rows(record: EvalRunRecord) -> list[dict]:
+def run_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
     """The run page's top metric rows: declared protocol metrics first, then undeclared raw rows.
 
     A declared benchmark metric keeps its protocol name and the value the statistics engine would
     select; tasks without a declaration keep their raw rows, so a record that mixes both still shows
     every task. When nothing is declared, the whole raw map is returned.
     """
-    rows = (*declared_metric_rows(record), *undeclared_metric_rows(record))
-    return [{"task": row.task, "metric": row.metric, "value": row.value, "declared": row.declared} for row in rows]
+    return [*declared_metric_rows(record), *undeclared_metric_rows(record)]
 
 
 def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:

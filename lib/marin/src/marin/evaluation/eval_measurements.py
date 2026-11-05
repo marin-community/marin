@@ -348,7 +348,7 @@ def declared_metric_gap(record: EvalRunRecord) -> str | None:
 
 
 @dataclass(frozen=True)
-class DeclaredMetricRow:
+class MetricRow:
     """One metric a record reports for a task: protocol name, value, and whether it was declared."""
 
     task: str
@@ -375,14 +375,14 @@ def _declared_metric_value(record: EvalRunRecord, task_keys: Sequence[str], metr
     return None
 
 
-def declared_metric_rows(record: EvalRunRecord) -> list[DeclaredMetricRow]:
+def declared_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
     """Every declared benchmark metric for each recorded task, the primary metric first.
 
     A declared metric reports its protocol name and takes the canonical value when the producer
     wrote one; otherwise the raw source metric supplies it under the same extraction-filter priority
     the statistics engine ranks with. Metrics with no recorded value are left out.
     """
-    rows: list[DeclaredMetricRow] = []
+    rows: list[MetricRow] = []
     task_keys = _metric_task_keys(record)
     for task in record.evaluation.tasks:
         benchmark = task.benchmark
@@ -394,18 +394,18 @@ def declared_metric_rows(record: EvalRunRecord) -> list[DeclaredMetricRow]:
         for metric in ordered:
             value = _declared_metric_value(record, keys, metric)
             if value is not None:
-                rows.append(DeclaredMetricRow(task=task.name, metric=metric.name, value=value, declared=True))
+                rows.append(MetricRow(task=task.name, metric=metric.name, value=value, declared=True))
     return rows
 
 
-def undeclared_metric_rows(record: EvalRunRecord) -> list[DeclaredMetricRow]:
+def undeclared_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
     """Raw metric rows for task keys that no declared benchmark covers.
 
     A record can mix tasks with benchmark metadata and tasks without it. The declared rows describe
     only the former, so the latter keep their raw rows; a record with no declarations at all returns
     its whole raw metric map, in stable task then metric order.
     """
-    rows: list[DeclaredMetricRow] = []
+    rows: list[MetricRow] = []
     for task_key, metrics in record.metrics.items():
         if _is_scratch_task_key(task_key):
             continue
@@ -413,7 +413,7 @@ def undeclared_metric_rows(record: EvalRunRecord) -> list[DeclaredMetricRow]:
         if task is not None and task.benchmark is not None:
             continue
         rows.extend(
-            DeclaredMetricRow(task=task_key, metric=name, value=value, declared=False) for name, value in metrics.items()
+            MetricRow(task=task_key, metric=name, value=value, declared=False) for name, value in metrics.items()
         )
     return sorted(rows, key=lambda row: (row.task, row.metric))
 

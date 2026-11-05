@@ -60,7 +60,7 @@ from marin.evaluation.records import (
 )
 from marina.apps import RegisteredApi, Services, registered_api
 from marina.mcp import OperationRisk, operation_extension
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity
 from sqlalchemy.engine import Connection, Engine
@@ -224,6 +224,8 @@ class PanelResponse(BaseModel):
 
 class RunMetricRowResponse(BaseModel):
     """One row of a run's top metrics table: a declared protocol metric or an undeclared raw one."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     task: str
     metric: str

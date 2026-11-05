@@ -29,10 +29,6 @@ export function rawMetricRows(record: EvalRecord): MetricRow[] {
  */
 export function metricView(record: EvalRecord): { rows: MetricRow[]; raw: MetricRow[]; hasDeclared: boolean } {
   const raw = rawMetricRows(record)
-  const resolved = record.metric_rows
-  return {
-    rows: resolved.length > 0 ? resolved.map(({ task, metric, value }) => ({ task, metric, value })) : raw,
-    raw,
-    hasDeclared: resolved.some((row) => row.declared),
-  }
+  const rows = record.metric_rows.map(({ task, metric, value }) => ({ task, metric, value }))
+  return { rows, raw, hasDeclared: record.metric_rows.some((row) => row.declared) }
 }
