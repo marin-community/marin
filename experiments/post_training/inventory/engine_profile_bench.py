@@ -30,6 +30,7 @@ SERVED_NAME = "snowball"
 PORT = 8011
 HEALTH_TIMEOUT = 25 * 60
 NCCL_GUARD_ENV = "MARIN_BI_KEEP_NCCL_DEFAULTS"
+NCCL_CHANNELS_GUARD_ENV = "MARIN_BI_KEEP_NCCL_CHANNELS"
 PROBE_MAX_TOKENS = 128
 FILLER_COUNT = 120
 FILLER_MAX_TOKENS = 256
@@ -47,14 +48,16 @@ NCCL_BLOCK = """    # NCCL determinism settings
     os.environ["NCCL_NTHREADS"] = "1"
     os.environ["NCCL_SOCKET_NTHREADS"] = "1"
 """
-NCCL_BLOCK_GUARDED = f"""    # NCCL determinism settings (Marin benchmark guard: {NCCL_GUARD_ENV}=1 keeps NCCL defaults)
+NCCL_BLOCK_GUARDED = f"""    # NCCL determinism settings (Marin benchmark guards: {NCCL_GUARD_ENV}=1 keeps all NCCL
+    # defaults; {NCCL_CHANNELS_GUARD_ENV}=1 keeps only the channel count at its default)
     if os.environ.get("{NCCL_GUARD_ENV}") != "1":
         os.environ["NCCL_LAUNCH_MODE"] = "GROUP"
         os.environ["NCCL_COLLNET_ENABLE"] = "0"
         os.environ["NCCL_NVLS_ENABLE"] = "0"
         os.environ["NCCL_P2P_NET_DISABLE"] = "1"
-        os.environ["NCCL_MIN_NCHANNELS"] = "1"
-        os.environ["NCCL_MAX_NCHANNELS"] = "1"
+        if os.environ.get("{NCCL_CHANNELS_GUARD_ENV}") != "1":
+            os.environ["NCCL_MIN_NCHANNELS"] = "1"
+            os.environ["NCCL_MAX_NCHANNELS"] = "1"
         os.environ["NCCL_PROTO"] = "Simple"
         os.environ["NCCL_ALGO"] = "allreduce:tree"
         os.environ["NCCL_NTHREADS"] = "1"
@@ -69,6 +72,7 @@ class Variant:
     attention_backend: str
     prefix_caching: bool
     keep_nccl_defaults: bool
+    keep_nccl_channels: bool = False
 
 
 VARIANTS = {
@@ -76,6 +80,8 @@ VARIANTS = {
     "armD": Variant("armD", True, "TRITON_ATTN", False, False),
     # Arm D with the engines' NCCL collectives left at NCCL defaults.
     "armD_nccl": Variant("armD_nccl", True, "TRITON_ATTN", False, True),
+    # Arm D with only the NCCL channel pins lifted; protocol, algorithm and thread pins stay.
+    "armD_channels": Variant("armD_channels", True, "TRITON_ATTN", False, False, keep_nccl_channels=True),
     # Arm D with prefix caching re-enabled.
     "armD_prefix": Variant("armD_prefix", True, "TRITON_ATTN", True, False),
     # Arm D with NCCL defaults and prefix caching together.
@@ -146,6 +152,8 @@ def guard_nccl_pins(venv: Path) -> Path:
     source = path.read_text()
     if NCCL_BLOCK_GUARDED in source:
         return path
+    if NCCL_GUARD_ENV in source:
+        raise RuntimeError(f"{path} carries an older benchmark guard; use a fresh environment")
     if source.count(NCCL_BLOCK) != 1:
         raise RuntimeError(f"{path} does not contain the expected NCCL block exactly once")
     path.write_text(source.replace(NCCL_BLOCK, NCCL_BLOCK_GUARDED))
@@ -198,6 +206,7 @@ def server_environment(variant: Variant) -> dict[str, str]:
     env = dict(os.environ)
     env["VLLM_BATCH_INVARIANT"] = "1" if variant.batch_invariant else "0"
     env[NCCL_GUARD_ENV] = "1" if variant.keep_nccl_defaults else "0"
+    env[NCCL_CHANNELS_GUARD_ENV] = "1" if variant.keep_nccl_channels else "0"
     env["VLLM_USE_V1"] = "1"
     return env
 
@@ -466,7 +475,7 @@ def main() -> None:
     staged = stage_model(args.model_uri, args.stage_dir)
     model = str(staged) if staged else args.model_uri
     tokenizer = str(staged) if staged else args.tokenizer_fallback
-    if any(variant.keep_nccl_defaults for variant in variants):
+    if any(variant.keep_nccl_defaults or variant.keep_nccl_channels for variant in variants):
         guard_nccl_pins(args.venv)
 
     results = []
