@@ -11,8 +11,8 @@ from huggingface_hub import HfApi
 
 
 @pytest.fixture(autouse=True)
-def hub_metadata(tmp_path, monkeypatch):
-    config = tmp_path / "hub-config.json"
+def hub_metadata(tmp_path_factory, monkeypatch):
+    config = tmp_path_factory.mktemp("hub-metadata") / "config.json"
     config.write_text(
         json.dumps(
             {

@@ -22,6 +22,7 @@ from verifyit.modes.grade_judge import JudgeConnection
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, run_evaluation
 
 DEFAULT_MAX_ATTEMPTS = 3
+WORKER_TIMEOUT = 36 * 60 * 60
 SOLVER_ENDPOINT = "EVALUATION_SOLVER_ENDPOINT"
 SOLVER_API_KEY = "EVALUATION_SOLVER_API_KEY"
 JUDGE_ENDPOINT = "EVALUATION_JUDGE_ENDPOINT"
@@ -101,7 +102,7 @@ def execute_with_retries(
 
 
 def run_worker(datasets: tuple[str, ...], output: str, config: EvaluationRunConfig, max_attempts: int) -> None:
-    """Read connections from Iris secret files outside the grader machines."""
+    """Execute the corpora and persist resumable raw results using Iris-provided connections."""
     logging.basicConfig(level=logging.INFO)
     # Iris endpoint URLs can contain scoped credentials.
     logging.getLogger("httpx").setLevel(logging.WARNING)

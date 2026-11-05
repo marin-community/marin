@@ -18,6 +18,7 @@ from marin.evaluation.task_worker import (
     JUDGE_ENDPOINT,
     SOLVER_API_KEY,
     SOLVER_ENDPOINT,
+    WORKER_TIMEOUT,
     execute_with_retries,
     execution_config,
     run_worker,
@@ -30,7 +31,6 @@ from rigging.timing import Duration
 from verifyit.modes.grade_judge import JudgeConnection
 
 DEFAULT_CLUSTER = "cw-us-east-02a"
-WORKER_TIMEOUT = 36 * 60 * 60
 
 
 def submit_evaluation(

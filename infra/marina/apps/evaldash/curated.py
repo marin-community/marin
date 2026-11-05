@@ -18,13 +18,12 @@ from marin.evaluation.records import (
     MetricKind,
     TaskCoverage,
 )
+from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT
+from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import EvaluationProtocol, SummaryKind
 from taskcompendium.identity import canonical_sha256
 
-RUN_OBJECT = "evaluation/run.json"
 SUMMARY_REVISION = "2026.11.05.1"
-ATTEMPTS_TABLE = "evaluation_attempts"
-SELECTIONS_TABLE = "evaluation_selection"
 SCORED_OUTCOMES = frozenset({"graded", "submission_failure"})
 
 
