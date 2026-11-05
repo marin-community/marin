@@ -686,8 +686,8 @@ Namespaces:
 
   Rows can be lost without blocking the controller: a failed snapshot (logged
   as `controller rows: snapshot failed`), a failed enqueue (logged as
-  `controller rows: write failed`) or a failed Finelog flush drops that
-  transaction's rows. To find gaps, compare daily row counts with the
+  `controller rows: write failed`, for that table only) or a failed Finelog
+  flush drops those rows. To find gaps, compare daily row counts with the
   controller DB.
 
   History is kept in the archive (remote retention is `retain_forever`). The
