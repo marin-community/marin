@@ -70,6 +70,7 @@ from experiments.grug.fast_track.cplm import bind_case_tables, case_class_tables
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
+    LAYER_OUTPUT_STATS_PREFIX,
     DenseMLP,
     GradProbeSite,
     GrugModelConfig,
@@ -1371,6 +1372,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 )
                 if router_metrics:
                     levanter.tracker.log(router_metrics, step=step)
+                layer_out_every = config.model.layer_output_stats_every
+                if layer_out_every and step % layer_out_every == 0:
+                    layer_out = {k: v for k, v in metrics.items() if k.startswith(LAYER_OUTPUT_STATS_PREFIX)}
+                    levanter.tracker.log(jax.device_get(layer_out), step=step)
                 if "train/cross_entropy_loss" in metrics:
                     levanter.tracker.log({"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]}, step=step)
                 if "moe/dropped_assignments" in metrics:

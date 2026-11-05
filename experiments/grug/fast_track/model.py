@@ -86,6 +86,10 @@ _ENTROPY_PRED = "entropy_pred"
 _ENTROPY_CHUNK = 1024
 # Per-layer branch-output stats, stacked over layers like the router stats.
 _OUTSTAT_PREFIX = "outstat/"
+# ``layer_output_stats_every``: per-layer output-stream stats from the forward (stacked like the router stats), and
+# the train metrics they become.
+_LAYER_OUT_PREFIX = "layer_out/"
+LAYER_OUTPUT_STATS_PREFIX = "train/layer_out/"
 
 # Kimi K3's KDA layer: low-rank forget-gate width, and the per-token log-decay floor
 # ``g = -KDA_MIN_LOG_DECAY * sigmoid(...)``.
@@ -416,6 +420,10 @@ class GrugModelConfig:
     token_embed_stats: bool = False
     """Log ``token_embed``'s Frobenius norm, row-norm min / p1 / p50 / max and relative update every train step
     (``train/embed/``). Logging only."""
+    layer_output_stats_every: int = 0
+    """Log max|h| and rms(h) of each layer's output stream and of the final normed hidden state every this many
+    train steps (``train/layer_out/``); 0: off. Under AttnRes a layer's output stream is the plain residual sum of
+    the embedding and every layer's output so far. Logging only."""
     lm_head_grad_clip: float | None = None
     """With ``lm_head_grad_probe``: clip each training token's gradient w.r.t. the lm_head input to this norm, in
     the probe's per-token units (the gradient of the token's own loss term), ``g * min(1, c / ||g||)``. The probe
@@ -1624,6 +1632,15 @@ def _residual_stream(blocks: tuple[jax.Array, ...], partial: jax.Array | None) -
     return functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
 
 
+def _layer_output_stats(h: Float[Array, "B S D"]) -> dict[str, jax.Array]:
+    """max|h| and rms(h) over every element of ``h``, without gradient."""
+    h = jax.lax.stop_gradient(h).astype(jnp.float32)
+    return {
+        f"{_LAYER_OUT_PREFIX}max_abs": jnp.max(jnp.abs(h)),
+        f"{_LAYER_OUT_PREFIX}rms": jnp.sqrt(jnp.mean(jnp.square(h))),
+    }
+
+
 def _gate_z(logits: list[jax.Array]) -> jax.Array:
     """Mean over tokens of ``logsumexp(logits)^2`` for one gate."""
     return jnp.mean(jnp.square(jax.nn.logsumexp(jnp.stack(logits), axis=0)))
@@ -1997,11 +2014,17 @@ class Transformer(eqx.Module):
                 use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
                 lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
                 layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
-                return eqx.filter_checkpoint(layer, policy=None)(carry_hidden, layer_mask, use_long, use_long)
+                out, stats = eqx.filter_checkpoint(layer, policy=None)(carry_hidden, layer_mask, use_long, use_long)
+                if cfg.layer_output_stats_every:
+                    stats = {**stats, **_layer_output_stats(out)}
+                return out, stats
 
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layer, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
             )
+        layer_out_stats = {
+            k: stacked_router_stats.pop(k) for k in list(stacked_router_stats) if k.startswith(_LAYER_OUT_PREFIX)
+        }
         if cfg.dense_mlp:
             router_metrics: dict[str, jax.Array] = {}
         else:
@@ -2033,6 +2056,10 @@ class Transformer(eqx.Module):
         hidden = self.final_norm(hidden)
         if self.final_gated_norm is not None:
             hidden = self.final_gated_norm(hidden)
+        if cfg.layer_output_stats_every:
+            final = _layer_output_stats(hidden)
+            layer_out_stats.update({f"{k}_final": v for k, v in final.items()})
+        router_metrics.update(layer_out_stats)
         return hidden, router_metrics
 
     def _attn_res_layers(
@@ -2116,6 +2143,8 @@ class Transformer(eqx.Module):
                 eps,
             )
             z_out.append(stats.pop(_ATTN_RES_Z))
+            if cfg.layer_output_stats_every:
+                stats.update(_layer_output_stats(_residual_stream(blocks, partial)))
             weight_logs[2 * i] = (stats.pop(_ATTN_RES_W_ATTN), partial_before is not None)
             weight_logs[2 * i + 1] = (stats.pop(_ATTN_RES_W_MLP), True)
             stats_out.append(stats)
@@ -2233,6 +2262,14 @@ class Transformer(eqx.Module):
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
         entropy_pred = router_metrics.pop(_ENTROPY_PRED, None)
         outstats = {k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith(_OUTSTAT_PREFIX)}
+        layer_out_metrics: dict[str, jax.Array] = {}
+        for key in [k for k in router_metrics if k.startswith(_LAYER_OUT_PREFIX)]:
+            name, value = key.removeprefix(_LAYER_OUT_PREFIX), router_metrics.pop(key)
+            if value.ndim == 0:
+                layer_out_metrics[f"{LAYER_OUTPUT_STATS_PREFIX}{name}"] = value
+            else:
+                for i in range(value.shape[0]):
+                    layer_out_metrics[f"{LAYER_OUTPUT_STATS_PREFIX}{name}_L{i}"] = value[i]
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -2294,6 +2331,7 @@ class Transformer(eqx.Module):
                 **final_gate_metrics,
                 **entropy_metrics,
                 **copy_metrics,
+                **layer_out_metrics,
             }
         summarized_metrics = summarize_router_metrics(router_metrics)
         summarized_metrics.update(final_gate_metrics)
@@ -2301,6 +2339,7 @@ class Transformer(eqx.Module):
         summarized_metrics.update(copy_metrics)
         summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
         summarized_metrics.update(probe_metrics)
+        summarized_metrics.update(layer_out_metrics)
         for name, per_layer in outstats.items():
             for i in range(per_layer.shape[0]):
                 summarized_metrics[f"train/aux/{name}_L{i}"] = per_layer[i]
