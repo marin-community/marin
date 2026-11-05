@@ -1,4 +1,6 @@
 import copy
+from collections.abc import Iterator, Mapping
+from typing import Any
 from dataclasses import fields, replace
 from types import SimpleNamespace
 from typing import get_args
@@ -12,7 +14,7 @@ from skyrlrecipe.declared import Callback, Teacher
 from skyrl_train.callbacks.builtin import CALLBACK_REGISTRY
 from marinskyrl import speculative_decoding
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPlacement, TeacherSource
-from skyrlrecipe.documents import MISSING, get_path, leaves, set_path
+from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.ownership import LAUNCH_PATHS
 from scripts.recipe_schema_sidecar import OPEN, UNDECLARED
 from skyrl_train.config.ftpo import FTPOConfig
@@ -28,6 +30,16 @@ FILL_WHEN_UNSET = frozenset(
         "terminal_bench.installed_agent.output_path",
     }
 )
+
+
+def leaves(document: Mapping[str, Any], prefix: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], Any]]:
+    """Yield indivisible values; empty mappings contribute a leaf."""
+    for key, value in document.items():
+        path = (*prefix, key)
+        if isinstance(value, Mapping) and value:
+            yield from leaves(value, path)
+        else:
+            yield path, value
 
 
 def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_authored_values(tmp_path, monkeypatch):

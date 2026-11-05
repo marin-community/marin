@@ -4,31 +4,22 @@
 import argparse
 import json
 import tempfile
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from cloud.iris import launch_config
 from omegaconf import OmegaConf
 
 
-@dataclass(frozen=True)
-class LauncherProvenance:
-    source: Path
-
-
-def installed_launcher() -> LauncherProvenance:
+def installed_launcher() -> None:
     source = Path(launch_config.__file__).resolve()
     expected = Path(__file__).resolve().parents[2] / "vendor/skyrl/cloud/iris/launch_config.py"
     if source != expected:
         raise ValueError(f"launcher module {source} differs from vendored source {expected}")
-    return LauncherProvenance(source)
 
 
-def load_documents(source: Path, output: Path, launcher: LauncherProvenance) -> None:
+def load_documents(source: Path, output: Path) -> None:
     loaded = []
     failures = []
-    start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="skyrl-launch-documents-") as directory:
         for index, entry in enumerate(json.loads(source.read_text())):
             path = Path(directory) / f"{index}.yaml"
@@ -42,8 +33,6 @@ def load_documents(source: Path, output: Path, launcher: LauncherProvenance) -> 
     output.write_text(
         json.dumps(
             {
-                "launcher_source": str(launcher.source),
-                "load_duration": time.monotonic() - start,
                 "documents": loaded,
                 "failures": failures,
             }
@@ -58,7 +47,8 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    load_documents(args.input, args.output, installed_launcher())
+    installed_launcher()
+    load_documents(args.input, args.output)
 
 
 if __name__ == "__main__":

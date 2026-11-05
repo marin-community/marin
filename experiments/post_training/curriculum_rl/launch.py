@@ -580,8 +580,7 @@ def rl_config_yaml(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> str
         trainer["policy"]["megatron_config"].update(asdict(tuning.policy_megatron))
         trainer["policy"]["megatron_config"]["transformer_config_kwargs"] = tuning.transformer_config_kwargs.copy()
         data.setdefault("sampling", {})["reversion_mass"] = tuning.sampling_reversion_mass
-    authored = SkyRLRecipe.from_document(config)
-    recipe = authored
+    recipe = SkyRLRecipe.from_document(config)
     return yaml.safe_dump(recipe.to_skyrl(), sort_keys=False)
 
 

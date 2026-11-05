@@ -9,24 +9,9 @@ from typing import Annotated, Literal
 
 from pydantic import Field, NonNegativeInt, PositiveInt
 
+from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting
 from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
-
-
-class EvalSamplingParams(Section):
-    max_generate_length: int = unset_field()
-    repetition_penalty: int | float = field(1.0)
-    temperature: int | float = field(0.0)
-    top_p: int | float = field(1.0)
-    min_p: int | float = field(0.0)
-    top_k: int = field(-1)
-    logprobs: NonNegativeInt | None = field(None)
-    stop: tuple[str, ...] | None = field(None)
-    min_tokens: NonNegativeInt = unset_field()
-
-
-# Callback annotations use the evaluation sampling class above.
-from . import declared  # noqa: E402
-from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting  # noqa: E402
+from .sampling import EvalSamplingParams
 
 
 class Sampling(Section):
@@ -72,7 +57,7 @@ class Data(Section):
     train_data: tuple[str, ...] | None = field(["${oc.env:HOME}/data/gsm8k/train.parquet"])
     val_data: tuple[str, ...] | None = field(["${oc.env:HOME}/data/gsm8k/validation.parquet"])
     shuffle: bool = field(True)
-    preference_pair_format: Literal["tokenized", "text"] = field("text")
+    preference_pair_format: Literal["text", "tokenized"] = field("text")
     "text completions or tokenized conversations with assistant masks"
     terminal_bench_data: tuple[str, ...] = field([])
     """Optional task-directory sidechannel for mixed Nemotron Ultra RLVR. The parquet dataloader remains
@@ -680,7 +665,7 @@ class ChatTemplate(Section):
     name_or_path: str | None = field(None)
 
 
-class Model(Section):
+class SpeculatorModel(Section):
     source_uri: str = unset_field()
     source_identity: str = unset_field()
 
@@ -703,7 +688,7 @@ class Training(Section):
 
 class SpeculativeDecoding(Section):
     method: Literal["eagle3"] = unset_field()
-    model: Model = unset_field()
+    model: SpeculatorModel = unset_field()
     num_speculative_tokens: PositiveInt = unset_field()
     training: Training | None = field(None)
 
@@ -908,9 +893,3 @@ class RecipeSections(Section):
 class ConfigGroups(Section):
     terminal_bench_config: Literal["terminal_bench"] = unset_field()
     algorithm_recipe: Literal["cispo", "dapo", "dpo", "dr_grpo", "ftpo", "grpo", "gspo", "mopd", "opd"] = unset_field()
-
-
-_namespace = {**vars(declared), **globals()}
-for _section in [value for value in _namespace.values() if isinstance(value, type) and issubclass(value, Section)]:
-    _section.model_rebuild(_types_namespace=_namespace)
-del _section, _namespace

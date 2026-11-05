@@ -3,7 +3,7 @@
 
 """Paths in sparse recipe and dense launch documents."""
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from .model import thaw
@@ -29,16 +29,6 @@ def set_path(document: dict[str, Any], path: str, value: Any) -> None:
             document[key] = current
         document = current
     document[leaf] = value
-
-
-def leaves(document: Mapping[str, Any], prefix: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], Any]]:
-    """Yield indivisible values; empty mappings contribute a leaf."""
-    for key, value in document.items():
-        path = (*prefix, key)
-        if isinstance(value, Mapping) and value:
-            yield from leaves(value, path)
-        else:
-            yield path, value
 
 
 def merge_mappings(base: Mapping[str, Any], patch: Mapping[str, Any]) -> dict[str, Any]:

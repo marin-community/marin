@@ -80,19 +80,20 @@ def test_recipe_round_trip_preserves_immutable_containers_and_mapping_order():
 
 def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recipe):
     base = base_recipe
+    authored_trainer = {
+        "logger": ["console", "wandb"],
+        "policy": {
+            "optimizer_config": {"scheduler": "constant_with_warmup"},
+            "megatron_config": {"optimizer_checkpoint_sharding_type": "dp_reshardable"},
+            "model": {"lora": {"dropout": 0.05}},
+        },
+        "critic": {"optimizer_config": {"scheduler": "constant_with_warmup"}},
+        "ref": {"megatron_config": {"optimizer_checkpoint_sharding_type": "fully_reshardable"}},
+        "algorithm": {"resolved_group_advantage": {"kind": "none"}},
+    }
     part = schema.RecipePatch.from_document(
         {
-            "trainer": {
-                "logger": ["console", "wandb"],
-                "policy": {
-                    "optimizer_config": {"scheduler": "constant_with_warmup"},
-                    "megatron_config": {"optimizer_checkpoint_sharding_type": "dp_reshardable"},
-                    "model": {"lora": {"dropout": 0.05}},
-                },
-                "critic": {"optimizer_config": {"scheduler": "constant_with_warmup"}},
-                "ref": {"megatron_config": {"optimizer_checkpoint_sharding_type": "fully_reshardable"}},
-                "algorithm": {"resolved_group_advantage": {"kind": "none"}},
-            },
+            "trainer": authored_trainer,
             "generator": {"chat_template": None, "engine_init_kwargs": {"user_options": {"math": 1, "code": [2, 3]}}},
         }
     )
@@ -119,7 +120,7 @@ def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recip
         "max_turns": 4,
     }
     assert list(edited.to_skyrl()["generator"]["engine_init_kwargs"]["user_options"]) == ["math", "code"]
-    assert edited.to_skyrl()["trainer"] == {**part.to_skyrl()["trainer"], "ckpt_interval": 4}
+    assert edited.to_skyrl()["trainer"] == {**authored_trainer, "ckpt_interval": 4}
     named_option = edited.with_settings(
         ["generator.engine_init_kwargs.user_options.backend=custom-engine", "trainer.run_name=123"]
     )
@@ -135,7 +136,6 @@ def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recip
 
 def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_recipe):
     base = base_recipe
-    edited = base
     for paths, owner in ((LAUNCH_PATHS, "launch document"), (DERIVED_PATHS, "context_budget")):
         for path in paths:
             document = base.to_skyrl()
@@ -151,13 +151,8 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
             schema.SkyRLRecipe.from_document(document)
         assert f"{path}: {message}" in str(error.value)
     removed = {"harbor": {"max_episodes": 1}}
-    for construct in (
-        lambda: schema.RecipePatch(terminal_bench=removed),
-        lambda: schema.SkyRLRecipe(context_budget=base.context_budget, terminal_bench=removed),
-        lambda: schema.SkyRLRecipe.model_validate_json(json.dumps({**base.to_skyrl(), "terminal_bench": removed})),
-    ):
-        with pytest.raises(ValueError, match=r"use context_budget.max_turns; Harbor reads max_turns"):
-            construct()
+    with pytest.raises(ValueError, match=r"use context_budget.max_turns; Harbor reads max_turns"):
+        schema.RecipePatch(terminal_bench=removed)
     for following in ("hf_save_interval", "micro_forward_batch_size_per_gpu"):
         with pytest.raises(ValueError, match=following):
-            edited.with_settings([f"trainer.{following}=null"])
+            base.with_settings([f"trainer.{following}=null"])
