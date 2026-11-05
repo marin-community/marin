@@ -1,6 +1,7 @@
 # Prepare each selected task image with Pi before launching. Declare its digest
 # in environment/shellbox-images.json under main and use that same docker_image.
 n_concurrent_trials: 32
+trial_attempt_timeout_sec: 5400
 release_trial_payloads_in_memory: true
 retry:
   max_retries: 10
@@ -18,7 +19,6 @@ retry:
   - AgentSetupTimeoutError
   - DaytonaSandboxStopError
   - DaytonaProcessError
-  - TrialTimeoutError
   - AgentKilledBySignalError
   - VerifierTimeoutError
   - VerifierRuntimeError

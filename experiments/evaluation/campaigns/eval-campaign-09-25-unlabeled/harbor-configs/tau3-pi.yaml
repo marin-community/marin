@@ -1,4 +1,5 @@
 n_concurrent_trials: 16
+trial_attempt_timeout_sec: 5400
 release_trial_payloads_in_memory: true
 retry:
   max_retries: 10
@@ -17,7 +18,6 @@ retry:
   - DaytonaSandboxStopError
   - DaytonaProcessError
   - DaytonaDockerSetupError
-  - TrialTimeoutError
   - AgentKilledBySignalError
   - VerifierTimeoutError
   - VerifierRuntimeError
