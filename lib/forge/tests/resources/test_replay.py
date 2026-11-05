@@ -12,7 +12,7 @@ from forge.effects.context import Context
 from forge.effects.events import Event, Note, Resolved
 from forge.effects.log import EventLog, JsonlSink, Record
 from forge.model.controls import Candidate
-from forge.model.llm import Completion, Message, Sampling
+from forge.model.llm import Completion, Message, Sampling, ToolSchema
 from forge.resources.clock import Clock, Now
 from forge.resources.env import CommandResult, Env, FakeCommand, FakeEnv, ReadFile, RunCommand, WriteFile
 from forge.resources.grading import GradeCandidate
@@ -61,7 +61,11 @@ async def test_reload_reexecutes_environment_but_reuses_inference_clock_and_ids(
     script = {"build": FakeCommand(result, {path: b"result"})}
     env = FakeEnv("image", script, note)
     client = FakeInference((Completion("answer"),))
-    event = InferenceRequest((Message("user", "solve"),), (), Sampling(temperature=1))
+    event = InferenceRequest(
+        (Message("user", "solve"),),
+        (ToolSchema("shell", "Run command", {"type": "object", "required": ("command",)}),),
+        Sampling(temperature=1),
+    )
     sink = JsonlSink(str(tmp_path / "events.jsonl"))
     ctx = Context(log=EventLog(sink=sink))
     configure(ctx, env, client, Clock(lambda: 12.5), Ids(lambda: "original"))

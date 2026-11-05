@@ -36,7 +36,7 @@ class MemoryMachine(Machine):
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {}
         self.closed = False
-        self.failure: MachineTerminated | TimeoutError | None = None
+        self.failure: RuntimeError | TimeoutError | None = None
 
     @override
     async def run(self, command: Command) -> Result:
@@ -163,9 +163,16 @@ async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
     assert env.fingerprint() == before
 
 
-@pytest.mark.parametrize("failure,decision", [(MachineTerminated("gone"), Restart), (TimeoutError("busy"), Transient)])
+@pytest.mark.parametrize(
+    "failure,decision",
+    [
+        (MachineTerminated("gone"), Restart),
+        (RuntimeError("Machine is closed"), Restart),
+        (TimeoutError("busy"), Transient),
+    ],
+)
 async def test_shellbox_failure_preserves_unresolved_history(
-    failure: MachineTerminated | TimeoutError, decision: type[Exception]
+    failure: RuntimeError | TimeoutError, decision: type[Exception]
 ) -> None:
     machine = MemoryMachine()
     machine.failure = failure
