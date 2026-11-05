@@ -46,7 +46,6 @@ import uuid
 from typing import Any, Protocol
 
 from omegaconf import DictConfig, OmegaConf
-from skyrl_train.utils.fd_monitor import start_fd_monitor
 
 from cloud.iris.artifacts import ArtifactSource, atomic_directory_update, file_inventory, fs_and_path, materialize
 from cloud.iris.hf_model_cache import (
@@ -115,7 +114,6 @@ except ImportError as error:
 RENDEZVOUS_FILENAME = "ray_head.json"
 DONE_FILENAME = "ray_head.done"
 HEAD_RESULT_SUCCEEDED = "succeeded"
-HOST_RAM_MONITOR_INTERVAL = 15
 
 
 @dataclass(frozen=True)
@@ -384,14 +382,6 @@ def _copy_tokenizer_metadata(source: Path, destination: Path) -> None:
         shutil.copy2(metadata_file, destination / metadata_file.name)
 
 
-def _validate_policy_tokenizer(path: Path, source: str) -> None:
-    # Keep Transformers optional for dependency-light launcher imports.
-    from transformers import AutoTokenizer
-
-    _require_tokenizer_metadata(path, source)
-    AutoTokenizer.from_pretrained(str(path), local_files_only=True, trust_remote_code=True)
-
-
 def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenizer | None:
     """Stage the requested tokenizer independently from the policy weights."""
     tokenizer_path = args.policy_tokenizer
@@ -404,7 +394,7 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
     if is_cloud_uri(tokenizer_path):
         manifest = load_model_manifest(tokenizer_path)
         stage_model_metadata(tokenizer_path, manifest, local_path)
-        _validate_policy_tokenizer(target, tokenizer_path)
+        _require_tokenizer_metadata(target, tokenizer_path)
         (target / MODEL_MANIFEST_FILENAME).unlink(missing_ok=True)
     else:
         with atomic_directory_update(target, staging_prefix=f".{target.name}.tokenizer-") as staging:
@@ -422,7 +412,6 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
                 _require_tokenizer_metadata(staging, tokenizer_path)
             else:
                 raise ValueError(f"Unsupported policy tokenizer source: {tokenizer_path!r}")
-            _validate_policy_tokenizer(staging, tokenizer_path)
 
     return PreparedPolicyTokenizer(local_path)
 
@@ -1035,10 +1024,11 @@ def _ray_port_flags() -> list[str]:
 
 
 # --- Ray cgroup-aware memory ----------------------------------------------------
-# Bound plasma on hosts with large RAM. Ray's --memory is a separate worker-heap
-# resource: advertising the whole cgroup limit in addition to plasma overstates
-# capacity. Subtract the bounded store from that limit. --memory is a scheduler
-# capacity, not a process RSS limit.
+# In a memory-cgroup-limited pod, Ray can read the HOST's physical RAM (~2 TB via
+# /proc/meminfo) instead of the --memory cgroup limit, and size its plasma object
+# store at the default ~30% of that (~600 GB). That can overrun the container
+# limit once training also allocates memory. Read the cgroup limit and pass it
+# to `ray start` as --memory, and bound the plasma store.
 RAY_OBJECT_STORE_CAP_GIB = 96  # bounded plasma; default can be ~30% of *detected* RAM (huge if host is misread)
 # Per-job override (env) for the plasma cap, in GiB. Default = RAY_OBJECT_STORE_CAP_GIB
 # (96). The min(., cgroup//8) OOM guard below still applies as the HARD ceiling.
@@ -1053,8 +1043,7 @@ def _cgroup_mem_limit_bytes() -> int | None:
         "/sys/fs/cgroup/memory/memory.limit_in_bytes",
     ):  # cgroup v1
         try:
-            with open(path) as source:
-                raw = source.read().strip()
+            raw = open(path).read().strip()
         except OSError:
             continue
         if raw in ("max", ""):  # v2 unlimited
@@ -1071,7 +1060,7 @@ def _cgroup_mem_limit_bytes() -> int | None:
 
 def _ray_mem_flags() -> list[str]:
     """Make `ray start` cgroup-aware (see the block comment above). Always bounds the
-    plasma store; --memory advertises the remaining cgroup budget when readable."""
+    plasma object store; additionally pins --memory to the cgroup limit when readable."""
     try:
         cap_gib = float(os.environ.get(_RAY_STORE_CAP_ENV, RAY_OBJECT_STORE_CAP_GIB))
     except ValueError:
@@ -1087,11 +1076,9 @@ def _ray_mem_flags() -> list[str]:
     flags: list[str] = []
     if limit:
         store_cap = min(store_cap, limit // 8)  # never let the store exceed ~1/8 of the container
-        worker_memory = limit - store_cap
-        flags.append(f"--memory={worker_memory}")
+        flags.append(f"--memory={limit}")
         _log(
-            f"Ray cgroup-aware: --memory={worker_memory} (~{worker_memory / (1 << 30):.0f}GiB worker heap), "
-            f"cgroup limit={limit}, "
+            f"Ray cgroup-aware: --memory={limit} (~{limit / (1 << 30):.0f}GiB cgroup limit), "
             f"--object-store-memory={store_cap} (~{store_cap / (1 << 30):.0f}GiB plasma cap)"
         )
     else:
@@ -2238,25 +2225,16 @@ def main() -> None:
     resolve_ray_ports()
     rank = _rank()
     debug_mode = DebugMode(str(launch_config.skyrl.get("trainer", {}).get("debug_mode", DebugMode.LIGHT.value)))
-    memory_monitor_stop = (
-        start_fd_monitor(interval_seconds=HOST_RAM_MONITOR_INTERVAL, breakdown=True)
-        if debug_mode is DebugMode.DISTRIBUTED
-        else None
-    )
-    try:
-        if rank == 0:
-            final_config_path = _write_final_config(
-                launch_config,
-                policy_model=policy_model,
-                policy_tokenizer=policy_tokenizer,
-                draft_model=draft_model,
-            )
-            exit_code = run_head(args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode)
-        else:
-            exit_code = run_worker(args, debug_mode=debug_mode)
-    finally:
-        if memory_monitor_stop is not None:
-            memory_monitor_stop.set()
+    if rank == 0:
+        final_config_path = _write_final_config(
+            launch_config,
+            policy_model=policy_model,
+            policy_tokenizer=policy_tokenizer,
+            draft_model=draft_model,
+        )
+        exit_code = run_head(args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode)
+    else:
+        exit_code = run_worker(args, debug_mode=debug_mode)
     if exit_code != 0:
         sys.exit(exit_code)
 

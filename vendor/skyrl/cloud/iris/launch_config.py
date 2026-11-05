@@ -63,7 +63,6 @@ class RuntimeConfig:
     """SkyRL execution settings."""
 
     profile: str = MISSING
-    hero_piecewise_runtime: bool = False
     entrypoint: str = ""
     training_type: str | None = None
     experiments_dir: str = "/app/experiments"
@@ -114,7 +113,6 @@ class IrisConfig:
     allocation: IrisAllocationConfig = field(default_factory=IrisAllocationConfig)
     priority: str = "interactive"
     max_retries: int = 3
-    max_preemption_retries: int | None = None
     timeout: int = 0
     target_cluster: str | None = None
     parent_cluster_config: str | None = None

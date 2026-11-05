@@ -409,16 +409,14 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             return super().forward(data, probe_micro_batch_size=probe_micro_batch_size)
 
     def offload_to_cpu(self, pin_memory=True, non_blocking=True, offload_optimizer=True, offload_model=True):
-        with self._memory.span("offload_to_cpu", step=self._model_version_step):
-            self.strategy.offload_to_cpu(
-                self.actor_module, self.optimizer, pin_memory, non_blocking, offload_optimizer, offload_model
-            )
+        self.strategy.offload_to_cpu(
+            self.actor_module, self.optimizer, pin_memory, non_blocking, offload_optimizer, offload_model
+        )
 
     def backload_to_gpu(self, non_blocking=True, backload_optimizer=True, backload_model=True):
-        with self._memory.span("backload_to_gpu", step=self._model_version_step):
-            self.strategy.backload_to_gpu(
-                self.actor_module, self.optimizer, non_blocking, backload_optimizer, backload_model
-            )
+        self.strategy.backload_to_gpu(
+            self.actor_module, self.optimizer, non_blocking, backload_optimizer, backload_model
+        )
 
     def init_worker_process_group(self):
         """

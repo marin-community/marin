@@ -291,11 +291,9 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         cluster=iris["cluster"],
         cluster_config=iris["cluster_config"],
         runtime_profile=RuntimeProfile(runtime["profile"]),
-        hero_piecewise_runtime=runtime["hero_piecewise_runtime"],
         job_name=iris["job_name"],
         priority=iris["priority"],
         max_retries=int(iris["max_retries"]),
-        max_preemption_retries=iris["max_preemption_retries"],
         timeout=int(iris["timeout"]),
         no_wait=submission == SubmissionMode.DETACH,
         dry_run=submission == SubmissionMode.PREPARE,
@@ -984,6 +982,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         "DAYTONA_JWT_TOKEN",
         "DAYTONA_ORGANIZATION_ID",
         "DAYTONA_API_URL",
+        "DAYTONA_TARGET",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",
@@ -1075,11 +1074,6 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
 
     with client_cm as client:
         entrypoint = Entrypoint.from_command(*command)
-        preemption_retries = (
-            {"max_retries_preemption": args.max_preemption_retries}
-            if args.max_preemption_retries is not None
-            else {}
-        )
         job = client.submit(
             entrypoint=entrypoint,
             name=args.job_name,
@@ -1089,9 +1083,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             environment=EnvironmentSpec(
                 env_vars=env_vars,
                 extras=["gpu"],
-                setup_scripts=[
-                    task_setup_script(args.runtime_profile, hero_piecewise_runtime=args.hero_piecewise_runtime)
-                ],
+                setup_scripts=[task_setup_script(args.runtime_profile)],
             ),
             constraints=constraints or None,
             coscheduling=coscheduling,
@@ -1101,7 +1093,6 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             max_task_failures=args.max_retries,
             priority_band=priority_band,
             timeout=None if args.timeout == 0 else _seconds_to_duration(args.timeout),
-            **preemption_retries,
         )
         full_job_id = str(job.job_id)
         print(

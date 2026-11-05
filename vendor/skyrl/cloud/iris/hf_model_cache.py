@@ -31,7 +31,7 @@ from marinskyrl.hf_model import (
     hugging_face_hub_online,
     immutable_model_cache_key,
     normalize_fast_tokenizer_metadata_bytes,
-    validate_hf_model_weights,
+    validate_portable_hf_model_files,
 )
 from marinskyrl.model_manifest import (
     HF_WEIGHT_INDEX_FILENAME,
@@ -607,10 +607,10 @@ def stage_model_metadata(model_uri: str, manifest: ModelManifest, local_path: st
 
 
 def stage_artifact_model_metadata(model_uri: str, source_identity: str, local_path: str) -> int:
-    """Stage immutable model metadata; the policy tokenizer is staged independently."""
+    """Stage metadata for a Marin-owned immutable model artifact without copying its weights."""
     filesystem, root = fs_and_path(model_uri)
     inventory = file_inventory(filesystem, root)
-    validate_hf_model_weights({entry.path for _, entry in inventory}, model_uri)
+    validate_portable_hf_model_files({entry.path for _, entry in inventory}, model_uri)
     metadata_inventory = tuple(item for item in inventory if not _is_weight(item[1].path))
     if not metadata_inventory:
         raise ValueError(f"Model artifact contains no metadata: {model_uri}")
@@ -623,10 +623,10 @@ def stage_artifact_model_metadata(model_uri: str, source_identity: str, local_pa
 
 
 def stage_artifact_model(model_uri: str, source_identity: str, local_path: str) -> int:
-    """Materialize immutable model weights and metadata independently from its tokenizer."""
+    """Materialize a complete Marin-owned immutable model artifact on one node."""
     filesystem, root = fs_and_path(model_uri)
     inventory = file_inventory(filesystem, root)
-    validate_hf_model_weights({entry.path for _, entry in inventory}, model_uri)
+    validate_portable_hf_model_files({entry.path for _, entry in inventory}, model_uri)
     artifact = materialize_inventory(
         ArtifactSource(uri=model_uri, identity=source_identity, local_path=local_path),
         filesystem,

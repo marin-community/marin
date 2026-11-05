@@ -67,21 +67,19 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
     pp = geometry.pipeline_model_parallel_size
     cp = geometry.context_parallel_size
     ep = geometry.expert_model_parallel_size
-    etp = geometry.expert_tensor_parallel_size
-    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}, ETP={etp}"
-    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep, etp)):
+    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}"
+    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep)):
         raise ValueError(f"Megatron {role} has {num_gpus} GPUs with {sizes}; parallel sizes must be positive integers")
-    # Megatron builds separate dense (TP, CP, DP, PP) and expert
-    # (ETP, EP, expert-DP, PP) grids. CP ranks also participate in the expert grid.
-    if num_gpus % (tp * pp * cp) or num_gpus % (etp * ep * pp):
+    model_parallel = tp * pp * cp
+    if num_gpus % model_parallel or (num_gpus // model_parallel) % ep:
         raise ValueError(
             f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
-            "GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
+            "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
         )
 
 
 class InferenceEngineBackend(StrEnum):
-    """Ray packs whole engines; multiprocessing packs individual DP rank groups."""
+    """Executor selection for SkyRL inference engines."""
 
     RAY = "ray"
     MULTIPROCESSING = "mp"
@@ -119,17 +117,15 @@ class SkyRLRolePlan:
     def num_nodes(self) -> int:
         if self.colocate_all:
             return self.policy_num_nodes
-        rank_gpus = self.inference_engine_tensor_parallel_size * self.inference_engine_pipeline_parallel_size
-        if self.inference_engine_backend is InferenceEngineBackend.MULTIPROCESSING:
-            atoms = self.num_inference_engines * self.inference_engine_data_parallel_size
-            atom_gpus = rank_gpus
-        else:
-            atoms = self.num_inference_engines
-            atom_gpus = rank_gpus * self.inference_engine_data_parallel_size
-        atoms_per_node = self.policy_num_gpus_per_node // atom_gpus
-        if not atoms_per_node:
-            raise ValueError(f"each SkyRL {self.inference_engine_backend} placement group must fit on one node")
-        rollout_nodes = (atoms + atoms_per_node - 1) // atoms_per_node
+        engine_gpus = (
+            self.inference_engine_tensor_parallel_size
+            * self.inference_engine_pipeline_parallel_size
+            * self.inference_engine_data_parallel_size
+        )
+        engines_per_node = self.policy_num_gpus_per_node // engine_gpus
+        if not engines_per_node:
+            raise ValueError("each SkyRL inference engine must fit on one node")
+        rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
         return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
 
 
@@ -178,17 +174,16 @@ class SkyRLTopology:
             raise ValueError("SkyRL reference_num_nodes must be positive")
 
         tensor_pipeline_gpus = plan.inference_engine_tensor_parallel_size * plan.inference_engine_pipeline_parallel_size
-        if plan.colocate_all and plan.inference_engine_backend is InferenceEngineBackend.MULTIPROCESSING:
-            raise ValueError("SkyRL multiprocessing inference requires non-colocated roles")
+        engine_gpus = tensor_pipeline_gpus * plan.inference_engine_data_parallel_size
         if plan.colocate_all and self.gpus_per_node % tensor_pipeline_gpus:
             raise ValueError(
                 "each colocated SkyRL inference engine TP*PP slice must divide gpus_per_node; "
                 f"got TP*PP={tensor_pipeline_gpus} and gpus_per_node={self.gpus_per_node}"
             )
-        if not plan.colocate_all and plan.num_nodes > self.num_nodes:
+        if not plan.colocate_all and engine_gpus > self.gpus_per_node:
             raise ValueError(
-                "SkyRL core role plan exceeds the allocated topology: "
-                f"placement requires {plan.num_nodes} nodes, topology has {self.num_nodes}"
+                "each SkyRL inference engine must fit on one node, but "
+                f"TP*PP*DP={engine_gpus} exceeds gpus_per_node={self.gpus_per_node}"
             )
         expert_group_gpus = plan.inference_engine_tensor_parallel_size * plan.inference_engine_data_parallel_size
         if expert_group_gpus % plan.inference_engine_expert_parallel_size:
@@ -427,7 +422,6 @@ class SkyRLSpec:
     topology: SkyRLTopology
     retention: SkyRLRetentionPolicy
     seed: int
-    hero_piecewise_runtime: bool = False
 
     def __post_init__(self) -> None:
         _validate_skyrl_recipe(self.config_yaml, self.topology)
@@ -451,15 +445,12 @@ class IrisSkyRLExecution:
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
-    max_preemption_retries: int | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
             raise ValueError("SkyRL coordinator_timeout_hours must be positive")
         if self.job_timeout_seconds < 0:
             raise ValueError("SkyRL job_timeout_seconds cannot be negative")
-        if self.max_preemption_retries is not None and self.max_preemption_retries < 0:
-            raise ValueError("SkyRL max_preemption_retries cannot be negative")
         if (self.target_cluster is None) != (self.parent_cluster_config is None):
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
@@ -833,7 +824,6 @@ def _launch_config_yaml(
         },
         "runtime": {
             "profile": _declared_config_value(recipe, "trainer.strategy"),
-            "hero_piecewise_runtime": spec.hero_piecewise_runtime,
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
             "task_env": task_env,
@@ -853,7 +843,6 @@ def _launch_config_yaml(
             },
             "priority": execution.priority,
             "max_retries": execution.max_retries,
-            "max_preemption_retries": execution.max_preemption_retries,
             "timeout": execution.job_timeout_seconds,
             "target_cluster": execution.target_cluster,
             "parent_cluster_config": execution.parent_cluster_config,

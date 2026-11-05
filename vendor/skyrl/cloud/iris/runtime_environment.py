@@ -43,12 +43,11 @@ def runtime_profile_for_strategy(
     raise ValueError(f"Unsupported training strategy: {strategy}")
 
 
-def task_setup_script(profile: RuntimeProfile, *, hero_piecewise_runtime: bool = False) -> str:
+def task_setup_script(profile: RuntimeProfile) -> str:
     """Install SkyRL's frozen profile and editable dependencies from the Marin workspace."""
     checkout = MARINSKYRL_TASK_ROOT
     activation_file = MARINSKYRL_ACTIVATION_FILE
     bootstrap_script = f"{checkout}/{MARINSKYRL_BOOTSTRAP_SCRIPT}"
-    overlay = "hero-piecewise" if hero_piecewise_runtime else "none"
     return f"""set -euo pipefail
 checkout={shlex.quote(checkout)}
 cd "$checkout"
@@ -57,7 +56,6 @@ bash {shlex.quote(bootstrap_script)} \
   "$IRIS_VENV" \
   {shlex.quote(activation_file)} \
   {shlex.quote(profile.value)} \
-  production \
-  {shlex.quote(overlay)}
+  production
 source {shlex.quote(activation_file)}
 """

@@ -15,7 +15,6 @@ from unittest.mock import MagicMock
 import click
 import pytest
 from click.testing import CliRunner
-from fray.types import JobRequest
 from iris.client.client import IrisClient
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
@@ -51,10 +50,9 @@ def _execution() -> IrisSkyRLExecution:
     )
 
 
-@pytest.mark.parametrize("preemption_retries", [None, 0, 4])
-def test_coordinator_request_replays_the_experiment_main(preemption_retries: int | None) -> None:
+def test_coordinator_request_replays_the_experiment_main() -> None:
     cluster_config, request = _coordinator_request(
-        [_step(dataclasses.replace(_execution(), max_preemption_retries=preemption_retries))],
+        [_step(_execution())],
         "experiments.test_rl",
         ("--version", "2026.09.21", "--run"),
         3,
@@ -69,11 +67,6 @@ def test_coordinator_request_replays_the_experiment_main(preemption_retries: int
     assert request.environment is not None
     assert request.environment.env_vars["DAYTONA_API_KEY"] == "secret"
     assert request.timeout == Duration.from_hours(18)
-    assert request.max_retries_failure == request.max_task_failures == 0
-    default_request = JobRequest(name="ordinary-coordinator", entrypoint=request.entrypoint)
-    assert request.max_retries_preemption == (
-        default_request.max_retries_preemption if preemption_retries is None else preemption_retries
-    )
     assert request.entrypoint.binary_entrypoint is not None
     assert request.entrypoint.binary_entrypoint.command == "python"
     assert request.entrypoint.binary_entrypoint.args == [
