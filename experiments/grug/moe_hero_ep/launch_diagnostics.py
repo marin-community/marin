@@ -86,6 +86,7 @@ def build_diagnostic_run(
     balance_attention_rows: bool = HERO_BALANCE_ATTENTION_ROWS,
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
+    log_scaling_n_floor: int | None = None,
     restore_from: str | None = None,
     moe_implementation: str | None = None,
     ce_grad_in_forward_token_block_size: int | None = None,
@@ -158,6 +159,7 @@ def build_diagnostic_run(
             ("max_seq_len", max_seq_len),
             ("qk_mult", qk_mult),
             ("qk_mult_long_scale", qk_mult_long_scale),
+            ("log_scaling_n_floor", log_scaling_n_floor),
             ("moe_implementation", moe_implementation),
             ("ce_grad_in_forward_token_block_size", ce_grad_in_forward_token_block_size),
         )
@@ -165,6 +167,11 @@ def build_diagnostic_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    if log_scaling_n_floor is not None and log_scaling_n_floor >= model.max_seq_len:
+        raise ValueError(
+            f"log_scaling_n_floor={log_scaling_n_floor} scales no query at max_seq_len={model.max_seq_len}; "
+            "this arm would be a control"
+        )
     model = with_transport_remat_mode(model)
     if batch_size is None:
         batch_size = hero_rack_batch_size(model.max_seq_len)
@@ -546,6 +553,15 @@ def build_diagnostic_run(
     default=None,
     help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
 )
+@click.option(
+    "--log-scaling-n-floor",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Scale each global-layer query seeing n keys in its document by 1 + 0.1 * ln(max(n / this value, 1)), "
+        "on top of --qk-mult and --qk-mult-long-scale. Defaults to off."
+    ),
+)
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @build_options
 def main(
@@ -581,6 +597,7 @@ def main(
     balance_attention_rows: bool,
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
+    log_scaling_n_floor: int | None,
     restore_from: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
@@ -601,6 +618,7 @@ def main(
         balance_attention_rows=balance_attention_rows,
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
+        log_scaling_n_floor=log_scaling_n_floor,
         restore_from=restore_from,
         moe_implementation=moe_implementation,
         ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
