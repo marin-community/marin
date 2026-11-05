@@ -20,21 +20,18 @@ from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from marinskyrl.harbor_environments import (
     HarborEnvironmentSettings,
-    HarborTaskBinding,
     apply_task_binding,
-    original_trial_environment,
 )
 from marinskyrl.resource_locator import join_resource_path
 from pydantic import BaseModel, ConfigDict, model_validator
 from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
-from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import Machine, NetworkPolicy
 from taskcompendium.submission import conversation_messages
 
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
 from skyrl_train.io import io
-from skyrl_train.dataset.harbor_import import TaskConfig as PackageConfig, restore_harbor_trial_task
+from skyrl_train.dataset.harbor_import import restore_harbor_trial_task
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 from skyrl_train.rollouts.agent_endpoint import registered_agent_endpoint
 from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
@@ -212,21 +209,11 @@ class InstalledAgentRuntime:
         try:
             task_dir = evidence / "task"
             restore_harbor_trial_task(lowered.task, task_dir)
-            package = PackageConfig.model_validate_toml((task_dir / "task.toml").read_text())
-            context = task_dir / "environment"
-            source = (
-                RegistryImage(package.environment.docker_image)
-                if package.environment.docker_image
-                else DockerfileSource(context, context / "Dockerfile")
-            )
             binding = self.settings.harbor_environment.task_bindings.get(lowered.task.id)
             config = apply_task_binding(config, binding)
-            environment = original_trial_environment(
-                config.environment,
-                image_source_key(source),
-                self.settings.harbor_environment,
-                (binding or HarborTaskBinding()).environment_resources,
-            )
+            environment = config.environment
+            if binding is not None:
+                environment = environment.model_copy(update=binding.environment_resources.model_dump(exclude_none=True))
             run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout
             assert config.trial_attempt_timeout_sec is not None
             async with self._served_agent(

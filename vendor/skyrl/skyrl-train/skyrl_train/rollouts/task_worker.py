@@ -231,7 +231,7 @@ def _failed_rollout(
     if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
         raise error
     if interruption.operation == RolloutOperation.MODEL and not isinstance(
-        error, (ModelServerError, ContextWindowExceeded, TimeoutError, ConnectionError, TemplateError)
+        error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
     ):
         raise error
     exception_type = type(error).__name__
