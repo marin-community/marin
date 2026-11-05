@@ -45,8 +45,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "github_posting": False,
     "node_cap": 8,
     "storage_limit_bytes": 1_000_000_000_000,
-    # Who may use the admin view: Marina identities. Seeded from the intake bot's BELAY_APPROVER_IDS
-    # (ops-belay-intake.yaml); an entry without an identity cannot sign in until a maintainer maps it.
+    # Who may use the admin view: Marina identities, seeded with the marin-devs team's GitHub accounts; an entry
+    # without an identity cannot sign in until a maintainer maps it.
     "approvers": [
         {"github": "ClassicLarry", "github_id": 42926649, "identity": "larry.dial@openathena.ai"},
         {"github": "dlwh", "github_id": 9633, "identity": None},
