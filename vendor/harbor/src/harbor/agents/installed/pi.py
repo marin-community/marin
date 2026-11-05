@@ -35,6 +35,7 @@ from harbor.models.trajectories.tool_call import ToolCall
 from harbor.models.trajectories.trajectory import Trajectory
 from harbor.llms.vllm_tokenization import tokenize_url
 from harbor.models.agent.name import AgentName
+from harbor.utils.artifact_writer import get_artifact_writer
 from harbor.utils.env import validate_task_environment
 
 
@@ -792,18 +793,13 @@ export default function (pi) {
             return
         if trajectory is None:
             return
-        try:
-            trajectory_path = self.logs_dir / self._TRAJECTORY_FILENAME
-            trajectory_path.write_text(
-                json.dumps(trajectory.to_json_dict(), indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except Exception:
-            self.logger.warning(
-                "Failed to write the Pi ATIF trajectory to %s",
-                self.logs_dir / self._TRAJECTORY_FILENAME,
-                exc_info=True,
-            )
+        # Trial artifacts are written through the artifact writer so remote
+        # (fsspec) destinations and failure logging stay in one lane.
+        get_artifact_writer().submit_optional(
+            self.logs_dir / self._TRAJECTORY_FILENAME,
+            lambda: json.dumps(trajectory.to_json_dict(), indent=2, ensure_ascii=False),
+            description="pi trajectory.json",
+        )
 
     def _read_output_events(self, output_file) -> tuple[list[dict], int]:
         """Parse pi.txt's JSON lines; unparseable records are skipped and counted."""

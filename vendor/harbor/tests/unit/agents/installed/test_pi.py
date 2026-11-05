@@ -23,6 +23,7 @@ from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories.trajectory import Trajectory
+from harbor.utils.artifact_writer import get_artifact_writer
 
 
 @pytest.fixture
@@ -1326,6 +1327,14 @@ class TestPiTrajectoryConversion:
         return Pi(logs_dir=temp_dir, model_name="hosted_vllm/test-model", **kwargs)
 
     @staticmethod
+    def _read_trajectory(temp_dir):
+        """Flush the artifact writer, then load and validate trajectory.json."""
+        get_artifact_writer().flush(str(temp_dir / "trajectory.json"))
+        return Trajectory.model_validate(
+            json.loads((temp_dir / "trajectory.json").read_text())
+        )
+
+    @staticmethod
     def _write_jsonl(path, events):
         path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
 
@@ -1336,9 +1345,7 @@ class TestPiTrajectoryConversion:
 
         agent.populate_context_post_run(context)
 
-        trajectory = Trajectory.model_validate(
-            json.loads((temp_dir / "trajectory.json").read_text())
-        )
+        trajectory = self._read_trajectory(temp_dir)
         assert trajectory.schema_version == "ATIF-v1.7"
         assert trajectory.session_id == "11111111-2222-3333-4444-555555555555"
         assert trajectory.agent.name == "pi"
@@ -1401,9 +1408,7 @@ class TestPiTrajectoryConversion:
 
         agent.populate_context_post_run(context)
 
-        trajectory = Trajectory.model_validate(
-            json.loads((temp_dir / "trajectory.json").read_text())
-        )
+        trajectory = self._read_trajectory(temp_dir)
         assert [step.source for step in trajectory.steps] == ["system", "user", "agent"]
         assert [call.function_name for call in trajectory.steps[2].tool_calls] == ["bash"]
         assert trajectory.steps[2].observation is None
@@ -1438,9 +1443,7 @@ class TestPiTrajectoryConversion:
 
         agent.populate_context_post_run(context)
 
-        trajectory = Trajectory.model_validate(
-            json.loads((temp_dir / "trajectory.json").read_text())
-        )
+        trajectory = self._read_trajectory(temp_dir)
         orphan_step = trajectory.steps[-1]
         assert orphan_step.observation.results[0].content == "orphan output"
         # The dangling id would fail ATIF's tool-call reference validation.
@@ -1480,9 +1483,7 @@ class TestPiTrajectoryConversion:
 
         agent.populate_context_post_run(context)
 
-        trajectory = Trajectory.model_validate(
-            json.loads((temp_dir / "trajectory.json").read_text())
-        )
+        trajectory = self._read_trajectory(temp_dir)
         result = trajectory.steps[0].observation.results[0]
         assert result.content == "mismatched"
         assert result.source_call_id is None
@@ -1515,6 +1516,7 @@ class TestPiTrajectoryConversion:
         # The malformed record is skipped; the well-formed one is counted.
         assert context.n_input_tokens == 10
         assert context.n_output_tokens == 5
+        get_artifact_writer().flush(str(temp_dir / "trajectory.json"))
         assert (temp_dir / "trajectory.json").exists()
 
     def test_unparseable_output_writes_no_trajectory(self, temp_dir):
