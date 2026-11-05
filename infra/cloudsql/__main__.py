@@ -56,6 +56,8 @@ def main() -> None:
     pulumi.export("connection_name", postgres.connection_name)
     pulumi.export("public_ip", postgres.public_ip)
     pulumi.export("eval_bucket", bucket.name)
+    # Preserve the deployed ops credential-generation output during this scoped addition.
+    pulumi.export("ops_password_generation", 1)
 
 
 main()
