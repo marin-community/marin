@@ -19,6 +19,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     get_metrics_from_trajectory_batch,
 )
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
+from skyrl_train.utils.trainer_utils import evaluation_response_metrics
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task
 
 
@@ -93,14 +94,14 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
     combined = concatenate_trajectory_batches([combined], tis_lcs_alert_threshold=0.05)
     stepped = StepTaskProjection(config, tokenizer).project(rollouts, request)
     for batch in (combined, stepped):
-        metrics = batch["rollout_metrics"]
-        assert {key: metrics[f"timing/grading/{key}"] for key in ("mean", "p50", "p95", "max")} == pytest.approx(
-            {"mean": 27.5, "p50": 4.0, "p95": 86.6, "max": 101.0}
-        )
-        assert metrics["timing/setup/mean"] == 26.5
-        assert metrics["timing/setup/p50"] == 3.0
-        assert metrics["timing/setup/p95"] == pytest.approx(85.6)
-        assert not any(key.startswith("environment/timing/") for key in metrics)
+        for metrics in (batch["rollout_metrics"], evaluation_response_metrics(batch)):
+            assert {key: metrics[f"timing/grading/{key}"] for key in ("mean", "p50", "p95", "max")} == pytest.approx(
+                {"mean": 27.5, "p50": 4.0, "p95": 86.6, "max": 101.0}
+            )
+            assert metrics["timing/setup/mean"] == 26.5
+            assert metrics["timing/setup/p50"] == 3.0
+            assert metrics["timing/setup/p95"] == pytest.approx(85.6)
+            assert not any(key.startswith("environment/timing/") for key in metrics)
     first_turns = filter_trajectory_batch(
         stepped, [index for index, last in enumerate(stepped["is_last_step"]) if not last]
     )

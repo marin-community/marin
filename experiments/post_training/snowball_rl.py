@@ -490,7 +490,7 @@ def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str
 
 
 def _completed_update(path: str, *, generating: bool) -> int | None:
-    for metric in reversed(scoring.paths(StoragePath(path) / "exports/metrics/step-*.json")[-3:]):
+    for metric in reversed(scoring.paths(StoragePath(path) / "exports/metrics/step-*.json")):
         try:
             values = json.loads(presets.read_text(metric))
             step = int(str(metric).rsplit("step-", 1)[-1].removesuffix(".json"))
