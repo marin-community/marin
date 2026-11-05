@@ -109,6 +109,31 @@ function priorityInput() {
   )
 }
 
+// What an approver has typed into a row's controls, by row key and field, so the 10-second refresh (which rebuilds
+// every row) keeps a draft, and the focused field with its cursor.
+const drafts = new Map()
+
+function drafted(node, key, field, initial = '') {
+  node.dataset.draft = `${key}:${field}`
+  node.value = drafts.get(key)?.[field] ?? initial
+  const save = () => drafts.set(key, { ...drafts.get(key), [field]: node.value })
+  node.addEventListener('input', save)
+  node.addEventListener('change', save)
+  return node
+}
+
+function withFocusKept(renderAll) {
+  const active = document.activeElement
+  const field = active?.dataset?.draft
+  const caret = field && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null
+  renderAll()
+  if (!field) return
+  const again = document.querySelector(`[data-draft="${CSS.escape(field)}"]`)
+  if (!again) return
+  again.focus()
+  if (caret && again.setSelectionRange) again.setSelectionRange(...caret)
+}
+
 function grantOf(nodes, hours, priority) {
   return {
     ...(nodes.value ? { nodes: Number(nodes.value) } : {}),
@@ -161,8 +186,8 @@ function renderPending() {
           ),
           idea.url ? link(idea.url, '↗') : el('span'),
           escalated(idea)
-            ? requeueWithGrant(idea, '')
-            : approveWithGrant('Approve', (body) =>
+            ? requeueWithGrant(idea, '', `idea${idea.id}`)
+            : approveWithGrant(`idea${idea.id}`, 'Approve', (body) =>
                 act(`ideas/${idea.id}/approve`, body, 'Approved and queued'),
               ),
           idea.state === 'pending'
@@ -204,29 +229,35 @@ function review(c) {
 }
 
 // Decline with the approver's reason, which the declined idea shows; the button waits for a reason.
-function declineWithReason(run) {
+function declineWithReason(key, run) {
   const reason = el('input', { type: 'text', class: 'reason', placeholder: 'reason to decline', 'aria-label': 'Reason to decline' })
-  const button = el('button', { type: 'button', class: 'btn', disabled: '' }, 'Decline')
-  reason.addEventListener('input', () => {
+  drafted(reason, key, 'reason')
+  const button = el('button', { type: 'button', class: 'btn' }, 'Decline')
+  const update = () => {
     button.disabled = !reason.value.trim()
+  }
+  update()
+  reason.addEventListener('input', update)
+  button.addEventListener('click', () => {
+    drafts.delete(key)
+    run(reason.value.trim())
   })
-  button.addEventListener('click', () => run(reason.value.trim()))
   return el('span', { class: 'grant' }, reason, button)
 }
 
 // A primary action with its grant fields (nodes, study hours, priority) and the approver's instructions for the
 // session: the action gets those that are filled. The session follows the instructions as the maintainer note.
-function approveWithGrant(label, run, suggested = '') {
-  const nodes = nodesInput()
-  const hours = hoursInput()
-  const priority = priorityInput()
+function approveWithGrant(key, label, run, suggested = '') {
+  const nodes = drafted(nodesInput(), key, 'nodes')
+  const hours = drafted(hoursInput(), key, 'hours')
+  const priority = drafted(priorityInput(), key, 'priority')
   const note = el('textarea', {
     class: 'instructions',
     rows: '2',
     placeholder: 'instructions for the session (optional): track, settings, what to compare',
     'aria-label': 'Instructions for the session',
   })
-  note.value = suggested
+  drafted(note, key, 'note', suggested)
   const decision = () => ({ ...grantOf(nodes, hours, priority), ...(note.value.trim() ? { note: note.value.trim() } : {}) })
   return el(
     'span',
@@ -235,12 +266,20 @@ function approveWithGrant(label, run, suggested = '') {
     nodes,
     hours,
     priority,
-    el('button', { type: 'button', class: 'btn primary', onclick: () => run(decision()) }, label),
+    el('button', {
+      type: 'button',
+      class: 'btn primary',
+      onclick: () => {
+        const body = decision()
+        drafts.delete(key)
+        run(body)
+      },
+    }, label),
   )
 }
 
-function requeueWithGrant(idea, suggested) {
-  return approveWithGrant('Re-queue', (grant) => act(`ideas/${idea.id}/requeue`, { note: '', ...grant }, 'Re-queued'), suggested)
+function requeueWithGrant(idea, suggested, key) {
+  return approveWithGrant(key, 'Re-queue', (grant) => act(`ideas/${idea.id}/requeue`, { note: '', ...grant }, 'Re-queued'), suggested)
 }
 
 // The newest #9514 comments, read from GitHub's public API in this browser (no server keys), with the visible text
@@ -314,7 +353,7 @@ function renderIntakeLive() {
           ),
           link(c.html_url, '↗'),
           waiting
-            ? approveWithGrant('Approve', (grant) => act('intake/approve', { ...review(c), ...grant }, 'Approved and queued'))
+            ? approveWithGrant(`c${c.id}`, 'Approve', (grant) => act('intake/approve', { ...review(c), ...grant }, 'Approved and queued'))
             : registered && !idea?.registry_id
               ? el('span', { class: 'muted small' }, 'done → ', link(`${PAGES.status}/${registered}`, registered))
               : el(
@@ -322,7 +361,7 @@ function renderIntakeLive() {
                   { class: 'muted small' },
                   idea.registry_id ? `${idea.state} → ${idea.registry_id}` : idea.state === 'declined' ? idea.note : idea.state,
                 ),
-          waiting ? declineWithReason((note) => act('intake/decline', { ...review(c), note }, 'Declined')) : null,
+          waiting ? declineWithReason(`c${c.id}`, (note) => act('intake/decline', { ...review(c), note }, 'Declined')) : null,
         ),
         expanded ? storedText(c.visible.text, c.visible.removed) : null,
       )
@@ -349,7 +388,7 @@ function alreadyRun() {
           el('small', {}, `#9514 · ${idea.author} · done → `, link(`${PAGES.status}/${idea.registry_id}`, idea.registry_id)),
         ),
         idea.url ? link(idea.url, '↗') : el('span'),
-        requeueWithGrant(idea, 'retest on current recipe'),
+        requeueWithGrant(idea, 'retest on current recipe', `run${idea.id}`),
       ),
     ),
   )
@@ -417,8 +456,10 @@ function render() {
 async function refresh() {
   try {
     state = await api('state')
-    render()
-    renderIntakeLive()
+    withFocusKept(() => {
+      render()
+      renderIntakeLive()
+    })
   } catch (error) {
     renderNext({ tone: 'blocked', text: `Belay API unavailable (${error.message})` })
   }
