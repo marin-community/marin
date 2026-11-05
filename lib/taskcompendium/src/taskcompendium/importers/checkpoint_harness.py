@@ -184,7 +184,7 @@ def read_checkpoint_file(
         rendered = checkpoint_choice(doc, template)
         requests = tuple(
             (
-                LikelihoodRequest(context=choice, continuation=rendered.prompt)
+                LikelihoodRequest(context=choice, continuation=" " + rendered.prompt)
                 if family == "wsc273"
                 else LikelihoodRequest(context=prefix + rendered.prompt, continuation=" " + choice)
             )
