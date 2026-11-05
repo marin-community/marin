@@ -181,8 +181,9 @@ def _combine_index(
             if item < 0:
                 item += view_length
             converted_list.append(start0 + item * step0)
-        # jax.Ref reads a Python list in an index tuple as several indices, so hand it an integer array.
-        return jnp.asarray(converted_list, dtype=jnp.int32)
+        # jax.Ref reads a Python list in an index tuple as several indices. A named array on the
+        # indexed axis keeps that axis in the result, as list indexing of a NamedArray does.
+        return NamedArray(jnp.asarray(converted_list, dtype=jnp.int32), (view_axis.resize(len(converted_list)),))
 
     raise TypeError(
         "Slice references only support integers, slices, dslice, NamedArray, jnp.ndarray, or lists/tuples thereof"

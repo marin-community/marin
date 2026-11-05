@@ -168,6 +168,21 @@ def test_list_index_reads_and_writes_selected_positions():
     assert jnp.array_equal(ref.value().array, jnp.array([10, 1, 20, 3, 4, 5]))
 
 
+def test_list_index_matches_named_array_when_length_equals_another_axis():
+    X, Y = hax.Axis("x", 6), hax.Axis("y", 2)
+    array = hax.arange(X) * 10 + hax.arange(Y).broadcast_axis(X)
+    ref = hax.new_ref(array)
+
+    read = ref[{"x": [0, 2]}]
+    expected = array[{"x": [0, 2]}]
+    assert read.axes == expected.axes
+    assert jnp.array_equal(read.array, expected.array)
+
+    ref[{"x": [1, 3]}] = hax.zeros((X.resize(2), Y), dtype=ref.dtype)
+    assert jnp.array_equal(ref.value()[{"x": [1, 3]}].array, jnp.zeros((2, 2), dtype=ref.dtype))
+    assert jnp.array_equal(ref.value()[{"x": [0, 2]}].array, expected.array)
+
+
 def test_slice_value_and_unsliced():
     X = hax.Axis("x", 6)
     Y = hax.Axis("y", 3)
