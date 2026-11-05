@@ -5,9 +5,10 @@
 
 import asyncio
 import json
+import os
 import signal
 import threading
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 
 import pytest
@@ -134,6 +135,22 @@ def test_router_does_not_retry_a_failed_generation(router_workers):
     with vllm_router(VllmRouterConfig(), (worker.url,), startup_timeout_seconds=30) as router:
         assert _chat(router.server_url, "failed-session", "fail").status_code == 503
         assert len(worker.calls) == 1
+
+
+@pytest.mark.parametrize("workload_error", [False, True])
+def test_router_forced_shutdown_reaps_the_process_and_preserves_caller_errors(router_workers, workload_error):
+    worker = router_workers("one")
+    port = available_port("127.0.0.1")
+    expected = pytest.raises(RuntimeError, match="workload failed") if workload_error else nullcontext()
+    with expected:
+        with vllm_router(VllmRouterConfig(), (worker.url,), port=port, startup_timeout_seconds=30) as router:
+            # A frozen process cannot handle SIGTERM; teardown must escalate.
+            os.killpg(router.process.pid, signal.SIGSTOP)
+            if workload_error:
+                raise RuntimeError("workload failed")
+    assert router.process.poll() is not None
+    with pytest.raises(requests.ConnectionError):
+        requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
 
 
 def test_router_client_disconnect_cancels_the_worker_stream(router_workers):

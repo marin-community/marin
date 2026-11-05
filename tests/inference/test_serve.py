@@ -45,6 +45,7 @@ from marin.inference.config import (
     VllmCompilationCacheMode,
     VllmEngineConfig,
     VllmLauncherType,
+    VllmRouterConfig,
     VllmSource,
 )
 from marin.inference.dashboard_server import (
@@ -727,7 +728,16 @@ def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
     assert plan.tpu_types == ("v6e-4", "v5litepod-4", "v5p-8", "v4-8")
 
 
-def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatch):
+@pytest.mark.parametrize(
+    "router,worker_resources,expected_dp",
+    [
+        (None, ResourceConfig.with_tpu(("v6e-4", "v4-8")), 1),
+        (VllmRouterConfig(data_parallel_size=2), ResourceConfig.with_gpu("H100", count=2), 2),
+    ],
+)
+def test_run_iris_service_registers_without_worker_placement_metadata(
+    monkeypatch, router, worker_resources, expected_dp
+):
     registered_metadata: dict[str, str] = {}
     model_id = "Qwen/Qwen3-0.6B"
 
@@ -764,9 +774,9 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
             tensor_parallel_size=1,
             chat_template_content="{{ messages }}",
         ),
-        engine=VllmEngineConfig(),
+        engine=VllmEngineConfig(router=router),
         iris=IrisConfig(
-            worker_resources=ResourceConfig.with_tpu(("v6e-4", "v4-8")),
+            worker_resources=worker_resources,
             worker_environment=create_environment(docker_image="test"),
         ),
         endpoint_name="/serve/test",
@@ -780,6 +790,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
         set_job_info(None)
 
     assert "accelerator" not in registered_metadata
+    assert int(registered_metadata["data_parallel_size"]) == expected_dp
     assert float(registered_metadata["proxy_timeout_seconds"]) == 43_200
 
 

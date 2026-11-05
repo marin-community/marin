@@ -375,9 +375,12 @@ def _effective_serving(
     instances: int = 1,
 ) -> EffectiveServing:
     geometry = iris.serving_geometry
+    data_parallel_size = geometry.data_parallel_size if geometry else 1
+    if geometry is None and isinstance(engine, VllmEngineConfig) and engine.router is not None:
+        data_parallel_size = engine.router.data_parallel_size
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--tensor-parallel-size", type=int, default=tensor_parallel_size)
-    parser.add_argument("--data-parallel-size", type=int, default=geometry.data_parallel_size if geometry else 1)
+    parser.add_argument("--data-parallel-size", type=int, default=data_parallel_size)
     parser.add_argument("--max-model-len", default=model.max_model_len)
     options, _ = parser.parse_known_args(engine.extra_args if isinstance(engine, VllmEngineConfig) else ())
     context = options.max_model_len

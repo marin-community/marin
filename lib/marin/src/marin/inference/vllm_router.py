@@ -21,6 +21,7 @@ from marin.inference.config import WORKER_PYTHON_VERSION, VllmRouterConfig
 
 logger = logging.getLogger(__name__)
 VLLM_ROUTER_VERSION = "0.1.16"
+_ROUTER_SHUTDOWN_TIMEOUT = 10
 
 
 def available_port(host: str) -> int:
@@ -137,8 +138,10 @@ def vllm_router(
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)
         try:
-            process.wait(timeout=10)
+            process.wait(timeout=_ROUTER_SHUTDOWN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            logger.warning("vLLM Router did not stop gracefully; killing its process group")
         finally:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=10)
+            process.wait(timeout=_ROUTER_SHUTDOWN_TIMEOUT)

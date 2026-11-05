@@ -3,7 +3,7 @@
 
 """Iris subcommand for ``marin-serve``.
 
-Submits a single Iris job that boots a serving backend on a TPU slice or single-host GPU allocation and
+Submits a single Iris job that boots a serving backend on a TPU slice or GPU allocation and
 registers a browser dashboard + OpenAI-compatible endpoint through the controller proxy. The job
 stops itself after ``--timeout-hours`` so a forgotten server frees its slice.
 
