@@ -24,8 +24,8 @@ PUBLIC_STAGED_REVISION = "5d6a5c9cbbf1541ae7325cbdba290a102ab05ca0"
 CAMPAIGN_ISSUE = "https://github.com/marin-community/marin/issues/10305"
 
 STAGE3_IMAGE_CAVEAT = (
-    "Docker image locators are local IDs, not pullable registry references; the archive "
-    "excludes container image bytes, so this release is not self-contained executable data."
+    "Container image material is host-local and excluded from the screened release, so this "
+    "release is data, not a runnable task environment."
 )
 QUALIFICATION_IS_NOT_ADMISSION = (
     "Campaign qualification is not curation admission: use the release's own admission "
