@@ -27,7 +27,7 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.datakit.decontam.prepare_eval_corpus import AA_EVALS
+from experiments.datakit.decontam.prepare_eval_corpus import AA_BENCHMARK_NAMES, AA_EVALS
 from experiments.datakit.decontam.viewer.export_run import (
     _overlapping_ngrams,
     _window,
@@ -35,7 +35,6 @@ from experiments.datakit.decontam.viewer.export_run import (
 )
 from experiments.datakit.decontam.viewer.report import render_run
 from experiments.datakit.reference_pipeline import (
-    AA_BENCHMARK_NAMES,
     EVAL_CORPUS_VERSION,
     MIN_MATCHED_FEATURES,
     NGRAM_LENGTH,

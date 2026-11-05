@@ -116,7 +116,6 @@ from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
     DeconAttributes,
     DropSetSource,
-    RequiredEvalSuite,
     all_source_drop_sets_step,
     build_eval_bloom_step,
     decon_step,
@@ -170,20 +169,18 @@ from experiments.datakit.decontam.config import (
     GLOBAL_DF_COMMON_MIN_SOURCES,
     GLOBAL_DF_SAMPLE_DOCS,
     ITEM_MATCH,
+    NGRAM_LENGTH,
     SOURCE_DF_COMMON_FRAC,
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
 )
 from experiments.datakit.decontam.prepare_eval_corpus import (
-    AA_BENCHMARK_NAMES,
-    AA_MANIFEST_RELATIVE,
     DECON_EXCLUDED_EVAL_TASKS,
     EVAL_CORPUS_VERSION,
     EVALS_RELATIVE,
     LMH_MANIFEST_RELATIVE,
     REQUIRED_LMH_TASKS,
-    UNCHEATABLE_BENCHMARK_NAMES,
-    UNCHEATABLE_MANIFEST_RELATIVE,
+    required_eval_suites,
 )
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBED_DOC_SAMPLE_CHARS,
@@ -230,11 +227,10 @@ SPLIT = "train"
 
 # Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
-# hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
-# ~270 MB filter.
+# hashes across the AA + LMH corpus plus ~4.85M for the AAII v5 and eval-policy
+# suites, with 1.9x headroom. At FPR=1e-9 this is a ~270 MB filter.
 ESTIMATED_DOC_COUNT = 50_000_000
 FALSE_POSITIVE_RATE = 1e-9
-NGRAM_LENGTH = 13
 OVERLAP_THRESHOLD = 0.5
 MIN_MATCHED_FEATURES = 2
 # Contaminated docs reservoir-sampled per shard into the flagged side output
@@ -789,10 +785,7 @@ def decontamination_steps(
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_suites=(
-            RequiredEvalSuite(f"{eval_root}/{AA_MANIFEST_RELATIVE}", AA_BENCHMARK_NAMES),
-            RequiredEvalSuite(f"{eval_root}/{UNCHEATABLE_MANIFEST_RELATIVE}", UNCHEATABLE_BENCHMARK_NAMES),
-        ),
+        required_eval_suites=required_eval_suites(eval_root),
         required_eval_corpus_version=EVAL_CORPUS_VERSION,
         best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
