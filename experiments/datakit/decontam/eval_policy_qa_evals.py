@@ -25,7 +25,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem, hf_hub_download
 
-from experiments.datakit.decontam.pinned_evals import PinnedEval
+from experiments.datakit.decontam.pinned_evals import MIN_LETTER_WORDS, PinnedEval, letter_words
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHAT_BENCHMARKS = REPO_ROOT / "vendor/evalchemy/eval/chat_benchmarks"
@@ -49,7 +49,6 @@ AIME24_FILE = "AIME24/data/aime24.json"
 FINANCEBENCH_FILE = "FinanceBench/data/financebench.jsonl"
 
 # A record needs this many words with a letter to produce a 13-gram.
-MIN_RECORD_WORDS = 13
 # A part gets its own view record only when it has this many words with a letter.
 MIN_VIEW_WORDS = 30
 # A test-harness line shared by this many items is boilerplate, not item content.
@@ -73,7 +72,7 @@ class EvalRecords:
 
     def add(self, item_id: str, parts: list[str], views: dict[str, str] | None = None) -> None:
         text = paragraphs(parts)
-        if letter_words(text) < MIN_RECORD_WORDS:
+        if letter_words(text) < MIN_LETTER_WORDS:
             return
         self.rows.append({"id": f"{self.name}-{item_id}", "text": text})
         for view, view_text in (views or {}).items():
@@ -81,10 +80,6 @@ class EvalRecords:
             if view_text == text or letter_words(view_text) < MIN_VIEW_WORDS:
                 continue
             self.rows.append({"id": f"{self.name}-{item_id}-{view}", "text": view_text})
-
-
-def letter_words(text: str) -> int:
-    return sum(1 for word in text.split() if any(c.isalpha() for c in word))
 
 
 def paragraphs(parts: list[str]) -> str:

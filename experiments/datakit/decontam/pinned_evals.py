@@ -4,12 +4,17 @@
 """A benchmark extracted from a pinned source into decontamination records."""
 
 import dataclasses
+import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
 from marin.datakit.decon import DEFAULT_PARAGRAPH_DELIMITER
 
 from experiments.datakit.decontam.config import NGRAM_LENGTH
+
+# A record needs as many words with a letter as one n-gram to be matched at all.
+MIN_LETTER_WORDS = NGRAM_LENGTH
+DOWNLOAD_TIMEOUT = 120
 
 
 @dataclasses.dataclass(frozen=True)
@@ -31,6 +36,19 @@ class PinnedEval:
     revision: str
     expected_records: int
     build: Callable[[Path], list[dict[str, str]]]
+
+
+def letter_words(text: str) -> int:
+    return sum(1 for word in text.split() if any(ch.isalpha() for ch in word))
+
+
+def fetch_cached(url: str, path: Path) -> bytes:
+    """Return the bytes at ``url``, downloading them to ``path`` on first use."""
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response:
+            path.write_bytes(response.read())
+    return path.read_bytes()
 
 
 def markable(text: str) -> str:

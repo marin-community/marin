@@ -12,7 +12,7 @@ Docker images.
 QA evals get one record per item. Task evals get one full record per task
 (``<eval>-<item>``) plus one record per view (``<eval>-<item>-<view>``): the
 instruction the agent sees, the reference solution or grading rubric, and the
-task-specific tests. Records with fewer than MIN_WORDS words containing letters
+task-specific tests. Records with fewer than MIN_LETTER_WORDS words containing letters
 are dropped, and each record is cut to MAX_CHARS characters.
 """
 
@@ -21,7 +21,6 @@ import csv
 import hashlib
 import io
 import json
-import urllib.request
 import zipfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -30,10 +29,9 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem, hf_hub_download
 
-from experiments.datakit.decontam.pinned_evals import PinnedEval
+from experiments.datakit.decontam.pinned_evals import MIN_LETTER_WORDS, PinnedEval, fetch_cached, letter_words
 
 MAX_CHARS = 200_000
-MIN_WORDS = 13
 # A file whose exact content appears in this many tasks of one eval is harness
 # boilerplate (shared test runners, helper scripts), not task content.
 BOILERPLATE_MIN_TASKS = 3
@@ -76,13 +74,9 @@ GDP_PDF_RUBRIC_CRITERIA = 30
 GDP_PDF_EMPTY_CRITERION = "None"
 
 
-def _letter_words(text: str) -> int:
-    return sum(1 for word in text.split() if any(ch.isalpha() for ch in word))
-
-
 def _record(record_id: str, text: str) -> dict[str, str] | None:
     text = text.strip()[:MAX_CHARS]
-    if _letter_words(text) < MIN_WORDS:
+    if letter_words(text) < MIN_LETTER_WORDS:
         return None
     return {"id": record_id, "text": text}
 
@@ -95,18 +89,9 @@ def _task_rows(name: str, item_id: str, views: dict[str, str], full_only: tuple[
     return [r for r in records if r is not None]
 
 
-def _fetch(url: str, path: Path) -> bytes:
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(url, timeout=120) as response:
-            data = response.read()
-        path.write_bytes(data)
-    return path.read_bytes()
-
-
 def _github_tree(repo: str, revision: str, cache_dir: Path) -> list[dict]:
     url = f"https://api.github.com/repos/{repo}/git/trees/{revision}?recursive=1"
-    tree = json.loads(_fetch(url, cache_dir / repo / revision / "_tree.json"))
+    tree = json.loads(fetch_cached(url, cache_dir / repo / revision / "_tree.json"))
     assert not tree["truncated"], f"{repo}@{revision}: git tree listing is truncated"
     return tree["tree"]
 
@@ -114,7 +99,7 @@ def _github_tree(repo: str, revision: str, cache_dir: Path) -> list[dict]:
 def _github_files(repo: str, revision: str, paths: list[str], cache_dir: Path) -> dict[str, str]:
     def fetch(path: str) -> str:
         url = f"https://raw.githubusercontent.com/{repo}/{revision}/{path}"
-        return _fetch(url, cache_dir / repo / revision / path).decode("utf-8")
+        return fetch_cached(url, cache_dir / repo / revision / path).decode("utf-8")
 
     with ThreadPoolExecutor(FETCH_THREADS) as pool:
         return dict(zip(paths, pool.map(fetch, paths), strict=True))
@@ -262,7 +247,7 @@ def automationbench(cache_dir: Path) -> list[dict[str, str]]:
     """
     name = "automationbench"
     url = f"https://github.com/{AUTOMATIONBENCH_REPO}/archive/{AUTOMATIONBENCH_REVISION}.zip"
-    archive = _fetch(url, cache_dir / AUTOMATIONBENCH_REPO / f"{AUTOMATIONBENCH_REVISION}.zip")
+    archive = fetch_cached(url, cache_dir / AUTOMATIONBENCH_REPO / f"{AUTOMATIONBENCH_REVISION}.zip")
     root = f"AutomationBench-{AUTOMATIONBENCH_REVISION}/automationbench/domains"
     rows: list[dict] = []
     seen: set[str] = set()

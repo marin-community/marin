@@ -23,7 +23,6 @@ import json
 import math
 import re
 import subprocess
-import urllib.request
 import zipfile
 from collections import Counter
 from collections.abc import Callable
@@ -31,7 +30,7 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
-from experiments.datakit.decontam.pinned_evals import PinnedEval
+from experiments.datakit.decontam.pinned_evals import MIN_LETTER_WORDS, PinnedEval, fetch_cached, letter_words
 
 REGISTRY_URL = (
     "https://raw.githubusercontent.com/marin-community/harbor/38742b0f9f411c95e0c01468785cac7bb77c9894/registry.json"
@@ -48,7 +47,6 @@ SOTOPIA_ITEMS = 100
 DS1000_TASKS = 1000
 
 MAX_VIEW_CHARS = 200_000
-MIN_LETTER_WORDS = 13
 BOILERPLATE_TASK_FRACTION = 0.5
 # About 40 of the 100 OpenThoughts-TBLite tasks share a grader wrapper and test.sh template.
 OT_TBLITE_BOILERPLATE_FRACTION = 0.25
@@ -110,14 +108,6 @@ def sparse_checkout(git_url: str, commit: str, path: str, dest: Path) -> Path:
     if head.stdout.strip() != commit:
         raise ValueError(f"{dest}: HEAD {head.stdout.strip()} != {commit}")
     return dest / path
-
-
-def download(url: str, dest: Path) -> Path:
-    if not dest.exists():
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(url) as response:
-            dest.write_bytes(response.read())
-    return dest
 
 
 def read(path: Path) -> str:
@@ -248,10 +238,6 @@ def strip_boilerplate(tasks: list[Task], fraction: float) -> list[Task]:
     return stripped
 
 
-def letter_words(text: str) -> int:
-    return sum(1 for word in text.split() if LETTER.search(word))
-
-
 def records(name: str, tasks: list[Task]) -> list[dict[str, str]]:
     """Full and per-view records for ``tasks``; records under MIN_LETTER_WORDS words are skipped."""
     rows: list[dict] = []
@@ -372,27 +358,27 @@ HARBOR_PARSERS: dict[str, Callable[[Path], Task]] = {
 }
 
 
-def ot_tblite(registry: list[dict], src_dir: Path) -> tuple[list[Task], str, str]:
+def ot_tblite(registry: list[dict], src_dir: Path) -> tuple[list[Task], RegistryDataset]:
     spec = SPECS["ot_tblite"]
     dataset = registry_dataset(registry, spec.registry_name, spec.registry_version)
-    archive = download(OT_TBLITE_ZIP.format(commit=dataset.commit), src_dir / f"ot_tblite_{dataset.commit}.zip")
+    archive = fetch_cached(OT_TBLITE_ZIP.format(commit=dataset.commit), src_dir / f"ot_tblite_{dataset.commit}.zip")
     extract_dir = src_dir / f"ot_tblite_{dataset.commit}"
     if not extract_dir.is_dir():
-        with zipfile.ZipFile(io.BytesIO(archive.read_bytes())) as source_zip:
+        with zipfile.ZipFile(io.BytesIO(archive)) as source_zip:
             source_zip.extractall(extract_dir)
     (root,) = extract_dir.iterdir()
     tasks = [ot_tblite_task(root / name) for name in dataset.task_names]
-    return tasks, dataset.git_url.removesuffix(".git"), dataset.commit
+    return tasks, dataset
 
 
-def ds1000(registry: list[dict], src_dir: Path) -> tuple[list[Task], RegistryDataset, list[str]]:
+def ds1000(registry: list[dict], src_dir: Path) -> tuple[list[Task], RegistryDataset]:
     spec = SPECS["ds1000"]
     mini = registry_dataset(registry, spec.registry_name, spec.registry_version)
     root = sparse_checkout(mini.git_url, mini.commit, mini.parent, src_dir / f"ds1000_{mini.commit}")
     names = sorted((p.name for p in root.iterdir() if p.is_dir()), key=int)
     if not set(mini.task_names) <= set(names):
         raise ValueError("ds1000: mini-200 tasks missing from the task tree")
-    return [ds1000_task(root / name) for name in names], mini, sorted(mini.task_names, key=int)
+    return [ds1000_task(root / name) for name in names], mini
 
 
 def sotopia(src_dir: Path) -> list[Task]:
@@ -409,7 +395,7 @@ def sotopia(src_dir: Path) -> list[Task]:
 
 @functools.cache
 def _registry(src_dir: Path) -> list[dict]:
-    return json.loads(read(download(REGISTRY_URL, src_dir / "registry_38742b0f.json")))
+    return json.loads(fetch_cached(REGISTRY_URL, src_dir / "registry_38742b0f.json"))
 
 
 def _check_commit(subdir: str, commit: str, pinned: str) -> None:
@@ -428,13 +414,13 @@ def _harbor_eval(subdir: str, pinned_commit: str, src_dir: Path) -> list[dict[st
 
 
 def ot_tblite_records(src_dir: Path) -> list[dict[str, str]]:
-    tasks, _source, revision = ot_tblite(_registry(src_dir), src_dir)
-    _check_commit("ot_tblite", revision, OT_TBLITE_COMMIT)
+    tasks, dataset = ot_tblite(_registry(src_dir), src_dir)
+    _check_commit("ot_tblite", dataset.commit, OT_TBLITE_COMMIT)
     return records("ot_tblite", strip_boilerplate(tasks, SPECS["ot_tblite"].boilerplate_fraction))
 
 
 def ds1000_records(src_dir: Path) -> list[dict[str, str]]:
-    tasks, mini, _mini_ids = ds1000(_registry(src_dir), src_dir)
+    tasks, mini = ds1000(_registry(src_dir), src_dir)
     _check_commit("ds1000", mini.commit, DS1000_COMMIT)
     if len(tasks) != DS1000_TASKS:
         raise ValueError(f"ds1000: {len(tasks)} tasks, expected {DS1000_TASKS}")

@@ -40,6 +40,7 @@ from experiments.datakit.decontam.config import (
     GLOBAL_DF_COMMON_MIN_SOURCES,
     GLOBAL_DF_SAMPLE_DOCS,
     ITEM_MATCH,
+    NGRAM_LENGTH,
     SOURCE_DF_COMMON_FRAC,
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
@@ -59,7 +60,6 @@ _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 # Bloom sizing mirrors experiments/datakit/reference_pipeline.py.
 ESTIMATED_DOC_COUNT = 50_000_000
 FALSE_POSITIVE_RATE = 1e-9
-NGRAM_LENGTH = 13
 OVERLAP_THRESHOLD = 0.5
 MIN_MATCHED_FEATURES = 2
 # True-paragraph split (blank-line-delimited) rather than per-line: dilutes
