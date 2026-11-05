@@ -867,9 +867,9 @@ class LmDataConfig:
                 raise ValueError(f"Invalid train_weights type: {type(weights)}")
 
         if self.max_train_batches is not None or self.num_validation_sequences is not None:
-            assert self.experiment_budget is None and self.target_budget is None, (
-                "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
-            )
+            assert (
+                self.experiment_budget is None and self.target_budget is None
+            ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
 
         if self.prior_context_phases:
             if not isinstance(self.shuffle, BlockShuffleConfig):
@@ -1139,16 +1139,16 @@ class LmDataConfig:
             datasets = sliced_datasets
 
         if self.max_train_batches is not None:
-            assert initial_batch_size is not None, (
-                "initial_batch_size must be provided if max_train_batches is provided"
-            )
+            assert (
+                initial_batch_size is not None
+            ), "initial_batch_size must be provided if max_train_batches is provided"
             for name, ds in datasets.items():
                 if name in self.max_train_batches:
                     num_sequences = self.max_train_batches[name] * initial_batch_size
                     len_dataset = len(ds.as_sync_dataset())
-                    assert num_sequences <= len_dataset, (
-                        f"Max sequences for {name} ({num_sequences}) is greater than the dataset size ({len_dataset})"
-                    )
+                    assert (
+                        num_sequences <= len_dataset
+                    ), f"Max sequences for {name} ({num_sequences}) is greater than the dataset size ({len_dataset})"
                     datasets[name] = ds.slice_dataset(end_index=num_sequences)
 
         return datasets, doc_caches

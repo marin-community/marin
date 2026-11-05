@@ -36,6 +36,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.marin_tokenizer import marin_tokenizer
 
 MRCR_DATASET_REVISION = "f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d"
+MRCR_RAW_VERSION = "2026.07.14.1"
 MRCR_VERSION = "2026.11.04"
 MRCR_NEEDLE_COUNTS: tuple[int, ...] = (2, 4, 8)
 MRCR_DISTANCE_BOUNDS: tuple[int, ...] = (32_768, 65_536, 131_072)
@@ -369,8 +370,9 @@ def mrcr_dataset(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[Artifact]:
         "raw/openai/mrcr",
         hf_id="openai/mrcr",
         revision=MRCR_DATASET_REVISION,
-        version=MRCR_VERSION,
+        version=MRCR_RAW_VERSION,
         urls_glob=["*needle/*.parquet"],
+        pin=f"raw/openai/mrcr/{MRCR_RAW_VERSION}",
     )
 
     def build_config(ctx: StepContext) -> MrcrTransformConfig:
