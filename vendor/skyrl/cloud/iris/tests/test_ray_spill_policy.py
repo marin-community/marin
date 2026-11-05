@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from ray._private.parameter import RayParams
+from ray._private.resource_and_label_spec import ResourceAndLabelSpec
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
@@ -137,3 +138,42 @@ def test_local_spill_directory_creation_failure_names_configured_path(tmp_path, 
             "10.0.0.2",
             LocalRaySpillTarget(str(spill_dir)),
         )
+
+
+@pytest.mark.parametrize("role", ["head", "worker"])
+@pytest.mark.parametrize("limit_gib,store_cap_gib", [(940, 96), (940, 32), (32, 96)])
+def test_ray_heap_and_plasma_resources_share_the_cgroup_budget(tmp_path, monkeypatch, role, limit_gib, store_cap_gib):
+    limit = limit_gib * 1024**3
+    cgroup_limit = tmp_path / "memory.max"
+    cgroup_limit.write_text(str(limit))
+    real_open = open
+
+    def open_cgroup(path):
+        return real_open(cgroup_limit if path == "/sys/fs/cgroup/memory.max" else path)
+
+    monkeypatch.setattr(runtime, "open", open_cgroup, raising=False)
+    monkeypatch.setenv("OT_AGENT_RAY_OBJECT_STORE_CAP_GIB", str(store_cap_gib))
+    commands = []
+    monkeypatch.setattr(runtime.subprocess, "run", lambda command, **_kwargs: commands.append(command))
+    target = LocalRaySpillTarget(str(tmp_path / "spill"))
+    if role == "head":
+        runtime.ray_start_head("127.0.0.1", target)
+    else:
+        runtime.ray_start_worker("127.0.0.1", 6379, "127.0.0.2", target)
+
+    flags = dict(argument.split("=", 1) for argument in commands[0] if "=" in argument)
+    # Exercise the pinned Ray resource representation without starting a cluster:
+    # its memory resource is worker heap, separate from plasma object-store memory.
+    resources = (
+        ResourceAndLabelSpec(
+            num_cpus=1,
+            num_gpus=0,
+            memory=int(flags["--memory"]),
+            object_store_memory=int(flags["--object-store-memory"]),
+        )
+        .resolve(is_head=role == "head", node_ip_address="127.0.0.1")
+        .to_resource_dict()
+    )
+    assert resources["memory"] > 0
+    assert 0 < resources["object_store_memory"] <= min(store_cap_gib * 1024**3, limit // 8)
+    assert resources["memory"] + resources["object_store_memory"] == limit
