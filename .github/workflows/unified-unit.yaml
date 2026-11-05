@@ -118,6 +118,10 @@ jobs:
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
 
+      - name: Type-check Forge
+        if: matrix.package == 'marin-forge'
+        run: uv run --frozen --package marin-forge --group test pyrefly check --config lib/forge/pyproject.toml
+
   slow:
     if: ${{ github.event_name == 'schedule' }}
     name: slow

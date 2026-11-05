@@ -33,6 +33,7 @@ from pathlib import Path, PurePosixPath
 # Ordered list of workspace member short names.
 SCOPES: tuple[str, ...] = (
     "rigging",
+    "forge",
     "haliax",
     "iris",
     "fray",
@@ -87,6 +88,7 @@ BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
+    "forge": "marin-forge",
     "haliax": "marin-haliax",
     "iris": "marin-iris",
     "fray": "marin-fray",
