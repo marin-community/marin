@@ -12,6 +12,7 @@ multi-sequence request.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -394,6 +395,11 @@ def _host_fp32_logprobs(logits: np.ndarray) -> np.ndarray:
     return shifted - normalizer
 
 
+def _row_sha256(values: np.ndarray) -> tuple[str, ...]:
+    """Hash each complete FP32 row using its contiguous native byte encoding."""
+    return tuple(hashlib.sha256(np.ascontiguousarray(row).tobytes()).hexdigest() for row in values)
+
+
 def compare_logits(
     reference: np.ndarray,
     actual: np.ndarray,
@@ -407,7 +413,9 @@ def compare_logits(
     The ``host_fp32_*`` fields use host NumPy float32 log-softmax. The
     ``rounded_fp64_oracle_*`` fields use host float64 log-softmax followed by
     an FP32 cast. Neither is a captured trainer or serving log-probability
-    kernel measurement.
+    kernel measurement. The full-vocabulary row fingerprints use the
+    contiguous native FP32 bytes of each complete vocabulary row and preserve
+    the comparison row order.
     """
 
     reference = _as_fp32_logits(reference, name="reference")
@@ -459,6 +467,11 @@ def compare_logits(
         "fp64_diagnostic_kl_min": min_kl,
         "fp64_diagnostic_kl_negative_count": int(np.count_nonzero(kl < 0)),
         "fp64_diagnostic_kl_negative_tolerance": negative_kl_tolerance,
+        "full_vocabulary": True,
+        "reference_row_sha256": _row_sha256(reference),
+        "actual_row_sha256": _row_sha256(actual),
+        "reference_host_fp32_logprob_row_sha256": _row_sha256(reference_fp32_logprobs),
+        "actual_host_fp32_logprob_row_sha256": _row_sha256(actual_fp32_logprobs),
     }
     if target_ids is not None:
         valid_targets = target_ids >= 0

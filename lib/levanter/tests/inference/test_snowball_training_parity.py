@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -9,6 +11,7 @@ import haliax as hax
 from haliax import Axis
 
 from levanter.inference.snowball_parity import (
+    compare_logits,
     diagnose_snowball_training_vs_paged_decode,
     _weighted_target_cross_entropy,
     snowball_parameter_budget,
@@ -115,6 +118,52 @@ def test_weighted_served_loss_oracle_detects_target_and_row_misalignment():
     assert expected != wrong_target
     assert expected != wrong_order
     assert zero_weight == 0.0
+
+
+def test_compare_logits_fingerprints_preserve_values_across_layouts():
+    contiguous = np.asarray(
+        [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], dtype=np.float32
+    )
+    backing = np.empty((2, 6), dtype=np.float32)
+    backing[:, ::2] = contiguous
+    backing[:, 1::2] = -1.0
+    noncontiguous = backing[:, ::2]
+
+    contiguous_metrics = compare_logits(contiguous, contiguous)
+    noncontiguous_metrics = compare_logits(noncontiguous, noncontiguous)
+
+    assert contiguous_metrics["full_vocabulary"] is True
+    assert noncontiguous_metrics["reference_row_sha256"] == contiguous_metrics["reference_row_sha256"]
+    assert noncontiguous_metrics["actual_row_sha256"] == contiguous_metrics["actual_row_sha256"]
+    assert noncontiguous_metrics["reference_host_fp32_logprob_row_sha256"] == contiguous_metrics[
+        "reference_host_fp32_logprob_row_sha256"
+    ]
+
+
+def test_compare_logits_fingerprints_change_only_changed_raw_row():
+    reference = np.asarray(
+        [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0, 7.0, 8.0]], dtype=np.float32
+    )
+    actual = reference.copy()
+    actual[1, 2] = np.float32(9.0)
+
+    metrics = compare_logits(reference, actual)
+
+    assert metrics["actual_row_sha256"][1] != metrics["reference_row_sha256"][1]
+    assert metrics["actual_row_sha256"][0] == metrics["reference_row_sha256"][0]
+    assert metrics["actual_row_sha256"][2] == metrics["reference_row_sha256"][2]
+
+
+def test_compare_logits_fingerprints_follow_public_row_order():
+    valid_positions = ((1, 4), (0, 2), (1, 5))
+    rows = np.asarray(
+        [[sequence, position] for sequence, position in valid_positions], dtype=np.float32
+    )
+    metrics = compare_logits(rows, rows, sample_ids=valid_positions)
+    expected = tuple(hashlib.sha256(np.ascontiguousarray(row).tobytes()).hexdigest() for row in rows)
+
+    assert metrics["reference_row_sha256"] == expected
+    assert metrics["actual_row_sha256"] == expected
 
 
 def test_snowball_training_serving_parity_rejects_noncontiguous_validity():
