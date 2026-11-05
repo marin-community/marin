@@ -4,7 +4,8 @@ With batch invariance on, the pinned vLLM limits every NCCL communicator to one 
 the limit in ``override_envs_for_invariance``, which each worker calls just before it creates its
 NCCL groups. ``generator.inference_engine_nccl_max_channels`` raises the engine's limit after that
 call, so the engine's own collectives can use more channels. Weight-sync groups stay at one channel
-so that each engine's channel layout matches the trainer's.
+so that each engine's channel layout matches the trainer's. Batch invariance at the raised limit
+depends on NCCL using one ring on every channel; ``tests/gpu/test_engine_nccl_channels.py`` checks it.
 
 This module runs inside the vLLM worker processes, because it is imported with the worker
 extension class.

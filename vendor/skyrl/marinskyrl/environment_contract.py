@@ -18,6 +18,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from marinskyrl.inference_placement import validate_engine_nccl_channels
+
 
 class EnvVarScope(StrEnum):
     DRIVER = "driver"
@@ -527,19 +529,11 @@ class EnvVarManager:
         for name in passthrough_names:
             if value := ambient.get(name):
                 values[name] = value
-        batch_invariant = _config_value(config, "trainer.algorithm.batch_invariant", False)
-        if batch_invariant:
+        if _config_value(config, "trainer.algorithm.batch_invariant", False):
             values[VLLM_BATCH_INVARIANT_ENV] = "1"
         engine_channels = _config_value(config, "generator.inference_engine_nccl_max_channels")
         if engine_channels is not None:
-            if not batch_invariant:
-                raise ValueError(
-                    "generator.inference_engine_nccl_max_channels requires trainer.algorithm.batch_invariant=true"
-                )
-            if not isinstance(engine_channels, int) or isinstance(engine_channels, bool) or engine_channels < 1:
-                raise ValueError(
-                    f"generator.inference_engine_nccl_max_channels must be a positive integer, not {engine_channels!r}"
-                )
+            validate_engine_nccl_channels(config)
             values[ENGINE_NCCL_MAX_CHANNELS_ENV] = str(engine_channels)
         if _config_value(config, "generator.fuse_weights", False):
             values[VLLM_ALLOW_INSECURE_SERIALIZATION_ENV] = "1"

@@ -129,14 +129,27 @@ trainer.algorithm.batch_invariant=true
 generator.inference_engine_nccl_max_channels=32
 ```
 
-The default `null` keeps vLLM's limit. Weight-sync groups on the engine keep
-one channel on both transports, so they match the trainer's layout. On one
-8-H100 Snowball engine at DP8/EP8 with the Triton MoE backend, lifting the
-engine's channel limit raised output throughput from 11,369 to 17,606 tokens
-per second at 512 concurrent streams. Greedy tokens and logprobs stayed
-identical, whether a prompt ran alone, under load, or repeated. Engines whose
-collectives reduce values across ranks, such as tensor-parallel engines, need
-their own parity check.
+The default `null` keeps vLLM's limit. The setting overrides only
+`NCCL_MAX_NCHANNELS`; vLLM's other batch-invariant NCCL settings stay in place.
+Weight-sync groups on the engine keep one channel on both transports, so they
+match the trainer's layout.
+
+The setting requires TP=1, decode context parallel size 1, and vLLM's default
+`allgather_reducescatter` MoE backend. In that layout, MoE dispatch all-gathers
+tokens, which copies them exactly at any channel count. MoE combine sums each
+rank's expert outputs with a reduce-scatter. A ring reduce-scatter sums each
+element in ring order, so the result stays batch invariant only if every NCCL
+channel uses the same ring. NCCL builds rings from the node topology and does
+not guarantee this. Check new hardware with the 8-GPU test
+`vendor/skyrl/skyrl-train/tests/gpu/test_engine_nccl_channels.py`. It checks
+that each token's sum is bit-identical across per-rank token counts from 1 to
+8,192.
+
+On one 8-H100 Snowball engine at DP8/EP8 with the Triton MoE backend, lifting
+the engine's channel limit raised output throughput from 11,369 to 17,606
+tokens per second at 512 concurrent streams. Greedy tokens and logprobs on eight
+probe prompts matched the one-channel engine, whether a prompt ran alone, under
+load, or repeated.
 
 ## Train, resume, and evaluate through Marin
 

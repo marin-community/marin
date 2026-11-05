@@ -46,15 +46,34 @@ def test_training_channels_require_compatible_weight_transport() -> None:
     validate_expert_block_transport(config)
 
 
-def test_engine_channels_reach_engines_only_with_batch_invariance() -> None:
+def _engine_channels_config(channels: int):
     config = get_default_config()
-    config.generator.inference_engine_nccl_max_channels = 16
-    # Without batch invariance vLLM sets no channel limit, so the setting would do nothing.
-    with pytest.raises(ValueError, match="batch_invariant"):
-        EnvVarManager.from_config(config)
     config.trainer.algorithm.batch_invariant = True
-    environment = EnvVarManager.from_config(config).environment_for(EnvVarScope.INFERENCE_WORKER)
+    config.generator.inference_engine_tensor_parallel_size = 1
+    config.generator.inference_engine_nccl_max_channels = channels
+    return config
+
+
+def test_engine_channels_reach_inference_workers() -> None:
+    environment = EnvVarManager.from_config(_engine_channels_config(16)).environment_for(EnvVarScope.INFERENCE_WORKER)
     assert environment[ENGINE_NCCL_MAX_CHANNELS_ENV] == "16"
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        # Without batch invariance vLLM sets no channel limit, so the setting would do nothing.
+        ("trainer.algorithm.batch_invariant", False, "batch_invariant"),
+        # TP engines all-reduce partial sums, which have not been checked at a raised limit.
+        ("generator.inference_engine_tensor_parallel_size", 2, "TP=1"),
+        ("generator.engine_init_kwargs", {"all2all_backend": "deepep_high_throughput"}, "all2all_backend"),
+    ],
+)
+def test_engine_channels_reject_unchecked_engine_layouts(path: str, value: Any, message: str) -> None:
+    config = _engine_channels_config(16)
+    OmegaConf.update(config, path, value, force_add=True)
+    with pytest.raises(ValueError, match=message):
+        EnvVarManager.from_config(config)
 
 
 def _raw_config() -> dict[str, Any]:
