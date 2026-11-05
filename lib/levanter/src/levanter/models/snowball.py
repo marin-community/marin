@@ -59,8 +59,7 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
-from levanter.models.loss import maybe_fused_next_token_loss
+from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -559,39 +558,6 @@ class MoeForwardStats(eqx.Module):
         return self.sender_dropped + self.receiver_dropped
 
 
-def dispatch_token_validity(example: LmExample) -> NamedArray:
-    """Read unshifted query validity from packing metadata, independently of loss masking."""
-    if not isinstance(example.attn_mask, LmHeadAttentionMask) or example.attn_mask.segment_ids is None:
-        raise ValueError("Snowball checked dispatch requires explicit query segment IDs")
-    query_segments, _ = example.attn_mask.segment_ids
-    if query_segments.axes != example.tokens.axes:
-        raise ValueError("Query segment IDs must have the token axes")
-    return query_segments >= 0
-
-
-def snowball_loss_with_dispatch_stats(
-    model: "SnowballLMHeadModel", example: LmExample, *, key=None
-) -> tuple[NamedArray | Array, dict[str, Array]]:
-    """Compute next-token loss and dispatch counts in one validity-masked forward."""
-    hidden, stats = model.activations_with_stats(
-        example.tokens, dispatch_token_validity(example), attn_mask=example.attn_mask
-    )
-    loss = maybe_fused_next_token_loss(
-        model.Pos,
-        model.Embed,
-        model.Vocab,
-        hidden,
-        model.get_lm_head(),
-        example.tokens,
-        loss_weight=example.loss_weight,
-    )
-    return loss, {
-        "moe_dropped": stats.dropped,
-        "moe_sender_dropped": stats.sender_dropped,
-        "moe_receiver_dropped": stats.receiver_dropped,
-    }
-
-
 class SnowballMoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights and frozen routing biases.
 
@@ -920,7 +886,10 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         *,
         attn_mask: LmHeadAttentionMask | NamedArray | None = None,
     ) -> tuple[NamedArray, MoeForwardStats]:
-        """Return hidden states, routes and valid-assignment drops from the same forward."""
+        """Return hidden states, routes and raw per-call valid-assignment counts.
+
+        Callers must sum the count arrays across microbatches for update totals.
+        """
         if token_valid.axes != input_ids.axes or token_valid.dtype != jnp.bool_:
             raise ValueError("token_valid must be boolean with the token axes")
         sequence = input_ids.array.shape[-1]
