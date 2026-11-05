@@ -42,7 +42,7 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource
 
-EVALUATION_PIPELINE_VERSION = "2026.11.02.1"
+EVALUATION_PIPELINE_VERSION = "2026.11.05.1"
 
 
 @dataclass(frozen=True)
