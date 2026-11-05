@@ -5,7 +5,7 @@
 
 import dataclasses
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from marin.datakit.decon import DEFAULT_PARAGRAPH_DELIMITER
@@ -15,6 +15,10 @@ from experiments.datakit.decontam.config import NGRAM_LENGTH
 # A record needs as many words with a letter as one n-gram to be matched at all.
 MIN_LETTER_WORDS = NGRAM_LENGTH
 DOWNLOAD_TIMEOUT = 120
+# A part of an item gets its own view record only with this many words with a letter,
+# so that one or two shared n-grams cannot carry a view over the item-rule bar.
+MIN_VIEW_WORDS = 30
+MAX_RECORD_CHARS = 200_000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -40,6 +44,32 @@ class PinnedEval:
 
 def letter_words(text: str) -> int:
     return sum(1 for word in text.split() if any(ch.isalpha() for ch in word))
+
+
+def paragraphs(parts: Sequence[str]) -> str:
+    return "\n\n".join(part.strip() for part in parts if part and part.strip())
+
+
+def item_records(
+    name: str, item_id: str, parts: Sequence[str], views: Mapping[str, str] | None = None
+) -> list[dict[str, str]]:
+    """One item's records: ``parts`` joined as the full record, then each view long enough to stand alone.
+
+    The full record's id is ``<name>-<item_id>`` and a view's ``<name>-<item_id>-<view>``.
+    The item is skipped when the full record has fewer than ``MIN_LETTER_WORDS`` words with
+    a letter; a view needs ``MIN_VIEW_WORDS`` and must differ from the full record. Every
+    record is cut to ``MAX_RECORD_CHARS``.
+    """
+    record_id = f"{name}-{item_id}"
+    full = paragraphs(parts)
+    if letter_words(full) < MIN_LETTER_WORDS:
+        return []
+    rows = [{"id": record_id, "text": full[:MAX_RECORD_CHARS]}]
+    for view, text in (views or {}).items():
+        text = text.strip()
+        if text != full and letter_words(text) >= MIN_VIEW_WORDS:
+            rows.append({"id": f"{record_id}-{view}", "text": text[:MAX_RECORD_CHARS]})
+    return rows
 
 
 def fetch_cached(url: str, path: Path) -> bytes:

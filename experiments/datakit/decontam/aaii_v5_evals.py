@@ -13,7 +13,7 @@ QA evals get one record per item. Task evals get one full record per task
 (``<eval>-<item>``) plus one record per view (``<eval>-<item>-<view>``): the
 instruction the agent sees, the reference solution or grading rubric, and the
 task-specific tests. Records with fewer than MIN_LETTER_WORDS words containing letters
-are dropped, and each record is cut to MAX_CHARS characters.
+are dropped (see ``pinned_evals.item_records``).
 """
 
 import ast
@@ -29,9 +29,8 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem, hf_hub_download
 
-from experiments.datakit.decontam.pinned_evals import MIN_LETTER_WORDS, PinnedEval, fetch_cached, letter_words
+from experiments.datakit.decontam.pinned_evals import PinnedEval, fetch_cached, item_records
 
-MAX_CHARS = 200_000
 # A file whose exact content appears in this many tasks of one eval is harness
 # boilerplate (shared test runners, helper scripts), not task content.
 BOILERPLATE_MIN_TASKS = 3
@@ -49,6 +48,8 @@ TEXT_EXTENSIONS = frozenset(
         "yaml", "yml",
     }
 )  # fmt: skip
+# pnpm-lock.yaml is the one lock file with an indexed extension.
+LOCK_FILE_SUFFIX = "-lock.yaml"
 LFS_POINTER_PREFIX = "version https://git-lfs.github.com/spec/"
 TERMINAL_BENCH_VIEWS = ("instruction", "solution", "tests")
 
@@ -72,21 +73,6 @@ GDP_PDF_REPO = "Oitaaa/GDP.pdf"
 GDP_PDF_REVISION = "7f7657830967e418091b010bc4ba0550a87d5e09"
 GDP_PDF_RUBRIC_CRITERIA = 30
 GDP_PDF_EMPTY_CRITERION = "None"
-
-
-def _record(record_id: str, text: str) -> dict[str, str] | None:
-    text = text.strip()[:MAX_CHARS]
-    if letter_words(text) < MIN_LETTER_WORDS:
-        return None
-    return {"id": record_id, "text": text}
-
-
-def _task_rows(name: str, item_id: str, views: dict[str, str], full_only: tuple[str, ...] = ()) -> list[dict]:
-    """Full record joining every view (plus ``full_only`` parts), then one record per view."""
-    full = "\n\n".join(part for part in (*views.values(), *full_only) if part.strip())
-    records = [_record(f"{name}-{item_id}", full)]
-    records += [_record(f"{name}-{item_id}-{view}", text) for view, text in views.items()]
-    return [r for r in records if r is not None]
 
 
 def _github_tree(repo: str, revision: str, cache_dir: Path) -> list[dict]:
@@ -113,7 +99,7 @@ def _is_indexed_file(relative_path: str, size: int) -> bool:
         return False
     filename = rest.rsplit("/", 1)[-1]
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    return extension in TEXT_EXTENSIONS and "lock" not in filename.lower() and size <= MAX_FILE_BYTES
+    return extension in TEXT_EXTENSIONS and not filename.lower().endswith(LOCK_FILE_SUFFIX) and size <= MAX_FILE_BYTES
 
 
 def terminal_bench(name: str, repo: str, revision: str, task_depth: int, cache_dir: Path) -> list[dict[str, str]]:
@@ -157,7 +143,8 @@ def terminal_bench(name: str, repo: str, revision: str, task_depth: int, cache_d
             if view == "instruction" or not boilerplate:
                 views[view].append(text)
         assert views["instruction"], f"{name}: task {task} has no instruction"
-        rows += _task_rows(name, task, {view: "\n\n".join(texts) for view, texts in views.items()})
+        task_views = {view: "\n\n".join(texts) for view, texts in views.items()}
+        rows += item_records(name, task, list(task_views.values()), task_views)
     return rows
 
 
@@ -266,7 +253,7 @@ def automationbench(cache_dir: Path) -> list[dict[str, str]]:
                     "rubric": json.dumps(info["assertions"], ensure_ascii=False, indent=1),
                 }
                 state = json.dumps(info["initial_state"], ensure_ascii=False, indent=1)
-                rows += _task_rows(name, task_id, views, full_only=(state,))
+                rows += item_records(name, task_id, [*views.values(), state], views)
     return rows
 
 
@@ -303,7 +290,7 @@ def aa_briefcase_lite(cache_dir: Path) -> list[dict[str, str]]:
             rubric += [source["justification"] for source in evidence["sources"]]
             rubric.append(evidence["reasoning"])
         views = {"instruction": read(task["task_md_path"]), "rubric": "\n\n".join(rubric)}
-        rows += _task_rows(name, task["task_id"], views)
+        rows += item_records(name, task["task_id"], list(views.values()), views)
     return rows
 
 
@@ -313,8 +300,7 @@ def aa_omniscience_v1_1(cache_dir: Path) -> list[dict[str, str]]:
     path = _hf_file(OMNISCIENCE_REPO, OMNISCIENCE_REVISION, "AA-Omniscience_dataset_public.csv", cache_dir)
     with path.open(encoding="utf-8", newline="") as f:
         items = list(csv.DictReader(f))
-    records = (_record(f"{name}-{r['question_id']}", f"{r['question']}\n\n{r['answer']}") for r in items)
-    return [r for r in records if r is not None]
+    return [row for r in items for row in item_records(name, r["question_id"], [r["question"], r["answer"]])]
 
 
 def hle_diamond(cache_dir: Path) -> list[dict[str, str]]:
@@ -324,8 +310,7 @@ def hle_diamond(cache_dir: Path) -> list[dict[str, str]]:
     # Read only the text columns; the image columns hold most of the file's bytes.
     with HfFileSystem().open(path) as f:
         items = pq.read_table(f, columns=["id", "question", "answer"]).to_pylist()
-    records = (_record(f"{name}-{r['id']}", f"{r['question']}\n\n{r['answer']}") for r in items)
-    return [r for r in records if r is not None]
+    return [row for r in items for row in item_records(name, r["id"], [r["question"], r["answer"]])]
 
 
 def gdp_pdf_rows(items: list[dict]) -> list[dict[str, str]]:
@@ -336,7 +321,7 @@ def gdp_pdf_rows(items: list[dict]) -> list[dict[str, str]]:
         criteria = [c.strip() for c in criteria if c and c.strip() != GDP_PDF_EMPTY_CRITERION]
         assert criteria, f"gdp_pdf: task {item['task_id']} has no rubric criteria"
         views = {"instruction": item["prompt"], "rubric": "\n".join(criteria)}
-        rows += _task_rows("gdp_pdf", item["task_id"], views)
+        rows += item_records("gdp_pdf", item["task_id"], list(views.values()), views)
     return rows
 
 
@@ -346,7 +331,7 @@ def gdp_pdf(cache_dir: Path) -> list[dict[str, str]]:
 
 
 AAII_V5_EVALS: tuple[PinnedEval, ...] = (
-    PinnedEval("GDP.pdf", "gdp_pdf", f"https://huggingface.co/datasets/{GDP_PDF_REPO}", GDP_PDF_REVISION, 299, gdp_pdf),
+    PinnedEval("GDP.pdf", "gdp_pdf", f"https://huggingface.co/datasets/{GDP_PDF_REPO}", GDP_PDF_REVISION, 287, gdp_pdf),
     PinnedEval(
         "Terminal-Bench 4.0",
         "terminal_bench_4",
@@ -380,7 +365,7 @@ AAII_V5_EVALS: tuple[PinnedEval, ...] = (
         "automationbench",
         f"https://github.com/{AUTOMATIONBENCH_REPO}",
         AUTOMATIONBENCH_REVISION,
-        1798,
+        1728,
         automationbench,
     ),
     PinnedEval(

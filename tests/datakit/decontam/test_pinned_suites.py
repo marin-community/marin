@@ -13,7 +13,7 @@ from experiments.datakit.decontam import prepare_eval_corpus
 from experiments.datakit.decontam.aaii_v5_evals import _automationbench_tasks, gdp_pdf_rows, terminal_bench
 from experiments.datakit.decontam.config import ITEM_MATCH
 from experiments.datakit.decontam.eval_policy_agentic_evals import Task, records, strip_boilerplate
-from experiments.datakit.decontam.pinned_evals import PinnedEval
+from experiments.datakit.decontam.pinned_evals import PinnedEval, item_records
 from experiments.datakit.reference_pipeline import MIN_MATCHED_FEATURES, NGRAM_LENGTH, OVERLAP_THRESHOLD
 from tests.datakit.test_decon import _run_decon_one_shot
 
@@ -47,6 +47,12 @@ def test_terminal_bench_indexes_task_views_without_shared_harness_or_data(tmp_pa
         task = f"tasks/sensor-means-{n}"
         files[f"{task}/instruction.md"] = f"{_INSTRUCTION} Use station {n}."
         files[f"{task}/solution/solve.sh"] = f"{_SOLUTION}# station {n} uses a {n * 10} minute warmup window\n"
+        # A code file whose name contains "lock" is still part of the solution.
+        files[f"{task}/solution/businessClock.ts"] = (
+            f"// Station {n} reports in local business hours, so shift every reading into UTC before\n"
+            "// grouping it by hour, and skip the readings logged while the clock was being adjusted.\n"
+        )
+        files[f"{task}/solution/pnpm-lock.yaml"] = "lockfileVersion: '9.0'\n"
         files[f"{task}/tests/test.sh"] = _SHARED_RUNNER
         files[f"{task}/tests/expected.json"] = json.dumps({"hourly_means": [20.5, 21.0]})
         files[f"{task}/environment/Dockerfile"] = "FROM python:3.12"
@@ -63,21 +69,24 @@ def test_terminal_bench_indexes_task_views_without_shared_harness_or_data(tmp_pa
     assert "Shared harness" not in full
     assert "hourly_means" not in full
     assert "FROM python" not in full
+    assert "business hours" in rows["bench-sensor-means-1-solution"]
+    assert "lockfileVersion" not in full
 
 
 def test_gdp_pdf_indexes_prompt_and_rubric_without_empty_criteria():
     item = {
         "task_id": "t1",
         "prompt": (
-            "According to the attached filing, how did segment revenue change between the two most recent fiscal years?"
+            "According to the attached filing, how did services segment revenue change between the two most recent "
+            "fiscal years, and which line items in the segment note explain most of that change in revenue?"
         ),
         **{f"rubric - {n}. criterion": "None" for n in range(1, 31)},
     }
     item["rubric - 1. criterion"] = (
-        "The response should state that services revenue grew by twelve percent year over year."
+        "The response should state that services revenue grew by twelve percent year over year, driven by renewals."
     )
     item["rubric - 2. criterion"] = (
-        "The response should not treat the one-time licensing gain as recurring segment revenue."
+        "The response should not treat the one-time licensing gain from the patent settlement as recurring revenue."
     )
 
     rows = {row["id"]: row["text"] for row in gdp_pdf_rows([item])}
@@ -211,3 +220,20 @@ def test_item_rule_marks_a_task_instruction_copied_without_its_solution(tmp_path
     assert paragraph_only["doc"]["contaminated"] is False
     assert f"{task}-instruction" in with_items["doc"]["matched_eval_ids"]
     assert f"{task}-solution" not in with_items["doc"]["matched_eval_ids"]
+
+
+def test_item_records_give_a_view_its_own_record_only_when_it_stands_alone():
+    question = (
+        "A sensor network reports temperature every five minutes, but each station drops readings while it is "
+        "being recalibrated, so which hourly mean should the operations dashboard show for that station each hour?"
+    )
+    short_answer = "The mean of the readings it kept."
+
+    rows = {
+        row["id"]: row["text"]
+        for row in item_records("qa", "1", [question, short_answer], {"q": question, "a": short_answer})
+    }
+
+    # A one-sentence answer holds too few n-grams to mark a document on its own.
+    assert sorted(rows) == ["qa-1", "qa-1-q"]
+    assert rows["qa-1"] == f"{question}\n\n{short_answer}"

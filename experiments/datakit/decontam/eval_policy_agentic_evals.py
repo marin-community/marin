@@ -30,7 +30,11 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
-from experiments.datakit.decontam.pinned_evals import MIN_LETTER_WORDS, PinnedEval, fetch_cached, letter_words
+from experiments.datakit.decontam.pinned_evals import (
+    PinnedEval,
+    fetch_cached,
+    item_records,
+)
 
 REGISTRY_URL = (
     "https://raw.githubusercontent.com/marin-community/harbor/38742b0f9f411c95e0c01468785cac7bb77c9894/registry.json"
@@ -46,7 +50,6 @@ SOTOPIA_REVISION = "b388b6634d82b25811afa431997b3dbfee9c17cf"
 SOTOPIA_ITEMS = 100
 DS1000_TASKS = 1000
 
-MAX_VIEW_CHARS = 200_000
 BOILERPLATE_TASK_FRACTION = 0.5
 # About 40 of the 100 OpenThoughts-TBLite tasks share a grader wrapper and test.sh template.
 OT_TBLITE_BOILERPLATE_FRACTION = 0.25
@@ -239,18 +242,14 @@ def strip_boilerplate(tasks: list[Task], fraction: float) -> list[Task]:
 
 
 def records(name: str, tasks: list[Task]) -> list[dict[str, str]]:
-    """Full and per-view records for ``tasks``; records under MIN_LETTER_WORDS words are skipped."""
+    """Full and per-view records for ``tasks`` (see ``item_records``)."""
     rows: list[dict] = []
     for task in tasks:
         views: dict[str, list[str]] = {}
         for key, text in task.components.items():
             views.setdefault(key.split(":", 1)[0], []).append(text)
         texts = {view: "\n\n".join(parts) for view, parts in views.items()}
-        candidates = [(f"{name}-{task.task_id}", "\n\n".join(texts.values()))]
-        candidates += [(f"{name}-{task.task_id}-{view}", text) for view, text in texts.items()]
-        for record_id, text in candidates:
-            if letter_words(text) >= MIN_LETTER_WORDS:
-                rows.append({"id": record_id, "text": text[:MAX_VIEW_CHARS]})
+        rows += item_records(name, task.task_id, list(texts.values()), texts)
     ids = [r["id"] for r in rows]
     if len(ids) != len(set(ids)):
         raise ValueError(f"{name}: duplicate record ids")
@@ -444,12 +443,12 @@ def _registry_pinned(subdir: str, git_url: str, commit: str) -> PinnedEval:
 
 # Records each eval's extraction produces (full and view records).
 EXPECTED_RECORDS = {
-    "swebench_verified": 1999,
-    "ot_tblite": 373,
-    "ds1000": 3388,
-    "bfcl_parity": 324,
-    "bixbench": 372,
-    "tau3": 1119,
+    "swebench_verified": 1868,
+    "ot_tblite": 370,
+    "ds1000": 2941,
+    "bfcl_parity": 247,
+    "bixbench": 253,
+    "tau3": 1072,
     "sotopia_hard": 300,
     "deepswe": 452,
 }

@@ -16,7 +16,6 @@ indexed. NUPA5K-Loose is not indexed: once its per-task instruction template is
 removed, an item holds only numbers, which produce no 13-gram of words.
 """
 
-import dataclasses
 import hashlib
 import json
 from collections import Counter, defaultdict
@@ -25,7 +24,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem, hf_hub_download
 
-from experiments.datakit.decontam.pinned_evals import MIN_LETTER_WORDS, PinnedEval, letter_words
+from experiments.datakit.decontam.pinned_evals import PinnedEval, item_records, paragraphs
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHAT_BENCHMARKS = REPO_ROOT / "vendor/evalchemy/eval/chat_benchmarks"
@@ -48,8 +47,6 @@ OLYMPIADBENCH_SUBSET = "OlympiadBench/data/olympiadbench.jsonl"
 AIME24_FILE = "AIME24/data/aime24.json"
 FINANCEBENCH_FILE = "FinanceBench/data/financebench.jsonl"
 
-# A part gets its own view record only when it has this many words with a letter.
-MIN_VIEW_WORDS = 30
 # A test-harness line shared by this many items is boilerplate, not item content.
 SHARED_LINE_ITEMS = 3
 # The policy runs MRCR at max_length 73,728 tokens, so only rows of at most 65,536
@@ -60,29 +57,6 @@ MRCR_MAX_TOKENS = 65_536
 MRCR_MAX_CHARS_PER_TOKEN = 10
 MRCR_MAX_CHARS = MRCR_MAX_TOKENS * MRCR_MAX_CHARS_PER_TOKEN
 MRCR_FILES = tuple(f"{n}needle/{n}needle_{part}.parquet" for n in (2, 4, 8) for part in (0, 1))
-
-
-@dataclasses.dataclass
-class EvalRecords:
-    """Records of one eval: a full record per item plus views long enough to stand alone."""
-
-    name: str
-    rows: list[dict[str, str]] = dataclasses.field(default_factory=list)
-
-    def add(self, item_id: str, parts: list[str], views: dict[str, str] | None = None) -> None:
-        text = paragraphs(parts)
-        if letter_words(text) < MIN_LETTER_WORDS:
-            return
-        self.rows.append({"id": f"{self.name}-{item_id}", "text": text})
-        for view, view_text in (views or {}).items():
-            view_text = view_text.strip()
-            if view_text == text or letter_words(view_text) < MIN_VIEW_WORDS:
-                continue
-            self.rows.append({"id": f"{self.name}-{item_id}-{view}", "text": view_text})
-
-
-def paragraphs(parts: list[str]) -> str:
-    return "\n\n".join(part.strip() for part in parts if part and part.strip())
 
 
 def hf_file(repo_rev: tuple[str, str], filename: str, cache_dir: Path) -> str:
@@ -110,11 +84,13 @@ def strip_shared_lines(texts: list[str]) -> list[str]:
 
 def math500(cache_dir: Path) -> list[dict[str, str]]:
     """Problem and solution (the boxed answer is in the solution); the prompt template is not indexed."""
-    out = EvalRecords("math500")
+    name, records = "math500", []
     for row in read_jsonl(hf_file(MATH500, "test.jsonl", cache_dir)):
         item_id = row["unique_id"].removeprefix("test/").removesuffix(".json")
-        out.add(item_id, [row["problem"], row["solution"]], {"prompt": row["problem"], "solution": row["solution"]})
-    return out.rows
+        records += item_records(
+            name, item_id, [row["problem"], row["solution"]], {"prompt": row["problem"], "solution": row["solution"]}
+        )
+    return records
 
 
 def humanevalplus(cache_dir: Path) -> list[dict[str, str]]:
@@ -123,16 +99,17 @@ def humanevalplus(cache_dir: Path) -> list[dict[str, str]]:
     The completion instruction and test-harness lines shared by SHARED_LINE_ITEMS items
     (is_floats, assertion, check loop) are not indexed.
     """
-    out = EvalRecords("humanevalplus")
+    name, records = "humanevalplus", []
     rows = read_jsonl(hf_file(HUMANEVALPLUS, "test.jsonl", cache_dir))
     tests = strip_shared_lines([row["test"] for row in rows])
     for row, test in zip(rows, tests, strict=True):
-        out.add(
+        records += item_records(
+            name,
             row["task_id"].removeprefix("HumanEval/"),
             [row["prompt"] + row["canonical_solution"]],
             {"prompt": row["prompt"], "solution": row["canonical_solution"], "tests": test},
         )
-    return out.rows
+    return records
 
 
 def mbppplus(cache_dir: Path) -> list[dict[str, str]]:
@@ -141,13 +118,15 @@ def mbppplus(cache_dir: Path) -> list[dict[str, str]]:
     The 3-shot preamble the loader prepends to every prompt is not indexed (its three
     items are indexed once as their own records), nor are shared test-harness lines.
     """
-    out = EvalRecords("mbppplus")
+    name, records = "mbppplus", []
     rows = read_parquet(MBPPPLUS, MBPPPLUS_FILE, cache_dir)
     tests = strip_shared_lines([row["test"] for row in rows])
     for row, test in zip(rows, tests, strict=True):
         prompt = paragraphs([row["prompt"], "\n".join(row["test_list"])])
-        out.add(str(row["task_id"]), [prompt, row["code"]], {"prompt": prompt, "solution": row["code"], "tests": test})
-    return out.rows
+        records += item_records(
+            name, str(row["task_id"]), [prompt, row["code"]], {"prompt": prompt, "solution": row["code"], "tests": test}
+        )
+    return records
 
 
 def olympiadbench(cache_dir: Path) -> list[dict[str, str]]:
@@ -157,57 +136,61 @@ def olympiadbench(cache_dir: Path) -> list[dict[str, str]]:
     solutions, and images are not indexed. Every subset problem must match its pool row.
     """
     subset = read_jsonl(CHAT_BENCHMARKS / OLYMPIADBENCH_SUBSET)
-    out = EvalRecords("olympiadbench")
+    name, records = "olympiadbench", []
     columns = ["question_id", "context", "question", "final_answer"]
     by_id = {}
     for row in read_parquet(OLYMPIADBENCH, "data/test_en-00000-of-00001.parquet", cache_dir, columns):
         problem = (row["context"] + "\n\n" if row["context"] else "") + row["question"]
         by_id[row["question_id"]] = problem
-        out.add(row["question_id"], [problem, "\n".join(row["final_answer"] or [])])
+        records += item_records(name, row["question_id"], [problem, "\n".join(row["final_answer"] or [])])
     mismatched = [row["id"] for row in subset if by_id.get(row["id"]) != row["problem"]]
     if mismatched:
         raise ValueError(f"OlympiadBench subset items differ from the pinned pool: {mismatched}")
-    return out.rows
+    return records
 
 
 def aime24(cache_dir: Path) -> list[dict[str, str]]:
     """Problem, reference solution and answer; the prompt template is not indexed."""
-    out = EvalRecords("aime24")
+    name, records = "aime24", []
     for row in read_jsonl(CHAT_BENCHMARKS / AIME24_FILE):
-        out.add(
+        records += item_records(
+            name,
             row["id"].removeprefix("aime24-"),
             [row["problem"], row["reference_solution"], str(row["expected_answer"])],
             {"prompt": row["problem"], "solution": row["reference_solution"]},
         )
-    return out.rows
+    return records
 
 
 def cruxeval(cache_dir: Path) -> list[dict[str, str]]:
     """The function and its completed assertion, which serve both the input and output directions."""
-    out = EvalRecords("cruxeval")
+    name, records = "cruxeval", []
     for row in read_jsonl(hf_file(CRUXEVAL, "test.jsonl", cache_dir)):
-        out.add(row["id"], [row["code"], f"assert f({row['input']}) == {row['output']}"], {"prompt": row["code"]})
-    return out.rows
+        records += item_records(
+            name, row["id"], [row["code"], f"assert f({row['input']}) == {row['output']}"], {"prompt": row["code"]}
+        )
+    return records
 
 
 def financebench(cache_dir: Path) -> list[dict[str, str]]:
     """The vendored 50-item sample: evidence page, question and answer. Filing PDFs are not indexed."""
-    out = EvalRecords("financebench")
+    name, records = "financebench", []
     for row in read_jsonl(CHAT_BENCHMARKS / FINANCEBENCH_FILE):
-        out.add(
+        records += item_records(
+            name,
             row["id"].removeprefix("financebench_id_"),
             [row["evidence_text"], row["question"], row["answer"]],
             {"prompt": row["question"], "answer": row["answer"]},
         )
-    return out.rows
+    return records
 
 
 def ifbench(cache_dir: Path) -> list[dict[str, str]]:
     """The prompt with its inline constraint; there is no reference answer."""
-    out = EvalRecords("ifbench")
+    name, records = "ifbench", []
     for row in read_parquet(IFBENCH, "data/train-00000-of-00001.parquet", cache_dir, ["key", "prompt"]):
-        out.add(str(row["key"]), [row["prompt"]])
-    return out.rows
+        records += item_records(name, str(row["key"]), [row["prompt"]])
+    return records
 
 
 def mrcr(cache_dir: Path) -> list[dict[str, str]]:
@@ -216,7 +199,7 @@ def mrcr(cache_dir: Path) -> list[dict[str, str]]:
     The synthetic filler turns and the leading few-shot example are not indexed. Item id
     is ``<file stem>_<row index in that file>``.
     """
-    out = EvalRecords("mrcr")
+    name, records = "mrcr", []
     fs = HfFileSystem()
     for filename in MRCR_FILES:
         with fs.open(f"datasets/{MRCR[0]}@{MRCR[1]}/{filename}") as f:
@@ -236,43 +219,47 @@ def mrcr(cache_dir: Path) -> list[dict[str, str]]:
             if len(needles) != row["n_needles"]:
                 raise ValueError(f"MRCR {filename} row {index}: {len(needles)} needles, expected {row['n_needles']}")
             item_id = f"{Path(filename).stem}_{index}"
-            out.add(item_id, [request, messages[-1]["content"], *needles, row["answer"]], {"answer": row["answer"]})
-    return out.rows
+            records += item_records(
+                name, item_id, [request, messages[-1]["content"], *needles, row["answer"]], {"answer": row["answer"]}
+            )
+    return records
 
 
 def piqa(cache_dir: Path) -> list[dict[str, str]]:
     """lm-eval piqa scores validation: goal and both solutions; id is the row index."""
-    out = EvalRecords("piqa")
+    name, records = "piqa", []
     for index, row in enumerate(read_parquet(PIQA, "piqa_validation.parquet", cache_dir)):
-        out.add(str(index), [row["goal"], row["sol1"], row["sol2"]])
-    return out.rows
+        records += item_records(name, str(index), [row["goal"], row["sol1"], row["sol2"]])
+    return records
 
 
 def winogrande(cache_dir: Path) -> list[dict[str, str]]:
     """lm-eval scores winogrande_xl validation: the sentence filled with the correct option, then raw."""
-    out = EvalRecords("winogrande")
+    name, records = "winogrande", []
     rows = read_parquet(WINOGRANDE, "winogrande_xl/validation-00000-of-00001.parquet", cache_dir)
     for index, row in enumerate(rows):
         answer = row["option1"] if row["answer"] == "1" else row["option2"]
-        out.add(str(index), [row["sentence"].replace("_", answer, 1), row["sentence"]])
-    return out.rows
+        records += item_records(name, str(index), [row["sentence"].replace("_", answer, 1), row["sentence"]])
+    return records
 
 
 def boolq(cache_dir: Path) -> list[dict[str, str]]:
     """lm-eval boolq scores validation: passage, question and answer."""
-    out = EvalRecords("boolq")
+    name, records = "boolq", []
     for row in read_parquet(BOOLQ, "boolq/validation-00000-of-00001.parquet", cache_dir):
-        out.add(str(row["idx"]), [row["passage"], row["question"] + "?", "yes" if row["label"] == 1 else "no"])
-    return out.rows
+        records += item_records(
+            name, str(row["idx"]), [row["passage"], row["question"] + "?", "yes" if row["label"] == 1 else "no"]
+        )
+    return records
 
 
 def truthfulqa(cache_dir: Path) -> list[dict[str, str]]:
     """lm-eval truthfulqa_mc2 scores validation: question and all MC2 choices; id is the row index."""
-    out = EvalRecords("truthfulqa")
+    name, records = "truthfulqa", []
     rows = read_parquet(TRUTHFULQA, "multiple_choice/validation-00000-of-00001.parquet", cache_dir)
     for index, row in enumerate(rows):
-        out.add(str(index), [row["question"], "\n".join(row["mc2_targets"]["choices"])])
-    return out.rows
+        records += item_records(name, str(index), [row["question"], "\n".join(row["mc2_targets"]["choices"])])
+    return records
 
 
 def triviaqa(cache_dir: Path) -> list[dict[str, str]]:
@@ -285,7 +272,7 @@ def triviaqa(cache_dir: Path) -> list[dict[str, str]]:
     rows = read_parquet(
         TRIVIAQA, "rc.nocontext/validation-00000-of-00001.parquet", cache_dir, ["question_id", "question", "answer"]
     )
-    out = EvalRecords("triviaqa")
+    name, records = "triviaqa", []
     texts_by_id: dict[str, list[str]] = defaultdict(list)
     for row in rows:
         text = paragraphs([row["question"], row["answer"]["value"]])
@@ -293,8 +280,8 @@ def triviaqa(cache_dir: Path) -> list[dict[str, str]]:
             texts_by_id[row["question_id"]].append(text)
     for question_id, texts in texts_by_id.items():
         for n, text in enumerate(texts):
-            out.add(question_id if n == 0 else f"{question_id}_{n}", [text])
-    return out.rows
+            records += item_records(name, question_id if n == 0 else f"{question_id}_{n}", [text])
+    return records
 
 
 def _hf(repo_rev: tuple[str, str]) -> tuple[str, str]:
