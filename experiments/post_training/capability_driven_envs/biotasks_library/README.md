@@ -61,3 +61,43 @@ controls. The blinded GLM screen recommended 40 accept, 17 revise, and 27 reject
 with three review calls retained as errors. These screening bands are not scientific
 review, rights approval, solver calibration, or release approval. All artifacts
 remain `internal_unreviewed_do_not_publish`.
+
+## Repository objective-task campaign
+
+`import_repositories.py` materializes bounded, hash-verified evidence for the 405
+issue-#5 repositories that had detected notebook or literate-document formats. It
+executes no repository code and caps each source at its README plus three documents.
+`run_repositories_v1_zephyr.py` authors zero to several concrete ideas per repository
+and obtains author/self and blinded GLM reviews before Taskforge lowering.
+
+The recovered immutable snapshot is stored at:
+
+```text
+s3://marin-us-east-02a/marin4sc/taskforge/task-library/
+  campaigns/biotasks/repositories/v1/snapshots/complete-2/
+```
+
+It contains 405 repository dispositions: 255 productive repositories, 144 explicit
+null repositories, and six repositories whose proposed ideas all failed deterministic
+hydration. The snapshot retains 398 hydrated ideas. The blinded GLM screen placed 265
+in accept, 89 in revise, 15 in reject, and 29 in review-error. These are pre-Taskforge
+screening bands, not structural acceptance or domain validation.
+
+## Combined Taskforge campaign
+
+`run_combined_v1_taskforge.py` combines only frozen blinded-GLM accepts from the
+notebook and repository snapshots, preserving source-campaign and screening-record
+identity. It excludes revise, reject, null, and review-error records rather than
+silently treating them as failures. `finalize_combined_v1.py` freezes the complete
+TaskSpecs and manifest at:
+
+```text
+s3://marin-us-east-02a/marin4sc/taskforge/task-library/
+  campaigns/biotasks/combined/v1/snapshots/complete-1/
+```
+
+The combined campaign contains 305 unique ideas (40 notebook and 265 repository)
+and 305 unique, structurally accepted TaskSpecs. Structural acceptance establishes
+buildability and deterministic control validity only; it is not scientific review,
+rights approval, solver calibration, training approval, or release approval. The
+snapshot remains `internal_unreviewed_do_not_publish`.
