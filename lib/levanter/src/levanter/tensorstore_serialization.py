@@ -37,6 +37,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec, Sharding, SingleDev
 from jaxtyping import PyTree
 
 from rigging.filesystem.cross_region import record_transfer
+from rigging.filesystem.s3_compat import coreweave_federated_bucket, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
@@ -115,13 +116,34 @@ def build_kvstore_spec(path: str) -> dict:
     """Build a tensorstore kvstore spec for an S3, GCS, or local URI.
 
     tensorstore reads neither AWS_ENDPOINT_URL nor AWS_DEFAULT_REGION from the environment.
-    Custom endpoints use virtual-hosted-style addressing, which CoreWeave requires.
+    CoreWeave federation supplies a bucket-specific endpoint and a refreshable ECS provider.
     """
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":
         bucket = parsed.netloc
         spec: dict = {"driver": "s3", "path": parsed.path.lstrip("/")}
         endpoint = os.environ.get("AWS_ENDPOINT_URL")
+        region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
+        federated = coreweave_federated_bucket(bucket)
+        if federated is not None:
+            bucket_spec, federation = federated
+            endpoint = s3_endpoint(bucket_spec.store)
+            region = bucket_spec.signing_region
+            spec["aws_credentials"] = {
+                "type": "ecs",
+                "endpoint": federation.uri,
+                "auth_token_file": federation.token_file,
+            }
+        elif os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+            spec["aws_credentials"] = {"type": "environment"}
+        elif credentials_file := os.environ.get("AWS_SHARED_CREDENTIALS_FILE"):
+            # The default chain can miss mounted profiles, and the profile provider needs a readable config path.
+            spec["aws_credentials"] = {
+                "type": "profile",
+                "profile": os.environ.get("AWS_PROFILE") or "default",
+                "credentials_file": credentials_file,
+                "config_file": os.environ.get("AWS_CONFIG_FILE") or os.devnull,
+            }
         if endpoint:
             # Virtual-hosted style: bucket becomes a subdomain of the endpoint
             # host and the ``bucket`` field is omitted (tensorstore #285).
@@ -129,26 +151,12 @@ def build_kvstore_spec(path: str) -> dict:
             spec["endpoint"] = f"{scheme}://{bucket}.{host}"
         else:
             spec["bucket"] = bucket
-        region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
         if region:
             spec["aws_region"] = region
         elif endpoint:
             # Custom endpoint with no explicit region: use a placeholder to prevent
             # tensorstore from trying (and failing) to discover the region via HEAD bucket.
             spec["aws_region"] = "us-east-1"
-
-        # TensorStore's default chain does not reliably load a mounted shared
-        # credentials file in a task pod. Its profile provider also requires
-        # a readable config path, even if that config is empty.
-        if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
-            spec["aws_credentials"] = {"type": "environment"}
-        elif credentials_file := os.environ.get("AWS_SHARED_CREDENTIALS_FILE"):
-            spec["aws_credentials"] = {
-                "type": "profile",
-                "profile": os.environ.get("AWS_PROFILE") or "default",
-                "credentials_file": credentials_file,
-                "config_file": os.environ.get("AWS_CONFIG_FILE") or os.devnull,
-            }
 
         return spec
     elif parsed.scheme == "gs":

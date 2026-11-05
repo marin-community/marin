@@ -2032,7 +2032,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiobotocore", specifier = ">=2.12.2" },
+    { name = "aiobotocore", specifier = ">=3.3.0" },
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "braceexpand", specifier = ">=0.1.7" },
     { name = "click", specifier = ">=8.3.1" },

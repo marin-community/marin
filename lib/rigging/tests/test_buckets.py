@@ -4,13 +4,21 @@
 """Tests for bucket-routed filesystems: which backend a URL resolves to, and the
 endpoint and credentials it is built with."""
 
+import json
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
+
 import botocore.session
+import fsspec
 import pytest
 import rigging.filesystem.cluster_config as cluster_config
 import s3fs
+from aiobotocore.awsrequest import AioAWSResponse
+from aiobotocore.httpsession import AIOHTTPSession
 from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, load_cluster_config, use_data_config
+from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import secret_file_contents, secret_file_environment
 
 CLUSTER_YAML = """
@@ -31,6 +39,15 @@ data:
       key_id_env: R2_KEY_ID
       key_secret_env: R2_KEY_SECRET
 """
+CW_OIDC_URI = "https://api.coreweave.com/v1/cwobject/temporary-credentials/oidc/test-org"
+
+
+class _HTTPBody:
+    def __init__(self, content: bytes):
+        self.content = content
+
+    async def read(self) -> bytes:
+        return self.content
 
 
 @pytest.fixture
@@ -120,6 +137,63 @@ def test_credentials_come_from_the_variables_the_backend_declares(config, monkey
     s3fs.S3FileSystem.clear_instance_cache()
     with pytest.raises(MissingCredentials, match="CW_KEY_ID"):
         filesystem_for("s3://marin-cw/x")
+
+
+def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_path, monkeypatch):
+    token_file = tmp_path / "oidc.jwt"
+    token_file.write_text("oidc-one")
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", CW_OIDC_URI)
+    monkeypatch.setenv("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "stale-aws-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "stale-aws-secret")
+    monkeypatch.setenv("AWS_PROFILE", "unused-profile")
+    monkeypatch.setenv("CW_S3_ENDPOINT", "https://cwobject.com")
+    monkeypatch.setitem(fsspec.config.conf, "s3", {"key": "stale-fsspec-key", "secret": "stale-fsspec-secret"})
+
+    async def send(_session, request):
+        authorization = request.headers.get("Authorization", "")
+        if isinstance(authorization, bytes):
+            authorization = authorization.decode()
+        if request.url == CW_OIDC_URI:
+            # The initial grant is in the SDK's advisory refresh window. Returning it
+            # for the first JWT lets the same client refresh on the next operation.
+            access_key, minutes = {"oidc-one": ("cw-one", 10), "oidc-two": ("cw-two", 60)}[authorization]
+            body = json.dumps(
+                {
+                    "AccessKeyId": access_key,
+                    "SecretAccessKey": "test-secret",
+                    "Token": "",
+                    "Expiration": (datetime.now(UTC) + timedelta(minutes=minutes)).isoformat(),
+                }
+            )
+        else:
+            host = urlsplit(request.url).hostname
+            region = {"marin-cw.cwobject.com": "US-EAST-02A", "r2.example": "auto"}[host]
+            credential = authorization.split("Credential=")[1].split(",")[0].split("/")
+            access_key, _, signing_region, service, _ = credential
+            assert (signing_region, service) == (region, "s3")
+            assert request.headers.get("X-Amz-Security-Token") is None
+            if request.method == "HEAD":
+                assert urlsplit(request.url).path == "/checkpoint/metadata.json"
+                assert access_key == "cw-two"
+                return AioAWSResponse(request.url, 200, {"content-length": "1"}, _HTTPBody(b""))
+            body = f"""<ListBucketResult><IsTruncated>false</IsTruncated><Contents>
+                <Key>{access_key}</Key><Size>1</Size></Contents></ListBucketResult>"""
+        return AioAWSResponse(request.url, 200, {}, _HTTPBody(body.encode()))
+
+    monkeypatch.setattr(AIOHTTPSession, "send", send)
+    cw_fs, cw_path = filesystem_for("s3://marin-cw/")
+    assert cw_fs.ls(cw_path, detail=False, refresh=True) == ["marin-cw/cw-one"]
+
+    new_token_file = tmp_path / "oidc.next"
+    new_token_file.write_text("oidc-two")
+    new_token_file.replace(token_file)
+    assert cw_fs.ls(cw_path, detail=False, refresh=True) == ["marin-cw/cw-two"]
+    assert StoragePath("s3://marin-cw/checkpoint/metadata.json").exists()
+
+    monkeypatch.delenv("AWS_PROFILE")
+    r2_fs, r2_path = filesystem_for("s3://marin-na/")
+    assert r2_fs.ls(r2_path, detail=False, refresh=True) == ["marin-na/r2-key"]
 
 
 def test_gcs_is_not_an_s3_backend(config):

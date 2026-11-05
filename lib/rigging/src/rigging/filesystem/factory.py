@@ -13,6 +13,7 @@ explicitly configured otherwise.
 
 import logging
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import fsspec
 from fsspec.implementations.local import LocalFileSystem
@@ -24,7 +25,12 @@ from rigging.filesystem.cross_region import (
     _is_gcs_url,
 )
 from rigging.filesystem.listing_cache import configure_listing_cache_defaults
-from rigging.filesystem.s3_compat import s3_credential_options, s3_python_config_kwargs
+from rigging.filesystem.s3_compat import (
+    coreweave_federated_bucket,
+    coreweave_federated_s3_options,
+    s3_credential_options,
+    s3_python_config_kwargs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +43,7 @@ fsspec.register_implementation("mirror", "rigging.filesystem.mirror.MirrorFileSy
 configure_listing_cache_defaults()
 
 
-def _s3_filesystem_options(kwargs: dict[str, Any]) -> dict[str, Any]:
+def _s3_filesystem_options(kwargs: dict[str, Any], *, url: str | None = None) -> dict[str, Any]:
     """Merge explicit S3 options with configured credentials and request bounds.
 
     Caller-supplied ``config_kwargs`` values win; we only fill in keys the
@@ -51,13 +57,17 @@ def _s3_filesystem_options(kwargs: dict[str, Any]) -> dict[str, Any]:
     (CoreWeave object storage) require, which then hangs/path-style-rejects.
     """
     conf_config_kwargs = (fsspec.config.conf.get("s3") or {}).get("config_kwargs") or {}
+    credential_options: dict[str, Any] = {}
+    if not kwargs.get("anon") and not any(name in kwargs for name in ("key", "secret", "token", "profile", "session")):
+        if url is not None and (federated := coreweave_federated_bucket(urlsplit(url).netloc)):
+            credential_options = coreweave_federated_s3_options(*federated)
+            conf_config_kwargs = credential_options.pop("config_kwargs")
+        else:
+            credential_options = s3_credential_options()
     config_kwargs = {**conf_config_kwargs, **dict(kwargs.get("config_kwargs") or {})}
     for key, value in s3_python_config_kwargs().items():
         config_kwargs.setdefault(key, value)
-    result = {**kwargs, "config_kwargs": config_kwargs}
-    if not kwargs.get("anon") and not any(name in kwargs for name in ("key", "secret", "token", "profile", "session")):
-        result.update(s3_credential_options())
-    return result
+    return {**kwargs, **credential_options, "config_kwargs": config_kwargs}
 
 
 def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
@@ -69,7 +79,7 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     timeouts injected (#6487).
     """
     if url.startswith("s3://"):
-        kwargs = _s3_filesystem_options(kwargs)
+        kwargs = _s3_filesystem_options(kwargs, url=url)
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)
@@ -94,7 +104,7 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
         guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
     if url.startswith("s3://"):
-        kwargs = _s3_filesystem_options(kwargs)
+        kwargs = _s3_filesystem_options(kwargs, url=url)
     return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
