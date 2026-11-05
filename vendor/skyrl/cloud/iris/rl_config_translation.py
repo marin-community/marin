@@ -272,7 +272,7 @@ def _apply_policy_model_source(trainer: Dict[str, Any], exp_args: Dict[str, Any]
     return model_path
 
 
-def role_gpus_per_node(
+def _role_gpus_per_node(
     placement: Dict[str, Any],
     key: str,
     launch_gpus_per_node: int,
@@ -328,7 +328,7 @@ def _checkpoint_export_trainer(
     num_nodes = int(exp_args.get("num_nodes", 1))
     gpus_per_node = int(exp_args.get("gpus_per_node", hpc.gpus_per_node))
     placement["policy_num_nodes"] = num_nodes
-    placement["policy_num_gpus_per_node"] = role_gpus_per_node(
+    placement["policy_num_gpus_per_node"] = _role_gpus_per_node(
         placement,
         "policy_num_gpus_per_node",
         gpus_per_node,
@@ -398,8 +398,8 @@ def _skyrl_config_sections(
         placement["policy_num_nodes"] = policy_num_nodes if policy_num_nodes is not None else num_nodes
     if placement.get("ref_num_nodes") is None:
         placement["ref_num_nodes"] = policy_num_nodes if policy_num_nodes is not None else num_nodes
-    placement["policy_num_gpus_per_node"] = role_gpus_per_node(placement, "policy_num_gpus_per_node", gpus_per_node)
-    placement["ref_num_gpus_per_node"] = role_gpus_per_node(placement, "ref_num_gpus_per_node", gpus_per_node)
+    placement["policy_num_gpus_per_node"] = _role_gpus_per_node(placement, "policy_num_gpus_per_node", gpus_per_node)
+    placement["ref_num_gpus_per_node"] = _role_gpus_per_node(placement, "ref_num_gpus_per_node", gpus_per_node)
     trainer["placement"] = placement
 
     if generator.get("num_inference_engines") is None:

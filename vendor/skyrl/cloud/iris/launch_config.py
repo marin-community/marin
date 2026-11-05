@@ -253,8 +253,8 @@ def _fill_launch_fields(config: DictConfig, *, data_kind: str | None = None) -> 
             skyrl.get("trainer", {}).get("strategy"),
             mode=RuntimeMode.CHECKPOINT_EXPORT if checkpoint_export else RuntimeMode.TRAINING,
         ).value
-    if OmegaConf.is_missing(config.inputs, "data_kind"):
-        config.inputs.data_kind = data_kind or "tasks"
+    if data_kind is not None and OmegaConf.is_missing(config.inputs, "data_kind"):
+        config.inputs.data_kind = data_kind
     elif data_kind is not None and config.inputs.data_kind != data_kind:
         raise ValueError(
             f"inputs.data_kind={config.inputs.data_kind!r} does not match the composed SkyRL value {data_kind!r}"

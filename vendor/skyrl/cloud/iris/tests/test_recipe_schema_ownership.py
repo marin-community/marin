@@ -51,8 +51,8 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
         "model_revision": "launch-revision",
         "model_source_uri": "s3://launch/model",
         "model_source_identity": "sha256:launch",
-        "train_data": ["/launch/train"],
-        "val_data": ["/launch/validation"],
+        "train_data": [],
+        "val_data": [],
         "checkpoint_root": "/launch/checkpoints",
         "export_root": "/launch/exports",
         "resume_checkpoint_count": 4,
@@ -93,18 +93,13 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
         for name in ("trainer", "generator", "data", "environment", "trajectory_runner", "terminal_bench")
     }
     injected = replace(parsed, **section_values)
-    authored_parameters = {
-        **parameters,
-        "train_data": seeded["data"]["train_data"],
-        "val_data": seeded["data"]["val_data"],
-    }
-    filled = launcher._skyrl_config_sections(injected, authored_parameters, SimpleNamespace(gpus_per_node=8))
+    filled = launcher._skyrl_config_sections(injected, parameters, SimpleNamespace(gpus_per_node=8))
     data = resolve_rl_train_data_with_sources(injected.data["terminal_bench_data"], kind="tasks", verbose=False)
     staged = launcher.apply_task_local_values(
         OmegaConf.create(filled),
         launcher.TaskLocalSkyRLValues(
-            train_data=tuple(authored_parameters["train_data"]),
-            validation_data=tuple(authored_parameters["val_data"]),
+            train_data=tuple(parameters["train_data"]),
+            validation_data=tuple(parameters["val_data"]),
             terminal_bench_data=tuple(data.paths),
         ),
     )
@@ -134,7 +129,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     for path in FILL_WHEN_UNSET:
         set_path(absent, path, None)
     defaults = launcher._skyrl_config_sections(
-        replace(parsed, **absent), authored_parameters, SimpleNamespace(gpus_per_node=8)
+        replace(parsed, **absent), parameters, SimpleNamespace(gpus_per_node=8)
     )
     defaults["terminal_bench"] = defaults.pop("terminal_bench_config")
     for path in FILL_WHEN_UNSET:

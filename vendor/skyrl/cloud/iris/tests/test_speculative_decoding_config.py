@@ -1,6 +1,7 @@
 """Behavior tests for the managed speculative-decoding configuration."""
 
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 from hydra import compose, initialize_config_dir
@@ -8,12 +9,17 @@ from omegaconf import OmegaConf
 import pytest
 import yaml
 
-from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
-from marinskyrl.speculative_decoding import (
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+for source_root in (_REPO_ROOT, _REPO_ROOT / "skyrl-train"):
+    if str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
+
+from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config  # noqa: E402
+from marinskyrl.speculative_decoding import (  # noqa: E402
     SpeculativeDecodingConfigError,
     parse_speculative_decoding_config,
 )
-from skyrl_train.entrypoints.main_base import config_dir
+from skyrl_train.entrypoints.main_base import config_dir  # noqa: E402
 
 
 _DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"

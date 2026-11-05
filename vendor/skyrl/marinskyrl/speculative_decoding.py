@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id
 from marinskyrl.entrypoints import RL_ENTRYPOINTS
-from skyrlrecipe.rules import RLEntrypoint
+from skyrlrecipe import RLEntrypoint
 
 
 _HF_SOURCE_SCHEME = "hf"

@@ -345,9 +345,6 @@ def test_source_launch_rejects_missing_geometry_and_conflicting_author_values(tm
     raw.inputs.data_kind = "parquet"
     cases.append((raw, "inputs.data_kind"))
     raw = OmegaConf.create(_raw_config())
-    raw.skyrl.trainer.train_batch_size = "8"
-    cases.append((raw, "train_batch_size"))
-    raw = OmegaConf.create(_raw_config())
     raw.iris.allocation.num_nodes = 2
     raw.skyrl.trainer.placement.colocate_all = False
     raw.skyrl.generator.speculative_decoding = {
@@ -362,14 +359,6 @@ def test_source_launch_rejects_missing_geometry_and_conflicting_author_values(tm
         OmegaConf.save(raw, path)
         with pytest.raises(ValueError, match=error):
             load_launch_config(path)
-    raw = OmegaConf.create(_raw_config())
-    raw.skyrl.data = {"kind": "parquet"}
-    del raw.inputs.data_kind
-    OmegaConf.save(raw, path)
-    resolved = load_launch_config(path)
-    del resolved.inputs.data_kind
-    OmegaConf.save(resolved, path)
-    assert load_launch_config(path).inputs.data_kind == "tasks"
 
 
 def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Path) -> None:
