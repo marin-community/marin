@@ -57,8 +57,7 @@ _MRCR_CHAT_TEMPLATE = (
     "{{ messages[0]['content'] }}{% generation %}{{ messages[1]['content'] }}{% endgeneration %}{{ eos_token }}"
 )
 _LENGTH_FILTER_BATCH_SIZE = 16
-# The chat preprocessor tokenizes either side of the generation boundary apart, so its length can differ
-# from one whole-string tokenization by a few tokens. Only rows near the cell get exact lengths.
+# The prefilter counts the prompt and target apart, as the exact length does; the margin is only a safety band.
 _LENGTH_FILTER_MARGIN = 64
 
 
@@ -135,13 +134,18 @@ def _render_prompt(messages: list[_MrcrMessage], assistant_prefix: str) -> tuple
     return "".join(parts), spans
 
 
-def _preprocess(preprocessor: Any, prompt: str, target: str) -> dict[str, np.ndarray]:
-    processed = preprocessor(
-        [{"messages": [{"role": "user", "content": prompt}, {"role": "assistant", "content": target}]}]
-    )[0]
+def _preprocess(tokenizer: Any, prompt: str, target: str) -> dict[str, np.ndarray]:
+    """Tokenize the prompt and response body apart, so no scored token overlaps the supplied answer prefix.
+
+    The chat processor masks by offsets into one whole-render tokenization, where a BPE merge across the
+    boundary would score a token that starts in the prefix. #8701 scores the body tokenized on its own.
+    """
+    prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+    target_ids = tokenizer.encode(target, add_special_tokens=False)
+    ids = [*prompt_ids, *target_ids, tokenizer.eos_token_id]
     return {
-        "input_ids": np.asarray(processed["input_ids"], dtype=np.int32),
-        "assistant_masks": np.asarray(processed["assistant_masks"], dtype=np.int32),
+        "input_ids": np.asarray(ids, dtype=np.int32),
+        "assistant_masks": np.asarray([0] * len(prompt_ids) + [1] * len(target_ids) + [0], dtype=np.int32),
     }
 
 
@@ -205,7 +209,6 @@ def _build_source(
     response_span: tuple[int, int],
     target: str,
     tokenizer: Any,
-    preprocessor: Any,
     offset_tokenizer: Any,
     distance_bounds: tuple[int, ...],
 ) -> _Source:
@@ -214,7 +217,7 @@ def _build_source(
     selected_request = messages[row["desired_msg_index"]]["content"]
     prompts = _condition_prompts(messages, selected_request=selected_request, needles=needles, nonce=row["nonce"])
     conditions = {
-        condition: canonical if condition == MrcrCondition.FULL_CONTEXT else _preprocess(preprocessor, prompt, target)
+        condition: canonical if condition == MrcrCondition.FULL_CONTEXT else _preprocess(tokenizer, prompt, target)
         for condition, prompt in prompts.items()
     }
     target_ids = canonical["input_ids"][canonical["assistant_masks"].astype(bool)]
@@ -271,7 +274,6 @@ def _sources_in_cell(config: MrcrTransformConfig) -> Iterator[_Source]:
         raise FileNotFoundError(f"No MRCR parquet files found under {config.input_path}")
     tokenizer = load_tokenizer(config.tokenizer)
     offset_tokenizer = tokenizer.as_hf_tokenizer()
-    preprocessor = mrcr_format().build_preprocessor(tokenizer)
     columns = ["prompt", "answer", "random_string_to_prepend", "n_needles", "desired_msg_index"]
     lower = config.context_cap_lower - _LENGTH_FILTER_MARGIN
     upper = config.context_cap + _LENGTH_FILTER_MARGIN
@@ -297,7 +299,7 @@ def _sources_in_cell(config: MrcrTransformConfig) -> Iterator[_Source]:
                     row_index += 1
                     if not lower < length <= upper:
                         continue
-                    canonical = _preprocess(preprocessor, prompt, target)
+                    canonical = _preprocess(tokenizer, prompt, target)
                     if not config.context_cap_lower < len(canonical["input_ids"]) <= config.context_cap:
                         continue
                     yield _build_source(
@@ -309,7 +311,6 @@ def _sources_in_cell(config: MrcrTransformConfig) -> Iterator[_Source]:
                         response_span=spans[row["desired_msg_index"] + 1],
                         target=target,
                         tokenizer=tokenizer,
-                        preprocessor=preprocessor,
                         offset_tokenizer=offset_tokenizer,
                         distance_bounds=config.distance_bounds,
                     )

@@ -10,6 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from levanter.store.cache import TreeCache
+from tokenizers import Tokenizer, models
 
 from experiments.datasets import mrcr
 
@@ -37,17 +38,6 @@ class _CharTokenizer:
     def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
         del skip_special_tokens
         return "".join(chr(token) for token in ids)
-
-    def apply_chat_template_with_masks(
-        self, conversations: list[list[dict[str, str]]], *, chat_template: str | None = None, **kwargs: Any
-    ) -> dict[str, list[list[int]]]:
-        del chat_template, kwargs
-        input_ids, masks = [], []
-        for conversation in conversations:
-            prompt, target = conversation[0]["content"], conversation[1]["content"]
-            input_ids.append(self.encode(prompt + target + self.eos_token))
-            masks.append([0] * len(prompt) + [1] * len(target) + [0])
-        return {"input_ids": input_ids, "assistant_masks": masks}
 
     def as_hf_tokenizer(self) -> Any:
         encode = self.encode
@@ -184,3 +174,49 @@ def test_a_needle_count_that_disagrees_with_the_conversation_fails_the_build(
     _write_rows(tmp_path / "input", [{**_row(filler="x" * 300), "n_needles": 4}])
     with pytest.raises(ValueError, match="n_needles does not match"):
         mrcr.transform_mrcr(_config(tmp_path))
+
+
+class _BoundaryMergingTokenizer(_CharTokenizer):
+    """Merges ``pre`` + ``fix`` into one token when both appear in one string."""
+
+    def __init__(self, characters: set[str]):
+        tokens = ["[UNK]", *sorted(characters), "pr", "pre", "fi", "fix", "prefix"]
+        self._vocab = {token: index for index, token in enumerate(tokens)}
+        merges = [("p", "r"), ("pr", "e"), ("f", "i"), ("fi", "x"), ("pre", "fix")]
+        self._tokenizer = Tokenizer(models.BPE(vocab=self._vocab, merges=merges, unk_token="[UNK]"))
+        self.eos_token_id = self._vocab[self.eos_token]
+
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
+        return self._tokenizer.encode(text, add_special_tokens=add_special_tokens).ids
+
+    def as_hf_tokenizer(self) -> Any:
+        tokenizer = self._tokenizer
+
+        class _Offsets:
+            def __call__(self, text: str, **kwargs: Any) -> dict[str, list[Any]]:
+                del kwargs
+                encoded = tokenizer.encode(text, add_special_tokens=False)
+                return {"input_ids": encoded.ids, "offset_mapping": encoded.offsets}
+
+        return _Offsets()
+
+
+def test_no_scored_token_overlaps_the_answer_prefix_when_the_boundary_would_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _row(filler="x" * 300, nonce="Ab3dE5gpre", target="fix")
+    characters = set(
+        row["prompt"] + row["answer"] + _CharTokenizer.eos_token + "".join(json.loads(row["prompt"])[0]["content"])
+    )
+    characters |= set("\n: UA" + "".join(message["content"] for message in json.loads(row["prompt"])))
+    tokenizer = _BoundaryMergingTokenizer(characters)
+    monkeypatch.setattr(mrcr, "load_tokenizer", lambda _: tokenizer)
+    _write_rows(tmp_path / "input", [row])
+
+    mrcr.transform_mrcr(_config(tmp_path))
+
+    exemplar = {"input_ids": np.zeros((0,), dtype=np.int32), "assistant_masks": np.zeros((0,), dtype=np.int32)}
+    cache = TreeCache.load(str(tmp_path / "output" / mrcr.MRCR_CACHE_SPLIT), exemplar)
+    for index in range(len(cache)):
+        scored = cache[index]["input_ids"][cache[index]["assistant_masks"].astype(bool)].tolist()
+        assert scored == tokenizer.encode("fix")
