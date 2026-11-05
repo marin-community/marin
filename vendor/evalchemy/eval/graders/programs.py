@@ -42,9 +42,13 @@ def program(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     )
     return Grade({"accuracy": float(bool(tests) and result["passed"])}, filtered_resps=[blocks])
 
+CRUX_CALL = re.compile(r"f\(.*?\)")
+CRUX_ANSWER_SPAN = re.compile(r"\[ANSWER\](.*?)\[/ANSWER\]", flags=re.DOTALL)
+
+
 def _crux_answer(text: str, direction: str) -> str:
     """The graded expression in one CruxEval answer span: an input call or an output literal."""
-    call = re.search(r"f\(.*?\)", text)
+    call = CRUX_CALL.search(text)
     if call is None:
         return text
     if direction == "input":
@@ -54,7 +58,7 @@ def _crux_answer(text: str, direction: str) -> str:
 
 def _is_crux_candidate(span: str, answer: str, direction: str) -> bool:
     if direction == "input":
-        return re.search(r"f\(.*?\)", span) is not None
+        return CRUX_CALL.search(span) is not None
     try:
         ast.parse(answer, mode="eval")
     except SyntaxError:
@@ -69,7 +73,7 @@ def crux(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     direction = spec.grader.reference["direction"]
     # Reasoning emitted as content (models served without a reasoning parser) often restates the
     # prompt's "[ANSWER] and [/ANSWER] tags" instruction, so grade the first span holding a candidate.
-    spans = [span.strip() for span in re.findall(r"\[ANSWER\](.*?)\[/ANSWER\]", response, flags=re.DOTALL)]
+    spans = [span.strip() for span in CRUX_ANSWER_SPAN.findall(response)]
     answers = [(span, _crux_answer(span, direction)) for span in spans] or [(response, _crux_answer(response, direction))]
     answer = next(
         (answer for span, answer in answers if _is_crux_candidate(span, answer, direction)), answers[0][1]
