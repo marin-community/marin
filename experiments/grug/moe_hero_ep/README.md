@@ -268,7 +268,7 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
 at 4K, 5632 at 8K, 2816 at 16K, 704 at 65K, and 176 at 262K with the same 390251-step schedule, learning rates, and weight
-decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch. Do not lengthen the schedule
+decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch. Training evals drop each corpus's final partial window, so at 262K `ptb` and `wikitext_103` have no window and log a loss of 0. `eval_dropless/paloma/macro_loss` excludes them, which raises it from 1.960 to 2.043 at step-390251, while `eval_dropless/macro_loss` averages them in as zeros. Do not lengthen the schedule
 to train longer: its length sizes the learning rates and prior context phases. Set the extension described in
 [Hero cutovers](#hero-cutovers-and-wb-lineage) instead.
 
@@ -522,7 +522,7 @@ reports median step time, MFU and tokens/s, peak HBM, drop fraction, final train
 eval loss against a baseline: the per-metric median of the last 5 scheduled canaries from the same
 checkpoint, limiting the effect of one outlier. Manual dispatches (`hero-canary-manual-*`) never
 enter it. The run fails when the final train loss is above 1.5 or the dropless eval macro loss
-is above 2.5; one-rack runs at 262K end near 0.83 and 2.04. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to Slack.
+is above 2.5; one-rack runs at 262K end near 0.83 and 1.79. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to Slack.
 Re-pin `HERO_CANARY_CHECKPOINT` when the checkpoint layout or context length changes; the next run
 starts a new baseline.
 
@@ -560,7 +560,7 @@ The short convolution exchanges a left halo across sequence shards.
 
 The 4K control uses `--seq-len 4096 --batch-size 1024 --context-axis-size 1
 --expert-axis-size 64 --qk-mult 1.3`. Use the same checkpoint and `--schedule-steps`
-for the 4K control and 262K probe. These sizes are now the default mesh and batch. `--num-steps` is an
+for the 4K control and 262K probe. The 262K mesh and batch are the launcher's defaults. `--num-steps` is an
 absolute stop step and must exceed the checkpoint step. Record MFU, elapsed step
 time, peak memory, and routing drops after warmup. A throughput probe alone does
 not establish long-context training quality.

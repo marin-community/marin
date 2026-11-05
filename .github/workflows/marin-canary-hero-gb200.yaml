@@ -37,7 +37,7 @@ jobs:
       # Unique per concurrent gang; the hero itself uses 32614.
       IRIS_PORT_JAX: "32650"
       # Loose loss ceilings, like the H100 canary's: one-rack runs from a nearby checkpoint
-      # ended at train loss 0.83 and dropless eval macro loss 2.04.
+      # ended at train loss 0.83 and dropless eval macro loss 1.79.
       HERO_CANARY_MAX_TRAIN_LOSS: "1.5"
       HERO_CANARY_MAX_EVAL_LOSS: "2.5"
       # Five hours for the training job to start before the day is skipped.

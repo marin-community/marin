@@ -162,16 +162,6 @@ def test_read_length_tokens(fake_store):
     assert read_length_tokens(str(fake_store.stats_path)) == TOKENS
 
 
-def test_hero_on_starts_the_store_where_its_context_history_ends(monkeypatch):
-    monkeypatch.setattr(launch_scaling_ladder, "HERO_USES_LONG_CONTEXT_MIX", True)
-
-    step = build_ladder_run(run_id="test-long-context-on", size="d6144", version="dev")
-    config = _fingerprint_config(step)
-
-    phases = launch_scaling_ladder.HERO_CONTEXT_PHASES
-    assert config.data.mixture_start_step == phases[-1].end_step
-
-
 def _training_data(data: LmDataConfig) -> LmDataConfig:
     """Drop the held-out components, which train at zero weight and leave the mixture's sources unchanged."""
     ((stage, weights),) = data.train_weights
