@@ -38,3 +38,26 @@ useful selection evidence, not a redistribution-rights audit, environment audit,
 or finding that a document can support a verifiable task. The catalog is an
 input to later checklist, curator-packet, proposal, and Taskforge campaigns.
 Source project identity must remain the split boundary when tasks are derived.
+
+## Notebook objective-task campaign
+
+`run_notebooks_v1_zephyr.py` processes the complete pinned cohort with one outer
+Zephyr shard per source document. It strips Jupyter outputs, asks the author model
+for zero to four concrete objective ideas without imposing a quota, runs each
+hydrated idea through Taskforge, and obtains a separate blinded usefulness review.
+`finalize_notebooks_v1.py` materializes compact campaign views and screening bands.
+
+The complete recovered snapshot is stored at:
+
+```text
+s3://marin-us-east-02a/marin4sc/taskforge/task-library/
+  campaigns/biotasks/notebooks/v1/snapshots/complete-1/
+```
+
+It contains 57 source dispositions, 87 non-null ideas from 49 productive sources,
+and eight explicit null-source records. Taskforge structurally accepted all 87
+non-null TaskSpecs; this only establishes buildability and valid reference/negative
+controls. The blinded GLM screen recommended 40 accept, 17 revise, and 27 reject,
+with three review calls retained as errors. These screening bands are not scientific
+review, rights approval, solver calibration, or release approval. All artifacts
+remain `internal_unreviewed_do_not_publish`.
