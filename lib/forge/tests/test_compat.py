@@ -19,3 +19,10 @@ def test_recover_returns_typed_result() -> None:
     value: object = recover(lambda: "completed", "fallback").value
     assert is_text(value)
     assert value.upper() == "COMPLETED"
+
+
+def test_recover_returns_fallback_for_declared_runtime_failure() -> None:
+    def fail() -> str:
+        raise ExceptionGroup("recoverable", [RuntimeError("unavailable")])
+
+    assert recover(fail, "fallback").value == "fallback"
