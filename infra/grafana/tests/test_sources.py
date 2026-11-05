@@ -304,10 +304,7 @@ def test_nightlies_mark_a_green_run_skipped_only_when_its_skip_step_ran(skip_ste
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/jobs"):
             jobs_requests.append(request.url.path)
-            steps = [
-                {"name": "Report", "conclusion": "skipped"},
-                {"name": lane.skip_step, "conclusion": skip_step_conclusion},
-            ]
+            steps = [{"name": lane.skip_step, "conclusion": skip_step_conclusion}]
             return httpx.Response(200, json={"jobs": [{"steps": steps}]})
         if lane.workflow_file in request.url.path:
             return httpx.Response(200, json={"workflow_runs": [run]})
