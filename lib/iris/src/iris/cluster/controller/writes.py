@@ -28,6 +28,7 @@ from sqlalchemy import Table, bindparam, case, delete, func, insert, select, tex
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
+from iris.cluster.controller import controller_rows
 from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
@@ -516,6 +517,7 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
 
     Non-PENDING jobs keep their state; ``started_at_ms`` is set only if still NULL (first assignment wins).
     """
+    job_ids = list(job_ids)
     for chunk in batched(job_ids, _ID_CHUNK_SIZE):
         tx.execute(
             update(jobs_table)
@@ -528,6 +530,7 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
                 started_at_ms=func.coalesce(jobs_table.c.started_at_ms, now_ms),
             )
         )
+    controller_rows.record_job_changes(tx, job_ids)
 
 
 @writes_to(meta_table)
@@ -583,6 +586,7 @@ def insert_attempt(
                     attempt_uid=attempt_uid,
                 )
             )
+            controller_rows.record_attempt_changes(tx, [(task_id, attempt_id)])
             return attempt_uid
         except IntegrityError as exc:
             # Re-mint only on an attempt_uid collision; any other constraint

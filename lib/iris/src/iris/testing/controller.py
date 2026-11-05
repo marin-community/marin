@@ -314,6 +314,7 @@ def controller_factory(tmp_path) -> Iterator[Callable[..., Controller]]:
         if config is None:
             config_kwargs.setdefault("remote_state_dir", f"file://{tmp_path}/remote")
             config_kwargs.setdefault("local_state_dir", tmp_path / "local")
+            config_kwargs.setdefault("cluster_id", "test-cluster")
             config = ControllerConfig(**config_kwargs)
         elif config_kwargs:
             raise TypeError("make_controller: pass either a config or config kwargs, not both")

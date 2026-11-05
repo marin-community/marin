@@ -644,6 +644,42 @@ Namespaces:
   `node_system_uuid`, `node_boot_id`, and nearby timestamps as one machine
   incident before counting repeat offenders.
 - `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.
+- `iris.job`, `iris.job_config`, `iris.task_attempt` — durable copies of the
+  controller DB's `jobs`, `job_config` and `task_attempts` rows, which the
+  controller deletes a few days after a job ends. The controller that executes
+  a job writes them, after each write transaction that changes the job or
+  attempt: at submit, when an attempt is created, when it starts (with its node)
+  and when it finishes. A job handed off to a federation peer is written only by
+  that peer. `cluster` is the writing controller's cluster config name, never
+  empty.
+
+  Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id)`, because
+  job ids are reused after a job ends. `root_submitted_at_ms` is epoch
+  milliseconds; the other time columns are timestamps. An attempt is
+  `attempt_uid`, and it carries the job key plus `(task_id, attempt_id)` to join
+  `iris.task` and `iris.task_event`. `node_name` (Kubernetes) or `worker_id`
+  (worker VMs) places an attempt on a machine. `iris.job_config` has one row per
+  job, written at submit, with the requested resources (`res_device_json` holds
+  the accelerator type and count). `iris.job.tags` is reserved for submit-time job
+  tags as a JSON object (`json_get(tags, 'category')`); it is NULL until Iris
+  accepts job tags at submit.
+
+  Rows are appended, never replaced: an entity has one row per state change.
+  Its current state is its newest row, ordered by `ts DESC, seq DESC`. The
+  latest state of each attempt of a job:
+
+  ```sql
+  SELECT * FROM (
+    SELECT *, row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn
+    FROM "iris.task_attempt"
+    WHERE root_job_id = '/user/job' AND ts >= now() - INTERVAL '7 days'
+  ) WHERE rn = 1;
+  ```
+
+  History is kept in the archive (remote retention is `retain_forever`). The
+  storage policies (5 years; 8 GiB for `iris.task_attempt`, 4 GiB each for the
+  other two) bound only the hub's local copy; older segments are read back from
+  the archive.
 - `iris.admission_probe` — on Kubernetes clusters, the outcome (every 60s) of a `dryRun=All` canary pod apply that traverses the full admission chain, keyed by `outcome` (`ok`/`failed` with `error_class`, latency, truncated message). `failed` rows (or silence) detect fail-closed admission webhooks before any task pod exists.
 - `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.
 

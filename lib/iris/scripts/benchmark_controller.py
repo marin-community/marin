@@ -2252,6 +2252,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         local_state_dir=state_dir / "local",
         dry_run=True,
         checkpoint_interval=None,
+        cluster_id="benchmark",
     )
     threads = ThreadContainer("bench-serve")
     log_stack = build_log_stack(

@@ -72,6 +72,7 @@ from iris.cluster.controller.checkpoint import (
     upload_checkpoint,
     write_checkpoint,
 )
+from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -342,12 +343,12 @@ class ControllerConfig:
     cluster_config.endpoints by the daemon entrypoint. Registered as system
     endpoints on the EndpointService during start()."""
 
-    cluster_id: str = ""
-    """This cluster's real federation identity (from the cluster config ``name``).
+    cluster_id: str = field(kw_only=True)
+    """This cluster's real identity (from the cluster config ``name``). Required.
 
-    Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
-    hands jobs off; unused otherwise. Also the tag a minted capability URL carries so a
-    federation parent can relay it back here."""
+    Stamped as ``cluster`` on the controller's ``iris.job*`` / ``iris.task_attempt``
+    Finelog rows. Sent as the ``requester_id`` on each ``FederationSync``, and the tag
+    a minted capability URL carries so a federation parent can relay it back here."""
 
     dashboard_url: str = ""
     """This cluster's public origin (cluster config ``dashboard_url``); the local origin
@@ -387,7 +388,7 @@ class Controller:
 
     Example:
         ```python
-        config = ControllerConfig(port=8080)
+        config = ControllerConfig(port=8080, cluster_id="marin")
         controller = Controller(config=config, log_stack=log_stack)
         controller.register_backend(RpcTaskBackend(descriptor=descriptor, stub_factory=stub_factory))
         controller.start()
@@ -487,6 +488,14 @@ class Controller:
         # (their finelog handles are constructor args), so the controller only holds
         # the stack for its own logging and shuts it down at stop().
         self._log_stack = log_stack
+        self._db.attach_controller_rows(
+            ControllerRowTables(
+                cluster=config.cluster_id,
+                job_table=log_stack.job_table,
+                job_config_table=log_stack.job_config_table,
+                task_attempt_table=log_stack.task_attempt_table,
+            )
+        )
         self._log_client = log_stack.client
         self._log_service_address = log_stack.address
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)

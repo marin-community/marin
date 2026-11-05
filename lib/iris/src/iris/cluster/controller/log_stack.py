@@ -25,8 +25,14 @@ from rigging.auth import BearerTokenInjector, TokenProvider
 
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.stats.tables import (
+    JOB_CONFIG_NAMESPACE,
+    JOB_CONFIG_STORAGE_POLICY,
+    JOB_NAMESPACE,
+    JOB_STORAGE_POLICY,
     PROFILE_NAMESPACE,
     PROVISIONING_NAMESPACE,
+    TASK_ATTEMPT_NAMESPACE,
+    TASK_ATTEMPT_STORAGE_POLICY,
     TASK_EVENT_NAMESPACE,
     TASK_EVENT_STORAGE_POLICY,
     TASK_STATE_NAMESPACE,
@@ -37,6 +43,9 @@ from iris.cluster.stats.tables import (
     IrisTaskStat,
     IrisTaskState,
     IrisWorkerStat,
+    JobConfigRow,
+    JobRow,
+    TaskAttemptRow,
     TaskEventRow,
 )
 
@@ -62,6 +71,10 @@ class LogStack:
     worker_stats_table: Table
     # iris.task_state rows from the controller's periodic per-root-job aggregate.
     task_state_table: Table
+    # iris.job / iris.job_config / iris.task_attempt: durable controller rows.
+    job_table: Table
+    job_config_table: Table
+    task_attempt_table: Table
     server: Any = None
 
     def close(self) -> None:
@@ -109,5 +122,10 @@ def build_log_stack(
         provisioning_table=client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning),
         worker_stats_table=client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat),
         task_state_table=client.get_table(TASK_STATE_NAMESPACE, IrisTaskState),
+        job_table=client.get_table(JOB_NAMESPACE, JobRow, storage_policy=JOB_STORAGE_POLICY),
+        job_config_table=client.get_table(JOB_CONFIG_NAMESPACE, JobConfigRow, storage_policy=JOB_CONFIG_STORAGE_POLICY),
+        task_attempt_table=client.get_table(
+            TASK_ATTEMPT_NAMESPACE, TaskAttemptRow, storage_policy=TASK_ATTEMPT_STORAGE_POLICY
+        ),
         server=server,
     )
