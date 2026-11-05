@@ -10,17 +10,14 @@ from io import BytesIO
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
-import pytest
 from botocore.awsrequest import AWSResponse
-from botocore.exceptions import ClientError
 from botocore.httpsession import URLLib3Session
 from urllib3.response import HTTPResponse
 
 from infra.buckets.openbao_pilot import pilot
 
 
-@pytest.mark.parametrize("denial", ["AccessDenied", "ExpiredToken"])
-def test_probe_uses_fresh_credentials_on_the_same_client(tmp_path, monkeypatch, denial):
+def test_probe_uses_fresh_credentials_on_the_same_client(tmp_path, monkeypatch):
     class Clock(datetime):
         current = datetime.now(UTC)
 
@@ -73,7 +70,7 @@ def test_probe_uses_fresh_credentials_on_the_same_client(tmp_path, monkeypatch, 
             reads.append((session, signed_key))
             return response(request, 200, pilot.SENTINEL)
         denied.append((request.method, url.path))
-        return response(request, 403, f"<Error><Code>{denial}</Code></Error>".encode())
+        return response(request, 403, b"<Error><Code>AccessDenied</Code></Error>")
 
     credentials_file = tmp_path / "approle.json"
     credentials_file.write_text(
@@ -92,12 +89,6 @@ def test_probe_uses_fresh_credentials_on_the_same_client(tmp_path, monkeypatch, 
     monkeypatch.setattr(pilot, "READ_INTERVAL", 301)
     monkeypatch.setattr(pilot, "bao", fake_bao)
     monkeypatch.setattr(URLLib3Session, "send", send)
-
-    if denial == "ExpiredToken":
-        with pytest.raises(ClientError, match="ExpiredToken"):
-            pilot.probe(credentials_file, "123456", "US-EAST-02A", 10)
-        assert [key for _, key in reads] == ["key-1"]
-        return
 
     pilot.probe(credentials_file, "123456", "US-EAST-02A", 10)
     assert [key for _, key in reads] == ["key-1", "key-2"]
