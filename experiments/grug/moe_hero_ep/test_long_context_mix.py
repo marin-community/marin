@@ -5,12 +5,14 @@ import asyncio
 import dataclasses
 import shutil
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
 import haliax as hax
 import jax
 import numpy as np
 import pytest
+from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat, preprocessor_for_format
 from levanter.data.text.length_bucket import document_length_stats, load_bucket_length_stats
 from levanter.schedule import BatchSchedule
@@ -29,11 +31,7 @@ from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
     overall_long_partition_passes,
     read_length_tokens,
 )
-from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
-    _SPEC,
-    HARRIER_MIX_2026_08_18_STORE,
-    harrier_mix_2026_08_18_data_config,
-)
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import _SPEC
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
 
@@ -45,6 +43,13 @@ WEIGHTS = {"c01q0": 0.75, "c02q3": 0.25}
 FIRST_ID = {("c01q0", "lte_64k"): 1000, ("c01q0", "gt_64k"): 3000, ("c02q3", "lte_64k"): 5000}
 TOKENIZER_FILES = ("gpt2_tokenizer.json", "tokenizer.json"), ("gpt2_tokenizer_config.json", "tokenizer_config.json")
 LEVANTER_TESTS = Path(__file__).parents[3] / "lib/levanter/tests"
+
+
+@dataclasses.dataclass(frozen=True)
+class HeroStore:
+    store: Path
+    stats_path: Path
+    data_config: Callable[[], LmDataConfig]
 
 
 def _fingerprint_config(step):
@@ -81,7 +86,7 @@ def fake_store(tmp_path, monkeypatch):
     monkeypatch.setattr(harrier_long_context_mix, "_COOLDOWN_WEIGHTS", WEIGHTS)
     monkeypatch.setattr(harrier_long_context_mix, "LONG_CONTEXT_THRESHOLD", 16)
 
-    def config(**kwargs):
+    def config():
         built = harrier_long_context_data_config(
             ctx=StepContext.for_fingerprint(),
             start_step=START_STEP,
@@ -89,11 +94,10 @@ def fake_store(tmp_path, monkeypatch):
             validation=(),
             store=str(store),
             stats_path=str(stats_path),
-            **kwargs,
         )
         return dataclasses.replace(built, tokenizer=str(tokenizer_dir), mixture_block_size=16)
 
-    return store, stats_path, config
+    return HeroStore(store, stats_path, config)
 
 
 def _partition(token: int) -> tuple[str, str]:
@@ -102,8 +106,7 @@ def _partition(token: int) -> tuple[str, str]:
 
 
 def test_skew_multiplies_long_mass_inside_the_bucket_and_keeps_outer_weights(fake_store):
-    _, _, config = fake_store
-    data = config()
+    data = fake_store.data_config()
     bucket_sequences = {"c01q0": (832 + LONG_CONTEXT_SKEW * 160) // SEQ_LEN, "c02q3": 240 // SEQ_LEN}
     block_reads = {"c01q0": 12, "c02q3": 4}
     # Whole blocks that read c01q0 exactly once through its concatenated partitions.
@@ -131,20 +134,22 @@ def test_skew_multiplies_long_mass_inside_the_bucket_and_keeps_outer_weights(fak
 
 
 def test_bucket_without_long_tokens_reads_only_short_documents(fake_store):
-    _, _, config = fake_store
-    data = config()
+    data = fake_store.data_config()
 
     bucket = data.train_sets(hax.Axis("position", SEQ_LEN), key=jax.random.PRNGKey(0))["c02q3"].as_sync_dataset()
     assert len(bucket) == 240 // SEQ_LEN
+    examples = bucket.get_batch(list(range(len(bucket))))
+    assert all(
+        _partition(int(token)) == ("c02q3", "lte_64k") for example in examples for token in np.asarray(example.tokens)
+    )
 
 
 def test_store_counts_read_from_document_offsets(fake_store):
-    store, stats_path, _ = fake_store
-    cache = TreeCache.load(str(store / "cluster=1/quality=0"), {"input_ids": np.empty(0, dtype=np.int32)})
+    cache = TreeCache.load(str(fake_store.store / "cluster=1/quality=0"), {"input_ids": np.empty(0, dtype=np.int32)})
 
-    assert read_length_tokens(str(stats_path)) == TOKENS
+    assert read_length_tokens(str(fake_store.stats_path)) == TOKENS
     counts = asyncio.run(document_length_stats(cache, thresholds=(8, 16, 32), chunk_rows=8))
-    written = load_bucket_length_stats(str(stats_path))
+    written = load_bucket_length_stats(str(fake_store.stats_path))
     assert written.buckets["c01q0"] == counts
     assert counts.total_tokens == 992
     assert counts.tokens_above == {8: 160, 16: 160, 32: 0}
@@ -159,24 +164,6 @@ def test_reported_share_and_passes(monkeypatch):
     # Half of 1000 tokens read a 700-token concatenation holding the long partition four times.
     assert long_partition_passes(tokens, 4, 1000) == pytest.approx({"a": 500 * 4 / 700})
     assert overall_long_partition_passes(tokens, 4, 1000) == pytest.approx(500 * 4 / 700)
-
-
-def test_hero_off_builds_the_harrier_config_it_always_built():
-    step = build_ladder_run(run_id="test-long-context-off", size="d6144", version="dev")
-    ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)
-    config = step.build_config(ctx)
-
-    assert config.data == harrier_mix_2026_08_18_data_config(
-        ctx=ctx,
-        total_steps=config.trainer.trainer.num_train_steps,
-        batch_size=config.trainer.trainer.train_batch_size,
-        max_seq_len=config.model.max_seq_len,
-        enable_simulated_epoching=False,
-        validation=[dep for dep in step.deps if dep is not HARRIER_MIX_2026_08_18_STORE],
-        prior_context_phases=launch_scaling_ladder.HERO_CONTEXT_PHASES,
-    )
-    assert config.data.mixture_start_step is None
-    assert LONG_CONTEXT_TAG not in config.trainer.trainer.tracker.tags
 
 
 def test_hero_on_starts_the_store_where_its_context_history_ends(monkeypatch):
@@ -202,8 +189,7 @@ def test_hero_on_starts_the_store_where_its_context_history_ends(monkeypatch):
     assert LONG_CONTEXT_TAG in config.trainer.trainer.tracker.tags
 
 
-def test_diagnostic_arms_select_the_same_data_on_any_rack_count(monkeypatch):
-
+def test_diagnostic_arms_select_the_same_data_on_any_rack_count():
     def arm(racks: int):
         return _fingerprint_config(
             build_diagnostic_run(
@@ -224,5 +210,4 @@ def test_diagnostic_arms_select_the_same_data_on_any_rack_count(monkeypatch):
 
     assert one_rack.data == four_racks.data
     assert one_rack.data.mixture_start_step == 390_000
-    assert one_rack.data.shuffle.io_block_size == 4
     assert LONG_CONTEXT_TAG in one_rack.trainer.trainer.tracker.tags

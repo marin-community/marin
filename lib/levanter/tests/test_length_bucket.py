@@ -1,6 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -11,6 +14,13 @@ from levanter.data.text.length_bucket import (
     document_length_stats,
 )
 from levanter.store.cache import TreeCache, consolidate_shard_cache_ledgers, write_levanter_cache
+
+
+@dataclass(frozen=True)
+class SourceCache:
+    cache: TreeCache[dict]
+    docs: list[np.ndarray]
+    path: Path
 
 
 @pytest.fixture(params=["consolidated", "sharded"])
@@ -29,12 +39,12 @@ def source_cache(tmp_path, request):
             write_levanter_cache([{"input_ids": doc} for doc in shard_docs], shard_path, metadata={})
             shard_paths.append(shard_path)
         consolidate_shard_cache_ledgers(shard_paths, str(path), exemplar)
-    return TreeCache.load(str(path), exemplar), docs, path
+    return SourceCache(TreeCache.load(str(path), exemplar), docs, path)
 
 
 @pytest.mark.asyncio
 async def test_virtual_reads_match_document_filtering_without_cache_writes(source_cache):
-    cache, docs, path = source_cache
+    cache, docs, path = source_cache.cache, source_cache.docs, source_cache.path
     before = {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
     stats = await document_length_stats(cache, thresholds=(5, 9, 20), chunk_rows=3)
     assert stats.tokens_above == {5: 40, 9: 31, 20: 0}
@@ -55,7 +65,7 @@ async def test_virtual_reads_match_document_filtering_without_cache_writes(sourc
 
 @pytest.mark.asyncio
 async def test_stale_chunk_statistics_fail_on_read(source_cache):
-    cache, _, _ = source_cache
+    cache = source_cache.cache
     stats = await document_length_stats(cache, thresholds=(5,), chunk_rows=3)
     stale = stats.model_copy(update={"chunk_tokens_above": {5: [10, 19, 11]}})
     index = LengthBucketIndex(cache, 5, statistics=stale, chunk_rows=3)
