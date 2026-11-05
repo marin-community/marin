@@ -39,7 +39,7 @@ def choice_source(
     template: HarnessTemplate,
     normalizations: tuple[LikelihoodNormalization, ...],
 ) -> RlDataSource[EvalDataset]:
-    """Bind immutable evaluation rows and the separate immutable few-shot pool."""
+    """Bind pinned rows and few-shots, with the first normalization as the headline."""
     names = {
         LikelihoodNormalization.RAW: "acc,none",
         LikelihoodNormalization.CHARACTERS: "acc_norm,none",
@@ -92,7 +92,7 @@ def choice_source(
                     )
                     for value in normalizations
                 ),
-                primary_metric=names[normalizations[-1]],
+                primary_metric=names[normalizations[0]],
                 num_fewshot=template.num_fewshot,
                 summary=SummaryKind.MEAN,
                 expected_population=population,

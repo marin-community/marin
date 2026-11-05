@@ -96,7 +96,8 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             1838,
             0,
             "piqa_train.parquet",
-            normalized,
+            # The publication policy uses length-normalized PIQA accuracy.
+            (LikelihoodNormalization.CHARACTERS, LikelihoodNormalization.RAW),
         ),
         (
             "openbookqa",
