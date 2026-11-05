@@ -21,9 +21,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Self
 
 from pydantic import TypeAdapter
+from rolloutengine.models import ModelRequest, ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     ANSWER_CALL_NAME,
@@ -246,12 +247,7 @@ def workspace_turn(index: int, file: TaskResource) -> AssistantToolCalls:
 
 
 def candidate_turns(final_reply: str, files: Sequence[TaskResource]) -> tuple[dict[str, Any], ...]:
-    """The assistant turns of a candidate that writes ``files`` with one shell call each, then replies.
-
-    A validation control with a workspace payload replays these turns, and so does
-    ``grade_candidate`` when it prototypes a grader on a candidate, so both grade the state an agent
-    would leave.
-    """
+    """The assistant turns of a candidate that writes ``files`` with one shell call each, then replies."""
     turns = [wire_message(workspace_turn(index, file)) for index, file in enumerate(files)]
     return (*turns, wire_message(reply(final_reply)))
 
@@ -366,3 +362,39 @@ def _check_payload(task: TaskSpec, control: Control) -> None:
                 raise ValueError(f"Control {control.id} calls shell without one string command")
         elif call.name not in final_names:
             raise ValueError(f"Control {control.id} calls {call.name!r}, which the task does not offer")
+
+
+@dataclass(frozen=True)
+class ScriptedModel:
+    """A RolloutEngine model that replays fixed assistant turns.
+
+    The turn served is the number of assistant messages the engine has already appended, so the
+    model is stateless and a retried attempt replays from the start.
+    """
+
+    turns: tuple[dict[str, Any], ...]
+    context_assistant_turns: int
+
+    def for_step(self, step: str) -> Self:
+        """This model: a scripted turn makes no server call, so the attempt's step changes nothing."""
+        return self
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        served = sum(message["role"] == "assistant" for message in request.messages) - self.context_assistant_turns
+        message = self.turns[served]
+        return ModelTurn(
+            message=message,
+            prompt_token_ids=(),
+            response_token_ids=(),
+            logprobs=None,
+            stop_reason="tool_calls" if "tool_calls" in message else "stop",
+            text=message["content"],
+        )
+
+
+def context_assistant_turns(task: TaskSpec) -> int:
+    """The assistant turns in ``task``'s context, which a ``ScriptedModel`` skips before its script."""
+    return sum(
+        isinstance(event, AssistantToolCalls) or (isinstance(event, TextMessage) and event.role == "assistant")
+        for event in task.context.events
+    )

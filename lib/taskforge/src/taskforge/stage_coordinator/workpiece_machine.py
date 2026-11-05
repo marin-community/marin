@@ -9,8 +9,9 @@ workpiece to its next stage::
 
     stage     event          exit       next      bookkeeping
     --------  -------------  ---------  --------  ------------------------------------------------
-    TRIAGE    TRIAGED        accept     AUTHOR
-    TRIAGE    TRIAGED        reject     DONE      closing rejected (task)
+    TRIAGE    TRIAGED        accept     AUTHOR    author_state
+    TRIAGE    TRIAGED        repair     TRIAGE    triage_repairs + 1; proposal_digest the rewrite's
+    TRIAGE    TRIAGED        reject     DONE      closing rejected (task), with the event's reason
     AUTHOR    AUTHORED       authored   BUILD     program_digest
     AUTHOR    AUTHOR_FAILED  revise     AUTHOR    build_revisions + 1; revision author_failure
     AUTHOR    AUTHOR_FAILED  reject     DONE      build_revisions + 1; closing rejected (budget)
@@ -19,17 +20,22 @@ workpiece to its next stage::
     BUILD     BUILD_FAILED   reject     DONE      build_revisions + 1; closing rejected (budget)
     VALIDATE  VALIDATED      validated  REVIEW
     REVIEW    DECIDED        accept     DONE      closing accepted (labelled with the band)
-    REVIEW    DECIDED        reject     DONE      closing rejected (the decision's kind)
+    REVIEW    DECIDED        reject     DONE      closing rejected (the event's kind)
     REVIEW    DECIDED        retry      VALIDATE  retries + 1
     REVIEW    DECIDED        abandon    DONE      retries + 1; closing abandoned
     REVIEW    DECIDED        modify     AUTHOR    round + 1; task_digest cleared; revision modify
     DONE      TERMINAL       -          -         terminal = the closing's terminal
     any       TERMINAL       -          (stays)   terminal failed, when ``terminal`` is ``failed``
 
-The coordinator checks the workpiece's budget when it records the event spending it. It picks revise or
-reject for ``AUTHOR_FAILED`` and ``BUILD_FAILED``, and retry or abandon for ``DECIDED``, so
-``transition`` reads no budget. ``AUTHOR_FAILED`` and ``BUILD_FAILED`` both count toward
-``build_revisions``.
+The coordinator checks the workpiece's budget when it records the event spending it. It picks repair or
+reject for a ``TRIAGED`` event on a REPAIR verdict, revise or reject for ``AUTHOR_FAILED`` and
+``BUILD_FAILED``, retry or abandon for a ``DECIDED`` event on a ``Retry``, and modify or reject for one on a
+``Modify``, so ``transition`` reads no budget. A ``Modify`` past the workpiece's MODIFY rounds exits reject
+with kind budget; ``round`` counts the modify exits, so it is the MODIFY rounds spent.
+``AUTHOR_FAILED`` and ``BUILD_FAILED`` both count toward ``build_revisions``. Triage exits accept or
+reject unless its verdict uses the REPAIR surface; a repair exit returns the workpiece to triage with
+the rewritten proposal, which every later stage runs. An accept records the verdict's author state,
+which the fold keeps for every author call; the default triage's is empty.
 
 ``derive_state`` folds a workpiece's events into its ``WorkpieceState`` by calling ``transition`` on each
 event in turn. The state is computed again from the events on every read and is stored nowhere.
@@ -44,10 +50,13 @@ terminal:
 * a failed workpiece resumes at the stage it failed in.
 """
 
+import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
+
+from pydantic import JsonValue
 
 from taskforge.stage30_author.author import RevisionKind
 from taskforge.stage60_review.decision import BandOutcome, RejectKind
@@ -57,6 +66,8 @@ EXIT = "exit"
 TERMINAL_ATTR = "terminal"
 """The attr holding a ``TERMINAL`` event's ``Terminal``."""
 REASON_ATTR = "reason"
+AUTHOR_STATE_ATTR = "author_state"
+"""The attr holding the author state of a triage accept, as canonical JSON."""
 UNNUMBERED = 0
 """The ``seq`` of an event before a log appends it."""
 CALIBRATED = "calibrated"
@@ -68,7 +79,10 @@ class EventKind(StrEnum):
     OPENED = "opened"
     """digest: the proposal's. attrs: budget_digest, model_digest (the coordinator's, part of every step key)."""
     TRIAGED = "triaged"
-    """digest: the proposal's. attrs: exit."""
+    """digest: the triaged proposal's, or the rewrite's for repair. attrs: exit, decision (the verdict's
+    ``TriageDecision``), repairs (the rewrites spent, this event's included); triaged_digest and
+    proposal_file for repair; author_state for accept (the verdict's, as canonical JSON); reason for
+    reject (the verdict's reasons, or why a REPAIR verdict was not answered, truncated)."""
     AUTHORED = "authored"
     """digest: the program's. attrs: exit, revision (the ``RevisionKind`` the program answers)."""
     AUTHOR_FAILED = "author_failed"
@@ -103,6 +117,7 @@ class Exit(StrEnum):
     REJECT = "reject"
     AUTHORED = "authored"
     BUILT = "built"
+    REPAIR = "repair"
     REVISE = "revise"
     VALIDATED = "validated"
     RETRY = "retry"
@@ -124,6 +139,7 @@ EVENT_STAGES: Mapping[EventKind, Stage] = {
 TRANSITIONS: Mapping[tuple[Stage, Exit], Stage] = MappingProxyType(
     {
         (Stage.TRIAGE, Exit.ACCEPT): Stage.AUTHOR,
+        (Stage.TRIAGE, Exit.REPAIR): Stage.TRIAGE,
         (Stage.TRIAGE, Exit.REJECT): Stage.DONE,
         (Stage.AUTHOR, Exit.AUTHORED): Stage.BUILD,
         (Stage.AUTHOR, Exit.REVISE): Stage.AUTHOR,
@@ -189,13 +205,17 @@ class WorkpieceState:
 
     Attributes:
         stage: The stage to run next.
-        round: The author, build and validation round. A ``modify`` exit starts the next one.
+        round: The author, build and validation round. Only a ``modify`` exit starts the next one, so it
+            also counts the MODIFY rounds the workpiece has spent.
         seq: The last event's ``seq``.
-        proposal_digest: The digest of the opened proposal.
+        proposal_digest: The digest of the proposal the stages run: the opened one, or the last triage rewrite.
         program_digest: The digest of the program authored last.
         task_digest: The digest of this round's built task, or ``None`` before the build.
         revision: The kind of revision the next author call answers. A build of a program without
             source asks the author again with it, so only ``BUILT`` clears it.
+        triage_repairs: The rewrites answering a REPAIR verdict so far.
+        author_state: The author state triage's accept recorded, which every author call receives;
+            empty before the accept.
         build_revisions: The build failures and failed author calls so far.
         retries: The review ``Retry`` decisions since the workpiece opened or was last abandoned.
         closing: The ``TERMINAL`` event due, while the stage is ``DONE``.
@@ -209,6 +229,8 @@ class WorkpieceState:
     program_digest: str | None
     task_digest: str | None
     revision: RevisionKind
+    triage_repairs: int
+    author_state: Mapping[str, JsonValue]
     build_revisions: int
     retries: int
     closing: Closing | None
@@ -228,6 +250,8 @@ def opened(event: WorkpieceEvent) -> WorkpieceState:
         program_digest=None,
         task_digest=None,
         revision=RevisionKind.NONE,
+        triage_repairs=0,
+        author_state=MappingProxyType({}),
         build_revisions=0,
         retries=0,
         closing=None,
@@ -264,10 +288,15 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
         raise ValueError(f"{kind} exits {way}, which stage {state.stage} has no edge for")
     state = replace(state, stage=TRANSITIONS[(state.stage, way)])
     match (kind, way):
-        case (EventKind.TRIAGED, Exit.ACCEPT) | (EventKind.VALIDATED, Exit.VALIDATED):
+        case (EventKind.TRIAGED, Exit.ACCEPT):
+            return replace(state, author_state=MappingProxyType(json.loads(attrs[AUTHOR_STATE_ATTR])))
+        case (EventKind.VALIDATED, Exit.VALIDATED):
             return state
+        case (EventKind.TRIAGED, Exit.REPAIR):
+            assert event.digest is not None, "a repair exit carries the rewrite's digest"
+            return replace(state, proposal_digest=event.digest, triage_repairs=state.triage_repairs + 1)
         case (EventKind.TRIAGED, Exit.REJECT):
-            return replace(state, closing=Closing(Terminal.REJECTED, TRIAGE_REJECTED, RejectKind.TASK))
+            return replace(state, closing=Closing(Terminal.REJECTED, attrs[REASON_ATTR], RejectKind.TASK))
         case (EventKind.AUTHORED, Exit.AUTHORED):
             return replace(state, program_digest=event.digest)
         case (EventKind.BUILT, Exit.BUILT):

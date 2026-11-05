@@ -5,24 +5,33 @@
 
 A caller awaits an author for a program with an ``AuthorContext``, the proposal, and ``None`` on
 the workpiece's first call. The context names the workpiece, its round and its directory. In each
-later call the caller passes the ``Revision`` describing what went wrong in the previous one. The
-author returns an ``AuthoredProgram``: the ``RLEnvBuildProgram`` to build next, with the Python
+later call the caller passes the ``Revision`` describing what went wrong in the previous one. Every
+call also passes the author state triage's accept attached to the workpiece, a JSON mapping that is
+empty unless a consumer's triage attached findings or obligations; the package's authors ignore it.
+The author returns an ``AuthoredProgram``: the ``RLEnvBuildProgram`` to build next, with the Python
 source it loaded the program from. The coordinator writes that source to ``PROGRAM_FILE``, beside
 ``PROGRAM_MANIFEST_FILE``, in a directory of the author call, and the build stage loads the program
 back from the file through ``loader.load_program_source``. A revision carries no program source:
 an author that revises its own program reads the ``PROGRAM_FILE`` it wrote. ``static_author``
-turns a program written by hand into an author returning no source.
+turns a program written by hand into an author returning no source. An author call whose reply
+stays invalid raises ``StructuredOutputError``, and the coordinator asks again with the failure as
+an ``AUTHOR_FAILURE`` revision.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from pydantic import JsonValue
+
+from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.program import RLEnvBuildProgram
 
 PROGRAM_MANIFEST_FILE = "program.json"
 PROGRAM_FILE = "program.py"
+ROUNDS_DIR = "rounds"
 
 
 class RevisionKind(StrEnum):
@@ -62,8 +71,8 @@ class AuthorContext:
     Attributes:
         workpiece_id: The workpiece's id.
         round: The workpiece's round, which counts the review ``Modify`` decisions it followed.
-        workpiece_dir: The workpiece's directory. The coordinator's files in it are ``events.json``
-            and, in ``rounds/<n>/``, ``authored/``, ``draft/``, ``build-failures/``,
+        workpiece_dir: The workpiece's directory. The coordinator's files in it are ``events.json``,
+            ``repaired/`` and, in ``rounds/<n>/``, ``authored/``, ``draft/``, ``build-failures/``,
             ``validation.json`` and ``decision.json``. An author keeps its own files in this
             directory under any other name.
     """
@@ -74,7 +83,13 @@ class AuthorContext:
 
 
 class Author(Protocol):
-    async def __call__(self, context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram: ...
+    async def __call__(
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
+    ) -> AuthoredProgram: ...
 
 
 def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
@@ -98,7 +113,12 @@ def static_author(program: RLEnvBuildProgram) -> Author:
     """Return an author that hands back ``program``, with no source, for every call."""
     authored = AuthoredProgram(program, None)
 
-    async def author(context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def author(
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
+    ) -> AuthoredProgram:
         return authored
 
     return author

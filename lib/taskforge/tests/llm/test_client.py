@@ -29,7 +29,6 @@ from taskforge.llm.glm_client import (
 )
 from taskforge.llm.policy import (
     CONTINUE_PROMPT,
-    GLM_MAX_OUTPUT_TOKENS,
     LLMPolicy,
     LLMProviderConfig,
     Message,
@@ -104,7 +103,7 @@ def test_stream_assembles_content_reasoning_usage_and_chunks(fake_glm, run):
     assert json.loads(attempt.events[1])["choices"][0]["delta"]["reasoning"] == "thin"
     assert json.loads(attempt.events[-1])["usage"]["completion_tokens"] == 7
     request = fake_glm.requests[0]
-    assert request["max_tokens"] == GLM_MAX_OUTPUT_TOKENS
+    assert "max_tokens" not in request and "max_completion_tokens" not in request
     assert (request["stream"], request["stream_options"]) == (True, {"include_usage": True})
     assert request["chat_template_kwargs"] == {"reasoning_effort": "high"}
 
@@ -290,7 +289,7 @@ def test_context_overflow_raises_without_lowering_max_tokens(fake_glm, run):
         run()
     assert error.value.status == 400
     assert error.value.attempts[0].outcome is AttemptOutcome.CONTEXT_OVERFLOW
-    assert [r["max_tokens"] for r in fake_glm.requests] == [GLM_MAX_OUTPUT_TOKENS]
+    assert all("max_tokens" not in request for request in fake_glm.requests)
 
 
 def test_length_finish_continues_from_partial_output(fake_glm, run):
@@ -438,3 +437,27 @@ def test_the_connection_pool_of_one_client_works_in_each_new_event_loop(fast_pro
         # A pool that a closed loop opened fails on its kept-alive connection with "Event loop is closed".
         assert [asyncio.run(health()) for _ in range(2)] == [200, 200]
         server.shutdown()
+
+
+def test_unlimited_continuations_complete_past_the_former_four_segment_cap(fake_glm, run):
+    for _ in range(6):
+        fake_glm.stream(content="part ", finish="length")
+    fake_glm.stream(content="done")
+    completion = run(policy=LLMPolicy(max_tokens=None, max_continuations=None))
+    assert completion.content == "part " * 6 + "done"
+    assert completion.continuations == 6
+    assert completion.finish_reason is FinishReason.STOP
+    assert all("max_tokens" not in request and "max_completion_tokens" not in request for request in fake_glm.requests)
+
+
+def test_uncapped_tool_call_at_the_physical_context_boundary_is_incomplete(fake_glm, run):
+    fake_glm.stream(
+        tool_calls=(("shell", '{"command": "cat <<EOF'),),
+        finish="tool_calls",
+        prompt_tokens=262000,
+        completion_tokens=144,
+    )
+    result = run(policy=LLMPolicy(max_tokens=None))
+    assert result.finish_reason is FinishReason.LENGTH
+    assert result.attempts[0].max_tokens is None
+    assert "max_tokens" not in fake_glm.requests[0]

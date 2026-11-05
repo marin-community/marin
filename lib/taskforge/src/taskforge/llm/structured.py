@@ -22,7 +22,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
-from taskforge.llm.client import Completion, FinishReason, StructuredResult
+from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 
 ERROR_TEXT_LIMIT = 4000
@@ -44,10 +44,21 @@ class SchemaCompletions(Protocol):
 
 
 class StructuredOutputError(ValueError):
-    """The output limit cut a reply off, or the first reply and every repair failed validation."""
+    """The first reply and every configured repair failed validation."""
 
     def __init__(self, error: ValueError, completions: Sequence[Completion]):
         super().__init__(f"structured output invalid after {len(completions) - 1} repairs: {error}")
+        self.completions = tuple(completions)
+
+
+class IncompleteOutput(ModelUnavailable):
+    """A physical output/context boundary interrupted structured generation; preserve it for a hold."""
+
+    def __init__(self, completions: Sequence[Completion]):
+        super().__init__(
+            "structured generation ended before the complete output was available",
+            tuple(attempt for completion in completions for attempt in completion.attempts),
+        )
         self.completions = tuple(completions)
 
 
@@ -137,9 +148,9 @@ async def complete_structured[T: BaseModel](
     messages: Sequence[Message],
     output_type: type[T],
     policy: LLMPolicy,
-    max_repairs: int,
+    max_repairs: int | None,
 ) -> StructuredResult[T]:
-    """Return the reply validated as ``output_type``, sending at most ``max_repairs`` repair requests.
+    """Return the reply validated as ``output_type``, repairing until valid when ``max_repairs`` is ``None``.
 
     A reply cut off by the output limit fails the call at once. Each repair request holds the original
     ``messages``, the latest invalid output and its validation error. Every request ends with a user
@@ -147,8 +158,8 @@ async def complete_structured[T: BaseModel](
     tells the model what each field holds.
 
     Raises:
-        StructuredOutputError: The output limit cut a reply off, or the last allowed reply was still
-            invalid. The error holds every completion.
+        IncompleteOutput: A physical output/context boundary interrupted generation; holds every completion.
+        StructuredOutputError: The last explicitly allowed repair remained invalid.
     """
     instruction: Message = {"role": "user", "content": schema_instruction(output_type)}
     completions = [await client.complete_schema([*messages, instruction], output_type, policy)]
@@ -156,9 +167,9 @@ async def complete_structured[T: BaseModel](
         try:
             return StructuredResult(_parsed(output_type, completions[-1]), tuple(completions))
         except CutReplyError as error:
-            raise StructuredOutputError(error, completions) from error
+            raise IncompleteOutput(completions) from error
         except ValueError as error:
-            if len(completions) > max_repairs:
+            if max_repairs is not None and len(completions) > max_repairs:
                 raise StructuredOutputError(error, completions) from error
             repair = repair_messages(messages, completions[-1], error)
             completions.append(await client.complete_schema([*repair, instruction], output_type, policy))

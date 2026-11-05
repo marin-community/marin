@@ -40,12 +40,9 @@ from rolloutengine.models import (
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     GradedRollout,
     MachineRuntimeSpec,
-    ModelRequest,
-    ModelTurn,
     Rollout,
     RolloutInterrupted,
     TaskRolloutSpec,
-    TokenUsage,
     TraceMode,
 )
 from shellbox.machine import Backend, Command, Machine, NetworkPolicy
@@ -70,9 +67,11 @@ from taskforge.agentic.gate import Evidence, Gate, missing_evidence
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, GUESS_PROMPT, REVIEW_TASK_PROMPT
 from taskforge.capability import FILE_SAFE_ID, CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
-from taskforge.llm.client import ContextExhausted
+from taskforge.llm.agent import clip_tool_output
 from taskforge.llm.policy import Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.spec.controls import ScriptedModel, context_assistant_turns
+from taskforge.stage40_build_with_program.context import BuildInfrastructureFailure
 
 logger = logging.getLogger(__name__)
 
@@ -368,8 +367,8 @@ class ToolSession:
             "%s %s(%s): %s",
             self.tools.idea.capability_id,
             name,
-            _clip(json.dumps(arguments), limit=200),
-            _clip(result.content, limit=300),
+            clip_tool_output(json.dumps(arguments), limit=200),
+            clip_tool_output(result.content, limit=300),
         )
         return result
 
@@ -381,7 +380,11 @@ class ToolSession:
         response = await _web(self.config.web.search(objective, queries))
         path = await self._save_web("search", response)
         results = [
-            {"url": item.get("url"), "title": item.get("title"), "excerpts": _clip(" ".join(item.get("excerpts") or ()))}
+            {
+                "url": item.get("url"),
+                "title": item.get("title"),
+                "excerpts": clip_tool_output(" ".join(item.get("excerpts") or ())),
+            }
             for item in response.get("results", ())
         ]
         return _result({"saved": path, "results": results})
@@ -391,7 +394,7 @@ class ToolSession:
         response = await _web(self.config.web.extract(urls, objective))
         path = await self._save_web("fetch", response)
         results = [
-            {"url": item.get("url"), "excerpts": _clip(" ".join(item.get("excerpts") or ()))}
+            {"url": item.get("url"), "excerpts": clip_tool_output(" ".join(item.get("excerpts") or ()))}
             for item in response.get("results", ())
         ]
         return _result({"saved": path, "results": results, "errors": response.get("errors", [])})
@@ -413,7 +416,7 @@ class ToolSession:
                 }
             )
         if status != Outcome.GRADED:
-            raise ToolError(f"The grade failed ({status}); check the task: {grade.error}")
+            raise BuildInfrastructureFailure("grading_unavailable", f"{status}: {grade.error}")
         passed = _passed(grade)
         key = _task_digest(task)
         self.tools.evidence[key].controls.append((expect == "pass", passed))
@@ -433,10 +436,12 @@ class ToolSession:
 
     async def _grade(self, task: TaskSpec, answer: str) -> GradeResult:
         """The grade of ``answer`` by the task's grader, from a rollout of a model that gives only that answer."""
+        spec = _solver_spec(task, self.config)
+        model = ScriptedModel(({"role": "assistant", "content": answer},), context_assistant_turns(spec.task))
         try:
-            result = await self.tools.solver_engine.run_task(_solver_spec(task, self.config), _ReplayModel(answer))
+            result = await self.tools.solver_engine.run_task(spec, model)
         except RolloutInterrupted as error:
-            raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
+            raise BuildInfrastructureFailure("grading_interrupted", _failure(error.rollout)) from error
         except (ValueError, NotImplementedError) as error:
             raise ToolError(f"The grade failed; check the task: {error}") from error
         return result.grade
@@ -457,7 +462,8 @@ class ToolSession:
         results = await asyncio.gather(
             *(self._rollouts(task, spec, n, role) for task, spec in zip(tasks, specs, strict=True))
         )
-        left = self.config.budget.solver_rollouts - self.tools.spend.solver_rollouts
+        budget = self.config.budget.solver_rollouts
+        left = None if budget is None else budget - self.tools.spend.solver_rollouts
         return _result({"results": dict(zip(paths, results, strict=True)), "solver_rollouts_left": left})
 
     async def _rollouts(
@@ -476,16 +482,21 @@ class ToolSession:
             rollout = outcome.rollout
             grade = outcome.grade if isinstance(outcome, GradedRollout) else None
             await self._write(f"{directory}/{role}-{first + index}.txt", _transcript(rollout, grade).encode())
+            if rollout.stop_reason in RAN_OUT_STOP_REASONS:
+                ungraded[f"incomplete: {rollout.stop_reason}"] += 1
+                continue
             if grade is None or grade.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE):
                 reason = f"{grade.status}: {grade.error}" if grade is not None else f"interrupted: {_failure(rollout)}"
-                ungraded[_clip(reason, limit=300)] += 1
+                ungraded[clip_tool_output(reason, limit=300)] += 1
                 continue
             passed = _passed(grade)
             answer = _final_answer(rollout)
             format_failure = (
                 grade.status == Outcome.SUBMISSION_FAILURE and rollout.stop_reason not in RAN_OUT_STOP_REASONS
             )
-            answers.append({"passed": passed, "format_failure": format_failure, "answer": _clip(answer, limit=200)})
+            answers.append(
+                {"passed": passed, "format_failure": format_failure, "answer": clip_tool_output(answer, limit=200)}
+            )
             if role == "solver" and format_failure:
                 evidence.solver_format_failures += 1
             elif role == "solver":
@@ -497,8 +508,14 @@ class ToolSession:
                 # An adversary without a graded answer shows nothing that the review can judge, so it does not count.
                 evidence.adversary_runs += 1
                 evidence.adversary_passes += passed
-                record = {"passed": passed, "answer": _clip(answer, limit=300), "commands": _commands(rollout)}
+                record = {
+                    "passed": passed,
+                    "answer": clip_tool_output(answer, limit=300),
+                    "commands": _commands(rollout),
+                }
                 self.tools.adversary_runs[key].append(record)
+        if ungraded:
+            raise BuildInfrastructureFailure("validation_incomplete", json.dumps(dict(ungraded), sort_keys=True))
         graded = [answer for answer in answers if not answer["format_failure"]]
         passes = sum(answer["passed"] for answer in graded)
         return {
@@ -638,7 +655,9 @@ class ToolSession:
         )
         if result.exit_code != 0:
             stderr = result.stderr.decode(errors="replace")
-            raise ToolError(f"`{shlex.join(command)}` failed with exit code {result.exit_code}: {_clip(stderr)}")
+            raise ToolError(
+                f"`{shlex.join(command)}` failed with exit code {result.exit_code}: {clip_tool_output(stderr)}"
+            )
         return await self._load(output)
 
     async def _snapshot(self) -> bytes:
@@ -653,7 +672,7 @@ class ToolSession:
                 "build program does not read"
             )
         if result.exit_code != 0:
-            raise ToolError(f"The workspace snapshot failed: {_clip(result.stderr.decode(errors='replace'))}")
+            raise ToolError(f"The workspace snapshot failed: {clip_tool_output(result.stderr.decode(errors='replace'))}")
         return result.stdout
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
@@ -677,12 +696,21 @@ class ToolSession:
 
     async def finish(self, report: str) -> ToolCallResult:
         budget = self.config.budget.solver_rollouts
-        left = budget - self.tools.spend.solver_rollouts
+        left = None if budget is None else budget - self.tools.spend.solver_rollouts
         accepted = len(self.tools.accepted)
-        if accepted < self.tools.n and left > EARLY_FINISH_BUDGET_SHARE * budget and not self.tools.early_finish_refused:
+        if (
+            accepted < self.tools.n
+            and (budget is None or (left is not None and left > EARLY_FINISH_BUDGET_SHARE * budget))
+            and not self.tools.early_finish_refused
+        ):
             self.tools.early_finish_refused = True
+            remaining = (
+                "validation calls have no separate cap"
+                if budget is None
+                else f"{left} of {budget} solver rollouts are left"
+            )
             return _error(
-                f"{accepted} of {self.tools.n} tasks are accepted and {left} of {budget} solver rollouts are left. "
+                f"{accepted} of {self.tools.n} tasks are accepted and {remaining}. "
                 "Use them: make the task harder with more steps or more data, or make a different task. "
                 "Call finish again only if the capability cannot give tasks in the band."
             )
@@ -707,10 +735,6 @@ class ToolSession:
             result = await self.config.judge.complete_structured(messages, output_type, self.config.judge_policy)
         except StructuredOutputError as error:
             raise ToolError(f"The reviewer gave no valid reply; try again: {error}") from error
-        except ContextExhausted as error:
-            raise ToolError(
-                "The reviewer cannot read this task: its prompt and files are too long. Make them shorter."
-            ) from error
         self.tools.spend.judge_tokens += sum(
             completion.usage.prompt_tokens + completion.usage.completion_tokens for completion in result.completions
         )
@@ -721,11 +745,11 @@ class ToolSession:
         await self._write(path, json.dumps(response, indent=1).encode())
         return path
 
-    def _spend(self, name: str, limit: int, count: int) -> None:
+    def _spend(self, name: str, limit: int | None, count: int) -> None:
         used = getattr(self.tools.spend, name)
-        if used >= limit:
+        if limit is not None and used >= limit:
             raise BudgetExhausted(f"The budget has no {name.replace('_', ' ')} left")
-        if used + count > limit:
+        if limit is not None and used + count > limit:
             raise ToolError(f"The budget has {limit - used} {name.replace('_', ' ')} left")
         setattr(self.tools.spend, name, used + count)
 
@@ -734,7 +758,7 @@ class ToolSession:
         command = Command(("cat", path), timeout=self.config.command_timeout, output_limit_bytes=MAX_FILE_BYTES)
         result = await self.machine.run(command)
         if result.exit_code != 0:
-            raise ToolError(f"Cannot read {path}: {_clip(result.stderr.decode(errors='replace'))}")
+            raise ToolError(f"Cannot read {path}: {clip_tool_output(result.stderr.decode(errors='replace'))}")
         if result.stdout_truncated:
             raise ToolError(f"{path} is larger than {MAX_FILE_BYTES} bytes")
         return result.stdout
@@ -751,10 +775,11 @@ class ToolSession:
         try:
             task = TaskSpec.model_validate_json(await self._read(path))
         except ValidationError as error:
-            raise ToolError(f"{path} is not a valid TaskSpec: {_clip(str(error))}") from error
+            raise ToolError(f"{path} is not a valid TaskSpec: {clip_tool_output(str(error))}") from error
         if FILE_SAFE_ID.match(task.id) is None or len(task.id) > MAX_ID_CHARS:
             raise ToolError(
-                f"The task id {_clip(task.id, limit=200)!r} must be at most {MAX_ID_CHARS} letters, digits, dots, "
+                f"The task id {clip_tool_output(task.id, limit=200)!r} must be at most "
+                f"{MAX_ID_CHARS} letters, digits, dots, "
                 "dashes and underscores, starting with a letter or a digit"
             )
         key = _task_digest(task)
@@ -768,17 +793,6 @@ class ToolSession:
         if requirements.setup_commands:
             raise ToolError("Tasks cannot have setup_commands: put the solver's files in resources.worker")
         return task
-
-
-@dataclass
-class _ReplayModel:
-    """A model that answers with ``answer`` and no tool call, so that the grader grades a given answer."""
-
-    answer: str
-
-    async def __call__(self, request: ModelRequest) -> ModelTurn:
-        message = {"role": "assistant", "content": self.answer}
-        return ModelTurn(message, (), (), None, "stop", text=self.answer, usage=TokenUsage(0, 0))
 
 
 def _next_step(evidence: Evidence, gate: Gate) -> dict[str, str]:
@@ -828,7 +842,7 @@ def review_content(
             "runs": evidence.solver_runs,
             "passes": evidence.solver_passes,
             "format_failures": evidence.solver_format_failures,
-            "failed_answers": [_clip(answer, limit=300) for answer in failed_answers][:REVIEW_ANSWERS],
+            "failed_answers": [clip_tool_output(answer, limit=300) for answer in failed_answers][:REVIEW_ANSWERS],
             "shared_failed_answers": {answer: count for answer, count in shared.most_common() if count > 1},
         },
         # Passed runs first, so that the limit never hides a shortcut from the review.
@@ -843,7 +857,7 @@ def _normal_answer(answer: str) -> str:
     try:
         return str(float(text.replace(",", "")))
     except ValueError:
-        return _clip(text, limit=100)
+        return clip_tool_output(text, limit=100)
 
 
 def rollout_tokens(rollout: Rollout) -> int:
@@ -980,7 +994,7 @@ def _reference(task: TaskSpec) -> str:
 def _public_task(task: TaskSpec, file_chars: int = OUTPUT_CHARS) -> dict[str, Any]:
     """What the solver sees: the prompt messages, the answer format, and the start of each of its files."""
     files = {
-        resource.path: _clip(resource_bytes(resource).decode(errors="replace"), limit=file_chars)
+        resource.path: clip_tool_output(resource_bytes(resource).decode(errors="replace"), limit=file_chars)
         for resource in task.resources.worker
         if isinstance(resource.source, InlineFile)
     }
@@ -1032,13 +1046,13 @@ def _failure(rollout: Rollout) -> str:
     failure = rollout.failure
     if failure is None:
         return "no failure record"
-    return _clip(f"{failure.exception_type}: {json.dumps(failure.diagnostics, default=str)}", limit=1000)
+    return clip_tool_output(f"{failure.exception_type}: {json.dumps(failure.diagnostics, default=str)}", limit=1000)
 
 
 def _commands(rollout: Rollout) -> list[str]:
     """The arguments of each tool call in ``rollout``, for example the shell commands of an adversary."""
     return [
-        _clip(str((call.get("function") or {}).get("arguments")), limit=200)
+        clip_tool_output(str((call.get("function") or {}).get("arguments")), limit=200)
         for conversation in rollout.conversations
         for message in conversation.messages
         for call in message.get("tool_calls") or ()
@@ -1060,10 +1074,6 @@ def _transcript(rollout: Rollout, grade: GradeResult | None) -> str:
             text = " ".join([str(message.get("content") or ""), *calls]).strip()
             lines.append(f"[{number}] {message.get('role')}: {text}")
     return "\n".join(lines) + "\n"
-
-
-def _clip(text: str, *, limit: int = OUTPUT_CHARS) -> str:
-    return text if len(text) <= limit else f"{text[:limit]}..."
 
 
 def _result(value: Mapping[str, Any], *, done: bool = False) -> ToolCallResult:

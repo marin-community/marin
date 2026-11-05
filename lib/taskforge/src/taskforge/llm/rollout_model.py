@@ -12,9 +12,8 @@ the conversation, so the model cannot replay an exact token prefix: a request th
 (a ``Continuation``, or pinned prompt ids) raises ``RolloutContractError`` before any call. Only the
 exact-token trace sends them.
 
-A rollout turn never continues on ``finish_reason == "length"``: the policy must set
-``max_continuations=0``, so a turn is one request and the engine grades a cut turn with stop reason
-``length``.
+A rollout turn follows the policy's continuation setting; ``None`` continues without an artificial cap.
+If generation still ends at a physical boundary, validation holds its partial grade as unavailable evidence.
 
 When the prompt alone fills the context window, the turn raises ``GenerationLimitReached`` with no
 prompt ids: the server rendered the prompt, and the messages trace keeps no tokens of it.
@@ -129,10 +128,6 @@ class GlmRolloutModel:
     client: ModelClient
     policy: LLMPolicy
     record: CallLedger
-
-    def __post_init__(self) -> None:
-        if self.policy.max_continuations != 0:
-            raise ValueError("A rollout model cannot continue on length; set LLMPolicy.max_continuations=0")
 
     def for_step(self, step: str) -> Self:
         """This model recording, and routing, under ``step`` of the same workpiece and round."""

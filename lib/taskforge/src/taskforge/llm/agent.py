@@ -46,7 +46,16 @@ from taskcompendium.models import FunctionCall, FunctionDefinition
 from taskcompendium.runtime.shell import BoundShellTool, ShellToolConfig, run_shell_call
 
 from taskforge.ledger.records import EntryKind, span
-from taskforge.llm.client import Completion, ContextExhausted, FinishReason, ModelClient, ToolCall, Usage
+from taskforge.llm.client import (
+    Completion,
+    ContextExhausted,
+    FinishReason,
+    ModelClient,
+    ModelRequestRejected,
+    ModelUnavailable,
+    ToolCall,
+    Usage,
+)
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_complete
 from taskforge.llm.rollout_model import PROMPT_CACHE_KEY, assistant_wire_message, routing_key
@@ -79,6 +88,17 @@ class AgentTool:
         }
 
 
+def clip_tool_output(text: str, *, limit: int = 2000, head: int | None = None, tail: int = 0) -> str:
+    """Keep a short reply whole, or retain its selected head and tail with a truncation marker."""
+    if len(text) <= limit:
+        return text
+    head = limit if head is None else head
+    if tail == 0:
+        return f"{text[:head]}..."
+    dropped = len(text) - head - tail
+    return f"{text[:head]}\n... [{dropped} characters dropped] ...\n{text[-tail:]}"
+
+
 class ReasoningReplay(StrEnum):
     """Whether replayed assistant turns of a ``run_agent`` loop carry their ``reasoning_content``."""
 
@@ -94,6 +114,8 @@ class AgentStop(StrEnum):
     """A reply without tool calls stayed cut off after ``LLMPolicy.max_continuations``; it is kept."""
     CONTEXT = "context"
     """The conversation filled the context window before the next reply; the turns so far are kept."""
+    INTERRUPTED = "interrupted"
+    """A model request failed; AgentInterrupted carries the completed conversation for resumption."""
     STOPPED = "stopped"
     """The caller's ``stop`` callback ended the run after a turn's tool calls ran; the turns so far are kept."""
 
@@ -129,6 +151,14 @@ class AgentRun:
     turns: tuple[AgentTurn, ...]
     stop: AgentStop
     usage: Usage
+
+
+class AgentInterrupted(ModelUnavailable):
+    """An unavailable model request with the agent's completed turns and exact continuation messages."""
+
+    def __init__(self, cause: ModelUnavailable | ModelRequestRejected, run: AgentRun):
+        super().__init__(str(cause), cause.attempts)
+        self.run = run
 
 
 def replay_arguments(arguments: str) -> str:
@@ -212,7 +242,7 @@ async def run_agent(
     policy: LLMPolicy,
     messages: Sequence[Message],
     tools: Sequence[AgentTool],
-    max_turns: int,
+    max_turns: int | None,
     record: CallLedger,
     replay: ReasoningReplay = ReasoningReplay.KEEP,
     stop: Callable[[AgentTurn], bool] | None = None,
@@ -221,16 +251,15 @@ async def run_agent(
     ``max_turns`` replies.
 
     A turn that the client rejects with ``ContextExhausted`` ends the run with
-    ``AgentStop.CONTEXT``; its ``LLM_CALL`` span carries the exception as ``cause``. The client sends
-    the policy's whole ``max_tokens`` with every turn, so a long loop needs a ``max_tokens`` that
-    leaves room for the conversation it builds.
+    ``AgentStop.CONTEXT``; its ``LLM_CALL`` span carries the exception as ``cause``. Other model
+    failures raise ``AgentInterrupted`` with the completed conversation and tool turns for resumption.
 
     Args:
         client: Shared model client; concurrent runs share its connection pool.
         policy: Sampling and continuation policy for every turn.
         messages: The opening conversation, usually a system and a user message.
         tools: Tools offered on every turn; names must be unique.
-        max_turns: Model replies allowed; tool calls in the last reply still run.
+        max_turns: Model replies allowed, or None for no turn limit; last-turn tool calls still run.
         record: Ledger and span identity for the turn and tool-call entries, and the run's ``routing_key``.
         replay: Whether replayed assistant turns carry their reasoning; they do by default.
         stop: Called with each turn that made tool calls, after they ran; ``True`` ends the run with
@@ -245,13 +274,17 @@ async def run_agent(
     conversation = list(messages)
     turns: list[AgentTurn] = []
     usage = NO_USAGE
-    for turn in range(max_turns):
+    turn = 0
+    while max_turns is None or turn < max_turns:
         try:
             completion = await recorded_complete(
                 client, conversation, policy, request_fields, record, {"turn": str(turn)}
             )
         except ContextExhausted:
             return AgentRun(tuple(conversation), tuple(turns), AgentStop.CONTEXT, usage)
+        except (ModelUnavailable, ModelRequestRejected) as error:
+            partial = AgentRun(tuple(conversation), tuple(turns), AgentStop.INTERRUPTED, usage)
+            raise AgentInterrupted(error, partial) from error
         usage = usage + completion.usage
         conversation.append(assistant_message(completion, replay))
         if not completion.tool_calls:
@@ -268,6 +301,7 @@ async def run_agent(
         turns.append(AgentTurn(completion, tuple(results)))
         if stop is not None and stop(turns[-1]):
             return AgentRun(tuple(conversation), tuple(turns), AgentStop.STOPPED, usage)
+        turn += 1
     return AgentRun(tuple(conversation), tuple(turns), AgentStop.MAX_TURNS, usage)
 
 

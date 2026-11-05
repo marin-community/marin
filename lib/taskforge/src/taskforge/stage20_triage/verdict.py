@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The triage verdict on one proposal: the decision, the structural results, the reasons, and the author state.
-
-``accept`` is a triage function admitting every proposal.
-"""
+"""The triage verdict on one proposal: the decision, the structural results, the reasons, and the author state."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -55,8 +52,3 @@ class Verdict:
 
 
 _VERDICT = TypeAdapter(Verdict)
-
-
-async def accept(proposal: object) -> TriageDecision:
-    """Accept ``proposal`` without checking it."""
-    return TriageDecision.ACCEPT

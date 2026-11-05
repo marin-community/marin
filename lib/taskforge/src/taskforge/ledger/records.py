@@ -82,6 +82,13 @@ class Ledger(Protocol):
     def record(self, entry: LedgerEntry) -> None: ...
 
 
+class DiscardingLedger:
+    """A ledger for callers that explicitly opt out of recording."""
+
+    def record(self, entry: LedgerEntry) -> None:
+        pass
+
+
 @dataclass
 class SpanFields:
     """Fields a caller fills in while a span is open; copied into the entry on exit."""

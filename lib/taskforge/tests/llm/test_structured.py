@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 from taskforge.llm.client import StructuredResult
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.llm.structured import StructuredOutputError, schema_instruction
+from taskforge.llm.structured import IncompleteOutput, StructuredOutputError, schema_instruction
 
 POSITIVE_POPULATION_ERROR = "a capital's population must be positive"
 
@@ -100,7 +100,7 @@ def test_second_failure_raises_with_both_completions(fake_glm, run):
 def test_length_cut_first_reply_raises_without_a_repair(fake_glm, run):
     fake_glm.stream(content=PARIS, finish="length")
     fake_glm.stream(content=PARIS)
-    with pytest.raises(StructuredOutputError) as error:
+    with pytest.raises(IncompleteOutput) as error:
         run()
     assert len(fake_glm.requests) == 1
     assert len(error.value.completions) == 1
@@ -110,7 +110,7 @@ def test_length_cut_first_reply_raises_without_a_repair(fake_glm, run):
 def test_length_cut_repair_raises(fake_glm, run):
     fake_glm.stream(content="not json")
     fake_glm.stream(content=PARIS, finish="length")
-    with pytest.raises(StructuredOutputError):
+    with pytest.raises(IncompleteOutput):
         run()
 
 
@@ -145,3 +145,12 @@ def test_schema_instruction_renders_nested_models_and_lists():
         "  grams (number or null, optional): Grams\n"
         "steps (list of string, required): Steps"
     )
+
+
+def test_unlimited_schema_repairs_reach_a_valid_reply_after_repeated_failures(fake_glm, run):
+    for _ in range(4):
+        fake_glm.stream(content="not json")
+    fake_glm.stream(content=PARIS)
+    result = run(structured_repairs=None)
+    assert result.value.city == "Paris"
+    assert len(result.completions) == 5

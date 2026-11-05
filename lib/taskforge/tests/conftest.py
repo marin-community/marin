@@ -25,6 +25,7 @@ import os
 import tempfile
 import threading
 import time
+import urllib.request
 from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -45,6 +46,17 @@ PARALLEL_KEY_FILE_ENV = "TASKFORGE_PARALLEL_KEY_FILE"
 PARALLEL_KEY = "PARALLEL_KEY"
 EVIDENCE_DIR_ENV = "TASKFORGE_EVIDENCE_DIR"
 DEFAULT_EVIDENCE_ROOT = Path(tempfile.gettempdir()) / "taskforge-evidence"
+
+
+@pytest.fixture(autouse=True)
+def no_package_downloads(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
+    if any(request.node.get_closest_marker(marker) is not None for marker in ("live_glm", "manual")):
+        return
+
+    def refuse_download(*args, **kwargs):
+        raise AssertionError("Unit tests must not download ShellSim catalog or runtime assets")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse_download)
 
 
 @dataclass(frozen=True)
@@ -85,6 +97,7 @@ def live_provider() -> LLMProviderConfig:
         stall_timeout=600.0,
         max_connections=512,
         structured_repairs=1,
+        context_window=262144,
     )
 
 
@@ -132,6 +145,7 @@ def fast_provider() -> LLMProviderConfig:
         stall_timeout=600.0,
         max_connections=8,
         structured_repairs=1,
+        context_window=262144,
     )
 
 

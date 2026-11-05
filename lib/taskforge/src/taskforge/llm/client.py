@@ -78,7 +78,7 @@ class Attempt:
 
     segment: int
     outcome: AttemptOutcome
-    max_tokens: int
+    max_tokens: int | None
     started: float
     duration: float
     http_status: int | None

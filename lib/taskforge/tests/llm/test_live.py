@@ -25,7 +25,7 @@ from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import AttemptOutcome, Completion, ContextExhausted, FinishReason
 from taskforge.llm.glm_client import GlmClient, request_kwargs
-from taskforge.llm.policy import GLM_MAX_OUTPUT_TOKENS, LLMPolicy, Message, ReasoningEffort
+from taskforge.llm.policy import LLMPolicy, Message, ReasoningEffort
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import response_format
@@ -116,7 +116,7 @@ def test_plain_completion_at_model_max_tokens(glm_source, live_provider, evidenc
     )
     assert completion.finish_reason is FinishReason.STOP
     assert completion.usage.completion_tokens > 0 and completion.content
-    assert completion.attempts[-1].max_tokens == GLM_MAX_OUTPUT_TOKENS
+    assert completion.attempts[-1].max_tokens is None
     assert completion.attempts[-1].http_status == 200
     promote(evidence_dir, run, "a_plain_completion")
 
@@ -124,10 +124,10 @@ def test_plain_completion_at_model_max_tokens(glm_source, live_provider, evidenc
 @pytest.mark.live_glm
 @pytest.mark.timeout(900)
 def test_long_prompt_raises_context_exhausted(glm_source, live_provider, evidence_dir):
-    # ~250k filler tokens: the prompt plus 131072 output tokens cannot fit the window.
+    # More than the physical context window in input alone.
     instruction = "Reply with the single word OK. Everything between the markers is filler; ignore it."
     messages: list[Message] = [
-        {"role": "user", "content": f"{instruction}\n<filler>\n{'apple ' * 250_000}\n</filler>\n{instruction}"}
+        {"role": "user", "content": f"{instruction}\n<filler>\n{'apple ' * 350_000}\n</filler>\n{instruction}"}
     ]
     policy = LLMPolicy(reasoning_effort=ReasoningEffort.LOW, temperature=0.0, max_continuations=0)
     with pytest.raises(ContextExhausted) as error:
@@ -136,7 +136,7 @@ def test_long_prompt_raises_context_exhausted(glm_source, live_provider, evidenc
     assert (attempt.outcome, attempt.http_status, attempt.max_tokens) == (
         AttemptOutcome.CONTEXT_OVERFLOW,
         400,
-        GLM_MAX_OUTPUT_TOKENS,
+        None,
     )
 
 

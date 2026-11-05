@@ -168,6 +168,11 @@ def module_name(source: str) -> str:
     return f"{MODULE_PREFIX}{sha256_hex(source.encode())[:16]}"
 
 
+def program_file(source: str) -> str:
+    """The file name the program compiled from ``source`` registers in ``linecache``, so its frames carry it."""
+    return f"<{module_name(source)}>"
+
+
 def load_program_source(source: str, sdk: SdkExports) -> RLEnvBuildProgram:
     """Check and run ``source`` as a build program module and return its ``PROGRAM``.
 
@@ -189,7 +194,7 @@ def load_program_source(source: str, sdk: SdkExports) -> RLEnvBuildProgram:
     _check_module_level(tree)
     check_names(tree, sdk, safe_builtins=SAFE_BUILTINS, unsafe_builtins=UNSAFE_BUILTINS, module_globals=MODULE_GLOBALS)
     check_module_attributes(tree, sdk, ALLOWED_IMPORTS)
-    filename = f"<{name}>"
+    filename = program_file(source)
     linecache.cache[filename] = (len(source), None, source.splitlines(keepends=True), filename)
     module = types.ModuleType(name)
     module.__dict__.update({"__builtins__": _program_builtins(sdk), "__file__": filename})

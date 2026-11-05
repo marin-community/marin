@@ -6,13 +6,13 @@ from dataclasses import dataclass
 import pytest
 
 from taskforge.content_hash import digest
-from taskforge.stage40_build_with_program.run import _memoized
 from taskforge.stage40_build_with_program.step_store import (
     SDK_VERSION,
     CacheStatus,
     RLEnvBuildStepKey,
     RLEnvBuildStepStore,
     StoreCorruption,
+    memoized,
 )
 
 
@@ -55,8 +55,8 @@ async def test_a_memoized_helper_computes_once_and_hits_on_the_second_call(tmp_p
         calls.append(None)
         return OUTPUT
 
-    first_status, first_record, first_output = await _memoized(store, "fixtures.render", key, Fixture, compute)
-    again_status, again_record, again_output = await _memoized(store, "fixtures.render", key, Fixture, compute)
+    first_status, first_record, first_output = await memoized(store, "fixtures.render", key, Fixture, compute)
+    again_status, again_record, again_output = await memoized(store, "fixtures.render", key, Fixture, compute)
 
     assert (first_status, again_status) == (CacheStatus.MISS, CacheStatus.HIT)
     assert again_record == first_record
@@ -77,8 +77,8 @@ async def test_a_miss_returns_the_stored_form_of_the_output(tmp_path):
     async def compute() -> Readings:
         return Readings(values=[3, 1, 2])  # type: ignore[arg-type]  # a list where the type says tuple
 
-    _, _, missed = await _memoized(store, "readings", key, Readings, compute)
-    _, _, hit = await _memoized(store, "readings", key, Readings, compute)
+    _, _, missed = await memoized(store, "readings", key, Readings, compute)
+    _, _, hit = await memoized(store, "readings", key, Readings, compute)
 
     assert missed == hit == Readings(values=(3, 1, 2))
     assert isinstance(missed.values, tuple)
@@ -90,6 +90,19 @@ def test_a_blob_altered_on_disk_is_refused(tmp_path):
     (tmp_path / "blobs" / record.output_digest).write_text("{}")
 
     with pytest.raises(StoreCorruption, match="does not match its digest"):
+        store.load(KEY, "fixtures", Fixture)
+
+
+def test_a_truncated_memo_or_a_blob_of_another_type_is_a_storage_fault(tmp_path):
+    """Both raise an ``OSError``, which the build child reports as a storage fault rather than a program crash."""
+    store = RLEnvBuildStepStore(str(tmp_path), "workpiece-a")
+    store.store(KEY, "fixtures", OUTPUT)
+    with pytest.raises(StoreCorruption, match="does not decode as"):
+        store.load(KEY, "fixtures", Readings)
+
+    memo = tmp_path / "workpieces" / "workpiece-a" / "steps" / "fixtures" / f"{KEY.digest}.json"
+    memo.write_bytes(memo.read_bytes()[:40])
+    with pytest.raises(OSError, match="does not validate"):
         store.load(KEY, "fixtures", Fixture)
 
 
