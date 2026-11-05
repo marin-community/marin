@@ -3806,6 +3806,8 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one()
     assert (record.rollout.stop_reason, record.grade.status, record.grade.reward) == ("length", Outcome.GRADED, 1.0)
     first, unserved = record.rollout.conversations
     assert (len(first.steps), unserved.steps, unserved.prompt_token_ids) == (1, (), (70, 71))
-    assert {key: value for key, value in record.rollout.metrics.items() if not key.startswith("timing/")} == {"score": 1.0}
+    assert {key: value for key, value in record.rollout.metrics.items() if not key.startswith("timing/")} == {
+        "score": 1.0
+    }
     assert record.rollout.metrics["timing/setup"] == 0
     assert record.rollout.metrics["timing/grading"] >= 0

@@ -301,6 +301,7 @@ def _run_step(
     export_hf: bool,
     retention: int,
     validation_data: tuple[ArtifactDataSource, ...],
+    wandb_entity: str | None,
     checkpoint_root: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     plan = layout.role_plan
@@ -329,7 +330,7 @@ def _run_step(
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=RUN_TIMEOUT_HOURS,
             job_timeout_seconds=RUN_TIMEOUT_HOURS * 3600,
-            wandb_entity="dogml",
+            wandb_entity=wandb_entity,
             required_env_vars=tuple(sorted(required | {"WANDB_API_KEY"})),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         ),
@@ -425,6 +426,7 @@ def build_run(
         "evaluations": sorted(selected),
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
+    wandb_entity = os.environ.get("WANDB_ENTITY") or None
     runs = []
     for replicate in range(replicates):
         name = presets.run_name(preset, provenance, inputs_hash, replicate, control=control)
@@ -438,6 +440,7 @@ def build_run(
             export_hf=preset.focus == presets.Focus.TRAIN,
             retention=5 if preset.checkpoint_every else 2,
             validation_data=validation_data,
+            wandb_entity=wandb_entity,
             checkpoint_root=checkpoint_root,
         )
         runs.append(run)
@@ -475,6 +478,7 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.result if receipt is not None else None
+        team = receipt.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
         state = (
             result.state
             if result
@@ -490,6 +494,7 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
                 "version": step.version,
                 "state": state,
                 "iris_job_id": result.iris_job_id if result else None,
+                "wandb_entity": team or "dogml",
                 "cluster": execution.cluster,
                 "allocation": {
                     **planned[-1]["iris"]["allocation"],
