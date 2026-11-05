@@ -27,7 +27,12 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.datakit.decontam.prepare_eval_corpus import AA_BENCHMARK_NAMES, AA_EVALS
+from experiments.datakit.decontam.prepare_eval_corpus import (
+    AA_BENCHMARK_NAMES,
+    AA_EVALS,
+    AAII_V5_EVALS,
+    EVAL_POLICY_EVALS,
+)
 from experiments.datakit.decontam.viewer.export_run import (
     _overlapping_ngrams,
     _window,
@@ -48,13 +53,14 @@ logger = logging.getLogger(__name__)
 INDEX_BATCH_ROWS = 131_072
 GALLERY_ROWS_PER_SOURCE = 5
 MAX_MATCHED_EVALS = 5
-AA_SUBDIR_TO_NAME = {config.subdir: config.name for config in AA_EVALS}
+# Record ids of the AA and pinned suites start with their artifact subdir.
+SUBDIR_TO_NAME = {ev.subdir: ev.name for ev in (*AA_EVALS, *AAII_V5_EVALS, *EVAL_POLICY_EVALS)}
 
 
 def _eval_family(eval_id: str) -> str:
-    for subdir, name in AA_SUBDIR_TO_NAME.items():
-        if eval_id == subdir or eval_id.startswith(f"{subdir}-"):
-            return name
+    matches = [subdir for subdir in SUBDIR_TO_NAME if eval_id == subdir or eval_id.startswith(f"{subdir}-")]
+    if matches:
+        return SUBDIR_TO_NAME[max(matches, key=len)]
     return eval_id_to_family(eval_id)
 
 
