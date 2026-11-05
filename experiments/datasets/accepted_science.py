@@ -9,7 +9,7 @@ launches are unchanged. The private HF dataset requires authorized credentials.
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import DedupMode, normalize_step
-from marin.datakit.sft_sources import DatakitChatSource, NEMOTRON_SFT_V3_TOKEN_COUNTS_B, all_sft_sources
+from marin.datakit.sft_sources import NEMOTRON_SFT_V3_TOKEN_COUNTS_B, DatakitChatSource, all_sft_sources
 from marin.datakit.sources import DatakitSource
 
 
