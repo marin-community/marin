@@ -57,6 +57,8 @@ class _ModelLimits:
 class Pi(BaseInstalledAgent):
     _OUTPUT_FILENAME = "pi.txt"
     _TRAJECTORY_FILENAME = "trajectory.json"
+    # populate_context_post_run converts pi.txt into an ATIF trajectory.
+    SUPPORTS_ATIF: bool = True
     _DEFAULT_CONTEXT_WINDOW = 32768
     _DEFAULT_MAX_TOKENS = 16384
     _SUPPORTED_THINKING_FORMATS = frozenset({"chat-template", "qwen-chat-template"})
@@ -1007,17 +1009,26 @@ export default function (pi) {
     def _attach_tool_result(
         self, message: dict, timestamp: str | None, steps: list[Step]
     ) -> None:
-        """Attach a tool result to the agent step that called the tool."""
+        """Attach a tool result to the agent step that called the tool.
+
+        ATIF validates every observation ``source_call_id`` against the same
+        step's tool calls, so an id that does not match the target step is
+        cleared rather than left to fail trajectory validation.
+        """
         call_id = message.get("toolCallId")
         result = ObservationResult(
             source_call_id=str(call_id) if call_id else None,
             content=self._message_text(message.get("content")) or None,
         )
         if steps and steps[-1].source == "agent":
-            if steps[-1].observation is None:
-                steps[-1].observation = Observation(results=[result])
+            step = steps[-1]
+            tool_call_ids = {call.tool_call_id for call in (step.tool_calls or [])}
+            if result.source_call_id is not None and result.source_call_id not in tool_call_ids:
+                result = result.model_copy(update={"source_call_id": None})
+            if step.observation is None:
+                step.observation = Observation(results=[result])
             else:
-                steps[-1].observation.results.append(result)
+                step.observation.results.append(result)
             return
         steps.append(
             Step(
@@ -1025,6 +1036,8 @@ export default function (pi) {
                 timestamp=timestamp,
                 source="user",
                 message="(tool result outside an agent turn)",
-                observation=Observation(results=[result]),
+                observation=Observation(
+                    results=[result.model_copy(update={"source_call_id": None})]
+                ),
             )
         )

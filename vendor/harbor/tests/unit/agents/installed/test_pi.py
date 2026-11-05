@@ -1410,6 +1410,82 @@ class TestPiTrajectoryConversion:
         assert context.n_input_tokens == 105  # 100 + 5 cacheRead
         assert context.n_output_tokens == 20
 
+    def test_tool_result_without_agent_step_stays_valid(self, temp_dir):
+        agent = self._agent(temp_dir)
+        self._write_jsonl(
+            temp_dir / "pi.txt",
+            [
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "go"}],
+                    },
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "toolResult",
+                        "toolCallId": "call-orphan",
+                        "toolName": "bash",
+                        "content": [{"type": "text", "text": "orphan output"}],
+                    },
+                },
+            ],
+        )
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        trajectory = Trajectory.model_validate(
+            json.loads((temp_dir / "trajectory.json").read_text())
+        )
+        orphan_step = trajectory.steps[-1]
+        assert orphan_step.observation.results[0].content == "orphan output"
+        # The dangling id would fail ATIF's tool-call reference validation.
+        assert orphan_step.observation.results[0].source_call_id is None
+
+    def test_unmatched_tool_result_id_is_cleared_not_dropped(self, temp_dir):
+        agent = self._agent(temp_dir)
+        self._write_jsonl(
+            temp_dir / "pi.txt",
+            [
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "toolCall",
+                                "id": "call-1",
+                                "name": "bash",
+                                "arguments": {},
+                            }
+                        ],
+                        "model": "hosted_vllm/test-model",
+                    },
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "toolResult",
+                        "toolCallId": "call-other",
+                        "content": [{"type": "text", "text": "mismatched"}],
+                    },
+                },
+            ],
+        )
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        trajectory = Trajectory.model_validate(
+            json.loads((temp_dir / "trajectory.json").read_text())
+        )
+        result = trajectory.steps[0].observation.results[0]
+        assert result.content == "mismatched"
+        assert result.source_call_id is None
+
     def test_unparseable_output_writes_no_trajectory(self, temp_dir):
         agent = self._agent(temp_dir)
         (temp_dir / "pi.txt").write_text("not json at all\n\x01\x02 not json either\n")
