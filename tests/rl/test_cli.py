@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import dataclasses
+import os
+import subprocess
+import sys
+import textwrap
 from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -11,6 +15,7 @@ from unittest.mock import MagicMock
 import click
 import pytest
 from click.testing import CliRunner
+from fray.types import JobRequest
 from iris.client.client import IrisClient
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
@@ -46,9 +51,10 @@ def _execution() -> IrisSkyRLExecution:
     )
 
 
-def test_coordinator_request_replays_the_experiment_main() -> None:
+@pytest.mark.parametrize("preemption_retries", [None, 0, 4])
+def test_coordinator_request_replays_the_experiment_main(preemption_retries: int | None) -> None:
     cluster_config, request = _coordinator_request(
-        [_step(_execution())],
+        [_step(dataclasses.replace(_execution(), max_preemption_retries=preemption_retries))],
         "experiments.test_rl",
         ("--version", "2026.09.21", "--run"),
         3,
@@ -63,7 +69,11 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
     assert request.environment is not None
     assert request.environment.env_vars["DAYTONA_API_KEY"] == "secret"
     assert request.timeout == Duration.from_hours(18)
-    assert request.max_retries_failure == request.max_retries_preemption == request.max_task_failures == 0
+    assert request.max_retries_failure == request.max_task_failures == 0
+    default_request = JobRequest(name="ordinary-coordinator", entrypoint=request.entrypoint)
+    assert request.max_retries_preemption == (
+        default_request.max_retries_preemption if preemption_retries is None else preemption_retries
+    )
     assert request.entrypoint.binary_entrypoint is not None
     assert request.entrypoint.binary_entrypoint.command == "python"
     assert request.entrypoint.binary_entrypoint.args == [
@@ -136,3 +146,48 @@ def test_execution_requires_a_complete_federated_route() -> None:
             _execution(),
             parent_cluster_config=None,
         )
+
+
+def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
+    module = tmp_path / "spawnable_rl.py"
+    module.write_text(
+        textwrap.dedent(
+            """\
+        import multiprocessing
+        import click
+        from marin.rl.cli import rl_build_options
+
+        @click.command()
+        @rl_build_options
+        def main():
+            return []
+
+        def worker(queue):
+            queue.put(42)
+
+        if __name__ == "__main__":
+            context = multiprocessing.get_context("spawn")
+            queue = context.Queue()
+            process = context.Process(target=worker, args=(queue,))
+            process.start()
+            try:
+                assert queue.get(timeout=30) == 42
+                process.join(timeout=10)
+                assert process.exitcode == 0
+            finally:
+                if process.is_alive():
+                    process.kill()
+                    process.join()
+                queue.close()
+    """
+        )
+    )
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), *sys.path])}
+    result = subprocess.run(
+        [sys.executable, "-m", "spawnable_rl"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=50,
+    )
+    assert result.returncode == 0, result.stderr

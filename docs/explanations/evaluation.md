@@ -68,6 +68,16 @@ archive and saves cohort-fit evidence under `metric_evidence` in Harbor's `resul
 A SOTOPIA correction failure fails the Harbor job and is recorded as `failed`. Judge configuration changes invalidate only FinanceBench and OlympiadBench;
 baseline source changes invalidate only SOTOPIA.
 
+### Publication metric view
+
+The shared measurement reader and Evaldash apply metric policy `marin-2026-10-16-v1`:
+PIQA uses normalized accuracy (`acc_norm`), IFBench uses strict prompt accuracy, and
+TruthfulQA MC2 uses continuous accuracy (`acc`). Evaldash exposes the policy version as
+`metric_policy`. Source records, sample archives, and resume identity remain unchanged.
+A missing selected metric leaves the result unavailable. Binary pass counts are derived
+from the selected score and recorded scored-item count; continuous scores have no
+pass/fail counts. The sample browser applies the same selection to scores and grades.
+
 ### Dataset caching
 
 Evalchemy's `eval.data_sources` caches immutable benchmark files from Hugging Face

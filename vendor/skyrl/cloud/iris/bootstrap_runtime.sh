@@ -62,7 +62,7 @@ UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
   "${runtime_extras[@]}"
 
 python="$environment/bin/python"
-if [[ "$profile" == megatron ]]; then
+if [[ "$profile" == megatron && "${MARIN_HERO_PIECEWISE_RUNTIME:-0}" == 1 ]]; then
   "$python" "$project_root/../../experiments/post_training/hero_rl/piecewise_runtime.py" \
     --workspace "$project_root/../.." \
     --receipt "${IRIS_OUTPUT_DIR:?}/hero-piecewise-runtime.json"

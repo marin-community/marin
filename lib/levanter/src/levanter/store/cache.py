@@ -1006,6 +1006,7 @@ def write_levanter_cache(
     *,
     metadata: dict[str, Any],
     batch_size: int = _LEVANTER_BATCH_SIZE,
+    max_pending_batches: int = 128,
 ) -> dict:
     """Write tokenized records to Levanter cache format.
 
@@ -1014,6 +1015,7 @@ def write_levanter_cache(
         output_path: Path to output cache directory
         metadata: Metadata for the cache
         batch_size: Number of records to accumulate before flushing to disk.
+        max_pending_batches: Maximum queued batches awaiting the background writer.
 
     Returns:
         ``{"path", "count", "exemplar"}`` where ``exemplar`` is the first record
@@ -1022,6 +1024,8 @@ def write_levanter_cache(
     """
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    if max_pending_batches < 1:
+        raise ValueError(f"max_pending_batches must be >= 1, got {max_pending_batches}")
 
     ensure_parent_dir(output_path)
     record_iter = iter(records)
@@ -1041,7 +1045,7 @@ def write_levanter_cache(
                 for batch in batches:
                     writer.write_batch(batch)
 
-            with ThreadedBatchWriter(_drain_batches) as threaded:
+            with ThreadedBatchWriter(_drain_batches, maxsize=max_pending_batches) as threaded:
                 threaded.submit([exemplar])
                 count += 1
                 zephyr_counters.pipeline.update_counter("zephyr/records_out", 1)

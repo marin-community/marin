@@ -5,6 +5,45 @@ fixed-weight numerical probe and a separate four-update asynchronous RL trial.
 Both use the maintained Marin artifact launcher and vendored SkyRL Megatron/vLLM
 runtime. Planning builds the graph locally; `--run` submits the selected stage.
 
+## Recorded GB200 validation
+
+The SFT64 initializer from [Hero format SFT #10428](https://github.com/marin-community/marin/issues/10428)
+passed the fixed-weight gate at runtime commit
+`3c4466634e4b657ea1219e021fab55cfbb5550e2`, artifact version `2026.11.04.33`.
+It produced 1,024 responses over 128 prompts and 109,519 qualified response tokens.
+Thirty trainer/serving probability ratios fell outside `[0.8, 1.2]`:
+0.02739%, below the 0.1% limit. All twelve serving ranks recorded capture
+completion and positive native PIECEWISE execution tables.
+
+The four-update trial at runtime commit
+`899b04436748b22da9d1e8a245bc1bdbe7556593`, version `2026.11.05.1`,
+completed on 48 GB200 GPUs with zero failed or preempted tasks. Every step
+applied one optimizer update with zero skips, finite loss and gradient norm,
+router-replay hit fraction 1.0 and PPO clip fraction below 0.000164. All four
+weight publications completed, and every serving rank resumed generation with
+the corresponding policy lease. The largest cgroup peak in the saved bounded
+monitor windows was 536.9 GiB against a 940 GiB per-tray limit; this is not a
+guaranteed global lifetime maximum.
+
+The initializer is
+`s3://marin-us-east-02a/marin/users/dlwh/hero-rl/sft64-bf16-fp32-router/2026.11.03.49`,
+with raw export-manifest SHA256
+`d6bfdb32b7f061ae6abc6af7c289522f3103ab1b9b772110aa451c3b757a6f25`
+and model version `2026.10.22.64`. The completed artifacts are under
+`s3://marin-us-east-02a/marin/users/dlwh/checkpoints/hero-rl/gb200-48/piecewise-266cb34f775746ac/`:
+`numerics-4k/2026.11.04.33/mismatch_probe` and `updates-4k/2026.11.05.1`.
+The latter's `resolved-launch.yaml` and `terminal.json` retain its launch and job
+identity. Raw per-actor logs are under its temporary `attempts/ray-logs` path
+recorded in the launch.
+
+Those runs used the original manifest `266cb34f775746ac050b13f4dcce38a615ae1718b450c546fba4ca4c06dfca8d`.
+This draft refreshes managed-input attestations for current main and scopes the
+bootstrap overlay to an explicit recipe opt-in; the three vLLM payloads remain
+identical. New runtime revisions require their own qualification. The 128-row
+baseline and final evaluation scores were 0.4140625 and 0.390625. Four updates
+establish integration; they do not demonstrate a quality gain, optimizer restore
+or production adoption.
+
 ## Isolated ShortConv PIECEWISE runtime experiment
 
 This source snapshot stages an experimental overlay into every GB200 task's
@@ -25,11 +64,11 @@ the three Python changes together by replacing the environment's package entry.
 The shared uv package cache remains unchanged.
 
 The overlay manifest SHA256 is
-`266cb34f775746ac050b13f4dcce38a615ae1718b450c546fba4ca4c06dfca8d`.
+`6c933795b025ceac484f0d503bac933f47fc6821e05e2bfe2e55531ff065ba90`.
 The source patch SHA256 is
 `1b377716b4586cc8ad5e4c607048aa6bb39ce159893da847cf6514ba9aae1896`
 against vLLM `39e62869693c46402b1a95fde4fc55ca1aab9ae1`.
-GB200 artifact names include `piecewise-266cb34f775746ac`, and engine settings
+GB200 artifact names include `piecewise-6c933795b025ceac`, and engine settings
 request `PIECEWISE` with capture sizes `[1, 2, 4, 8, 16]`. Batch invariance and
 routed-expert capture remain enabled. Full CUDA graphs remain unsupported.
 Native `cudagraph_metrics` records execution tables. Require capture logs and
@@ -37,7 +76,11 @@ positive completed PIECEWISE executions for all twelve serving DP ranks before
 accepting the full-model gate. Coordinator and GPU tasks have zero failure and
 preemption retries.
 
-The GB200 update candidate uses
+The GB200 profile opts into this overlay with
+`extra_env.MARIN_HERO_PIECEWISE_RUNTIME=1`; ordinary Megatron and export
+profiles retain their existing bootstrap.
+
+The GB200 update profile uses
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,pinned_max_cached_size_mb:1`.
 Torch's native cache cap also prevents rounding above that size. Larger pinned
 allocations retain their requested size and are released after their transfer
@@ -152,11 +195,12 @@ Microbatches remain one. Each tray requests 128 CPUs, 940 GiB host memory and
 also saves activation inputs to pinned CPU memory through
 `trainer.policy.megatron_config.transformer_config_kwargs.grug_checkpoint_cpu_offload=true`.
 
-This is an unqualified memory and numerical experiment. The routed-expert BF16
+The recorded GB200 trial below passed its numerical and four-update gates.
+The H100 profile has not been GPU-qualified by this work. The routed-expert BF16
 weights, FP32 masters and FP32 gradients alone require 135 GiB per learner GPU.
 Dense parameters and optimizer moments raise the estimate to approximately
 158 GiB on an embedding or output-head stage, before activations, communication
-and kernel workspace. Actual peak memory remains to be measured. CPU momentum
+and kernel workspace. Measure memory for each new configuration. CPU momentum
 and activation offload also consume host memory.
 
 CP1/EP3 pools three different sequences in each expert group. Historical
@@ -290,5 +334,6 @@ locked CPU SkyRL runtime without submitting jobs. It checks multi-node role
 allocation, synchronous versus asynchronous execution, the 4K cap and absence
 of checkpoint/export callbacks. Report tests write real local mismatch
 archives and exercise token coverage, outlier thresholds and invalid evidence.
-These CPU checks prepare the qualification; accelerator parity and learning
-remain unmeasured on this recipe until its stages are run.
+These CPU checks prepare new configurations. The recorded GB200 runs below
+establish fixed-weight numerics and update integration; learning quality and
+optimizer restore require separate experiments.

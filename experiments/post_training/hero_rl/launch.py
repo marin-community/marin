@@ -333,6 +333,7 @@ def training_config(hardware: Hardware = Hardware.H100) -> dict:
     }
     _materialize_role_plan_config(config, plan)
     if hardware is Hardware.GB200_48:
+        config["extra_env"]["MARIN_HERO_PIECEWISE_RUNTIME"] = "1"
         # The native cache cap also prevents large-block rounding. Unrounded
         # blocks must bypass Torch's power-of-two cache buckets to avoid reuse
         # of a smaller block for a larger request in the same bucket.
@@ -412,6 +413,7 @@ def build_qualification(
         disk="4TB",
         priority=priority,
         max_retries=0,
+        max_preemption_retries=0,
         target_cluster=profile.cluster,
         parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
         coordinator_timeout_hours=8,

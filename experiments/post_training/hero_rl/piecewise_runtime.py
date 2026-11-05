@@ -23,7 +23,7 @@ from urllib.parse import unquote
 from urllib.request import urlopen
 from zipfile import ZipFile
 
-MANIFEST_SHA256 = "266cb34f775746ac050b13f4dcce38a615ae1718b450c546fba4ca4c06dfca8d"
+MANIFEST_SHA256 = "6c933795b025ceac484f0d503bac933f47fc6821e05e2bfe2e55531ff065ba90"
 PAYLOAD_DIRECTORY = Path("experiments/post_training/hero_rl/piecewise_payload")
 WHEEL_DOWNLOAD_TIMEOUT = 120
 WHEEL_DOWNLOAD_DEADLINE = 15 * 60

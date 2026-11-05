@@ -9,7 +9,7 @@ import os
 import sys
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 
@@ -46,6 +46,7 @@ class _IrisSubmissionRoute:
     priority: str
     timeout_hours: int
     container_profile: job_pb2.ContainerProfile | None
+    max_preemption_retries: int | None
 
 
 def _module_name(module: ModuleType) -> str:
@@ -83,6 +84,9 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
     priorities = {execution.priority for execution in executions}
     if len(priorities) != 1:
         raise ValueError(f"one RL main cannot use multiple coordinator priorities: {sorted(priorities)!r}")
+    preemption_retries = {execution.max_preemption_retries for execution in executions}
+    if len(preemption_retries) != 1:
+        raise ValueError("one RL main cannot use multiple coordinator preemption retry policies")
     cluster_config, target_cluster, container_profile = routes.pop()
     return _IrisSubmissionRoute(
         cluster_config=cluster_config,
@@ -90,6 +94,7 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
         priority=priorities.pop(),
         timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
         container_profile=container_profile,
+        max_preemption_retries=preemption_retries.pop(),
     )
 
 
@@ -125,10 +130,11 @@ def _coordinator_request(
             ),
         ),
         environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
-        max_retries_preemption=0,
         priority=priority_band_value(route.priority),
         timeout=Duration.from_hours(route.timeout_hours),
     )
+    if route.max_preemption_retries is not None:
+        request = replace(request, max_retries_preemption=route.max_preemption_retries)
     return route.cluster_config, request
 
 
@@ -155,10 +161,10 @@ def _submit_or_run(
 
 def rl_build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
     """Build and validate an RL graph, then run it in or submit it to Iris."""
-    module = sys.modules[fn.__module__]
-    module_name = _module_name(module)
 
     def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
+        # Spawn workers import the main module before registering its module spec.
+        module_name = _module_name(sys.modules[fn.__module__])
         _submit_or_run(module_name, handles, max_concurrent, os.environ)
 
     return build_options_with_runner(fn, runner)

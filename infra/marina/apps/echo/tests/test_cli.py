@@ -353,3 +353,34 @@ def test_history_export_pages_in_stable_id_order(monkeypatch, capsys):
         ("GET", "/search-executions", {"params": {"after_id": 7, "mode": None, "limit": 2}, "timeout": 180}),
     ]
     assert [cli.json.loads(line)["id"] for line in capsys.readouterr().out.splitlines()] == [4, 7, 9]
+
+
+def http_response(status_code, value):
+    response = json_response(value, {"content-type": "application/json"})
+    response.status_code = status_code
+    return response
+
+
+def work_log_add_args():
+    return cli.build_parser().parse_args(["work-log", "add", "--project", "grug-moe", "--title", "20% MFU"])
+
+
+def test_refused_work_log_add_warns_without_failing(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "bearer_token", lambda: "token")
+    monkeypatch.setattr(cli.requests, "request", lambda *_, **__: http_response(403, {"detail": "no IAP access"}))
+    args = work_log_add_args()
+
+    args.func(args)
+
+    captured = capsys.readouterr()
+    assert captured.err
+    assert not captured.out
+
+
+def test_work_log_add_server_error_fails(monkeypatch):
+    monkeypatch.setattr(cli, "bearer_token", lambda: "token")
+    monkeypatch.setattr(cli.requests, "request", lambda *_, **__: http_response(500, {"detail": "database unavailable"}))
+    args = work_log_add_args()
+
+    with pytest.raises(SystemExit):
+        args.func(args)

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 from finestore.rl.mismatch_probe import ProbeRow, ScoreRow
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training.mismatch_probe.report import GENERATION_SCORING, ArchiveData, load_archive
 
@@ -157,7 +158,7 @@ def qualify_archive(uri: str, *, expected_model_source: str, expected_starting_s
             raise ValueError("Manifest has no matching initial-weight scoring step")
         if model.get("source_uri") != expected_model_source or not model.get("source_identity"):
             raise ValueError("Manifest policy source differs from the requested completed export or lacks identity")
-        if manifest.checkpoint_path != model.get("path"):
+        if manifest.checkpoint_path != expected_model_source:
             raise ValueError("Manifest loaded checkpoint differs from the declared initial policy export")
         if manifest.vllm_enforce_eager or not manifest.tokenizer_fingerprint:
             raise ValueError("Numerical qualification requires non-eager vLLM and a tokenizer fingerprint")
@@ -213,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--expected-starting-step", required=True, type=int)
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args(argv)
+    configure_coreweave_s3()
     report = qualify_archive(
         args.archive,
         expected_model_source=args.expected_model_source,

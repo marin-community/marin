@@ -112,11 +112,16 @@ def _archive(root, *, tokens_per_response=2500, outliers=0, corruption=None):
                 )
             )
     model = {"path": "/staged/hero", "source_uri": MODEL_SOURCE, "source_identity": "completed-export@sha256:abc"}
+    checkpoint_path = MODEL_SOURCE
+    if corruption == "checkpoint":
+        checkpoint_path = "/other/checkpoint"
+    elif corruption == "staged_checkpoint":
+        checkpoint_path = model["path"]
     manifest = ManifestRow(
         archive=str(root),
         status="complete",
         probe_hash="frozen-bank",
-        checkpoint_path="/other/checkpoint" if corruption == "checkpoint" else model["path"],
+        checkpoint_path=checkpoint_path,
         runtime_commit="pinned-runtime",
         tokenizer_fingerprint="pinned-tokenizer",
         starting_global_step=0,
@@ -188,7 +193,18 @@ def test_gate_rejects_underpowered_bank_and_outlier_threshold(tmp_path, tokens_p
 
 
 @pytest.mark.parametrize(
-    "corruption", ["token", "stale", "checkpoint", "request", "route", "partial_routes", "nonfinite", "missing_replay"]
+    "corruption",
+    [
+        "token",
+        "stale",
+        "checkpoint",
+        "staged_checkpoint",
+        "request",
+        "route",
+        "partial_routes",
+        "nonfinite",
+        "missing_replay",
+    ],
 )
 def test_gate_marks_nonindependent_or_mismatched_evidence_invalid(tmp_path, corruption):
     root = tmp_path / "archive"

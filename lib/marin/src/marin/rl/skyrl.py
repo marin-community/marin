@@ -20,7 +20,6 @@ from typing import Literal, cast
 
 import fsspec
 import yaml
-from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
@@ -152,7 +151,6 @@ class SkyRLTopology:
         positive_fields = (
             "policy_num_nodes",
             "policy_num_gpus_per_node",
-            "num_inference_engines",
             "inference_engine_tensor_parallel_size",
             "inference_engine_pipeline_parallel_size",
             "inference_engine_data_parallel_size",
@@ -166,6 +164,10 @@ class SkyRLTopology:
             if getattr(plan, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
 
+        if plan.num_inference_engines < 0:
+            raise ValueError("SkyRL role plan num_inference_engines cannot be negative")
+        if plan.num_inference_engines == 0 and plan.colocate_all:
+            raise ValueError("a SkyRL role plan without inference engines cannot colocate policy and rollout roles")
         if plan.policy_num_nodes > self.num_nodes:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
         if plan.policy_num_gpus_per_node > self.gpus_per_node:
@@ -228,8 +230,8 @@ class SkyRLTopology:
 class SkyRLRetentionPolicy:
     """Temporary storage lifetime and rolling resume depth for one SkyRL run.
 
-    Every successful run produces one durable canonical export from its terminal
-    checkpoint.
+    When HF export is requested, a successful run produces a durable canonical
+    export from its terminal checkpoint.
     """
 
     resume_checkpoint_count: int = 2
@@ -448,12 +450,15 @@ class IrisSkyRLExecution:
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
+    max_preemption_retries: int | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
             raise ValueError("SkyRL coordinator_timeout_hours must be positive")
         if self.job_timeout_seconds < 0:
             raise ValueError("SkyRL job_timeout_seconds cannot be negative")
+        if self.max_preemption_retries is not None and self.max_preemption_retries < 0:
+            raise ValueError("SkyRL max_preemption_retries cannot be negative")
         if (self.target_cluster is None) != (self.parent_cluster_config is None):
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
@@ -815,9 +820,6 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
-    submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
-    target_cluster = None if submit_through_ambient_controller else execution.target_cluster
-    parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
     launch = {
         "schema_version": 1,
         "run": {
@@ -849,9 +851,10 @@ def _launch_config_yaml(
             },
             "priority": execution.priority,
             "max_retries": execution.max_retries,
+            "max_preemption_retries": execution.max_preemption_retries,
             "timeout": execution.job_timeout_seconds,
-            "target_cluster": target_cluster,
-            "parent_cluster_config": parent_cluster_config,
+            "target_cluster": execution.target_cluster,
+            "parent_cluster_config": execution.parent_cluster_config,
         },
         "ray": {
             "spill_backend": "local",

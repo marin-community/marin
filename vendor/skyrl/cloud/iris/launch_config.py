@@ -113,6 +113,7 @@ class IrisConfig:
     allocation: IrisAllocationConfig = field(default_factory=IrisAllocationConfig)
     priority: str = "interactive"
     max_retries: int = 3
+    max_preemption_retries: int | None = None
     timeout: int = 0
     target_cluster: str | None = None
     parent_cluster_config: str | None = None

@@ -111,7 +111,7 @@ allocation, task bootstrap, training, checkpoint export, and the persisted run m
                     +-> derive Iris resources
 resolved launch.yaml +-> configure Ray and staging
                     +-> call the registered run(cfg.skyrl)
-                    +-> derive checkpoint-export launch.yaml
+                    +-> derive checkpoint-export launch.yaml (only when requested)
 ```
 
 This shape keeps validation mechanical. Adding a launch setting means adding one structured field and
@@ -181,6 +181,11 @@ data artifacts, topology, seed, retention, and the rendered config. Cluster rout
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
 
+`IrisSkyRLExecution.max_preemption_retries` sets the preemption retry budget for
+the coordinator and trainer jobs. Its default `None` preserves each backend's
+default; bounded qualification runs set it to zero. Failure retries remain
+controlled separately by `max_retries`.
+
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
 which leaves the Iris default in effect. In-pod sandbox graders need namespace capabilities: use
@@ -199,7 +204,11 @@ Marin translates this policy to `trainer.max_ckpts_to_keep`; standalone SkyRL
 recipes can set that field directly. Cleanup runs after the replacement checkpoint
 has uploaded and its latest-checkpoint marker has been published. Pending HF
 exports and the selected best native checkpoint remain protected beyond this
-rolling window. Each successful Marin run also produces a durable terminal export.
+rolling window. HF export is opt-in: `skyrl_step(..., export_hf=True)` requests a durable terminal
+model and a separate export job. The structured launch config defaults `run.export_hf`
+to false as well. Without export, successful runs retain native recovery checkpoints,
+in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
+is null. Pipelines that serve the resulting model for downstream evaluation must request export.
 
 The temporary checkpoint root is derived from the RL artifact name and version.
 After runtime changes, use a fresh RL artifact version. Reusing the old

@@ -232,3 +232,42 @@ def test_wait_non_silent_conditions_still_escalate(
 
     assert result.exit_code != 0
     assert cluster.terminated == []
+
+
+def test_child_wait_timeout_shutdown_cancels_a_parent_whose_child_never_starts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    parent_job_id = "/runner/hero-canary"
+    cluster = FakeClusterClient(
+        [
+            job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING, has_children=True),
+            job_pb2.JobStatus(job_id=f"{parent_job_id}/train", state=job_pb2.JOB_STATE_PENDING),
+        ]
+    )
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **_kwargs: nullcontext(IrisClient(cluster)))
+
+    result = CliRunner().invoke(
+        iris_monitor.cli,
+        [
+            "wait",
+            "--job-id",
+            parent_job_id,
+            "--controller-url",
+            "http://iris.test",
+            "--poll-interval",
+            "0.01",
+            "--child-wait-timeout",
+            "0",
+            "--child-wait-timeout-policy",
+            "shutdown",
+            "--resource-exhaustion-policy",
+            "shutdown",
+            "--github-output",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert cluster.terminated == [parent_job_id]
+    assert "resource_exhausted=true" in github_output.read_text()

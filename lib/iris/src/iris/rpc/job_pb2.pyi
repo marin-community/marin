@@ -764,7 +764,7 @@ class EgressRule(_message.Message):
     def __init__(self, domain: _Optional[str] = ..., cidr: _Optional[str] = ..., ports: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class RunTaskRequest(_message.Message):
-    __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "ports", "attempt_id", "constraints", "task_image", "attempt_uid", "coscheduling", "priority", "container_profile", "egress_policy", "task_token", "egress_allow")
+    __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "termination_grace", "ports", "attempt_id", "constraints", "task_image", "attempt_uid", "coscheduling", "priority", "container_profile", "egress_policy", "task_token", "egress_allow")
     TASK_ID_FIELD_NUMBER: _ClassVar[int]
     NUM_TASKS_FIELD_NUMBER: _ClassVar[int]
     ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
@@ -772,6 +772,7 @@ class RunTaskRequest(_message.Message):
     BUNDLE_ID_FIELD_NUMBER: _ClassVar[int]
     RESOURCES_FIELD_NUMBER: _ClassVar[int]
     TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+    TERMINATION_GRACE_FIELD_NUMBER: _ClassVar[int]
     PORTS_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
     CONSTRAINTS_FIELD_NUMBER: _ClassVar[int]
@@ -790,6 +791,7 @@ class RunTaskRequest(_message.Message):
     bundle_id: str
     resources: ResourceSpecProto
     timeout: _time_pb2.Duration
+    termination_grace: _time_pb2.Duration
     ports: _containers.RepeatedScalarFieldContainer[str]
     attempt_id: int
     constraints: _containers.RepeatedCompositeFieldContainer[Constraint]
@@ -801,4 +803,4 @@ class RunTaskRequest(_message.Message):
     egress_policy: EgressPolicy
     task_token: str
     egress_allow: _containers.RepeatedCompositeFieldContainer[EgressRule]
-    def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ..., attempt_uid: _Optional[str] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., priority: _Optional[_Union[PriorityBand, str]] = ..., container_profile: _Optional[_Union[ContainerProfile, str]] = ..., egress_policy: _Optional[_Union[EgressPolicy, str]] = ..., task_token: _Optional[str] = ..., egress_allow: _Optional[_Iterable[_Union[EgressRule, _Mapping]]] = ...) -> None: ...
+    def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., termination_grace: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ..., attempt_uid: _Optional[str] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., priority: _Optional[_Union[PriorityBand, str]] = ..., container_profile: _Optional[_Union[ContainerProfile, str]] = ..., egress_policy: _Optional[_Union[EgressPolicy, str]] = ..., task_token: _Optional[str] = ..., egress_allow: _Optional[_Iterable[_Union[EgressRule, _Mapping]]] = ...) -> None: ...
