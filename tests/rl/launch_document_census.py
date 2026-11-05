@@ -8,8 +8,6 @@ from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
-from uuid import UUID
 
 import yaml
 from marin.execution.artifact import write_artifact
@@ -198,10 +196,7 @@ def render_launch_census(artifact_root: Path) -> LaunchCensus:
     builders = launch_builders(artifact_root)
     documents = []
     failures = []
-    with (
-        build_context(BuildContext(versions=VersionCodex(default=VERSION))),
-        patch("uuid.uuid4", return_value=UUID(int=17)),
-    ):
+    with build_context(BuildContext(versions=VersionCodex(default=VERSION))):
         for name, build in builders.items():
             try:
                 step = build()
