@@ -36,7 +36,7 @@ from forge.model.review import (
     Cause,
     ControlResult,
     Decision,
-    Hold,
+    Incomplete,
     Modify,
     Reject,
     RejectKind,
@@ -83,12 +83,12 @@ VALIDATION_RESULT = TypeAdapter(ValidationResult)
 TRIAL_RESULT = TypeAdapter(TrialResult)
 CONTROL_RESULT = TypeAdapter(ControlResult)
 ADVERSARY_RESULT = TypeAdapter(AdversaryResult)
-DECISION: TypeAdapter[Decision] = TypeAdapter(Accept | Reject | Modify | Retry | Hold)
+DECISION: TypeAdapter[Decision] = TypeAdapter(Accept | Reject | Modify | Retry | Incomplete)
 ACCEPT = TypeAdapter(Accept)
 REJECT = TypeAdapter(Reject)
 MODIFY = TypeAdapter(Modify)
 RETRY = TypeAdapter(Retry)
-HOLD = TypeAdapter(Hold)
+INCOMPLETE = TypeAdapter(Incomplete)
 BAND_OUTCOME = TypeAdapter(BandOutcome)
 BAND_RULES = TypeAdapter(BandRules)
 REJECT_KIND = TypeAdapter(RejectKind)

@@ -38,7 +38,7 @@ from forge.model.review import (
     Budget,
     Cause,
     ControlResult,
-    Hold,
+    Incomplete,
     Modify,
     Reject,
     RejectKind,
@@ -98,7 +98,7 @@ def workpiece() -> Workpiece:
         session=session,
         submission=Submission(task, controls, "authored"),
         evidence=(evidence,),
-        decisions=(Modify(("harder",)), Hold(("retry later",))),
+        decisions=(Modify(("harder",)), Incomplete(("retry later",))),
         terminal=Terminal.HELD,
     )
 
@@ -108,7 +108,7 @@ def test_saved_workpiece_round_trip_keeps_conversation_evidence_and_decisions(wo
     assert restored == workpiece
     assert restored.evidence[0].solver[1].cause is Cause.MODEL_TIMEOUT
     assert isinstance(restored.decisions[0], Modify)
-    assert isinstance(restored.decisions[1], Hold)
+    assert isinstance(restored.decisions[1], Incomplete)
     assert restored.session is not None
     assert restored.session.messages[-1].reasoning == "done"
 
@@ -119,8 +119,8 @@ def test_saved_workpiece_round_trip_keeps_conversation_evidence_and_decisions(wo
         Accept(BandOutcome.IN_BAND),
         Reject(RejectKind.TASK, ("ambiguous",)),
         Modify(("revise",)),
-        Retry("missing grade", 2),
-        Hold(("machine gone",)),
+        Retry(Cause.NO_GRADE, 2),
+        Incomplete(("machine gone",)),
     ],
 )
 def test_decision_round_trip_preserves_variant(decision: wire.Decision) -> None:

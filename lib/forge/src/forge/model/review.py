@@ -105,16 +105,16 @@ class Modify:
 
 @dataclass(frozen=True, slots=True)
 class Retry:
-    cause: str
+    cause: Cause
     count: int
 
 
 @dataclass(frozen=True, slots=True)
-class Hold:
+class Incomplete:
     reasons: tuple[str, ...]
 
 
-type Decision = Accept | Reject | Modify | Retry | Hold
+type Decision = Accept | Reject | Modify | Retry | Incomplete
 
 
 @dataclass(frozen=True, slots=True)
