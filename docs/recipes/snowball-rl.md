@@ -68,19 +68,23 @@ after 14 days. Check checkpoint compatibility before resuming across changes to
 SkyRL or Marin's RL runtime; see [checkpoint handling](../references/rl-launching.md).
 Repeat the original `--init` when continuing a run with custom initial weights.
 
-Use `--replicates N` for 1–5 copies of a short or medium preset, sharing a seed. Controls use
+Use `--replicates N` for 1–5 copies of a gated preset, sharing a seed. Controls use
 `--control --replicates N` from a clean checkout and fixed default inputs, with the
 commit in their shared artifact names. Data-medium uses learning-medium's control.
 
 ## Compare with controls
 
-Short and medium presets write `gate_report.json` and `gate_report.md`. Status shows
+Calibrated presets write `gate_report.json` and `gate_report.md`. Status shows
 `pass`, `fail` or `invalid`, a change label and the report path. Train-long has no
 verdict; a crashed run reports `fail` with its Iris job ID.
 
 The gate reads exact runs pinned in `snowball_rl_gate.CONTROLS`. Refresh a pin after
 its replicates finish. Pins with the same preset revision pool deviations from each
 pin's own mean.
+Speed-long has no current control pin. A candidate returns JSON INVALID with
+exit code 2 before GPU submission and prints a four-replicate control collection
+command. Its 20-update sizing run took 48.2 minutes with natural replies up to
+8,192 tokens.
 
 Guards compare candidate and control replicate means, signed so positive means better.
 Tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, with `k` guards
@@ -212,7 +216,7 @@ data-short. Each run forwards its required keys through Iris.
 | gap | implication and follow-up |
 |---|---|
 | remote judge | Every preset except speed-short depends on Together: the training selection contains 6,653 Glaive tasks, and data-short also configures a remote judge session. Judge retries can extend update time. The no-judge `snowball-100k@2026.11.04.1` selection is planned for the test-panel control refresh. |
-| layout-p40-only; no-async-speed-gate | medium gates cover the 40-GPU synchronous layout; add an asynchronous speed gate |
+| layout-p40-only | calibrated gates cover the 40-GPU layout; other layouts need qualification |
 | AAII coverage; no-agentic-tasks | current tasks cover only part of AAII; add missing task families and agentic tasks |
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
