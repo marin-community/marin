@@ -1014,6 +1014,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
+    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     if case == "unpinned":
         client = MagicMock(spec=IrisClient)
         client.submit.side_effect = AssertionError("an unpinned candidate submitted a coordinator")
