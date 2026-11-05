@@ -58,6 +58,10 @@ jobs:
           set -euo pipefail
           JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" job run --no-wait \
             --job-name "$RUN_ID" --timeout 12600 \
+            --include tests/__init__.py --include tests/conftest.py \
+            --include tests/cluster/__init__.py --include tests/cluster/conftest.py \
+            --include tests/cluster/vllm/__init__.py --include tests/cluster/vllm/conftest.py \
+            --include tests/cluster/vllm/test_snowball_backend_parity.py \
             --cpu 2 --memory 8G --disk 32G --enable-extra-resources --extra cpu \
             -e JAX_PLATFORMS cpu \
             -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" -e HF_TOKEN "$HF_TOKEN" \
