@@ -29,6 +29,18 @@ the immutable object-store destination with `--output-prefix`; the generated
 Goal achievement remains available in the source metrics but is not the default
 ranking outcome.
 
+Run the SOTOPIA report from the repository root in Harbor's environment, which
+provides the scorer and fitting dependencies. Replace the example tracker path
+and immutable output prefix with the inputs for the report:
+
+```bash
+uv run --project vendor/harbor --extra sotopia python \
+  experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/analysis/sotopia_length_control/rank.py \
+  --tracker tracker.md \
+  --output-dir /tmp/sotopia-length-control \
+  --output-prefix s3://bucket/immutable-prefix
+```
+
 Run the tournament before plotting. Both commands and their required inputs are
 specified in the campaign release document's “Reproduce the Snowball tournament
 and critical-difference figures” section. These scripts report the results in

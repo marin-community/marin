@@ -5,6 +5,10 @@ context_parallel_size: 1
 expert_model_parallel_size: 1
 expert_tensor_parallel_size: null
 
+# Optional training channel limit for batch-invariant TP1/ETP1 policies.
+# Weight publication keeps vLLM's channel limit. Null keeps the shared defaults.
+nccl_max_channels: null
+
 ddp_config:
   grad_reduce_in_fp32: true
   overlap_grad_reduce: false

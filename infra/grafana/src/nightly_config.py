@@ -16,6 +16,11 @@ from collections.abc import Sequence
 _ALL_DAYS: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)
 _MONDAY: tuple[int, ...] = (1,)
 
+# The step a canary workflow runs only when Iris cancelled it for lack of capacity. A run
+# that took it finished green without running its workload. Renaming the step in a
+# workflow makes that lane's skips show as ordinary runs.
+_CAPACITY_SKIP_STEP = "Note a skipped day"
+
 
 @dataclasses.dataclass(frozen=True)
 class NightlyLane:
@@ -24,7 +29,8 @@ class NightlyLane:
     weekdays uses 0=Sunday..6=Saturday. active_from/active_until (inclusive,
     "YYYY-MM-DD") bound the lane's lifecycle; None means unbounded on that side.
     expected_min_seconds/expected_max_seconds are None until a duration baseline
-    has been established for the lane.
+    has been established for the lane. skip_step names the workflow step that runs
+    only when the lane skipped a day for lack of capacity, or is None if it never skips.
     """
 
     id: str
@@ -43,6 +49,7 @@ class NightlyLane:
     overdue_grace_minutes: int
     expected_min_seconds: int | None
     expected_max_seconds: int | None
+    skip_step: str | None
 
 
 NIGHTLY_LANES: tuple[NightlyLane, ...] = (
@@ -63,6 +70,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=300,
         expected_min_seconds=0,
         expected_max_seconds=195 * 60,
+        skip_step=None,
     ),
     NightlyLane(
         id="cw-gpu-ferry",
@@ -81,6 +89,26 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=300,
         expected_min_seconds=0,
         expected_max_seconds=40 * 60,
+        skip_step=None,
+    ),
+    NightlyLane(
+        id="hero-gb200-canary",
+        label="Hero GB200 canary",
+        short_label="Hero canary",
+        group="marin",
+        subgroup="training",
+        repository="marin-community/marin",
+        workflow_file="marin-canary-hero-gb200.yaml",
+        branch="main",
+        weekdays=_ALL_DAYS,
+        hour=11,
+        minute=0,
+        active_from=None,
+        active_until=None,
+        overdue_grace_minutes=300,
+        expected_min_seconds=None,
+        expected_max_seconds=None,
+        skip_step=_CAPACITY_SKIP_STEP,
     ),
     NightlyLane(
         id="grug-multislice",
@@ -99,6 +127,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=240,
         expected_min_seconds=None,
         expected_max_seconds=None,
+        skip_step=_CAPACITY_SKIP_STEP,
     ),
     NightlyLane(
         id="datakit-t1",
@@ -117,6 +146,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=360,
         expected_min_seconds=65 * 60,
         expected_max_seconds=85 * 60,
+        skip_step=_CAPACITY_SKIP_STEP,
     ),
     NightlyLane(
         id="datakit-t2",
@@ -135,6 +165,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=360,
         expected_min_seconds=65 * 60,
         expected_max_seconds=85 * 60,
+        skip_step=_CAPACITY_SKIP_STEP,
     ),
     NightlyLane(
         id="datakit-t3",
@@ -153,6 +184,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=480,
         expected_min_seconds=70 * 60,
         expected_max_seconds=180 * 60,
+        skip_step=_CAPACITY_SKIP_STEP,
     ),
     NightlyLane(
         id="evalchemy",
@@ -171,6 +203,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=240,
         expected_min_seconds=0,
         expected_max_seconds=20 * 60,
+        skip_step=None,
     ),
     NightlyLane(
         id="harbor",
@@ -189,6 +222,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=240,
         expected_min_seconds=0,
         expected_max_seconds=12 * 60,
+        skip_step=None,
     ),
     NightlyLane(
         id="marinskyrl",
@@ -207,6 +241,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=240,
         expected_min_seconds=None,
         expected_max_seconds=None,
+        skip_step=None,
     ),
     NightlyLane(
         id="skyrl",
@@ -225,6 +260,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=240,
         expected_min_seconds=None,
         expected_max_seconds=None,
+        skip_step=None,
     ),
     NightlyLane(
         id="vllm-gpu",
@@ -243,6 +279,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=240,
         expected_min_seconds=2 * 60,
         expected_max_seconds=15 * 60,
+        skip_step=None,
     ),
     NightlyLane(
         id="vllm-gpu-release",
@@ -261,6 +298,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=12 * 60,
         expected_min_seconds=None,
         expected_max_seconds=None,
+        skip_step=None,
     ),
     NightlyLane(
         id="tpu-inference",
@@ -279,6 +317,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         overdue_grace_minutes=240,
         expected_min_seconds=5 * 60,
         expected_max_seconds=10 * 60,
+        skip_step=None,
     ),
 )
 

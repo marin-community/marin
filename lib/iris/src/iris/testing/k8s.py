@@ -5,6 +5,8 @@
 
 from copy import deepcopy
 
+from rigging.timing import Duration
+
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.reads import ControlSnapshot
@@ -14,6 +16,7 @@ from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
 
 KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
@@ -52,6 +55,7 @@ def make_run_req(
     attempt_uid: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
+    req.termination_grace.milliseconds = DEFAULT_TERMINATION_GRACE.to_ms()
     req.task_id = task_id
     req.attempt_id = attempt_id
     req.attempt_uid = attempt_uid
@@ -287,4 +291,5 @@ def common_env_from_req(
         constraints=req.constraints,
         ports=req.ports,
         resources=req.resources if req.HasField("resources") else None,
+        termination_grace=Duration.from_ms(req.termination_grace.milliseconds),
     )
