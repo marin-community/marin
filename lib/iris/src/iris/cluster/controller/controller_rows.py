@@ -77,7 +77,7 @@ class _Marked:
     jobs: dict[JobName, None] = field(default_factory=dict)
     submitted: dict[JobName, None] = field(default_factory=dict)
     attempts: dict[tuple[JobName, int], None] = field(default_factory=dict)
-    rows: list[IrisJob] = field(default_factory=list)
+    job_rows: list[IrisJob] = field(default_factory=list)
     config_rows: list[IrisJobConfig] = field(default_factory=list)
     attempt_rows: list[IrisTaskAttempt] = field(default_factory=list)
 
@@ -126,8 +126,8 @@ def record_attempt_changes(cur: RowCursor, attempts: Iterable[tuple[JobName, int
 
 
 def _write(tables: ControllerRowTables, marked: _Marked) -> None:
-    if marked.rows:
-        tables.job_table.write(marked.rows)
+    if marked.job_rows:
+        tables.job_table.write(marked.job_rows)
     if marked.config_rows:
         tables.job_config_table.write(marked.config_rows)
     if marked.attempt_rows:
@@ -153,7 +153,7 @@ def _snapshot_or_drop(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
             [j.to_wire() for j in list(marked.jobs)[:5]],
             [(t.to_wire(), a) for t, a in list(marked.attempts)[:5]],
         )
-        marked.rows.clear()
+        marked.job_rows.clear()
         marked.config_rows.clear()
         marked.attempt_rows.clear()
 
@@ -163,7 +163,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
     j, c, a, t = jobs_table.c, job_config_table.c, task_attempts_table.c, tasks_table.c
     for chunk in batched(marked.jobs, _ID_CHUNK_SIZE):
         for r in cur.execute(select(jobs_table).where(j.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)):
-            marked.rows.append(
+            marked.job_rows.append(
                 IrisJob(
                     cluster=tables.cluster,
                     root_job_id=r.root_job_id,

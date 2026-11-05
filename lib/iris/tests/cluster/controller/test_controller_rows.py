@@ -202,7 +202,7 @@ def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, mon
     rows = _attach(state, "marin")
 
     def broken_snapshot(cur, tables, marked):
-        marked.rows.append(object())  # a partial snapshot must be dropped too
+        marked.job_rows.append(object())  # a partial snapshot must be dropped too
         raise RuntimeError("snapshot bug")
 
     monkeypatch.setattr(controller_rows, "_snapshot", broken_snapshot)
