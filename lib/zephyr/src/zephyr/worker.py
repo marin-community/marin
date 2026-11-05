@@ -63,7 +63,7 @@ class _ActiveShard:
 
 
 def _counter_values(counters: dict[CounterKey, CounterEntry]) -> dict[str, int | float]:
-    return {name: entry.value for name, entry in counters_by_name(counters).items()}
+    return {name: entry.value for name, entry in counters_by_name(counters.items()).items()}
 
 
 def _shard_progress(active: _ActiveShard, snapshot: RunnerSnapshot, now: float) -> ShardProgress:

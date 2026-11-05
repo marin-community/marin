@@ -332,7 +332,7 @@ class _PipelineExecution:
         With ``stage`` set, only that stage's counters are included. With
         ``stage=None``, a name recorded under several scopes folds into one entry.
         """
-        return counters_by_name(self.completed_snapshot().counters, stage)
+        return counters_by_name(self.completed_snapshot().counters.items(), stage)
 
 
 def _aggregate_counter_snapshots(
@@ -348,13 +348,8 @@ def _aggregate_counter_snapshots(
     interrupts execution. When ``stage`` is given, only entries recorded under
     that stage label are included.
     """
-    merged, conflicted = merge_counter_entries(
-        (key.name, entry)
-        for snap in snapshots
-        for key, entry in snap.counters.items()
-        if stage is None or key.stage == stage
-    )
-    return {name: e.value for name, e in merged.items() if name not in conflicted}
+    entries = (item for snap in snapshots for item in snap.counters.items())
+    return {name: entry.value for name, entry in counters_by_name(entries, stage).items()}
 
 
 class ZephyrCoordinator:

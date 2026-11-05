@@ -5,7 +5,7 @@
 
 import enum
 import logging
-from collections.abc import Hashable, Iterable, Mapping
+from collections.abc import Hashable, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, TypeVar
@@ -105,7 +105,9 @@ def merge_counter_entries(entries: Iterable[tuple[_K, CounterEntry]]) -> tuple[d
     return merged, conflicted
 
 
-def counters_by_name(counters: Mapping[CounterKey, CounterEntry], stage: str | None = None) -> dict[str, CounterEntry]:
+def counters_by_name(
+    entries: Iterable[tuple[CounterKey, CounterEntry]], stage: str | None = None
+) -> dict[str, CounterEntry]:
     """Fold scoped counters into one entry per name.
 
     With ``stage`` set, only that stage's counters are included. With
@@ -113,7 +115,7 @@ def counters_by_name(counters: Mapping[CounterKey, CounterEntry], stage: str | N
     entry. Names whose entries disagree on aggregation are dropped.
     """
     merged, conflicted = merge_counter_entries(
-        (key.name, entry) for key, entry in counters.items() if stage is None or key.stage == stage
+        (key.name, entry) for key, entry in entries if stage is None or key.stage == stage
     )
     return {name: entry for name, entry in merged.items() if name not in conflicted}
 

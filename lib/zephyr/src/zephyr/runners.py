@@ -152,7 +152,7 @@ class _InProcessWorkerContext:
 
     def get_counters(self, stage: str | None = None) -> dict[str, int | float]:
         """Flat view of counter values by name, for use by stats emission code."""
-        return {name: entry.value for name, entry in counters_by_name(dict(self._counters), stage).items()}
+        return {name: entry.value for name, entry in counters_by_name(dict(self._counters).items(), stage).items()}
 
     def get_counter_snapshot(self) -> CounterSnapshot:
         self._generation += 1
@@ -168,7 +168,7 @@ class _InProcessWorkerContext:
         progress = self._input_progress
         # The task thread may add keys while a heartbeat samples these counters.
         return RunnerSnapshot(
-            counters={name: replace(entry) for name, entry in dict(self._counters).items()},
+            counters={key: replace(entry) for key, entry in dict(self._counters).items()},
             input_progress=replace(progress) if progress is not None else None,
         )
 

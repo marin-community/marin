@@ -194,7 +194,7 @@ class CoordinatorDashboard:
         merged_by_worker: dict[str, dict[str, CounterEntry]] = {}
         for worker_id, entries in entries_by_worker.items():
             merged, conflicted = merge_counter_entries(entries)
-            merged_by_worker[worker_id] = counters_by_name({k: e for k, e in merged.items() if k not in conflicted})
+            merged_by_worker[worker_id] = counters_by_name((k, e) for k, e in merged.items() if k not in conflicted)
         return merged_by_worker
 
     def _shard_buckets_locked(self, run: DashboardExecution) -> tuple[ShardBucket, ...]:
@@ -229,7 +229,7 @@ class CoordinatorDashboard:
             for (worker_id, snapshot_execution_id), snapshot in self._coordinator._worker_counters.items()
             if worker_id in self._coordinator._worker_states and snapshot_execution_id == run.execution_id
         ]
-        worker_counters = [counters_by_name(snapshot.counters) for snapshot in worker_snapshots]
+        worker_counters = [counters_by_name(snapshot.counters.items()) for snapshot in worker_snapshots]
         cpu_percent = sum(
             float(counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value) for counters in worker_counters
         )
