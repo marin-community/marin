@@ -168,6 +168,8 @@ from experiments.belay.study import (
 from experiments.belay.submit import (
     ACTIVE_JOB_STATES,
     DEFAULT_TRACK,
+    LADDER,
+    LADDER_RUNGS,
     PROBE_SKIP,
     RUN_PREFIX,
     ExperimentSpec,
@@ -176,6 +178,7 @@ from experiments.belay.submit import (
     Stage,
     check_launch,
     check_variant,
+    experiment_id,
     iris_jobs,
     latest_stage,
     launch_band,
@@ -188,6 +191,7 @@ from experiments.belay.submit import (
     parse_track,
     refuse_over_cap,
     refuse_reused_names,
+    registry_of,
     run_id,
     run_name,
     run_suffix,
@@ -199,7 +203,7 @@ from experiments.belay.submit import (
     stage_runs,
     submit_run,
     track_command,
-    track_of_comment,
+    tracks_of_comment,
     variant_settings,
     with_launched,
 )
@@ -413,7 +417,7 @@ def start(events_file: Path, today: datetime.date) -> None:
             line = (
                 f'[run_overdue {event.experiment}] section 6: {BELAY} escalate --title "{event.experiment}: a run is '
                 f'overdue" --body "<which run, its state and expected finish, what its logs show>" '
-                f"--registry-id {event.experiment}"
+                f"--registry-id {registry_of(event.experiment)}"
             )
         elif event.kind is EventKind.RUN_FINISHED:
             # A finished shared control also concerns every spec that reuses it.
@@ -459,10 +463,11 @@ def approved_idea(idea: Idea) -> tuple[Idea, list[str]]:
     return idea, list(idea.hidden_removed or [])
 
 
-def idea_track(idea: Idea) -> tuple[Track, bool]:
-    """The idea's Track and whether it defaulted to speedrun; refuses an unknown one with the escalation to run."""
+def idea_tracks(idea: Idea) -> tuple[tuple[Track, ...], bool]:
+    """The idea's Tracks (several for ``Track: ladder``) and whether they defaulted to speedrun; the approver's
+    instructions win over the comment. Refuses an unknown one with the escalation to run."""
     try:
-        return track_of_comment(idea.body)
+        return tracks_of_comment(idea.body, idea.note)
     except SystemExit as refusal:  # add the escalation as the next step
         raise SystemExit(
             f"{refusal}\nnext: {BELAY} escalate --idea-id {idea.id} "
@@ -486,11 +491,15 @@ def track_label(track: Track, defaulted: bool) -> str:
     return f"Track: {track}{' (default)' if defaulted else ''}"
 
 
-def print_idea_brief(idea: Idea, track: Track, defaulted: bool) -> None:
-    baseline = TRACKS[track]
+def print_idea_brief(idea: Idea, tracks: tuple[Track, ...], defaulted: bool) -> None:
     print(f"idea #{idea.id}: {idea.name}\n\n{idea.body.strip()}\n")
-    label = track_label(track, defaulted)
-    print(f"{label}: {baseline.description}; judged on {baseline.metric}, noise {baseline.noise}.\n")
+    if len(tracks) > 1:
+        print(f"Track: {LADDER}, one trial per rung, launched together: {', '.join(tracks)}.")
+    for track in tracks:
+        baseline = TRACKS[track]
+        label = track_label(track, defaulted)
+        print(f"{label}: {baseline.description}; judged on {baseline.metric}, noise {baseline.noise}.")
+    print()
     if (idea.note or "").startswith(MAINTAINER_NOTE):
         print(f"MAINTAINER NOTE (follow it; it settles the checks it addresses):\n{idea.note}\n")
     print(
@@ -509,14 +518,15 @@ def print_idea_brief(idea: Idea, track: Track, defaulted: bool) -> None:
 
 
 def granted_band(state: PageState, registry_id: str, track: Track) -> str:
-    """The Iris band ``registry_id``'s runs launch at: its approver's priority grant, else the Track's band."""
-    idea = state.idea_for(registry_id)
+    """The Iris band ``registry_id``'s runs launch at: its approver's priority grant, else the Track's band. Takes
+    a registry id or a ladder rung's experiment id."""
+    idea = state.idea_for(registry_of(registry_id))
     return launch_band(track, None if idea is None else idea.priority_grant, registry_id)
 
 
 def node_grant(state: PageState, registry_id: str) -> int | None:
-    """The maintainer's node grant on the idea behind ``registry_id``, if any."""
-    idea = state.idea_for(registry_id)
+    """The maintainer's node grant on the idea behind ``registry_id`` (or a rung's experiment id), if any."""
+    idea = state.idea_for(registry_of(registry_id))
     return None if idea is None else idea.node_grant
 
 
@@ -538,7 +548,7 @@ def shareable_control(repo: Path, track: Track, jobs: list[IrisJob]) -> str | No
             name = run_id(spec, control)
             if control.shared is not None or control.seed != CONFIG.seed or name not in active:
                 continue
-            trials = load_entry(spec.experiment).get("trials") or []
+            trials = load_entry(registry_of(spec.experiment)).get("trials") or []
             commit = next((t["commit"] for t in trials if run_id(spec, variant) in (t.get("wandb") or [])), None)
             if commit is not None and same_code(repo, commit):
                 return name
@@ -573,10 +583,13 @@ MAINTAINER_NOTE = "Maintainer "  # the app's prefix for an approver's instructio
 SPECS = Path("experiments/belay/runs")
 
 
-def prior_trials_hold(entry: dict, note: str | None) -> str | None:
+def prior_trials_hold(entry: dict, note: str | None, tracks: tuple[Track, ...]) -> str | None:
     """The prior results that hold an idea back (escalated to the admin page), unless a maintainer re-queued it with
-    a note asking for a retest on the current recipe. None when it may run."""
+    a note asking for a retest on the current recipe. A ladder is held only by trials on its own rungs (taking a
+    speedrun win up the ladder is not a retest). None when it may run."""
     trials = entry.get("trials") or []
+    if len(tracks) > 1:
+        trials = [t for t in trials if t.get("rung") in tracks]
     if not trials or RETEST in (note or "").lower():
         return None
     lines = [
@@ -616,9 +629,12 @@ def new_idea(
     settings: list[tuple[str, str]],
     defaults: str | None,
     *,
+    named_entry: str | None = None,
     dry_run: bool,
 ) -> None:
-    """Register an approved idea, commit its run spec, post the plan and launch it; resumes where it stopped."""
+    """Register an approved idea, commit its run spec, post the plan and launch it; resumes where it stopped. A
+    ladder idea gets one spec and trial per rung, launched together. ``named_entry`` is an existing registry entry
+    the approved text names (an idea that takes a recorded one further, such as up the ladder)."""
     repo = repo_root()
     branch = require_week_branch(repo, datetime.date.today())
     require_registry_checkout()
@@ -629,14 +645,16 @@ def new_idea(
     idea, hidden = approved_idea(idea)
     if hidden:
         print(f"note: the comment had text a reviewer would not see: {', '.join(hidden)}")
-    track, defaulted = idea_track(idea)
-    if track is Track.CUSTOM:
-        require_study_budget(idea)
-    else:
-        runnable(idea, track)
-    registry_id = idea.registry_id or (entry_for_intake(idea.url) if idea.url else None)
+    tracks, defaulted = idea_tracks(idea)
+    ladder = len(tracks) > 1
+    for track in tracks:
+        if track is Track.CUSTOM:
+            require_study_budget(idea)
+        else:
+            runnable(idea, track)
+    registry_id = idea.registry_id or (entry_for_intake(idea.url) if idea.url else None) or named(idea, named_entry)
     if registry_id is not None:
-        held = prior_trials_hold(load_entry(registry_id), idea.note)
+        held = prior_trials_hold(load_entry(registry_id), idea.note, tracks)
         if held is not None:
             escalate(
                 f"Idea #{idea.id} was already tested as {registry_id}",
@@ -647,7 +665,7 @@ def new_idea(
             )
             return
     if category is None:
-        print_idea_brief(idea, track, defaulted)
+        print_idea_brief(idea, tracks, defaulted)
         return
     if category not in categories():
         raise SystemExit(f"refusing: category {category!r} is not in the list printed by new-idea --idea-id {idea_id}")
@@ -661,13 +679,13 @@ def new_idea(
     if registry_id is None:
         if not name or len(name) > MAX_NAME:
             raise SystemExit(f"refusing: give --name, the idea's short name (at most {MAX_NAME} characters)")
-        registry_id, _ = create_entry(idea, name, category, track, dry_run=dry_run)
+        registry_id, _ = create_entry(idea, name, category, tracks[0], dry_run=dry_run)
     else:
         print(f"idea #{idea.id} is {registry_id}")
     report_idea(
         idea.id, {"registry_id": registry_id, "registry_url": entry_url(entry_path(registry_id))}, dry_run=dry_run
     )
-    if track is Track.CUSTOM:
+    if tracks == (Track.CUSTOM,):
         print(f"{registry_id} is registered as a study on its budget: {study_budget(idea)}")
         say_next(f"{BELAY} study {registry_id} --spec <file>   (write the spec as RUNBOOK.md section 1c shows)")
         return
@@ -675,28 +693,72 @@ def new_idea(
         print(f"{registry_id} is registered; its change needs code (section 1b)")
         say_next(f"{BELAY} code-change {registry_id} --start")
         return
-    if TRACKS[track].needs_go_ahead:
-        request_go_ahead(idea, registry_id, track, [x for setting in settings for x in setting], dry_run=dry_run)
+    if TRACKS[tracks[0]].needs_go_ahead:
+        request_go_ahead(idea, registry_id, tracks[0], [x for setting in settings for x in setting], dry_run=dry_run)
         return
-    existing = spec_path(registry_id, repo / SPECS)
+    defaults_text = defaults + (f" (hidden text removed from the comment: {', '.join(hidden)})" if hidden else "")
+    if defaulted:
+        defaults_text = f"track speedrun (no Track: line); {defaults_text}"
+    for track in tracks:
+        plan_and_launch(
+            Plan(repo, branch, idea, registry_id, track, experiment_id(registry_id, track, ladder), defaults_text),
+            variant,
+            settings,
+            name,
+            dry_run=dry_run,
+        )
+    say_next("stop (the watcher starts a new session when the runs finish)")
+
+
+def named(idea: Idea, entry: str | None) -> str | None:
+    """``entry`` when the approved text (the comment or the approver's instructions) names it and it exists."""
+    if entry is None:
+        return None
+    if entry not in f"{idea.body}\n{idea.note or ''}":
+        raise SystemExit(f"refusing: --registry-id {entry} is not named in idea #{idea.id}'s approved text")
+    entry_path(entry)  # refuses an id with no entry
+    return entry
+
+
+@dataclass(frozen=True)
+class Plan:
+    """One Track's share of a new idea: where its spec goes and under which ids."""
+
+    repo: Path
+    branch: str
+    idea: Idea
+    registry_id: str
+    track: Track
+    experiment: str
+    """The spec and run-name id: the registry id, or with a ladder rung's tag (``X0037d768``)."""
+    defaults: str
+
+
+def plan_and_launch(
+    plan: Plan, variant: str, settings: list[tuple[str, str]], name: str | None, *, dry_run: bool
+) -> None:
+    """Write and commit ``plan.track``'s run spec, add its trial and plan section to the idea's thread, and launch."""
+    repo, branch, idea, registry_id, experiment = plan.repo, plan.branch, plan.idea, plan.registry_id, plan.experiment
+    state = page_state()
+    existing = spec_path(experiment, repo / SPECS)
     launched = existing.exists() and "launched" in yaml.safe_load(existing.read_text())
     if launched:
         text = existing.read_text()  # resuming: the committed spec decides
     else:  # a new idea, or one held at the node cap: plan its runs now, so a shared control is one still running
         jobs = iris_jobs()
-        shared = shareable_control(repo, track, jobs)
+        shared = shareable_control(repo, plan.track, jobs)
         if shared is not None:
             print(f"reusing the running control {shared} (same code and seed)")
-        text = new_spec_text(registry_id, track, variant, settings, run_suffix(registry_id, jobs), shared)
+        text = new_spec_text(experiment, plan.track, variant, settings, run_suffix(experiment, jobs), shared)
     spec = write_spec(repo, branch, text, dry_run=dry_run, replace=existing.exists() and not launched)
+    if launched:
+        print(f"{experiment} already launched; nothing more to start")
+        return
     commit = require_clean_pushed_head(repo, branch)
     check_launch(spec, iris_jobs(), state.node_cap, idea.node_grant)
     cap = f"node grant {idea.node_grant}" if idea.node_grant else f"node cap {state.node_cap}"
     print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the {cap}")
     entry = load_entry(registry_id) if not dry_run or idea.registry_id else {"name": name or registry_id}
-    defaults_text = defaults + (f" (hidden text removed from the comment: {', '.join(hidden)})" if hidden else "")
-    if defaulted:
-        defaults_text = f"track speedrun (no Track: line); {defaults_text}"
     url = thread_url(registry_id)
     thread = None if dry_run and not idea.registry_id else read_thread(registry_id)
     number = len([t for t in entry.get("trials") or [] if t.get("comment_url") == url]) + 1
@@ -704,22 +766,18 @@ def new_idea(
     variant_key = next(r.name for r in data_runs if not r.control)
     rows = plan_rows(spec, data_runs, commit)
     section = stage_section(
-        number, comparison_text(spec.track, Stage.DATA), rows, reproduce(registry_id, commit, variant_key)
+        number, comparison_text(spec.track, Stage.DATA), rows, reproduce(experiment, commit, variant_key)
     )
+    plan_title = title(registry_id, entry["name"], spec.track, "plan")
     if thread is None:
         body = render(
-            Comment(
-                title(registry_id, entry["name"], spec.track, "plan"),
-                {number: section},
-                post_footer(idea, registry_id, spec.track, defaults_text, commit),
-            )
+            Comment(plan_title, {number: section}, post_footer(idea, registry_id, spec.track, plan.defaults, commit))
         )
-    else:  # a retest: one more section in the idea's thread
-        body = updated(thread, title(registry_id, entry["name"], spec.track, "plan"), number, section)
-    plan_title = title(registry_id, entry["name"], spec.track, "plan")
+    else:  # a retest, or another rung: one more section in the idea's thread
+        body = updated(thread, plan_title, number, section)
     publish_thread(registry_id, plan_title, body, idea.id, "plan", dry_run=dry_run)
-    plan = {"summary": entry["name"], "commit": commit, "branch": branch, "track": spec.track.value, "comment": url}
-    report_idea(idea.id, {"state": "planned", "plan": plan}, dry_run=dry_run)
+    summary = {"summary": entry["name"], "commit": commit, "branch": branch, "track": spec.track.value, "comment": url}
+    report_idea(idea.id, {"state": "planned", "plan": summary}, dry_run=dry_run)
     if dry_run:
         launch_stage(repo, branch, spec, data_runs, None, state, dry_run=True)
         return
@@ -738,7 +796,6 @@ def new_idea(
     launch_stage(repo, branch, spec, data_runs, trial_id, state, dry_run=False)
     running = title(registry_id, entry["name"], spec.track, "running")
     publish_thread(registry_id, running, updated(body, running, number, section), idea.id, "plan", dry_run=False)
-    say_next("stop (the watcher starts a new session when the runs finish)")
 
 
 def post_footer(idea: Idea, registry_id: str, track: Track, defaults: str, commit: str) -> list[str]:
@@ -811,7 +868,7 @@ def launch_stage(
             due = datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=minutes)
             expect_finish(run_id, due, dry_run=False)
         if trial_id is not None and not run.control:
-            path = add_trial_run(spec.experiment, trial_id, run_id)
+            path = add_trial_run(registry_of(spec.experiment), trial_id, run_id)
             commit_and_push([path], f"Belay registry: {spec.experiment} {run.name} launched", dry_run=False)
     path = spec_path(spec.experiment, repo / SPECS)
     if not dry_run:
@@ -822,10 +879,12 @@ def launch_stage(
     return commands
 
 
-def launch(registry_id: str, run: str, *, print_only: bool, dry_run: bool) -> None:
-    """Show (``--print``) or submit one run of the committed spec, through the same path as every other launch."""
+def launch(experiment: str, run: str, *, print_only: bool, dry_run: bool) -> None:
+    """Show (``--print``) or submit one run of the committed spec, through the same path as every other launch.
+    ``experiment`` is the spec's id: a registry id, or a ladder rung's (``X0037d768``)."""
     repo = repo_root()
-    if is_study(spec_path(registry_id, repo / SPECS).read_text()):
+    registry_id = registry_of(experiment)
+    if is_study(spec_path(experiment, repo / SPECS).read_text()):
         plan = load_study(registry_id, repo)
         if run not in plan.runs:
             raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(plan.runs)}")
@@ -842,9 +901,9 @@ def launch(registry_id: str, run: str, *, print_only: bool, dry_run: bool) -> No
         launch_study_runs(repo, plan, [run], idea, state, dry_run=dry_run)
         say_next("stop (the watcher starts a new session when the run finishes)")
         return
-    spec = load_spec(registry_id, repo / SPECS)
+    spec = load_spec(experiment, repo / SPECS)
     if run not in spec.runs:
-        raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(spec.runs)}")
+        raise SystemExit(f"refusing: {experiment} has no run {run!r}; runs: {', '.join(spec.runs)}")
     if print_only:
         band = granted_band(page_state(), registry_id, spec.track)
         print(shlex.join(launch_command(spec, spec.runs[run], band)))
@@ -857,9 +916,15 @@ def launch(registry_id: str, run: str, *, print_only: bool, dry_run: bool) -> No
     say_next("stop (the watcher starts a new session when the run finishes)")
 
 
-def reproduce(registry_id: str, commit: str, run: str) -> str:
-    spec = f"https://github.com/{CONFIG.repository}/blob/{commit}/{SPECS}/{registry_id}.yaml"
-    command = f"git checkout {commit[:10]} && uv run python -m experiments.belay launch {registry_id} --run {run}"
+def run_parts(name: str) -> tuple[str, str]:
+    """A run name's experiment id and run key (``belay-X0037d768-seed0`` -> ``X0037d768``, ``seed0``)."""
+    experiment, _, key = name.removeprefix(RUN_PREFIX).partition("-")
+    return experiment, key
+
+
+def reproduce(experiment: str, commit: str, run: str) -> str:
+    spec = f"https://github.com/{CONFIG.repository}/blob/{commit}/{SPECS}/{experiment}.yaml"
+    command = f"git checkout {commit[:10]} && uv run python -m experiments.belay launch {experiment} --run {run}"
     return f"Reproduce: [spec]({spec}) · `{command}`"
 
 
@@ -1228,17 +1293,19 @@ def stage_pairs(spec: ExperimentSpec, stage: Stage) -> list[tuple[RunSpec, RunSp
     return [(next(c for c in controls if c.control and c.seed == v.seed), v) for v in variants]
 
 
-def run_finished(registry_id: str, *, dry_run: bool) -> None:
-    """Record a finished stage, update the idea's #9451 comment in place, and start the next stage the Track's
-    comparison calls for (for speedrun: equal data, then equal time by ``after_equal_data``)."""
+def run_finished(experiment: str, *, dry_run: bool) -> None:
+    """Record a finished stage, update the idea's thread in place, and start the next stage the Track's comparison
+    calls for (for speedrun: equal data, then equal time by ``after_equal_data``). ``experiment`` is a registry id,
+    or a ladder rung's experiment id, whose results go on its registry entry."""
     repo = repo_root()
     branch = require_week_branch(repo, datetime.date.today())
     require_registry_checkout()
     state = page_state()
-    if is_study(spec_path(registry_id, repo / SPECS).read_text()):
+    registry_id = registry_of(experiment)
+    if is_study(spec_path(experiment, repo / SPECS).read_text()):
         study_finished(registry_id, repo, load_study(registry_id, repo), state, dry_run=dry_run)
         return
-    spec = load_spec(registry_id)
+    spec = load_spec(experiment)
     names = {run_id(spec, r) for r in spec.runs.values()}
     runs = [r for r in state.runs if r.name in names]
     live = [r.name for r in runs if not r.terminal]
@@ -1249,7 +1316,7 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     failed = [r for r in runs if r.state != "succeeded"]
     if failed:
         print(f"{failed[0].name} is {failed[0].state}")
-        say_next(f"{BELAY} run-failed {registry_id} --run {failed[0].run}   (section 3)")
+        say_next(f"{BELAY} run-failed {experiment} --run {failed[0].run}   (section 3)")
         return
     baseline = TRACKS[spec.track]
     entry = load_entry(registry_id)
@@ -1266,7 +1333,7 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
         data_variant = run_id(spec, stage_pairs(spec, Stage.DATA)[0][1])
         data_trial = next(t for t in trials if data_variant in t["wandb"])
         prior = str(verdict(data_trial["delta"][0], baseline))
-        nxt = Next(repo, branch, spec, registry_id, Stage.TIME, steps, url, entry, state, note, prior)
+        nxt = Next(repo, branch, spec, experiment, Stage.TIME, steps, url, entry, state, note, prior)
         advance(nxt, dry_run=dry_run)
         return
     trial = next(t for t in trials if run_id(spec, stage_pairs(spec, stage)[0][1]) in t["wandb"])
@@ -1299,7 +1366,7 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     stage_rows = [rows[run_id(spec, r)] for pair in pairs for r in pair]
     tokens = measure(stage_rows[0].name, baseline.metric).tokens if stage is Stage.DATA else None
     variant_key = pairs[0][1].name
-    notes = [reproduce(registry_id, trial["commit"], variant_key)]
+    notes = [reproduce(experiment, trial["commit"], variant_key)]
     staged = baseline.comparison is Comparison.EQUAL_DATA_THEN_TIME
     status = f"{overall} at equal time" if stage is Stage.TIME else str(overall)
     run_equal_time = False
@@ -1315,19 +1382,25 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     analysis = (f"{registry_id} {trial['id']}", report_url(registry_id, trial["id"]))
     new_title = title(registry_id, entry["name"], spec.track, status)
     body = updated(read_thread(registry_id) or "", new_title, number, section, analysis)
-    prefix = f"{RUN_PREFIX}{registry_id}-"
-    earlier = {
-        i + 1: reproduce(registry_id, t["commit"], t["wandb"][0].removeprefix(prefix)) for i, t in enumerate(trials)
-    }
+    earlier = {}
+    for i, t in enumerate(trials):
+        trial_experiment, key = run_parts(t["wandb"][0])
+        earlier[i + 1] = reproduce(trial_experiment, t["commit"], key)
     body = with_reproduce(body, earlier)  # sections written before posts carried a Reproduce line
     publish_thread(registry_id, new_title, body, None if idea is None else idea.id, "result", dry_run=dry_run)
+    rungs_left = ladder_rungs_left(trials, trial)
     if idea is not None:
         result = {"rows": [asdict(r) for r in results], "verdict": overall, "kind": PAGE_RESULT_KIND[overall]}
-        report_idea(idea.id, {"state": "recorded", "result": {**result, "summary": status}}, dry_run=dry_run)
+        idea_state = "running" if rungs_left else "recorded"
+        report_idea(idea.id, {"state": idea_state, "result": {**result, "summary": status}}, dry_run=dry_run)
     idea_id = None if idea is None else idea.id
     if run_equal_time:
-        nxt = Next(repo, branch, spec, registry_id, Stage.PROBE, None, url, entry, state, prior=str(overall))
+        nxt = Next(repo, branch, spec, experiment, Stage.PROBE, None, url, entry, state, prior=str(overall))
         advance(nxt, dry_run=dry_run)
+        return
+    if rungs_left:
+        print(f"{experiment} recorded; {len(rungs_left)} other rung(s) of {registry_id} still running")
+        say_next("stop (the last rung to finish scores the entry)")
         return
     if overall is Verdict.WIN:
         adoption = f"See {url}. A maintainer decides on adoption into {CONFIG.recipe_name}."
@@ -1337,6 +1410,12 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     say_next(f'{BELAY} score {registry_id} --score <0-10> --rationale "<one line>" --model <your model>   (section 2d)')
 
 
+def ladder_rungs_left(trials: list[dict], finished: dict) -> list[dict]:
+    """The idea's other ladder-rung trials with no result yet: while any remain, the idea stays running and only its
+    last rung scores the entry."""
+    return [t for t in trials if t is not finished and t.get("loss") is None and t.get("rung") in LADDER_RUNGS]
+
+
 @dataclass(frozen=True)
 class Next:
     """The stage ``run-finished`` starts next, and where it is recorded."""
@@ -1344,7 +1423,8 @@ class Next:
     repo: Path
     branch: str
     spec: ExperimentSpec
-    registry_id: str
+    experiment: str
+    """The spec's id: the registry id, or a ladder rung's experiment id."""
     stage: Stage
     steps: int | None
     url: str
@@ -1368,11 +1448,12 @@ def as_result(run: RunSpec, m: Measure, delta: float | None, v: Verdict | None) 
 def advance(nxt: Next, *, dry_run: bool) -> None:
     """Start the next stage: add its runs to the spec, commit and push it, launch them, and show them in the
     idea's thread."""
-    repo, branch, spec, registry_id, stage = nxt.repo, nxt.branch, nxt.spec, nxt.registry_id, nxt.stage
+    repo, branch, spec, experiment, stage = nxt.repo, nxt.branch, nxt.spec, nxt.experiment, nxt.stage
+    registry_id = registry_of(experiment)
     jobs = iris_jobs()
     stage_keys = {Stage.PROBE: ("probe",), Stage.TIME: (f"seed{CONFIG.seed}-t",)}
-    runs = next_stage_runs(spec, stage, run_suffix(registry_id, jobs, stage_keys[stage]), nxt.steps)
-    text = spec_with_runs(spec_path(registry_id, repo / SPECS).read_text(), runs)
+    runs = next_stage_runs(spec, stage, run_suffix(experiment, jobs, stage_keys[stage]), nxt.steps)
+    text = spec_with_runs(spec_path(experiment, repo / SPECS).read_text(), runs)
     new_spec = write_spec(repo, branch, text, dry_run=dry_run, replace=True)
     commit = "dry-run" if dry_run else require_clean_pushed_head(repo, branch)
     started = [r for r in new_spec.runs.values() if r.name in runs]
@@ -1385,7 +1466,7 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     else:
         pair = stage_pairs(new_spec, stage)[0]
         planned = plan_rows(new_spec, [*pair], commit)
-        notes = "\n\n".join(n for n in (nxt.note, reproduce(registry_id, commit, pair[1].name)) if n)
+        notes = "\n\n".join(n for n in (nxt.note, reproduce(experiment, commit, pair[1].name)) if n)
         section = stage_section(number, comparison_text(spec.track, stage), planned, notes)
     new_title = title(registry_id, nxt.entry["name"], spec.track, STATUS_RUNNING[stage].format(prior=nxt.prior))
     body = updated(read_thread(registry_id) or "", new_title, number, section)
@@ -1495,9 +1576,10 @@ def analyze_profile(run: str, compare: str | None, cluster: str, *, dry_run: boo
         raise SystemExit(f"{job} {state}; logs: {shlex.join(iris_cli('job', 'logs', job))}")
 
 
-def rewrite_reports(registry_id: str, *, dry_run: bool) -> None:
+def rewrite_reports(experiment: str, *, dry_run: bool) -> None:
     """Rewrite the analysis report of every finished stage of the experiment, and commit and push them."""
-    spec = load_spec(registry_id)
+    spec = load_spec(experiment)
+    registry_id = registry_of(experiment)
     require_registry_checkout()
     baseline = TRACKS[spec.track]
     entry = load_entry(registry_id)
@@ -1601,24 +1683,25 @@ def score_batch(batch: Path, model: str, *, dry_run: bool) -> None:
 # ---------- 3. run failed ----------
 
 
-def run_failed(registry_id: str, run: str, *, dry_run: bool) -> None:
+def run_failed(experiment: str, run: str, *, dry_run: bool) -> None:
     """Escalate a failed run with its state and log command; never relaunch it."""
     state = page_state()
-    path = spec_path(registry_id, repo_root() / SPECS)
+    registry_id = registry_of(experiment)
+    path = spec_path(experiment, repo_root() / SPECS)
     if is_study(path.read_text()):
-        names = {key: run_name(registry_id, key) for key in parse_study(path.read_text()).runs}
+        names = {key: run_name(experiment, key) for key in parse_study(path.read_text()).runs}
     else:
-        spec = load_spec(registry_id)
+        spec = load_spec(experiment)
         names = {key: run_id(spec, r) for key, r in spec.runs.items()}
     if run not in names:
-        raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(names)}")
+        raise SystemExit(f"refusing: {experiment} has no run {run!r}; runs: {', '.join(names)}")
     name = names[run]
     rows = [r for r in state.runs if r.name == name]
     if not rows:
         raise SystemExit(f"refusing: no run {name} on the Belay page")
     row = rows[0]
     if not row.terminal or row.state == "succeeded":
-        raise SystemExit(f"refusing: {name} is {row.state}, not failed.\nnext: {BELAY} run-finished {registry_id}")
+        raise SystemExit(f"refusing: {name} is {row.state}, not failed.\nnext: {BELAY} run-finished {experiment}")
     body = (
         f"`{name}` ended `{row.state}` at step {row.step} (job `{row.job_id}`). Nothing was relaunched. "
         f"Logs: `uv run iris --cluster marin job logs {row.job_id}`."
@@ -1929,6 +2012,7 @@ def main(argv: list[str]) -> None:
     p.add_argument("--variant")
     p.add_argument("--opt-set", action="append", default=[])
     p.add_argument("--model-set", action="append", default=[])
+    p.add_argument("--registry-id", help="an existing entry the approved text names (such as a ladder of X####)")
     p = command("launch")
     p.add_argument("registry_id")
     p.add_argument("--run", required=True, help="the run's key in experiments/belay/runs/X####.yaml")
@@ -2004,7 +2088,16 @@ def main(argv: list[str]) -> None:
         start(args.events, today)
     elif args.command == "new-idea":
         settings = [("--opt-set", s) for s in args.opt_set] + [("--model-set", s) for s in args.model_set]
-        new_idea(args.idea_id, args.name, args.category, args.variant, settings, args.defaults, dry_run=args.dry_run)
+        new_idea(
+            args.idea_id,
+            args.name,
+            args.category,
+            args.variant,
+            settings,
+            args.defaults,
+            named_entry=args.registry_id,
+            dry_run=args.dry_run,
+        )
     elif args.command == "launch":
         launch(args.registry_id, args.run, print_only=args.print_only, dry_run=args.dry_run)
     elif args.command == "code-change" and args.start:

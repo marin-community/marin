@@ -27,6 +27,7 @@ from experiments.belay.__main__ import (
     EventKind,
     WaitOutcome,
     carried_ideas,
+    ladder_rungs_left,
     launch,
     prior_trials_hold,
     reproduce,
@@ -82,14 +83,16 @@ from experiments.belay.results import Verdict, after_equal_data, change, overall
 from experiments.belay.submit import (
     IrisJob,
     check_launch,
+    experiment_id,
     launch_band,
     launch_command,
     new_spec_text,
     parse_spec,
+    registry_of,
     run_id,
     run_suffix,
     submit_run,
-    track_of_comment,
+    tracks_of_comment,
     with_launched,
 )
 from experiments.grug.fast_track import belay_s7, belay_tracks
@@ -191,6 +194,40 @@ def test_an_aborted_port_leaves_the_recipe_and_nothing_pending(repo: Path) -> No
     assert not git(repo, "status", "--porcelain", "--untracked-files=no")
     with pytest.raises(SystemExit, match="no weekly rollover"):
         load_rollover(repo)
+
+
+def test_a_ladder_is_every_competitive_rung_and_the_approvers_track_wins() -> None:
+    rungs = (Track.COMPETITIVE_D512, Track.COMPETITIVE_D768, Track.COMPETITIVE_D1024, Track.COMPETITIVE_D1280)
+    assert tracks_of_comment("Track: ladder\nTake X0037 up the ladder.") == (rungs, False)
+    instructions = "Maintainer ClassicLarry: run it with Track: ladder, settings from t004."
+    assert tracks_of_comment("Track: speedrun\nRun X0037 again.", instructions) == (rungs, False)
+    assert tracks_of_comment("Run X0037 again.", "Maintainer ClassicLarry: seed 0 only.") == ((Track.SPEEDRUN,), True)
+
+
+def test_each_rung_has_its_own_experiment_id_on_the_same_entry() -> None:
+    ids = [experiment_id("X0037", track, ladder=True) for track in (Track.COMPETITIVE_D512, Track.COMPETITIVE_D1280)]
+    assert ids == ["X0037d512", "X0037d1280"]
+    assert experiment_id("X0037", Track.SPEEDRUN, ladder=False) == "X0037"
+    assert {registry_of(i) for i in [*ids, "X0037"]} == {"X0037"}
+    # The app reads a run's experiment up to its first '-'; a rung's runs must keep that whole id.
+    assert "belay-X0037d768-seed0".removeprefix("belay-").partition("-")[0] == "X0037d768"
+
+
+def test_a_ladder_idea_waits_for_its_last_rung() -> None:
+    d512 = {"id": "t005", "rung": "competitive-d512", "loss": [3.1]}
+    d768 = {"id": "t006", "rung": "competitive-d768"}
+    speedrun = {"id": "t004", "rung": "speedrun"}
+    assert ladder_rungs_left([speedrun, d512, d768], d512) == [d768]
+    assert ladder_rungs_left([speedrun, d512, {**d768, "loss": [2.9]}], d512) == []
+
+
+def test_a_ladder_is_held_only_by_trials_on_its_own_rungs() -> None:
+    rungs = (Track.COMPETITIVE_D512, Track.COMPETITIVE_D768)
+    speedrun_win = {"trials": [{"id": "t004", "rung": "speedrun", "delta": [-0.0074]}]}
+    assert prior_trials_hold(speedrun_win, None, rungs) is None
+    assert prior_trials_hold(speedrun_win, None, (Track.SPEEDRUN,)) is not None
+    on_rung = {"trials": [{"id": "t005", "rung": "competitive-d768", "delta": [-0.002]}]}
+    assert prior_trials_hold(on_rung, None, rungs) is not None
 
 
 def test_only_ideas_in_play_are_carried() -> None:
@@ -304,10 +341,10 @@ def test_score_na_marks_an_entry_with_no_potential_score() -> None:
 
 
 def test_comment_track_defaults_to_speedrun_and_unknown_is_refused() -> None:
-    assert track_of_comment("Try sqrt-softplus routing.") == (Track.SPEEDRUN, True)
-    assert track_of_comment("**Track:** moe-d768\nTry sqrt-softplus routing.") == (Track.MOE_D768, False)
+    assert tracks_of_comment("Try sqrt-softplus routing.") == ((Track.SPEEDRUN,), True)
+    assert tracks_of_comment("**Track:** moe-d768\nTry sqrt-softplus routing.") == ((Track.MOE_D768,), False)
     with pytest.raises(SystemExit, match="not one of"):
-        track_of_comment("Track: competitive-d2048\nTry sqrt-softplus routing.")
+        tracks_of_comment("Track: competitive-d2048\nTry sqrt-softplus routing.")
     with pytest.raises(SystemExit, match="not one of"):
         parse_spec(SPEC.replace("competitive-d512", "competitive-d2048"))
 
@@ -405,10 +442,10 @@ def test_first_spec_on_a_fresh_weekly_branch(repo: Path) -> None:
 
 def test_idea_with_prior_trials_is_held_unless_retest_requested() -> None:
     entry = {"trials": [{"id": "t002", "variant": "0.85->0.98 over 10%", "rung": "d512", "delta": [0.0216, 0.0162]}]}
-    held = prior_trials_hold(entry, None)
+    held = prior_trials_hold(entry, None, (Track.SPEEDRUN,))
     assert held is not None and "t002" in held and "0.0216" in held
-    assert prior_trials_hold(entry, "Maintainer ClassicLarry: retest on current recipe") is None
-    assert prior_trials_hold({}, None) is None
+    assert prior_trials_hold(entry, "Maintainer ClassicLarry: retest on current recipe", (Track.SPEEDRUN,)) is None
+    assert prior_trials_hold({}, None, (Track.SPEEDRUN,)) is None
 
 
 WB = "https://wandb.ai/marin-community/marin_moe/runs"

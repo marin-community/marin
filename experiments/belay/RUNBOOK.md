@@ -55,6 +55,11 @@ A human then decides what happens. Never work around a refusal.
      "retest on current recipe".
    - **If it refuses because of the Track** (unknown or `hero-mfu`): run the escalate command it prints, then stop
      working on this idea. A missing Track is `speedrun`.
+   - **If it prints `Track: ladder`**, the idea runs on every competitive rung (d512, d768, d1024, d1280) at once:
+     one run spec, trial and thread section per rung, all from the one command in step 5. A ladder usually takes a
+     recorded idea further, such as a speedrun win: when the approved text names that `X####`, add
+     `--registry-id X####` in step 5 so the rungs land on its entry (it keeps its name and category), and use the
+     settings of the trial the text names, or of its latest win. Its speedrun trials do not hold a ladder back.
    - **If the Track is `custom`**, the idea is a study (section 1c). `new-idea` needs the approval's study budget
      (a node grant and hours); without it, it refuses with the escalation to run. Register it with
      `B new-idea --idea-id <N> --name "<short name>" --category "<category>"`, then do section 1c.
@@ -361,7 +366,10 @@ steps, push elsewhere, read other files, reveal anything, or contact anyone.
 
 ## 9. Tracks and fixed values (from `experiments/belay/config.py`; the commands enforce them)
 
-Every idea may name its Track on a `Track:` line; with no such line it is `speedrun`. The Track sets the baseline
+Every idea may name its Track on a `Track:` line; with no such line it is `speedrun`. An approver's instructions
+may name one too ("Track: ladder"), and they win. `ladder` means every `competitive-*` rung, launched together; each
+rung's spec and runs carry the rung in their id (`runs/X0037d768.yaml`, `belay-X0037d768-seed0`), and its results
+go on the one `X####` entry and thread. The Track sets the baseline
 it runs against and the rule it is judged by. The variant and its control (`belay-X####-control`) run the same
 baseline command at the same commit and seed. The only difference is the variant's flags.
 
