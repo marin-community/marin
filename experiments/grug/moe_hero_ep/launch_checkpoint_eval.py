@@ -429,9 +429,8 @@ def build_checkpoint_eval(
     """``nodes`` evaluating the hero's model from each of ``checkpoints`` at ``seq_lens`` and, optionally, on MRCR.
 
     Only each checkpoint's ``qk_mult``, ``qk_mult_long_scale``, ``log_scaling_n_floor`` and ``log_scaling_alpha``
-    differ from the hero's model. An eval batch holds a rack's 4,194,304 tokens at the full 16 nodes, and the same tokens per GPU
-    on fewer. Capacity
-    does not enter the dropless eval.
+    differ from the hero's model. An eval batch holds a rack's 4,194,304 tokens at the full 16 nodes, and the same
+    tokens per GPU on fewer. Capacity does not enter the dropless eval.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
