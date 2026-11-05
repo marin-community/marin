@@ -1,0 +1,63 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Harness contracts shared with the coordinator and stage configuration."""
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Protocol
+
+from forge.effects.context import Context
+from forge.model.llm import ToolSchema
+from forge.model.stage import Exit
+from forge.model.workpiece import Conversation, Submission
+from forge.resources.env import Env
+from forge.resources.inference import InferenceClient
+
+
+class StopReason(StrEnum):
+    FINISHED = "finished"
+    CONTEXT_LIMIT = "context_limit"
+    TURN_LIMIT = "turn_limit"
+
+
+@dataclass(frozen=True, slots=True)
+class Submitted(Exit):
+    submission: Submission
+
+
+@dataclass(frozen=True, slots=True)
+class ToolReturn[P](Exit):
+    tool: str
+    payload: P
+    session: Conversation
+
+
+@dataclass(frozen=True, slots=True)
+class Stopped(Exit):
+    reason: StopReason
+    session: Conversation
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResult:
+    content: str
+
+
+class Tool[P](Protocol):
+    @property
+    def schema(self) -> ToolSchema: ...
+
+    async def __call__(self, ctx: Context, args: Mapping[str, object], env: Env) -> ToolResult | ToolReturn[P]: ...
+
+
+class Harness(Protocol):
+    async def run(
+        self,
+        ctx: Context,
+        session: Conversation,
+        env: Env,
+        client: InferenceClient,
+        tools: Mapping[str, Tool[object]],
+    ) -> Exit: ...

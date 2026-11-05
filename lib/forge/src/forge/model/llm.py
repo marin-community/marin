@@ -6,8 +6,12 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
+from typing import Annotated
 
-from pydantic import JsonValue
+from pydantic import PlainSerializer
+
+from forge.model.json import FrozenJson, freeze_json, thaw_json
 
 
 class FinishReason(StrEnum):
@@ -36,13 +40,19 @@ class Message:
     content: str
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str | None = None
+    reasoning: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class ToolSchema:
     name: str
     description: str
-    parameters: Mapping[str, JsonValue]
+    parameters: Annotated[Mapping[str, FrozenJson], PlainSerializer(thaw_json)]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "parameters", MappingProxyType({key: freeze_json(value) for key, value in self.parameters.items()})
+        )
 
 
 @dataclass(frozen=True, slots=True)
