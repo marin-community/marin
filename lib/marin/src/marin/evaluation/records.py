@@ -121,6 +121,7 @@ class BenchmarkMetadataRef(BaseModel):
     reducers: tuple[BenchmarkReducerRef, ...] = ()
     prompt_length: BenchmarkPromptLengthRef | None = None
     requires_judge: bool = False
+    identity: str | None = None
 
     @model_validator(mode="after")
     def validate_protocol(self) -> "BenchmarkMetadataRef":
@@ -240,7 +241,7 @@ class ModelConfigRef(BaseModel):
     serve: ModelServeConfig
     generation: ModelGenerationConfig
     agent: ModelAgentConfig
-    evalchemy_num_concurrent: int | None = None
+    evaluation_num_concurrent: int | None = None
 
 
 class ModelRef(BaseModel):
@@ -340,6 +341,15 @@ class HarborRef(BaseModel):
     )
 
 
+class CuratedRef(BaseModel):
+    """Immutable corpus locations and the normalized TaskSpec driver settings."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    datasets: tuple[str, ...]
+    settings_json: str
+
+
 class EvalRef(BaseModel):
     """The eval that was run: its name, mechanism, and mechanism-specific detail.
 
@@ -361,6 +371,7 @@ class EvalRef(BaseModel):
     )
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
+    curated: CuratedRef | None = None
     harbor: HarborRef | None = None
     postprocessing: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
     """Named final-score protocols and their frozen JSON configurations."""

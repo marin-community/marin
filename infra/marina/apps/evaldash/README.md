@@ -368,3 +368,15 @@ Marina deployment and restart do not publish EvalDash or run its migrations.
 Pass `--allow-dirty` to explicitly release branch or uncommitted source
 without verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
 Use `--local` to preview in a disposable stack.
+
+## Curated evaluation import
+
+Curated producer records identify a raw FineStore store and leave metrics empty.
+Ingest snapshots its protocols, manifests, selections and attempts, then selects the
+latest finished retry per dataset, source row and trial. The sample browser uses the
+same selection. Zero grades remain scored; failed and unfinished work stays missing
+coverage. Means, instruction weights, classification, perplexity and groups follow
+protocol metadata. Dataset identities and the summary revision distinguish comparison
+protocols. PostgreSQL reconciliation checks the raw store HEAD as well as record.json,
+so resumed work can refresh an unchanged producer record. Derived summaries remain in
+Evaldash's catalog.

@@ -52,6 +52,7 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvalDataset]:
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
+                requires_judge=True,
                 version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(

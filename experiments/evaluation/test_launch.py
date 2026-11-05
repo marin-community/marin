@@ -14,18 +14,16 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from marin.evaluation.evalchemy import runtime
 from marin.evaluation.hardware import Platform
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationBatch, EvaluationError, _record
 from marin.execution.step_runner import StepRunner
 from marin.inference.iris import RemoteInferenceStartupError
-from rigging.provenance import launch_provenance
 
 import experiments.evaluation.launch as launch_module
 import experiments.evaluation.policy_finalization as policy_module
 from experiments.evaluation.cli import cli
-from experiments.evaluation.evals import EvalchemyDefinition
+from experiments.evaluation.curated import CuratedDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
 
@@ -216,12 +214,12 @@ def test_relaunch_changed_scoring_settings_use_distinct_steps(tmp_path, submitte
 @pytest.mark.parametrize("cache_key", [None, "pipeline-artifact"])
 def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache_key):
     config = tmp_path / "custom.yaml"
-    config.write_text("tasks: [gsm8k]\nextra_model_args:\n  num_concurrent: 16\n")
+    config.write_text("name: custom\nsources: [evalchemy-gsm8k]\n")
     model = models()["qwen3-8b"]
     spec = LaunchSpec(
         model=model,
         evals=(),
-        evalchemy_definitions=(EvalchemyDefinition(name="custom", config_path=config),),
+        curated_definitions=(CuratedDefinition.from_file(config),),
         harbor_definitions=(),
         platform=Platform.GPU,
         accelerator="H100x1",
@@ -243,7 +241,7 @@ def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache
     StepRunner().run(build_evaluation_steps(before, execute))
     executed.clear()
 
-    config.write_text("tasks: [gsm8k]\nextra_model_args:\n  num_concurrent: 64\n")
+    model = replace(model, evaluation_num_concurrent=64)
     tuned = replace(model.serve, max_num_batched_tokens=8192, max_num_seqs=128, gpu_memory_utilization=0.9)
     after = prepare_evaluation_batch(replace(spec, model=replace(model, serve=tuned)))
     StepRunner().run(build_evaluation_steps(after, execute))
@@ -255,7 +253,7 @@ def _pipeline_spec(tmp_path):
     return LaunchSpec(
         model=models()["qwen3-8b"],
         evals=("gsm8k-smoke", "arc-easy"),
-        evalchemy_definitions=(),
+        curated_definitions=(),
         harbor_definitions=(),
         platform=Platform.GPU,
         accelerator="H100x1",
@@ -286,8 +284,7 @@ def test_pipeline_changed_launch_tree_creates_new_steps_and_preserves_partial_ar
     partial.write_text('{"response":"already generated"}')
     executed.clear()
 
-    captured = launch_provenance()
-    monkeypatch.setattr(runtime, "launch_provenance", lambda: replace(captured, tree_hash="changed-tree"))
+    monkeypatch.setattr(launch_module, "EVALUATION_EXECUTION_REVISION", "changed-execution")
     after = prepare_evaluation_batch(spec)
     StepRunner().run(build_evaluation_steps(after, execute))
 

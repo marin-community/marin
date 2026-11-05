@@ -13,6 +13,7 @@ in these two modules alone.
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -54,6 +55,7 @@ class _TaskScore:
     kind: MetricKind | None = None
     declared: bool = False
     protocol_metric: str | None = None
+    protocol_identity: str | None = None
 
 
 def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
@@ -110,7 +112,7 @@ def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], boo
     """Read evaluator-canonical scores under their recorded benchmark protocols."""
     scores: dict[str, _TaskScore] = {}
     missing_primary = False
-    selected = PUBLICATION_METRICS.get(record.evaluation.name)
+    selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
     task_keys = dict.fromkeys((*record.metrics, *record.canonical_metrics))
     for task_key in task_keys:
         if _is_scratch_task_key(task_key):
@@ -138,6 +140,7 @@ def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], boo
                 kind=kind,
                 declared=True,
                 protocol_metric=name,
+                protocol_identity=benchmark.identity,
             ),
         )
     return list(scores.values()), missing_primary
@@ -169,7 +172,7 @@ def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False)
     ``tmp...`` entries are excluded; the first remaining score wins for duplicate task leaves.
     """
     scores: dict[str, _TaskScore] = {}
-    selected = PUBLICATION_METRICS.get(record.evaluation.name)
+    selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
     missing = False
     for task_key, metrics in (record.metrics or {}).items():
         if _is_scratch_task_key(task_key):
@@ -254,6 +257,8 @@ def _mechanism_coverage(record: EvalRunRecord, n_scored: int | None) -> Coverage
 
 def _item_cap(record: EvalRunRecord) -> int | None:
     """The per-run item cap the launcher declared, if any."""
+    if record.evaluation.curated is not None:
+        return json.loads(record.evaluation.curated.settings_json)["source_limit"]
     if record.evaluation.evalchemy is not None:
         return record.evaluation.evalchemy.max_eval_instances
     if record.evaluation.harbor is not None:
@@ -283,7 +288,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     if len(repeated) > 1:
         raise ValueError(f"{record.run_id}: cannot combine several repeated task aggregates")
     repeat_aggregation = repeated[0] if repeated else None
-    selected = PUBLICATION_METRICS.get(record.evaluation.name)
+    selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
     if selected is not None:
         # These policy metrics share their benchmark's scored-item denominator.
         # A saved numerator belongs to the evaluator's original headline metric.
@@ -291,6 +296,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     declared = all(score.declared for score in scores)
     declared_kinds = {score.kind for score in scores if score.kind is not None}
     declared_metrics = {score.protocol_metric for score in scores if score.protocol_metric is not None}
+    identities = {score.protocol_identity for score in scores}
     if repeat_aggregation is not None:
         kind = MetricKind.CONTINUOUS
     elif declared and len(declared_kinds) == 1:
@@ -338,6 +344,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
             if repeat_aggregation is not None
             else next(iter(declared_kinds)) if declared and len(declared_kinds) == 1 else None
         ),
+        protocol_identity=next(iter(identities)) if declared and len(identities) == 1 else None,
     )
 
 
@@ -354,7 +361,7 @@ def declared_metric_gap(record: EvalRunRecord) -> str | None:
         if benchmark is None or not source_metrics:
             continue
         metrics = record.canonical_metrics.get(task_key, {})
-        selected = PUBLICATION_METRICS.get(record.evaluation.name)
+        selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
         name = selected.name if selected is not None else benchmark.primary_metric
         if name not in metrics:
             return f"declared metric {name} not in canonical results"

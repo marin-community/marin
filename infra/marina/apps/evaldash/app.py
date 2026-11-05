@@ -71,6 +71,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import review, samples
+from .curated import import_curated_record
 from .db_migrations import apply_migrations
 from .metrics import (
     ALL_COHORTS,
@@ -829,7 +830,7 @@ class Ingestor:
                 try:
                     scan = await asyncio.to_thread(scan_records, prefix, self._record_cache[prefix])
                     found = [
-                        record.model_copy(update={"step_status": step_status_for_record(path)})
+                        import_curated_record(record.model_copy(update={"step_status": step_status_for_record(path)}))
                         for path, record in scan.records_by_path.items()
                     ]
                     failures = list(scan.failures)

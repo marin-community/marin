@@ -15,7 +15,7 @@ from experiments.post_training.task_curation.pipeline import source_recipe
 
 
 def test_publication_compiles_staged_fewshots_and_retains_duplicate_rows(tmp_path):
-    dataset = next(source.config for source in sources() if source.config.protocol.benchmark == "mmlu-abstract_algebra")
+    dataset = next(source.config for source in sources() if source.name == "evalchemy-mmlu-abstract_algebra")
     document = {
         "question": "Which integer is even?",
         "subject": "abstract_algebra",
