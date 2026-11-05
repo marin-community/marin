@@ -14,7 +14,9 @@ from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url
 
 from forge.effects.events import (
+    BYTES_TAG,
     EVENT_TYPES,
+    MAPPING_TAG,
     Event,
     Fingerprint,
     Resolved,
@@ -51,10 +53,10 @@ def _encode(event: Event[object]) -> dict[str, Any]:
 
 def _restore(value: Any) -> Any:
     if isinstance(value, dict):
-        if set(value) == {"__forge_mapping__"}:
-            return {key: _restore(item) for key, item in value["__forge_mapping__"].items()}
-        if set(value) == {"__forge_bytes__"}:
-            return base64.b64decode(value["__forge_bytes__"], validate=True)
+        if set(value) == {MAPPING_TAG}:
+            return {key: _restore(item) for key, item in value[MAPPING_TAG].items()}
+        if set(value) == {BYTES_TAG}:
+            return base64.b64decode(value[BYTES_TAG], validate=True)
         return {key: _restore(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_restore(item) for item in value]

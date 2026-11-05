@@ -44,3 +44,9 @@ class FlakySink(Sink):
 class Timed(Event[float]):
     timeout: float
     result_type: ClassVar[object] = float
+
+
+@dataclass(frozen=True, slots=True)
+class Choices(Event[frozenset[str]]):
+    options: frozenset[str]
+    result_type: ClassVar[object] = frozenset[str]
