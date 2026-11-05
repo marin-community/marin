@@ -61,6 +61,9 @@ Historical producers recorded either item counts or trial counts in coverage; th
 normalizes both to item counts. The third migration updates existing catalog rows and advances the
 catalog generation. It does not rewrite evaluation records in object storage. The run page and
 score tooltips show `N items × R repeats`; the raw evaluator's `accuracy_std_err` remains in Metrics.
+Trial coverage also records the actual scored-trial count when available. A partial trial count is
+projected only when it proves that every distinct item was scored; ambiguous records retain their
+source coverage so one incomplete run cannot stop catalog migration or reconciliation.
 `marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION` applies the
 pending numbered migrations from `migrations/` under a
 PostgreSQL advisory lock and rejects a database whose migration ledger is newer than the running

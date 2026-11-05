@@ -145,6 +145,56 @@ def test_catalog_projection_recovers_historical_ungraded_or_absent_coverage(tmp_
     assert headline["errors"] == {}
 
 
+def test_partial_trial_coverage_does_not_abort_catalog_projection(tmp_path):
+    source = tmp_path / "fixtures"
+    fixtures.build_fixtures(str(source))
+    record = next(record for record in list_records(str(source)) if record.evaluation.name == "aime24")
+
+    nearly_complete = record.model_copy(
+        update={
+            "coverage": {
+                "aime24": TaskCoverage(n_benchmark=300, n_attempted=300, n_scored=299, errors={"request_failed": 1})
+            }
+        }
+    )
+    projected = EvalRunRecord.model_validate(results_db.run_row(nearly_complete)["record"])
+    assert projected.coverage["aime24"].n_scored == 30
+    assert projected.repeat_aggregates["aime24"].n_scored_trials == 299
+    assert projected.repeat_aggregates["aime24"].source_coverage.errors == {"request_failed": 1}
+
+    ambiguous = record.model_copy(update={"coverage": {"aime24": TaskCoverage(n_attempted=300, n_scored=200)}})
+    unprojected = EvalRunRecord.model_validate(results_db.run_row(ambiguous)["record"])
+    assert unprojected.repeat_aggregates == {}
+    assert unprojected.coverage["aime24"].n_scored == 200
+
+
+@pytest.mark.parametrize("source_count", [30, 300])
+def test_all_unanswered_repeated_trials_remain_flagged(tmp_path, source_count):
+    source = tmp_path / "fixtures"
+    fixtures.build_fixtures(str(source))
+    record = next(record for record in list_records(str(source)) if record.evaluation.name == "aime24")
+    metrics = {**record.metrics["aime24"], "accuracy_avg": 0.0, "solved_avg": 0.0}
+    record = record.model_copy(
+        update={
+            "metrics": {"aime24": metrics},
+            "coverage": {
+                "aime24": TaskCoverage(
+                    n_benchmark=source_count,
+                    n_attempted=source_count,
+                    n_scored=source_count,
+                    n_unanswered=source_count,
+                )
+            },
+        }
+    )
+
+    projected = EvalRunRecord.model_validate(results_db.run_row(record)["record"])
+    headline = record_headline(projected)
+    assert headline is not None
+    assert projected.coverage["aime24"].n_unanswered == 30
+    assert "no_answers" in headline["flags"]
+
+
 def test_migration_rematerializes_existing_repeat_records(tmp_path):
     engine = _engine()
     results_db.metadata.create_all(engine)

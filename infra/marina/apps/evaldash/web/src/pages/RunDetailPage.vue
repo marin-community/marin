@@ -185,7 +185,13 @@ async function copyPath() {
               {{ data.headline.metric }} · {{ scoredItemsLabel(data.headline) }}
             </div>
             <div v-if="data.headline.repeat_aggregation" class="text-xs text-text-muted mt-0.5">
-              {{ data.headline.repeat_aggregation.n_trials }} scored trials · item-based standard error
+              <template v-if="data.headline.repeat_aggregation.n_scored_trials === null">
+                {{ data.headline.repeat_aggregation.n_trials }} planned trials
+              </template>
+              <template v-else>
+                {{ data.headline.repeat_aggregation.n_scored_trials }} of {{ data.headline.repeat_aggregation.n_trials }} trials scored
+              </template>
+              · item-based standard error
             </div>
             <div class="text-xs font-mono mt-0.5" :class="gradedNote.warn ? 'text-status-warning' : 'text-text-muted'">
               {{ gradedNote.label }}

@@ -504,6 +504,7 @@ class RepeatAggregate(BaseModel):
     n_items: int
     n_repeats: int
     n_trials: int
+    n_scored_trials: int | None = None
     stderr: float
     stderr_basis: str
     source_coverage: TaskCoverage | None = None
