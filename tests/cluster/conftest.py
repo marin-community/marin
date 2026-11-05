@@ -35,7 +35,7 @@ from fray.types import JobRequest, JobStatus
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.resources.state import TaskState
 from iris.test_util import wait_for_condition
 from rigging.auth import IapCredentialsUnavailable
 from rigging.filesystem.cluster_config import load_cluster_config, use_data_config
@@ -154,9 +154,9 @@ def _task_left_queue(client: IrisClient, task_id: JobName) -> bool:
             return False
         raise
     return state not in (
-        job_pb2.TASK_STATE_PENDING,
-        job_pb2.TASK_STATE_ASSIGNED,
-        job_pb2.TASK_STATE_BUILDING,
+        TaskState.PENDING,
+        TaskState.ASSIGNED,
+        TaskState.BUILDING,
     )
 
 

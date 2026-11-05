@@ -17,10 +17,18 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 from iris.client.client import IrisClient
 from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc import job_pb2
-from marin.testing.inference.snowball import RepresentativeGolden, read_representative_goldens
+from marin.inference.iris_tpu_vllm import RAY_PORTS
+from marin.testing.inference.snowball import (
+    SNOWBALL,
+    TPU_REGION,
+    TPU_TYPE,
+    RepresentativeGolden,
+    read_representative_goldens,
+)
 from marin.testing.inference.snowball_backend_parity_jobs import (
     GPU_COUNT,
     score_levanter_against_goldens,
+    score_tpu_vllm_against_goldens,
     score_vllm_against_goldens,
 )
 
@@ -60,6 +68,7 @@ def _vllm_job(
         name=f"snowball-parity-vllm-pp{pipeline_parallel_size}-{uuid.uuid4().hex[:8]}",
         entrypoint=Entrypoint.from_callable(
             score_vllm_against_goldens,
+            score_tpu_vllm_against_goldens,
             args=[goldens, attention_backend, pipeline_parallel_size],
         ),
         resources=ResourceConfig.with_gpu(
@@ -74,12 +83,39 @@ def _vllm_job(
         ),
         priority=job_pb2.PRIORITY_BAND_PRODUCTION,
         replicas=pipeline_parallel_size,
-        max_retries_failure=2,
-        max_task_failures=2,
+        max_retries_failure=0,
+        max_retries_preemption=0,
+        max_task_failures=0,
     )
 
 
-@pytest.mark.parametrize("backend", ["levanter-gpu", "vllm-gpu-pp1", "vllm-gpu-pp2"])
+def _tpu_vllm_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
+    resources = ResourceConfig.with_tpu(
+        TPU_TYPE,
+        cpu=32,
+        ram="360g",
+        disk="100g",
+        regions=[TPU_REGION],
+        zone=f"{TPU_REGION}-b",
+        preemptible=False,
+    )
+    return JobRequest(
+        name=f"snowball-parity-vllm-v4-{uuid.uuid4().hex[:8]}",
+        entrypoint=Entrypoint.from_callable(
+            score_tpu_vllm_against_goldens,
+            args=[goldens, SNOWBALL.tpu_export_uri, resources.cpu],
+        ),
+        resources=resources,
+        environment=create_environment(extras=["cpu"], env_vars={"JAX_PLATFORMS": "cpu"}),
+        ports=RAY_PORTS,
+        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        max_retries_failure=0,
+        max_retries_preemption=0,
+        max_task_failures=0,
+    )
+
+
+@pytest.mark.parametrize("backend", ["levanter-gpu", "vllm-gpu-pp1", "vllm-gpu-pp2", "vllm-tpu-v4-tp16"])
 def test_snowball_export_matches_representative_goldens(
     marin_gpu_client: IrisClient,
     backend: str,
@@ -89,6 +125,8 @@ def test_snowball_export_matches_representative_goldens(
     goldens = read_representative_goldens()
     if backend == "levanter-gpu":
         request = _levanter_job(goldens)
+    elif backend == "vllm-tpu-v4-tp16":
+        request = _tpu_vllm_job(goldens)
     else:
         pipeline_parallel_size = int(backend.removeprefix("vllm-gpu-pp"))
         request = _vllm_job(goldens, vllm_attention_backend, pipeline_parallel_size)
