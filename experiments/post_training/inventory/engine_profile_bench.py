@@ -330,6 +330,17 @@ def filler_prompt(index: int) -> str:
     return " ".join(sentences) + " Write a detailed report analyzing these observations."
 
 
+def compare(reference: list[dict], other: list[dict]) -> dict:
+    """Count prompts with identical greedy tokens and the largest logprob gap on shared positions."""
+    token_matches = sum(a["tokens"] == b["tokens"] for a, b in zip(reference, other, strict=True))
+    max_diff = 0.0
+    for a, b in zip(reference, other, strict=True):
+        for x, y in zip(a["logprobs"], b["logprobs"], strict=False):
+            if x is not None and y is not None:
+                max_diff = max(max_diff, abs(x - y))
+    return {"token_matches": token_matches, "prompts": len(reference), "max_abs_logprob_diff": max_diff}
+
+
 def parity_probe() -> dict:
     """Compare greedy outputs alone, under concurrent load, and on a repeated solo pass."""
     solo = [completion(prompt, PROBE_MAX_TOKENS) for prompt in PROBE_PROMPTS]
@@ -342,16 +353,7 @@ def parity_probe() -> dict:
             future.result()
     repeat = [completion(prompt, PROBE_MAX_TOKENS) for prompt in PROBE_PROMPTS]
 
-    def compare(reference: list[dict], other: list[dict]) -> dict:
-        token_matches = sum(a["tokens"] == b["tokens"] for a, b in zip(reference, other, strict=True))
-        max_diff = 0.0
-        for a, b in zip(reference, other, strict=True):
-            for x, y in zip(a["logprobs"], b["logprobs"], strict=False):
-                if x is not None and y is not None:
-                    max_diff = max(max_diff, abs(x - y))
-        return {"token_matches": token_matches, "prompts": len(reference), "max_abs_logprob_diff": max_diff}
-
-    return {"solo_vs_loaded": compare(solo, loaded), "solo_vs_repeat": compare(solo, repeat)}
+    return {"solo_vs_loaded": compare(solo, loaded), "solo_vs_repeat": compare(solo, repeat), "solo": solo}
 
 
 def tail(path: Path, lines: int) -> str:
@@ -388,7 +390,7 @@ def run_variant(
                     f"ttft_ms mean={fmt(row['mean_ttft_ms'], 8, 1)} e2e_s p90={fmt(row['p90_e2el_ms'], 6, 1, 1000)}"
                 )
             parity = parity_probe()
-            log(f"parity: {json.dumps(parity)}")
+            log(f"parity: {json.dumps({k: v for k, v in parity.items() if k != 'solo'})}")
         finally:
             stop_server(process)
     engine_lines = [
@@ -421,6 +423,12 @@ def print_summary(results: list[dict]) -> None:
                 f"{fmt(row['p90_e2el_ms'], 9, 1, 1000)}"
             )
         parity = result["parity"]
+        reference = results[0]["parity"]["solo"]
+        cross = compare(reference, parity["solo"])
+        print(
+            f"{result['variant']['name']:12} vs {results[0]['variant']['name']}: tokens {cross['token_matches']}/"
+            f"{cross['prompts']} maxdlp={cross['max_abs_logprob_diff']:.3e}"
+        )
         print(
             f"{result['variant']['name']:12} parity solo_vs_loaded={parity['solo_vs_loaded']['token_matches']}/"
             f"{parity['solo_vs_loaded']['prompts']} maxdlp={parity['solo_vs_loaded']['max_abs_logprob_diff']:.3e} "
