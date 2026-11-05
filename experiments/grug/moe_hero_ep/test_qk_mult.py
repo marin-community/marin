@@ -134,9 +134,32 @@ def test_log_scaling_scales_only_rows_beyond_the_floor_and_matches_a_uniform_sca
 
 def test_log_scaling_default_slope_keeps_the_factor():
     visible_keys = jnp.asarray([[1, 65536, 131072, 262144]], dtype=jnp.int32)
-    factor = model.log_scaling_factor(visible_keys, 65536, model.GrugModelConfig.log_scaling_alpha)
+    cfg = model.GrugModelConfig
+    factor = model.log_scaling_factor(visible_keys, 65536, cfg.log_scaling_alpha, cfg.log_scaling_power)
     # Literal values of 1 + 0.1 * ln(n / 65536), so a changed default cannot pass unnoticed.
     np.testing.assert_allclose(factor, [[1.0, 1.0, 1.0693147, 1.1386294]], rtol=1e-6)
+
+
+def test_log_scaling_default_power_is_bitwise_the_unpowered_factor():
+    visible_keys = jnp.arange(1, 262145, 37, dtype=jnp.int32)[None, :]
+    cfg = model.GrugModelConfig
+    factor = model.log_scaling_factor(visible_keys, 65536, cfg.log_scaling_alpha, cfg.log_scaling_power)
+    unpowered = 1.0 + 0.1 * jnp.log(jnp.maximum(visible_keys.astype(jnp.float32) / 65536, 1.0))
+    np.testing.assert_array_equal(np.asarray(factor), np.asarray(unpowered))
+
+
+def test_log_scaling_power_reaches_the_logits():
+    base = dataclasses.replace(_log_scaling_config(), log_scaling_n_floor=4)
+    tokens = _log_scaling_tokens(base)
+    default = _log_scaling_logits(base, tokens)
+    squared = _log_scaling_logits(dataclasses.replace(base, log_scaling_power=2.0), tokens)
+    unscaled = dataclasses.replace(base, log_scaling_n_floor=None)
+    # The last row sees 8 keys, twice the floor.
+    uniform = _log_scaling_logits(dataclasses.replace(unscaled, qk_mult_long_scale=(1 + 0.1 * math.log(2)) ** 2), tokens)
+
+    np.testing.assert_allclose(squared[:, :4], default[:, :4], rtol=1e-5, atol=1e-5)
+    assert np.max(np.abs(squared[:, -1] - default[:, -1])) > 1e-4
+    np.testing.assert_allclose(squared[:, -1], uniform[:, -1], rtol=1e-5, atol=1e-5)
 
 
 def test_log_scaling_alpha_reaches_the_logits():

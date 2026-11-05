@@ -271,9 +271,9 @@ only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-sca
 `launch_diagnostics.py`, the only launcher with that flag.
 `qk_mult_long_scale` multiplies `qk_mult` on the global layers only. `log_scaling_n_floor` adds a
 position-dependent factor on the global layers, in the form of Inkling's log scaling: a query that sees `n`
-keys in its document is multiplied by `1 + log_scaling_alpha * ln(max(n / log_scaling_n_floor, 1))`, so queries within
-the floor are unchanged. `log_scaling_alpha` defaults to 0.1; `launch_checkpoint_eval.py` sets it with `--log-scaling-alpha`. At the end of a 262K document, a floor of 65536 gives 1.139 and a floor of 128000
-gives 1.072 at the default slope. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
+keys in its document is multiplied by `(1 + log_scaling_alpha * ln(max(n / log_scaling_n_floor, 1))) ** log_scaling_power`, so queries within
+the floor are unchanged. `log_scaling_alpha` defaults to 0.1 and `log_scaling_power` to 1; `launch_checkpoint_eval.py` sets them with `--log-scaling-alpha` and `--log-scaling-power`. At the end of a 262K document, a floor of 65536 gives 1.139 and a floor of 128000
+gives 1.072 at the default slope and power. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
 Hero exports and upload, refuses this field instead of serving the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
 data seed, component order, and token store unchanged. The QK and capacity values need measured
