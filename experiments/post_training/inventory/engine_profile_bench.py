@@ -119,13 +119,16 @@ def stage_model(model_uri: str, stage_dir: Path) -> Path | None:
     except (subprocess.CalledProcessError, FileNotFoundError) as error:
         log(f"staging failed ({error}); serving from {model_uri} with the streaming loader")
         return None
-    shards = sorted(stage_dir.glob("*.safetensors"))
-    if len(shards) != EXPECTED_SHARDS or not (stage_dir / "config.json").exists():
-        log(f"staging incomplete: {len(shards)} shards, config present={(stage_dir / 'config.json').exists()}")
+    # fsutil may place the prefix under a nested directory; locate the export by its config.
+    configs = sorted(stage_dir.rglob("config.json"))
+    model_dir = configs[0].parent if configs else stage_dir
+    shards = sorted(model_dir.glob("*.safetensors"))
+    if len(shards) != EXPECTED_SHARDS:
+        log(f"staging incomplete under {model_dir}: {len(shards)} shards, configs={configs}")
         return None
-    staged_bytes = sum(path.stat().st_size for path in stage_dir.iterdir())
-    log(f"staged {staged_bytes / 1e9:.1f} GB in {time.time() - started:.0f}s")
-    return stage_dir
+    staged_bytes = sum(path.stat().st_size for path in model_dir.iterdir() if path.is_file())
+    log(f"staged {staged_bytes / 1e9:.1f} GB to {model_dir} in {time.time() - started:.0f}s")
+    return model_dir
 
 
 def guard_nccl_pins(venv: Path) -> Path:
