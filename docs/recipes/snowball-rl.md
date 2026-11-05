@@ -16,7 +16,7 @@ launcher interface; Snowball steps use the fixed `PRESET_REVISION` instead.
 
 Add `--run --wait` to poll every 60 seconds and print the final status and report
 table. Its exit code is 0 for PASS or completed train-long/control collection,
-1 for FAIL and 2 for INVALID. Submission without `--wait` returns 0 when accepted.
+1 for FAIL, 2 for INVALID and 3 when submission, the coordinator or missing evidence prevents a verdict. Successful ungated runs also exit 0. Submission without `--wait` returns 0 when accepted.
 The status lists the latest completed update and the W&B URL when the tracker has
 saved one. Set `WANDB_ENTITY` before submission to choose the W&B team; an unset
 value uses `marin-community`. Runs use the `marin-snowball-rl` project. The team changes neither run identity nor pinned configuration. Grafana run and preset-panel links appear when the native job start time is available; active jobs link through the present time.
@@ -114,10 +114,12 @@ uses their mean and replicate count, with the pinned controls' pooled spread and
 degrees of freedom. It applies the same guard and reporting tolerances as the
 control table. The verdict and change label continue to use the controls.
 Repeated references and aliases to the same saved run count once. Baselines must
-have matching panel task IDs and valid completed batches; a candidate cannot be
-its own baseline. Baselines change the gate identity and leave the training run
+have matching panel task IDs and valid completed batches. Baselines change the gate identity and leave the training run
 identity fixed. The CPU re-score command accepts additional baselines and recovers
-those recorded at launch.
+those recorded at launch. A baseline that becomes unavailable leaves the control verdict intact;
+`vs_baseline` is empty and `vs_baseline_reason` explains why. JSON comparison rows use
+`control`, `n_control`, `control_min` and `control_max` for the baseline statistics.
+Timer comparisons are unavailable until the test-panel control refresh records timers.
 
 The Breakdown tables show overall results, agentic results when the panel has both
 agentic and other tasks, family, AAII category,
@@ -181,6 +183,7 @@ Reports join evaluation answers to the run's task manifest by TaskSpec ID and ke
 Each update records `timing/grading/{mean,p50,p95,max}` and
 `timing/setup/{mean,p50,p95,max}` in seconds over its retained, scored TaskSpec answers.
 Setup includes task and verifier startup, package environments and verifier staging.
+Answers without a task or verifier machine contribute zero setup time.
 Grading measures wall time excluding verifier setup; both timers exclude cleanup.
 The gate reports the mean of each statistic over the measured updates, so its p95 row is
 the average of the update p95 values.
@@ -221,6 +224,7 @@ data-short. Each run forwards its required keys through Iris.
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
 | eval-uses-training-sampling | Panel answers use the training temperature because the engine applies `generator.sampling_params` to native requests. Separate evaluation sampling needs a new panel and new controls. |
+| no-async-speed-gate | Speed-long has no pinned controls; collect controls before using its throughput verdict. |
 | mismatch-is-agreement | agreement can miss shared errors; learning remains a separate check |
 
 Speed-short measures engines only. A speed claim also needs speed-medium, whose

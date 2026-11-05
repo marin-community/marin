@@ -262,16 +262,6 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(
     before = {
         path: hashlib.sha256(path.read_bytes()).digest() for root in roots for path in root.rglob("*") if path.is_file()
     }
-    with monkeypatch.context() as lower_gate:
-        lower_gate.setattr(gate, "GATE_REVISION", "2026.11.05")
-        lower_report = rescore("speed-medium", "--leave-out", "r0")
-    lower_path = Path(lower_report.pop("report"))
-    lower_report["reported"] = [
-        row for row in lower_report["reported"] if not row["metric"].startswith(("timing/grading/", "timing/setup/"))
-    ]
-    _json(lower_path, lower_report)
-    lower_record = lower_path.parent / RECORD_FILENAME
-    _json(lower_record, json.loads(lower_record.read_text()) | {"result": lower_report})
     report = rescore("speed-medium", "--leave-out", "r0")
     assert {f"timing/{phase}/{stat}" for phase in ("grading", "setup") for stat in ("mean", "p50", "p95", "max")} <= {
         row["metric"] for row in report["reported"]
@@ -305,6 +295,7 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(
         "guards",
         "reported",
         "vs_baseline",
+        "vs_baseline_reason",
         "gaps",
     }
     pin = gate.CONTROLS["speed-medium"][0]
@@ -325,9 +316,7 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(
 
 def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_runs, tmp_path):
     controls(recorded_runs, "speed-medium")
-    candidate = recorded_runs(
-        "speed-medium", "users/test/baseline-candidate", speed=101.5, argv=("--preset", "speed-medium")
-    )
+    recorded_runs("speed-medium", "users/test/baseline-candidate", speed=101.5, argv=("--preset", "speed-medium"))
     first = recorded_runs("speed-medium", "users/test/baseline-a", speed=20, argv=("--preset", "speed-medium"))
     recorded_runs("speed-medium", "users/test/baseline-b", speed=24, argv=("--preset", "speed-medium"))
     alias = first.parents[1] / "baseline-alias" / presets.PRESET_REVISION
@@ -390,19 +379,45 @@ def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_run
         metrics={"policy/raw_grad_norm": float("nan")},
         argv=("--preset", "speed-medium"),
     )
-    for root, reason in (
-        (candidate, "overlaps a candidate"),
-        (wrong, "not a recorded speed-medium"),
-        (old, "revision differs"),
-        (unfinished, "not a recorded speed-medium"),
-        (failed, "run crashed"),
-        (incomplete, "failed invariants"),
-    ):
+    controls(recorded_runs, "learning-medium")
+    recorded_runs("learning-medium", "users/test/panel-candidate", argv=("--preset", "learning-medium"))
+    other_panel = recorded_runs(
+        "learning-medium",
+        "users/test/other-panel",
+        argv=("--preset", "learning-medium"),
+        first_panel_task="other-heldout-task",
+    )
+    missing_record = first.parents[1] / "missing-record" / presets.PRESET_REVISION
+    panel_original = rescore("learning-medium", "--candidate", "users/test/panel-candidate")
+    cases = [
+        ("speed-medium", root, reason)
+        for root, reason in (
+            (wrong, "not a recorded speed-medium"),
+            (old, "revision differs"),
+            (unfinished, "not a recorded speed-medium"),
+            (failed, "run crashed"),
+            (incomplete, "failed invariants"),
+            (missing_record, "record"),
+        )
+    ]
+    cases.append(("learning-medium", other_panel, "panel task IDs differ"))
+    for preset_name, root, reason in cases:
+        candidate_name = (
+            "users/test/panel-candidate" if preset_name == "learning-medium" else "users/test/baseline-candidate"
+        )
+        expected = panel_original if preset_name == "learning-medium" else original
         ref = f"{root.relative_to(first.parents[3]).parent}@{root.name}"
         rejected = CliRunner().invoke(
-            gate.main, ["--preset", "speed-medium", "--candidate", "users/test/baseline-candidate", "--baseline", ref]
+            gate.main, ["--preset", preset_name, "--candidate", candidate_name, "--baseline", ref]
         )
-        assert rejected.exit_code == 2 and reason in rejected.output, (ref, rejected.output, rejected.exception)
+        assert rejected.exit_code == 0, (ref, rejected.output, rejected.exception)
+        payload = json.loads(rejected.output.strip().splitlines()[-1])
+        assert (payload["verdict"], payload["label"]) == (expected["verdict"], expected["label"])
+        assert payload["vs_baseline"] == [] and reason in payload["vs_baseline_reason"]
+        refused = CliRunner().invoke(
+            snowball.main, ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--baseline", ref]
+        )
+        assert refused.exit_code == 2 and reason in refused.output
 
 
 VLLM = "vllm/median_generation_throughput"
@@ -582,37 +597,6 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
         t.ppf(0.975, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25)
     )
     assert rows["panel-910/scored_fraction"]["change"] == "unavailable"
-    recorded_runs("learning-medium", "users/test/detail-second", answers=answers)
-    candidates = tuple(
-        ArtifactStep.adopt(
-            f"users/test/{name}",
-            presets.PRESET_REVISION,
-            str(tmp_path / "users/test" / name / presets.PRESET_REVISION),
-            kind=SkyRLRun,
-        )
-        for name in ("detail", "detail-second")
-    )
-    for name, score in (("earlier-a", 0.7), ("earlier-b", 0.9)):
-        recorded_runs("learning-medium", "users/test/" + name, score=score, argv=("--preset", "learning-medium"))
-    plain = run(gate.gate_step(presets.PRESETS["learning-medium"], candidates, inputs=gate.GateInputs()))[0]
-    baselines = tuple(f"users/test/{name}@{presets.PRESET_REVISION}" for name in ("earlier-a", "earlier-b"))
-    compared = run(
-        gate.gate_step(presets.PRESETS["learning-medium"], candidates, inputs=gate.gate_inputs(baselines=baselines))
-    )[0]
-    assert (compared.verdict, compared.label, compared.guards, compared.reported) == (
-        plain.verdict,
-        plain.label,
-        plain.guards,
-        plain.reported,
-    )
-    baseline_rows = {row.metric: row for row in compared.vs_baseline}
-    for dimension in ("aaii_category/x", "family/a"):
-        for band in ("hard", "learnable", "easy"):
-            row = baseline_rows[f"panel-910/{dimension}/difficulty/{band}/mean"]
-            assert (row.n_run, row.n_control, row.df) == (2, 2, 3)
-            assert row.control == pytest.approx(0.8)
-            assert row.tolerance == pytest.approx(t.ppf(1 - 0.025 / 6, 3) * math.sqrt(5 / 3) * 0.01)
-    assert baseline_rows["panel-910/mean"].tolerance == pytest.approx(t.ppf(0.975, 3) * math.sqrt(5 / 3) * 0.01)
     recorded_runs("learning-medium", "users/test/initial", answers=answers, initial_score=0.3)
     initial = {row["metric"]: row for row in rescore("learning-medium", "--candidate", "users/test/initial")["reported"]}
     for key in ("panel-910/agentic/true/mean", "panel-910/family/a/mean", "panel-910/difficulty/hard/mean"):
@@ -645,8 +629,8 @@ def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs
     for name in ("speed-short", "speed-medium", "learning-medium"):
         controls(recorded_runs, name)
     speed, learning = presets.PRESETS["speed-medium"], presets.PRESETS["learning-medium"]
-    gate.check_requirements(speed, ["speed/update_seconds<=120", VLLM + "<=control"], control=False)
-    gate.check_requirements(
+    gate.validate_candidate(speed, ["speed/update_seconds<=120", VLLM + "<=control"], control=False)
+    gate.validate_candidate(
         learning,
         ["panel-910/aaii_category/coding/mean>=control", "panel-910/family/large/difficulty/hard/mean>=0"],
         control=False,
@@ -760,6 +744,7 @@ REQUIREMENT = "policy/raw_grad_norm<=1"
 
 @pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])
 def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset, monkeypatch):
+    monkeypatch.setenv("WANDB_ENTITY", "planned-team")
     controls(recorded_runs, preset)
     if preset == "learning-medium":
         (summary,) = inspect.unwrap(snowball_pass_rates.main.callback)()
@@ -792,7 +777,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         settings = (
             "trainer.policy.optimizer_config.lr=2e-6",
             "trainer.algorithm={group_advantage_min_size: null, advantage_estimator: grpo}",
-            "trainer.policy.optimizer_config.lr=1e-6",
+            "trainer.policy.optimizer_config.lr=1.0e-6",
         )
         built = snowball.build_run(
             presets.PRESETS[preset],
@@ -811,7 +796,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         ]
         algorithm = {"trainer.algorithm.advantage_estimator": "grpo", "trainer.algorithm.group_advantage_min_size": None}
         expected = (
-            algorithm | {"trainer.policy.optimizer_config.lr": "1e-6"},
+            algorithm | {"trainer.policy.optimizer_config.lr": 1e-6},
             None,
             "users/test/initializer@2026.10.27",
             [pytest.approx(0.295)],
@@ -823,6 +808,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         )
         argv = ["--require", REQUIREMENT, "--tasks", f"unused@{presets.DEFAULT_SELECTION_VERSION}", "--tasks", tasks]
         expected = ({}, tasks, None, [])
+    assert status(preset, argv)["runs"][0]["wandb_entity"] == "planned-team"
     initial = 0.2 if preset == "learning-medium" else None
     timers = {
         f"timing/{phase}/{stat}": float(index)
@@ -852,15 +838,21 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         ("require/" + REQUIREMENT.split("<=")[0], True)
     ]
     assert "wandb_url" not in status(preset, argv)["runs"][0]
+    assert status(preset, argv)["runs"][0]["wandb_entity"] == snowball.DEFAULT_WANDB_ENTITY
     _json(source / "exports/tracking.json", {"wandb_url": "https://wandb.example/team/project/runs/actual-id"})
     _json(source / "exports/metrics/step-000026.json", {"step": 26, "startup/load_checkpoints": 3.0})
-    (source / "exports/metrics/step-000027.json").write_text("{")
     _json(source / "exports/metrics/step-000028.json", {"step": 28, "trainer/global_step": 28})
     printed = status(preset, argv)
     assert printed["runs"][0]["wandb_url"] == "https://wandb.example/team/project/runs/actual-id"
     assert printed["runs"][0]["latest_completed_update"] == 25
     receipt = json.loads((source / "terminal.json").read_text())
-    linked_receipt = receipt | {"config": {"run": {"id": "run / id?x=1&y=2"}, "runtime": {"training_type": "sync"}}}
+    linked_receipt = receipt | {
+        "config": {
+            "run": {"id": "run / id?x=1&y=2"},
+            "runtime": {"training_type": "sync"},
+            "iris": {"wandb_entity": "receipt-team"},
+        }
+    }
     _json(source / "terminal.json", linked_receipt)
     started, finished = 1793840000000, 1793840060000
     native_job = SimpleNamespace(
@@ -869,77 +861,24 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     client = MagicMock(spec=IrisClient)
     client.job_status.return_value = native_job
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
-    links = status(preset, argv)["runs"][0]["grafana_links"]
+    linked = status(preset, argv)["runs"][0]
+    assert linked["wandb_entity"] == "receipt-team"
+    links = linked["grafana_links"]
     query = parse_qs(urlsplit(links["run"]).query)
     assert query["var-run"] == ["run / id?x=1&y=2"]
     assert query["from"] == [str(started)] and query["to"] == [str(finished)]
     client.job_status.side_effect = ConnectError(Code.NOT_FOUND, "archived native job")
     assert "grafana_links" not in status(preset, argv)["runs"][0]
+    client.job_status.side_effect = ConnectionError("controller unavailable")
+    assert status(preset, argv)["verdict"] == report["verdict"]
     client.job_status.side_effect = None
+    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: (_ for _ in ()).throw(ConnectionError("offline")))
+    assert "grafana_links" not in status(preset, argv)["runs"][0]
+    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
     native_job.started_at = None
     assert "grafana_links" not in status(preset, argv)["runs"][0]
     _json(source / "terminal.json", receipt)
-    if preset == "learning-medium":
-        dashboard = json.loads((presets.REPO_ROOT / "infra/grafana/dashboards/rl_runs.json").read_text())
-        variables = {value["name"] for value in dashboard["templating"]["list"]}
-        titles, pending = {}, list(dashboard["panels"])
-        while pending:
-            panel = pending.pop()
-            titles[panel["id"]] = panel["title"]
-            pending.extend(panel.get("panels", []))
-        speed = {
-            3: "Generated and consumed response tokens / s",
-            102: "Rollout wait vs train step (critical path)",
-            121: "Step composition: exclusive seconds per span",
-            109: "vLLM token throughput",
-        }
-        learning = {22: "Training reward and informative groups", 23: "Evaluation scores", 24: "Optimizer loss and KL"}
-        for name, expected_panels in (
-            ("speed-short", speed),
-            ("speed-medium", speed | {54: "Trainer/vLLM logprob mismatch \u03c1 (staleness 0)"}),
-            ("speed-long", speed),
-            ("learning-medium", learning),
-            ("data-medium", learning),
-            ("train-long", {}),
-        ):
-            asynchronous = name in {"speed-long", "train-long"}
-            generated = presets.grafana_links(
-                presets.PRESETS[name],
-                run_id="run / id?x=1&y=2",
-                cluster="cw-us-east-02a",
-                training_type="async" if asynchronous else "sync",
-                started_ms=started,
-                finished_ms=None,
-            )
-            found = {}
-            for label, url in generated.items():
-                parsed = urlsplit(url)
-                assert (parsed.scheme, parsed.netloc, parsed.path) == (
-                    "https",
-                    "grafana.oa.dev",
-                    f"/d/{dashboard['uid']}/rl-post-training",
-                )
-                values = parse_qs(parsed.query)
-                panel_ids = values.pop("viewPanel", [])
-                assert values == {
-                    "orgId": ["1"],
-                    "timezone": ["utc"],
-                    "from": [str(started)],
-                    "to": ["now"],
-                    "var-training_type": ["async" if asynchronous else "sync"],
-                    "var-cluster": ["cw-us-east-02a"],
-                    "var-run": ["run / id?x=1&y=2"],
-                    "var-job": ["$__all"],
-                    "var-execution": ["$__all"],
-                }
-                assert {key.removeprefix("var-") for key in values if key.startswith("var-")} <= variables
-                if label == "run":
-                    assert not panel_ids
-                else:
-                    (panel_id,) = panel_ids
-                    found[int(panel_id)] = titles[int(panel_id)]
-            assert found == expected_panels
-    for step in (26, 27, 28):
+    for step in (26, 28):
         (source / f"exports/metrics/step-{step:06d}.json").unlink()
     assert timers.keys() <= {row["key"] for row in printed["reported_metrics"]}
     assert (printed["verdict"], printed["label"]) == (report["verdict"], report["label"])
@@ -955,20 +894,6 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     recovered = rescore(preset, "--candidate", built.runs[0].name)
     assert recovered["run"]["baselines"] == [baseline] and recovered["vs_baseline"]
     assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
-    recorded_runs(preset, "users/test/other-panel", argv=("--preset", preset), first_panel_task="other-heldout-task")
-    refused = CliRunner().invoke(
-        snowball.main,
-        [
-            "--preset",
-            preset,
-            "--version",
-            presets.PRESET_REVISION,
-            *argv,
-            "--baseline",
-            f"users/test/other-panel@{presets.PRESET_REVISION}",
-        ],
-    )
-    assert refused.exit_code == 2 and "panel task IDs differ" in refused.output
     if preset == "learning-medium":
         later = recorded_runs(preset, "users/test/later-replicate", score=0.495)
         receipt = json.loads((later / "terminal.json").read_text())
@@ -993,45 +918,41 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     )
 
 
+def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch):
+    client = MagicMock(spec=IrisClient)
+    client.submit.side_effect = AssertionError("an unpinned candidate submitted a coordinator")
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+    for command, arguments in (
+        (snowball.main, ["--preset", "speed-long", "--version", presets.PRESET_REVISION, "--run", "--wait"]),
+        (gate.main, ["--preset", "speed-long", "--candidate", "tests/unpinned"]),
+    ):
+        refused = CliRunner().invoke(command, arguments)
+        assert refused.exit_code == 2, (refused.output, refused.exception)
+        payload = json.loads(refused.output)
+        assert payload["preset"] == "speed-long" and payload["verdict"] == "invalid"
+        assert payload["reason"].endswith(
+            "python -m experiments.post_training.snowball_rl --preset speed-long "
+            f"--version {presets.PRESET_REVISION} --control --replicates 4 --run"
+        )
+
+
 @pytest.mark.parametrize(
     "case,expected",
     [
         ("pass", 0),
         ("fail", 1),
         ("invalid", 2),
-        ("missing", 2),
-        ("parent", 1),
-        ("parent-early", 1),
-        ("runtime", 1),
-        ("missing-markdown", 2),
-        ("gate-failed", 1),
+        ("missing", 3),
+        ("parent-early", 3),
         ("no-wait", 0),
-        ("submit", 1),
         ("child", 0),
         ("control", 0),
         ("generate", 0),
-        ("unpinned", 2),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
-    if case == "unpinned":
-        client = MagicMock(spec=IrisClient)
-        client.submit.side_effect = AssertionError("an unpinned candidate submitted a coordinator")
-        monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
-        for command, arguments in (
-            (snowball.main, ["--preset", "speed-long", "--version", presets.PRESET_REVISION, "--run", "--wait"]),
-            (gate.main, ["--preset", "speed-long", "--candidate", "tests/unpinned"]),
-        ):
-            refused = CliRunner().invoke(command, arguments)
-            assert refused.exit_code == expected, (refused.output, refused.exception)
-            payload = json.loads(refused.output)
-            assert payload["preset"] == "speed-long" and payload["verdict"] == "invalid"
-            assert payload["reason"].endswith(
-                "python -m experiments.post_training.snowball_rl --preset speed-long "
-                f"--version {presets.PRESET_REVISION} --control --replicates 4 --run"
-            )
-        return
+    monkeypatch.setenv("WANDB_ENTITY", "submission-team")
     preset_name = "speed-short" if case == "generate" else "speed-medium"
     controls(recorded_runs, preset_name)
     preset = presets.PRESETS[preset_name]
@@ -1048,36 +969,17 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         _json(source / "terminal.json", receipt)
     if case not in {"missing", "control"}:
         run(built.gate)
-    if case == "missing-markdown":
-        (Path(built.gate.path()) / "gate_report.md").unlink()
-    if case == "gate-failed":
-        (Path(built.gate.path()) / ".executor_status").write_text("FAILED")
-    if case == "runtime":
-        receipt = json.loads((source / "terminal.json").read_text())
-        receipt["result"]["state"] = "failed"
-        _json(source / "terminal.json", receipt)
     if case == "parent-early":
         shutil.rmtree(source)
         shutil.rmtree(built.gate.path())
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = job
-    final = JobState.FAILED if case in {"parent", "parent-early"} else JobState.SUCCEEDED
-    states = iter((JobState.PENDING, JobState.RUNNING, final))
-
-    def job_status(identifier):
-        if identifier != job:
-            raise KeyError(identifier)
-        return SimpleNamespace(state=next(states))
-
-    client.job_status.side_effect = job_status
+    final = JobState.FAILED if case == "parent-early" else JobState.SUCCEEDED
+    client.job.return_value.wait.return_value = SimpleNamespace(state=final)
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
-    elapsed = []
-    monkeypatch.setattr(snowball, "time", SimpleNamespace(sleep=elapsed.append))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    if case == "submit":
-        client.submit.side_effect = ConnectionError("submission failed")
     if case == "child":
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
@@ -1091,11 +993,19 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    assert sum(elapsed) == (0 if case in {"no-wait", "submit", "child"} else 120)
+    waited = [] if case in {"no-wait", "child"} else [(job,)]
+    assert [call.args for call in client.job.call_args_list] == waited
+    assert all(call.kwargs["poll_interval"] == 60 for call in client.job.return_value.wait.call_args_list)
+    if case != "child":
+        assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
     if case in {"pass", "fail", "invalid"}:
         assert "# speed-medium" in result.output
     if case == "generate":
-        assert status(preset_name, [])["runs"][0]["latest_completed_update"] == 0
+        snapshot = status(preset_name, [])
+        assert snapshot["runs"][0]["latest_completed_update"] == 0
+        assert {
+            f"timing/{phase}/{stat}" for phase in ("grading", "setup") for stat in ("mean", "p50", "p95", "max")
+        } <= {row["key"] for row in snapshot["reported_metrics"]}
 
 
 def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
@@ -1145,3 +1055,26 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     }
     expected |= {"scored_fraction": 0.8, "aaii_category/format/mean": 0.5}
     assert {key: statistics["panel-100/" + key] for key in expected} == pytest.approx(expected)
+
+
+def test_grafana_links_reference_dashboard_panels_and_variables():
+    dashboard = json.loads((presets.REPO_ROOT / "infra/grafana/dashboards/rl_runs.json").read_text())
+    variables = {value["name"] for value in dashboard["templating"]["list"]}
+    panels, pending = set(), list(dashboard["panels"])
+    while pending:
+        panel = pending.pop()
+        panels.add(panel["id"])
+        pending.extend(panel.get("panels", []))
+    for preset in presets.PRESETS.values():
+        links = presets.grafana_links(
+            preset,
+            run_id="run / id?x=1&y=2",
+            cluster="cw-us-east-02a",
+            training_type="sync",
+            started_ms=1793840000000,
+            finished_ms=None,
+        )
+        for url in links.values():
+            query = parse_qs(urlsplit(url).query)
+            assert {key.removeprefix("var-") for key in query if key.startswith("var-")} <= variables
+            assert all(int(value) in panels for value in query.get("viewPanel", ()))

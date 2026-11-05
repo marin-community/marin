@@ -56,6 +56,7 @@ from experiments.post_training.task_curation.inventory import (
 REPO_ROOT = find_project_root(Path(__file__))
 PRESET_REVISION = "2026.10.27"
 RUN_PREFIX = "checkpoints/snowball-rl"
+GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 TRAIN_LONG_RUN = f"{RUN_PREFIX}/train-long-"
 # Fraction of a native panel that must be scored before its scores count.
 MINIMUM_PANEL_COVERAGE = 0.99
@@ -465,7 +466,7 @@ PRESETS = MappingProxyType(
                 guards=(Metric("generate/tokens_per_second_per_gpu", True),),
                 reported=(
                     *_TIMER_REPORTS,
-                    Metric("generate/wall_seconds", False),
+                    Metric(GENERATE_WALL_SECONDS_METRIC, False),
                     Metric("generate/response_tokens", True),
                     Metric("generate/vllm/latency_ttft_mean", False),
                     Metric("generate/vllm/peak_gpu_cache_usage_perc", False),
@@ -589,6 +590,10 @@ def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate
     if preset.focus != Focus.TRAIN:
         name += f"-r{replicate}"
     return user_owned_name(name)
+
+
+def gated(preset: Preset) -> bool:
+    return preset.name in PRESETS and preset.focus != Focus.TRAIN
 
 
 def run_tree_hash(name: str) -> str:
@@ -750,12 +755,10 @@ def grafana_links(
     run_id: str,
     cluster: str,
     training_type: Literal["sync", "async"],
-    started_ms: int | None,
+    started_ms: int,
     finished_ms: int | None,
 ) -> dict[str, str]:
-    """Build dashboard and preset-panel links for a native run with a known start time."""
-    if started_ms is None:
-        return {}
+    """Build dashboard and preset-panel links for a native run; an unfinished run links through now."""
     query = urlencode(
         {
             "orgId": 1,
@@ -892,8 +895,8 @@ def run_command(*, help_text: str | None = None):
                 "evaluations",
                 multiple=True,
                 type=click.Choice(sorted(EVALUATIONS)),
-                help="Add an evaluation to train-long, which already runs panel-100 before training and every 10 "
-                "updates. Repeatable.",
+                help="Train-long evaluation requests; repeatable. Panel-100 runs before training and every 10 updates. "
+                "A second native panel is refused.",
             ),
             click.option(
                 "--replicates",

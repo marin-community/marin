@@ -33,7 +33,6 @@ _COORDINATOR_CPU = 4
 _COORDINATOR_MEMORY = "16GB"
 _COORDINATOR_DISK = "64GB"
 _COORDINATOR_ENV_VARS = (
-    "WANDB_ENTITY",
     "DAYTONA_API_KEY",
     "DAYTONA_RL_API_KEY",
     "DAYTONA_EVAL_API_KEY",
@@ -102,9 +101,10 @@ def _coordinator_request(
     max_concurrent: int,
     workspace: Path,
     env_vars: Mapping[str, str],
+    extra_env_vars: tuple[str, ...] = (),
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
-    selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
+    selected_env = {name: env_vars[name] for name in (*_COORDINATOR_ENV_VARS, *extra_env_vars) if name in env_vars}
     for execution in executions:
         for name in execution.required_env_vars:
             selected_env[name] = env_vars[name]
@@ -134,7 +134,12 @@ def _coordinator_request(
 
 
 def submit_or_run(
-    module_name: str, handles: list[ArtifactStep], max_concurrent: int, coordinator_env: Mapping[str, str]
+    module_name: str,
+    handles: list[ArtifactStep],
+    max_concurrent: int,
+    coordinator_env: Mapping[str, str],
+    *,
+    extra_env_vars: tuple[str, ...] = (),
 ) -> JobName | None:
     """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
@@ -149,6 +154,7 @@ def submit_or_run(
         max_concurrent,
         workspace,
         coordinator_env,
+        extra_env_vars,
     )
     with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
         handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)

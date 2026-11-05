@@ -242,7 +242,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     assert run(long).fingerprint() == original.fingerprint()
     with monkeypatch.context() as preflight:
         # The requirement preflight reads control r0; test_snowball_rl_gate.py covers it with recorded controls.
-        preflight.setattr(snowball.snowball_rl_gate, "check_requirements", lambda *args, **kwargs: None)
+        preflight.setattr(snowball.snowball_rl_gate, "validate_candidate", lambda *args, **kwargs: None)
         first = snowball.build_run(learning, requirements=("panel-910/mean>=0",))
         second = snowball.build_run(learning, requirements=("panel-910/mean>=0.1",))
     assert first.runs[0].name == second.runs[0].name == name()

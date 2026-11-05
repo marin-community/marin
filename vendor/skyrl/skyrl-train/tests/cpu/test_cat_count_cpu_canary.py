@@ -256,9 +256,9 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     ]
     sampled_rows = [
         json.loads(line)
-        for line in (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl")
-        .read_text()
-        .splitlines()
+        for line in (
+            (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl").read_text().splitlines()
+        )
     ]
     assert len(sampled_rows) == 8 * len(greedy_rows)
     for prefix, rows in (("eval/train", greedy_rows), ("eval/sampled/train", sampled_rows)):
@@ -320,12 +320,25 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         cfg.trainer.micro_train_batch_size_per_gpu = 1
         cfg.trainer.micro_forward_batch_size_per_gpu = 1
         cfg.generator.n_samples_per_prompt = 2
-        for filename in (cfg.data.train_data[0], cfg.data.val_data[0]):
+        paths = []
+        environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
+        for filename in (cfg.data.train_data[0], *cfg.data.val_data):
             path = Path(filename)
-            row = json.loads(path.read_text().splitlines()[0])
-            row["prompt"][0]["content"] = "cat " * 200
-            with path.open("a") as handle:
-                handle.write(json.dumps(row) + "\n")
+            tasks = []
+            for index, line in enumerate(path.read_text().splitlines()):
+                row = json.loads(line)
+                n = row["extra_info"]["n"]
+                lowered = source_row_task(row, index, source_name=path.stem, environment_configs=environment_configs)
+                if index % 5 == 0:
+                    task = lowered.task.model_copy(
+                        update={"grader": verifyit_package(ExactSpec(expected=(" ".join([TARGET_WORD] * n),))).grader}
+                    )
+                    lowered = lowered_task(task, max_turns=1)
+                tasks.append(lowered)
+            tasks.append(lowered_task(text_task("overlong", prompt="cat " * 200), max_turns=1))
+            paths.append(str(path.with_suffix(".parquet")))
+            write_tasks(Path(paths[-1]), tasks)
+        cfg.data.train_data, cfg.data.val_data = paths[:1], paths[1:]
         records = run_process(forkserver_context, root, cfg)
         training = [row for row in records if "policy/raw_grad_norm" in row]
         assert [row["step"] for row in training] == list(range(1, steps + 1))
@@ -336,41 +349,17 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
         assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
-
-
-@pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
-def test_task_grading_timers_reach_training_and_evaluation(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context
-):
-    root = tmp_path / "task-timers"
-    cfg = cat_count_config(root, cat_count_policy, steps=2)
-    cfg.trainer.epochs = 2
-    tasks = [
-        lowered_task(
-            text_task(str(n), prompt=PROMPT.format(N=n), source="task-timers").model_copy(
-                update={"grader": verifyit_package(ExactSpec(expected=(" ".join([TARGET_WORD] * n),))).grader}
-            ),
-            max_turns=1,
-        )
-        for n in range(1, 9)
-    ]
-    path = root / "data/tasks.parquet"
-    write_tasks(path, tasks)
-    cfg.data.train_data = [str(path)]
-    cfg.data.val_data = [str(path)]
-    records = run_process(forkserver_context, root, cfg)
-    training = [row for row in records if "policy/raw_grad_norm" in row]
-    evaluations = [row for row in records if "eval/all/timing/grading/mean" in row]
-    assert [int(row["step"]) for row in training] == [1, 2]
-    assert [int(row["step"]) for row in evaluations] == [0, 2]
-    for rows, prefix in ((training, ""), (evaluations, "eval/all/")):
-        for row in rows:
-            for raw in TASK_TIMING_KEYS:
-                values = [row[f"{prefix}{raw}/{stat}"] for stat in ("mean", "p50", "p95", "max")]
-                assert all(math.isfinite(value) and value >= 0 for value in values)
-                assert values[1] <= values[2] <= values[3]
-            assert row[f"{prefix}timing/grading/mean"] > 0
-            assert row[f"{prefix}timing/setup/max"] == 0
+        evaluations = [row for row in records if "eval/all/timing/grading/mean" in row]
+        timed_training = [row for row in training if "timing/grading/mean" in row]
+        assert evaluations and timed_training
+        for rows, prefix in ((timed_training, ""), (evaluations, "eval/all/")):
+            for row in rows:
+                for raw in TASK_TIMING_KEYS:
+                    values = [row[f"{prefix}{raw}/{stat}"] for stat in ("mean", "p50", "p95", "max")]
+                    assert all(math.isfinite(value) and value >= 0 for value in values)
+                    assert values[1] <= values[2] <= values[3]
+                assert row[f"{prefix}timing/grading/mean"] > 0
+                assert row[f"{prefix}timing/setup/max"] == 0
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
