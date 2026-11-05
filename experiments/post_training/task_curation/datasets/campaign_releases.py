@@ -142,7 +142,8 @@ def sources() -> list[RlDataSource]:
                     "1,683 setup-branch parents from qualified repositories, retained as 1,699 staged "
                     "variants. Stage 1 tests repository and workspace readiness, not issue repair. The "
                     "verifier inspects actual checkout state and rejects upstream defaults and wrong "
-                    "branches. The public release is screened to agent-visible instructions; execution and verifier materials remain host-local. "
+                    "branches. The public release is screened to agent-visible instructions; execution "
+                    "and verifier materials remain host-local. "
                     + QUALIFICATION_IS_NOT_ADMISSION
                     + " "
                     + STAGE3_IMAGE_CAVEAT
@@ -169,7 +170,8 @@ def sources() -> list[RlDataSource]:
                     "762 train / 16 validation. Complete handoffs start from repaired code that passed "
                     "the original required tests; partials start from partially repaired code with a "
                     "witnessed remaining failure that the known repair clears. Stage 3 was not used in "
-                    "run 2026.10.19.57. The public release is screened to agent-visible instructions; execution and verifier materials remain host-local. "
+                    "run 2026.10.19.57. The public release is screened to agent-visible instructions; "
+                    "execution and verifier materials remain host-local. "
                     + QUALIFICATION_IS_NOT_ADMISSION
                     + " "
                     + STAGE3_IMAGE_CAVEAT
