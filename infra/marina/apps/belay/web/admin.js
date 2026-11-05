@@ -214,27 +214,33 @@ function declineWithReason(run) {
   return el('span', { class: 'grant' }, reason, button)
 }
 
-// A primary action with its grant fields (nodes, study hours, priority): the action gets those that are filled.
-function approveWithGrant(label, run) {
+// A primary action with its grant fields (nodes, study hours, priority) and the approver's instructions for the
+// session: the action gets those that are filled. The session follows the instructions as the maintainer note.
+function approveWithGrant(label, run, suggested = '') {
   const nodes = nodesInput()
   const hours = hoursInput()
   const priority = priorityInput()
-  const grant = () => grantOf(nodes, hours, priority)
+  const note = el('textarea', {
+    class: 'instructions',
+    rows: '2',
+    placeholder: 'instructions for the session (optional): track, settings, what to compare',
+    'aria-label': 'Instructions for the session',
+  })
+  note.value = suggested
+  const decision = () => ({ ...grantOf(nodes, hours, priority), ...(note.value.trim() ? { note: note.value.trim() } : {}) })
   return el(
     'span',
     { class: 'grant' },
+    note,
     nodes,
     hours,
     priority,
-    el('button', { type: 'button', class: 'btn primary', onclick: () => run(grant()) }, label),
+    el('button', { type: 'button', class: 'btn primary', onclick: () => run(decision()) }, label),
   )
 }
 
 function requeueWithGrant(idea, suggested) {
-  return approveWithGrant('Re-queue', (grant) => {
-    const note = window.prompt('Note for the session (for example "retest on current recipe")', suggested)
-    if (note !== null) act(`ideas/${idea.id}/requeue`, { note, ...grant }, 'Re-queued')
-  })
+  return approveWithGrant('Re-queue', (grant) => act(`ideas/${idea.id}/requeue`, { note: '', ...grant }, 'Re-queued'), suggested)
 }
 
 // The newest #9514 comments, read from GitHub's public API in this browser (no server keys), with the visible text

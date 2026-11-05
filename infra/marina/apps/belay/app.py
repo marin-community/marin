@@ -277,6 +277,8 @@ class MaintainerNote(BaseModel):
 
 
 class Approval(BaseModel):
+    note: str = ""
+    """The approver's instructions on how to run the idea; the session follows them as the maintainer note."""
     nodes: int | None = Field(default=None, ge=1)
     """A node grant: this idea's launches may hold up to this many nodes, past the global cap."""
     hours: float | None = Field(default=None, gt=0)
@@ -303,6 +305,8 @@ class IntakeDecline(IntakeReview):
 
 
 class IntakeApproval(IntakeReview):
+    note: str = ""
+    """The approver's instructions on how to run the idea; the session follows them as the maintainer note."""
     nodes: int | None = Field(default=None, ge=1)
     hours: float | None = Field(default=None, gt=0)
     """A study's budget hours (custom track): with the node grant, the most its runs may use."""
@@ -513,6 +517,12 @@ PRIORITY_ASSIGNMENT = (
 )
 
 
+def maintainer_note(login: str, note: str) -> str | None:
+    """A maintainer's instructions as stored on the idea; None when there are none. A session prints a note with this
+    ``Maintainer`` prefix next to the idea and follows it (the Belay tooling on the recipe branch)."""
+    return f"Maintainer {login}: {note.strip()}" if note.strip() else None
+
+
 def approve_idea(
     conn: Connection,
     idea_id: int,
@@ -520,8 +530,10 @@ def approve_idea(
     node_grant: int | None = None,
     budget_hours: float | None = None,
     priority: PriorityBand | None = None,
+    note: str = "",
 ) -> bool:
-    """Approve an idea and queue its one ``approved`` event; False unless it is pending.
+    """Approve an idea and queue its one ``approved`` event; False unless it is pending. ``note`` is the approver's
+    instructions, stored as the maintainer note a session follows.
 
     Approving an idea that already has its ``approved`` event queues nothing more, so it runs once. A pending
     idea's text freezes here: from now on sessions get the text as it was approved.
@@ -535,15 +547,24 @@ def approve_idea(
     conn.execute(
         text(
             "UPDATE ideas SET state = 'approved', decided_by = :by, decided_at = now(), "
+            "note = COALESCE(CAST(:note AS TEXT), note), "
             "node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), "
             "budget_hours = COALESCE(CAST(:hours AS DOUBLE PRECISION), budget_hours), "
             f"{PRIORITY_ASSIGNMENT}, updated_at = now() WHERE id = :id"
         ),
-        {"by": caller, "grant": node_grant, "hours": budget_hours, "priority": priority, "id": idea_id},
+        {
+            "by": caller,
+            "note": maintainer_note(caller, note),
+            "grant": node_grant,
+            "hours": budget_hours,
+            "priority": priority,
+            "id": idea_id,
+        },
     )
     grant = f" with up to {node_grant} nodes" if node_grant else ""
     grant += f" for {budget_hours:g} h" if budget_hours else ""
     grant += f" at {priority} priority" if priority else ""
+    grant += " with instructions" if note.strip() else ""
     _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} approved “{_label(idea)}”{grant}"))
     queued = _rows(conn, "SELECT id FROM events WHERE kind = 'approved' AND ref = :ref", ref=str(idea_id))
     if not queued:
@@ -818,9 +839,14 @@ def _record_reviewed_comment(conn: Connection, comment: IntakeReview) -> dict[st
 
 def approve_intake_comment(conn: Connection, comment: IntakeApproval, login: str) -> dict[str, Any]:
     """Approve a #9514 comment straight from the admin page: record it as an intake idea and queue it, unless the
-    registry already holds it. Its visible text, as stored here, is the only text a session reads."""
+    registry already holds it. A session reads its visible text, as stored here, plus the approver's instructions."""
     idea = _record_reviewed_comment(conn, comment)
-    grants = {"node_grant": comment.nodes, "budget_hours": comment.hours, "priority": comment.priority}
+    grants = {
+        "node_grant": comment.nodes,
+        "budget_hours": comment.hours,
+        "priority": comment.priority,
+        "note": comment.note,
+    }
     if not approve_idea(conn, idea["id"], login, **grants):
         raise HTTPException(409, f"idea {idea['id']} is already {idea['state']}")
     return {"state": IdeaState.APPROVED.value, "idea_id": idea["id"]}
@@ -856,7 +882,7 @@ def requeue_idea(
             f"{PRIORITY_ASSIGNMENT}, updated_at = now() WHERE id = :id"
         ),
         {
-            "n": f"Maintainer {login}: {note}" if note else None,
+            "n": maintainer_note(login, note),
             "grant": nodes,
             "hours": hours,
             "priority": priority,
@@ -1232,9 +1258,12 @@ def create_api(services: Services) -> RegisteredApi:
         grant = approval.nodes if approval is not None else None
         hours = approval.hours if approval is not None else None
         priority = approval.priority if approval is not None else None
+        note = approval.note if approval is not None else ""
         with engine.begin() as conn:
             login = approver_login(_settings(conn), caller)
-            if not approve_idea(conn, idea_id, login, node_grant=grant, budget_hours=hours, priority=priority):
+            if not approve_idea(
+                conn, idea_id, login, node_grant=grant, budget_hours=hours, priority=priority, note=note
+            ):
                 raise HTTPException(409, f"idea {idea_id} is not waiting for approval")
         return {"state": IdeaState.APPROVED.value}
 
