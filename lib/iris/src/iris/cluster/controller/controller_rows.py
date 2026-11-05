@@ -15,8 +15,8 @@ Only work this controller executes is written: rows for jobs whose ``cluster`` i
 a peer's jobs and attempts, are written by the peer that runs them, so every job
 has one writer and one key.
 
-A failed snapshot is logged and drops that transaction's rows; it never rolls
-back the controller's own writes.
+A failed snapshot or write is logged and drops that transaction's rows; it never
+rolls back the controller's own writes or stops its later post-commit hooks.
 """
 
 import logging
@@ -126,12 +126,26 @@ def record_attempt_changes(cur: RowCursor, attempts: Iterable[tuple[JobName, int
 
 
 def _write(tables: ControllerRowTables, marked: _Marked) -> None:
-    if marked.job_rows:
-        tables.job_table.write(marked.job_rows)
-    if marked.config_rows:
-        tables.job_config_table.write(marked.config_rows)
-    if marked.attempt_rows:
-        tables.task_attempt_table.write(marked.attempt_rows)
+    """Enqueue the snapshotted rows; on failure, log and drop them.
+
+    Runs after COMMIT among the transaction's post-commit hooks, so an exception
+    here would reach the caller of a committed transaction and skip the hooks
+    registered after this one (cache invalidations).
+    """
+    try:
+        if marked.job_rows:
+            tables.job_table.write(marked.job_rows)
+        if marked.config_rows:
+            tables.job_config_table.write(marked.config_rows)
+        if marked.attempt_rows:
+            tables.task_attempt_table.write(marked.attempt_rows)
+    except Exception:
+        logger.exception(
+            "controller rows: write failed, dropping %d job, %d config, %d attempt rows",
+            len(marked.job_rows),
+            len(marked.config_rows),
+            len(marked.attempt_rows),
+        )
 
 
 def _dt(value: Timestamp | None) -> datetime | None:

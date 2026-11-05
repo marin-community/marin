@@ -212,6 +212,37 @@ def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, mon
     assert (rows.jobs, rows.job_configs, rows.attempts) == ([], [], [])
 
 
+class _ClosedTable(FakeStatsTable):
+    def write(self, rows) -> None:
+        raise RuntimeError("Table(iris.job) is closed")
+
+
+def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
+    state._db.attach_controller_rows(
+        ControllerRowTables(
+            cluster="marin",
+            job_table=_ClosedTable(),
+            job_config_table=FakeStatsTable(),
+            task_attempt_table=FakeStatsTable(),
+        )
+    )
+    later_hook_ran: list[bool] = []
+    job_id = JobName.root("test-user", "train")
+
+    with state._db.transaction() as cur:
+        ops.job.submit(
+            cur,
+            job_id=job_id,
+            request=make_job_request("train"),
+            ts=Timestamp.now(),
+            priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        )
+        cur.register(lambda: later_hook_ran.append(True))
+
+    assert later_hook_ran == [True]
+    assert query_task(state, JobName.from_string("/test-user/train/0")) is not None
+
+
 def test_handed_off_job_is_written_by_the_executing_peer_only():
     """The parent parks and later kills its handle for a handed-off job; the peer runs it."""
     with make_controller_state() as parent, make_controller_state() as peer:
