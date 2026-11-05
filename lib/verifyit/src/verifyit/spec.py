@@ -111,8 +111,8 @@ class UnsolvableSpec:
 class ReasoningMarkupSpec:
     """Credit a reply whose reasoning markup is well formed: at most one closed span, no stray closer.
 
-    The reply text must retain its reasoning markers. A span the reply never closes counts as
-    malformed, because the candidate carries no stop reason to tell truncation apart.
+    The reply text must retain its reasoning markers. The prompt is taken to open no span, so a
+    leading closer is stray. A span left open by a length stop is truncation, not a violation.
     """
 
     output: str = DEFAULT_OUTPUT
