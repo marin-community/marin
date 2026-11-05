@@ -10,6 +10,7 @@ from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import LevanterCheckpoint
 
@@ -64,18 +65,19 @@ def eval_step(
             generation=GenerationConfig(max_gen_toks=group.max_tokens),
         )
 
+    name = f"evaluation/curated/{model.name}/{group.name}"
     accelerator = group.accelerator
     step = launch_step(
         resolve_model(StepContext.for_fingerprint((), (model,))),
         ",".join(group.evals),
-        version=version or model.version,
+        version=resolve_version(name, version),
         deps=(model,),
         resolve_model=resolve_model,
         limit=group.limit,
         accelerator=accelerator.label,
         federated_cluster=accelerator.target_cluster,
     )
-    return replace(step, name=f"evaluation/curated/{model.name}/{group.name}")
+    return replace(step, name=name)
 
 
 def eval_steps(
@@ -93,9 +95,10 @@ def eval_report(
     def run(paths: tuple[str, ...]) -> EvaluationReport:
         return EvaluationReport(runs=tuple(EvaluationResult.raw_load(path) for path in paths))
 
+    name = "evaluation/report/" + name
     return ArtifactStep(
-        name="evaluation/report/" + name,
-        version=version or results[0].version,
+        name=name,
+        version=resolve_version(name, version),
         artifact_type=EvaluationReport,
         run=run,
         build_config=build_config,

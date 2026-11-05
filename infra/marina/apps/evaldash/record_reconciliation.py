@@ -158,8 +158,8 @@ def _inspect_record(
     state: SourceState | None,
     schedule: VerificationSchedule,
 ) -> RecordObservation:
-    if state is None:
-        return _read_changed_record(path, schedule, initial=True)
+    if state is None or state.error is not None:
+        return _read_changed_record(path, schedule, initial=state is None)
     try:
         version = conditional_object(path).version()
         step_status = step_status_for_record(path) if version is not None else None

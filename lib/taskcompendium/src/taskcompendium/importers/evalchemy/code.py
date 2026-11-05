@@ -57,6 +57,9 @@ CODE_REVISION = (
 )
 
 
+CRUX_DIRECTIONS = ("input", "output")
+
+
 def read_mbpp(path: StoragePath, _context: ConversionContext):
     """Keep the source's first 500 rows and its fixed examples at positions 1, 2 and 3."""
     with path.open("rb") as file:
@@ -69,7 +72,7 @@ def read_mbpp(path: StoragePath, _context: ConversionContext):
 def read_crux(path: StoragePath, _context: ConversionContext):
     with path.open("rt") as file:
         rows = [json.loads(line) for line in file if line.strip()]
-    for direction in ("input", "output"):
+    for direction in CRUX_DIRECTIONS:
         template = (ASSETS / f"crux_{direction}.txt").read_text()
         for row in rows:
             prompt = template.replace("{input}", row["input"]).replace("{output}", row["output"])

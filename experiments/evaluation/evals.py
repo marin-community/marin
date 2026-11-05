@@ -18,12 +18,10 @@ from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef, ModelConfigRef
 from marin.evaluation.runner import EvalExecutor
-from marin.rollouts.evaluation import JudgeIdentity
 from rigging.secrets import SecretSpec
 
 from experiments.evaluation.curated import CuratedDefinition
 from experiments.post_training.task_curation.datasets.evalchemy.checkpoint import sources as checkpoint_sources
-from experiments.post_training.task_curation.datasets.evalchemy.mmlu import MMLU_POPULATIONS
 
 logger = logging.getLogger(__name__)
 
@@ -180,119 +178,10 @@ STANDARD_EVALS: tuple[str, ...] = (
     "graphwalks",
 )
 
-_CURATED_SOURCES = {
-    "mmlu": tuple("evalchemy-mmlu-" + subject for subject in MMLU_POPULATIONS),
-    **{
-        name: ("evalchemy-" + source,)
-        for name, source in {
-            "arc-challenge": "arc_challenge",
-            "arc-easy": "arc_easy",
-            "hellaswag": "hellaswag",
-            "winogrande": "winogrande",
-            "truthfulqa": "truthfulqa_mc2",
-            "boolq": "boolq",
-            "piqa": "piqa",
-            "openbookqa": "openbookqa",
-            "gsm8k": "gsm8k",
-            "math500": "math500",
-            "humaneval": "humaneval",
-            "lambada": "lambada_openai",
-            "triviaqa": "triviaqa",
-            "nq-open": "nq_open",
-            "drop": "drop",
-            "gsm8k-0shot": "gsm8k-0shot",
-            "aime24": "aime24",
-            "olympiadbench": "olympiadbench",
-            "olympiadbench-deterministic": "olympiadbenchdeterministic",
-            "humanevalplus": "humanevalplus",
-            "mbppplus": "mbppplus",
-            "mmlu-smoke": "mmlu-smoke",
-            "gsm8k-smoke": "gsm8k",
-            "aime24-smoke": "aime24",
-            "mmlu-pro": "mmlu-pro",
-            "gpqa-diamond": "gpqa-diamond",
-            "cruxeval": "cruxeval",
-            "financebench": "financebench",
-            "ifeval": "ifeval",
-            "ifbench": "ifbench",
-            "mrcr": "mrcr",
-            "graphwalks": "graphwalks",
-        }.items()
-    },
-}
+_CURATED_CONFIG_DIR = Path(__file__).with_name("configs") / "curated"
 EVALS: dict[str, EvaluationDefinition] = {
-    name: CuratedDefinition(
-        name=name,
-        sources=_CURATED_SOURCES[name],
-        chat_sources=(
-            tuple(source + "-chat" for source in _CURATED_SOURCES[name])
-            if name in {"gsm8k", "gsm8k-smoke", "gsm8k-0shot", "triviaqa", "nq-open", "drop", "ifeval"}
-            else ()
-        ),
-        family=_EVAL_FAMILIES.get(name),
-        limit={"mmlu-smoke": 64, "gsm8k-smoke": 128, "aime24-smoke": 2}.get(name),
-        max_tokens=(
-            256
-            if name
-            in {
-                "mmlu",
-                "mmlu-smoke",
-                "arc-challenge",
-                "arc-easy",
-                "hellaswag",
-                "winogrande",
-                "truthfulqa",
-                "boolq",
-                "piqa",
-                "openbookqa",
-                "lambada",
-            }
-            else {"mrcr": 4096, "graphwalks": 131072}.get(name)
-        ),
-        seed={
-            "cruxeval": 42,
-            "gpqa-diamond": 42,
-            "financebench": 42,
-            "ifbench": 42,
-            "ifeval": 1234,
-            "mmlu-pro": 42,
-            "mrcr": 42,
-        }.get(name),
-    )
-    for name in STANDARD_EVALS
+    path.stem: CuratedDefinition.from_file(path) for path in sorted(_CURATED_CONFIG_DIR.glob("*.yaml"))
 }
-EVALS.update(
-    {
-        "mmlu-0shot": CuratedDefinition(
-            "mmlu-0shot", tuple("evalchemy-mmlu-0shot-" + subject for subject in MMLU_POPULATIONS)
-        ),
-        **{
-            name: CuratedDefinition(name, ("evalchemy-" + source,))
-            for name, source in {
-                "arc-easy-10shot": "arc_easy-10shot",
-                "arc-challenge-10shot": "arc_challenge-10shot",
-                "boolq-10shot": "boolq-10shot",
-                "piqa-10shot": "piqa-10shot",
-                "winogrande-0shot": "winogrande-0shot",
-                "hellaswag-0shot": "hellaswag-0shot",
-                "truthfulqa-6shot": "truthfulqa_mc2-6shot",
-            }.items()
-        },
-    }
-)
-for name in ("financebench", "olympiadbench"):
-    EVALS[name] = CuratedDefinition(
-        name,
-        _CURATED_SOURCES[name],
-        seed=42 if name == "financebench" else None,
-        judge=JudgeIdentity(
-            deployment="together",
-            models={"openai/gpt-oss-120b": "provider-managed:openai/gpt-oss-120b"},
-            default_model="openai/gpt-oss-120b",
-        ),
-        judge_endpoint="https://api.together.xyz/v1",
-        judge_api_key=_TOGETHER_API_KEY_SECRET,
-    )
 _CHECKPOINT_BENCHMARKS = {
     "commonsense_qa": "commonsense-qa-10shot",
     "copa": "copa",

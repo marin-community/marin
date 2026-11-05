@@ -1,0 +1,4 @@
+name: graphwalks
+sources:
+- evalchemy-graphwalks
+max_tokens: 131072

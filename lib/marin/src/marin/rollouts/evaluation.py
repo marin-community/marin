@@ -73,7 +73,7 @@ from verifyit.modes.grade_judge import JudgeConnection
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.05"
+EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
 
 
 class EvaluationInfrastructureError(RuntimeError):

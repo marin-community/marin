@@ -68,7 +68,7 @@ def checkpoint_source(
     }
     protocol = EvaluationProtocol(
         benchmark=benchmark,
-        version="2026.11.05",
+        version="2026.11.05.2",
         operation=operation,
         sampling=(
             Sampling(
@@ -120,7 +120,8 @@ def checkpoint_source(
                     if generation
                     else partial(convert_choice_document, benchmark=benchmark)
                 ),
-                version=canonical_sha256(checkpoint_prompts())[:16]
+                version="2026.11.05.2-"
+                + canonical_sha256(checkpoint_prompts())[:16]
                 + (scorer_revision("checkpoint_generation") if generation else ""),
                 intended_use=IntendedUse.EVAL,
                 grader=MATH_GRADER if generation else None,
@@ -311,9 +312,12 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 recipe=replace(
                     dataset.recipe,
                     name="checkpoint-humaneval-10shot",
+                    version="2026.11.05.2-" + dataset.recipe.version,
                     source=replace(dataset.recipe.source, read=read_humaneval_fewshot),
                 ),
-                protocol=dataset.protocol.model_copy(update={"benchmark": "humaneval-10shot", "num_fewshot": 10}),
+                protocol=dataset.protocol.model_copy(
+                    update={"benchmark": "humaneval-10shot", "num_fewshot": 10, "version": "2026.11.05.2"}
+                ),
             ),
         )
     )

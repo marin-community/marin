@@ -1,0 +1,4 @@
+name: hellaswag
+sources:
+- evalchemy-hellaswag
+max_tokens: 256

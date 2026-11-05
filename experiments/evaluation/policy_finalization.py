@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import yaml
+from finestore.reader import ReadView
 from marin.evaluation.curated import CuratedExecutor
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ModelConfig, load_model_config
@@ -26,6 +27,7 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.inference.types import InferenceBackendState
 from marin.rollouts.evaluation import JudgeIdentity
+from marin.rollouts.evaluation_results import evaluation_coverage
 
 POLICY = "marin-10197"
 MIN_SCORED_FRACTION = 0.9
@@ -75,7 +77,7 @@ class PolicyJudge:
             self.accelerator,
             env_vars=env_vars,
             priority=self.priority,
-            api_model="openai/gpt-oss-120b",
+            api_model=self.model.location,
         )
         try:
             with remote_inference(inference) as policy_judge:
@@ -84,8 +86,8 @@ class PolicyJudge:
                 assert self.model.revision is not None
                 configuration = JudgeIdentity(
                     deployment=self.model.location,
-                    models={"openai/gpt-oss-120b": self.model.revision},
-                    default_model="openai/gpt-oss-120b",
+                    models={self.model.location: self.model.revision},
+                    default_model=self.model.location,
                 )
                 executor = replace(self.source, settings=replace(self.source.settings, judge=configuration))
 
@@ -105,7 +107,18 @@ class PolicyJudge:
                     exc.jobs.update(jobs)
                     raise
                 jobs.update(outcome.jobs)
-                return replace(outcome, jobs=jobs)
+                coverage = evaluation_coverage(ReadView(output_dir))
+                if not coverage or any(
+                    not item.n_attempted or item.n_scored / item.n_attempted < MIN_SCORED_FRACTION
+                    for item in coverage.values()
+                ):
+                    raise EvaluationError(
+                        "policy judge scored fewer than 90% of selected trials",
+                        status=RunStatus.ARTIFACT_FAILED,
+                        jobs=jobs,
+                        coverage=coverage,
+                    )
+                return replace(outcome, jobs=jobs, coverage=coverage)
         except RemoteInferenceStartupError as exc:
             jobs, tails = job_diagnostics(exc.jobs, "policy-judge")
             raise EvaluationError(
@@ -135,8 +148,8 @@ def policy_executor(
                 source.settings,
                 judge=JudgeIdentity(
                     deployment=config.judge.location,
-                    models={"openai/gpt-oss-120b": config.judge.revision},
-                    default_model="openai/gpt-oss-120b",
+                    models={config.judge.location: config.judge.revision},
+                    default_model=config.judge.location,
                 ),
             ),
         )
