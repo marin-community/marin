@@ -151,6 +151,10 @@ class LaunchSpec:
     policy_finalization: PolicyFinalization | None = None
 
 
+# EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
+POLICY_RECORDS_PREFIXES = (DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX)
+
+
 def _git_sha() -> str:
     for key in ("MARIN_GIT_SHA", "GIT_COMMIT"):
         value = os.environ.get(key)
@@ -186,12 +190,22 @@ def _capability_origin(cluster: str) -> str:
 
 
 def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
-    """Resolve the configured TPU or CoreWeave records store."""
+    """Resolve the configured TPU or CoreWeave records store.
+
+    Policy launches may write remote records only to a prefix EvalDash catalogs; a local path stays
+    available for dry runs and tests.
+    """
     if spec.records_prefix:
-        return spec.records_prefix if "://" in spec.records_prefix else os.path.abspath(spec.records_prefix)
-    if accel.target_cluster:
-        return CW_RECORDS_PREFIX
-    return DEFAULT_RECORDS_PREFIX
+        prefix = spec.records_prefix if "://" in spec.records_prefix else os.path.abspath(spec.records_prefix)
+    elif accel.target_cluster:
+        prefix = CW_RECORDS_PREFIX
+    else:
+        prefix = DEFAULT_RECORDS_PREFIX
+    if spec.policy_finalization is not None and "://" in prefix and prefix.rstrip("/") not in POLICY_RECORDS_PREFIXES:
+        raise ValueError(
+            f"policy records prefix {prefix!r} is not catalogued by EvalDash; use one of {POLICY_RECORDS_PREFIXES}"
+        )
+    return prefix
 
 
 def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefinition], ...]:
