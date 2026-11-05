@@ -93,6 +93,7 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     expected_env = {
+        "WANDB_ENTITY": "test-team",
         "DAYTONA_RL_API_KEY": "test-rl-key",
         "DAYTONA_EVAL_API_KEY": "test-eval-key",
         "DAYTONA_API_KEY": "test-other-key",

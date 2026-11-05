@@ -347,6 +347,7 @@ _LEARNING = Recipe(
     optimizer=_OPTIMIZER,
     engine_init_kwargs={"moe_backend": "triton"},
 )
+_ASYNC_P40 = replace(_LEARNING, staleness=2, estimator={**_ESTIMATOR, "off_policy_correction": "tis"})
 _GAPS = (
     Gap.AAII_COVERAGE,
     Gap.REUSED_DEV_PANEL,
@@ -414,6 +415,19 @@ _SPEED_REPORTS = (
     Metric("vllm/latency_ttft_mean", False),
     Metric("startup/init_weight_sync_state", False),
     Metric("startup/load_checkpoints", False),
+)
+_ASYNC_SPEED_REPORTS = (
+    *_SPEED_REPORTS,
+    *(Metric(f"async/staleness_{statistic}", False) for statistic in ("mean", "max", "ratio")),
+    *(
+        Metric(f"policy/mismatch/pooled/{statistic}", False)
+        for statistic in ("kl_k3", "log_ratio_abs_mean", "log_ratio_abs_p99", "log_ratio_abs_p999")
+    ),
+    Metric("policy/mismatch/staleness0/kl_k3", False),
+    *(
+        Metric(f"policy/mismatch/{bucket}/selected_tokens", bucket == "staleness0")
+        for bucket in ("staleness0", "staleness1", "staleness2", "staleness3", "staleness4-7", "staleness8+")
+    ),
 )
 _LEARNING_MEDIUM = Preset(
     focus=Focus.LEARNING,
@@ -486,6 +500,21 @@ PRESETS = MappingProxyType(
                 gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY, Gap.NO_ASYNC_SPEED_GATE),
                 budget="35-40 min; 25 H100-h",
             ),
+            Preset(
+                focus=Focus.SPEED,
+                duration=Duration.LONG,
+                recipe=_ASYNC_P40,
+                updates=20,
+                measured=range(3, 21),
+                guards=(
+                    Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
+                    Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
+                    Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
+                ),
+                reported=_ASYNC_SPEED_REPORTS,
+                gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),
+                budget="45-75 min; 30-50 H100-h",
+            ),
             _LEARNING_MEDIUM,
             replace(_LEARNING_MEDIUM, focus=Focus.DATA),
             Preset(
@@ -537,7 +566,7 @@ PRESETS = MappingProxyType(
 )
 TRAIN_LONG_RECIPES = MappingProxyType(
     {
-        "p40": replace(_LEARNING, staleness=2, estimator={**_ESTIMATOR, "off_policy_correction": "tis"}),
+        "p40": _ASYNC_P40,
         "l112": PRESETS["train-long"].recipe,
     }
 )
