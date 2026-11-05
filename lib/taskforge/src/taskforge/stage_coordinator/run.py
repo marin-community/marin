@@ -1,25 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run many workpieces at once, each from the moment its proposal arrives, with failures kept to their workpiece.
+"""Run proposals as they arrive, isolating each workpiece's failures from its siblings.
 
-``run_workpieces`` reads ``(workpiece_id, proposal)`` pairs from an async iterable and starts
-``run_workpiece`` for each as it arrives, so a proposal still being written holds back no other
-workpiece. It sets no width of its own: the stages' resource pools (build processes, model
-connections, machines) bound how much runs at once.
+Transient infrastructure failures retry with backoff at the interrupted stage.
+Exhausted retries produce ABANDONED; other failures produce HELD. The event store
+retains the stages and evidence available for a later explicit resume. A failure
+to persist abandonment returns HELD and logs the storage error.
 
-Each workpiece runs inside a wrapper that records its terminal and never raises, so one
-workpiece's failure cancels no sibling. When ``run_workpiece`` raises a transient infrastructure
-failure (``transient_infrastructure_failure``), the wrapper waits out a backoff and calls it again
-with the same log, which resumes the workpiece at the stage that raised; every attempt leaves its
-``TERMINAL`` failed event in the workpiece's log. Once ``InfrastructureRetry.max_attempts`` attempts
-have failed, or on any other error, the workpiece stays failed in place, as one ``run_workpiece``
-call leaves it, and the run goes on.
-
-``run_workpieces`` returns when the iterable is exhausted and every workpiece it started has a
-terminal. An error while reading the iterable, or a workpiece id the iterable yields a second time,
-stops admission: the workpieces already started run to their terminals, and ``run_workpieces``
-then raises that error.
+Admission errors stop new work; already admitted workpieces finish before the
+error is raised. Resource pools, rather than this wrapper, bound concurrency.
 """
 
 import asyncio
@@ -33,9 +23,10 @@ from taskforge.llm.client import ModelUnavailable
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage40_build_with_program.context import BuildInfrastructureFailure
 from taskforge.stage40_build_with_program.infrastructure import HOST_REJECTIONS
+from taskforge.stage60_review.decision import RejectKind
 from taskforge.stage_coordinator.coordinator import StageCoordinator, run_workpiece
 from taskforge.stage_coordinator.event_log import InMemoryEventLog
-from taskforge.stage_coordinator.workpiece_machine import Terminal
+from taskforge.stage_coordinator.workpiece_machine import EventKind, Terminal, WorkpieceEvent, derive_state
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +76,7 @@ async def run_workpieces(
     """Run each proposal ``proposals`` yields as workpiece ``workpiece_id``, starting it as it arrives.
 
     Each workpiece resumes from the coordinator's event store, as ``run_workpiece`` does with an
-    empty log. A workpiece whose run raised is ``FAILED``; the error is logged, and a stage's error
+    empty log. A workpiece whose run raised is ``HELD``; the error is logged, and a stage's error
     is also recorded in the workpiece's ``TERMINAL`` event.
 
     Returns:
@@ -116,7 +107,7 @@ async def run_workpieces(
 async def _run_retrying(
     coordinator: StageCoordinator, workpiece_id: str, proposal: TaskProposal, retry: InfrastructureRetry
 ) -> Terminal:
-    """Run the workpiece to a terminal, retrying transient infrastructure failures; ``FAILED`` on any other error."""
+    """Run the workpiece to a terminal, retrying transient infrastructure failures; ``HELD`` on any other error."""
     log = InMemoryEventLog()
     backoff = ExponentialBackoff(
         initial=retry.backoff_initial, maximum=retry.backoff_maximum, factor=retry.backoff_factor
@@ -126,9 +117,30 @@ async def _run_retrying(
         try:
             return await run_workpiece(coordinator, workpiece_id, proposal, log)
         except Exception as error:
-            if not transient_infrastructure_failure(error) or attempt >= retry.max_attempts:
+            transient = transient_infrastructure_failure(error)
+            if not transient or attempt >= retry.max_attempts:
                 logger.warning("workpiece %s failed on attempt %d", workpiece_id, attempt, exc_info=True)
-                return Terminal.FAILED
+                if transient and log.events():
+                    state = derive_state(log.events())
+                    log.append(
+                        WorkpieceEvent(
+                            EventKind.TERMINAL,
+                            state.round,
+                            None,
+                            {
+                                "terminal": Terminal.ABANDONED,
+                                "kind": RejectKind.BUDGET,
+                                "reason": f"infrastructure retry budget exhausted after {attempt} attempts: {error}",
+                            },
+                        )
+                    )
+                    try:
+                        coordinator.event_store.save(workpiece_id, log.events())
+                    except Exception:
+                        logger.exception("could not persist exhausted retry budget for workpiece %s", workpiece_id)
+                        return Terminal.HELD
+                    return Terminal.ABANDONED
+                return Terminal.HELD
             delay = backoff.next_interval()
             logger.warning(
                 "workpiece %s attempt %d/%d failed (%s: %s); retrying in %.1fs",

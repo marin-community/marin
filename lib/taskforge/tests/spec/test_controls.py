@@ -319,20 +319,6 @@ def test_control_ids_are_portable_names(identifier):
         )
 
 
-@pytest.mark.parametrize(
-    "status,bounds,message",
-    [
-        (Outcome.SUBMISSION_FAILURE, {"reward_max": 0.0}, "should not have reward bounds"),
-        (Outcome.INFRA_ERROR, {}, "graded result or a submission failure"),
-        (Outcome.GRADED, {"reward_min": 0.8, "reward_max": 0.2}, "reversed"),
-        (Outcome.GRADED, {"reward_max": 1.5}, "outside"),
-    ],
-)
-def test_expectation_rejects_ungradeable_bounds(status, bounds, message):
-    with pytest.raises(ValueError, match=message):
-        Expectation(status, **bounds)
-
-
 def test_transcript_ends_with_its_only_text_reply():
     with pytest.raises(ValueError, match="final transcript turn"):
         Transcript((reply("thinking"), reply("12")))

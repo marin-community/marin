@@ -185,7 +185,7 @@ def test_a_failed_workpiece_keeps_its_stage_and_a_final_terminal_ends_the_log():
     log += [decided(exit="reject", kind="host", reasons="no machine"), terminal(terminal="rejected", reason="r")]
     rejected = derive_state(numbered(*log))
 
-    assert (failed.terminal, failed.stage) == (Terminal.FAILED, Stage.REVIEW)
+    assert (failed.terminal, failed.stage) == (Terminal.HELD, Stage.REVIEW)
     assert rejected.terminal is Terminal.REJECTED
     with pytest.raises(ValueError, match="after terminal rejected"):
         derive_state(numbered(*log, VALIDATED))

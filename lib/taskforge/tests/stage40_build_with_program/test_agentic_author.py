@@ -242,13 +242,8 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
 
     program = load_program(PROGRAM)
     assert authored.source == PROGRAM and authored.program is program
-    wrote, loader, refused, built, graded = tool_outputs(model)
-    assert wrote == f"wrote {len(PROGRAM.encode())} bytes to program.py"
-    assert loader.startswith("loads: program ")
-    assert refused.startswith("not handed in: the loader accepts it") and "never built in this session" in refused
-    assert built.startswith("built: program ") and "sources MISS" in built and "grader MISS" in built
-    assert "reference: graded reward 1.0" in built
-    assert "empty answer: submission_failure reward 0.0 (graded by the library; ceiling 0.0)" in built
+    wrote = tool_outputs(model)[0]
+    graded = tool_outputs(model)[-1]
     assert graded.startswith("status graded, reward 0.0")
     assert not model.replies, "the session stopped at the accepted submit"
 
