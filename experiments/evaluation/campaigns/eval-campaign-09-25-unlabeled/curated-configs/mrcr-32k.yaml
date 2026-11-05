@@ -1,0 +1,5 @@
+name: mrcr-32k
+sources:
+- evalchemy-mrcr-32k
+seed: 42
+max_tokens: 4096

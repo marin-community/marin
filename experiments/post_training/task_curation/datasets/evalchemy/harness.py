@@ -3,8 +3,10 @@
 
 """Pinned native likelihood corpora with lm-eval v0.4.12 prompt semantics."""
 
+from dataclasses import replace
 from functools import partial
 
+from taskcompendium.evaluation.corpus import chat_variant_item
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     LikelihoodMetric,
@@ -63,7 +65,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             "ARC-Easy/test-00000-of-00001.parquet",
             2376,
             0,
-            "",
+            "ARC-Easy/train-00000-of-00001.parquet",
             normalized,
         ),
         (
@@ -83,7 +85,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             "boolq/validation-00000-of-00001.parquet",
             3270,
             0,
-            "",
+            "boolq/train-00000-of-00001.parquet",
             raw,
         ),
         (
@@ -93,7 +95,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             "piqa_validation.parquet",
             1838,
             0,
-            "",
+            "piqa_train.parquet",
             normalized,
         ),
         (
@@ -127,11 +129,27 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             raw,
         ),
     ):
-        result.append(
-            choice_source(
-                name, repo, revision, file, population, HarnessTemplate(name, shots, fewshot_file=pool), normalizations
+        shot_counts = {
+            "arc_challenge": (shots, 10),
+            "arc_easy": (shots, 10),
+            "boolq": (shots, 10),
+            "piqa": (shots, 10),
+            "winogrande": (shots, 0),
+            "hellaswag": (shots, 0),
+            "truthfulqa_mc2": (shots, 6),
+        }.get(name, (shots,))
+        for count in shot_counts:
+            result.append(
+                choice_source(
+                    name if count == shots else f"{name}-{count}shot",
+                    repo,
+                    revision,
+                    file,
+                    population,
+                    HarnessTemplate(name, count, fewshot_file=pool or file),
+                    normalizations,
+                )
             )
-        )
     result.append(
         RlDataSource(
             info=SourceInfo(
@@ -184,6 +202,36 @@ def sources() -> list[RlDataSource[EvalDataset]]:
         )
     )
     result.extend(generation_sources())
+    result.extend(chat_sources(generation_sources()))
+    return result
+
+
+def chat_sources(sources: list[RlDataSource[EvalDataset]]) -> list[RlDataSource[EvalDataset]]:
+    """Publish instruct-model transport variants as separate immutable corpora."""
+    result = []
+    for source in sources:
+        dataset = source.config
+        assert dataset is not None and dataset.protocol.sampling is not None
+        name = dataset.recipe.name.removeprefix("evalchemy-")
+        sampling = dataset.protocol.sampling.model_copy(
+            update={
+                "chat_template_kwargs": {"enable_thinking": False} if name in {"gsm8k-0shot", "triviaqa"} else {},
+            }
+        )
+        result.append(
+            replace(
+                source,
+                info=replace(source.info, id=source.info.id + "-chat"),
+                config=replace(
+                    dataset,
+                    recipe=replace(dataset.recipe, name=dataset.recipe.name + "-chat"),
+                    protocol=dataset.protocol.model_copy(
+                        update={"operation": OperationKind.CHAT_GENERATION, "sampling": sampling}
+                    ),
+                    item_builder=partial(chat_variant_item, item_builder=dataset.item_builder),
+                ),
+            )
+        )
     return result
 
 

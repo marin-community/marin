@@ -78,7 +78,7 @@ def read_crux(path: StoragePath, _context: ConversionContext):
 def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> TaskSpec:
     problem = dict(row.data)
     prompt = (
-        (problem["prompt"] if suite == "humaneval" else function_prompt(problem))
+        (problem.get("evaluation_prompt", problem["prompt"]) if suite == "humaneval" else function_prompt(problem))
         if suite in {"humaneval", "humanevalplus"}
         else problem["evaluation_prompt"]
     )

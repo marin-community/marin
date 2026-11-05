@@ -1,8 +1,0 @@
-cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
-authors:
-- family-names: "Lin"
-  given-names: "Bill Yuchen" 
-title: "ZeroEval: A Unified Framework for Evaluating Language Models" 
-date-released: 2024-07-18
-url: "https://github.com/yuchenlin/ZeroEval"

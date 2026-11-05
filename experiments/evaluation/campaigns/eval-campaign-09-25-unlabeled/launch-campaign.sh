@@ -12,7 +12,7 @@ By default, validates the full tracker-backed campaign without submitting jobs. 
 Options:
   --model NAME       Launch one model-config basename; repeatable. Default: all.
   --suite NAME       all, nonagentic, agentic, or terminal-bench. Default: all.
-  --evalchemy NAME   Select one Evalchemy config basename; repeatable. Default: all.
+  --curated NAME   Select one curated config basename; repeatable. Default: all.
   --harbor NAME      Select one Harbor config basename; repeatable. Default: all.
   --limit COUNT      Cap selected benchmark items for a smoke reproduction.
   --version LABEL    Attach a submitter-controlled cohort label. Not policy attestation.
@@ -39,8 +39,8 @@ while [ "$#" -gt 0 ]; do
       models+=("$2")
       shift 2
       ;;
-    --evalchemy)
-      [ "$#" -ge 2 ] || die "--evalchemy requires a value"
+    --curated)
+      [ "$#" -ge 2 ] || die "--curated requires a value"
       selected_evalchemy_names+=("$2")
       shift 2
       ;;
@@ -113,7 +113,7 @@ evalchemy_names=(
 )
 if [ "${#selected_evalchemy_names[@]}" -gt 0 ]; then
   for name in "${selected_evalchemy_names[@]}"; do
-    [ -f "$EVALCHEMY_CONFIG_DIR/$name.yaml" ] || die "unknown Evalchemy config: $name"
+    [ -f "$CURATED_CONFIG_DIR/$name.yaml" ] || die "unknown Evalchemy config: $name"
   done
   evalchemy_names=("${selected_evalchemy_names[@]}")
 fi
@@ -175,7 +175,7 @@ PY
   if [ "$suite" = all ] || [ "$suite" = nonagentic ]; then
     arguments=("${base_arguments[@]}")
     for name in "${evalchemy_names[@]}"; do
-      arguments+=(--evalchemy-config "$EVALCHEMY_CONFIG_DIR/$name.yaml")
+      arguments+=(--curated-config "$CURATED_CONFIG_DIR/$name.yaml")
     done
     echo "== $model (nonagentic; $([ "$submit" = 1 ] && echo submit || echo validate))"
     run_campaign_launch "$submit" "${arguments[@]}"

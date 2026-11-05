@@ -3,6 +3,8 @@
 
 """Classic MMLU subject populations and pinned development pools."""
 
+from dataclasses import replace
+
 from taskcompendium.evaluation.spec import LikelihoodNormalization
 from taskcompendium.importers.evaluation_harness import HarnessTemplate
 
@@ -75,18 +77,33 @@ MMLU_POPULATIONS = {
 
 def sources() -> list[RlDataSource[EvalDataset]]:
     raw = (LikelihoodNormalization.RAW,)
-    result = [
-        choice_source(
-            "mmlu-" + subject,
-            "cais/mmlu",
-            MMLU_REVISION,
-            subject + "/test-00000-of-00001.parquet",
-            population,
-            HarnessTemplate("mmlu", 5, subject, subject + "/dev-00000-of-00001.parquet"),
-            raw,
-        )
-        for subject, population in MMLU_POPULATIONS.items()
-    ]
+    result = []
+    for shots in (0, 5):
+        for subject, population in MMLU_POPULATIONS.items():
+            source = choice_source(
+                "mmlu-" + subject if shots == 5 else "mmlu-0shot-" + subject,
+                "cais/mmlu",
+                MMLU_REVISION,
+                subject + "/test-00000-of-00001.parquet",
+                population,
+                HarnessTemplate("mmlu", shots, subject, subject + "/dev-00000-of-00001.parquet"),
+                raw,
+            )
+            dataset = source.config
+            assert dataset is not None
+            result.append(
+                replace(
+                    source,
+                    config=replace(
+                        dataset,
+                        protocol=dataset.protocol.model_copy(
+                            update={
+                                "benchmark": "mmlu" if shots == 5 else "mmlu-0shot",
+                            }
+                        ),
+                    ),
+                )
+            )
     result.append(
         choice_source(
             "mmlu-smoke",

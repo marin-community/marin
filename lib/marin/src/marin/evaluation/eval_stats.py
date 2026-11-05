@@ -222,6 +222,7 @@ class Measurement:
     declared: bool = False
     protocol_metric: str | None = None
     protocol_kind: MetricKind | None = None
+    protocol_identity: str | None = None
 
 
 # --------------------------------------------------------------------------------------------------
@@ -526,6 +527,7 @@ class MetricProtocol:
 
     metric: str
     kind: MetricKind
+    identity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -540,7 +542,9 @@ class LegacyMetric:
 def effective_protocol(measurement: Measurement) -> MetricProtocol:
     """Resolve a measurement's declared protocol or its legacy inferred protocol."""
     if measurement.declared and measurement.protocol_metric is not None and measurement.protocol_kind is not None:
-        return MetricProtocol(metric=measurement.protocol_metric, kind=measurement.protocol_kind)
+        return MetricProtocol(
+            metric=measurement.protocol_metric, kind=measurement.protocol_kind, identity=measurement.protocol_identity
+        )
     return MetricProtocol(metric=base_metric(measurement.metric), kind=measurement.kind)
 
 
@@ -552,7 +556,7 @@ def declared_protocols(measurements: Iterable[Measurement]) -> Mapping[str, Metr
         if measurement.declared and (current is None or measurement.created_at > current.created_at):
             newest[measurement.benchmark] = measurement
     return {
-        benchmark: MetricProtocol(metric=measurement.protocol_metric, kind=measurement.protocol_kind)
+        benchmark: effective_protocol(measurement)
         for benchmark, measurement in newest.items()
         if measurement.protocol_metric is not None and measurement.protocol_kind is not None
     }

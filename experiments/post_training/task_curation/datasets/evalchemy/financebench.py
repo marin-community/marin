@@ -51,6 +51,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 ),
                 EvaluationProtocol(
                     benchmark="FinanceBench",
+                    requires_judge=True,
                     version="2026.11.02",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(

@@ -143,6 +143,11 @@ def chat_item(task: TaskSpec, *, response_selection: ResponseSelection = "combin
     )
 
 
+def chat_variant_item(task: TaskSpec, *, item_builder: ItemBuilder) -> EvaluationItem:
+    """Retain source grouping and provenance in an explicit chat transport variant."""
+    return item_builder(task).model_copy(update={"operation": ChatGeneration()})
+
+
 def file_sha256(path: StoragePath) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()

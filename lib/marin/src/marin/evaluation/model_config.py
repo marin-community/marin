@@ -194,11 +194,11 @@ class ModelConfig:
     ``tokenizer`` because the eval client loads its tokenizer through HF. ``revision`` pins an
     immutable checkpoint for a base HF model. ``tokenizer_revision`` pins the tokenizer repository.
     When ``tokenizer`` is omitted, it defaults to ``location`` and its revision defaults to
-    ``revision``. ``apply_chat_template`` controls whether Evalchemy formats requests with the
-    tokenizer's chat template. ``resource_hint`` states where the model is compatible; ``serve``
+    ``revision``. ``apply_chat_template`` selects curated chat or completion protocols.
+    ``resource_hint`` states where the model is compatible; ``serve``
     states how its inference server behaves. ``generation`` and ``agent`` are experiment-definition
-    inputs and never affect inference placement. ``evalchemy_num_concurrent`` limits the number of
-    in-flight Evalchemy requests to this model's endpoint without changing benchmark semantics.
+    inputs and never affect inference placement. ``evaluation_num_concurrent`` limits the number of
+    in-flight curated requests to this model's endpoint without changing benchmark semantics.
     """
 
     name: str
@@ -212,13 +212,13 @@ class ModelConfig:
     serve: ServeConfig = field(default_factory=ServeConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
-    evalchemy_num_concurrent: int | None = None
+    evaluation_num_concurrent: int | None = None
 
     def __post_init__(self) -> None:
         if "/" in self.name:
             raise ValueError("model name cannot contain '/'")
-        if self.evalchemy_num_concurrent is not None and self.evalchemy_num_concurrent <= 0:
-            raise ValueError("evalchemy_num_concurrent must be positive")
+        if self.evaluation_num_concurrent is not None and self.evaluation_num_concurrent <= 0:
+            raise ValueError("evaluation_num_concurrent must be positive")
         if self.serve.pipeline_parallel_size > 1 and not self.resource_hint.gpu:
             raise ValueError("pipeline parallelism requires resource_hint.gpu")
 

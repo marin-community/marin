@@ -242,9 +242,18 @@ headline. NUPA uses ordinary means; task/bucket stratification constructs the
 population and supplies group labels. FinanceBench uses means. SimpleQA and
 SimpleQAMini use classification summaries.
 
-See [task curation](task-curation.md) for acquisition and publication and
-[task rollouts](task-rollouts.md) for single-task execution. Legacy evaluation
-launchers and checkpoint menus still use Evalchemy. Their cutover requires the
-remaining protocol variants, consumer summaries and retry-aware sample reads;
-`vendor/evalchemy` remains until those callers migrate. Harbor execution and
-Evaldash's raw-archive importer remain separate migrations.
+The shared evaluation CLI and checkpoint menus now select these curated corpora.
+Their source graphs finish before inference starts. Native generation menus publish
+raw and chat variants separately; no runtime task registry is loaded.
+
+Evaldash imports raw FineStore stores, selects one latest finished retry per logical
+trial, and applies these reductions. Its sample browser uses the same trial selection.
+The PostgreSQL reconciler checks both the producer record and the raw store version.
+Dataset identities and the summary revision participate in dashboard protocol
+comparison. Producer records keep their metric maps empty.
+
+See [task curation](task-curation.md) for acquisition and publication,
+[running evaluations](../tutorials/run-lm-evals.md) for the shared launcher, and
+[task rollouts](task-rollouts.md) for single-task execution. Harbor execution remains
+separate. Historical Evalchemy archives remain readable; reproducing their runs
+requires the recorded checkout.

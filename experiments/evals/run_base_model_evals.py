@@ -14,10 +14,10 @@ compiles one ``EvalReport`` per model.
 from marin.evaluation.model_config import ServeConfig
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import experiment_main
-from marin.experiment.evaluation import eval_report, eval_steps
 from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.evals import base_model_evals
+from experiments.evals.evaluation import eval_report, eval_steps
 from experiments.models import amber_base_7b, llama_3_1_8b, map_neo_7b, olmo_2_base_8b
 
 

@@ -92,7 +92,8 @@ def choice_source(
                     )
                     for value in normalizations
                 ),
-                primary_metric=names[normalizations[0]],
+                primary_metric=names[normalizations[-1]],
+                num_fewshot=template.num_fewshot,
                 summary=SummaryKind.MEAN,
                 expected_population=population,
                 likelihood_metrics=tuple(
