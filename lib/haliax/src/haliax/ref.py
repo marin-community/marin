@@ -181,7 +181,8 @@ def _combine_index(
             if item < 0:
                 item += view_length
             converted_list.append(start0 + item * step0)
-        return converted_list
+        # jax.Ref reads a Python list in an index tuple as several indices, so hand it an integer array.
+        return jnp.asarray(converted_list, dtype=jnp.int32)
 
     raise TypeError(
         "Slice references only support integers, slices, dslice, NamedArray, jnp.ndarray, or lists/tuples thereof"
@@ -235,8 +236,6 @@ def _to_pallas_dslice(value):
 
 def _is_supported_prefix(idx: Any) -> bool:
     if isinstance(idx, (slice, int, HaliaxDSlice)) or is_pallas_dslice(idx):
-        return True
-    if isinstance(idx, list) and all(isinstance(it, int) for it in idx):
         return True
     if isinstance(idx, (jnp.ndarray, jax.Array)):
         return idx.ndim <= 1 and jnp.issubdtype(idx.dtype, jnp.integer)
