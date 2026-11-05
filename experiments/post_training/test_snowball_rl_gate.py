@@ -980,6 +980,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         _json(source / "terminal.json", receipt)
     if case == "parent-early":
         shutil.rmtree(source)
+        shutil.rmtree(built.gate.path())
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = job
