@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "marin-taskforge"
 version = "0.1.0"
-description = "Task generation with GLM-5.3: the model client that writes TaskCompendium task programs"
+description = "Task generation with GLM-5.3: proposals, build programs, RolloutEngine validation"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "marin-taskcompendium",
