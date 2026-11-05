@@ -23,14 +23,15 @@ from tokenizers.models import WordLevel
 from experiments.grug.moe_hero_ep import model
 from experiments.grug.moe_hero_ep.launch_checkpoint_eval import (
     CheckpointEvalConfig,
+    EvalCheckpoint,
     eval_tokens_per_batch,
-    evaluate_checkpoint,
+    evaluate_checkpoints,
 )
 from experiments.grug.moe_hero_ep.train import _reshard_tree_to_mesh
 
 
 @pytest.mark.timeout(240)
-def test_checkpoint_eval_scores_saved_weights_at_each_length_and_pads_the_final_window():
+def test_checkpoint_eval_scores_each_checkpoint_at_each_length_with_its_own_qk_mult_and_pads_the_final_window():
     with use_test_devices(4):
         config = model.GrugModelConfig(
             vocab_size=64,
@@ -75,23 +76,26 @@ def test_checkpoint_eval_scores_saved_weights_at_each_length_and_pads_the_final_
                     "opt_state": {"momentum": jnp.ones((8, 8))},
                 }
                 save_checkpoint(state, step=17, checkpoint_path=directory + "/step-17", is_temporary=False)
-
-            def scores(qk_mult):
-                eval_config = CheckpointEvalConfig(
-                    model=dataclasses.replace(config, qk_mult=qk_mult),
-                    data=data,
-                    trainer=TrainerConfig(mp=jmp.get_policy("float32")),
-                    resources=ResourceConfig.with_cpu(),
-                    checkpoint_path=directory + "/step-17",
-                    seq_lens=(8, 16),
-                    eval_tokens_per_batch=64,
-                    dropless_moe_implementation="scatter",
-                    compute_bpb=False,
+                # The same weights saved at a later step, scored with a larger qk_mult.
+                save_checkpoint(
+                    {**state, "step": jnp.array(23, dtype=jnp.int32)},
+                    step=23,
+                    checkpoint_path=directory + "/step-23",
+                    is_temporary=False,
                 )
-                return evaluate_checkpoint(eval_config)
 
-            step, metrics = scores(1.0)
-            _, rescaled = scores(1.5)
+            eval_config = CheckpointEvalConfig(
+                model=config,
+                data=data,
+                trainer=TrainerConfig(mp=jmp.get_policy("float32")),
+                resources=ResourceConfig.with_cpu(),
+                checkpoints=(EvalCheckpoint(directory + "/step-17", 1.0), EvalCheckpoint(directory + "/step-23", 1.5)),
+                seq_lens=(8, 16),
+                eval_tokens_per_batch=64,
+                dropless_moe_implementation="scatter",
+                compute_bpb=False,
+            )
+            (step, metrics), (later, rescaled) = evaluate_checkpoints(eval_config)
 
             # The reference: the saved weights scored directly, window by window.
             reference = {}
@@ -118,7 +122,7 @@ def test_checkpoint_eval_scores_saved_weights_at_each_length_and_pads_the_final_
                     )
                     reference[seq_len] = float(jnp.sum(per_token * loss_weight) / loss_weight.sum())
 
-        assert step == 17
+        assert (step, later) == (17, 23)
         for seq_len in (8, 16):
             prefix = f"eval_dropless/seq_len_{seq_len}"
             np.testing.assert_allclose(metrics[prefix + "/paloma/tiny/loss"], reference[seq_len], rtol=1e-4)

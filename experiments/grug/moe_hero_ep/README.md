@@ -510,9 +510,9 @@ not establish long-context training quality.
 
 ### Checkpoint eval: Paloma, Uncheatable and paired MRCR
 
-`launch_checkpoint_eval.py` scores any `step-N` checkpoint without training. It reads only `params` and `step`, and runs one rack on the expert-collapsed mesh under the local dropless backend. Paloma and Uncheatable run once per `--seq-len`, keeping a final partial sequence with masked right padding.
+`launch_checkpoint_eval.py` scores `step-N` checkpoints without training, each with its own Q multiplier, in increasing step order. It reads only `params` and `step`, and runs one rack on the expert-collapsed mesh under the local dropless backend. Paloma and Uncheatable run once per `--seq-len`, keeping a final partial sequence with masked right padding.
 
-`--mrcr` adds the oracle-normalized paired MRCR eval from [#8701](https://github.com/marin-community/marin/issues/8701): 299 sources, four conditions each, 1,196 unpacked sequences and 115,834 scored response tokens per condition. It needs `--context-axis-size 4` and scores 16 sequences per batch. Build its data once with `python -m experiments.datasets.mrcr --run`. The artifact holds `mrcr_metrics.json` and per-source `mrcr_example_losses.jsonl`, and W&B logs the same values under `eval/mrcr/two_shot/cap_262144/`.
+`--mrcr` adds the oracle-normalized paired MRCR eval from [#8701](https://github.com/marin-community/marin/issues/8701): 299 sources, four conditions each, 1,196 unpacked sequences and 115,834 scored response tokens per condition. It needs `--context-axis-size 4` and scores 16 sequences per batch. Build its data once with `python -m experiments.datasets.mrcr --run`. The artifact holds `step-<N>/mrcr_metrics.json` and per-source `step-<N>/mrcr_example_losses.jsonl`, and W&B logs the same values under `eval/mrcr/two_shot/cap_262144/`.
 
 Read recovery beside the condition NLLs and both gains. Log scaling reaches `full_context` and `distractor_only`, whose documents pass the floors, but not the short `needle_only` and `query_only` documents. A uniform qk change moves all four, so recovery alone does not compare those arms.
 
@@ -521,8 +521,8 @@ Trailing padding carries `valid=False` and a sentinel bound through the FA4 quer
 ```bash
 python -m experiments.grug.moe_hero_ep.launch_checkpoint_eval \
   --run-id hero-mrcr-<arm>-step<N> \
-  --checkpoint s3://marin-us-east-02a/marin/<run>/checkpoints/step-<N> \
-  --qk-mult 1.66 --context-axis-size 4 --mrcr \
+  --checkpoint s3://marin-us-east-02a/marin/<run>/checkpoints/step-<N> 1.66 \
+  --context-axis-size 4 --mrcr \
   --seq-len 4096 --seq-len 65536 --seq-len 262144 \
   --version <YYYY.MM.DD> --run
 ```
