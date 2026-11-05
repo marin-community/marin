@@ -6,6 +6,7 @@
 import argparse
 import asyncio
 import hashlib
+import json
 from collections.abc import Iterable, Iterator
 from dataclasses import asdict
 from functools import partial
@@ -24,7 +25,6 @@ from experiments.post_training.capability_driven_envs.biotasks_library.repositor
     repository_source_text,
     unavailable_portfolio,
 )
-from experiments.post_training.capability_driven_envs.biotasks_library.run_first3_zephyr import review_prompt
 from experiments.post_training.capability_driven_envs.biotasks_library.run_notebooks_v1_zephyr import (
     DEFAULT_RELAY_JOB,
     DEFAULT_RELAY_SERVICE,
@@ -49,9 +49,33 @@ def read_catalog(uri: str) -> list[dict[str, object]]:
     return rows
 
 
+def idea_review_prompt(idea: BioTaskIdea) -> str:
+    """Render a blinded pre-Taskforge review of a fully instantiated idea."""
+    public_idea = idea.model_dump(mode="json", exclude={"author_assessment"})
+    return f"""You are independently reviewing a proposed computational-biology reward task before it is lowered into
+Taskforge. The author assessment is deliberately hidden. The idea's expected JSON will later become a StructuredExact
+grader, so assess whether that contract is justified from solver-visible resources; do not penalize the expected
+absence of a TaskSpec or executable grader at this stage.
+
+Score each dimension from 1 (poor) to 5 (excellent):
+- information_sufficiency: a solver can answer from solver-visible resources alone;
+- biological_substance: the task tests biology or biologically meaningful analysis, not incidental arithmetic;
+- scientific_validity: conclusions follow from evidence and preserve limitations;
+- objective_verifiability: the frozen answer is deterministic, internally consistent, and justified;
+- hack_resistance: no answer leakage, filename shortcut, ambiguity, or future grader exploit;
+- practical_usefulness: useful training signal at reasonable runtime and complexity.
+
+List concrete blocking issues. recommended_action must be accept, revise, or reject. Confidence is 0 to 1. Repository
+format detection is only discovery evidence, not proof of scientific quality. Synthetic resources must be honestly
+labeled and still test a substantive operation.
+
+Idea packet:
+{json.dumps(public_idea, indent=2, sort_keys=True)}
+"""
+
+
 async def _review(idea: BioTaskIdea, *, model: object, port: OpenAIModelPort) -> dict[str, object]:
-    authoring_result: dict[str, object] = {"terminal": "not_run"}
-    prompt = review_prompt(idea, authoring_result)
+    prompt = idea_review_prompt(idea)
     base = {
         "idea": idea.model_dump(mode="json"),
         "author_assessment": idea.author_assessment.model_dump(mode="json"),
