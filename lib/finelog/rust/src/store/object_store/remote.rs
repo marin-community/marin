@@ -115,6 +115,26 @@ impl RemoteObjectStore {
 
 #[async_trait]
 impl ObjectStore for RemoteObjectStore {
+    async fn read_ranges(
+        &self,
+        reference: &super::ObjectReference,
+        ranges: &[std::ops::Range<u64>],
+    ) -> Result<Option<Vec<bytes::Bytes>>, StatsError> {
+        self.provider
+            .read_ranges(self.provider.object_path(&reference.id), ranges)
+            .await
+    }
+
+    async fn read_range(
+        &self,
+        reference: &super::ObjectReference,
+        range: std::ops::Range<u64>,
+    ) -> Result<Option<bytes::Bytes>, StatsError> {
+        self.provider
+            .read_range(self.provider.object_path(&reference.id), range)
+            .await
+    }
+
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
         self.provider
             .get_path(self.provider.object_path(id), "object")
