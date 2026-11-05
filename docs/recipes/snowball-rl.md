@@ -80,8 +80,9 @@ Metrics are in `exports/metrics/step-*.json`; per-answer JSONL is under
 job ID. Inspect both the artifacts and job before treating a run as successful.
 
 The `Evaluator` interface supplies configuration, callbacks and required environment names for presets. Harbor-on-Daytona support is a follow-up; internal panels are the current
-implementation. Training tasks with remote judges require `TOGETHER_API_KEY` in
-the submitting environment; every run forwards its required keys through Iris.
+implementation. With the default selection, every preset except speed-short requires
+`TOGETHER_API_KEY` in the submitting environment, including generate-only
+data-short. Each run forwards its required keys through Iris.
 
 ## Which experiment to run
 
@@ -101,7 +102,7 @@ the submitting environment; every run forwards its required keys through Iris.
 
 | gap | implication and follow-up |
 |---|---|
-| remote judge | Training presets depend on Together to judge 6,653 Glaive tasks; judge retries can extend update time. The no-judge `snowball-100k@2026.11.04.1` selection is planned for the test-panel control refresh. |
+| remote judge | Every preset except speed-short depends on Together: the training selection contains 6,653 Glaive tasks, and data-short also configures a remote judge session. Judge retries can extend update time. The no-judge `snowball-100k@2026.11.04.1` selection is planned for the test-panel control refresh. |
 | layout-p40-only; no-async-speed-gate | medium gates cover the 40-GPU synchronous layout; add an asynchronous speed gate |
 | AAII coverage; no-agentic-tasks | current tasks cover only part of AAII; add missing task families and agentic tasks |
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |
