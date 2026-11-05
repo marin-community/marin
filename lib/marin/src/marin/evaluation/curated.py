@@ -43,6 +43,8 @@ from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import InferenceBackendState
 from marin.rollouts.evaluation import EvaluationRunConfig, JudgeIdentity, ModelIdentity
 
+DEFAULT_EVALUATION_CONCURRENCY = 64
+
 
 @dataclass(frozen=True)
 class CuratedRunSettings:
@@ -59,7 +61,7 @@ class CuratedRunSettings:
                 "source_limit": self.source_limit,
                 "seed": self.seed,
                 "judge": self.judge.model_dump(mode="json") if self.judge is not None else None,
-                "concurrency": self.model.evaluation_num_concurrent or 64,
+                "concurrency": self.model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
             },
             sort_keys=True,
         )
@@ -90,7 +92,7 @@ def runtime_config(settings: CuratedRunSettings, session: RemoteInferenceSession
         generation_extra_body={key: json.loads(value) for key, value in model.generation.extra_gen_kwargs.items()},
         chat_template_kwargs=dict(model.generation.chat_template_kwargs),
         thinking_off_template_kwargs=dict(model.generation.thinking_off_template_kwargs),
-        concurrency=model.evaluation_num_concurrent or 64,
+        concurrency=model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
         source_limit=settings.source_limit,
         seed=settings.seed,
         judge=settings.judge,

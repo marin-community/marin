@@ -195,19 +195,27 @@ def test_raw_ingestion_and_browser_choose_terminal_trials_without_counting_retri
 
 
 @pytest.mark.parametrize(
-    "name,historical_metric,canonical_metric,native_metric,kind,shots",
+    "name,historical_metric,canonical_metric,native_metric,kind,shots,normalized_metric",
     [
-        ("mmlu", "acc,none", "accuracy", "acc,none", "binary", 5),
-        ("piqa", "acc_norm,none", "normalized_accuracy", "acc_norm,none", "binary", 0),
-        ("gsm8k", "exact_match,flexible-extract", "accuracy", "exact_match,strict-match", "binary", 5),
-        ("humanevalplus", "pass@1", "pass_at_1", "accuracy", "binary", 0),
-        ("mrcr", "mrcr_accuracy", "mrcr_accuracy", "accuracy", "continuous", 0),
-        ("math500", "accuracy_avg", "accuracy", "accuracy", "binary", 0),
-        ("ifbench", "strict_prompt_accuracy", "strict_prompt_accuracy", "strict_prompt_accuracy", "binary", 0),
+        ("mmlu", "acc,none", "accuracy", "acc,none", "binary", 5, "accuracy"),
+        ("piqa", "acc_norm,none", "normalized_accuracy", "acc_norm,none", "binary", 0, "normalized_accuracy"),
+        ("gsm8k", "exact_match,flexible-extract", "accuracy", "exact_match,strict-match", "binary", 5, "accuracy"),
+        ("humanevalplus", "pass@1", "pass_at_1", "accuracy", "binary", 0, "accuracy"),
+        ("mrcr", "mrcr_accuracy", "mrcr_accuracy", "accuracy", "continuous", 0, "accuracy"),
+        ("math500", "accuracy_avg", "accuracy", "accuracy", "binary", 0, "accuracy"),
+        (
+            "ifbench",
+            "strict_prompt_accuracy",
+            "strict_prompt_accuracy",
+            "strict_prompt_accuracy",
+            "binary",
+            0,
+            "strict_prompt_accuracy",
+        ),
     ],
 )
 def test_native_summary_reuses_historical_scores_in_panel_comparison_and_history(
-    raw_run, name, historical_metric, canonical_metric, native_metric, kind, shots
+    raw_run, name, historical_metric, canonical_metric, native_metric, kind, shots, normalized_metric
 ):
     raw_run = raw_run.model_copy(update={"evaluation": raw_run.evaluation.model_copy(update={"name": name})})
     write_observations(
@@ -260,6 +268,7 @@ def test_native_summary_reuses_historical_scores_in_panel_comparison_and_history
     records = [historical, native]
     panel = build_panel(records, panel_request())
     cells = {row["model"]: row["cells"][name] for row in panel["rows"]}
+    assert cells["historical-model"]["metric"] == cells["solver"]["metric"] == normalized_metric
     assert cells["historical-model"]["value"] == 0.6
     assert cells["solver"]["value"] == 0.5
     assert cells["historical-model"]["run_id"] == "historical"

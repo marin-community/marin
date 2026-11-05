@@ -411,7 +411,7 @@ def test_newest_declared_protocol_excludes_legacy_metrics_for_the_column():
     selection = select([legacy, declared], SelectionRequest())
 
     assert selection.cells["m"]["drop"].run_id == "declared"
-    assert selection.rejections[0].reason == "metric exact_match differs from declared f1"
+    assert selection.rejections[0].reason == "metric accuracy differs from declared f1"
 
 
 @pytest.mark.parametrize(
@@ -982,6 +982,23 @@ def test_publication_metric_projects_score_and_coverage_without_changing_record(
     assert measurement.coverage.n_scored == 4
     assert measurement.coverage.n_attempted == 5
     assert measurement.coverage.errors == {"ungraded": 1}
+    assert record.model_dump() == original
+
+
+def test_historical_mrcr_normalization_preserves_continuous_uncertainty():
+    record = _record(
+        eval_name="mrcr",
+        metrics={"mrcr": {"mrcr_accuracy": 0.5, "mrcr_accuracy_stderr": 0.1, "sample_len": 4}},
+        coverage={"mrcr": TaskCoverage(n_benchmark=4, n_attempted=4, n_scored=4)},
+    )
+    original = record.model_dump()
+    measurement = measurement_from_record(record)
+    assert measurement is not None
+    assert (measurement.metric, measurement.value, measurement.kind) == ("accuracy", 0.5, MetricKind.CONTINUOUS)
+    assert measurement.n_correct is None
+    assert measurement.recorded_stderr == 0.1
+    interval = measurement_interval(measurement)
+    assert 0.3 < interval.low < interval.high < 0.7
     assert record.model_dump() == original
 
 
