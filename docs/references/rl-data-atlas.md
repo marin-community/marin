@@ -84,9 +84,9 @@ excluded from the processed-examples total.
 **Not assessed** means there is no current sampled assessment; **Unknown** is a
 completed assessment without enough conclusive judgments. Curation never re-grades
 independent QC; the **Independent QC** column and the source details present the
-release's own admission evidence — verdict, method, reviewed and admitted counts
-and a link to its pinned manifest — beside, and distinct from, the sampled
-quality. Open a source for
+release's own admission evidence — verdict, method, reviewed count, admitted count
+where the release claims one, and a link to its pinned manifest — beside, and
+distinct from, the sampled quality. Open a source for
 pipeline details and links to its original dataset, assessment and curriculum
 coverage. The leading curriculum domain links directly to that source's coverage
 within the domain. On small screens, the table keeps name, count and quality

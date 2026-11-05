@@ -57,12 +57,13 @@ class IndependentQC(CatalogRecord):
     verdict: Verdict
     method: str = Field(min_length=1)
     reviewed: int = Field(ge=0)
-    admitted: int = Field(ge=0)
+    # Absent when the release retained its reviewed population without an admission claim.
+    admitted: int | None = Field(default=None, ge=0)
     evidence_url: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def _admitted_within_reviewed(self) -> "IndependentQC":
-        if self.admitted > self.reviewed:
+        if self.admitted is not None and self.admitted > self.reviewed:
             raise ValueError(f"admitted {self.admitted} exceeds reviewed {self.reviewed}")
         return self
 

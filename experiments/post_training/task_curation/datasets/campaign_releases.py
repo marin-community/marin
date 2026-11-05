@@ -160,9 +160,8 @@ def sources() -> list[RlDataSource]:
                 dataset=staged_v1,
                 independent_qc=IndependentQC(
                     verdict=Verdict.UNKNOWN,
-                    method="Stage 1 workspace-readiness verifier only; the release makes no task-quality claim",
+                    method="Stage 1 workspace-readiness verification; the release makes no task-quality claim",
                     reviewed=1699,
-                    admitted=1699,
                     evidence_url=_pinned_blob(staged_v1),
                 ),
             )
@@ -191,7 +190,6 @@ def sources() -> list[RlDataSource]:
                     method="Stage 3 handoff verification against required tests; 178 of 778 handoffs are partial "
                     "and none were used in run 2026.10.19.57",
                     reviewed=778,
-                    admitted=778,
                     evidence_url=_pinned_blob(staged_v2),
                 ),
             )

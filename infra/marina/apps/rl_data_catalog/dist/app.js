@@ -72,9 +72,13 @@ function render() {
     } else quality.append(badge);
     const independent = node('td');
     if (row.independent_qc) {
-      const chip = node('span', labels[row.independent_qc.verdict], `chip quality-${row.independent_qc.verdict}`);
-      chip.title = row.independent_qc.method;
-      independent.append(chip, node('span', `${number.format(row.independent_qc.admitted)} of ${number.format(row.independent_qc.reviewed)} reviewed`, 'source-subtitle'));
+      const qc = row.independent_qc;
+      const chip = node('span', labels[qc.verdict], `chip quality-${qc.verdict}`);
+      chip.title = qc.method;
+      const subtitle = qc.admitted === null
+        ? `${number.format(qc.reviewed)} reviewed`
+        : `${number.format(qc.admitted)} of ${number.format(qc.reviewed)} reviewed`;
+      independent.append(chip, node('span', subtitle, 'source-subtitle'));
     } else independent.append(node('span', '—', 'muted'));
     const area = node('td');
     if (row.coverage?.top_area) {
@@ -94,7 +98,7 @@ function details(row) {
   const fields = [
     ['Catalog', row.origin], ['Converted examples', row.coverage?.example_count],
     ['Use', useLabels[row.coverage?.intended_use]], ['Quality', labels[grade(row)]],
-    ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed — ${row.independent_qc.method}` : null],
+    ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted === null ? `${row.independent_qc.reviewed} reviewed` : `${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed`} — ${row.independent_qc.method}` : null],
     ['Top curriculum area', row.coverage?.top_area?.name],
     ['Input rows', row.task_count], ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
     ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
