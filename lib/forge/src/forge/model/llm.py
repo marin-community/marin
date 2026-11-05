@@ -80,3 +80,4 @@ class Completion:
     usage: Usage = Usage()
     continuations: int = 0
     reasoning: str = ""
+    retries: tuple[str, ...] = ()
