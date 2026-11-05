@@ -12,9 +12,8 @@ import math
 from importlib import import_module
 
 from verifyit.adapters import harness_validation as validation
-from verifyit.adapters.skyrl import grade_literal_candidate
 from verifyit.grade import InvalidTask, Reward, scored
-from verifyit.modes.grade_exact import grade_exact_candidate
+from verifyit.modes.grade_exact import grade_exact_candidate, grade_literal_candidate
 from verifyit.modes.grade_math import grade_numeric_candidate_float
 from verifyit.modes.grade_mcq import grade_mcq_candidate
 from verifyit.spec import ExactSpec, McqSpec

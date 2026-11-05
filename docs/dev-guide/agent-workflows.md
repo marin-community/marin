@@ -23,6 +23,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `simplify-code` | Explicitly requested cleanup of a branch or diff | Review findings alone do not authorize edits; publication belongs to `manage-pr` |
 | `file-issue` | Deduplicating and filing an issue | Implementing an assigned issue belongs to `manage-pr` |
 | `use-echo` | Searching prior work and maintaining shared knowledge or incident records | Repository procedures belong in `OPS.md` or `docs/`; search alone does not require a write |
+| `echo-log` | Reading and appending the shared agent work log, one entry per milestone | Search, wiki notes, and incident records belong to `use-echo`; an entry links evidence and does not replace the PR, issue, or report |
 | `research-engineering` | Iterative design and data exploration, experiments, runnable research branches, notebooks, and promotion into Marin | Background research uses experiment records; domain skills own execution and `manage-pr` owns contribution PRs |
 | `curate-experiments` | Report-index curation and explicitly requested archive tags and issue breadcrumbs | Archival does not authorize deleting experiment files; scheduled issue summaries use an assigned procedure |
 
@@ -46,7 +47,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `review-grant` | Verifying decrypted identities and roles, obtaining confirmation, and applying the approved change | Never approves or merges before confirmation |
 | `trace-pulumi-diff` | Read-only attribution of pending infrastructure changes | Never applies or refreshes state |
 | `onboard-marin` | Local developer readiness and identification of missing access | Does not grant access or launch compute without the required authorization |
-| `marina-applet` | Marina application build, validation, release, data, and lifecycle | Application releases are separate from Marina runtime deployment |
+| `marina-app` | Marina application build, validation, release, data, and lifecycle | Application releases are separate from Marina runtime deployment |
 
 ## Implementation and publication
 

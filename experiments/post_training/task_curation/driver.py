@@ -89,12 +89,16 @@ EMBEDDING_STAGES = (
 
 
 def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
-    """The named catalog sources in catalog order, or the whole catalog when none is named."""
+    """Select named sources, or training sources when no names are supplied."""
     catalog = runnable_sources()
     unknown = set(sources) - catalog.keys()
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
-    return {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
+    return {
+        name: pipeline
+        for name, pipeline in catalog.items()
+        if (name in sources if sources else pipeline.declaration.type != "eval")
+    }
 
 
 def _image_factory(backend: Backend | None, controller_url: str | None) -> MachineFactory | None:
@@ -133,7 +137,13 @@ def _conversion_steps(
         step = cast(CurationPipeline, source.pipeline)(source, options)
         declaration = source.declaration
         assert declaration.pipeline is not None
-        identity = canonical_sha256({"pipeline": declaration.pipeline.model_dump(), "dependencies": step.fingerprint()})
+        identity = canonical_sha256(
+            {
+                "pipeline": declaration.pipeline.model_dump(),
+                "step": f"{step.name}@{step.version}",
+                "dependencies": step.fingerprint(),
+            }
+        )
         steps[source.name] = replace(
             step, name=f"rl-semantics/converted/{source.name}-{identity[:16]}", version=CORPUS_CONVERSION_VERSION
         )
@@ -534,6 +544,10 @@ def main(
         SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
     )
     selected = _selected_sources(sources)
+    if processing_mode != SourceProcessingMode.QUICK and any(
+        source.declaration.type == "eval" for source in selected.values()
+    ):
+        raise click.UsageError("Evaluation sources use --mode quick to publish their full benchmark population")
     runtime = CampaignRuntime()
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
     if publication_catalog is not None and (
@@ -585,7 +599,15 @@ def main(
         max_workers,
         concurrent_sources,
         worker_resources=worker_resources,
-        coordinator_resources=ResourceConfig(cpu=1, ram=coordinator_memory or LOCAL_MEMORY, preemptible=False),
+        # Iris authorizes an elevated worker profile only when the launching parent
+        # task carries the same profile; the coordinator job is that parent, so it
+        # must request the profile the workers will run under.
+        coordinator_resources=ResourceConfig(
+            cpu=1,
+            ram=coordinator_memory or LOCAL_MEMORY,
+            preemptible=False,
+            container_profile=worker_resources.container_profile,
+        ),
         chunk_storage_prefix=(
             str(cache_dir / ".zephyr")
             if cache_dir is not None
@@ -634,11 +656,14 @@ def main(
         if local and sources:
             selected = {name: selected[name] for name in dict.fromkeys(sources)}
         options = PipelineOptions(processing_mode, runtime, inputs=inputs)
-        steps = (
-            {name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()}
-            if local
-            else _conversion_steps(selected, options)
-        )
+        if local:
+            assert cache_dir is not None
+            with artifact_prefix(str(cache_dir)):
+                steps = {
+                    name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()
+                }
+        else:
+            steps = _conversion_steps(selected, options)
         roots = _quick_conversion(
             steps,
             selected,
