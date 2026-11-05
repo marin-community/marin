@@ -3,6 +3,7 @@
 
 """The core types: model requests and turns, rollout records and events, exceptions, and the task rollout spec."""
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -13,6 +14,7 @@ from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.reasoning_markup import ReasoningViolation
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
@@ -70,6 +72,20 @@ class TokenUsage:
     completion_tokens: int
 
 
+class ModelResponseError(ValueError):
+    """An unusable endpoint response retained as JSON-safe failure evidence."""
+
+    def __init__(self, message: str, *, response: dict[str, Any]):
+        super().__init__(message)
+        self.response = response
+        self.response_json: str | None = None
+        try:
+            json.dumps(response, allow_nan=False)
+        except ValueError:
+            self.response_json = json.dumps(response, allow_nan=True)
+            self.response = json.loads(self.response_json, parse_constant=lambda _value: None)
+
+
 @dataclass(frozen=True)
 class ModelTurn:
     """The transport's answer to one ``ModelRequest``: the parsed message and the exact tokens.
@@ -88,13 +104,19 @@ class ModelTurn:
     logprobs: tuple[float, ...] | None
     """The log probability of each response token when it was sampled, or ``None`` if the transport gives none."""
     stop_reason: str
-    """Why generation stopped, for example ``"stop"`` or ``"length"``. A ``"length"`` stop refuses the next ``reply``."""
+    """Why generation stopped, for example ``"stop"`` or ``"length"``. A ``"length"`` stop refuses the next ``reply``.
+
+    It is ``"length"`` whenever generation ended on the output token budget, including a reply that a server's tool
+    parser reports as tool calls. The shell harness does not execute tool calls from such a turn.
+    """
     text: str = ""
     """The response as plain text. A harness that reads tags in the text, not tool calls, uses it."""
     metadata: dict[str, Any] = field(default_factory=dict)
     """Extra data from the transport, such as top-k log probabilities. The engine passes it on unread."""
     usage: TokenUsage | None = None
     """Token counts that the transport reports. The token budget counts them instead of the token IDs."""
+    reasoning_violation: ReasoningViolation | None = None
+    """The malformed reasoning span that the transport found in the reply, if any."""
 
     @property
     def request_tokens(self) -> int:
@@ -113,7 +135,11 @@ class ContextWindowExceeded(RuntimeError):
 
 
 class GenerationLimitReached(Exception):
-    """The rendered prompt leaves no permitted generation budget."""
+    """The rendered prompt leaves no permitted generation budget.
+
+    ``prompt_token_ids`` are the rendered prompt tokens, or empty when the server rejected the prompt without
+    rendering it. The engine records them only when no turn of the conversation completed.
+    """
 
     def __init__(self, prompt_token_ids: tuple[int, ...]):
         self.prompt_token_ids = prompt_token_ids

@@ -4,9 +4,8 @@ import asyncio
 import json
 import shutil
 import tempfile
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager
-from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,6 +14,7 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
 from harbor.models.task.config import EnvironmentConfig
+from harbor.host_capabilities import DaytonaConnection, HostCapabilities
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
@@ -25,11 +25,11 @@ from marinskyrl.harbor_environments import (
     original_trial_environment,
 )
 from marinskyrl.resource_locator import join_resource_path
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
-from shellbox.machine import Machine, NetworkPolicy
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
+from shellbox.machine import Machine, NetworkPolicy
 from taskcompendium.submission import conversation_messages
 
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
@@ -42,6 +42,7 @@ from skyrl_train.rollouts.agent_service import serve_agent_app
 from skyrl_train.rollouts.installed_agent import run_installed_agent
 from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness, run_harbor_trial
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
+from skyrl_train.rollouts.harbor_settings import EnvironmentType
 
 
 async def publish_attempt(evidence: Path, destination: str) -> None:
@@ -66,11 +67,34 @@ class InstalledAgentSettings(BaseModel):
     harbor_environment: HarborEnvironmentSettings
     trial_reward_key: str = "reward"
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_snapshots(cls, values: object) -> object:
+        if isinstance(values, Mapping) and "environment_snapshots" in values:
+            raise ValueError(
+                "environment_snapshots is retired; prepare task docker_image references "
+                "and remove the legacy snapshot mapping before launching"
+            )
+        return values
+
 
 class InstalledAgentRuntime:
-    def __init__(self, settings: InstalledAgentSettings, backend: AgentInferenceBackend, max_output_tokens: int):
+    def __init__(
+        self,
+        settings: InstalledAgentSettings,
+        backend: AgentInferenceBackend,
+        max_output_tokens: int,
+        *,
+        daytona_connection: DaytonaConnection,
+        eval_daytona_connection: DaytonaConnection,
+    ):
         self.settings = settings
         self.backend = backend
+        self.daytona_connection = daytona_connection
+        self.eval_daytona_connection = eval_daytona_connection
+        self.protected_values = frozenset(
+            value for value in (daytona_connection.api_key, eval_daytona_connection.api_key) if value
+        )
         self.limits = NativeAPILimits(backend.model_name, backend.max_model_len, max_output_tokens)
         self.resources = AsyncExitStack()
         self.port: int | None = None
@@ -128,12 +152,19 @@ class InstalledAgentRuntime:
         """Bind a full Harbor trial to the phase's deadlines and environment settings."""
         if lowered.limits.attempt_timeout is None:
             raise ValueError("Full Harbor trials require a finite attempt timeout for the inference capability")
+        if settings.environment.type is not EnvironmentType.DAYTONA:
+            raise ValueError(
+                "Original Harbor trials require Shellbox Daytona; engine-owned Docker "
+                "machines use the borrowed-machine harness"
+            )
         kwargs = dict(settings.environment.kwargs)
-        key_env = kwargs.pop("eval_api_key_env" if phase == "eval" else "api_key_env", None)
         kwargs.pop("api_key_env", None)
         kwargs.pop("eval_api_key_env", None)
-        if key_env is not None:
-            kwargs["api_key_env"] = key_env
+        connection = self.eval_daytona_connection if phase == "eval" else self.daytona_connection
+        host_capabilities = HostCapabilities(
+            daytona=connection,
+            protected_values=self.protected_values,
+        )
         environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
         agent = self.settings.agent.model_copy(
             update={
@@ -148,10 +179,17 @@ class InstalledAgentRuntime:
             trial_attempt_timeout_sec=lowered.limits.attempt_timeout,
             trial_cleanup_grace_sec=lowered.limits.cleanup_timeout,
         )
-        return HarborTrialHarness(
-            partial(self.run_original_trial, lowered=lowered, session_id=session_id, config=config),
-            self.settings.trial_reward_key,
-        )
+
+        async def run(complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> TrialResult:
+            return await self.run_original_trial(
+                complete,
+                lowered=lowered,
+                session_id=session_id,
+                config=config,
+                host_capabilities=host_capabilities,
+            )
+
+        return HarborTrialHarness(run, self.settings.trial_reward_key)
 
     async def run_original_trial(
         self,
@@ -160,6 +198,7 @@ class InstalledAgentRuntime:
         lowered: TaskRolloutSpec,
         session_id: str,
         config: TrialConfig,
+        host_capabilities: HostCapabilities,
     ) -> TrialResult:
         """Execute the original package with Harbor-owned environments and verification."""
         if self.port is None:
@@ -206,7 +245,7 @@ class InstalledAgentRuntime:
                         "environment": environment,
                     }
                 )
-                trial = await Trial.create(trial_config)
+                trial = await Trial.create(trial_config, host_capabilities=host_capabilities, guest_environment={})
                 result = await run_harbor_trial(trial, self.backend, complete, evidence / "engine")
                 return result.model_copy(update={"trial_uri": join_resource_path(destination, "trials", attempt_id)})
         finally:
@@ -238,7 +277,7 @@ class InstalledAgentRuntime:
                     "kwargs": {
                         **source.kwargs,
                         "api_base": api_base,
-                        "api_key": "capability-url",
+                        "api_key": "EMPTY",
                         "collect_rollout_details": True,
                         "model_info": {
                             "max_input_tokens": self.backend.max_model_len,
@@ -263,7 +302,10 @@ class InstalledAgentRuntime:
             run_timeout,
             capability_lifetime=self.settings.setup_timeout + run_timeout + self.settings.cleanup_timeout,
         ) as config:
-            agent = AgentFactory.create_agent_from_config(config, logs_dir=trial_dir / "agent")
+            host_capabilities = HostCapabilities(protected_values=self.protected_values)
+            agent = AgentFactory.create_agent_from_config(
+                config, logs_dir=trial_dir / "agent", host_capabilities=host_capabilities, guest_environment={}
+            )
             if not isinstance(agent, BaseInstalledAgent):
                 raise ValueError("The selected agent must be an installed Harbor agent")
             environment = BorrowedMachineEnvironment(
@@ -271,6 +313,7 @@ class InstalledAgentRuntime:
                 trial_dir,
                 attempt_id,
                 EnvironmentConfig(allow_internet=lowered.task_machine.network == NetworkPolicy.ALLOW),
+                host_capabilities=host_capabilities,
             )
             with environment.with_default_user(lowered.task_machine.user):
                 await run_installed_agent(

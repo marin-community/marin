@@ -128,6 +128,11 @@ class AgentInferenceBackend:
 
     async def chat_completion_stream(self, request_payload: dict[str, Any]):
         response = await self.chat_completion(request_payload)
+        async for chunk in self.stream_chat_completion(response):
+            yield chunk
+
+    @staticmethod
+    async def stream_chat_completion(response: dict[str, Any]):
         if "error" in response:
             yield f"data: {json.dumps(response)}\n\n"
             yield "data: [DONE]\n\n"

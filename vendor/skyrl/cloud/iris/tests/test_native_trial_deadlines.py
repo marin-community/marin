@@ -57,7 +57,7 @@ async def test_native_trial_verifier_finishes_after_agent_deadline(monkeypatch):
         OmegaConf.create(
             {
                 "harbor": {
-                    "override_timeout_sec": 0.05,
+                    "eval_timeout_override_sec": 0.05,
                     "verifier_override_timeout_sec": 0.2,
                     "trial_attempt_timeout_sec": 1,
                 }

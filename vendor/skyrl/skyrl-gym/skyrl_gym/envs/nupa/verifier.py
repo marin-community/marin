@@ -1,13 +1,13 @@
-"""Verifyit-backed verifier for NUPA-Loose representation-sensitive grading."""
+"""Source-backed verifier for NUPA-Loose representation-sensitive grading."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from verifyit.adapters.evalchemy_nupa import grade_nupa_answer
+from taskcompendium.importers.evalchemy.scorers.nupa import grade_nupa_answer
 from verifyit.grade import Status
 
-from skyrl_gym.envs.nupa.answers import extract_answer, full_answer, digit_parts, parse_ground_truth
+from skyrl_gym.envs.nupa.answers import parse_ground_truth
 from skyrl_gym.verification import RolloutEvidence, VerificationResult
 
 
@@ -27,9 +27,6 @@ class NUPAVerifier:
             evidence.response,
             answer,
             answer_format,
-            extract_answer=extract_answer,
-            full_answer=full_answer,
-            digit_parts=digit_parts,
         )
         if verdict.status is not Status.SCORED:
             return VerificationResult.error(

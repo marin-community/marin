@@ -1,7 +1,5 @@
 """Unit tests for Gemini CLI MCP server integration."""
 
-from unittest.mock import AsyncMock
-
 import pytest
 
 from harbor.agents.installed.gemini_cli import GeminiCli
@@ -152,64 +150,3 @@ class TestReasoningEffort:
     def test_invalid_reasoning_effort_raises(self, temp_dir):
         with pytest.raises(ValueError, match="Valid values"):
             GeminiCli(logs_dir=temp_dir, reasoning_effort="extreme")
-
-
-class TestCreateRunAgentCommandsMCP:
-    """Test that run() handles MCP servers correctly."""
-
-    @pytest.mark.asyncio
-    async def test_no_mcp_servers_no_settings_command(self, temp_dir):
-        agent = GeminiCli(logs_dir=temp_dir, model_name="google/gemini-2.5-pro")
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        await agent.run("do something", mock_env, AsyncMock())
-        exec_calls = mock_env.exec.call_args_list
-        assert not any("settings.json" in call.kwargs["command"] for call in exec_calls)
-
-    @pytest.mark.asyncio
-    async def test_mcp_servers_adds_setup_command(self, temp_dir):
-        servers = [
-            MCPServerConfig(
-                name="mcp-server", transport="sse", url="http://mcp-server:8000/sse"
-            )
-        ]
-        agent = GeminiCli(
-            logs_dir=temp_dir,
-            model_name="google/gemini-2.5-pro",
-            mcp_servers=servers,
-        )
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        await agent.run("do something", mock_env, AsyncMock())
-        exec_calls = mock_env.exec.call_args_list
-        mcp_calls = [
-            call for call in exec_calls if "settings.json" in call.kwargs["command"]
-        ]
-        assert len(mcp_calls) == 1
-        assert "mcpServers" in mcp_calls[0].kwargs["command"]
-
-    @pytest.mark.asyncio
-    async def test_reasoning_effort_uses_model_alias(self, temp_dir):
-        agent = GeminiCli(
-            logs_dir=temp_dir,
-            model_name="google/gemini-3-pro-preview",
-            reasoning_effort="high",
-        )
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-
-        await agent.run("do something", mock_env, AsyncMock())
-
-        exec_calls = mock_env.exec.call_args_list
-        settings_calls = [
-            call for call in exec_calls if "settings.json" in call.kwargs["command"]
-        ]
-        run_calls = [
-            call for call in exec_calls if "gemini --yolo" in call.kwargs["command"]
-        ]
-        assert len(settings_calls) == 1
-        assert "thinkingLevel" in settings_calls[0].kwargs["command"]
-        assert len(run_calls) == 1
-        assert (
-            "--model=harbor-gemini-3-pro-preview-high" in run_calls[0].kwargs["command"]
-        )

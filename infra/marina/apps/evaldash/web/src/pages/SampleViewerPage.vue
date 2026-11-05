@@ -65,7 +65,7 @@ const {
   ensure,
 } = useSamplePager(props.runId, task, filter, extractionFilter)
 
-const FILTERS = computed(() => sampleFilters(counts.value?.ungraded))
+const FILTERS = computed(() => sampleFilters(counts.value))
 
 // A task scored under one filter needs no control; only offer the selector when there is a choice.
 const showExtractionFilters = computed(() => extractionFilters.value.length > 1)
