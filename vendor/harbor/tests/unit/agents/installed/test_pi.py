@@ -1361,7 +1361,8 @@ class TestPiTrajectoryConversion:
         assert [call.function_name for call in tool_step.tool_calls] == ["bash"]
         assert tool_step.tool_calls[0].tool_call_id == "chatcmpl-tool-aaa"
         assert tool_step.tool_calls[0].arguments == {"command": "ls -la"}
-        assert tool_step.metrics.prompt_tokens == 100
+        assert tool_step.metrics.prompt_tokens == 105  # 100 input + 5 cached
+        assert tool_step.metrics.cached_tokens == 5
         assert tool_step.metrics.completion_tokens == 20
         result = tool_step.observation.results[0]
         assert result.source_call_id == "chatcmpl-tool-aaa"
@@ -1378,7 +1379,7 @@ class TestPiTrajectoryConversion:
         assert final.tool_calls is None
         assert final.metrics.prompt_tokens == 180
 
-        assert trajectory.final_metrics.total_prompt_tokens == 420
+        assert trajectory.final_metrics.total_prompt_tokens == 425  # 105 + 140 + 180
         assert trajectory.final_metrics.total_completion_tokens == 95
         assert trajectory.final_metrics.total_steps == 5
 
@@ -1485,6 +1486,36 @@ class TestPiTrajectoryConversion:
         result = trajectory.steps[0].observation.results[0]
         assert result.content == "mismatched"
         assert result.source_call_id is None
+
+    def test_malformed_usage_values_do_not_escape(self, temp_dir):
+        agent = self._agent(temp_dir)
+        self._write_jsonl(
+            temp_dir / "pi.txt",
+            [
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "usage": {"input": None, "output": "many", "cacheRead": 3},
+                    },
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "usage": {"input": 10, "output": 5},
+                    },
+                },
+            ],
+        )
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)  # must not raise
+
+        # The malformed record is skipped; the well-formed one is counted.
+        assert context.n_input_tokens == 10
+        assert context.n_output_tokens == 5
+        assert (temp_dir / "trajectory.json").exists()
 
     def test_unparseable_output_writes_no_trajectory(self, temp_dir):
         agent = self._agent(temp_dir)

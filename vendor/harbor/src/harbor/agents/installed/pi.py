@@ -757,17 +757,15 @@ export default function (pi) {
         for event in events:
             try:
                 usage = self._assistant_usage(event)
+                if usage is not None:
+                    total_input_tokens += usage.get("input", 0)
+                    total_output_tokens += usage.get("output", 0)
+                    total_cache_read_tokens += usage.get("cacheRead", 0)
+                    total_cache_write_tokens += usage.get("cacheWrite", 0)
+                    cost = usage.get("cost") or {}
+                    total_cost += cost.get("total", 0.0)
             except (AttributeError, TypeError):
                 skipped_records += 1
-                continue
-            if usage is None:
-                continue
-            total_input_tokens += usage.get("input", 0)
-            total_output_tokens += usage.get("output", 0)
-            total_cache_read_tokens += usage.get("cacheRead", 0)
-            total_cache_write_tokens += usage.get("cacheWrite", 0)
-            cost = usage.get("cost") or {}
-            total_cost += cost.get("total", 0.0)
 
         if skipped_records:
             self.logger.debug(
@@ -847,6 +845,13 @@ export default function (pi) {
         return None
 
     @staticmethod
+    def _token_count(value: Any) -> int:
+        """A non-negative token count; malformed values count as zero."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 0
+        return value if value > 0 else 0
+
+    @staticmethod
     def _message_text(content: Any) -> str:
         """The concatenated text of a message's text blocks, or a bare string."""
         if content is None:
@@ -890,8 +895,10 @@ export default function (pi) {
             if role == "assistant":
                 step, usage = self._assistant_step(message, timestamp, len(steps) + 1)
                 if usage is not None:
-                    total_input_tokens += usage.get("input", 0) or 0
-                    total_output_tokens += usage.get("output", 0) or 0
+                    total_input_tokens += self._token_count(usage.get("input", 0)) + self._token_count(
+                        usage.get("cacheRead", 0)
+                    )
+                    total_output_tokens += self._token_count(usage.get("output", 0))
                 if step.model_name and not model_name:
                     model_name = step.model_name
                 steps.append(step)
@@ -975,11 +982,22 @@ export default function (pi) {
         usage = usage if isinstance(usage, dict) else None
         metrics = None
         if usage is not None:
-            cost = usage.get("cost")
+            # ATIF counts cached input inside prompt_tokens, with the cache
+            # hits kept in cached_tokens. Malformed values count as zero so
+            # one bad record cannot void the trajectory.
+            cached_tokens = self._token_count(usage.get("cacheRead", 0))
+            prompt_tokens = self._token_count(usage.get("input", 0)) + cached_tokens
+            cost_total = (usage.get("cost") or {}).get("total")
+            cost_usd = (
+                cost_total
+                if isinstance(cost_total, (int, float)) and not isinstance(cost_total, bool)
+                else None
+            )
             metrics = Metrics(
-                prompt_tokens=(usage.get("input", 0) or 0) or None,
-                completion_tokens=(usage.get("output", 0) or 0) or None,
-                cost_usd=(cost.get("total") if isinstance(cost, dict) else None) or None,
+                prompt_tokens=prompt_tokens or None,
+                completion_tokens=self._token_count(usage.get("output", 0)) or None,
+                cached_tokens=cached_tokens or None,
+                cost_usd=cost_usd,
             )
         step_model = message.get("model")
         step = Step(
