@@ -196,6 +196,7 @@ from experiments.belay.submit import (
     variant_settings,
     with_launched,
 )
+from experiments.belay.sync import sync
 
 BELAY = "uv run python -m experiments.belay"
 ESCALATED = "Escalated:"
@@ -1844,6 +1845,7 @@ def main(argv: list[str]) -> None:
         p.add_argument("--dry-run", action="store_true", help="check and print; write, push, launch and post nothing")
         return p
 
+    sub.add_parser("sync", help="report runs, registry results and storage to the page (the watch runs it every pass)")
     command("claim")
     p = command("wait")
     p.add_argument("--session", default=os.environ.get(SESSION_ENV), help="this session's id (default: its env)")
@@ -1924,7 +1926,9 @@ def main(argv: list[str]) -> None:
             raise SystemExit("refusing: --today is for dry runs only")
         today = args.today
 
-    if args.command == "claim":
+    if args.command == "sync":
+        sync()
+    elif args.command == "claim":
         claim()
     elif args.command == "wait":
         if not args.session:

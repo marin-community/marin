@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from experiments.belay.branch import current_branch, git
+from experiments.belay.branch import current_branch, git, repo_root
 from experiments.belay.config import CONFIG, Track
 from experiments.belay.page import Idea
 from experiments.belay.results import RunResult
@@ -27,6 +27,11 @@ MAX_SUMMARY = 400
 
 
 def require_registry_checkout() -> None:
+    """Pull the registry checkout, first adding it as a worktree of this repository if it does not exist yet (a fresh
+    Loom session has none)."""
+    if not CONFIG.registry_checkout.exists():
+        git(repo_root(), "fetch", "--quiet", "origin", CONFIG.registry_branch)
+        git(repo_root(), "worktree", "add", "--quiet", str(CONFIG.registry_checkout), CONFIG.registry_branch)
     branch = current_branch(CONFIG.registry_checkout)
     if branch != CONFIG.registry_branch:
         raise SystemExit(f"refusing: {CONFIG.registry_checkout} is on {branch}, not {CONFIG.registry_branch}")

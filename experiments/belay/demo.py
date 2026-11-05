@@ -47,14 +47,12 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-import s3fs
 import sqlalchemy
-import wandb
 
-from experiments.belay.config import CONFIG, COREWEAVE_S3_ENDPOINT
+from experiments.belay.config import CONFIG
 from experiments.belay.page import SESSION_ENV as SESSION_ID_ENV
 from experiments.belay.page import SESSION_SECRET_ENV, TOKEN_ENV, SessionCredentials, call
-from experiments.belay.submit import iris_jobs
+from experiments.belay.sync import Watcher
 
 logger = logging.getLogger("belay.demo")
 
@@ -75,9 +73,6 @@ PG_PORT = 55433
 MARINA_PORT = 8091
 WATCH_INTERVAL = 120
 DISPATCH_INTERVAL = 5
-STORAGE_INTERVAL = 3600
-WANDB_PATH = CONFIG.wandb_project
-STORAGE_BUCKET = "marin-us-east-02a"
 SESSION_MAX_TURNS = 400
 APP_SCHEMA = "belay"
 PUBLIC_FILES = (
@@ -94,7 +89,6 @@ PUBLIC_FILES = (
     "belay.css",
 )
 # The public page's speedrun chart and results show macro loss as placeholder BPB until BPB evals land in the registry.
-PLACEHOLDER_BPB_RATIO = "0.4147"
 
 
 # ---------- local Postgres and Marina ----------
@@ -280,138 +274,6 @@ def stop_stack(stack: Stack) -> None:
     data = stack.state_dir / "pg"
     if data.exists():
         _pg(stack, "pg_ctl", "-D", str(data), "stop", "-m", "fast", check=False)
-
-
-# ---------- watcher ----------
-
-
-def _run_state(coord: str, train: str | None) -> str:
-    if coord in ("pending", "running") and train is not None:
-        return train
-    if coord == "running":
-        return "pending"  # the coordinator is up; the training job is not placed yet
-    return coord
-
-
-def registry_results(registry_dir: Path) -> tuple[str, dict]:
-    """The registry checkout's HEAD and its ``registry build`` output (the public page's results data)."""
-    revision = subprocess.run(
-        ["git", "-C", str(registry_dir), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
-    ).stdout.strip()
-    built = subprocess.run(
-        [
-            sys.executable,
-            str(registry_dir / "experiments/belay/registry.py"),
-            "build",
-            "--placeholder-bpb-ratio",
-            PLACEHOLDER_BPB_RATIO,
-            "--default-author",
-            CONFIG.default_author,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return revision, json.loads(built)
-
-
-class Watcher:
-    def __init__(self, registry_dir: Path, token: str) -> None:
-        self.registry_dir = registry_dir
-        self.token = token
-        self.final: dict[str, dict] = {}
-        self.storage_at = 0.0
-        self.wandb = wandb.Api()
-
-    def _wandb(self, name: str) -> dict:
-        try:
-            run = self.wandb.run(f"{WANDB_PATH}/{name}")
-        except (wandb.errors.CommError, ValueError):
-            return {}
-        loss = run.summary.get("eval/paloma/macro_loss")
-        return {
-            "step": run.summary.get("_step"),
-            "loss": float(loss) if loss is not None else None,
-            "wandb_url": run.url,
-            "finished": run.state == "finished",
-        }
-
-    def runs(self) -> list[dict]:
-        self.wandb = wandb.Api()  # a fresh client per tick: Api caches each Run it has loaded
-        coords, trains, submitted = {}, {}, {}
-        for job in iris_jobs():
-            parts = job.job_id.strip("/").split("/")
-            if len(parts) == 2 and parts[1].endswith("-coord"):
-                name = parts[1].removesuffix("-coord")
-                coords[name] = (job.job_id, job.state)
-                submitted[name] = job.submitted_at
-            elif len(parts) == 3 and parts[1].endswith("-coord"):
-                trains[parts[1].removesuffix("-coord")] = job.state
-        reports = []
-        for name, (job_id, coord_state) in coords.items():
-            state = _run_state(coord_state, trains.get(name))
-            report = {
-                "name": name,
-                "job_id": job_id,
-                "state": state,
-                "nodes": 1,
-                "total_steps": None,
-                "submitted_at": submitted.get(name),
-            }
-            if name in self.final:
-                report.update(self.final[name])
-            elif state != "pending":
-                progress = self._wandb(name)
-                report.update({k: v for k, v in progress.items() if k != "finished"})
-                if state == "succeeded" and progress.get("finished") and progress.get("loss") is not None:
-                    self.final[name] = {k: v for k, v in progress.items() if k != "finished"}
-            reports.append(report)
-        return reports
-
-    def storage(self) -> tuple[int, int] | None:
-        if time.monotonic() - self.storage_at < STORAGE_INTERVAL and self.storage_at:
-            return None
-        fs = s3fs.S3FileSystem(
-            key=os.environ["CW_KEY_ID"],
-            secret=os.environ["CW_KEY_SECRET"],
-            endpoint_url=COREWEAVE_S3_ENDPOINT,
-            config_kwargs={"s3": {"addressing_style": "virtual"}},
-        )
-        prefix = f"{STORAGE_BUCKET}/{CONFIG.output_root.rsplit('/', 1)[0]}/"
-        files = fs.find(prefix, detail=True)
-        self.storage_at = time.monotonic()
-        return sum(f["size"] for f in files.values()), len(files)
-
-    def upload_registry(self) -> None:
-        """Rebuild and upload the registry's results when the registry checkout moved."""
-        head = subprocess.run(
-            ["git", "-C", str(self.registry_dir), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
-        ).stdout.strip()
-        if call("agent/registry", token=self.token)["revision"] == head:
-            return
-        revision, data = registry_results(self.registry_dir)
-        call("agent/registry", {"revision": revision, "data": data}, token=self.token)
-        logger.info("uploaded registry results at %s (%d ideas)", revision[:10], len(data["ideas"]))
-
-    def tick(self) -> None:
-        error = None
-        try:
-            self.upload_registry()
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            error = f"registry: {e}"
-        reports = self.runs()
-        call("agent/sync/runs", {"runs": reports}, token=self.token)
-        storage = None
-        try:
-            storage = self.storage()
-        except (OSError, KeyError) as e:
-            error = f"storage: {e}"
-        nodes = sum(r["nodes"] for r in reports if r["state"] == "running")
-        body = {"nodes_in_use": nodes, "error": error}
-        if storage is not None:
-            body.update(storage_bytes=storage[0], storage_objects=storage[1])
-        call("agent/tick", body, token=self.token)
-        logger.info("tick: %d runs, %d nodes running%s", len(reports), nodes, f", {error}" if error else "")
 
 
 # ---------- sessions ----------
