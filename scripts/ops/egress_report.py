@@ -167,7 +167,7 @@ def _compose_message(
 
 @click.command(help=__doc__)
 @click.option("--hours", type=float, default=24.0, help="Analysis window in hours. Defaults to 24.")
-@click.option("--channel", default="internal-discuss", help="Discord channel name.")
+@click.option("--channel", default="gcs-egress", help="Discord channel name.")
 @click.option(
     "--dry-run/--no-dry-run",
     default=False,
