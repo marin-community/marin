@@ -3190,7 +3190,6 @@ mod tests {
             .iter()
             .all(|segment| segment.table_spec_version == 2));
         assert_eq!(store.query_snapshot("iris.worker").unwrap().paths, before);
-        let new_read = store.query_providers(&["iris.worker".into()]).unwrap();
         tokio::task::spawn_blocking(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -3216,25 +3215,11 @@ mod tests {
                     crate::query::is_read_deadline(&error),
                     "a later policy change must not extend an existing snapshot's lifetime"
                 );
-                tokio::time::resume();
-                let rows = crate::query::run_query_over(
-                    &crate::query::make_ctx(),
-                    new_read,
-                    "SELECT * FROM \"iris.worker\"",
-                )
-                .await
-                .unwrap();
-                assert_eq!(
-                    rows.batches
-                        .iter()
-                        .map(RecordBatch::num_rows)
-                        .sum::<usize>(),
-                    1
-                );
             });
         })
         .await
         .unwrap();
+        assert_eq!(scan_table(&store, "iris.worker").await, 1);
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();

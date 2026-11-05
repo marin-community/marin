@@ -193,7 +193,7 @@ enum SegmentRead {
     Source(PartitionedFile),
     Projection {
         projection: PartitionedFile,
-        source: PartitionedFile,
+        source: Box<PartitionedFile>,
     },
 }
 
@@ -318,7 +318,7 @@ async fn prepare_segment(
             warm_selected_source(inputs, &reference).await?;
             return Ok(SegmentRead::Projection {
                 projection,
-                source: file,
+                source: Box::new(file),
             });
         }
         if exact_prune::exact_postings_may_cover(&opened.header, &inputs.exact) {
@@ -427,7 +427,7 @@ async fn open_segment(
                     DataFusionError::Internal("projection fallback has no source reference".into())
                 })?;
             warm_selected_source(inputs, reference).await?;
-            source
+            *source
         }
     };
     inputs.scope.source_opens.fetch_add(1, Ordering::Relaxed);
