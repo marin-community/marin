@@ -381,7 +381,7 @@ def _wait_and_report_endpoint(
 @click.option("--data-parallel-size", type=click.IntRange(min=1), default=None, help="Total native GPU DP ranks.")
 @click.option("--data-parallel-size-local", type=click.IntRange(min=1), default=None, help="DP ranks per host.")
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
-@click.option("--router-timeout", type=click.IntRange(min=1), default=14400)
+@click.option("--router-timeout", type=click.IntRange(min=1), default=VllmRouterConfig.request_timeout_seconds)
 @click.option("--vllm-release", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
 @click.option("--dtype", default="bfloat16", help="Weight/compute dtype.")
 @click.option("--cache-ttl-days", type=int, default=14, help="Mirror HF models to a TTL'd GCS cache (0 disables).")

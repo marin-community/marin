@@ -64,7 +64,7 @@ def main() -> None:
 @click.option("--vllm-release", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
 @click.option("--data-parallel-size", type=click.IntRange(min=1), default=1)
-@click.option("--router-timeout", type=click.IntRange(min=1), default=14400)
+@click.option("--router-timeout", type=click.IntRange(min=1), default=VllmRouterConfig.request_timeout_seconds)
 @click.option("--tokenizer", default=None)
 @click.option("--host", default="127.0.0.1")
 @click.option("--port", type=int, default=None)

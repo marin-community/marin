@@ -8,6 +8,7 @@ import json
 import signal
 import threading
 from contextlib import ExitStack
+from dataclasses import dataclass
 
 import pytest
 import requests
@@ -22,6 +23,14 @@ from starlette.responses import JSONResponse, PlainTextResponse, StreamingRespon
 from starlette.routing import Route
 
 pytestmark = pytest.mark.integration
+
+
+@dataclass(frozen=True)
+class RouterWorker:
+    url: str
+    calls: list[dict]
+    cancelled: threading.Event
+    next_chunk: threading.Event
 
 
 @pytest.fixture
@@ -74,7 +83,7 @@ def router_workers():
             sock = bind_serving_socket("127.0.0.1", 0)
             url = f"http://127.0.0.1:{sock.getsockname()[1]}"
             stack.enter_context(serve_app_background(app, sock))
-            return url, calls, cancelled, next_chunk
+            return RouterWorker(url=url, calls=calls, cancelled=cancelled, next_chunk=next_chunk)
 
         yield start
 
@@ -91,7 +100,7 @@ def _chat(url, session=None, content="hello", *, stream=False):
 
 @pytest.mark.parametrize("worker_count,dp_size", [(2, 1), (1, 4)])
 def test_router_later_turns_reach_the_same_worker_and_dp_rank(router_workers, worker_count, dp_size):
-    workers = [router_workers(str(index))[0] for index in range(worker_count)]
+    workers = [router_workers(str(index)).url for index in range(worker_count)]
     port = available_port("127.0.0.1")
     with vllm_router(VllmRouterConfig(dp_size), workers, port=port, startup_timeout_seconds=30) as router:
         destinations = set()
@@ -121,31 +130,31 @@ def test_router_later_turns_reach_the_same_worker_and_dp_rank(router_workers, wo
 
 
 def test_router_does_not_retry_a_failed_generation(router_workers):
-    url, calls, _, _ = router_workers("one")
-    with vllm_router(VllmRouterConfig(), (url,), startup_timeout_seconds=30) as router:
+    worker = router_workers("one")
+    with vllm_router(VllmRouterConfig(), (worker.url,), startup_timeout_seconds=30) as router:
         assert _chat(router.server_url, "failed-session", "fail").status_code == 503
-        assert len(calls) == 1
+        assert len(worker.calls) == 1
 
 
 def test_router_client_disconnect_cancels_the_worker_stream(router_workers):
-    url, _, cancelled, next_chunk = router_workers("one")
-    with vllm_router(VllmRouterConfig(), (url,), startup_timeout_seconds=30) as router:
+    worker = router_workers("one")
+    with vllm_router(VllmRouterConfig(), (worker.url,), startup_timeout_seconds=30) as router:
         with _chat(router.server_url, "cancel-session", "cancel", stream=True) as response:
             assert response.status_code == 200
             assert next(response.iter_content(chunk_size=1)) == b"d"
         # Released Router notices the closed receiver on the next upstream chunk.
-        next_chunk.set()
+        worker.next_chunk.set()
         assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
-            cancelled.is_set, timeout=Duration.from_seconds(5)
+            worker.cancelled.is_set, timeout=Duration.from_seconds(5)
         )
 
 
 def test_router_never_publishes_an_endpoint_with_an_unavailable_worker(router_workers):
-    url, _, _, _ = router_workers("one")
+    worker = router_workers("one")
     missing = f"http://127.0.0.1:{available_port('127.0.0.1')}"
     port = available_port("127.0.0.1")
     with pytest.raises((RuntimeError, TimeoutError)):
-        with vllm_router(VllmRouterConfig(), (url, missing), port=port, startup_timeout_seconds=2):
+        with vllm_router(VllmRouterConfig(), (worker.url, missing), port=port, startup_timeout_seconds=2):
             pytest.fail("published a partially ready deployment")
     with pytest.raises(requests.ConnectionError):
         requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
