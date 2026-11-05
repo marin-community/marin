@@ -5,16 +5,13 @@
 
 import argparse
 import json
+import shlex
 import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SAFE_MARKERS = (
-    "not slow and not integration and not data_integration and not cluster "
-    "and not requires_cluster and not docker and not manual"
-)
 
 
 @dataclass(frozen=True)
@@ -89,6 +86,12 @@ def write_record(path: Path, record: dict) -> None:
     path.write_text(json.dumps(record, sort_keys=True) + "\n")
 
 
+def safe_markers(root: Path) -> str:
+    options = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]["addopts"]
+    arguments = shlex.split(options)
+    return arguments[arguments.index("-m") + 1]
+
+
 def release(policy: AppPolicy, record_path: Path, *, root: Path = ROOT) -> dict:
     """Validate and publish once against the version observed before validation."""
     before = marina("release-status", policy.path, root=root)
@@ -111,7 +114,7 @@ def release(policy: AppPolicy, record_path: Path, *, root: Path = ROOT) -> dict:
             "-c",
             "infra/marina/pyproject.toml",
             "-m",
-            SAFE_MARKERS,
+            safe_markers(root),
             *(f"infra/marina/{path}" for path in policy.tests),
         ],
         cwd=root,

@@ -85,6 +85,7 @@ def test_drift_names_unreleased_source_commit(tmp_path, monkeypatch):
 
 def test_release_conflict_keeps_inspected_base_version_and_does_not_retry(tmp_path, monkeypatch):
     calls = fake_uv(tmp_path, monkeypatch, {"state": "different", "version": 4})
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\naddopts = \"-m 'not slow and not cluster'\"\n")
     record_path = tmp_path / "release.json"
     policy = AppPolicy("evaldash", True, ("tests/test_applets.py",), ())
 
@@ -95,4 +96,6 @@ def test_release_conflict_keeps_inspected_base_version_and_does_not_retry(tmp_pa
     publishes = [args for args in arguments if "--base-version" in args]
     assert len(publishes) == 1
     assert publishes[0][publishes[0].index("--base-version") + 1] == "4"
+    test_command = next(args for args in arguments if "pytest" in args)
+    assert test_command[test_command.index("-m") + 1] == "not slow and not cluster"
     assert json.loads(record_path.read_text())["action"] == "validated"
