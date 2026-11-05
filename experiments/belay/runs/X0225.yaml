@@ -1,0 +1,14 @@
+experiment: X0225
+kind: study
+track: custom
+question: In the current recipe at d512, which layers grow the largest output outliers (max|h| vs rms(h)) over training, and when?
+runs:
+  layerout:
+    track: competitive-d512
+    seed: 0
+    variant: current recipe d512, layer_output_stats_every=100, final checkpoint
+    flags: ["--model-set", "layer_output_stats_every=100"]
+    hours: 3.5
+analysis:
+  - script: experiments/belay/studies/X0225.py
+    input: layerout
