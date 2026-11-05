@@ -16,6 +16,8 @@ from iac.gcp.iam import (
     GcpSecretIam,
 )
 
+_REGION = "us-central1"
+
 
 def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> GcpIamGrantSet:
     """Reuse Marina's human viewers and give ingestion its scoped machine access."""
@@ -51,7 +53,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
         ),
         artifact_repositories=(
             GcpArtifactRepositoryIam(
-                location="us-central1",
+                location=_REGION,
                 repository="marin-inferencex",
                 grants=(
                     GcpRoleGrant(role="roles/artifactregistry.writer", members=(deploy,)),
@@ -61,7 +63,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
         ),
         cloud_run_iap=(
             GcpCloudRunIapIam(
-                location="us-central1",
+                location=_REGION,
                 service="marin-inferencex",
                 iap_grants=viewers,
                 service_grants=(GcpRoleGrant(role="roles/run.invoker", members=(iap_agent,)),),
