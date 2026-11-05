@@ -54,7 +54,7 @@ from levanter.grug.grug_moe import (
     MOE_VALID_ASSIGNMENTS_METRIC,
     MoeImplementation,
 )
-from levanter.grug.sharding import compact_grug_mesh
+from levanter.grug.sharding import _axis_names, compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -550,16 +550,13 @@ def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
 
     At training ``data`` size one, ``expert`` becomes the eval ``data`` axis and training ``data``
     drops out, so every device keeps the shard it already holds. Otherwise the spec is unchanged:
-    a leaf sharded on ``expert`` lands replicated and the move transfers it.
+    a leaf sharded on ``expert`` without ``data`` lands replicated and the move transfers it.
     """
     if train_mesh.shape["data"] != 1:
         return spec
 
     def rename(entry):
-        if entry is None:
-            return None
-        names = (entry,) if isinstance(entry, str) else entry
-        renamed = tuple("data" if name == "expert" else name for name in names if name != "data")
+        renamed = tuple("data" if name == "expert" else name for name in _axis_names(entry) if name != "data")
         if not renamed:
             return None
         return renamed if len(renamed) > 1 else renamed[0]
@@ -567,8 +564,8 @@ def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
     return P(*(rename(entry) for entry in spec))
 
 
-def _reshard_tree_to_mesh(tree, train_mesh: Mesh, eval_mesh: Mesh):
-    """Move each array leaf from ``train_mesh`` onto its expert-collapsed ``eval_mesh``.
+def _move_tree_to_eval_mesh(tree, train_mesh: Mesh):
+    """Move each array leaf from ``train_mesh`` onto ``expert_collapsed_eval_mesh(train_mesh)``.
 
     The move must not need a collective when training ``data`` has size one. A collective here runs
     on a communicator training does not hold, and that communicator's NCCL buffers stay outside the
@@ -576,6 +573,7 @@ def _reshard_tree_to_mesh(tree, train_mesh: Mesh, eval_mesh: Mesh):
     model's own ``reshard`` calls fix the layout inside the forward, so any valid placement on the
     eval mesh suffices. Non-array leaves pass through.
     """
+    eval_mesh = expert_collapsed_eval_mesh(train_mesh)
 
     def move(leaf):
         if not isinstance(leaf, jax.Array):
@@ -1463,9 +1461,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    # `model` must stay a local. When the move transfers leaves, the copy adds to
-                    # the train-mesh params, and the train step needs almost the whole device
-                    # budget for its temporary buffer, thus this copy must die before the next step.
+                    # `model` must stay a local. In a multi-process run the move copies each leaf,
+                    # also when the leaf stays on its devices. The copy adds to the train-mesh
+                    # params, and the train step needs almost the whole device budget for its
+                    # temporary buffer, thus this copy must die before the next step.
                     with (
                         callbacks.progress_event_scope(
                             step.emit_event,
@@ -1474,7 +1473,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         ),
                         set_mesh(_mesh),
                     ):
-                        model = _reshard_tree_to_mesh(step.model, mesh, _mesh)
+                        model = _move_tree_to_eval_mesh(step.model, mesh)
                         log_device_memory_breakdown(f"after_reshard:{step_count}")
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
