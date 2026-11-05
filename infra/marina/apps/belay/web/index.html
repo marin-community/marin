@@ -383,7 +383,9 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
     <p class="muted small grant-help">Approve, Re-queue and the #9514 Approve take optional grants for one idea:
       <b>nodes</b> (may pass the global node cap), <b>hours</b> (with nodes, a <code>custom</code> study's budget) and
       <b>priority</b> (an Iris band above the Track's; it can only raise it, the Iris user must be allowed that band,
-      and Status shows who granted it). Blank keeps the defaults.</p>
+      and Status shows who granted it). Blank keeps the defaults. The text box takes your instructions for the session
+      (which track, settings, what to compare); the session follows them as the maintainer note, ahead of the
+      comment's own wording.</p>
     <div class="list" id="pending"></div></section>
   <section class="block"><h2>#9514, newest <span class="muted small">live from GitHub</span>
     <button type="button" class="btn small" id="intake-reload">Reload</button></h2><div class="list" id="intake-live"></div></section>
@@ -391,7 +393,7 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
   <details class="block fold">
     <summary>Settings</summary>
     <form id="settings-form" class="settings">
-      <label class="check"><input type="checkbox" id="set-github"> Reply on #9514 (one reply per idea, edited at the verdict)</label>
+      <label class="check"><input type="checkbox" id="set-github"> React on #9514 (👀 once an idea is approved or declined; nothing is posted)</label>
       <label class="wide">Approvers <span class="muted small">one per line: github-login marina-identity</span>
         <textarea id="set-approvers" rows="6" spellcheck="false"></textarea></label>
       <button type="submit" class="btn primary">Save</button>

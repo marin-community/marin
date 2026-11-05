@@ -430,7 +430,7 @@ function cellTitle(cell: PanelCell): string {
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
-    `cohort ${cell.version ?? 'unversioned'} · ${cell.eval_runtime}`,
+    `cohort ${cell.version ?? 'unversioned'}${cell.eval_runtime ? ` · ${cell.eval_runtime}` : ''}`,
     'click for history',
   ].join('\n')
 }

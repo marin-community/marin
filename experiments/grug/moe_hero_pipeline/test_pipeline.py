@@ -33,7 +33,12 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 
 
 def _tiny_hero(
-    qb_estimator: QbEstimator, context_axis_size: int = 1, *, devices: Sequence[jax.Device], num_layers: int = 5
+    qb_estimator: QbEstimator,
+    context_axis_size: int = 1,
+    *,
+    devices: Sequence[jax.Device],
+    num_layers: int = 5,
+    log_scaling_n_floor: int | None = None,
 ) -> tuple[Mesh, Transformer]:
     config = GrugModelConfig(
         vocab_size=16,
@@ -62,6 +67,7 @@ def _tiny_hero(
         attention_implementation="reference",
         moe_implementation="scatter",
         initializer_std=0.2,
+        log_scaling_n_floor=log_scaling_n_floor,
     )
     mesh = Mesh(
         np.asarray(devices[:context_axis_size]).reshape(1, 1, 1, context_axis_size, 1),
@@ -173,6 +179,24 @@ def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimato
     for name in ("routing_counts_per_layer", "router_z_loss_per_layer", "qb_beta_per_layer"):
         actual = jnp.concatenate([metrics[name] for metrics in stage_metrics])
         np.testing.assert_allclose(actual, expected_metrics[name], rtol=1e-5, atol=1e-5)
+
+
+def test_hero_pipeline_applies_log_scaling():
+    mesh, off = _tiny_hero(QbEstimator.TOPK, devices=jax.local_devices())
+    _, model = _tiny_hero(QbEstimator.TOPK, devices=jax.local_devices(), log_scaling_n_floor=2)
+    batch = _packed_batch()
+    with jax.set_mesh(mesh):
+        expected_hidden, _ = eqx.filter_jit(Transformer.__call__)(model, batch.tokens, batch.attn_mask)
+        off_hidden, _ = eqx.filter_jit(Transformer.__call__)(off, batch.tokens, batch.attn_mask)
+        stages = split_transformer(model, 2, layer_counts=(2, 3))
+        hidden = stages[0].embed(batch.tokens)
+        run_blocks = eqx.filter_jit(GrugMoePipelineStage.run_blocks)
+        for stage in stages:
+            hidden, _ = run_blocks(stage, hidden, batch.attn_mask)
+        hidden = stages[-1].finish(hidden)
+
+    np.testing.assert_allclose(hidden, expected_hidden, rtol=1e-5, atol=1e-5)
+    assert np.max(np.abs(np.asarray(expected_hidden) - np.asarray(off_hidden))) > 1e-4
 
 
 # Compiling both gradient paths can exceed the default minute on shared CI CPUs.
