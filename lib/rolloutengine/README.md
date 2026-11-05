@@ -40,8 +40,14 @@ their token IDs need not be the tokens that the model sampled.
 See the [task rollout reference](../../docs/references/task-rollouts.md) for the harness contract, the
 exact-token contract, trace modes, failure handling, and backend configuration.
 
+`rolloutengine.completion` and `rolloutengine.likelihood` provide raw-text
+generation and continuation-scoring transports. Corpus scheduling, FineStore
+results, and resume belong to `marin.rollouts.evaluation`; dataset protocols and
+corpus readers live in TaskCompendium. See
+[evaluation tasks](../../docs/references/evaluation-tasks.md).
+
 From the Marin repository root:
 
 ```bash
-uv run --package marin-rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
+uv run --package marin-rolloutengine --frozen --group test pytest -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests -q
 ```

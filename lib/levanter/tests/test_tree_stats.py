@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from haliax.nn import ArrayStacked
+from levanter.layers.stacked import ArrayStacked
 
 from levanter.analysis.tree_stats import summary_statistics_for_tree
 

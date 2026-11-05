@@ -61,3 +61,16 @@ identity, failure handling and resume behavior without launching model servers.
 Nested benchmark licenses and citations remain with their source. The imported
 fork has no root license file; this vendor does not assign a new license to that
 source. `CITATION.cff` preserves Evalchemy's attribution.
+
+The GSM8K task override also includes the later extraction/scoring changes from
+Evalchemy commit `a993b52543c493e58956be94ed6d3420b94143c0`. Flexible extraction
+retains the complete final boxed answer, including clock times and nested LaTeX.
+The scorer accepts the historical policy's unit/currency annotations, arithmetic
+forms, whole-hour clock answers for time questions, and fractional answers for
+percentage/pass-rate questions. These are scoring changes: replaying the same
+responses can change `exact_match`. Metric names, prompts and generation settings
+remain unchanged.
+
+Unlike that historical patch, scalar fallbacks require a complete scalar or
+annotated answer. They do not strip a leading operand from a fraction, expression
+or clock time, or extract a radicand as the answer to a square root.
