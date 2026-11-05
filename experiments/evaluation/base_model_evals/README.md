@@ -6,7 +6,13 @@ ran. Some use local paths from the original workstation; change them before you 
 
 ## Shared runtime
 
-All GPU work ran on Iris `cw-rno2a`, one whole H100x8 node per job, at Marin's pinned vLLM fork.
+All GPU work ran on Iris `cw-rno2a`:
+
+- Mini840 served the model under test on 2 H100s, with a separate 8-H100 judge.
+- Snowball probes, trace scoring and the decode ablation used vLLM at TP1 x DP4 with expert
+  parallelism on 4 H100s, with a whole 8-H100 node reserved per job. The decode ablation used
+  vLLM `39e62869`, which is newer than the campaign build.
+- Qwen probes used transformers (sdpa), not vLLM.
 
 - `mini_policy_runtime/generational_perplexity.py` scores probe strings and full traces by teacher
   forcing. It supports `--template-family template`, `--enable-thinking`, `--chat-template-file`
@@ -45,12 +51,8 @@ All GPU work ran on Iris `cw-rno2a`, one whole H100x8 node per job, at Marin's p
 - Mini840 run root: `s3://marin-rno2a/marin/experiments/chat-aligned-base-evals/2026.10.31.150013/`.
 - Qwen3.5 base `<|im_end|>` rerun:
   `s3://marin-rno2a/marin/checkpoints/mini840-e2e-qwen35-35b-a3b-base-im-end-stop/2026.11.04.4`.
-- Trace-likelihood per-token scores:
-  `s3://marin-rno2a/tmp/ttl=30d/benfeuer/trace-likelihood/2026.11.03/`.
-- Decode ablation generations and scores:
-  `s3://marin-rno2a/tmp/ttl=30d/benfeuer/decode-ablation/2026.11.04/v2/`.
-
-The `ttl=30d` prefixes expire 30 days after they were written.
+- Trace-likelihood per-token scores and decode-ablation generations and scores (permanent copy):
+  `s3://marin-rno2a/marin/experiments/base-model-evals/whats-in-a-base-2026.11.05/`.
 
 ## Notes
 
