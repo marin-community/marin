@@ -14,6 +14,7 @@ from pathlib import Path
 
 import fsspec
 from taskforge.llm.policy import LLMPolicy, ReasoningEffort
+from taskforge.llm.structured import IncompleteOutput, StructuredOutputError
 from taskforge_adapters.campaign import OpenAIModelPort, campaign_worker
 
 from experiments.post_training.capability_driven_envs.biotasks_library.notebooks_v1 import (
@@ -76,14 +77,27 @@ async def _review(
     port: OpenAIModelPort,
 ) -> dict[str, object]:
     prompt = review_prompt(idea, taskforge_result)
-    review = await model.complete_structured(
-        [{"role": "user", "content": prompt}],
-        Assessment,
-        REVIEW_POLICY,
-    )
-    return {
+    base = {
         **taskforge_result,
         "author_assessment": idea.author_assessment.model_dump(mode="json"),
+    }
+    try:
+        review = await model.complete_structured(
+            [{"role": "user", "content": prompt}],
+            Assessment,
+            REVIEW_POLICY,
+        )
+    except (IncompleteOutput, StructuredOutputError) as error:
+        return {
+            **base,
+            "glm_review_error": {
+                "type": type(error).__name__,
+                "message": str(error),
+                "completions": [asdict(completion) for completion in error.completions],
+            },
+        }
+    return {
+        **base,
         "glm_review": review.value.model_dump(mode="json"),
         "glm_review_provenance": {
             "model": port.model,
@@ -99,13 +113,52 @@ async def _run_source(row: dict[str, object], port: OpenAIModelPort) -> dict[str
     source = SourceRecord.model_validate(row)
     source_text = extract_source_text(source, _read_source(source))
     prompt = generation_prompt(source, source_text)
+    source_record = {
+        "source": source.model_dump(mode="json"),
+        "source_text_sha256": hashlib.sha256(source_text.encode()).hexdigest(),
+        "source_text_characters": len(source_text),
+    }
     async with campaign_worker(port) as worker:
-        generated = await worker.model.complete_structured(
-            [{"role": "user", "content": prompt}],
-            GeneratedPortfolio,
-            GENERATION_POLICY,
-        )
-        ideas = hydrate_ideas(source, generated.value)
+        prompts = [
+            prompt,
+            prompt + "\n\nSTRICT COMPACT RETRY: Return at most two ideas and at most 8,000 total resource characters. "
+            "Keep each instruction and assessment concise.",
+        ]
+        failures: list[dict[str, object]] = []
+        generated = None
+        used_prompt = prompt
+        for candidate_prompt in prompts:
+            try:
+                generated = await worker.model.complete_structured(
+                    [{"role": "user", "content": candidate_prompt}],
+                    GeneratedPortfolio,
+                    GENERATION_POLICY,
+                )
+                used_prompt = candidate_prompt
+                break
+            except (IncompleteOutput, StructuredOutputError) as error:
+                failures.append(
+                    {
+                        "type": type(error).__name__,
+                        "message": str(error),
+                        "completions": [asdict(completion) for completion in error.completions],
+                    }
+                )
+        if generated is None:
+            return {**source_record, "status": "generation_failed", "generation_failures": failures, "items": []}
+
+        ideas: list[BioTaskIdea] = []
+        hydration_errors: list[dict[str, str]] = []
+        if generated.value.disposition == "no_objective_task":
+            ideas = hydrate_ideas(source, generated.value)
+        else:
+            for candidate in generated.value.ideas:
+                candidate_portfolio = generated.value.model_copy(update={"ideas": (candidate,)})
+                try:
+                    ideas.extend(hydrate_ideas(source, candidate_portfolio))
+                except ValueError as error:
+                    hydration_errors.append({"family": candidate.family, "error": str(error)})
+
         items: list[dict[str, object]] = []
         with tempfile.TemporaryDirectory(prefix="biotasks-notebooks-v1-") as temporary:
             root = Path(temporary)
@@ -113,17 +166,18 @@ async def _run_source(row: dict[str, object], port: OpenAIModelPort) -> dict[str
                 taskforge_result = await run_idea(root, idea)
                 items.append(await _review(idea, taskforge_result, model=worker.model, port=port))
     return {
-        "source": source.model_dump(mode="json"),
-        "source_text_sha256": hashlib.sha256(source_text.encode()).hexdigest(),
-        "source_text_characters": len(source_text),
+        **source_record,
+        "status": "completed" if not hydration_errors else "completed_with_hydration_rejections",
         "portfolio": generated.value.model_dump(mode="json"),
         "generation_provenance": {
             "model": port.model,
             "policy": asdict(GENERATION_POLICY),
-            "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-            "prompt": prompt,
+            "prompt_sha256": hashlib.sha256(used_prompt.encode()).hexdigest(),
+            "prompt": used_prompt,
             "completions": [asdict(completion) for completion in generated.completions],
+            "prior_failures": failures,
         },
+        "hydration_errors": hydration_errors,
         "items": items,
     }
 

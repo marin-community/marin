@@ -20,8 +20,8 @@ from experiments.post_training.capability_driven_envs.biotasks_library.pilot_fir
 GENERATOR_REVISION = "biotasks-notebooks-v1"
 RELEASE_STATUS = "internal_unreviewed_do_not_publish"
 MAX_SOURCE_CHARACTERS = 80_000
-MAX_RESOURCE_CHARACTERS = 30_000
-MAX_IDEAS_PER_SOURCE = 8
+MAX_RESOURCE_CHARACTERS = 15_000
+MAX_IDEAS_PER_SOURCE = 4
 
 
 class SourceRecord(BaseModel):
