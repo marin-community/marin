@@ -261,16 +261,8 @@ def _resolve_definitions(
     limit: int | None,
     seed: int | None,
     retry_unscored_harbor_trials: bool,
-    version: str | None,
     judge_model: ModelConfig | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
-    curated_definitions = [definition for _, definition in definitions if isinstance(definition, CuratedDefinition)]
-    runtime_commits = RUNTIME_COMMITS.get(version or "", {})
-    if curated_definitions and (commit := runtime_commits.get("evalchemy")) is not None:
-        raise ValueError(
-            f"{version} requires historical Evalchemy commit {commit}; "
-            "run it from a Marin checkout that predates Evalchemy vendoring"
-        )
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
     harbor_runtime = harbor_runtime_descriptor() if harbor_definitions else None
     model_agent_kwargs = harbor_model_agent_kwargs(model)
@@ -379,13 +371,13 @@ def build_evaluation_batch(
     if spec.instances > 1 and spec.model.serve.pipeline_parallel_size > 1:
         raise ValueError("pipeline parallelism requires one serving instance")
     model = spec.model
-    if spec.version in RUNTIME_COMMITS and any(
-        isinstance(definition, CuratedDefinition) for _, definition in _evaluation_definitions(spec)
-    ):
+    requested_definitions = _evaluation_definitions(spec)
+    has_curated_definitions = any(isinstance(definition, CuratedDefinition) for _, definition in requested_definitions)
+    if spec.version in RUNTIME_COMMITS and has_curated_definitions:
         raise ValueError(
             f"{spec.version} requires its historical Evalchemy checkout; curated runs need a new cohort label"
         )
-    if any(isinstance(definition, CuratedDefinition) for _, definition in _evaluation_definitions(spec)):
+    if has_curated_definitions:
         model = pinned_model(model)
     source_model_config = ModelConfigRef.model_validate(asdict(model))
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
@@ -394,7 +386,6 @@ def build_evaluation_batch(
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
     judge = _resolve_hosted_judge(spec, accelerator)
-    requested_definitions = _evaluation_definitions(spec)
     if model.serve.max_model_len is not None and any(
         isinstance(definition, HarborDefinition) for _, definition in requested_definitions
     ):
@@ -405,7 +396,6 @@ def build_evaluation_batch(
         spec.limit,
         spec.seed,
         spec.retry_unscored_harbor_trials,
-        spec.version,
         judge.model if judge is not None else None,
     )
     if spec.retry_unscored_harbor_trials and spec.resume_results_path is None:
