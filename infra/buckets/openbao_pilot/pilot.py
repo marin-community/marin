@@ -16,6 +16,7 @@ import re
 import time
 from collections.abc import Callable
 from contextlib import closing
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
 from pathlib import Path
@@ -30,6 +31,8 @@ from botocore.exceptions import ClientError, MetadataRetrievalError
 from botocore.session import Session
 from botocore.utils import ContainerMetadataFetcher
 
+# Fixed loopback port shared with the disposable Docker listener and metadata proxy.
+BAO_PORT = 18200
 ROLE = "coreweave-pilot"
 APPROLE_PATH = f"auth/approle/role/{ROLE}"
 TOKEN_PATH = f"identity/oidc/token/{ROLE}"
@@ -40,6 +43,24 @@ SENTINEL = b"openbao-pilot\n"
 READ_INTERVAL = 30
 
 
+@dataclass(frozen=True)
+class AppRole:
+    role_id: str
+    secret_id: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class PilotIdentity:
+    approle: AppRole
+    bucket: str
+    role: str
+
+
+def load_identity(path: Path) -> PilotIdentity:
+    payload = json.loads(path.read_text())
+    return PilotIdentity(AppRole(**payload["approle"]), payload["bucket"], payload["role"])
+
+
 def bao(path: str, *, token: str | None = None, data: dict | None = None) -> dict:
     headers = {"Content-Type": "application/json"}
     if token is not None:
@@ -47,7 +68,7 @@ def bao(path: str, *, token: str | None = None, data: dict | None = None) -> dic
     method = "GET" if data is None else "POST"
     body = None if data is None else json.dumps(data)
     # Use a direct loopback connection that cannot follow redirects or honor proxy settings.
-    with closing(HTTPConnection("127.0.0.1", 18200, timeout=10)) as connection:
+    with closing(HTTPConnection("127.0.0.1", BAO_PORT, timeout=10)) as connection:
         connection.request(method, f"/v1/{path}", body=body, headers=headers)
         with connection.getresponse() as response:
             if response.status == 204:
@@ -57,8 +78,31 @@ def bao(path: str, *, token: str | None = None, data: dict | None = None) -> dic
             return json.load(response)
 
 
-def login(approle: dict) -> dict:
-    return bao("auth/approle/login", data=approle)["auth"]
+def login(approle: AppRole) -> dict:
+    return bao("auth/approle/login", data=asdict(approle))["auth"]
+
+
+def coreweave_policy(bucket: str, role: str) -> dict:
+    return {
+        "version": "v1alpha1",
+        "name": bucket,
+        "statements": [
+            {
+                "name": "exchange-oidc",
+                "effect": "Allow",
+                "actions": ["cwobject:CreateAccessKeyOIDC"],
+                "resources": ["*"],
+                "principals": [f"role/{role}"],
+            },
+            {
+                "name": "read-pilot-prefix",
+                "effect": "Allow",
+                "actions": ["s3:GetObject"],
+                "resources": [f"{bucket}/{READ_PREFIX}/*"],
+                "principals": [f"role/{role}"],
+            },
+        ],
+    }
 
 
 def bootstrap(origin: str, bucket: str, credentials_file: Path, root_token: str) -> dict:
@@ -87,41 +131,22 @@ def bootstrap(origin: str, bucket: str, credentials_file: Path, root_token: str)
                 "secret_id_ttl": "4h",
             },
         )
-        approle = {
-            "role_id": bao(f"{APPROLE_PATH}/role-id", token=root_token)["data"]["role_id"],
-            "secret_id": bao(f"{APPROLE_PATH}/secret-id", token=root_token, data={})["data"]["secret_id"],
-        }
+        approle = AppRole(
+            role_id=bao(f"{APPROLE_PATH}/role-id", token=root_token)["data"]["role_id"],
+            secret_id=bao(f"{APPROLE_PATH}/secret-id", token=root_token, data={})["data"]["secret_id"],
+        )
         auth = login(approle)
         bao(TOKEN_PATH, token=auth["client_token"])  # Generate the signing key and check the workload ACL.
         discovery = bao("identity/oidc/.well-known/openid-configuration")
         issuer = discovery["issuer"]
         role = f"{issuer}:{auth['entity_id']}"
-        json.dump({"approle": approle, "bucket": bucket, "role": role}, output)
+        json.dump(asdict(PilotIdentity(approle, bucket, role)), output)
 
     return {
         "issuer": issuer,
         "jwks_uri": discovery["jwks_uri"],
         "audience": AUDIENCE,
-        "policy": {
-            "version": "v1alpha1",
-            "name": bucket,
-            "statements": [
-                {
-                    "name": "exchange-oidc",
-                    "effect": "Allow",
-                    "actions": ["cwobject:CreateAccessKeyOIDC"],
-                    "resources": ["*"],
-                    "principals": [f"role/{role}"],
-                },
-                {
-                    "name": "read-pilot-prefix",
-                    "effect": "Allow",
-                    "actions": ["s3:GetObject"],
-                    "resources": [f"{bucket}/{READ_PREFIX}/*"],
-                    "principals": [f"role/{role}"],
-                },
-            ],
-        },
+        "policy": coreweave_policy(bucket, role),
     }
 
 
@@ -157,7 +182,7 @@ class ObservedCredentials(ContainerMetadataFetcher):
         self.last_exchange = exchange
         return metadata
 
-    def rotated_after_expiry(self, read_started: datetime) -> bool:
+    def read_demonstrates_rotation(self, read_started: datetime) -> bool:
         first = self.first_exchange
         last = self.last_exchange
         return (
@@ -174,7 +199,7 @@ def create_private_file(path: Path) -> TextIO:
     return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w")
 
 
-def refresh_token(approle: dict, token_file: Path) -> None:
+def refresh_token(approle: AppRole, token_file: Path) -> None:
     auth = login(approle)
     jwt = bao(TOKEN_PATH, token=auth["client_token"])["data"]["token"]
     with TemporaryDirectory(dir=token_file.parent) as directory:
@@ -234,19 +259,34 @@ def read_sentinel(client, bucket: str) -> None:
             raise RuntimeError("The allowed sentinel does not contain the expected pilot payload")
 
 
+def check_scope(client, bucket: str) -> None:
+    read_sentinel(client, bucket)
+    print("Allowed sentinel read succeeded", flush=True)
+    require_denied("Outside-prefix read", client.get_object, Bucket=bucket, Key="outside/read.txt")
+    require_denied(
+        "Write",
+        client.put_object,
+        Bucket=bucket,
+        Key=f"{READ_PREFIX}/put-{uuid4()}",
+        Body=SENTINEL,
+        IfNoneMatch="*",
+    )
+    require_denied("Delete", client.delete_object, Bucket=bucket, Key=f"{READ_PREFIX}/delete-{uuid4()}")
+
+
 def probe(credentials_file: Path, organization: str, region: str, max_wait_minutes: int) -> None:
-    config = json.loads(credentials_file.read_text())
-    bucket = config["bucket"]
+    identity = load_identity(credentials_file)
+    bucket = identity.bucket
     if not re.fullmatch(BUCKET_PATTERN, bucket):
         raise ValueError("Use a disposable bucket named marin-openbao-pilot-<suffix>")
     if not organization.isascii() or not organization.isdecimal():
         raise ValueError("Expected a numeric CoreWeave organization ID")
 
     deadline = datetime.now(UTC) + timedelta(minutes=max_wait_minutes)
-    fetcher = ObservedCredentials(config["role"])
+    fetcher = ObservedCredentials(identity.role)
     with TemporaryDirectory(prefix="openbao-pilot-") as directory:
         token_file = Path(directory) / "oidc.jwt"
-        refresh_token(config["approle"], token_file)
+        refresh_token(identity.approle, token_file)
         with closing(
             s3_client(
                 region,
@@ -256,18 +296,7 @@ def probe(credentials_file: Path, organization: str, region: str, max_wait_minut
                 fetcher,
             )
         ) as client:
-            read_sentinel(client, bucket)
-            print("Allowed sentinel read succeeded", flush=True)
-            require_denied("Outside-prefix read", client.get_object, Bucket=bucket, Key="outside/read.txt")
-            require_denied(
-                "Write",
-                client.put_object,
-                Bucket=bucket,
-                Key=f"{READ_PREFIX}/put-{uuid4()}",
-                Body=SENTINEL,
-                IfNoneMatch="*",
-            )
-            require_denied("Delete", client.delete_object, Bucket=bucket, Key=f"{READ_PREFIX}/delete-{uuid4()}")
+            check_scope(client, bucket)
 
             first = fetcher.first_exchange
             if first is None or first.expires >= deadline:
@@ -276,10 +305,10 @@ def probe(credentials_file: Path, organization: str, region: str, max_wait_minut
 
             while datetime.now(UTC) < deadline:
                 time.sleep(min(READ_INTERVAL, max(0, (deadline - datetime.now(UTC)).total_seconds())))
-                refresh_token(config["approle"], token_file)
+                refresh_token(identity.approle, token_file)
                 started = datetime.now(UTC)
                 read_sentinel(client, bucket)
-                if fetcher.rotated_after_expiry(started):
+                if fetcher.read_demonstrates_rotation(started):
                     print("The same S3 client read successfully after rotating its credentials", flush=True)
                     return
 
@@ -310,8 +339,8 @@ def main() -> None:
         metadata = bootstrap(args.public_origin, args.bucket, args.credentials_file, root_token)
         print(json.dumps(metadata, indent=2))
     elif args.command == "issue-token":
-        config = json.loads(args.credentials_file.read_text())
-        refresh_token(config["approle"], args.token_file)
+        identity = load_identity(args.credentials_file)
+        refresh_token(identity.approle, args.token_file)
     else:
         probe(args.credentials_file, args.organization, args.region, args.max_wait_minutes)
 

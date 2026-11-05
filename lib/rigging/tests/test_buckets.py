@@ -18,6 +18,7 @@ from aiobotocore.httpsession import AIOHTTPSession
 from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, load_cluster_config, use_data_config
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import secret_file_contents, secret_file_environment
 
@@ -148,7 +149,14 @@ def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_p
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "stale-aws-secret")
     monkeypatch.setenv("AWS_PROFILE", "unused-profile")
     monkeypatch.setenv("CW_S3_ENDPOINT", "https://cwobject.com")
-    monkeypatch.setitem(fsspec.config.conf, "s3", {"key": "stale-fsspec-key", "secret": "stale-fsspec-secret"})
+    configured = {
+        "key": "stale-fsspec-key",
+        "secret": "stale-fsspec-secret",
+        "username": "stale-alias-key",
+        "password": "stale-alias-secret",
+        "config_kwargs": {"retries": {"max_attempts": 2}, "s3": {"addressing_style": "path"}},
+    }
+    monkeypatch.setitem(fsspec.config.conf, "s3", configured)
 
     async def send(_session, request):
         authorization = request.headers.get("Authorization", "")
@@ -168,7 +176,11 @@ def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_p
             )
         else:
             host = urlsplit(request.url).hostname
-            region = {"marin-cw.cwobject.com": "US-EAST-02A", "r2.example": "auto"}[host]
+            region = {
+                "marin-cw.cwobject.com": "US-EAST-02A",
+                "marin-cw.override.cwobject.com": "US-WEST-04A",
+                "r2.example": "auto",
+            }[host]
             credential = authorization.split("Credential=")[1].split(",")[0].split("/")
             access_key, _, signing_region, service, _ = credential
             assert (signing_region, service) == (region, "s3")
@@ -191,7 +203,16 @@ def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_p
     assert cw_fs.ls(cw_path, detail=False, refresh=True) == ["marin-cw/cw-two"]
     assert StoragePath("s3://marin-cw/checkpoint/metadata.json").exists()
 
+    override_fs, override_path = url_to_fs(
+        "s3://marin-cw/checkpoint/metadata.json",
+        endpoint_url="https://override.cwobject.com",
+        client_kwargs={"region_name": "US-WEST-04A"},
+    )
+    assert override_fs.exists(override_path)
+    assert override_fs.s3.meta.config.retries["total_max_attempts"] == 3
+
     monkeypatch.delenv("AWS_PROFILE")
+    monkeypatch.setitem(fsspec.config.conf, "s3", {})
     r2_fs, r2_path = filesystem_for("s3://marin-na/")
     assert r2_fs.ls(r2_path, detail=False, refresh=True) == ["marin-na/r2-key"]
 

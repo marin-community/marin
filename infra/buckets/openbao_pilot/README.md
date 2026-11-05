@@ -26,7 +26,7 @@ docker run --rm -d --name marin-openbao-pilot --log-driver none \
   --publish 127.0.0.1:18200:8200 --env BAO_DEV_ROOT_TOKEN_ID \
   ghcr.io/openbao/openbao:2.7.2 server -dev -dev-listen-address=0.0.0.0:8200
 unset BAO_DEV_ROOT_TOKEN_ID
-curl --fail --silent --retry 5 --retry-connrefused --noproxy '*' \
+curl --fail --silent --retry 5 --retry-all-errors --noproxy '*' \
   http://127.0.0.1:18200/v1/sys/health > /dev/null
 
 uv run --script pilot.py bootstrap \

@@ -259,6 +259,8 @@ def coreweave_federated_s3_options(spec: BucketSpec, federation: CoreWeaveFedera
         "key": None,
         "secret": None,
         "token": None,
+        "username": None,
+        "password": None,
         "anon": False,
     }
 

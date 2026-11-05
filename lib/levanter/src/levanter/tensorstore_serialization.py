@@ -116,7 +116,7 @@ def build_kvstore_spec(path: str) -> dict:
     """Build a tensorstore kvstore spec for an S3, GCS, or local URI.
 
     tensorstore reads neither AWS_ENDPOINT_URL nor AWS_DEFAULT_REGION from the environment.
-    CoreWeave federation supplies a bucket-specific endpoint and a refreshable ECS provider.
+    Federated CoreWeave buckets use their configured endpoint and signing region.
     """
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":

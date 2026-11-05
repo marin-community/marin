@@ -58,16 +58,26 @@ def _s3_filesystem_options(kwargs: dict[str, Any], *, url: str | None = None) ->
     """
     conf_config_kwargs = (fsspec.config.conf.get("s3") or {}).get("config_kwargs") or {}
     credential_options: dict[str, Any] = {}
-    if not kwargs.get("anon") and not any(name in kwargs for name in ("key", "secret", "token", "profile", "session")):
+    if not kwargs.get("anon") and not any(
+        name in kwargs for name in ("key", "secret", "token", "username", "password", "profile", "session")
+    ):
         if url is not None and (federated := coreweave_federated_bucket(urlsplit(url).netloc)):
             credential_options = coreweave_federated_s3_options(*federated)
-            conf_config_kwargs = credential_options.pop("config_kwargs")
+            federated_config = credential_options.pop("config_kwargs")
+            conf_config_kwargs = {**federated_config, **conf_config_kwargs}
+            if "s3" in federated_config:
+                # Bucket routing supplies addressing defaults even if another backend configured the process.
+                conf_config_kwargs["s3"] = {**(conf_config_kwargs.get("s3") or {}), **federated_config["s3"]}
+            kwargs = {
+                **kwargs,
+                "client_kwargs": {**credential_options.pop("client_kwargs"), **(kwargs.get("client_kwargs") or {})},
+            }
         else:
             credential_options = s3_credential_options()
     config_kwargs = {**conf_config_kwargs, **dict(kwargs.get("config_kwargs") or {})}
     for key, value in s3_python_config_kwargs().items():
         config_kwargs.setdefault(key, value)
-    return {**kwargs, **credential_options, "config_kwargs": config_kwargs}
+    return {**credential_options, **kwargs, "config_kwargs": config_kwargs}
 
 
 def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:

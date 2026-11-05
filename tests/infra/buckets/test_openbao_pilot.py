@@ -76,7 +76,15 @@ def test_probe_uses_fresh_credentials_on_the_same_client(tmp_path, monkeypatch, 
         return response(request, 403, f"<Error><Code>{denial}</Code></Error>".encode())
 
     credentials_file = tmp_path / "approle.json"
-    credentials_file.write_text(json.dumps({"approle": {}, "bucket": bucket, "role": role}))
+    credentials_file.write_text(
+        json.dumps(
+            {
+                "approle": {"role_id": "synthetic-role", "secret_id": "synthetic-secret"},
+                "bucket": bucket,
+                "role": role,
+            }
+        )
+    )
     monkeypatch.setenv("AWS_PROFILE", "missing")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "unrelated-key")
     monkeypatch.setattr(pilot, "datetime", Clock)

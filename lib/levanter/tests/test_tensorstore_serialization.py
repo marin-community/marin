@@ -4,6 +4,7 @@
 import asyncio
 import json
 import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
@@ -45,6 +46,18 @@ from levanter.utils.byte_budget import HostByteBudget
 _ASYNC_TEST_TIMEOUT = 5
 
 
+@contextmanager
+def _loopback_http_server(handler):
+    with ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}"
+        finally:
+            server.shutdown()
+            thread.join()
+
+
 def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
     spec = build_kvstore_spec(f"file://{tmp_path}/cache")
 
@@ -70,20 +83,14 @@ def test_tensorstore_s3_reads_with_mounted_credentials(tmp_path, monkeypatch):
         def log_message(self, _format, *_args):
             pass
 
-    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
-        thread = threading.Thread(target=server.serve_forever)
-        thread.start()
-        try:
-            monkeypatch.setenv("AWS_ENDPOINT_URL", f"http://127.0.0.1:{server.server_port}")
-            spec = build_kvstore_spec("s3://bucket/cache")
-            # The local server has no bucket subdomain; only credential delivery is under test.
-            spec["endpoint"] = f"http://127.0.0.1:{server.server_port}"
-            store = ts.KvStore.open(spec).result(timeout=_ASYNC_TEST_TIMEOUT)
-            assert store.read("missing").result(timeout=_ASYNC_TEST_TIMEOUT).state == "missing"
-            assert authorized_request.is_set()
-        finally:
-            server.shutdown()
-            thread.join()
+    with _loopback_http_server(Handler) as endpoint:
+        monkeypatch.setenv("AWS_ENDPOINT_URL", endpoint)
+        spec = build_kvstore_spec("s3://bucket/cache")
+        # The local server has no bucket subdomain; only credential delivery is under test.
+        spec["endpoint"] = endpoint
+        store = ts.KvStore.open(spec).result(timeout=_ASYNC_TEST_TIMEOUT)
+        assert store.read("missing").result(timeout=_ASYNC_TEST_TIMEOUT).state == "missing"
+        assert authorized_request.is_set()
 
 
 def test_tensorstore_coreweave_refreshes_credentials_for_reads_and_writes(tmp_path, monkeypatch):
@@ -98,6 +105,7 @@ def test_tensorstore_coreweave_refreshes_credentials_for_reads_and_writes(tmp_pa
 
     objects = {}
     current_token = "jwt-one"
+    grants = {"jwt-one": ("cw-one", 1), "jwt-two": ("cw-two", 60)}
 
     class Handler(BaseHTTPRequestHandler):
         def respond(self, status, body=b""):
@@ -108,7 +116,7 @@ def test_tensorstore_coreweave_refreshes_credentials_for_reads_and_writes(tmp_pa
             self.wfile.write(body)
 
         def authorized(self):
-            access_key = {"jwt-one": "cw-one", "jwt-two": "cw-two"}[current_token]
+            access_key, _ = grants[current_token]
             authorization = self.headers.get("Authorization", "")
             return (
                 f"Credential={access_key}/" in authorization
@@ -120,7 +128,7 @@ def test_tensorstore_coreweave_refreshes_credentials_for_reads_and_writes(tmp_pa
             if self.path == "/credentials":
                 if self.headers.get("Authorization") != current_token:
                     return self.respond(403)
-                access_key, minutes = {"jwt-one": ("cw-one", 1), "jwt-two": ("cw-two", 60)}[current_token]
+                access_key, minutes = grants[current_token]
                 expiration = datetime.now(UTC) + timedelta(minutes=minutes)
                 return self.respond(
                     200,
@@ -148,27 +156,21 @@ def test_tensorstore_coreweave_refreshes_credentials_for_reads_and_writes(tmp_pa
 
     spec = build_kvstore_spec("s3://marin-us-east-02a/checkpoint/")
     assert spec["endpoint"] == "https://marin-us-east-02a.cwobject.com"
-    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
-        thread = threading.Thread(target=server.serve_forever)
-        thread.start()
-        try:
-            # Redirect only the HTTP endpoints, leaving TensorStore's native provider and S3 signing active.
-            spec["endpoint"] = f"http://127.0.0.1:{server.server_port}"
-            spec["aws_credentials"]["endpoint"] = f"{spec['endpoint']}/credentials"
-            store = ts.KvStore.open(spec).result(timeout=_ASYNC_TEST_TIMEOUT)
-            store.write("one", b"first").result(timeout=_ASYNC_TEST_TIMEOUT)
+    with _loopback_http_server(Handler) as endpoint:
+        # Redirect only the HTTP endpoints, leaving TensorStore's native provider and S3 signing active.
+        spec["endpoint"] = endpoint
+        spec["aws_credentials"]["endpoint"] = f"{endpoint}/credentials"
+        store = ts.KvStore.open(spec).result(timeout=_ASYNC_TEST_TIMEOUT)
+        store.write("one", b"first").result(timeout=_ASYNC_TEST_TIMEOUT)
 
-            # The first grant expires inside the provider's refresh window, so rotation needs no sleep.
-            replacement = token_file.with_suffix(".next")
-            replacement.write_text("jwt-two")
-            replacement.replace(token_file)
-            current_token = "jwt-two"
-            assert store.read("one").result(timeout=_ASYNC_TEST_TIMEOUT).value == b"first"
-            store.write("two", b"second").result(timeout=_ASYNC_TEST_TIMEOUT)
-            assert store.read("two").result(timeout=_ASYNC_TEST_TIMEOUT).value == b"second"
-        finally:
-            server.shutdown()
-            thread.join()
+        # The first grant expires inside the provider's refresh window, so rotation needs no sleep.
+        replacement = token_file.with_suffix(".next")
+        replacement.write_text("jwt-two")
+        replacement.replace(token_file)
+        current_token = "jwt-two"
+        assert store.read("one").result(timeout=_ASYNC_TEST_TIMEOUT).value == b"first"
+        store.write("two", b"second").result(timeout=_ASYNC_TEST_TIMEOUT)
+        assert store.read("two").result(timeout=_ASYNC_TEST_TIMEOUT).value == b"second"
 
 
 @pytest.mark.tpu
