@@ -51,13 +51,10 @@ def test_data():
 
     key = key_iterator(jax.random.PRNGKey(0))
 
-    # Initialize pred_embeddings with ones
     pred_embeddings = hax.random.normal(next(key), (Batch, Seq, Embed), dtype=jnp.float32) / math.sqrt(Embed.size)
 
-    # Initialize pred_lm_head with ones
     pred_lm_head = hax.random.normal(next(key), (Vocab, Embed), dtype=jnp.float32) / math.sqrt(Embed.size)
 
-    # Define true_ids such that the target is always the first token in vocab
     true_ids = hax.random.randint(next(key), (Batch, Seq), 0, Vocab.size)
 
     return pred_embeddings, pred_lm_head, true_ids
@@ -140,7 +137,7 @@ def test_single_block(test_data):
     # Compute full loss
     loss_full, _logz_full = _compute_full(Vocab, pred_embeddings, pred_lm_head, true_ids)
 
-    # Compute block-wise loss with block_size=4 (vocab_size=4)
+    # Compute block-wise loss with a single block covering the whole vocab
     with jax.disable_jit():
         loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
             pred_embeddings,
@@ -176,7 +173,7 @@ def test_multiple_blocks(test_data):
     # Compute full loss
     loss_full, _logz_full = _compute_full(Vocab, pred_embeddings, pred_lm_head, true_ids)
 
-    # Compute block-wise loss with block_size=1 (vocab_size=4)
+    # Compute block-wise loss with one vocab entry per block
     loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
         pred_embeddings,
         pred_lm_head,
@@ -199,7 +196,8 @@ def test_block_size_not_dividing_vocab(test_data):
     pred_embeddings, pred_lm_head, true_ids = test_data
 
     # Set block_size that does not divide vocab_size
-    block_size = 3  # vocab_size=4
+    block_size = 3
+    assert Vocab.size % block_size != 0
 
     # should be fine now
     loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -233,10 +231,8 @@ def test_vocab_size_less_than_block_size(test_data):
     """
     pred_embeddings, pred_lm_head, true_ids = test_data
 
-    # Set block_size greater than vocab_size
-    block_size = 5  # vocab_size=4
+    block_size = Vocab.size + 1
 
-    # should be fine now
     loss_block = fused_cross_entropy_loss_and_logsumexp_penalty(
         pred_embeddings,
         pred_lm_head,

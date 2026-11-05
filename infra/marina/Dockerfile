@@ -22,6 +22,7 @@ COPY lib/rigging/pyproject.toml lib/rigging/
 COPY lib/finestore/pyproject.toml lib/finestore/
 COPY lib/finelog/pyproject.toml lib/finelog/
 COPY lib/shellbox/pyproject.toml lib/shellbox/
+COPY lib/rolloutengine/pyproject.toml lib/rolloutengine/
 COPY lib/taskcompendium/pyproject.toml lib/taskcompendium/
 COPY lib/verifyit/pyproject.toml lib/verifyit/
 COPY infra/marina/pyproject.toml infra/marina/
@@ -49,6 +50,7 @@ COPY lib/levanter/src lib/levanter/src
 COPY lib/marin/src lib/marin/src
 COPY lib/zephyr/src lib/zephyr/src
 COPY lib/shellbox/src lib/shellbox/src
+COPY lib/rolloutengine/src lib/rolloutengine/src
 COPY lib/taskcompendium/src lib/taskcompendium/src
 COPY lib/verifyit/src lib/verifyit/src
 COPY infra/marina/src infra/marina/src

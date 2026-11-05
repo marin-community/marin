@@ -147,7 +147,7 @@ class PanelCellResponse(BaseModel):
     created_at: str
     version: str | None
     git_sha: str
-    eval_runtime: str
+    eval_runtime: str | None
 
 
 class MissingCellResponse(BaseModel):
