@@ -58,3 +58,8 @@ export interface Covered {
 export function isPartialCoverage(cell: Covered): boolean {
   return cell.interval_kind === INTERVAL_KIND.IDENTIFIED && cell.coverage !== null && cell.coverage < 1
 }
+
+export function scoredItemsLabel(cell: PanelCell): string {
+  const repeat = cell.repeat_aggregation
+  return repeat ? `${repeat.n_items} items × ${repeat.n_repeats} repeats` : `${cell.n_scored} items`
+}

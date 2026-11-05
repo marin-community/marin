@@ -13,7 +13,7 @@ import { apiGet, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cohortWarning, isPartialCoverage } from '@/utils/panel'
+import { cohortWarning, isPartialCoverage, scoredItemsLabel } from '@/utils/panel'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta, Panel, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -315,7 +315,7 @@ const chartSeries = computed(() =>
                       backgroundColor: scoreTint(cell(row, m)!.value),
                       ...(row.leader === m ? { '--tw-ring-color': 'var(--c-best)' } : {}),
                     }"
-                    :title="`${cell(row, m)!.metric} · ${cell(row, m)!.n_scored} items graded`"
+                    :title="`${cell(row, m)!.metric} · ${scoredItemsLabel(cell(row, m)!)} graded`"
                   >
                     <span class="font-mono font-medium tabular-nums">{{ formatScore(cell(row, m)!.value) }}</span>
                     <span class="block font-mono text-[10px] text-text-muted tabular-nums leading-none">

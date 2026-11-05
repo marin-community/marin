@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, cohortWarning, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
@@ -423,7 +423,7 @@ function cellTitle(cell: PanelCell): string {
       : 'attempted count not reported, so completeness is unknown'
   const shotSetting = cell.num_fewshot === null ? 'default shots' : `${cell.num_fewshot}-shot`
   return [
-    `${cell.metric} · ${shotSetting} · ${cell.n_scored} items graded`,
+    `${cell.metric} · ${shotSetting} · ${scoredItemsLabel(cell)} graded`,
     cell.n_benchmark === null
       ? 'benchmark size unreported'
       : `${cell.n_attempted ?? 'unknown'} of ${cell.n_benchmark} benchmark items attempted`,

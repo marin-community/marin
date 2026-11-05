@@ -61,6 +61,15 @@ export const FLAG_NOTES: Record<string, string> = {
   degenerate_stderr: 'the harness recorded a standard error of exactly zero, which no real sample supports',
 }
 
+export interface RepeatAggregate {
+  n_items: number
+  n_repeats: number
+  n_trials: number
+  stderr: number
+  stderr_basis: string
+  source_coverage: unknown
+}
+
 // One benchmark result: the rate over graded items, the interval around it, how much of the
 // attempted item set was graded, and the run it came from. `low` is the ranking key -- `value` is a
 // complete-case rate and is biased upward when a run lost items.
@@ -71,6 +80,7 @@ export interface PanelCell {
   interval_kind: IntervalKind
   metric: string
   metric_kind: string
+  repeat_aggregation: RepeatAggregate | null
   declared: boolean
   n_scored: number
   n_benchmark: number | null

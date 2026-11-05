@@ -12,7 +12,7 @@ import {
   objectStoreUrl,
   shortSha,
 } from '@/utils/formatting'
-import { isPartialCoverage } from '@/utils/panel'
+import { isPartialCoverage, scoredItemsLabel } from '@/utils/panel'
 import { FLAG_NOTES, INTERVAL_KIND, type EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import JobsPanel from '@/components/runs/JobsPanel.vue'
@@ -182,7 +182,10 @@ async function copyPath() {
               95% {{ formatInterval(data.headline.low, data.headline.high) }}
             </div>
             <div class="text-xs font-mono text-text-muted truncate max-w-[16rem]" :title="data.headline.metric">
-              {{ data.headline.metric }} · {{ data.headline.n_scored }} items
+              {{ data.headline.metric }} · {{ scoredItemsLabel(data.headline) }}
+            </div>
+            <div v-if="data.headline.repeat_aggregation" class="text-xs text-text-muted mt-0.5">
+              {{ data.headline.repeat_aggregation.n_trials }} scored trials · item-based standard error
             </div>
             <div class="text-xs font-mono mt-0.5" :class="gradedNote.warn ? 'text-status-warning' : 'text-text-muted'">
               {{ gradedNote.label }}

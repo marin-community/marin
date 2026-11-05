@@ -12,7 +12,7 @@ import { computed } from 'vue'
 import { RUN_STATUS, type MissingCell, type PanelCell } from '@/types/api'
 import { formatCoverage, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreColor } from '@/utils/score'
-import { type BestCell } from '@/utils/panel'
+import { scoredItemsLabel, type BestCell } from '@/utils/panel'
 import { tip, type TipContent } from '@/composables/tooltip'
 
 interface HistoryPoint {
@@ -96,7 +96,7 @@ const gauges = computed<Gauge[]>(() =>
         lines: [
           { label: props.model, value: formatScore(cell.value) },
           { label: '95% interval', value: formatInterval(cell.low, cell.high) },
-          { label: 'metric', value: `${cell.metric} · ${cell.n_scored} items`, tone: 'muted' },
+          { label: 'metric', value: `${cell.metric} · ${scoredItemsLabel(cell)}`, tone: 'muted' },
           { label: 'coverage', value: coverage || 'not reported', tone: 'muted' },
           isBest
             ? { label: 'fleet best', value: 'this model', tone: 'best' }
