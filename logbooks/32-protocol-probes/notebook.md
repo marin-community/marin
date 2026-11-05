@@ -1,0 +1,149 @@
+---
+title: "Agent protocol probes on Qwen3-0.6B and Snowball v0.1"
+source_repository: "marin-community/marin"
+task_issue: "https://github.com/marin-community/marin-logbooks/issues/32"
+related_issues:
+  - "https://github.com/marin-community/marin/issues/10393"
+  - "https://github.com/marin-community/marin/pull/10399"
+  - "https://github.com/marin-community/marin/pull/10932"
+research_branch: "codex/32-protocol-probes"
+marin_base_revision: "f24a46889a8b3a16858a32d25ad5565532c4f456"
+archive_template_revision: "f54b3aa0e6ee533e988d2b97e9db0d1523f934dd"
+status: complete
+---
+
+# Agent protocol probes on Qwen3-0.6B and Snowball v0.1
+
+## Question and decision criteria
+
+- Goal and why it matters: marin-community/marin#10393 asks for structural
+  evals that separate agent protocol failures from wrong answers. #10399 grades
+  four checks (required-file submission, tool execution, thinking disabled, URL
+  loading) into `diagnostics["protocol"]`; #10932 runs 32 probe tasks, 8 per
+  check, as a validation source in the quick RL loop. These runs check that the
+  probes and labels work on real vLLM serving before the quick loop relies on
+  them, and record baseline rates for two models.
+- Baseline and alternatives: no prior protocol measurement exists. Qwen3-0.6B
+  is the cheapest model that runs the full path; Snowball v0.1 is the current
+  agentic checkpoint.
+- Evidence needed to choose: every probe row produces the label its trace
+  shows, and a correct answer is not lost to serving or grading bugs.
+- Constraints: one node per run; thinking turned off on every request so the
+  thinking check applies to all 32 rows.
+
+## Source
+
+The branch base `f24a46889a` is the reviewed #10932 tip with both launchers:
+
+- `experiments/post_training/inventory/protocol_probes_smoke.py`: Qwen3-0.6B on
+  one H100, trains one dry step so the trainer evaluates the probes before and
+  after it.
+- `experiments/post_training/inventory/protocol_probes_eval.py`: a Snowball
+  checkpoint served by vLLM on one 8xH100 node through SkyRL's `generate`
+  entrypoint, with no policy loaded.
+
+The recorded runs used earlier revisions of the same PR before its rebase and
+cleanup. Both are parents of this branch's merge commit `608bf14d0c`, which
+keeps the `f24a46889a` tree:
+
+- `7de9f12c88`: Qwen3-0.6B run `probes4-dev`.
+- `7b81a5e760`: Snowball v0.1 run `probes-eval4-dev`.
+
+Between `7b81a5e760` and `f24a46889a`, `taskcompendium/protocol.py` and
+`taskcompendium/examples/protocol_probes.py` are unchanged. The later revision
+reworks how RolloutEngine passes recorded turns to grading and removes tests.
+
+## Entries
+
+### 2026-11-04 00:17-01:10 UTC - Qwen3-0.6B smoke on one H100
+
+- Question: do the 32 probes run end to end through the quick loop's path?
+- Commands, from the run revision:
+  `uv run python -m experiments.post_training.inventory.protocol_probes_smoke --version probes<N>-dev --run`.
+- Runs, Iris coordinators under `/dml/users-dml-checkpoints-protocol-probes-smoke-*`:
+  - `probes-dev` (`…-69622d00`): all 24 tool, URL and file probes failed with
+    HTTP 400 and no recorded message. Led to keeping the server's error message
+    with a failed rollout.
+  - `probes-dev` (`…-11bd2e81`): refused, because run 1 had sealed that version
+    label.
+  - `probes3-dev` (`…-e7e66ac3`): the recorded 400 was vLLM's
+    `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set`.
+    The thinking probes were not assessed, because the worker merged
+    `enable_thinking: false` into the request after the harness recorded it.
+    Fixed by enabling the Hermes tool parser and recording the settings the
+    transport applied per turn.
+  - `probes4-dev` (`…-76782a11`, revision `7de9f12c88`): the measured run.
+- Result (`probes4-dev`, before training, 32 rows): average score 0.19.
+
+  | Check | Labels |
+  | --- | --- |
+  | tool execution (8) | `no_invocation` 8 |
+  | URL loading (8) | `not_attempted` 8 |
+  | required file (8) | `missing_file` 8 |
+  | thinking disabled (32) | `respected` 12, `reasoning_emitted` 20 |
+
+- Evidence:
+  `s3://marin-us-east-08a/marin/users/dml/checkpoints/protocol-probes-smoke/probes4-dev/exports/dumped_evals/global_step_0_evals/protocol-probes.jsonl`;
+  per-row extract in `analysis/traces.json` under `qwen3-0.6b`.
+- Interpretation: Qwen3-0.6B never calls a tool; it answers in prose, often
+  inventing a value. The labels match the traces. The model is useful only as a
+  plumbing check.
+
+### 2026-11-04 18:02-20:18 UTC - Snowball v0.1 on one 8xH100 node
+
+- Question: what are the protocol rates of a real agentic checkpoint?
+- Model: `open-athena/Marin-Snowball-67B-A2B-v0.1` at revision
+  `adc0078a19a4383bc998fcdb43867b3360baf5f3`, served by vLLM with the Hermes
+  tool parser, broadcast weight sync, pipeline parallel 1.
+- Commands, from the run revision:
+  `uv run python -m experiments.post_training.inventory.protocol_probes_eval --version probes-eval<N>-dev --run`.
+- Runs, Iris coordinators under `/dml/users-dml-checkpoints-protocol-probes-eval-snowball-v0.1-*`:
+  - `probes-eval-dev` (`…-b25b389e`): failed loading the probe rows, built under
+    TaskSpec schema 0.28 while main read 0.30. Fixed by putting the schema
+    version in the probe artifact's identity.
+  - `probes-eval2-dev` (`…-e46698d9`) and `probes-eval3-dev` (`…-143ff52a`):
+    average score 0.19. Seven exact-nonce answers graded as
+    `<nonce><|eot_id|>`: Snowball's tokenizer EOS is `<|end_of_text|>`, its
+    template ends turns with `<|eot_id|>`, and the client stripped only the
+    EOS. Fixed in `7b81a5e760` by stripping whichever special token the server
+    stopped at.
+  - `probes-eval4-dev` (`…-67e5d2f3`, revision `7b81a5e760`): the measured run,
+    8 minutes once the model was staged.
+- Result (`probes-eval4-dev`, 32 rows): average score 0.53.
+
+  | Check | Labels | Correct answers |
+  | --- | --- | --- |
+  | tool execution (8) | `executed` 7, `not_executed` 1 | 3 |
+  | URL loading (8) | `retrieved` 8 | 4 |
+  | required file (8) | `submitted` 2, `missing_file` 6 | 2 |
+  | thinking disabled (32) | `respected` 27, `reasoning_emitted` 5 | |
+
+- Evidence:
+  `s3://marin-us-east-08a/marin/users/dml/checkpoints/protocol-probes-eval/snowball-v0.1/probes-eval4-dev/exports/dumped_evals/eval_only/protocol-probes.jsonl`;
+  per-row extract in `analysis/traces.json` under `snowball-v0.1`.
+- Interpretation:
+  - Snowball calls the tool on nearly every tool and URL probe. The wrong
+    answers there wrap the nonce in prose ("The token is …"), which the
+    exact-match grader rejects as the instruction asks.
+  - The file misses are mostly a malformed call: Snowball writes
+    `<tool_call name="shell">` with a JSON body in its text and follows it with
+    an observation it wrote itself. The Hermes parser does not accept that
+    markup, so no command ran and no file was written.
+  - An earlier comment on #10393 described these traces as fabricated tool
+    output; the corrected reading is on the issue
+    (marin-community/marin#10393, issuecomment-6641107802).
+
+## Final decision
+
+- Selected approach: the probes and labels as merged through #10399 and #10932.
+  Both runs produced labels consistent with their traces once the two serving
+  bugs were fixed.
+- Marin contribution PRs: marin-community/marin#10399 (grading, fetch provider,
+  end-of-turn fix, server error capture) and marin-community/marin#10932 (quick
+  loop wiring). The launchers stay on this branch.
+- Reproduction: check out this branch and run either launcher with a fresh
+  `--version <label>-dev --run`. The dumps put each row's assessment under
+  `verification.diagnostics.protocol`, keyed by check.
+- Remaining uncertainty: 8 variants per check gives coarse rates; the thinking
+  check applies only when the launch turns thinking off, which the quick loop
+  does not do by default.
