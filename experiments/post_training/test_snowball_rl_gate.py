@@ -226,7 +226,7 @@ def test_calibrate_pools_deviations_within_pins():
 
 
 @pytest.mark.parametrize("outlier", [False, True])
-def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs, outlier, tmp_path):
+def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs, outlier, tmp_path, monkeypatch):
     roots = controls(recorded_runs, "speed-medium")
     next(tmp_path.glob("rl-data/snowball-pass-rates/*/*/pass_rates.parquet")).unlink()
     if outlier:
@@ -235,6 +235,11 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
     before = {
         path: hashlib.sha256(path.read_bytes()).digest() for root in roots for path in root.rglob("*") if path.is_file()
     }
+    with monkeypatch.context() as legacy:
+        legacy.setattr(gate, "GATE_REVISION", "2026.11.03.1")
+        legacy_report = rescore("speed-medium", "--leave-out", "r0")
+    legacy_record = Path(legacy_report["report"]).parent / RECORD_FILENAME
+    _json(legacy_record, json.loads(legacy_record.read_text()) | {"result_type": "__main__.GateReport"})
     report = rescore("speed-medium", "--leave-out", "r0")
     timing, mismatch = report["guards"]
     assert [timing[key] for key in ("run", "control", "sd", "df", "n_run", "n_control", "delta")] == [
