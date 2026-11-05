@@ -4,7 +4,7 @@ name: Value embeddings on MLA layers
 category: Embeddings and inputs
 summary: Add a per-token embedding table to the MLA values, via a lambda or a sigmoid gate.
 source: maintainer
-status: done
+status: running
 first_batch: 1
 tags:
 - value-embeds
@@ -352,6 +352,19 @@ trials:
   steps: 3030
   baseline: belay-X0014-control 3.0472 (same commit, seed 0)
   step_time_change: +1%
+- id: t017
+  variant: gated value embeds on MLA, table LR 0.3x
+  rung: competitive-d512
+  protocol: equal_steps
+  batch: X0014
+  date: '2026-11-05'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0014
+  wandb: []
+  settings:
+    value_embed_lr_mult: '0.3'
+    value_embeds: gated
+  commit: 425d17b0e2
+  priority: batch
 events:
 - type: adopted
   batch: '89'
