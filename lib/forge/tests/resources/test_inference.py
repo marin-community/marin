@@ -1,0 +1,136 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+from collections.abc import Mapping, Sequence
+from typing import override
+
+import pytest
+from taskforge.llm.client import Attempt, AttemptOutcome, ModelRequestRejected, ModelUnavailable
+from taskforge.llm.client import Completion as ProviderCompletion
+from taskforge.llm.client import FinishReason as ProviderFinish
+from taskforge.llm.client import ToolCall as ProviderToolCall
+from taskforge.llm.client import Usage as ProviderUsage
+from taskforge.llm.policy import LLMPolicy
+
+from forge.effects.events import Retrying
+from forge.effects.issues import Hold, Restart
+from forge.model.llm import Completion, Message, Sampling, ToolCall, ToolSchema
+from forge.resources.inference import CompletionBackend, FakeInference, GlmInference, InferenceRequest
+
+
+class Backend(CompletionBackend):
+    model = "test-model"
+
+    def __init__(self, script: Sequence[ProviderCompletion | ModelRequestRejected | ModelUnavailable]) -> None:
+        self.script = tuple(script)
+        self.calls: list[tuple[Sequence[dict[str, object]], LLMPolicy, Mapping[str, object] | None]] = []
+
+    @override
+    async def complete(
+        self,
+        messages: Sequence[dict[str, object]],
+        policy: LLMPolicy,
+        request_fields: Mapping[str, object] | None = None,
+    ) -> ProviderCompletion:
+        value = self.script[len(self.calls)]
+        self.calls.append((messages, policy, request_fields))
+        if isinstance(value, ModelRequestRejected | ModelUnavailable):
+            raise value
+        return value
+
+
+class Retries:
+    def __init__(self) -> None:
+        self.events: list[Retrying] = []
+
+    async def __call__(self, event: Retrying) -> None:
+        self.events.append(event)
+
+
+def provider_completion(attempts: tuple[Attempt, ...] = ()) -> ProviderCompletion:
+    return ProviderCompletion(
+        "answer",
+        "reason",
+        (ProviderToolCall("id", "shell", "{}"),),
+        ProviderFinish.TOOL_CALLS,
+        ProviderUsage(10, 20, 3, 4),
+        1,
+        0.1,
+        0.9,
+        2,
+        attempts,
+    )
+
+
+def request() -> InferenceRequest:
+    return InferenceRequest(
+        (
+            Message("assistant", "prefix", (ToolCall("previous", "shell", "{}"),), reasoning="thought"),
+            Message("tool", "result", tool_call_id="previous"),
+        ),
+        (ToolSchema("shell", "Run command", {"type": "object"}),),
+        Sampling(max_tokens=100),
+    )
+
+
+async def test_inference_retries_then_preserves_wire_and_completion_values() -> None:
+    retries = Retries()
+    backend = Backend((ModelRequestRejected(503, "private response", ()), provider_completion()))
+    event = request()
+    result = await GlmInference(backend, event.sampling, max_attempts=3, notify=retries).complete(event)
+    assert result.content == "answer" and result.reasoning == "reason"
+    assert result.tool_calls == (ToolCall("id", "shell", "{}"),)
+    assert result.usage.cached_tokens == 4 and result.continuations == 2
+    messages, policy, fields = backend.calls[-1]
+    assert messages[0]["reasoning_content"] == "thought"
+    assert messages[1]["tool_call_id"] == "previous"
+    assert policy.max_tokens == 100
+    assert fields == {
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "shell", "description": "Run command", "parameters": {"type": "object"}},
+            }
+        ]
+    }
+    assert [(retry.request, retry.attempt) for retry in retries.events] == [(event, 1)]
+    assert "private" not in retries.events[0].cause
+
+
+async def test_inference_exhausts_bound_without_consuming_later_success() -> None:
+    retries = Retries()
+    backend = Backend((ModelRequestRejected(429, "", ()), ModelRequestRejected(503, "", ()), provider_completion()))
+    event = request()
+    with pytest.raises(Restart):
+        await GlmInference(backend, event.sampling, max_attempts=2, notify=retries).complete(event)
+    assert len(backend.calls) == 2
+    assert [retry.attempt for retry in retries.events] == [1]
+
+
+async def test_provider_exhaustion_is_not_retried_by_executor() -> None:
+    attempts = (Attempt(0, AttemptOutcome.RETRYABLE_STATUS, 10, 0, 1, 503, "secret", ()),) * 2
+    backend = Backend((ModelUnavailable("secret", attempts), provider_completion()))
+    retries = Retries()
+    event = request()
+    with pytest.raises(Restart):
+        await GlmInference(backend, event.sampling, max_attempts=3, notify=retries).complete(event)
+    assert len(backend.calls) == 1
+    assert len(retries.events) == 1 and "secret" not in retries.events[0].cause
+
+
+async def test_request_rejection_holds_without_retry() -> None:
+    backend = Backend((ModelRequestRejected(400, "", ()),))
+    retries = Retries()
+    with pytest.raises(Hold):
+        await GlmInference(backend, Sampling(), max_attempts=3, notify=retries).complete(request())
+    assert len(backend.calls) == 1 and not retries.events
+
+
+async def test_fake_inference_records_requests_and_stops_at_script_end() -> None:
+    client = FakeInference((Completion("first"), Completion("second")))
+    event = request()
+    assert (await client.complete(event)).content == "first"
+    assert (await client.complete(event)).content == "second"
+    with pytest.raises(Restart):
+        await client.complete(event)
+    assert client.requests == [event, event, event]
