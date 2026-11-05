@@ -31,6 +31,50 @@ tensor_parallel: 1
 precision: "bf16"
 cache: "native"
 enable_prefix_caching: true
+# Final cache-owner settings: vLLM #110 at 6a64b548c67ab11e8355c372d3b252108cf8f5c1.
+# Explicit enable rejects fallback when the qualified native capabilities are absent.
+kv_cache_dtype: auto
+attention_backend: FLASHINFER
+compilation_config:
+  mode: 3
+  cudagraph_mode: NONE
+  cudagraph_capture_sizes:
+  - 1
+  - 2
+  - 4
+  - 8
+  - 16
+  - 32
+  - 2048
+  splitting_ops:
+  - vllm::unified_attention_with_output
+  - vllm::unified_mla_attention_with_output
+  - vllm::mamba_mixer2
+  - vllm::mamba_mixer
+  - vllm::short_conv
+  - vllm::qwen4_exp_ple_short_conv
+  - vllm::qwen4_exp_qsa_with_output
+  - vllm::linear_attention
+  - vllm::qwen_gdn_attention_core
+  - vllm::qwen_gdn_attention_core_fused_norm_packed
+  - vllm::gdn_attention_core_xpu
+  - vllm::olmo_hybrid_gdn_full_forward
+  - vllm::sparse_attn_indexer
+  - vllm::rocm_aiter_sparse_attn_indexer
+  - vllm::deepseek_v4_attention
+  - vllm::hpc_rope_norm_forward
+  - vllm::unified_kv_cache_update
+  - vllm::unified_mla_kv_cache_update
+  - vllm::grug_moe_short_conv
+  - vllm::moe_forward
+  - vllm::moe_forward_shared
+  inductor_compile_config:
+    emulate_precision_casts: true
+    max_autotune: false
+    coordinate_descent_tuning: false
+    deterministic: true
+    dynamic_scale_rblock: false
+    combo_kernels: false
 additional_config: {grug_logical_kv_cache: true}
 prefix_cache_retention_interval: 0
 numa_bind: true

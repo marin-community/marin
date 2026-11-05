@@ -216,6 +216,7 @@ def main() -> None:
     release = None
     run_id = source["run_id"] if source is not None else args.run_id
     attempt = source["run_attempt"] if source is not None else args.run_attempt
+    found_submission = False
     with connect_controller(cluster_name="marin") as endpoint:
         with IrisClient.remote(endpoint.url, credentials=endpoint.credentials, workspace=Path.cwd()) as client:
             for profile in profiles:
@@ -252,7 +253,13 @@ def main() -> None:
                         flush=True,
                     )
                     continue
-                plan = read_record(uri)
+                try:
+                    plan = read_record(uri)
+                except FileNotFoundError:
+                    if args.profile != "both":
+                        raise
+                    continue
+                found_submission = True
                 job = client.job(JobName.from_string(plan["job_id"]))
                 if args.operation == "cancel":
                     job.cancel()
@@ -269,6 +276,8 @@ def main() -> None:
                     with tempfile.TemporaryDirectory(prefix="agentx-recovery-") as directory:
                         work = Path(directory)
                         print(recover_results(client, plan, work))
+            if source is None and not found_submission:
+                parser.error(f"No saved submission for run {run_id}, attempt {attempt} under {args.root}")
 
 
 if __name__ == "__main__":

@@ -33,6 +33,12 @@ experts. Compilation remains enabled. Hero retains its native ShortConv
 CUDA-graph guard. The [qualified recipe](https://github.com/marin-community/marin-logbooks/blob/d6f5660563606d7877e7f40b8a70a59703a35f52/logbooks/19-hero-agentx-throughput/owner-integration/hero-logical-kv-recipe.md)
 is reference evidence; final validation requires the cache owner's final supported
 settings and a published wheel containing [#110](https://github.com/marin-community/vllm/pull/110).
+The [final cache handoff](https://github.com/marin-community/marin-logbooks/blob/2ae5ed7be2/logbooks/19-hero-agentx-throughput/owner-integration/hero-logical-kv-review-settings.json)
+at source `6a64b548c67ab11e8355c372d3b252108cf8f5c1` enables logical storage
+automatically for the qualified path. This benchmark keeps its supported explicit
+enable so unavailable native capabilities fail startup. It pins FlashInfer,
+KV dtype `auto` and the handoff's compilation configuration, including mode 3
+and the accepted ShortConv graph guard.
 Marin must adopt a compatible release before weekly Hero use. A manual published
 release override can validate it before adoption.
 
@@ -115,6 +121,16 @@ marin-env uv run --no-sync python -c \
   'import json; from experiments.evaluation.agentx.artifacts import write_record; write_record("s3://BUCKET/PREFIX/current-spare-placement.json", json.load(open("placement.json")))'
 ```
 
+The node list is a post-admission guard. It does not select a rack for Kueue.
+Before dispatch, verify that Hero training has a higher protected priority band
+than this interactive gang, and that the approved spare domain has capacity.
+Check each admission and retry against the current receipt; cancel an allocation
+on other nodes. A queue delay can invalidate the earlier inventory. If safe
+admission cannot be established, obtain a supported restriction from the Iris
+resource owner before launching. Current Iris maps only `pool` and `region` to
+node selectors; an arbitrary node/domain constraint is ignored. Keep pool/label
+and scheduler changes with that owner.
+
 ```sh
 gh workflow run agentx-performance.yaml -R marin-community/marin --ref VALIDATION_BRANCH \
   -f state_root=s3://BUCKET/PREFIX/validation -f profile=gb200 \
@@ -188,6 +204,10 @@ uv run --frozen --package marin-core --extra cpu --no-default-groups \
   python -m experiments.evaluation.agentx.control recover \
   --root "$AGENTX_STATE_ROOT" --run-id RUN_ID --run-attempt ATTEMPT --profile both
 ```
+
+For stop, observation and recovery, `both` processes the descriptors that exist,
+including a run that submitted only one profile. An absent explicit single profile
+or a run with neither descriptor reports an error.
 
 Recovery validates completed children and republishes them without submitting
 GPUs. Output finalization can take ten minutes. Before preparation completes,

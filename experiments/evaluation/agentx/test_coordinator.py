@@ -3,6 +3,7 @@
 
 """Control-plane interruption regressions; these tests allocate no hardware."""
 
+import contextlib
 import dataclasses
 import hashlib
 import io
@@ -30,6 +31,7 @@ from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Deadline, Timestamp
 
+from experiments.evaluation.agentx import control
 from experiments.evaluation.agentx.artifacts import (
     pack_server_metrics,
     read_record,
@@ -213,6 +215,25 @@ def test_recovery_refuses_a_live_coordinator(saved_batch, tmp_path):
     with pytest.raises(ValueError, match="still live"):
         recover_results(controller, plan, tmp_path)
     assert len(controller.jobs) == 1
+
+
+@pytest.mark.parametrize("profile", ["h100", "gb200"])
+def test_default_cancel_reaches_the_existing_single_profile(saved_batch, tmp_path, monkeypatch, profile):
+    plan, _ = saved_batch
+    plan = plan | {"profile": profile, "job_id": f"/fixture/agentx-{profile}"}
+    write_record(control.submission_uri(plan["root"], 123, 2, profile), plan)
+    cancelled = set()
+    client = SimpleNamespace(job=lambda job_id: SimpleNamespace(cancel=lambda: cancelled.add(str(job_id))))
+    endpoint = SimpleNamespace(url="http://fixture", credentials=None)
+    # These are the controller-discovery and RPC connection boundaries. Descriptor
+    # lookup and the default CLI profile selection run unchanged.
+    monkeypatch.setattr(control, "connect_controller", lambda **_kwargs: contextlib.nullcontext(endpoint))
+    monkeypatch.setattr(control.IrisClient, "remote", lambda *_args, **_kwargs: contextlib.nullcontext(client))
+    monkeypatch.setattr(
+        sys, "argv", ["control", "cancel", "--root", plan["root"], "--run-id", "123", "--run-attempt", "2"]
+    )
+    control.main()
+    assert cancelled == {plan["job_id"]}
 
 
 def test_recovery_after_preparation_loss_publishes_no_measurements(saved_batch, tmp_path):
