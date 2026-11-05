@@ -251,7 +251,7 @@ class _PipelineExecution:
     # True once the final task-producing stage has been loaded, so a drained
     # queue means no further task can be dispatched for this pipeline.
     is_last_stage: bool = False
-    # Folded completed-task counters, keyed by scope and aggregation.
+    # Folded completed-task counters, keyed by counter (scope and name) and aggregation.
     completed_totals: dict[tuple[CounterKey, Aggregation], CounterEntry] = field(default_factory=dict)
     # Set at each _start_stage so status logs show throughput since stage start.
     stage_monotonic_start: float | None = None
