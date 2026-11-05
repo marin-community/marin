@@ -33,7 +33,11 @@ T_co = TypeVar("T_co", covariant=True)
 
 @dataclass(frozen=True, slots=True)
 class Event(Generic[T_co]):
-    """Immutable request; explicit covariance is required for the phantom result T."""
+    """An immutable request whose executor returns the declared result type.
+
+    Covariance lets observers accept every result type as Event[object]. The
+    phantom result parameter requires an explicit TypeVar to preserve this.
+    """
 
     result_type: ClassVar[object] = type(None)
 
