@@ -745,12 +745,6 @@ export default function (pi) {
             return
 
         events, skipped_records = self._read_output_events(output_file)
-        if skipped_records:
-            self.logger.debug(
-                "Skipped %d malformed Pi output record(s) in %s",
-                skipped_records,
-                output_file,
-            )
 
         total_input_tokens = 0
         total_output_tokens = 0
@@ -760,18 +754,25 @@ export default function (pi) {
 
         for event in events:
             try:
-                if event.get("type") == "message_end":
-                    message = event.get("message") or {}
-                    if message.get("role") == "assistant":
-                        usage = message.get("usage") or {}
-                        total_input_tokens += usage.get("input", 0)
-                        total_output_tokens += usage.get("output", 0)
-                        total_cache_read_tokens += usage.get("cacheRead", 0)
-                        total_cache_write_tokens += usage.get("cacheWrite", 0)
-                        cost = usage.get("cost") or {}
-                        total_cost += cost.get("total", 0.0)
+                usage = self._assistant_usage(event)
             except (AttributeError, TypeError):
                 skipped_records += 1
+                continue
+            if usage is None:
+                continue
+            total_input_tokens += usage.get("input", 0)
+            total_output_tokens += usage.get("output", 0)
+            total_cache_read_tokens += usage.get("cacheRead", 0)
+            total_cache_write_tokens += usage.get("cacheWrite", 0)
+            cost = usage.get("cost") or {}
+            total_cost += cost.get("total", 0.0)
+
+        if skipped_records:
+            self.logger.debug(
+                "Skipped %d malformed Pi output record(s) in %s",
+                skipped_records,
+                output_file,
+            )
 
         context.n_input_tokens = total_input_tokens + total_cache_read_tokens
         context.n_output_tokens = total_output_tokens
@@ -877,107 +878,27 @@ export default function (pi) {
                 if isinstance(candidate, str) and candidate:
                     session_id = candidate
                 continue
-            if event.get("type") != "message_end":
+            message = self._message_end_message(event)
+            if message is None:
                 continue
-            message = event.get("message")
-            if not isinstance(message, dict):
-                continue
-            role = message.get("role")
             timestamp = self._pi_timestamp_to_iso(
                 message.get("timestamp") if message.get("timestamp") is not None else event.get("timestamp")
             )
-
-            if role == "system":
-                text = self._message_text(message.get("content"))
-                if not text:
-                    sections = message.get("sections") or {}
-                    if isinstance(sections, dict):
-                        text = sections.get("preamble") or ""
-                if text:
-                    steps.append(
-                        Step(step_id=len(steps) + 1, timestamp=timestamp, source="system", message=text)
-                    )
-            elif role == "user":
-                steps.append(
-                    Step(
-                        step_id=len(steps) + 1,
-                        timestamp=timestamp,
-                        source="user",
-                        message=self._message_text(message.get("content")) or "(empty user message)",
-                    )
-                )
-            elif role == "assistant":
-                content = message.get("content") or []
-                blocks = [block for block in content if isinstance(block, dict)]
-                text = "\n".join(
-                    block.get("text") or "" for block in blocks if block.get("type") == "text"
-                )
-                tool_calls = []
-                for block in blocks:
-                    if block.get("type") != "toolCall":
-                        continue
-                    call = block.get("toolCall")
-                    if not isinstance(call, dict):
-                        call = {key: value for key, value in block.items() if key != "type"}
-                    arguments = call.get("arguments")
-                    tool_calls.append(
-                        ToolCall(
-                            tool_call_id=str(
-                                call.get("id") or call.get("toolCallId") or len(tool_calls) + 1
-                            ),
-                            function_name=str(call.get("name") or call.get("toolName") or "unknown_tool"),
-                            arguments=arguments if isinstance(arguments, dict) else {},
-                        )
-                    )
-                metrics = None
-                usage = message.get("usage")
-                if isinstance(usage, dict):
-                    prompt_tokens = usage.get("input", 0) or 0
-                    completion_tokens = usage.get("output", 0) or 0
-                    total_input_tokens += prompt_tokens
-                    total_output_tokens += completion_tokens
-                    cost = usage.get("cost") or {}
-                    metrics = Metrics(
-                        prompt_tokens=prompt_tokens or None,
-                        completion_tokens=completion_tokens or None,
-                        cost_usd=(cost.get("total") if isinstance(cost, dict) else None) or None,
-                    )
-                step_model = message.get("model")
-                steps.append(
-                    Step(
-                        step_id=len(steps) + 1,
-                        timestamp=timestamp,
-                        source="agent",
-                        model_name=step_model if step_model else None,
-                        message=text or "(empty assistant message)",
-                        tool_calls=tool_calls or None,
-                        metrics=metrics,
-                    )
-                )
-                if step_model and not model_name:
-                    model_name = str(step_model)
+            role = message.get("role")
+            if role == "assistant":
+                step, usage = self._assistant_step(message, timestamp, len(steps) + 1)
+                if usage is not None:
+                    total_input_tokens += usage.get("input", 0) or 0
+                    total_output_tokens += usage.get("output", 0) or 0
+                if step.model_name and not model_name:
+                    model_name = step.model_name
+                steps.append(step)
             elif role == "toolResult":
-                text = self._message_text(message.get("content"))
-                call_id = message.get("toolCallId")
-                result = ObservationResult(
-                    source_call_id=str(call_id) if call_id else None,
-                    content=text or None,
-                )
-                if steps and steps[-1].source == "agent":
-                    if steps[-1].observation is None:
-                        steps[-1].observation = Observation(results=[result])
-                    else:
-                        steps[-1].observation.results.append(result)
-                else:
-                    steps.append(
-                        Step(
-                            step_id=len(steps) + 1,
-                            timestamp=timestamp,
-                            source="user",
-                            message="(tool result outside an agent turn)",
-                            observation=Observation(results=[result]),
-                        )
-                    )
+                self._attach_tool_result(message, timestamp, steps)
+            else:
+                step = self._non_agent_step(message, timestamp, len(steps) + 1)
+                if step is not None:
+                    steps.append(step)
 
         if not steps:
             return None
@@ -996,4 +917,114 @@ export default function (pi) {
                 total_completion_tokens=total_output_tokens or None,
                 total_steps=len(steps),
             ),
+        )
+
+    @staticmethod
+    def _message_end_message(event: dict) -> dict | None:
+        """The final message dict of a ``message_end`` event, else None."""
+        if event.get("type") != "message_end":
+            return None
+        message = event.get("message")
+        return message if isinstance(message, dict) else None
+
+    @staticmethod
+    def _assistant_usage(event: dict) -> dict | None:
+        """The usage dict of an assistant turn, else None."""
+        message = Pi._message_end_message(event)
+        if message is None or message.get("role") != "assistant":
+            return None
+        usage = message.get("usage")
+        return usage if isinstance(usage, dict) else None
+
+    def _non_agent_step(
+        self, message: dict, timestamp: str | None, step_id: int
+    ) -> Step | None:
+        """A system or user turn as a step; system turns without text are dropped."""
+        if message.get("role") == "system":
+            text = self._message_text(message.get("content"))
+            if not text:
+                sections = message.get("sections") or {}
+                if isinstance(sections, dict):
+                    text = sections.get("preamble") or ""
+            if not text:
+                return None
+            return Step(step_id=step_id, timestamp=timestamp, source="system", message=text)
+        if message.get("role") == "user":
+            return Step(
+                step_id=step_id,
+                timestamp=timestamp,
+                source="user",
+                message=self._message_text(message.get("content")) or "(empty user message)",
+            )
+        return None
+
+    def _assistant_step(
+        self, message: dict, timestamp: str | None, step_id: int
+    ) -> tuple[Step, dict | None]:
+        """An agent step with its tool calls and usage metrics, plus the usage dict."""
+        blocks = [block for block in (message.get("content") or []) if isinstance(block, dict)]
+        text = self._message_text(blocks)
+        tool_call_blocks = [block for block in blocks if block.get("type") == "toolCall"]
+        tool_calls = [
+            self._tool_call(block, position)
+            for position, block in enumerate(tool_call_blocks, start=1)
+        ]
+        usage = message.get("usage")
+        usage = usage if isinstance(usage, dict) else None
+        metrics = None
+        if usage is not None:
+            cost = usage.get("cost")
+            metrics = Metrics(
+                prompt_tokens=(usage.get("input", 0) or 0) or None,
+                completion_tokens=(usage.get("output", 0) or 0) or None,
+                cost_usd=(cost.get("total") if isinstance(cost, dict) else None) or None,
+            )
+        step_model = message.get("model")
+        step = Step(
+            step_id=step_id,
+            timestamp=timestamp,
+            source="agent",
+            model_name=step_model if step_model else None,
+            message=text or "(empty assistant message)",
+            tool_calls=tool_calls or None,
+            metrics=metrics,
+        )
+        return step, usage
+
+    @staticmethod
+    def _tool_call(block: dict, position: int) -> ToolCall:
+        """The ATIF tool call for a pi ``toolCall`` content block."""
+        call = block.get("toolCall")
+        if not isinstance(call, dict):
+            call = {key: value for key, value in block.items() if key != "type"}
+        arguments = call.get("arguments")
+        return ToolCall(
+            tool_call_id=str(call.get("id") or call.get("toolCallId") or position),
+            function_name=str(call.get("name") or call.get("toolName") or "unknown_tool"),
+            arguments=arguments if isinstance(arguments, dict) else {},
+        )
+
+    def _attach_tool_result(
+        self, message: dict, timestamp: str | None, steps: list[Step]
+    ) -> None:
+        """Attach a tool result to the agent step that called the tool."""
+        call_id = message.get("toolCallId")
+        result = ObservationResult(
+            source_call_id=str(call_id) if call_id else None,
+            content=self._message_text(message.get("content")) or None,
+        )
+        if steps and steps[-1].source == "agent":
+            if steps[-1].observation is None:
+                steps[-1].observation = Observation(results=[result])
+            else:
+                steps[-1].observation.results.append(result)
+            return
+        steps.append(
+            Step(
+                step_id=len(steps) + 1,
+                timestamp=timestamp,
+                source="user",
+                message="(tool result outside an agent turn)",
+                observation=Observation(results=[result]),
+            )
         )

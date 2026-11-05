@@ -1192,9 +1192,8 @@ class TestPiPopulateContext:
 class TestPiTrajectoryConversion:
     """populate_context_post_run converts pi.txt into an ATIF trajectory.json.
 
-    PI_SESSION_EVENTS is an anonymized, trimmed slice of a real BFCL pi.txt
-    session stream: one turn with two tool calls, their results, and a final
-    answer.
+    ``_events()`` is an anonymized, trimmed slice of a real BFCL pi.txt session
+    stream: one turn with two tool calls, their results, and a final answer.
     """
 
     @staticmethod
@@ -1383,7 +1382,8 @@ class TestPiTrajectoryConversion:
         assert trajectory.final_metrics.total_completion_tokens == 95
         assert trajectory.final_metrics.total_steps == 5
 
-        # The existing usage parsing is unchanged by the conversion.
+        # Usage still counts every assistant turn, including the turns the
+        # trajectory records as steps.
         assert context.n_input_tokens == 425  # (100 + 5) + 140 + 180
         assert context.n_output_tokens == 95
         assert context.n_cache_tokens == 5
