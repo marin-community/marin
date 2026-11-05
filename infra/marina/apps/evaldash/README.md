@@ -31,8 +31,8 @@ is still running or has failed, and run detail shows both the evaluator result a
 Historical Evalchemy summaries remain usable alongside native TaskSpec summaries without rerunning
 models or rewriting archives. Comparison columns match the registry benchmark name, canonical metric
 and statistical kind. Recorded few-shot counts must agree when both are known; older unspecified
-counts remain admissible. Metric aliases bridge `acc,none` and `accuracy`, code-task `accuracy` and
-`pass_at_1`, and MRCR's `accuracy` and `mrcr_accuracy`. The saved score, coverage and uncertainty are
+counts remain admissible. Metric aliases bridge `acc,none` and `accuracy`, code-task `pass_at_1` and
+MRCR's `mrcr_accuracy` into native `accuracy`. The saved score, coverage and uncertainty are
 preserved. Missing historical corpus identities do not exclude these results. When both runs record
 corpus identities, differing identities remain incompatible. Metric changes such as accuracy versus
 normalized accuracy or exact match versus F1 remain separate, and existing cohort and coverage gates
