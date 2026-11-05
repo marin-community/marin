@@ -78,6 +78,7 @@ VLLM_USE_V1_ENV = "VLLM_USE_V1"
 VLLM_USE_V2_MODEL_RUNNER_ENV = "VLLM_USE_V2_MODEL_RUNNER"
 VLLM_USE_DEEP_GEMM_ENV = "VLLM_USE_DEEP_GEMM"
 VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
+ENGINE_NCCL_MAX_CHANNELS_ENV = "SKYRL_ENGINE_NCCL_MAX_CHANNELS"
 VLLM_ALLOW_INSECURE_SERIALIZATION_ENV = "VLLM_ALLOW_INSECURE_SERIALIZATION"
 RUNAI_STREAMER_LOG_TO_STDERR_ENV = "RUNAI_STREAMER_LOG_TO_STDERR"
 RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS_ENV = "RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"
@@ -192,6 +193,12 @@ ENV_VAR_SPECS = (
     EnvVarSpec(
         VLLM_BATCH_INVARIANT_ENV,
         "trainer.algorithm.batch_invariant",
+        EnvVarSource.CONFIG,
+        frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.INFERENCE_WORKER}),
+    ),
+    EnvVarSpec(
+        ENGINE_NCCL_MAX_CHANNELS_ENV,
+        "generator.inference_engine_nccl_max_channels",
         EnvVarSource.CONFIG,
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.INFERENCE_WORKER}),
     ),
@@ -520,8 +527,20 @@ class EnvVarManager:
         for name in passthrough_names:
             if value := ambient.get(name):
                 values[name] = value
-        if _config_value(config, "trainer.algorithm.batch_invariant", False):
+        batch_invariant = _config_value(config, "trainer.algorithm.batch_invariant", False)
+        if batch_invariant:
             values[VLLM_BATCH_INVARIANT_ENV] = "1"
+        engine_channels = _config_value(config, "generator.inference_engine_nccl_max_channels")
+        if engine_channels is not None:
+            if not batch_invariant:
+                raise ValueError(
+                    "generator.inference_engine_nccl_max_channels requires trainer.algorithm.batch_invariant=true"
+                )
+            if not isinstance(engine_channels, int) or isinstance(engine_channels, bool) or engine_channels < 1:
+                raise ValueError(
+                    f"generator.inference_engine_nccl_max_channels must be a positive integer, not {engine_channels!r}"
+                )
+            values[ENGINE_NCCL_MAX_CHANNELS_ENV] = str(engine_channels)
         if _config_value(config, "generator.fuse_weights", False):
             values[VLLM_ALLOW_INSECURE_SERIALIZATION_ENV] = "1"
         if _config_value(config, "trainer.placement.enable_numa_affinity", False):

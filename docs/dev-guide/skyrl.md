@@ -119,6 +119,26 @@ tested batch shape, but both retained existing batch-shape sensitivity. This
 option does not establish exact batch invariance; see the
 [numerical checks](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-invariance-01a13c0f/reports/HERO-NCCL-BATCH-INVARIANCE.md).
 
+### Engine communication
+
+Batch-invariant vLLM engines also inherit the one-channel limit. Engines can
+set a separate limit for their own collectives:
+
+```text
+trainer.algorithm.batch_invariant=true
+generator.inference_engine_nccl_max_channels=32
+```
+
+The default `null` keeps vLLM's limit. Weight-sync groups on the engine keep
+one channel on both transports, so they match the trainer's layout. On one
+8-H100 Snowball engine at DP8/EP8 with the Triton MoE backend, lifting the
+engine's channel limit raised output throughput from 11,628 to 17,606 tokens
+per second at 512 concurrent streams. Greedy tokens and logprobs stayed
+identical, whether a prompt ran alone, under load, or repeated. The benchmark
+is `experiments/post_training/inventory/engine_profile_bench.py` on branch
+`dml/engine-profile-bench`. Engines whose collectives reduce values across
+ranks, such as tensor-parallel engines, need their own parity check.
+
 ## Train, resume, and evaluate through Marin
 
 The artifact smoke uses Qwen2.5-0.5B-Instruct, procedural CatCount training
