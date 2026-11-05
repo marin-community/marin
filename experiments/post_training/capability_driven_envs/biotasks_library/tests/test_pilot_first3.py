@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import csv
+import io
 import json
 
 import pytest
@@ -45,6 +47,25 @@ async def test_ideas_cross_taskforge_with_null_rejected_and_candidates_accepted(
 
     assert [result["terminal"] for result in results] == ["accepted", "accepted", "held", "accepted"]
     assert sum("task_json" in result for result in results) == 3
+
+
+def test_inverse_model_reference_sse_is_recomputed_from_solver_visible_tables():
+    idea = next(row for row in ideas() if row.family == "otu_inverse_model_selection")
+    matrix = list(csv.DictReader(io.StringIO(idea.resources[0].content)))
+    candidates = list(csv.DictReader(io.StringIO(idea.resources[1].content)))
+    observed = [float(row["brightness"]) for row in matrix]
+    result: dict[str, float] = {}
+    for candidate in candidates:
+        abundance = [float(candidate[otu]) for otu in ("OTU1", "OTU2", "OTU3")]
+        predicted = [
+            sum(float(row[otu]) * value for otu, value in zip(("OTU1", "OTU2", "OTU3"), abundance, strict=True))
+            for row in matrix
+        ]
+        squared_error = sum((left - right) ** 2 for left, right in zip(predicted, observed, strict=True))
+        result[candidate["candidate"]] = round(squared_error, 6)
+
+    assert idea.expected is not None
+    assert result == idea.expected["candidate_sse"]
 
 
 def test_glm_review_packet_is_blind_to_author_assessment():
