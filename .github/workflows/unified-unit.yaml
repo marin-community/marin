@@ -345,8 +345,11 @@ jobs:
         working-directory: vendor/evalchemy
         env:
           UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/vendor/evalchemy/.venv
+        # One xdist worker per logical CPU: these tests do not run JAX, so all four
+        # runner vCPUs fit in memory. `-n auto` would count physical cores and start two.
         run: >-
           uv run --frozen --all-extras --group test pytest -q
+          -n logical --dist=worksteal --durations=10
       - name: Check publication policy metrics
         working-directory: vendor/evalchemy
         env:
