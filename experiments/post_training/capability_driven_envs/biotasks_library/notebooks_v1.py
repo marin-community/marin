@@ -131,14 +131,22 @@ For each idea:
 - require a single JSON answer and provide the exact expected JSON;
 - make the expected answer calculable solely from the resources and explicit instruction;
 - freeze thresholds, rounding, tie rules, missingness, units, and interpretation limits;
-- avoid trivia, pure filename lookup, answer leakage, unsupported biological claims, and wet-lab claims from predictions;
-- prefer meaningful analysis over incidental arithmetic, but retain useful preprocessing controls when honestly labeled;
+- avoid trivia, pure filename lookup, unsupported biological claims, and wet-lab claims from predictions;
+- never place an answer, expected result, solution, task-specific ground truth, or explanation of which rows pass in a
+  solver-visible resource; reference resources may contain methods and limitations but not the derived result;
+- independently recompute every expected field from the final resources and instruction, and omit the idea entirely if
+  any field is uncertain or contradictory;
+- use exact discrete operations or explicitly rounded arithmetic; avoid optimizer-dependent continuous answers that
+  can differ across valid libraries;
+- prefer meaningful analysis over tiny threshold-filtering exercises or incidental arithmetic, but retain genuinely
+  useful preprocessing controls when honestly labeled;
 - keep total resource content under {MAX_RESOURCE_CHARACTERS} characters;
 - encode parameters_json and expected_json as valid JSON objects;
 - assess your own task on the six 1-5 rubric dimensions. recommended_action may be accept, revise, or reject.
 
 Do not copy the source notebook wholesale into resources. Do not require internet access, package installation, large
-models, GPUs, or unavailable source datasets. A Taskforge structural accept does not imply scientific quality.
+models, GPUs, or unavailable source datasets. Before returning, perform a final answer-leakage and arithmetic audit of
+each idea. A Taskforge structural accept does not imply scientific quality.
 
 Source metadata:
 {json.dumps(metadata, indent=2, sort_keys=True)}
