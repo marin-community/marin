@@ -109,8 +109,8 @@ function priorityInput() {
   )
 }
 
-// What an approver has typed into a row's controls, by row key and field, so the 10-second refresh (which rebuilds
-// every row) keeps a draft, and the focused field with its cursor.
+// What an approver has typed into a row's controls, by row key and field, so a refresh (which rebuilds every row)
+// keeps a draft, and the focused field with its cursor.
 const drafts = new Map()
 
 function drafted(node, key, field, initial = '') {
@@ -475,7 +475,10 @@ function wireControls() {
     const cap = Number(document.getElementById('node-cap').value)
     act('settings', { node_cap: cap }, `Node cap ${cap}`)
   })
-  document.getElementById('intake-reload').addEventListener('click', () => loadIntake())
+  document.getElementById('intake-reload').addEventListener('click', () => {
+    refresh()
+    loadIntake()
+  })
   document.getElementById('settings-form').addEventListener('submit', (event) => {
     event.preventDefault()
     const previous = new Map(state.settings.approvers.map((a) => [a.github, a]))
@@ -527,7 +530,11 @@ async function start() {
   wireControls()
   await refresh()
   loadIntake()
-  setInterval(refresh, REFRESH_MS)
+  // No timed refresh here (the public Status page has one): rebuilding the lists mid-edit costs an approver their
+  // place, and admin data changes slowly. The page refreshes after each action, on returning to the tab, and on Reload.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refresh()
+  })
 }
 
 start()
