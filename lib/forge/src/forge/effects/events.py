@@ -4,7 +4,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Generic, TypeVar
 
 
 class ReplayPolicy(StrEnum):
@@ -19,12 +18,8 @@ class Fingerprint:
     replay: ReplayPolicy
 
 
-# A phantom result parameter needs explicit covariance; PEP 695 infers invariance.
-T_co = TypeVar("T_co", covariant=True)
-
-
 @dataclass(frozen=True, slots=True)
-class Event(Generic[T_co]):
+class Event[T]:
     """An immutable request whose executor returns T."""
 
 
