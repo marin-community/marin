@@ -1083,6 +1083,24 @@ def _deserialize_leaves(
                 for path, sharding, spec in zip(paths, shardings, tensorstore_specs)
             )
         )
+        # Rehearsal-only (interim branch): restore casts silently, so report what the store held against the template.
+        if jax.process_index() == 0:
+            logger.info(
+                "RESTORE-DTYPES %s",
+                dict(
+                    collections.Counter(
+                        (str(plan.store.dtype.numpy_dtype), str(np.dtype(plan.dtype))) for plan in plans
+                    )
+                ),
+            )
+            for plan in plans:
+                if plan.store.dtype.numpy_dtype != plan.dtype:
+                    logger.warning(
+                        "RESTORE-DTYPE-MISMATCH %s store=%s template=%s",
+                        plan.path,
+                        plan.store.dtype.numpy_dtype,
+                        plan.dtype,
+                    )
         leaves = []
         store_bytes = 0
         peak_bytes = 0
