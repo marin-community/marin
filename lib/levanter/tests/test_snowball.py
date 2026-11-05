@@ -694,6 +694,91 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
             assert math.isfinite(native_metrics["eval/loss"])
 
 
+@pytest.mark.timeout(120)
+@pytest.mark.multidevice
+def test_hf_config_reload_trains_with_float32_override_superset(tmp_path):
+    with use_test_devices(4):
+        hf_path = tmp_path / "hf"
+        tokenizer = Tokenizer(
+            models.WordLevel(vocab={"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}}, unk_token="<pad>")
+        )
+        tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+        fast = PreTrainedTokenizerFast(tokenizer_object=tokenizer, pad_token="<pad>", eos_token="<eos>")
+        fast.save_pretrained(hf_path)
+        config = _tiny_config(
+            vocab_size=64,
+            hidden_dim=32,
+            intermediate_dim=32,
+            shared_expert_intermediate_dim=32,
+            num_layers=1,
+            head_dim=8,
+            max_seq_len=128,
+            router_dot_fp32=True,
+            tokenizer=str(hf_path),
+        )
+        # HF metadata chooses the platform kernel; test reload separately from
+        # context sharding, which has its unchanged reference-backend test above.
+        trainer = TrainerConfig(
+            id="hf-config-override-regression",
+            mesh=MeshConfig(
+                axes={"data": -1, "replica": 1, "model": 1, "context": 1, "expert": 2},
+                compute_mapping={"batch": ["replica_dcn", "data", "expert"], "vocab": "model"},
+            ),
+            compute_dtype_overrides={"router_bias": "f4", "router": "float32"},
+            use_explicit_mesh_axes=True,
+            train_batch_size=max(8, jax.device_count()),
+            per_device_parallelism=1,
+            num_train_steps=1,
+            max_eval_batches=1,
+            require_accelerator=False,
+            tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "ckpts")),
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_jaxprs=False,
+            log_xla_hlo=False,
+        )
+        with set_mesh(trainer.device_mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", 64), config, key=random.key(0))
+            config.hf_checkpoint_converter().replaced(tokenizer=fast).save_pretrained(
+                model,
+                str(hf_path),
+                save_tokenizer=False,
+                save_reference_code=False,
+            )
+        examples = [GrugLmExample.causal(jnp.arange(128, dtype=jnp.int32) % 62 + 2) for _ in range(16)]
+        main(
+            TrainLmConfig(
+                data=LmDataConfig(
+                    tokenizer=str(hf_path),
+                    components={
+                        "direct": DirectDatasetComponent(
+                            datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(examples)},
+                        )
+                    },
+                ),
+                model=config,
+                initialize_from_hf=str(hf_path),
+                use_hf_model_config=True,
+                trainer=trainer,
+                optimizer=AdamConfig(learning_rate=5e-5),
+            )
+        )
+        metrics = json.loads((tmp_path / "eval_results.json").read_text())
+        assert math.isfinite(metrics["train/loss"])
+        assert math.isfinite(metrics["eval/loss"])
+
+
+@pytest.mark.parametrize("native_checkpoint", [False, True])
+def test_fp32_router_training_rejects_missing_bias_override_before_loading(tmp_path, native_checkpoint):
+    config = TrainLmConfig(
+        model=_tiny_config(router_dot_fp32=True),
+        data=LmDataConfig(tokenizer=str(tmp_path)),
+        initialize_model_from_checkpoint_path=str(tmp_path / "checkpoint") if native_checkpoint else None,
+    )
+    with pytest.raises(ValueError, match="native FP32 router biases"):
+        main(config)
+
+
 @pytest.mark.parametrize("separate_key_axis", [False, True])
 def test_snowball_packed_conversations_are_isolated(separate_key_axis):
     cfg = _tiny_config()

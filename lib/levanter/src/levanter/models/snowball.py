@@ -746,14 +746,7 @@ class SnowballTransformer(eqx.Module):
         cfg = self.config
         if mask is None:
             mask = AttentionMask.causal()
-        if (
-            not isinstance(mask, AttentionMask)
-            or not mask.is_causal
-            or mask.sliding_window is not None
-            or mask.fa4_bounds is not None
-        ):
-            raise ValueError("Snowball transformer masks may only add causal document segments")
-        segment_ids = mask.segment_ids
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
@@ -832,13 +825,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             return None
         if not isinstance(attn_mask, LmHeadAttentionMask):
             raise ValueError("Snowball accepts structured causal document masks, not dense masks")
-        if (
-            not attn_mask.is_causal
-            or attn_mask.explicit_mask is not None
-            or attn_mask.causal_offset is not None
-            or attn_mask.bidirectional_window is not None
-            or attn_mask.sliding_window is not None
-        ):
+        if not attn_mask.is_causal or attn_mask.explicit_mask is not None or attn_mask.causal_offset is not None:
             raise ValueError("Snowball document masks cannot override the model's causal/window policy")
         if attn_mask.segment_ids is None:
             return AttentionMask.causal()
