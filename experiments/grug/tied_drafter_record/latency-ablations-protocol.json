@@ -1,0 +1,42 @@
+{
+  "status": "frozen before launch",
+  "frozen_at": "2026-10-23T22:23:13.015929+00:00",
+  "variants": [
+    "identity",
+    "activation_identity",
+    "k4_gain0.75",
+    "k1_gain0.75",
+    "hash_k8",
+    "hash_k2",
+    "drop_shared",
+    "gate_half",
+    "gate_identity",
+    "rms_gain_only",
+    "routed_relu",
+    "shared_relu",
+    "all_experts_relu",
+    "fp4_expert_inputs",
+    "k4_fp4_inputs"
+  ],
+  "source_sha256": {
+    "tied_drafter_latency.py": "5be4ac8d9f965ee2c3b26e2c9d829d1e2a5d424bf8a3e5b1f8da2596de94a995",
+    "tied_drafter_approximations.py": "bb873ee75180070dbfb5df871e5c14018f2e4a9f670383e431fba82e6c2f0ef3",
+    "tied_drafter_activation/model.py": "f8c90323b68ace2569e0964002b1adb7acde25cbcf3ebce736ad058a0ca7261c"
+  },
+  "calibration_batches": [
+    51000,
+    51001
+  ],
+  "fresh_confirmation_batches": [
+    54000,
+    54001,
+    54002,
+    54003
+  ],
+  "checkpoint": "step2116 EMA, same archived Belay model as prior sweep",
+  "hardware": "8 H100 RNO2A interactive",
+  "fp4_scope": "E2M1 with FP8 block scales (16 values) and FP32 per-row scale, emulated quantize/dequantize at routed-expert input. Forward still uses BF16 communication and matrix arithmetic. Packed communication is a separate microbenchmark; no native NVFP4 throughput claim.",
+  "activation_scope": "Isolated copy of pinned model; unsquared ReLU for routed, shared or both expert groups. Unchanged-copy control must match native reference exactly.",
+  "normalization_scope": "Replace block input RMS normalization with learned gain only; replace learned gated normalization with constant 1/2 or identity. Attention Q/K and latent norms remain unless FP4 wrapper explicitly quantizes the latent-normalized input.",
+  "sparsity_scope": "One routed expert; omit shared experts; fixed token-ID hash selects distinct random experts as an approximation baseline. No retraining or adaptation."
+}

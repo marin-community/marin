@@ -1,0 +1,66 @@
+--- marin/experiments/grug/fast_track/model.py	2026-10-23 13:55:23
++++ marin/experiments/grug/tied_drafter_activation/model.py	2026-10-23 19:57:42
+@@ -217,6 +217,8 @@
+ class UngatedExpertActivation(StrEnum):
+     """The activation of the ungated (single ``W_up``) experts."""
+ 
++    RELU = "relu"
++    """Unsquared ReLU, used only for the bounded drafter activation ablation."""
+     RELU2 = "relu2"
+     """``leaky_relu(u, expert_leaky_slope)^2``."""
+     POLYNORM = "polynorm"
+@@ -648,6 +650,8 @@
+     # attention over the residual-block history (the embedding, completed block sums and the running
+     # partial), scored by a learned per-sublayer pseudo-query against the RMS-normalized sources.
+     attn_res: bool = False
++    drafter_skip_layers: tuple[int, ...] = ()
++    """Forward-only depth ablation: omit these physical blocks and their residual sources."""
+     attn_res_num_blocks: int = 8
+     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
+     latent_orthogonal_init: bool = False
+@@ -3647,7 +3651,9 @@
+         hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
+     else:
+         slope = cfg.expert_leaky_slope
+-        if cfg.shared_ungated_activation == UngatedExpertActivation.POLYNORM:
++        if cfg.shared_ungated_activation == UngatedExpertActivation.RELU:
++            hidden = jnp.concatenate([jax.nn.relu(u) for u in ups], axis=1)
++        elif cfg.shared_ungated_activation == UngatedExpertActivation.POLYNORM:
+             hidden = jnp.concatenate([polynorm(u) for u in ups], axis=1)
+         else:
+             hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
+@@ -4780,6 +4786,8 @@
+ 
+ def _ungated_expert_activation(cfg: "GrugModelConfig"):
+     """Activation of the ungated experts: ``leaky_relu(u, slope)^2`` (plain ReLU^2 at slope 0), or PolyNorm."""
++    if cfg.moe_ungated_activation == UngatedExpertActivation.RELU:
++        return ActivationFunctionEnum.relu
+     if cfg.moe_ungated_activation == UngatedExpertActivation.POLYNORM:
+         return polynorm
+     if cfg.expert_leaky_slope:
+@@ -6328,6 +6336,15 @@
+         seg_size = max(1, num_layers // cfg.attn_res_num_blocks)
+         block_cap = cfg.attn_res_num_blocks * passes
+         layers = self.layers()
++        if cfg.drafter_skip_layers:
++            if not (passes == 1 and seg_size == 1 and not cfg.attn_res_full):
++                raise ValueError("Depth ablation requires one pass and one residual segment per block")
++            if cfg.mla_share_kv_latent or cfg.value_residual_layers or cfg.router_history:
++                raise ValueError("Depth ablation excludes cross-layer KV/value/router state")
++            if cfg.attn_res_logit_bias or cfg.attn_res_mask_attn_for:
++                raise ValueError("Depth ablation excludes source-indexed residual biases and masks")
++            if not set(cfg.drafter_skip_layers) < set(range(num_layers)):
++                raise ValueError("Depth ablation must leave at least one valid physical block")
+         embedding = hidden
+         # Every query in gate order [pass 0: attn_0, mlp_0, ..., mlp_{L-1}; pass 1: ...; final].
+         gate_queries = []
+@@ -6435,6 +6452,9 @@
+             hist_probs: list[jax.Array] = []
+             kv_share: dict[str, jax.Array] | None = {} if cfg.mla_share_kv_latent or cfg.value_residual_layers else None
+             for i, layer in enumerate(layers):
++                if i in cfg.drafter_skip_layers:
++                    # Leave the stream/history untouched; surviving queries keep physical indices.
++                    continue
+                 eff = pass_index * num_layers + i
+                 if cfg.attn_res_full or (eff % seg_size == 0 and eff // seg_size < block_cap):
+                     assert partial is not None

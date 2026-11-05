@@ -1,0 +1,70 @@
+{
+  "status": "analytical assumptions; no drafter learning or timing measurements",
+  "draft_training_flop_fraction": 0.125,
+  "tokens_per_step": 524288,
+  "acceptance_probability_assumption": 0.8,
+  "verification_forwards": 2,
+  "verification_flops_in_hero_steps": 0.6666666666666666,
+  "verification_time_in_hero_steps": 0.605167795799514,
+  "timing_caveat": "Forward timing is synthetic at initialization; optimizer timing is real-data control. Their ratio is a planning estimate, not a matched verifier benchmark.",
+  "excluded_overheads": [
+    "snapshot",
+    "transfer",
+    "candidate application",
+    "extra validation",
+    "optimizer-state handling",
+    "hardware utilization differences"
+  ],
+  "break_even": [
+    {
+      "draft_steps": 4,
+      "additional_compute_in_hero_steps": 1.1666666666666665,
+      "accepted_gain_break_even": 1.458333333333333,
+      "retained_fraction_break_even": 0.36458333333333326
+    },
+    {
+      "draft_steps": 8,
+      "additional_compute_in_hero_steps": 1.6666666666666665,
+      "accepted_gain_break_even": 2.083333333333333,
+      "retained_fraction_break_even": 0.26041666666666663
+    },
+    {
+      "draft_steps": 16,
+      "additional_compute_in_hero_steps": 2.6666666666666665,
+      "accepted_gain_break_even": 3.333333333333333,
+      "retained_fraction_break_even": 0.20833333333333331
+    },
+    {
+      "draft_steps": 32,
+      "additional_compute_in_hero_steps": 4.666666666666667,
+      "accepted_gain_break_even": 5.833333333333333,
+      "retained_fraction_break_even": 0.18229166666666666
+    }
+  ],
+  "hardware_examples_n16_k4": [
+    {
+      "draft_gpus": 1,
+      "hero_steps_while_drafting": 16.0,
+      "wall_speedup": 1.156266545217139,
+      "flop_efficiency": 1.0285714285714285
+    },
+    {
+      "draft_gpus": 2,
+      "hero_steps_while_drafting": 8.0,
+      "wall_speedup": 1.3015434754761104,
+      "flop_efficiency": 1.05
+    },
+    {
+      "draft_gpus": 4,
+      "hero_steps_while_drafting": 4.0,
+      "wall_speedup": 1.5634609463236706,
+      "flop_efficiency": 1.08
+    },
+    {
+      "draft_gpus": 8,
+      "hero_steps_while_drafting": 2.0,
+      "wall_speedup": 1.996032658005487,
+      "flop_efficiency": 1.1142857142857143
+    }
+  ]
+}

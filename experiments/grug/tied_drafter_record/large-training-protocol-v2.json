@@ -1,0 +1,85 @@
+{
+  "frozen_at": "2026-10-24T00:05:56.614053+00:00",
+  "audit": {
+    "parameters": 3180184109,
+    "parameter_ratio": 3.098118497350855,
+    "linear_compute_ratio": 1.865823724440307,
+    "layer_stack_indices": [
+      [
+        3,
+        9
+      ],
+      [
+        0,
+        1,
+        2,
+        6,
+        7,
+        8
+      ],
+      [
+        5,
+        11
+      ],
+      [
+        4,
+        10
+      ]
+    ],
+    "changes": {
+      "num_layers": [
+        6,
+        12
+      ],
+      "num_experts": [
+        512,
+        1024
+      ],
+      "attn_res_num_blocks": [
+        8,
+        16
+      ],
+      "global_layers": [
+        [
+          3,
+          5
+        ],
+        [
+          3,
+          5,
+          9,
+          11
+        ]
+      ],
+      "latent_out_full_layers": [
+        [
+          4,
+          5
+        ],
+        [
+          4,
+          5,
+          10,
+          11
+        ]
+      ]
+    },
+    "architecture_policy": "Repeat the original six-block attention/full-width-expert-write layout twice; retain per-block widths and eight active experts.",
+    "steps": 2116,
+    "reason_for_residual_block_change": "Preserve a separate residual-history segment for each physical block as depth doubles."
+  },
+  "steps": 2116,
+  "schedule_steps": 2698,
+  "seed": "native recorded seed and split",
+  "hardware": "8 H100; RNO2A interactive",
+  "source_sha256": {
+    "experiments/grug/tied_drafter_large.py": "e636ead48199373ee0204dca88779ca1147a1d50f13f875f37a2dc4452475843",
+    "experiments/grug/tied-large-config.json": "4eacc7dab8c491dcb0c62bd4be78068f5f797cfe0f1a42477b73d7bda5bbf76b",
+    "experiments/grug/noise_belay/candidate11_control_probe.py": "cee9b0c5dbf27ffb5505bf6da789191d517d9087a1bfd235bd1d2ef2b7a2870e",
+    "experiments/grug/tied-large-first-batch.json": "ce8a47efdf887def3b5a445e84d3724767b49bec6d35817c8d18d35dac7f81af"
+  },
+  "checkpoint": "s3://marin-rno2a/experiments/benfeuer/tied-drafter/large-12x1024-20261024-v1/evaluation-model.eqx",
+  "training_comparison": "Matched update count/data sequence; original native optimizer, EMA beta/start and schedule; independent larger initialization. No matched wall-time claim.",
+  "strategy_selection": "Freeze six highest-agreement non-identity configurations from small-model evaluation before scoring larger model. Hold recipe parameters fixed; no large-model tuning.",
+  "revision": "v2: explicitly bundle original first-batch fingerprint at an included source path; arithmetic/training recipe unchanged."
+}

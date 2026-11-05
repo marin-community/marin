@@ -1,0 +1,1246 @@
+{
+  "source_revision": "8983bec6fdaeb1cd6d0acff041194d2bf53ab679",
+  "reference_run": "https://wandb.ai/marin-community/marin_moe/runs/lc1-b174-ft-kda",
+  "reference_sha256": "c0fa7cb60f8aabac0ce746b92c5a4d21f16a828f60ce53d0dd4fbd1a24fee2f5",
+  "parameter_count": 1026488855,
+  "layer_stack_indices": [
+    [
+      3
+    ],
+    [
+      0,
+      1,
+      2
+    ],
+    [
+      5
+    ],
+    [
+      4
+    ]
+  ],
+  "parameters": [
+    {
+      "path": ".token_embed",
+      "shape": [
+        16384,
+        512
+      ],
+      "size": 8388608
+    },
+    {
+      "path": ".embed_norm.weight",
+      "shape": [
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".output_proj",
+      "shape": [
+        512,
+        16384
+      ],
+      "size": 8388608
+    },
+    {
+      "path": ".stacked_blocks.stacked.rms_attn.weight",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn_gated_norm.w_down",
+      "shape": [
+        1,
+        512,
+        128
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn_gated_norm.w_up",
+      "shape": [
+        1,
+        128,
+        512
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.w_q",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.w_o",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.attn_gate",
+      "shape": [
+        1,
+        512,
+        4
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.rel_pos.r_proj",
+      "shape": [
+        1,
+        512,
+        64
+      ],
+      "size": 32768
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.rel_pos.proj",
+      "shape": [
+        1,
+        16,
+        1024
+      ],
+      "size": 16384
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.w_dkv",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.kv_latent_norm.weight",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.w_uk",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.w_uv",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.value_embed",
+      "shape": [
+        1,
+        16384,
+        512
+      ],
+      "size": 8388608
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.ve_lambda",
+      "shape": [
+        1,
+        2
+      ],
+      "size": 2
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.ve_gate",
+      "shape": [
+        1,
+        512,
+        4
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn.qk_mult",
+      "shape": [
+        1
+      ],
+      "size": 1
+    },
+    {
+      "path": ".stacked_blocks.stacked.rms_mlp.weight",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks.stacked.mlp_gated_norm.w_down",
+      "shape": [
+        1,
+        512,
+        128
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".stacked_blocks.stacked.mlp_gated_norm.w_up",
+      "shape": [
+        1,
+        128,
+        512
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".stacked_blocks.stacked.mlp.router",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks.stacked.mlp.router_bias",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks.stacked.mlp.expert_mlp.w_up",
+      "shape": [
+        1,
+        512,
+        256,
+        384
+      ],
+      "size": 50331648
+    },
+    {
+      "path": ".stacked_blocks.stacked.mlp.expert_mlp.w_down",
+      "shape": [
+        1,
+        512,
+        384,
+        256
+      ],
+      "size": 50331648
+    },
+    {
+      "path": ".stacked_blocks.stacked.mlp.w_latent_down",
+      "shape": [
+        1,
+        512,
+        256
+      ],
+      "size": 131072
+    },
+    {
+      "path": ".stacked_blocks.stacked.mlp.latent_norm.weight",
+      "shape": [
+        1,
+        256
+      ],
+      "size": 256
+    },
+    {
+      "path": ".stacked_blocks.stacked.mlp.w_latent_up",
+      "shape": [
+        1,
+        256,
+        512
+      ],
+      "size": 131072
+    },
+    {
+      "path": ".stacked_blocks.stacked.shared[0].w_up",
+      "shape": [
+        1,
+        512,
+        768
+      ],
+      "size": 393216
+    },
+    {
+      "path": ".stacked_blocks.stacked.shared[0].w_down",
+      "shape": [
+        1,
+        768,
+        512
+      ],
+      "size": 393216
+    },
+    {
+      "path": ".stacked_blocks.stacked.sconv_attn.weight",
+      "shape": [
+        1,
+        4,
+        512
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".stacked_blocks.stacked.sconv_mlp.weight",
+      "shape": [
+        1,
+        4,
+        512
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn_res_query_attn",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks.stacked.attn_res_query_mlp",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".kda_blocks.stacked.rms_attn.weight",
+      "shape": [
+        3,
+        512
+      ],
+      "size": 1536
+    },
+    {
+      "path": ".kda_blocks.stacked.attn_gated_norm.w_down",
+      "shape": [
+        3,
+        512,
+        128
+      ],
+      "size": 196608
+    },
+    {
+      "path": ".kda_blocks.stacked.attn_gated_norm.w_up",
+      "shape": [
+        3,
+        128,
+        512
+      ],
+      "size": 196608
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_q",
+      "shape": [
+        3,
+        512,
+        512
+      ],
+      "size": 786432
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_k",
+      "shape": [
+        3,
+        512,
+        512
+      ],
+      "size": 786432
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_v",
+      "shape": [
+        3,
+        512,
+        512
+      ],
+      "size": 786432
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_o",
+      "shape": [
+        3,
+        512,
+        512
+      ],
+      "size": 786432
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_g",
+      "shape": [
+        3,
+        512,
+        512
+      ],
+      "size": 786432
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_write",
+      "shape": [
+        3,
+        512,
+        512
+      ],
+      "size": 786432
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_erase",
+      "shape": [
+        3,
+        512,
+        512
+      ],
+      "size": 786432
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_a_down",
+      "shape": [
+        3,
+        512,
+        128
+      ],
+      "size": 196608
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_a_up",
+      "shape": [
+        3,
+        128,
+        512
+      ],
+      "size": 196608
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.a_log",
+      "shape": [
+        3,
+        4
+      ],
+      "size": 12
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.dt_bias",
+      "shape": [
+        3,
+        4,
+        128
+      ],
+      "size": 1536
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.w_beta",
+      "shape": [
+        3,
+        512,
+        4
+      ],
+      "size": 6144
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.o_norm.weight",
+      "shape": [
+        3,
+        128
+      ],
+      "size": 384
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.sconv_q.weight",
+      "shape": [
+        3,
+        4,
+        512
+      ],
+      "size": 6144
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.sconv_k.weight",
+      "shape": [
+        3,
+        4,
+        512
+      ],
+      "size": 6144
+    },
+    {
+      "path": ".kda_blocks.stacked.attn.sconv_v.weight",
+      "shape": [
+        3,
+        4,
+        512
+      ],
+      "size": 6144
+    },
+    {
+      "path": ".kda_blocks.stacked.rms_mlp.weight",
+      "shape": [
+        3,
+        512
+      ],
+      "size": 1536
+    },
+    {
+      "path": ".kda_blocks.stacked.mlp_gated_norm.w_down",
+      "shape": [
+        3,
+        512,
+        128
+      ],
+      "size": 196608
+    },
+    {
+      "path": ".kda_blocks.stacked.mlp_gated_norm.w_up",
+      "shape": [
+        3,
+        128,
+        512
+      ],
+      "size": 196608
+    },
+    {
+      "path": ".kda_blocks.stacked.mlp.router",
+      "shape": [
+        3,
+        512,
+        512
+      ],
+      "size": 786432
+    },
+    {
+      "path": ".kda_blocks.stacked.mlp.router_bias",
+      "shape": [
+        3,
+        512
+      ],
+      "size": 1536
+    },
+    {
+      "path": ".kda_blocks.stacked.mlp.expert_mlp.w_up",
+      "shape": [
+        3,
+        512,
+        256,
+        384
+      ],
+      "size": 150994944
+    },
+    {
+      "path": ".kda_blocks.stacked.mlp.expert_mlp.w_down",
+      "shape": [
+        3,
+        512,
+        384,
+        256
+      ],
+      "size": 150994944
+    },
+    {
+      "path": ".kda_blocks.stacked.mlp.w_latent_down",
+      "shape": [
+        3,
+        512,
+        256
+      ],
+      "size": 393216
+    },
+    {
+      "path": ".kda_blocks.stacked.mlp.latent_norm.weight",
+      "shape": [
+        3,
+        256
+      ],
+      "size": 768
+    },
+    {
+      "path": ".kda_blocks.stacked.mlp.w_latent_up",
+      "shape": [
+        3,
+        256,
+        512
+      ],
+      "size": 393216
+    },
+    {
+      "path": ".kda_blocks.stacked.shared[0].w_up",
+      "shape": [
+        3,
+        512,
+        768
+      ],
+      "size": 1179648
+    },
+    {
+      "path": ".kda_blocks.stacked.shared[0].w_down",
+      "shape": [
+        3,
+        768,
+        512
+      ],
+      "size": 1179648
+    },
+    {
+      "path": ".kda_blocks.stacked.sconv_mlp.weight",
+      "shape": [
+        3,
+        4,
+        512
+      ],
+      "size": 6144
+    },
+    {
+      "path": ".kda_blocks.stacked.attn_res_query_attn",
+      "shape": [
+        3,
+        512
+      ],
+      "size": 1536
+    },
+    {
+      "path": ".kda_blocks.stacked.attn_res_query_mlp",
+      "shape": [
+        3,
+        512
+      ],
+      "size": 1536
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.rms_attn.weight",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn_gated_norm.w_down",
+      "shape": [
+        1,
+        512,
+        128
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn_gated_norm.w_up",
+      "shape": [
+        1,
+        128,
+        512
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.w_q",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.w_o",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.attn_gate",
+      "shape": [
+        1,
+        512,
+        4
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.rel_pos.r_proj",
+      "shape": [
+        1,
+        512,
+        64
+      ],
+      "size": 32768
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.rel_pos.proj",
+      "shape": [
+        1,
+        16,
+        1024
+      ],
+      "size": 16384
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.w_dkv",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.kv_latent_norm.weight",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.w_uk",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.w_uv",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.value_embed",
+      "shape": [
+        1,
+        16384,
+        512
+      ],
+      "size": 8388608
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.ve_lambda",
+      "shape": [
+        1,
+        2
+      ],
+      "size": 2
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.ve_gate",
+      "shape": [
+        1,
+        512,
+        4
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn.qk_mult",
+      "shape": [
+        1
+      ],
+      "size": 1
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.rms_mlp.weight",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.mlp_gated_norm.w_down",
+      "shape": [
+        1,
+        512,
+        128
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.mlp_gated_norm.w_up",
+      "shape": [
+        1,
+        128,
+        512
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.mlp.router",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.mlp.router_bias",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.mlp.expert_mlp.w_up",
+      "shape": [
+        1,
+        512,
+        256,
+        384
+      ],
+      "size": 50331648
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.mlp.expert_mlp.w_down",
+      "shape": [
+        1,
+        512,
+        384,
+        512
+      ],
+      "size": 100663296
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.mlp.w_latent_down",
+      "shape": [
+        1,
+        512,
+        256
+      ],
+      "size": 131072
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.mlp.latent_norm.weight",
+      "shape": [
+        1,
+        256
+      ],
+      "size": 256
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.shared[0].w_up",
+      "shape": [
+        1,
+        512,
+        768
+      ],
+      "size": 393216
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.shared[0].w_down",
+      "shape": [
+        1,
+        768,
+        512
+      ],
+      "size": 393216
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.sconv_attn.weight",
+      "shape": [
+        1,
+        4,
+        512
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.sconv_mlp.weight",
+      "shape": [
+        1,
+        4,
+        512
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn_res_query_attn",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".stacked_blocks_tail.stacked.attn_res_query_mlp",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.rms_attn.weight",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn_gated_norm.w_down",
+      "shape": [
+        1,
+        512,
+        128
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn_gated_norm.w_up",
+      "shape": [
+        1,
+        128,
+        512
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_q",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_k",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_v",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_o",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_g",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_write",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_erase",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_a_down",
+      "shape": [
+        1,
+        512,
+        128
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_a_up",
+      "shape": [
+        1,
+        128,
+        512
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.a_log",
+      "shape": [
+        1,
+        4
+      ],
+      "size": 4
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.dt_bias",
+      "shape": [
+        1,
+        4,
+        128
+      ],
+      "size": 512
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.w_beta",
+      "shape": [
+        1,
+        512,
+        4
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.o_norm.weight",
+      "shape": [
+        1,
+        128
+      ],
+      "size": 128
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.sconv_q.weight",
+      "shape": [
+        1,
+        4,
+        512
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.sconv_k.weight",
+      "shape": [
+        1,
+        4,
+        512
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn.sconv_v.weight",
+      "shape": [
+        1,
+        4,
+        512
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.rms_mlp.weight",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.mlp_gated_norm.w_down",
+      "shape": [
+        1,
+        512,
+        128
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.mlp_gated_norm.w_up",
+      "shape": [
+        1,
+        128,
+        512
+      ],
+      "size": 65536
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.mlp.router",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "size": 262144
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.mlp.router_bias",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.mlp.expert_mlp.w_up",
+      "shape": [
+        1,
+        512,
+        256,
+        384
+      ],
+      "size": 50331648
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.mlp.expert_mlp.w_down",
+      "shape": [
+        1,
+        512,
+        384,
+        512
+      ],
+      "size": 100663296
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.mlp.w_latent_down",
+      "shape": [
+        1,
+        512,
+        256
+      ],
+      "size": 131072
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.mlp.latent_norm.weight",
+      "shape": [
+        1,
+        256
+      ],
+      "size": 256
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.shared[0].w_up",
+      "shape": [
+        1,
+        512,
+        768
+      ],
+      "size": 393216
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.shared[0].w_down",
+      "shape": [
+        1,
+        768,
+        512
+      ],
+      "size": 393216
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.sconv_mlp.weight",
+      "shape": [
+        1,
+        4,
+        512
+      ],
+      "size": 2048
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn_res_query_attn",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".kda_blocks_tail.stacked.attn_res_query_mlp",
+      "shape": [
+        1,
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".final_norm.weight",
+      "shape": [
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".attn_res_query_final",
+      "shape": [
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".token_embed2",
+      "shape": [
+        524288,
+        512
+      ],
+      "size": 268435456
+    },
+    {
+      "path": ".embed2_norm.weight",
+      "shape": [
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".bigram_gate_w",
+      "shape": [
+        512
+      ],
+      "size": 512
+    },
+    {
+      "path": ".bigram_gate_b",
+      "shape": [],
+      "size": 1
+    },
+    {
+      "path": ".bigram_gate_a_lr",
+      "shape": [
+        512,
+        16
+      ],
+      "size": 8192
+    },
+    {
+      "path": ".bigram_gate_b_lr",
+      "shape": [
+        16,
+        512
+      ],
+      "size": 8192
+    }
+  ]
+}

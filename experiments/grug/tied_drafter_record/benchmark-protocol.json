@@ -1,0 +1,34 @@
+{
+  "frozen_utc": "2026-10-23T19:23:27.096513+00:00",
+  "implementation_sha256": "06950c2f14975b6d60cac360158fee5c9b8a67f5dea4a1b0890d3b5d148ebb76",
+  "horizon": 16,
+  "last_step": 368,
+  "evaluation_steps": [
+    256,
+    264,
+    272,
+    280,
+    288,
+    296,
+    304,
+    312,
+    320,
+    328,
+    336,
+    344,
+    352,
+    360,
+    368
+  ],
+  "target_policy": "Use the two original protocol-v1 loss targets without alteration; report first observed attainment at the fixed cadence, not an interpolated exact crossing.",
+  "clock_policy": "Wall clock starts immediately before the first real optimizer update. Includes data waits, snapshot/proposal operations, target evaluations and logging; compilation and matched forward/application warmup are separate.",
+  "arms": [
+    "native eight H100s",
+    "same eight-H100 hero plus four-H100 drafter, one 16-update proposal"
+  ],
+  "allocator": "cuda_async",
+  "comparison_limit": "One paired seed, exploratory timing; no equal-total-hardware resource-efficiency claim. No diagnostic continuation forks in these arms.",
+  "reason": "Directly record time to fixed targets for the primary configuration after bounded component diagnostics; no algorithm or acceptance hyperparameter tuning.",
+  "previous_protocol_sha256": "6e890372da32137edf84e3a35a2885db84ffed79b477d6b08e3119c28a645eae",
+  "lifecycle_revision": "Explicitly stop and join all three loader prefetch threads; native v1 saved all 368 updates then crashed during shutdown. No training, evaluation, target, or acceptance changes."
+}

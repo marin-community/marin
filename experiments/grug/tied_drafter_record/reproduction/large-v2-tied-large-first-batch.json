@@ -1,0 +1,20 @@
+{
+  "step": 0,
+  "dataset_indices": [
+    0,
+    128
+  ],
+  "shape": [
+    128,
+    4096
+  ],
+  "token_min": 0,
+  "token_max": 16383,
+  "loss_weight_sum": 524160.0,
+  "document_starts": 341,
+  "array_sha256": {
+    "tokens": "60c5f688c118e647ab71e35481bb67852533e319e0cf1cf157f2fffb9df7cc61",
+    "loss_weight": "6eaa446c86373cf88bcf03cc58bdc644d7c9cab1911d4eab35eb26c09018d774",
+    "segment_ids": "396545102e64395ce3aa995c86059687029151d51d94cf25117da9fffba6fa4c"
+  }
+}

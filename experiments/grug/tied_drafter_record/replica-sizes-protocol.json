@@ -1,0 +1,44 @@
+{
+  "frozen_utc": "2026-10-23T20:33:19.500163+00:00",
+  "source_sha256": "6a4df0d9c983a61e1ebc387f6ad2fdc67c87bffd72a64c63b82e7d72ee3f6a8b",
+  "helper_sha256": "98099b29a6a363a3505bde69ee5d4a0396fe9051d466db242de036a4f898bd6a",
+  "question": "How much prediction fidelity survives immediate tied restriction to approximately half and quarter compute?",
+  "user_size_definition": "Half/quarter compute explicitly confirmed",
+  "architectures": [
+    {
+      "width": 256,
+      "heads": 2,
+      "ffn": 48,
+      "shared": 96,
+      "compute": 0.25244273264396194,
+      "parameters": 0.1949152687098585
+    },
+    {
+      "width": 384,
+      "heads": 3,
+      "ffn": 128,
+      "shared": 256,
+      "compute": 0.4952584244643602,
+      "parameters": 0.4024067100075821
+    }
+  ],
+  "seed": 0,
+  "anchor_step": 256,
+  "verification_batches": [
+    50000,
+    50001
+  ],
+  "control": "Full-width identity restriction on same trained hero checkpoint",
+  "metrics": [
+    "weighted cross-entropy",
+    "per-sequence loss correlation",
+    "sampled top-one agreement",
+    "sampled top-five set overlap",
+    "median of five warm loss-forward timings"
+  ],
+  "scope": "Pure forward prediction fidelity before replica optimization; no update transfer, optimizer-state mapping or speedup claim",
+  "size_limitation": "Leading linear-weight FLOPs only; excludes attention interactions, recurrent state, optimizer and transport",
+  "hardware": "8 H100 single job, configurations evaluated sequentially",
+  "timeout_seconds": 450,
+  "maximum_gpu_hours": 1.0
+}

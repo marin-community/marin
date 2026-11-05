@@ -1,0 +1,20 @@
+{
+  "frozen_utc": "2026-10-23T20:16:28.811931+00:00",
+  "question": "Does a full-width identity-restricted replica reproduce native model predictions and 16 updates with identical complete optimizer state?",
+  "source_sha256": "98099b29a6a363a3505bde69ee5d4a0396fe9051d466db242de036a4f898bd6a",
+  "anchor_step": 256,
+  "continuation_checkpoints": [
+    0,
+    1,
+    4,
+    16
+  ],
+  "verification_batches": [
+    50000,
+    50001
+  ],
+  "hardware": "8 H100 same mesh/executable; sequential branches",
+  "predeclared_checks": "Exact full-state equality at snapshot; report raw losses, sampled predictions, parameters and complete-state divergence at all checkpoints, compared with repeated-forward noise. Do not alter tolerance after observing outcomes.",
+  "excluded": "No narrowed draft, no Adam reset, no asynchronous proposal or HTTP transport, no speedup claim",
+  "maximum_gpu_hours": 1.3333333333333333
+}

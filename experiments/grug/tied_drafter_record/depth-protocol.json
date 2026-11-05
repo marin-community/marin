@@ -1,0 +1,32 @@
+{
+  "frozen_at": "2026-10-24T00:00:18.618227+00:00",
+  "variants": [
+    "identity",
+    "activation_identity",
+    "k4_gain0.75",
+    "depth_drop0",
+    "depth_drop1",
+    "depth_drop2",
+    "depth_drop3",
+    "depth_drop4",
+    "depth_drop5",
+    "depth_keep0235",
+    "depth_keep0145",
+    "depth_keep025",
+    "depth_keep035",
+    "depth_keep012",
+    "depth_keep345"
+  ],
+  "batch_indices": [
+    55000,
+    55001
+  ],
+  "source_sha256": {
+    "tied_drafter_latency.py": "964964506f22c53532ab174a644974b0866359cbab5a0513d383d197e027c615",
+    "tied_drafter_activation/model.py": "4d43bdf337d3dc0a9cdb43622cc546b796d7046de484f967d4101db6f4a3864d",
+    "tied_drafter_approximations.py": "bef062d274a6b850099e51f150d0272f3464238cca17e17f1975b90c4957b4fa"
+  },
+  "scope": "Frozen checkpoint depth screen; omit blocks and their residual history; retain original physical query/mask/attention identities; no fine-tuning. Bypassed arrays remain stored. Six leave-one-out and six fixed three/four-block subsets.",
+  "checks": "Native and copied full-depth identity must match exactly. Zeroing every bypassed block must leave per-sequence loss exactly unchanged.",
+  "selection": "Select depth candidates by agreement/latency on these calibration batches. Freeze top six non-identity strategies by small-model agreement for larger model; confirm finalists together on fresh batches before transfer."
+}

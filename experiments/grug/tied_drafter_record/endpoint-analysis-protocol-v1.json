@@ -1,0 +1,17 @@
+{
+  "frozen_at": "2026-10-24T01:33:42.877307+00:00",
+  "timing": "Frozen before inspecting any main-run proposal result. Initial monitoring losses and main endpoints have not been read.",
+  "target_rule": "Per-seed initial fixed-anchor token-weighted cross-entropy minus each declared reduction. Report all targets for both arms, including uncrossed targets.",
+  "target_reductions_nats": [
+    0.02,
+    0.05,
+    0.1,
+    0.15,
+    0.2
+  ],
+  "crossing": "First recorded monitoring point at or below target; report enclosing observation interval, do not infer an exact crossing time or assume monotonic loss.",
+  "primary": "Per-seed immediate endpoint loss gain on fresh batches; paired treatment-minus-control trajectories at identical consumed training batches; recovery at0,1,4,16,64,128 native updates.",
+  "uncertainty": "Show all three initialization seeds, mean and range. Same data and evaluation windows across seeds; no claim of independent corpus replicates or population confidence interval.",
+  "cost_bounds": "Minimal measured online cost includes draft updates, treatment native updates and acceptance forwards. A conservative total adds all recorded state-copy and monitor-forward costs, including extra reference/diagnostic work. Data/setup/checkpoint costs separately listed, and whole-study GPU-time charged. These bounds do not isolate production wall time.",
+  "limitation": "Token-weighted losses use unused windows of the pretraining stream; no downstream or held-out-domain quality claim."
+}

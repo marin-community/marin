@@ -1,0 +1,21 @@
+{
+  "created_at": "2026-10-24T10:19:35.023000+00:00",
+  "scope": "Post-hoc four-expert efficiency and conditional trend analysis; expert-specific drafter future-work notes. Existing measurements only; no GPU jobs or frozen protocol/runtime changes. Historical source archives remain unchanged.",
+  "files": {
+    "analyze_four_expert_efficiency.py": "94765d1048eebc4d1fff04f575ea573a9d255f951b62f316a870e92fb8c11a37",
+    "render_four_expert_efficiency.py": "78d8a01d8735b72759a9cf57eb5cf09f7d647090329e910685684ca765b76d25",
+    "render_report.py": "3e56d075bb0400027f8c1e4f9ae1ceeee6fc11549a74d13038cf8793e073ae1b",
+    "measurements/frontier-screen-summary.json": "eb229ee336e18e7544ce4fa96eeb468e0de482dd62ad5b0b8e6b9a5249ee0279",
+    "measurements/four-expert-efficiency.json": "9b377de01dd8bb7626dac4c838f67e8fb132ff56ed534cf96494fee766ab9fb2",
+    "measurements/four-expert-efficiency-section.html": "19c01cfeee7a859bc28d8aa6a35442869c778ea3d3c3b96d9c32a9f828b02eb1",
+    "measurements/four-expert-efficiency.svg": "5ae55bbb7fd4ce4651bcf805343781adb78376df7efa7f07b51eb6e7b6c97295",
+    "measurements/four-expert-efficiency.png": "930c8f2c7a1f9e4b823ee7f1fb8a9151e5cff83e34ab8c0ca627baffbb52d02a",
+    "measurements/expert-drafter-future-work.html": "9b41e72676424ae91c914c565725cd75c17cad730da8ea1b87d7997f5ae94ebb",
+    "measurements/four-expert-analysis-review.json": "76c3db3779e19774d8d6e96307163cfb3eb4beb855267ade3f234c7d49a66b78",
+    "async-analysis.html": "f2e1d9970031c63b76e8804e0a0f04b1692fae0deff04b3c7704620aa017946e"
+  },
+  "current_artifact_refresh": {
+    "at": "2026-10-24T14:49:24.504150+00:00",
+    "reason": "16384-update follow-up report and parameterized analysis/collection helpers. Prior4096 numerical results reproduced; historical archived source is unchanged."
+  }
+}

@@ -1,0 +1,266 @@
+{
+  "frozen_utc": "2026-10-23T18:53:27.892156+00:00",
+  "calibration_sha256": "e9bb1421d6912d3fdb6c27fa9ebe60b26dcc05a29d1726860db35bc343701aca",
+  "implementation_sha256": {
+    "__init__.py": "07bb5e2ebf8b63ddb316f395a0b30bad3e39b32ebe91915765902c0d9ecc3692",
+    "acceptance.py": "a16c6ac9006b20960ff2fd45f0ac801c09e8428af8f99ca1f456e96fb390fae8",
+    "audit.py": "e5c44f0bf9cf936ab66f879690a7ea440d0762ae3581f310324933e7bfeacbdc",
+    "calibration.py": "7985c32df4209ca2c2647901f5aa778a184be338a6b592b0e89604a7ba7a8604",
+    "coordinates.py": "c1fad16cc8e0acd3fffcf5c6b021b900331a6b2c64d4cb65bd63184fa500765f",
+    "draft_worker.py": "a1a119b686305102dba603e326bb6b38381dd95e6f436e2ac7e7d3533c777768",
+    "exchange.py": "14cb28847f233ba10a7083629a03e09440a93b90e55ab51e774db59f2f74f98f",
+    "freeze_protocol.py": "70c98efcda735105ae2d08fee898e0fa659303da64671a1b86ee13227e9c7ede",
+    "hero_trial.py": "d2e8dad9fe5af76007220e53b1ab9f9f2cf5a2819a45b30bf19c24b143f816a1",
+    "profile.py": "90efe5a21eeb7bba0a13e8848d520d4c6236d989645368e825cc5323c915b489",
+    "runtime.py": "b357ce1c2b2e20cc3e5b97bbd82177e11db5eaf79b0ecf278383baaa5034bb44",
+    "test_acceptance.py": "e0095673038ec0e717c444302146674ba5dae14a9bf8f5aedb046e561e6ec922",
+    "test_coordinates.py": "6a4318383b9c84692e6ca52d490c534799a5536b4d4ec6bb2e327b4859f89911",
+    "test_exchange.py": "9faa4c489948ff1ddbd155a54300e48b90183849a1b7e0ec1facc8e257b0988a",
+    "transactions.py": "295078f8093c4af1156cd13955d39778a6a5f1e321b415cb67830e1bbba1af57"
+  },
+  "seed": 0,
+  "recipe": "width_quarter",
+  "anchor_step": 256,
+  "native_step_seconds": 0.2323261743877083,
+  "native_timing_policy": "Mean control update plus data-wait time from steps 193 through 320",
+  "horizons": [
+    16,
+    8,
+    32
+  ],
+  "draft_learning_rate": 0.001,
+  "scales": [
+    1.0,
+    0.5
+  ],
+  "maximum_staleness_steps": 64,
+  "verification_batches": 1,
+  "sequences_per_group": 8,
+  "assumed_acceptance": 0.8,
+  "candidate_confidence": 0.9916666666666667,
+  "repeatability_floor": 1e-06,
+  "forecast_curve": [
+    {
+      "loss_per_step": 0.003292129504188779,
+      "upper_loss_per_step": 0.0036090239741654894,
+      "calibration_first_step": 192,
+      "calibration_last_step": 224,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0021600205845970777,
+      "upper_loss_per_step": 0.0023521662082669078,
+      "calibration_first_step": 224,
+      "calibration_last_step": 256,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0019423839817136468,
+      "upper_loss_per_step": 0.0022318768515352683,
+      "calibration_first_step": 256,
+      "calibration_last_step": 288,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0015023324690446316,
+      "upper_loss_per_step": 0.0016534320034075744,
+      "calibration_first_step": 288,
+      "calibration_last_step": 320,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0010204548713090844,
+      "upper_loss_per_step": 0.0010735355507953664,
+      "calibration_first_step": 320,
+      "calibration_last_step": 448,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0007786554251651978,
+      "upper_loss_per_step": 0.0009117726017658803,
+      "calibration_first_step": 448,
+      "calibration_last_step": 480,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0005655775212289882,
+      "upper_loss_per_step": 0.0007230780164837536,
+      "calibration_first_step": 480,
+      "calibration_last_step": 512,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0005410519852375728,
+      "upper_loss_per_step": 0.0006444757776903276,
+      "calibration_first_step": 512,
+      "calibration_last_step": 544,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0006695024544569605,
+      "upper_loss_per_step": 0.0007873339132327195,
+      "calibration_first_step": 544,
+      "calibration_last_step": 576,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0003876766666432256,
+      "upper_loss_per_step": 0.0004102253335287386,
+      "calibration_first_step": 576,
+      "calibration_last_step": 960,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.00027858383236889495,
+      "upper_loss_per_step": 0.00037262617749791327,
+      "calibration_first_step": 960,
+      "calibration_last_step": 992,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0003453314491252968,
+      "upper_loss_per_step": 0.0004459293768182533,
+      "calibration_first_step": 992,
+      "calibration_last_step": 1024,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0003653439760000765,
+      "upper_loss_per_step": 0.000541704185590158,
+      "calibration_first_step": 1024,
+      "calibration_last_step": 1056,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.00018124155690202315,
+      "upper_loss_per_step": 0.00036858304356128616,
+      "calibration_first_step": 1056,
+      "calibration_last_step": 1088,
+      "independent_groups": 64
+    }
+  ],
+  "forecast_lookahead": 64,
+  "forecast_policy": "Measured piecewise control curve, with the largest local upper progress slope over the next 64 updates",
+  "independent_check_slopes": [
+    {
+      "loss_per_step": 0.0032558981083639082,
+      "upper_loss_per_step": 0.0036090239741654894,
+      "calibration_first_step": 192,
+      "calibration_last_step": 224,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.002142778201687179,
+      "upper_loss_per_step": 0.0023227933309190756,
+      "calibration_first_step": 224,
+      "calibration_last_step": 256,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.002003838735163299,
+      "upper_loss_per_step": 0.0022318768515352683,
+      "calibration_first_step": 256,
+      "calibration_last_step": 288,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.00146947434905087,
+      "upper_loss_per_step": 0.0016534320034075744,
+      "calibration_first_step": 288,
+      "calibration_last_step": 320,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0009912707537296228,
+      "upper_loss_per_step": 0.0010644728481573682,
+      "calibration_first_step": 320,
+      "calibration_last_step": 448,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0007386639417745755,
+      "upper_loss_per_step": 0.0008459426039222751,
+      "calibration_first_step": 448,
+      "calibration_last_step": 480,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0005874959922493872,
+      "upper_loss_per_step": 0.0007230780164837536,
+      "calibration_first_step": 480,
+      "calibration_last_step": 512,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0005223382456733816,
+      "upper_loss_per_step": 0.0006444757776903276,
+      "calibration_first_step": 512,
+      "calibration_last_step": 544,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0006132473426987417,
+      "upper_loss_per_step": 0.00073925545256448,
+      "calibration_first_step": 544,
+      "calibration_last_step": 576,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.00036981055177420785,
+      "upper_loss_per_step": 0.00039696525789249836,
+      "calibration_first_step": 576,
+      "calibration_last_step": 960,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.00028021056255056465,
+      "upper_loss_per_step": 0.0003531242817200101,
+      "calibration_first_step": 960,
+      "calibration_last_step": 992,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.0003293344557278033,
+      "upper_loss_per_step": 0.0004200365071500537,
+      "calibration_first_step": 992,
+      "calibration_last_step": 1024,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.00042736592104120064,
+      "upper_loss_per_step": 0.000541704185590158,
+      "calibration_first_step": 1024,
+      "calibration_last_step": 1056,
+      "independent_groups": 64
+    },
+    {
+      "loss_per_step": 0.00024630105690448545,
+      "upper_loss_per_step": 0.00036858304356128616,
+      "calibration_first_step": 1056,
+      "calibration_last_step": 1088,
+      "independent_groups": 64
+    }
+  ],
+  "extrapolation_equivalent_steps": 4,
+  "loss_targets": [
+    {
+      "control_step": 288,
+      "loss": 2.8098982393930783,
+      "native_control_training_seconds": 76.37256070785224
+    },
+    {
+      "control_step": 320,
+      "loss": 2.7601004288735567,
+      "native_control_training_seconds": 83.51284481398761
+    }
+  ],
+  "optimizer_policy": "Reset draft AdamW each snapshot; preserve hero moments, EMA, pending router state, ordinary step and data cursor on parameter jumps",
+  "rejection_policy": "Retain original complete hero state; advance native continuation in the recorded outcome",
+  "persistence_policy": "On identical next 64 batches, compare native, selected draft scale, and extrapolation at 0/1/4/16/64 updates, even when the proposed jump is rejected",
+  "data_policy": "Train from index zero; draft consumes the next horizon batches starting at snapshot_step. Verification 30000+8*horizon; persistence 40000+8*horizon; final target indices 20000..20003. These are reserved mixture indices, not proven document-disjoint sets.",
+  "statistics": "Nominal grouped t bounds with a 2.5% forecast budget and 2.5% split over three horizons and their predefined scale trials. Adjacent packed-sequence groups can be correlated; bounds are exploratory, not a guarantee of population coverage.",
+  "sample_size_policy": "One full native batch (128 sequences) per candidate evaluation; uncertain results are rejected. Four reserved batches measure persistence. No sample-size tuning after treatment outcomes.",
+  "expansion_gate": "Repeated positive 64-update persistence and projected speedup >=1.2 after measured overhead; then at least three independent paired seeds. No superior resource-efficiency claim without equal-total-hardware control.",
+  "initial_gpu_hour_cap": 10,
+  "notes": "A diagnostic trial is not an end-to-end accelerated benchmark. Diagnostic branch time is accounted as experiment cost but not represented as deployment overhead."
+}

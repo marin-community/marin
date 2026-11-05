@@ -1,0 +1,12 @@
+{
+  "frozen_at": "2026-10-24T02:47:12.016906+00:00",
+  "timing": "Recorded after native-control endpoints began but before inspecting any draft frontier endpoint.",
+  "unit": "First-choice endpoint at a specific active-expert count and horizon; shorter-prefix passing endpoints do not change rejection count.",
+  "passing": "Observed rejected/trials <=0.10. Native eight-expert reference is excluded from candidate selection.",
+  "speed_ranking": "Among passing draft cells, minimize median update_seconds/executed_update_count across all trials in that cell; executed_update_count is horizon for a completed trajectory and failure_step for an early nonfinite trajectory. This ranks measured draft update speed, not useful learning progress. Report baseline/check/copy costs separately.",
+  "speed_ties": "If values are exactly equal, prefer fewer active experts, then the larger horizon.",
+  "failing_neighbor": "Among observed failing draft cells, minimize Manhattan distance in ordered expert-count indices [6,4,2,1] and horizon indices [64,128,256,512,1024,1536] from the selected passing cell. Break equal distances by fewer active experts, then larger horizon. If no failing cell exists, confirm only the passing candidate and report that no rejection boundary was found within the tested limits.",
+  "confirmation": "Trial ids4..15 per seed use new training/check/monitor windows. Candidate selection is frozen before those outcomes. Confirmation may use multiple jobs partitioned by trial id without changing data mapping, source, checkpoint or optimizer schedule. Require all36 unique seed/trial pairs before a final rejection rate.",
+  "native_reference_reuse": "Reuse native endpoints only when seed, full starting checkpoint, optimizer schedule, data/check/monitor windows, horizon and source implementation match; otherwise run a matched native reference.",
+  "interpretation": "Acceptance is a weak feasibility condition. Report fresh endpoint gains and native-comparison losses regardless of rejection rate; do not present the fastest passing cell as a production speedup."
+}

@@ -1,0 +1,18 @@
+{
+  "status": "frozen before submission",
+  "source_sha256": {
+    "tied_route_boundary.py": "7510c014d783eed1f0d2fc87d96191847f5d748402d8042d91c40be830deff86",
+    "tied_drafter_approximations.py": "e81905ec8759cadb174fbae18bbd6fde763dd09824d6908b94c6939e932ef915",
+    "tied_drafter_latency.py": "5be4ac8d9f965ee2c3b26e2c9d829d1e2a5d424bf8a3e5b1f8da2596de94a995"
+  },
+  "checkpoint": "Archived step2116 EMA Belay",
+  "hardware": "8 H100 RNO2A interactive",
+  "route_batches": [
+    53100,
+    53101
+  ],
+  "sample_rows": 16,
+  "analysis": "Fit token-ID expert frequencies on first captured batch; evaluate on second. Compare oracle top-count cache, previous-window cache, token-ID forecast cache, and random cache for windows 1/4/16/64/256/1024 and capacities 8/32/128/256. Fixed checkpoint, no weight drift or actual cache execution.",
+  "communication": "BF16, existing FP8 block128+FP32 scales, and E2M1 FP4 block16+FP8 scales+FP32 per-row scale. Five payload shapes, ten timed forwards after three warmups; activation-only payloads, no expert headers or combine path.",
+  "validation": "Eight-device CPU exchanges match an independently transposed decoded reference exactly."
+}
