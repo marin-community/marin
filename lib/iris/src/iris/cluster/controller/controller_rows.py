@@ -126,26 +126,23 @@ def record_attempt_changes(cur: RowCursor, attempts: Iterable[tuple[JobName, int
 
 
 def _write(tables: ControllerRowTables, marked: _Marked) -> None:
-    """Enqueue the snapshotted rows; on failure, log and drop them.
+    """Enqueue the snapshotted rows; a table whose write fails is logged and its rows dropped.
 
     Runs after COMMIT among the transaction's post-commit hooks, so an exception
     here would reach the caller of a committed transaction and skip the hooks
     registered after this one (cache invalidations).
     """
-    try:
-        if marked.job_rows:
-            tables.job_table.write(marked.job_rows)
-        if marked.config_rows:
-            tables.job_config_table.write(marked.config_rows)
-        if marked.attempt_rows:
-            tables.task_attempt_table.write(marked.attempt_rows)
-    except Exception:
-        logger.exception(
-            "controller rows: write failed, dropping %d job, %d config, %d attempt rows",
-            len(marked.job_rows),
-            len(marked.config_rows),
-            len(marked.attempt_rows),
-        )
+    for table, rows in (
+        (tables.job_table, marked.job_rows),
+        (tables.job_config_table, marked.config_rows),
+        (tables.task_attempt_table, marked.attempt_rows),
+    ):
+        if not rows:
+            continue
+        try:
+            table.write(rows)
+        except Exception:
+            logger.exception("controller rows: write failed, dropping %d %s rows", len(rows), type(rows[0]).__name__)
 
 
 def _dt(value: Timestamp | None) -> datetime | None:
