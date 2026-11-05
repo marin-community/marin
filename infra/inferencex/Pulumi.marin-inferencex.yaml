@@ -2,3 +2,4 @@ secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings
 config:
   marin-inferencex:custom_domain: knotmeter.oa.dev
   marin-inferencex:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
+encryptedkey: CiQAKk3j6Wa68StjXlt/DDI8pzdyzIN9P8NkJWnPRgaGAgWfrfoSSQCdtF6i9OFat4VKnrbcYYQLBEKB8S62Ry7I/cK37UYxCph255nxpwZCqeLFuAogDa2KReMjJcdBtvoIwYm8WSGfpxNs1pCo0p4=
