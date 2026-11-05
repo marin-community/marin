@@ -13,8 +13,6 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-VERSION = "1"
-
 
 def convert(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     try:
@@ -39,7 +37,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             ),
             config=CurationRecipe(
                 name="nemo-predicted-action",
-                version=VERSION,
+                version="1",
                 source=HfSource(DATASET, REVISION, ("train.jsonl",), SourceFormat.JSONL),
                 convert=convert,
                 intended_use=IntendedUse.EVAL,

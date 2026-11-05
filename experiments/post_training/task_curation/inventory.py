@@ -5,7 +5,6 @@
 
 import hashlib
 import json
-import math
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
@@ -87,6 +86,13 @@ TASK_MANIFEST_SCHEMA = pa.schema(
         pa.field("agentic", pa.bool_(), nullable=False),
         pa.field("grader_kind", pa.string(), nullable=False),
         pa.field("upstream_pass_rate", pa.float64()),
+    ]
+)
+PANEL_MANIFEST_SCHEMA = pa.schema(
+    [
+        *(field for field in TASK_MANIFEST_SCHEMA if field.name != "upstream_pass_rate"),
+        *((name, pa.string()) for name in ("part", "source", "license")),
+        ("difficulty", pa.float64()),
     ]
 )
 
@@ -296,37 +302,32 @@ def select_heldout(full: tuple[TaskSpec, ...], recipe: SelectionRecipe) -> Heldo
 def _panel_source_tasks(
     source: HeldoutSource, grader_environments: Mapping[str, EnvironmentRequirements]
 ) -> Iterator[TaskSpec]:
-    count = 0
+    root, count = StoragePath(source.uri), 0
+    tasks: Iterator[TaskSpec]
     if source.format == PanelFormat.EVALUATION:
-        for case in evaluation_cases(source.uri):
-            count += 1
-            yield _chat_panel_task(case)
+        tasks = map(_chat_panel_task, evaluation_cases(source.uri))
+    elif source.format == PanelFormat.NORMALIZED:
+        if json.loads((root / "manifest.json").read_text())["intended_use"] != IntendedUse.EVAL:
+            raise ValueError(f"Panel source is not reserved for evaluation: {source.uri}")
+        paths = sorted((root / "normalize/*.parquet").glob(), key=str)
+        raw = (value for path in paths for value in _parquet_column(path, TASK_JSON_COLUMN) if value is not None)
+        tasks = map(TaskSpec.model_validate_json, raw)
+    elif source.format == PanelFormat.HISTORICAL:
+        raw = _parquet_column(root, "lowered_task_spec")
+        tasks = (validation_task({"lowered_task_spec": value}, grader_environments) for value in raw)
     else:
-        root = StoragePath(source.uri)
-        paths = [root]
-        column = TASK_SPEC_COLUMN
-        if source.format == PanelFormat.HISTORICAL:
-            column = "lowered_task_spec"
-        elif source.format == PanelFormat.NORMALIZED:
-            manifest = json.loads((root / "manifest.json").read_text())
-            if manifest["intended_use"] != IntendedUse.EVAL:
-                raise ValueError(f"Panel source is not reserved for evaluation: {source.uri}")
-            paths = sorted((root / "normalize/*.parquet").glob(), key=str)
-            column = TASK_JSON_COLUMN
-        for path in paths:
-            with path.open("rb") as stream:
-                for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[column]):
-                    for row in batch.to_pylist():
-                        if source.format == PanelFormat.NORMALIZED and row[column] is None:
-                            continue
-                        count += 1
-                        yield (
-                            validation_task(row, grader_environments)
-                            if source.format == PanelFormat.HISTORICAL
-                            else TaskSpec.model_validate_json(row[column])
-                        )
+        tasks = map(TaskSpec.model_validate_json, _parquet_column(root, TASK_SPEC_COLUMN))
+    for task in tasks:
+        count += 1
+        yield task
     if count != source.rows:
         raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}, read {count}")
+
+
+def _parquet_column(path: StoragePath, column: str) -> Iterator[Any]:
+    with path.open("rb") as stream:
+        for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[column]):
+            yield from batch.column(0).to_pylist()
 
 
 def _chat_panel_task(case: EvaluationCase) -> TaskSpec:
@@ -519,6 +520,22 @@ def prepare(config: SelectionConfig) -> None:
         (destination / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
+def _pinned_inputs(name: str, sources: tuple[HeldoutSource, ...]) -> tuple[ArtifactStep, ...]:
+    return tuple(
+        ArtifactStep.adopt(f"rl-data/selection-inputs/{name}-{index}", source.version, source.uri)
+        for index, source in enumerate(sources)
+    )
+
+
+def _resolved[S: HeldoutSource | PanelMeasurement](
+    context: StepContext, sources: tuple[S, ...], steps: tuple[ArtifactStep, ...]
+) -> tuple[S, ...]:
+    return tuple(
+        source.model_copy(update={"uri": context.artifact_path(step)})
+        for source, step in zip(sources, steps, strict=True)
+    )
+
+
 def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecipe) -> ArtifactStep[Artifact]:
     """Bind a terminal selection to admitted source artifacts and a pinned heldout input."""
     missing = recipe.sources.keys() - curated.keys()
@@ -534,14 +551,8 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
             family_totals[recipe.sources[source]] += limit
         if family_totals != recipe.family_limits:
             raise ValueError("Source quotas must sum to each family quota")
-    heldout = tuple(
-        ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}-heldout-{index}", source.version, source.uri)
-        for index, source in enumerate(recipe.heldout)
-    )
-    exclusions = tuple(
-        ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}-exclude-{index}", source.version, source.uri)
-        for index, source in enumerate(recipe.exclusions)
-    )
+    heldout = _pinned_inputs(f"{recipe.name}-heldout", recipe.heldout)
+    exclusions = _pinned_inputs(f"{recipe.name}-exclude", recipe.exclusions)
     inputs = {source_id: curated[source_id] for source_id in sorted(recipe.sources)}
 
     def build_config(ctx: StepContext) -> SelectionConfig:
@@ -551,15 +562,9 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
                 for source_id, step in inputs.items()
             ),
             recipe,
-            tuple(
-                source.model_copy(update={"uri": ctx.artifact_path(step)})
-                for source, step in zip(recipe.heldout, heldout, strict=True)
-            ),
+            _resolved(ctx, recipe.heldout, heldout),
             ctx.output_path,
-            tuple(
-                source.model_copy(update={"uri": ctx.artifact_path(step)})
-                for source, step in zip(recipe.exclusions, exclusions, strict=True)
-            ),
+            _resolved(ctx, recipe.exclusions, exclusions),
         )
 
     return ArtifactStep(
@@ -581,24 +586,18 @@ def _panel_measurements(measurement: PanelMeasurement | None) -> dict[str, Panel
     if len(by_id) != len(rows) or len(rows) != measurement.rows:
         raise ValueError("Panel pass-rate rows must have unique task IDs and the declared population")
     for row in rows:
-        if (
-            row.attempted != 8
-            or not 0 < row.samples <= row.attempted
-            or not 0 <= row.passed <= row.samples
-            or not math.isfinite(row.mean_score)
-            or not 0 <= row.mean_score <= 1
-            or row.model_revision != measurement.model_revision
-        ):
+        # The range comparison also refuses NaN and infinite scores.
+        valid = 0 < row.samples and 0 <= row.passed <= row.samples <= row.attempted == 8 and 0 <= row.mean_score <= 1
+        if not valid or row.model_revision != measurement.model_revision:
             raise ValueError(f"Panel pass-rate evidence is incomplete: {row.task_id}")
     return by_id
 
 
-def _statement_digest(task: TaskSpec) -> str | None:
-    message = next(
-        (event for event in reversed(task.context.events) if isinstance(event, TextMessage) and event.role == "user"),
-        None,
-    )
-    return hashlib.sha256(" ".join(message.content.split()).encode()).hexdigest() if message is not None else None
+def _panel_keys(task: TaskSpec) -> tuple[tuple[str, str], ...]:
+    """The exact ID and conversation keys, then the whitespace-normalized final user statement if there is one."""
+    users = [event.content for event in task.context.events if isinstance(event, TextMessage) and event.role == "user"]
+    statement = (("statement", hashlib.sha256(" ".join(users[-1].split()).encode()).hexdigest()),) if users else ()
+    return (("id", task.id), ("context", canonical_sha256(task.context.model_dump(mode="json"))), *statement)
 
 
 def select_test_panel(
@@ -608,66 +607,49 @@ def select_test_panel(
     rates: Mapping[str, PanelRate],
 ) -> PanelSelection:
     """Select canonical tasks from source iterators; named-part order gives duplicates to the first part."""
-    excluded_ids, excluded_contexts, excluded_statements = set(), set(), set()
-    for task in excluded:
-        excluded_ids.add(task.id)
-        excluded_contexts.add(canonical_sha256(task.context.model_dump(mode="json")))
-        statement = _statement_digest(task)
-        if statement is not None:
-            excluded_statements.add(statement)
+    excluded_keys = {key for task in excluded for key in _panel_keys(task)}
     selected: list[tuple[TaskSpec, PanelSource]] = []
-    selected_ids, selected_contexts = set(), set()
-    source_counts: dict[str, Counter[str]] = {}
+    taken: set[tuple[str, str]] = set()
+    audit: dict[str, Counter[str]] = {}
 
     def candidates(part: PanelSource, counts: Counter[str]) -> Iterator[TaskSpec]:
-        seen_ids, seen_contexts = set(), set()
+        seen: set[tuple[str, str]] = set()
         for task in sources[part.name]:
-            context = canonical_sha256(task.context.model_dump(mode="json"))
             counts["input"] += 1
+            keys = _panel_keys(task)
             if not set(part.required_tags).issubset(task.tags):
                 counts["filtered"] += 1
-                continue
-            if task.id in excluded_ids or context in excluded_contexts or _statement_digest(task) in excluded_statements:
+            elif not excluded_keys.isdisjoint(keys):
                 counts["overlap"] += 1
-                continue
-            if "eval" not in task.tags:
+            elif "eval" not in task.tags:
                 raise ValueError(f"Test panel source must reserve its tasks for evaluation: {task.id}")
-            if _grader_kind(task) not in (GraderKind.IN_PROCESS, GraderKind.PACKAGE):
+            elif _grader_kind(task) not in (GraderKind.IN_PROCESS, GraderKind.PACKAGE):
                 raise ValueError(f"Test panel requires a local grader: {task.id}")
-            if (
-                task.id in selected_ids
-                or task.id in seen_ids
-                or context in selected_contexts
-                or context in seen_contexts
-            ):
+            elif not taken.isdisjoint(keys[:2]) or not seen.isdisjoint(keys[:2]):
                 counts["duplicate"] += 1
-                continue
-            seen_ids.add(task.id)
-            seen_contexts.add(context)
-            yield task
+            else:
+                seen.update(keys[:2])
+                yield task
 
     for part in recipe.sources:
         counts: Counter[str] = Counter()
-        count, tasks = seeded_sample(
+        eligible, tasks = seeded_sample(
             candidates(part, counts), size=part.count, key=lambda task: seeded_order(task.id, recipe.seed)
         )
-        if count < part.count:
-            raise ValueError(f"Test panel part shortfall: {part.name}: requested {part.count}, eligible {count}")
-        for task in tasks:
-            selected.append((task, part))
-            selected_ids.add(task.id)
-            selected_contexts.add(canonical_sha256(task.context.model_dump(mode="json")))
-        counts.update(eligible=count, selected=len(tasks))
-        source_counts[part.name] = counts
+        if eligible < part.count:
+            raise ValueError(f"Test panel part shortfall: {part.name}: requested {part.count}, eligible {eligible}")
+        selected.extend((task, part) for task in tasks)
+        taken.update(key for task in tasks for key in _panel_keys(task)[:2])
+        counts.update(eligible=eligible, selected=len(tasks))
+        audit[part.name] = counts
     selected.sort(key=lambda entry: entry[0].id)
     if recipe.pass_rates is not None:
-        if not selected_ids <= rates.keys():
+        if not {task.id for task, _ in selected} <= rates.keys():
             raise ValueError("Pass-rate evidence must cover every selected panel task")
         for task, _ in selected:
             if rates[task.id].task_digest != canonical_sha256(task.model_dump(mode="json")):
                 raise ValueError(f"Pass-rate evidence measures different task content: {task.id}")
-    families = {part.family for _, part in selected}
-    if recipe.fast_counts.keys() != families:
+    if recipe.fast_counts.keys() != {part.family for _, part in selected}:
         raise ValueError("Fast-panel quotas must cover every selected family")
     fast_ids = set()
     for family, size in recipe.fast_counts.items():
@@ -679,7 +661,7 @@ def select_test_panel(
         if count < size:
             raise ValueError(f"Fast-panel source shortfall for {family}")
         fast_ids.update(task.id for task in sample)
-    return PanelSelection(tuple(selected), tuple(task for task, _ in selected if task.id in fast_ids), source_counts)
+    return PanelSelection(tuple(selected), tuple(task for task, _ in selected if task.id in fast_ids), audit)
 
 
 def prepare_test_panel(config: TestPanelConfig) -> None:
@@ -702,27 +684,16 @@ def prepare_test_panel(config: TestPanelConfig) -> None:
             "part": part.name,
             "source": task.source.model_dump_json(),
             "license": part.license,
-            "difficulty": None if not rates else 1 - rates[task.id].mean_score,
+            "difficulty": 1 - rates[task.id].mean_score if rates else None,
         }
         for task, part in selection.tasks
     )
-    schema = pa.schema(
-        [
-            *TASK_MANIFEST_SCHEMA.remove(TASK_MANIFEST_SCHEMA.get_field_index("upstream_pass_rate")),
-            ("part", pa.string()),
-            ("source", pa.string()),
-            ("license", pa.string()),
-            ("difficulty", pa.float64()),
-        ]
-    )
     with TemporaryDirectory(prefix="test-panel-") as temporary:
         directory = Path(temporary)
-        for name, tasks in (
-            (FULL_VALIDATION_FILENAME, (task for task, _ in selection.tasks)),
-            (VALIDATION_FILENAME, iter(selection.fast)),
-        ):
-            write_parquet_file(task_records(tasks), str(directory / name), schema=TASK_SCHEMA)
-        write_parquet_file(manifest, str(directory / TASK_MANIFEST_FILENAME), schema=schema)
+        full = (task for task, _ in selection.tasks)
+        write_parquet_file(task_records(full), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA)
+        write_parquet_file(task_records(iter(selection.fast)), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA)
+        write_parquet_file(manifest, str(directory / TASK_MANIFEST_FILENAME), schema=PANEL_MANIFEST_SCHEMA)
         summary = {
             "recipe": recipe.model_dump(mode="json"),
             "full_validation_rows": len(selection.tasks),
@@ -754,34 +725,21 @@ def test_panel_step(curated: dict[str, ArtifactStep], recipe: TestPanelRecipe) -
     if missing:
         raise ValueError(f"Panel requires corpus sources: {', '.join(sorted(missing))}")
     inputs = {part.name: curated[part.source_id] for part in recipe.sources}
-    exclusions = tuple(
-        ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/exclude-{index}", source.version, source.uri)
-        for index, source in enumerate((*recipe.training, recipe.development))
-    )
-    measurement = (
-        ArtifactStep.adopt(
-            f"rl-data/selection-inputs/{recipe.name}/pass-rates", recipe.pass_rates.version, recipe.pass_rates.uri
-        )
-        if recipe.pass_rates is not None
-        else None
+    excluded = (*recipe.training, recipe.development)
+    exclusions = _pinned_inputs(f"{recipe.name}/exclude", excluded)
+    rates = () if recipe.pass_rates is None else (recipe.pass_rates,)
+    measurement = tuple(
+        ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/pass-rates", rate.version, rate.uri)
+        for rate in rates
     )
 
     def build_config(context: StepContext) -> TestPanelConfig:
-        paths = [context.artifact_path(step) for step in exclusions]
-        resolved = recipe.model_copy(
-            update={
-                "training": tuple(
-                    source.model_copy(update={"uri": path})
-                    for source, path in zip(recipe.training, paths[:-1], strict=True)
-                ),
-                "development": recipe.development.model_copy(update={"uri": paths[-1]}),
-                "pass_rates": (
-                    recipe.pass_rates.model_copy(update={"uri": context.artifact_path(measurement)})
-                    if measurement is not None
-                    else None
-                ),
-            }
-        )
+        *training, development = _resolved(context, excluded, exclusions)
+        update = {
+            "training": tuple(training),
+            "development": development,
+            "pass_rates": next(iter(_resolved(context, rates, measurement)), None),
+        }
         sources = {
             part.name: HeldoutSource(
                 uri=context.artifact_path(inputs[part.name]),
@@ -791,13 +749,13 @@ def test_panel_step(curated: dict[str, ArtifactStep], recipe: TestPanelRecipe) -
             )
             for part in recipe.sources
         }
-        return TestPanelConfig(resolved, sources, context.output_path)
+        return TestPanelConfig(recipe.model_copy(update=update), sources, context.output_path)
 
     return ArtifactStep(
         name=f"{SELECTION_PREFIX}/{recipe.name}",
         version=recipe.version,
         artifact_type=Artifact,
-        deps=(*dict.fromkeys(inputs.values()), *exclusions, *((measurement,) if measurement is not None else ())),
+        deps=(*dict.fromkeys(inputs.values()), *exclusions, *measurement),
         run=prepare_test_panel,
         build_config=build_config,
     )

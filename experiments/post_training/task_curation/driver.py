@@ -262,8 +262,7 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
 def _selection_pass(
     corpus: _CorpusSources, recipe: SelectionRecipe | TestPanelRecipe, *, cache_dir: Path | None, do_run: bool
 ) -> None:
-    panel = isinstance(recipe, TestPanelRecipe)
-    if corpus.population != ("converted" if panel else "admitted"):
+    if corpus.population != ("converted" if isinstance(recipe, TestPanelRecipe) else "admitted"):
         raise click.UsageError("Test panels require a converted corpus; training selection requires an admitted corpus")
     curated = {
         source_id: ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/{source_id}", recipe.version, root)
