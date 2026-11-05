@@ -333,9 +333,10 @@ def training_config(hardware: Hardware = Hardware.H100) -> dict:
     }
     _materialize_role_plan_config(config, plan)
     if hardware is Hardware.GB200_48:
-        # Large pinned master and Muon momentum banks must retain their requested
-        # sizes instead of rounding every tensor allocation to a power of two.
-        config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] += ",pinned_max_round_threshold_mb:1"
+        # The native cache cap also prevents large-block rounding. Unrounded
+        # blocks must bypass Torch's power-of-two cache buckets to avoid reuse
+        # of a smaller block for a larger request in the same bucket.
+        config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] += ",pinned_max_cached_size_mb:1"
         config["generator"]["engine_init_kwargs"]["cudagraph_metrics"] = True
         config["generator"]["engine_init_kwargs"]["compilation_config"] = {
             "mode": 3,  # Exact-39e CompilationMode.VLLM_COMPILE.

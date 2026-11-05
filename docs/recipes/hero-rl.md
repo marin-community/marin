@@ -38,15 +38,24 @@ accepting the full-model gate. Coordinator and GPU tasks have zero failure and
 preemption retries.
 
 The GB200 update candidate uses
-`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,pinned_max_round_threshold_mb:1`
-to keep pinned allocations larger than 1 MiB at their requested size. Optimizer
-offload, CPU Muon momentum and activation offload remain enabled. Worker phase
-observations record native pinned allocated, active and cached bytes, including
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,pinned_max_cached_size_mb:1`.
+Torch's native cache cap also prevents rounding above that size. Larger pinned
+allocations retain their requested size and are released after their transfer
+events complete. Smaller blocks retain the rounded cache. Disabling rounding
+alone lets unequal exact-sized allocations share a power-of-two cache bucket,
+which can return an undersized block for a later activation copy. The managed
+Torch GPU probe reproduced that failure and passed checkpoint/autograd and
+master/momentum roundtrips with the cache cap alone. Repeated large native host
+allocations and frees may increase update duration.
+
+Optimizer offload, CPU Muon momentum and activation offload remain enabled.
+Worker phase observations record native pinned allocated, active and cached bytes, including
 offload/backload boundaries. Native active bytes can include completed transfers
 whose events the allocator has not polled; the observations do not force polling
 or synchronization. This change preserves the numerical configuration and the
-validated vLLM overlay. It does not establish full-model host-memory fit. Require
-the separate two-cycle allocator probe and a fresh bounded update trial.
+validated vLLM overlay. The small allocator gate does not establish full-model
+host-memory fit, applied updates or weight publication; require the fresh
+bounded update trial separately.
 
 The CPU tests establish staging and launch composition only. Keep the
 qualification hold until the seven kernel/config cases, a matched route-enabled

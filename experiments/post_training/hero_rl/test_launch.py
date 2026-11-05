@@ -198,7 +198,7 @@ def test_experimental_gb200_profile_composes_36_learners_and_12_servers(tmp_path
         assert stage["cluster"] == stage["target_cluster"] == "cw-us-east-08a"
         assert stage["priority"] == "interactive"
         assert stage["memory"] == "940GiB"
-        assert stage["allocator_config"] == "expandable_segments:True,pinned_max_round_threshold_mb:1"
+        assert stage["allocator_config"] == "expandable_segments:True,pinned_max_cached_size_mb:1"
         assert stage["submission_retries"] == {
             "max_retries_failure": 0,
             "max_retries_preemption": 0,
