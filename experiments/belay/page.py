@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 import requests
 from marina.client import bearer_token
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapCredentialsUnavailable, IapServiceAccountTokenProvider
 
 from experiments.belay.config import CONFIG
 
@@ -40,6 +41,7 @@ SESSION_HEADER = "X-Belay-Session"
 SESSION_SECRET_HEADER = "X-Belay-Session-Secret"
 SESSION_FILE = Path(tempfile.gettempdir()) / "belay-session.json"
 BOT_MARK = "🤖"
+MARINA_IDENTITY_URL = "https://marina.oa.dev/api/marina/me"
 TERMINAL_RUN_STATES = ("succeeded", "failed", "killed", "worker_failed", "unschedulable")
 
 
@@ -176,7 +178,30 @@ def call(
         return _local_call(url, body, headers | ({TOKEN_HEADER: token} if token else {}))
     if token is not None:
         raise ValueError("the service token is only for a local preview; Marina callers use their IAP identity")
-    return _marina_call(url, body, headers | {"Authorization": f"Bearer {bearer_token()}"})
+    return _marina_call(url, body, headers | {"Authorization": f"Bearer {marina_token()}"})
+
+
+_SERVICE_ACCOUNT_TOKENS = IapServiceAccountTokenProvider(MARIN_DESKTOP_OAUTH_CLIENT.client_id)
+
+
+def marina_token() -> str:
+    """An IAP token for Marina: the machine's service account when it has one (a Loom session's ``loom-vm``, which the
+    app lists in its session identities), else the caller's cached Marin login. Marina's own client prefers a cached
+    login, which inside Loom is not an identity the app accepts."""
+    try:
+        token = _SERVICE_ACCOUNT_TOKENS.get_token()
+    except IapCredentialsUnavailable:
+        token = None
+    return token or bearer_token()
+
+
+def _caller_identity(headers: dict[str, str]) -> str:
+    """Who Marina sees for these headers, for a refusal's message; ``unknown`` if Marina will not say."""
+    try:
+        response = requests.get(MARINA_IDENTITY_URL, headers={"Authorization": headers["Authorization"]}, timeout=30)
+        return response.json()["user"] if response.ok else "unknown"
+    except (requests.RequestException, ValueError, KeyError):
+        return "unknown"
 
 
 def _local_call(url: str, body: dict | None, headers: dict[str, str]) -> dict:
@@ -192,6 +217,8 @@ def _local_call(url: str, body: dict | None, headers: dict[str, str]) -> dict:
 def _marina_call(url: str, body: dict | None, headers: dict[str, str]) -> dict:
     method = "GET" if body is None else "POST"
     response = requests.request(method, url, json=body, headers=headers, timeout=REQUEST_TIMEOUT)
+    if response.status_code == 401:
+        raise PageRequestError(401, f"{response.text[:500]} (called as {_caller_identity(headers)})")
     if response.status_code >= 400:
         raise PageRequestError(response.status_code, response.text[:500])
     return response.json()

@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 import requests
 import yaml
+from rigging.auth import IapCredentialsUnavailable
 
 from experiments.belay import __main__ as belay_main
 from experiments.belay import page
@@ -482,7 +483,7 @@ def test_a_marina_page_is_called_with_the_iap_identity(monkeypatch: pytest.Monke
 
     applet = "https://applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/"
     monkeypatch.setattr(page, "CONFIG", dataclasses.replace(CONFIG, page_url=applet))
-    monkeypatch.setattr(page, "bearer_token", fake_iap_token)
+    monkeypatch.setattr(page, "marina_token", fake_iap_token)
     monkeypatch.setattr(requests, "request", request)
     monkeypatch.setenv(page.TOKEN_ENV, "a-local-token")  # never sent to Marina
     session = page.SessionCredentials("loom-1101-120000", "s3cret")
@@ -515,7 +516,7 @@ def test_a_local_page_takes_the_service_token(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(page, "CONFIG", dataclasses.replace(CONFIG, page_url="http://127.0.0.1:8091/belay/"))
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(page, "bearer_token", no_iap_token)
+    monkeypatch.setattr(page, "marina_token", no_iap_token)
     monkeypatch.setenv(page.TOKEN_ENV, "local-token")
     monkeypatch.delenv(page.SESSION_ENV, raising=False)
     monkeypatch.setattr(page, "SESSION_FILE", Path("/nonexistent/belay-session.json"))
@@ -524,6 +525,23 @@ def test_a_local_page_takes_the_service_token(monkeypatch: pytest.MonkeyPatch) -
     headers = [{k.lower(): v for k, v in r.header_items()} for r in sent]
     assert headers[0]["x-belay-token"] == "local-token" and "authorization" not in headers[0]
     assert "x-belay-token" not in headers[1] and "x-belay-session" not in headers[0]
+
+
+def test_marina_calls_use_the_machine_service_account_before_a_cached_login(monkeypatch) -> None:
+    class Accounts:
+        def __init__(self, token: str | None) -> None:
+            self.token = token
+
+        def get_token(self) -> str:
+            if self.token is None:
+                raise IapCredentialsUnavailable("no service account")
+            return self.token
+
+    monkeypatch.setattr(page, "bearer_token", lambda: "cached-login-token")
+    monkeypatch.setattr(page, "_SERVICE_ACCOUNT_TOKENS", Accounts("loom-vm-token"))
+    assert page.marina_token() == "loom-vm-token"
+    monkeypatch.setattr(page, "_SERVICE_ACCOUNT_TOKENS", Accounts(None))
+    assert page.marina_token() == "cached-login-token"
 
 
 def intake_idea(url: str | None) -> Idea:
