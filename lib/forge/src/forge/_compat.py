@@ -19,7 +19,11 @@ def is_text(value: object) -> TypeIs[str]:
 
 
 def recover[T](operation: Callable[[], T], fallback: T) -> Value[T]:
-    """Recover a grouped runtime failure without hiding unrelated failures."""
+    """Demonstrate except* recovery for a disposable package compatibility probe.
+
+    The supplied operation declares RuntimeError as recoverable; every other
+    exception propagates. Effects replace this probe in the next work package.
+    """
     value = fallback
     try:
         value = operation()
