@@ -158,21 +158,6 @@ def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(
     first = runner.invoke(cli, command)
     assert first.exit_code == 0, first.output
     batch = submitted_batches[-1]
-    # Records from earlier launches can have IDs derived from a different runtime revision.
-    batch = replace(
-        batch,
-        evaluations=tuple(
-            replace(
-                evaluation,
-                identity=replace(
-                    evaluation.identity,
-                    run_id=f"saved-eval-{index}",
-                    output_dir=str(tmp_path / f"saved-eval-{index}" / "results"),
-                ),
-            )
-            for index, evaluation in enumerate(batch.evaluations)
-        ),
-    )
     executed = []
 
     def execute(evaluation, _output_path):
@@ -313,6 +298,14 @@ def test_changed_runtime_creates_new_steps_and_preserves_partial_archive(tmp_pat
 
     monkeypatch.setattr(launch_module, "EVALUATION_EXECUTION_REVISION", "changed-execution")
     after = prepare_evaluation_batch(spec)
+    if cache_key is None:
+        # A previous launcher can stamp the new runtime onto a record under its old run ID.
+        stale = replace(
+            after.evaluations[1].identity, run_id=pending.identity.run_id, output_dir=pending.identity.output_dir
+        )
+        _record(after, stale, RunStatus.INFRA_FAILED, "startup interrupted", {}, {}, {})
+        resumed = prepare_evaluation_batch(spec)
+        assert resumed.evaluations[1].identity.run_id == after.evaluations[1].identity.run_id
     StepRunner().run(build_evaluation_steps(after, execute))
 
     assert after.group_id == before.group_id

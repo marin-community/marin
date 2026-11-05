@@ -585,7 +585,8 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             (
                 record
                 for record in records
-                if _same_evaluation(record.evaluation, evaluation.identity.eval_ref)
+                if record.run_id == evaluation.identity.run_id
+                and _same_evaluation(record.evaluation, evaluation.identity.eval_ref)
                 and record.provenance.eval_runtime == evaluation.identity.eval_runtime
             ),
             None,
