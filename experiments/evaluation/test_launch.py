@@ -291,8 +291,11 @@ def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, mon
     assert request.constraints[0].value.string_value == "cw-rno2a"
 
 
-def test_pipeline_changed_launch_tree_creates_new_steps_and_preserves_partial_archive(tmp_path, monkeypatch):
-    spec = _pipeline_spec(tmp_path)
+@pytest.mark.parametrize("cache_key", [None, "caller-owned-immutable-artifact"])
+def test_changed_runtime_creates_new_steps_and_preserves_partial_archive(tmp_path, monkeypatch, cache_key):
+    spec = replace(
+        _pipeline_spec(tmp_path), cache_key=cache_key, run_id="runtime-relaunch" if cache_key is None else None
+    )
     before = prepare_evaluation_batch(spec)
     executed = []
 
