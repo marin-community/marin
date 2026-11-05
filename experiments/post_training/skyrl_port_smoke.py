@@ -101,8 +101,7 @@ def build_smoke(version: str) -> Smoke:
             if callback["type"] == "evaluation":
                 callback["additional_evaluations"] = {}
                 callback["metric_groups"] = {}
-        authored = SkyRLRecipe.from_document(config)
-        recipe = authored
+        recipe = SkyRLRecipe.from_document(config)
         return skyrl_step(
             SkyRLSpec(
                 name=user_owned_name(f"checkpoints/skyrl-port-smoke/{name}"),

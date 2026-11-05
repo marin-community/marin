@@ -371,14 +371,19 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     for setting in settings:
         key = setting.partition("=")[0]
         if (
+            # Role counts and evaluation limits come from the launch inputs.
             key in ROLE_PLAN_SETTINGS | EVAL_DERIVED_SETTINGS
             or key
             in {
+                # This producer runs the local asynchronous entrypoint.
                 "entrypoint",
+                # The reference shares the policy placement.
                 "trainer.placement.colocate_policy_ref",
+                # Retried launches resume the latest checkpoint.
                 "trainer.resume_mode",
                 "generator.run_engines_locally",
             }
+            # Data paths and format come from the pool inputs.
             or key.startswith("data.")
         ):
             raise click.BadParameter(f"{key!r} is fixed by this launcher's run inputs")
