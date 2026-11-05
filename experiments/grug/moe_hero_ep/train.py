@@ -10,6 +10,7 @@ import itertools
 import logging
 import math
 import os
+import subprocess
 import time
 from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
@@ -593,6 +594,33 @@ def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
         hook(step, *args, **kwargs)
 
     return gated
+
+
+def _log_hbm_diag(label: str, step: int) -> None:
+    """DIAGNOSTIC ONLY: log allocator stats and NVML device memory at an eval/train boundary."""
+    stats = jax.local_devices()[0].memory_stats()
+    smi = subprocess.run(
+        ["nvidia-smi", "--query-gpu=index,memory.used,memory.free", "--format=csv,noheader,nounits"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout.replace("\n", ";")
+    logger.info("hbm_diag label=%s step=%d stats=%s nvml_used_free_mib=%s", label, step, stats, smi)
+
+
+def _hbm_diag_around(hook: Callable[..., None]) -> Callable[..., None]:
+    """DIAGNOSTIC ONLY: bracket an eval hook with `_log_hbm_diag`."""
+
+    @functools.wraps(hook)
+    def wrapped(step, *args, **kwargs):
+        step_count = int(step.step)
+        _log_hbm_diag("before_eval", step_count)
+        try:
+            hook(step, *args, **kwargs)
+        finally:
+            _log_hbm_diag("after_eval", step_count)
+
+    return wrapped
 
 
 def _collect_after_eval(hook: Callable[..., None]) -> Callable[..., None]:
@@ -1379,6 +1407,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
+        state_callbacks.add_hook(lambda step_info: _log_hbm_diag("after_step", int(step_info.step)), every=1)
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_hooks: list[Callable[..., None]] = []
@@ -1431,6 +1460,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
             if config.trainer.gc_interval is not None:
                 eval_hooks = [_collect_after_eval(hook) for hook in eval_hooks]
+
+            eval_hooks = [_hbm_diag_around(hook) for hook in eval_hooks]
 
             if interval is not None and interval > 0:
                 for hook in eval_hooks:
