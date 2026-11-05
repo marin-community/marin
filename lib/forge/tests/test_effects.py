@@ -110,15 +110,21 @@ async def test_check_awaits_only_declared_issue_kind() -> None:
 
 
 async def test_persistence_retries_and_failure_is_deferred_to_root_drain() -> None:
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
     transient = FlakySink(2)
-    log = EventLog(sink=transient)
+    log = EventLog(sink=transient, sleep=fake_sleep)
     await log.record(Note("durable"))
     assert [record.event for record in transient.records] == [Note("durable")]
-    ctx = Context(log=EventLog(sink=FlakySink(100)))
+    assert delays == [1, 2]
+    ctx = Context(log=EventLog(sink=FlakySink(100), sleep=fake_sleep))
     async with ctx.scope("work"):
         ctx.emit(Note("buffered"))
         await ctx.check(Hold)
-        with pytest.raises(Restart):
+        with pytest.raises(RuntimeError):
             await ctx.drain()
     with pytest.raises(ExceptionGroup) as caught:
         await ctx.drain()
@@ -235,3 +241,21 @@ async def test_scope_joins_effects_started_by_observers() -> None:
             ctx.emit(Note("start"))
     assert isinstance(caught.value.exceptions[0], Restart)
     await ctx.drain()
+
+
+async def test_failed_scope_exit_reaches_observers_without_masking_original_failure() -> None:
+    log = EventLog()
+    ctx = Context(log=log)
+    seen: list[ScopeExited] = []
+
+    async def exited(event: ScopeExited) -> None:
+        seen.append(event)
+        raise Hold("exit observer")
+
+    ctx.observe(ScopeExited, exited)
+    with pytest.raises(Restart, match="primary"):
+        async with ctx.scope("failed"):
+            raise Restart("primary")
+    await ctx.drain()
+    assert seen == [ScopeExited("failed", True)]
+    assert any(record.event == seen[0] for record in log.records)

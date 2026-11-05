@@ -3,13 +3,13 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import cast
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited
-from forge.effects.issues import Hold, LogFailure, Restart
+from forge.effects.issues import Hold, LogFailure
 from forge.effects.log import EventLog, Missing
 
 type Executor[E: Event[object], T] = Callable[..., Awaitable[T]]
@@ -36,19 +36,13 @@ class _Handler:
     uses: tuple[object, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class _Effect:
-    task: asyncio.Task[object]
-    consumed: asyncio.Event
-
-
 class _Scope:
     def __init__(self) -> None:
         self.handlers: tuple[_Handler, ...] = ()
         self.observers: tuple[_Observer, ...] = ()
         self.resources: tuple[tuple[object, Callable[[], Fingerprint]], ...] = ()
         self.pending: tuple[_Pending, ...] = ()
-        self.effects: tuple[_Effect, ...] = ()
+        self.effects: tuple[Handle[object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,20 +103,20 @@ class Context:
                     (fn for scope in reversed(chain) for obj, fn in reversed(scope.resources) if obj is resource), None
                 )
                 if fingerprint is None:
-                    raise Restart("Executor uses an unregistered resource")
+                    raise RuntimeError("Executor uses an unregistered resource")
                 fingerprints += (fingerprint(),)
         self._notify(event, chain)
         task = asyncio.create_task(self._execute(event, handler, fingerprints, chain))
-        consumed = asyncio.Event()
-        chain[-1].effects += (_Effect(task, consumed),)
-        return Handle(event, task, consumed)
+        handle = Handle(event, task, asyncio.Event())
+        chain[-1].effects += (cast(Handle[object], handle),)
+        return handle
 
     async def _execute[T](
         self, event: Event[T], handler: _Handler | None, fingerprints: tuple[Fingerprint, ...], chain: tuple[_Scope, ...]
     ) -> T:
         if handler is None:
             if event.result_type is not type(None):
-                raise Restart(f"No executor for {type(event).__qualname__}")
+                raise RuntimeError(f"No executor for {type(event).__qualname__}")
             return cast(T, None)
         value = self._log.lookup(event, fingerprints)
         replayed = not isinstance(value, Missing) and all(fp.replay == ReplayPolicy.CACHE for fp in fingerprints)
@@ -149,11 +143,11 @@ class Context:
     async def _settle(self, owner: _Scope) -> None:
         while effects := owner.effects:
             owner.effects = ()
-            results = await asyncio.gather(*(effect.task for effect in effects), return_exceptions=True)
+            results = await asyncio.gather(*(effect._task for effect in effects), return_exceptions=True)
             errors = tuple(
                 result
                 for effect, result in zip(effects, results, strict=True)
-                if isinstance(result, BaseException) and not effect.consumed.is_set()
+                if isinstance(result, BaseException) and not effect._consumed.is_set()
             )
             if errors:
                 raise BaseExceptionGroup("Unawaited effect failures", errors)
@@ -165,11 +159,8 @@ class Context:
             await self._settle(owner)
             await self._check(owner, types)
 
-    def scope(self, name: str) -> AbstractAsyncContextManager[None]:
-        return self._scope(name)
-
     @asynccontextmanager
-    async def _scope(self, name: str) -> AsyncIterator[None]:
+    async def scope(self, name: str) -> AsyncIterator[None]:
         owner = _Scope()
         chain = (*self._chain.get(), owner)
         token = self._chain.set(chain)
@@ -183,12 +174,12 @@ class Context:
             # Exceptional exits join owned work without inspecting observer issues.
             if failed:
                 for task in (
-                    *(effect.task for effect in owner.effects),
+                    *(effect._task for effect in owner.effects),
                     *(p.task for p in owner.pending if not issubclass(p.raises, self._defer)),
                 ):
                     task.cancel()
                 await asyncio.gather(
-                    *(effect.task for effect in owner.effects), *(p.task for p in owner.pending), return_exceptions=True
+                    *(effect._task for effect in owner.effects), *(p.task for p in owner.pending), return_exceptions=True
                 )
             self._notify(ScopeExited(name, failed), chain)
             remaining = tuple(p for p in owner.pending if not issubclass(p.raises, self._defer))
@@ -196,14 +187,18 @@ class Context:
                 if not failed:
                     await self._finish(owner)
                 else:
-                    for pending in remaining:
-                        pending.task.cancel()
-                    await asyncio.gather(*(p.task for p in remaining), return_exceptions=True)
+                    while remaining or owner.effects:
+                        effects, owner.effects = owner.effects, ()
+                        owner.pending = tuple(p for p in owner.pending if issubclass(p.raises, self._defer))
+                        await asyncio.gather(
+                            *(p.task for p in remaining), *(e._task for e in effects), return_exceptions=True
+                        )
+                        remaining = tuple(p for p in owner.pending if not issubclass(p.raises, self._defer))
             finally:
                 self._root.pending += tuple(p for p in owner.pending if issubclass(p.raises, self._defer))
                 self._chain.reset(token)
 
     async def drain(self) -> None:
         if self._chain.get() != (self._root,):
-            raise Restart("Drain is only valid outside active scopes")
+            raise RuntimeError("Drain is only valid outside active scopes")
         await self._finish(self._root, (BaseException,))
