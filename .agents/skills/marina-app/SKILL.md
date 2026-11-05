@@ -107,7 +107,9 @@ Maintained apps with `release_on_merge = true` in
 release after a push to `main` changes their source or declared `source_paths`.
 The workflow waits for the runtime rollout, runs the declared tests (including
 migration coverage where needed), validates with `--dry-run`, and publishes
-with the inspected base version. Set the policy flag to `false` for releases
+with the inspected base version. If `main` moves during validation, CI
+refreshes its checkout and repeats those checks. A live-version conflict stops
+the job. Set the policy flag to `false` for releases
 that need operator coordination; Snowball tree has its own nightly workflow.
 The daily drift workflow checks all maintained apps, including manual ones.
 

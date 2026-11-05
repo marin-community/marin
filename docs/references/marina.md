@@ -102,8 +102,10 @@ waits for any runtime rollout from the same push, then runs one release job per
 changed app. It includes declared `source_paths`, runs the policy's tests
 (including migration tests where the app has `migrate()`), validates with
 `marina release --dry-run`, and publishes from clean current `main` with
-`--base-version` set to the inspected live version. A conflict fails the job;
-inspect the selected revision before trying again.
+`--base-version` set to the inspected live version. If `main` advances
+during validation, CI refreshes its checkout and repeats the tests and dry-run.
+A live-version conflict fails the job; inspect the selected revision before
+trying again.
 
 The [daily drift check](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-app-release-drift.yaml)
 checks every maintained app, including manual ones, and reports commits absent

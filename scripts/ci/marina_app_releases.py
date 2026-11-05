@@ -5,13 +5,17 @@
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+MAX_MAIN_REFRESHES = 3
+STALE_MAIN_ERROR = "Releases require origin's current main commit by default"
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,10 @@ class AppPolicy:
     @property
     def path(self) -> str:
         return f"infra/marina/apps/{self.name}"
+
+
+class StaleMainError(Exception):
+    pass
 
 
 def policies(root: Path = ROOT) -> dict[str, AppPolicy]:
@@ -72,14 +80,16 @@ def git(*arguments: str, root: Path = ROOT) -> str:
 
 
 def marina(*arguments: str, root: Path = ROOT) -> dict:
-    output = subprocess.run(
+    result = subprocess.run(
         ["uv", "run", "--no-sync", "marina", *arguments, "--json"],
         cwd=root,
-        check=True,
         text=True,
-        stdout=subprocess.PIPE,
-    ).stdout
-    return json.loads(output)
+        capture_output=True,
+    )
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    result.check_returncode()
+    return json.loads(result.stdout)
 
 
 def write_record(path: Path, record: dict) -> None:
@@ -92,8 +102,44 @@ def safe_markers(root: Path) -> str:
     return arguments[arguments.index("-m") + 1]
 
 
+def refresh_main(root: Path) -> None:
+    """Refresh an ephemeral CI checkout after Marina rejects a stale main head."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise RuntimeError("Refusing to reset a checkout outside GitHub Actions")
+    if git("status", "--porcelain", "--untracked-files=all", root=root):
+        raise RuntimeError("Refusing to reset a modified checkout")
+    git("fetch", "origin", "main", root=root)
+    git("reset", "--hard", "FETCH_HEAD", root=root)
+    subprocess.run(
+        ["uv", "sync", "--locked", "--package", "marin-marina", "--group", "test", "--no-default-groups"],
+        cwd=root,
+        check=True,
+    )
+
+
 def release(policy: AppPolicy, record_path: Path, *, root: Path = ROOT) -> dict:
-    """Validate and publish once against the version observed before validation."""
+    """Validate current main and publish with one guarded attempt per source head."""
+    initial_version = None
+    for refresh_count in range(MAX_MAIN_REFRESHES + 1):
+        current_policy = policies(root)[policy.name] if refresh_count else policy
+        if not current_policy.release_on_merge:
+            result = {"app": policy.name, "action": "disabled_after_refresh"}
+            write_record(record_path, result)
+            return result
+        try:
+            return release_once(current_policy, record_path, initial_version=initial_version, root=root)
+        except StaleMainError:
+            if refresh_count == MAX_MAIN_REFRESHES:
+                raise
+            record = json.loads(record_path.read_text())
+            initial_version = record["before"]["version"]
+            record.update(action="refreshing_main", refresh_count=refresh_count + 1)
+            write_record(record_path, record)
+            refresh_main(root)
+    raise AssertionError("unreachable")
+
+
+def release_once(policy: AppPolicy, record_path: Path, *, initial_version: int | None, root: Path) -> dict:
     before = marina("release-status", policy.path, root=root)
     record = {"app": policy.name, "action": "inspected", "before": before}
     write_record(record_path, record)
@@ -102,6 +148,8 @@ def release(policy: AppPolicy, record_path: Path, *, root: Path = ROOT) -> dict:
         record["action"] = "unchanged"
         write_record(record_path, record)
         return record
+    if initial_version is not None and before["version"] != initial_version:
+        raise RuntimeError(f"{policy.name}: live version changed during source refresh; inspect before releasing")
     if state not in {"different", "unrecorded"}:
         raise RuntimeError(f"{policy.name}: refusing to release source in state {state!r}")
 
@@ -128,7 +176,12 @@ def release(policy: AppPolicy, record_path: Path, *, root: Path = ROOT) -> dict:
     )
     write_record(record_path, record)
 
-    published = marina("release", policy.path, "--base-version", str(before["version"]), root=root)
+    try:
+        published = marina("release", policy.path, "--base-version", str(before["version"]), root=root)
+    except subprocess.CalledProcessError as error:
+        if STALE_MAIN_ERROR in (error.stderr or ""):
+            raise StaleMainError(f"{policy.name}: source head moved during publication") from error
+        raise
     record.update(action="released", published=published, verification="pending")
     write_record(record_path, record)
     after = marina("release-status", policy.path, root=root)
