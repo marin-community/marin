@@ -88,7 +88,6 @@ def test_bucket_policies_deny_belay_everything_its_grants_do_not_cover() -> None
         for action in ("s3:GetObject", "s3:PutObject", "s3:DeleteObject"):
             assert denied(policy_for(path), action, object_arn(path))
     assert denied(policy_for(old_hero_object), "s3:ListBucket", "arn:aws:s3:::hero-checkpoints")
-    assert denied(policy_for(BELAY_BUCKET), "s3:PutBucketPolicy", f"arn:aws:s3:::{BELAY_BUCKET}")
     assert denied(policy_for(BELAY_BUCKET), "s3:DeleteObjectVersion", object_arn(f"{RUN}/x"))
 
 
@@ -96,7 +95,15 @@ def test_belay_organization_policy_denies_account_and_policy_management() -> Non
     statements = belay_policy_statements(coreweave_temp_bucket(load_cluster_config("coreweave")))
     (deny,) = [s for s in statements if s.effect == "Deny"]
     assert deny.resources == ["*"]
-    for action in ("cwobject:EnsureAccessPolicy", "cwobject:DeleteAccessPolicy", "cwobject:CreateAccessKey"):
+    # CoreWeave evaluates bucket-policy changes against organization policies only, so only this deny can stop Belay
+    # from rewriting a bucket policy to drop its bucket-level denies.
+    for action in (
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "cwobject:EnsureAccessPolicy",
+        "cwobject:DeleteAccessPolicy",
+        "cwobject:CreateAccessKey",
+    ):
         assert action in deny.actions
     granted = {a for s in statements if s.effect == "Allow" for a in s.actions}
     assert not granted & set(deny.actions)

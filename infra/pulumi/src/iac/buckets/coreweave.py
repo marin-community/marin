@@ -42,7 +42,8 @@ BELAY_LIST_ACTION = "s3:ListBucket"
 BELAY_OBJECT_ACTIONS = (BELAY_READ_ACTION, *BELAY_WRITE_ACTIONS)
 # Account and bucket management actions that the organization-wide `admin-use-bucket-go-fast` access policy (managed
 # in the console, not here) grants every principal. Bucket policies cannot deny the `cwobject:` control-plane actions
-# (access keys, organization access policies, audit logging), so the Belay organization policy denies them all.
+# (access keys, organization access policies, audit logging), and CoreWeave evaluates bucket-policy changes against
+# organization policies only, so the Belay organization policy denies them all.
 BELAY_DENIED_MANAGEMENT_ACTIONS = (
     "s3:CreateBucket",
     "s3:DeleteBucket",
