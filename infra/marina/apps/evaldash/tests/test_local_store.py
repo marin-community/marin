@@ -309,12 +309,18 @@ def test_api_compare_applies_the_selection_it_is_given(comparison_client):
     assert comparison["shared"] == ["mmlu"]
 
 
-def test_api_compare_rejects_mixed_cohorts_but_panel_can_browse_them(client):
+def test_api_compare_reuses_the_same_cross_cohort_scores_as_the_panel(client):
     response = client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "all"})
 
-    assert response.status_code == 400
+    assert response.status_code == 200
+    comparison = response.json()
     panel = client.get("/panel", params={"cohort": "all"}).json()
-    assert {cell["version"] for row in panel["rows"] for cell in row["cells"].values()} >= {"2026.07.20", "2026.07.21"}
+    panel_cells = {row["model"]: row["cells"] for row in panel["rows"]}
+    assert "mmlu" in comparison["shared"]
+    mmlu = next(row for row in comparison["rows"] if row["benchmark"] == "mmlu")
+    for model in ("snowball", "qwen3-8b"):
+        assert mmlu["cells"][model]["run_id"] == panel_cells[model]["mmlu"]["run_id"]
+    assert {cell["version"] for cell in mmlu["cells"].values()} == {"2026.07.20", "2026.07.21"}
 
 
 def test_api_compare_rejects_a_request_it_cannot_answer(client):

@@ -187,7 +187,7 @@ The evaluator names each task's primary metric, its canonical spelling, and whet
 are binary or continuous. A column's protocol comes from the newest record with evaluator metadata;
 a cell whose metric or kind differs is rejected rather than ranked against unlike numbers. Records
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
-their columns remain populated while benchmarks are rerun.
+their columns remain populated alongside native results.
 
 The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-24-verified`.
 The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
@@ -198,9 +198,10 @@ selections, with controls to remove one model or clear the set. Model names wrap
 comparison results, and model cards; config digests remain visible on a separate line.
 
 Historical cohort labels remain selectable. `cohort=all` selects the newest admissible run per
-benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
-it. The UI marks all-cohort and unverified historical views with an asterisk because their settings
-are not verified as comparable. A named verified cohort admits only records with its approved
+benchmark across cohorts for browsing and comparison. Comparisons use the same admitted cells as
+the panel, including historical/native metric normalization and protocol checks. The UI marks
+all-cohort and unverified historical views with an asterisk because their settings are not verified
+as comparable. A named verified cohort admits only records with its approved
 benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
 the selected cohort, including benchmark-specific serving overrides. Each run retains its source
 configuration and digest.

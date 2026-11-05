@@ -141,15 +141,14 @@ function clearFilters() {
 const selected = ref<string[]>([])
 
 function toggleModel(model: string) {
-  if (cohort.value === 'all') return
   const at = selected.value.indexOf(model)
   if (at >= 0) selected.value.splice(at, 1)
   else if (selected.value.length < MAX_COMPARE) selected.value.push(model)
 }
 function canSelect(model: string): boolean {
-  return cohort.value !== 'all' && (selected.value.includes(model) || selected.value.length < MAX_COMPARE)
+  return selected.value.includes(model) || selected.value.length < MAX_COMPARE
 }
-const comparing = computed(() => cohort.value !== 'all' && selected.value.length >= 2)
+const comparing = computed(() => selected.value.length >= 2)
 watch(selection, () => {
   selected.value = []
 })
@@ -471,7 +470,6 @@ function goToModel(model: string) {
         benchmarks. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
       <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
-      <p v-if="cohort === 'all'" class="text-xs text-status-warning mt-2">Choose one cohort to compare models.</p>
     </div>
 
     <!-- Fleet readout -->

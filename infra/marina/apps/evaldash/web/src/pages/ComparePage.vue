@@ -52,9 +52,8 @@ const { data, error, refresh } = useApi<Comparison>(() =>
 const { data: panel, loading: loadingModels, error: modelsError, refresh: refreshModels } = useApi<Panel>(() =>
   `api/panel?${selectionQuery.value}&include_archived=1`,
 )
-const mixedCohorts = computed(() => new URLSearchParams(selectionQuery.value).get('cohort') === 'all')
 const availableModels = computed(() =>
-  modelsError.value || mixedCohorts.value
+  modelsError.value
     ? []
     : (panel.value?.rows ?? [])
         .filter((row) => Object.values(row.cells).some((cell) => cell.value !== 0))
@@ -190,8 +189,7 @@ const chartSeries = computed(() =>
       <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted mb-2">
         Models ({{ selected.length }}/{{ MAX_COMPARE }})
       </div>
-      <p v-if="mixedCohorts" class="text-sm text-status-warning">Choose one cohort on the Panel before comparing models.</p>
-      <p v-else-if="loadingModels && !panel" class="text-sm text-text-muted">Loading models…</p>
+      <p v-if="loadingModels && !panel" class="text-sm text-text-muted">Loading models…</p>
       <p v-else-if="modelsError" class="text-sm text-status-danger">{{ modelsError }}</p>
       <p v-else-if="!availableModels.length" class="text-sm text-text-muted">No models have non-zero scores in this selection.</p>
       <template v-else>
