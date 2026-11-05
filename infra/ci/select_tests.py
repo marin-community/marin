@@ -61,6 +61,7 @@ class SourceRoot:
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
+    SourceRoot("lib/forge/src/forge", "lib/forge/src"),
     SourceRoot("lib/rolloutengine/src/rolloutengine", "lib/rolloutengine/src"),
     SourceRoot("lib/shellbox/src/shellbox", "lib/shellbox/src"),
     SourceRoot("lib/taskcompendium/src/taskcompendium", "lib/taskcompendium/src"),
