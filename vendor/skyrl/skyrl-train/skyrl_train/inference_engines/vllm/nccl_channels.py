@@ -16,10 +16,9 @@ import os
 from loguru import logger
 from vllm.model_executor.determinism import batch_invariant as vllm_batch_invariant
 
-from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
+from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV, NCCL_MAX_CHANNELS_ENV
 from skyrl_train.env_vars import ENGINE_NCCL_MAX_CHANNELS_ENV
 
-NCCL_MAX_CHANNELS_ENV = "NCCL_MAX_NCHANNELS"
 WEIGHT_SYNC_NCCL_CHANNELS = int(BATCH_INVARIANT_NCCL_ENV[NCCL_MAX_CHANNELS_ENV])
 
 

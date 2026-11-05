@@ -16,7 +16,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
+from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV, NCCL_MAX_CHANNELS_ENV
 from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.gpu.utils import get_available_gpus
 
@@ -33,7 +33,7 @@ def _unequal_counts(tokens: int, world_size: int) -> list[int]:
 
 def _check_reduce_scatters(rank: int, world_size: int, rendezvous: str) -> None:
     os.environ.update(BATCH_INVARIANT_NCCL_ENV)
-    os.environ["NCCL_MAX_NCHANNELS"] = str(ENGINE_CHANNELS)
+    os.environ[NCCL_MAX_CHANNELS_ENV] = str(ENGINE_CHANNELS)
     device = torch.device("cuda", rank)
     torch.cuda.set_device(device)
     dist.init_process_group("nccl", init_method=rendezvous, rank=rank, world_size=world_size, device_id=device)
