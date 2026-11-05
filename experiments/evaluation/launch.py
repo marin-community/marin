@@ -189,6 +189,16 @@ def _capability_origin(cluster: str) -> str:
     return config.dashboard_url
 
 
+def _is_catalogued_results_path(path: str) -> bool:
+    """Whether `path` is `<root>/<run_id>/results` under a prefix EvalDash scans for `record.json`."""
+    for root in POLICY_RECORDS_PREFIXES:
+        relative = path.rstrip("/").removeprefix(f"{root}/")
+        if relative != path.rstrip("/"):
+            run_id, _, leaf = relative.partition("/")
+            return bool(run_id) and leaf == "results"
+    return False
+
+
 def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
     """Resolve the configured TPU or CoreWeave records store.
 
@@ -391,6 +401,11 @@ def build_evaluation_batch(
             raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
         if "://" not in spec.resume_results_path:
             raise ValueError("--resume-results-path must be an object-store path")
+        if spec.policy_finalization is not None and not _is_catalogued_results_path(spec.resume_results_path):
+            raise ValueError(
+                f"policy --resume-results-path {spec.resume_results_path!r} is not a run's results directory "
+                f"that EvalDash catalogs; use <root>/<run_id>/results under one of {POLICY_RECORDS_PREFIXES}"
+            )
         validate_harbor_resume_root(spec.resume_results_path, definitions[0][1].executor.resume_identity)
     model_ref = ModelRef(
         name=model.name,
