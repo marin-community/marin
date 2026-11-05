@@ -1,6 +1,6 @@
 """Metric names shared by training and offline analysis."""
 
-from rolloutengine.models import TASK_TIMING_KEYS
+from rolloutengine.models import TASK_TIMING_KEYS as TASK_TIMING_KEYS
 
 ROLLOUT_FAILURE_FRACTION_METRIC = "generate/failed_trajectory_fraction"
 ENVIRONMENT_METRIC_PREFIX = "environment/"

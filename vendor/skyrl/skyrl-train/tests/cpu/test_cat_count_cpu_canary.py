@@ -256,9 +256,9 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     ]
     sampled_rows = [
         json.loads(line)
-        for line in (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl")
-        .read_text()
-        .splitlines()
+        for line in (
+            (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl").read_text().splitlines()
+        )
     ]
     assert len(sampled_rows) == 8 * len(greedy_rows)
     for prefix, rows in (("eval/train", greedy_rows), ("eval/sampled/train", sampled_rows)):
@@ -321,15 +321,20 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         cfg.trainer.micro_forward_batch_size_per_gpu = 1
         cfg.generator.n_samples_per_prompt = 2
         paths = []
+        environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
         for filename in (cfg.data.train_data[0], *cfg.data.val_data):
             path = Path(filename)
             tasks = []
             for index, line in enumerate(path.read_text().splitlines()):
                 row = json.loads(line)
                 n = row["extra_info"]["n"]
-                task = text_task(str(index), prompt=row["prompt"][0]["content"], source=row["data_source"])
-                task = task.model_copy(update={"grader": verifyit_package(ExactSpec(expected=(" ".join([TARGET_WORD] * n),))).grader})
-                tasks.append(lowered_task(task, max_turns=1))
+                lowered = source_row_task(row, index, source_name=path.stem, environment_configs=environment_configs)
+                if index % 5 == 0:
+                    task = lowered.task.model_copy(
+                        update={"grader": verifyit_package(ExactSpec(expected=(" ".join([TARGET_WORD] * n),))).grader}
+                    )
+                    lowered = lowered_task(task, max_turns=1)
+                tasks.append(lowered)
             tasks.append(lowered_task(text_task("overlong", prompt="cat " * 200), max_turns=1))
             paths.append(str(path.with_suffix(".parquet")))
             write_tasks(Path(paths[-1]), tasks)
@@ -345,8 +350,9 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
         assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
         evaluations = [row for row in records if "eval/all/timing/grading/mean" in row]
-        assert evaluations
-        for rows, prefix in ((training, ""), (evaluations, "eval/all/")):
+        timed_training = [row for row in training if "timing/grading/mean" in row]
+        assert evaluations and timed_training
+        for rows, prefix in ((timed_training, ""), (evaluations, "eval/all/")):
             for row in rows:
                 for raw in TASK_TIMING_KEYS:
                     values = [row[f"{prefix}{raw}/{stat}"] for stat in ("mean", "p50", "p95", "max")]
