@@ -199,7 +199,7 @@ The evaluator names each task's primary metric, its canonical spelling, and whet
 are binary or continuous. A column's protocol comes from the newest record with evaluator metadata;
 a cell whose metric or kind differs is rejected rather than ranked against unlike numbers. Records
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
-their columns remain populated while benchmarks are rerun.
+their columns remain populated alongside native results.
 
 The scored `/panel` and `/compare` APIs default to `cohort=all`, the newest admissible run per
 benchmark across cohorts. Results from that default may mix evaluation settings; callers that need
@@ -215,8 +215,10 @@ Historical cohort labels remain selectable. `cohort=unversioned` selects runs la
 version label (`version: null`); the selector lists it whenever such runs exist. `cohort=all`
 selects the newest admissible run per benchmark across cohorts. Panel and Compare accept it, so
 models whose newest runs sit in different cohorts can be compared, and each compared cell names its
-cohort and links its source run. The UI marks all-cohort and unverified historical views with an
-asterisk because their settings are not verified as comparable. A named verified cohort admits only records with its approved
+cohort and links its source run. Comparisons use the same admitted cells as the panel, including
+historical/native metric normalization and protocol checks. The UI marks
+all-cohort and unverified historical views with an asterisk because their settings are not verified
+as comparable. A named verified cohort admits only records with its approved
 benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
 the selected cohort, including benchmark-specific serving overrides. Each run retains its source
 configuration and digest.
