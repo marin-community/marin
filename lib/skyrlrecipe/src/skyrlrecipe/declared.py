@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, Field, PlainSerializer, PositiveInt
 
 from .model import FrozenMap, OpenMap, Section, SectionMap, field, thaw, unset_field
-from .sections import EvalSamplingParams
+from .sampling import EvalSamplingParams
 
 
 class TeacherModel(Section):
