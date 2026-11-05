@@ -557,11 +557,15 @@ def _compare(
     )
     for metric in metrics:
         row = _comparison(metric, values, reference_noise.get(metric.key), n_control, len(metrics))
-        if row.delta is None:
+        if row.delta is None and not baselines:
             raise InvalidComparison(f"missing or non-finite guard metric: {metric.key}")
-        if row.sd == 0:
+        if row.sd == 0 and not baselines:
             raise InvalidComparison(f"control variation is zero for guard metric: {metric.key}; use a number bound")
-        guards.append(GuardComparison(**row.model_dump(), passes=row.delta >= -row.tolerance, change=_change(row)))
+        guards.append(
+            GuardComparison(
+                **row.model_dump(), passes=row.delta is not None and row.delta >= -row.tolerance, change=_change(row)
+            )
+        )
     guard_keys = {metric.key for metric in metrics}
     declared = {metric.key: metric for metric in preset.reported if metric.key not in guard_keys}
     prefixes = tuple(evaluation.name + "/" for evaluation in preset.evaluations)
@@ -699,6 +703,7 @@ def _write_gate(
             raise InvalidComparison("mismatch guard has missing or zero selected-token counts")
         guards, declared, details = _compare(preset, runs, grouped, inputs.requirements)
         reported = [*declared, *details]
+        verdict, label, reason = _verdict(invariants, guards, declared)
         if baselines:
             baseline_guards, baseline_declared, baseline_details = _compare(
                 preset, runs, grouped, inputs.requirements, baselines=baselines
@@ -708,7 +713,6 @@ def _write_gate(
                 + baseline_declared
                 + baseline_details
             )
-        verdict, label, reason = _verdict(invariants, guards, declared)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
         reason = str(error)
     report = GateReport(
@@ -808,30 +812,30 @@ def gate_step(
     return _gate_artifact(name, preset, runs, inputs)
 
 
-def _recorded_params(path: str) -> dict:
+def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
     try:
         receipt = read_skyrl_launch_receipt(path)
     except SkyRLReceiptLookupError:
-        return {}
+        return None, GateInputs()
     argv = (receipt.result.provenance or {}).get("command_line", []) if receipt else []
     command = presets.run_command()(lambda **kwargs: ())
     command.params.append(click.Option(["--baseline", "baselines"], multiple=True))
     context = command.make_context(
         "snowball", list(argv), resilient_parsing=True, ignore_unknown_options=True, allow_extra_args=True
     )
-    return context.params
-
-
-def recorded_inputs(path: str) -> GateInputs:
-    params = _recorded_params(path)
+    params = context.params
     settings = tuple(map(presets.parse_setting, params.get("settings", ())))
-    return gate_inputs(
+    return params.get("preset_name"), gate_inputs(
         settings,
         params.get("tasks_name"),
         params.get("init_name"),
         params.get("requirements", ()),
         params.get("baselines", ()),
     )
+
+
+def recorded_inputs(path: str) -> GateInputs:
+    return _recorded_run(path)[1]
 
 
 def _baseline_runs(
@@ -849,9 +853,10 @@ def _baseline_runs(
             raise InvalidComparison(f"baseline overlaps a candidate: {reference}")
         if path in runs:
             continue
-        if _recorded_params(path).get("preset_name") != preset.name:
+        preset_name, recorded = _recorded_run(path)
+        if preset_name != preset.name:
             raise InvalidComparison(f"baseline is not a recorded {preset.name} run: {reference}")
-        inputs = replace(recorded_inputs(path), requirements=(), baselines=())
+        inputs = replace(recorded, requirements=(), baselines=())
         baseline = _load_run(path, preset, rates, inputs)
         if baseline.version != presets.PRESET_REVISION:
             raise InvalidComparison(f"baseline preset revision differs: {reference}")

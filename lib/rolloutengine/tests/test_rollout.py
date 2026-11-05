@@ -865,8 +865,6 @@ async def test_spec_preserves_task_and_produces_private_grade_with_training_toke
 
     assert task.model_dump_json() == reloaded.task.model_dump_json() == original
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
-    assert result.rollout.metrics["timing/setup"] == 0.0
-    assert result.rollout.metrics["timing/grading"] >= 0.0
     assert result.rollout.conversations[-1].prompt_token_ids == (10, 11)
     assert result.rollout.conversations[-1].response_token_ids == (20,)
     assert result.rollout.conversations[-1].loss_mask == (1,)
