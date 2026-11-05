@@ -35,7 +35,8 @@ change runs speed-medium, then learning-medium. A new task selection runs data-s
 data-medium. --require adds a condition of your own, such as a mismatch bound on a speed run or
 a per-category score on a learning run. Without --run the command prints the plan and the status
 block, including the verdict of a finished gated run; --run submits it. --wait polls every 60 s
-and prints the final status and report, exiting 0 for PASS, 1 for FAIL, 2 for INVALID, and 3 when no verdict exists.
+and prints the final status and report. It exits 0 for PASS or a finished ungated run,
+1 for FAIL, 2 for INVALID, and 3 when a required verdict is unavailable.
 --baseline NAME@VERSION adds a comparison with earlier finished runs; the verdict uses the
 pinned controls. Status includes each run's latest completed update and saved W&B URL.
 Set WANDB_ENTITY before submission to choose the W&B team; unset uses marin-community.
@@ -118,6 +119,7 @@ RUN_TIMEOUT_HOURS = 72
 
 
 DEFAULT_WANDB_ENTITY = "marin-community"
+_WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _FAILED_RUN_STATES = {"failed", "killed", "worker_failed", "unschedulable"}
 
 
@@ -457,7 +459,7 @@ def build_run(
         "evaluations": sorted(selected),
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
-    wandb_entity = os.environ.get("WANDB_ENTITY") or DEFAULT_WANDB_ENTITY
+    wandb_entity = os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY
     runs = []
     for replicate in range(replicates):
         name = presets.run_name(preset, provenance, inputs_hash, replicate, control=control)
@@ -486,6 +488,7 @@ def build_run(
 
 
 def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str]] | None, str | None]:
+    """Return source changes, or the reason git comparison is unavailable."""
     if not (presets.REPO_ROOT / ".git").exists():
         return None, "git metadata is unavailable on this host"
     try:
@@ -535,7 +538,7 @@ def _grafana_links(
 
 
 def _completed_update(path: str, *, generating: bool) -> int | None:
-    key = "generate/wall_seconds" if generating else "timing/step_wall/unaccounted"
+    key = presets.GENERATE_WALL_SECONDS_METRIC if generating else "timing/step_wall/unaccounted"
     for metric in reversed(scoring.paths(StoragePath(path) / "exports/metrics/step-*.json")):
         values = json.loads(presets.read_text(metric))
         if key in values and (generating or values.get("trainer/global_step") == values["step"]):
@@ -675,7 +678,10 @@ def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Pre
 
 def _run_command(function: Callable) -> click.Command:
     command = click.option(
-        "--wait", is_flag=True, help="Wait after --run; exit 0 for PASS, 1 for FAIL, 2 for INVALID, 3 without a verdict."
+        "--wait",
+        is_flag=True,
+        help="Wait after --run; exit 0 for PASS or a finished ungated run, "
+        "1 for FAIL, 2 for INVALID, 3 without a required verdict.",
     )(presets.run_command(help_text=__doc__)(function))
 
     @wraps(function)
@@ -690,7 +696,7 @@ def _run_command(function: Callable) -> click.Command:
                     handles,
                     max_concurrent,
                     os.environ,
-                    extra_env_vars=("WANDB_ENTITY",),
+                    extra_env_vars=(_WANDB_ENTITY_ENV,),
                 )
                 if wait and job is not None:
                     _wait_for_run(job, handles, presets.PRESETS[kwargs["preset_name"]])

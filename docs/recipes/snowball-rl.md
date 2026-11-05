@@ -16,7 +16,7 @@ launcher interface; Snowball steps use the fixed `PRESET_REVISION` instead.
 
 Add `--run --wait` to poll every 60 seconds and print the final status and report
 table. Its exit code is 0 for PASS or completed train-long/control collection,
-1 for FAIL, 2 for INVALID and 3 when submission, the coordinator or missing evidence prevents a verdict. Submission without `--wait` returns 0 when accepted.
+1 for FAIL, 2 for INVALID and 3 when submission, the coordinator or missing evidence prevents a verdict. Successful ungated runs also exit 0. Submission without `--wait` returns 0 when accepted.
 The status lists the latest completed update and the W&B URL when the tracker has
 saved one. Set `WANDB_ENTITY` before submission to choose the W&B team; an unset
 value uses `marin-community`. Runs use the `marin-snowball-rl` project. The team changes neither run identity nor pinned configuration. Grafana run and preset-panel links appear when the native job start time is available; active jobs link through the present time.
@@ -224,7 +224,7 @@ data-short. Each run forwards its required keys through Iris.
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
 | eval-uses-training-sampling | Panel answers use the training temperature because the engine applies `generator.sampling_params` to native requests. Separate evaluation sampling needs a new panel and new controls. |
-| no-async-speed-gate | Speed-long has no pinned controls until E13; collect controls before using its throughput verdict. |
+| no-async-speed-gate | Speed-long has no pinned controls; collect controls before using its throughput verdict. |
 | mismatch-is-agreement | agreement can miss shared errors; learning remains a separate check |
 
 Speed-short measures engines only. A speed claim also needs speed-medium, whose

@@ -532,6 +532,7 @@ def _compare(
     *,
     baselines: Sequence[RunData] = (),
 ) -> tuple[list[GuardComparison], list[ReportedComparison], list[ReportedComparison]]:
+    """Return guard comparisons, declared report rows and breakdown detail rows."""
     noise = calibrate({pin: [run.values for run in group] for pin, group in controls.items()})
     values = [run.values for run in runs]
     n_control = sum(map(len, controls.values()))
@@ -838,10 +839,6 @@ def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
     )
 
 
-def recorded_inputs(path: str) -> GateInputs:
-    return _recorded_run(path)[1]
-
-
 def _baseline_runs(
     references: tuple[str, ...],
     preset: presets.Preset,
@@ -932,7 +929,7 @@ def main(
     namespace = user_owned_name(
         f"{presets.RUN_PREFIX}/rescore/{preset_name}-{fingerprint_hash(canonical_json((source, pins, index)))}"
     )
-    recorded = recorded_inputs(source)
+    _, recorded = _recorded_run(source)
     inputs = replace(
         recorded,
         requirements=(*recorded.requirements, *requirements),
