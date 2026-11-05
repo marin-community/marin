@@ -517,9 +517,8 @@ impl NamespaceProvider {
     ///
     /// Segments partition the sequence space disjointly, so a `seq`-bounded
     /// predicate (a forwarder cursor read, a tail query) selects only the
-    /// segments whose range it overlaps — on an object-backed table that is
-    /// the difference between localizing a few tail objects and the whole
-    /// table.
+    /// segments whose range it overlaps. An object-backed scan opens only
+    /// the selected segments.
     pub fn with_segment_seq_bounds(mut self, bounds: BTreeMap<String, (i64, i64)>) -> Self {
         self.segment_seq_bounds = bounds;
         self
@@ -629,11 +628,6 @@ impl TableProvider for NamespaceProvider {
         }
         match &self.inner {
             Inner::Listing(t) => {
-                // Prune from the pinned table metadata BEFORE any object is
-                // touched. Planning costs nothing for segments the predicate
-                // excluded. Object-backed segments then split by cache state:
-                // cached files scan locally, the rest scan the remote directly
-                // while a background fill warms the cache for the next query.
                 let mut segment_paths = self.segment_paths_for_scan(filters, limit);
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
@@ -1206,11 +1200,10 @@ mod tests {
         );
     }
 
-    /// A `seq`-bounded predicate selects only the segments whose disjoint seq
-    /// ranges it overlaps — on an object-backed table everything else is never
-    /// localized. A segment without recorded bounds is always selected.
+    /// A `seq`-bounded predicate selects segments with overlapping ranges.
+    /// A segment without recorded bounds is always selected.
     #[tokio::test]
-    async fn a_seq_range_prunes_segments_before_localization() {
+    async fn a_seq_range_selects_overlapping_segments() {
         let schema = worker_arrow();
         let paths: Vec<String> = (0..3)
             .map(|i| format!("/planned/seg_{i}.parquet"))
@@ -2593,7 +2586,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cold_index_excludes_source_before_remote_parquet_planning() {
+    async fn cold_index_excludes_missing_source_before_open() {
         let dir = tempdir("cold_index_before_source");
         let path =
             write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["ordinary shutdown"]);
@@ -2651,8 +2644,7 @@ mod tests {
                 local_value: None,
             },
         };
-        // A missing remote source makes any attempt to plan it fail. Its index
-        // proves that this predicate needs none of its rows.
+        // The source is absent; its index must prune it before the opener reads it.
         let store = Arc::new(
             crate::store::object_store::CachedObjectStore::new(
                 remote.clone(),
