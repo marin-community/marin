@@ -273,7 +273,8 @@ only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-sca
 position-dependent factor on the global layers, in the form of Inkling's log scaling: a query that sees `n`
 keys in its document is multiplied by `1 + 0.1 * ln(max(n / log_scaling_n_floor, 1))`, so queries within
 the floor are unchanged. At the end of a 262K document, a floor of 65536 gives 1.139 and a floor of 128000
-gives 1.072. Each Harrier bucket skips the unread rest of the shuffle window
+gives 1.072. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
+Hero exports and upload, refuses this field instead of serving the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
 data seed, component order, and token store unchanged. The QK and capacity values need measured
 evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial

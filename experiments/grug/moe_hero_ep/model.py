@@ -502,6 +502,11 @@ class GrugModelConfig:
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
+        if self.log_scaling_n_floor is not None:
+            raise ValueError(
+                "log_scaling_n_floor is set, but the vLLM and SkyRL Grug models apply only a fixed query scale per "
+                "layer; this model would be served at the wrong temperature past the floor"
+            )
         # One name per field: core fields take the universal transformers spelling, MoE fields the
         # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
         # stays tolerant of the older spellings so existing artifacts keep loading.
