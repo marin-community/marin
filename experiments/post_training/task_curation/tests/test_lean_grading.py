@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Lean proof grader accepts only kernel-replayed proofs of the frozen statement, on Lean v4.34.1.
+"""The Lean proof grader accepts only kernel-replayed proofs of the frozen statement.
 
 See ``local_grader`` for building the ``LEAN_KERNEL_GRADER_IMAGE`` these tests run in.
 """

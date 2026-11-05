@@ -1,35 +1,35 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade a Lean proof of a frozen theorem statement on Lean v4.34.1, by kernel replay.
+"""Grade a Lean proof of a frozen theorem statement by kernel replay.
 
 ``/tests/config.json`` is the task's contract: the statement file's ``prefix`` (imports, ``open``s and
 helper declarations), the theorem ``statement`` through its final ``:=``, and the ``target`` theorem
 name. The reply's last ``lean4``/``lean`` code block (else its last code block, else the whole reply)
 is either a proof term or, when it declares the target theorem itself, a whole file after the imports.
 Both files below are named ``Task.lean``, so that private names agree. Each step runs as its own
-unprivileged user, chosen afresh for each grade, after the machine's world-writable directories and
-``/tests``, where a source may keep a reference proof hidden from the solver, are closed to those users;
-the three steps that write run in a directory only their user can write, and verification writes nothing:
+unprivileged Unix uid, chosen afresh for each grade, after the machine's world-writable directories and
+``/tests``, where a source may keep a reference proof hidden from the solver, are closed to those uids;
+the three steps that write run in a directory only their uid can write, and verification writes nothing:
 
-1. The reference user compiles the reference: the statement proved by ``sorry``, then a check, run by
+1. The reference step compiles the reference: the statement proved by ``sorry``, then a check, run by
    Lean, that the module declares the target as a theorem, that no declaration's statement uses
    ``sorry``, that only the target's proof does, and that the module declares no axiom
    (``native_decide`` declares one).
-2. The candidate user compiles the candidate: the statement followed by the proof term in parentheses, or
+2. The candidate step compiles the candidate: the statement followed by the proof term in parentheses, or
    the imports followed by the reply's file. Elaboration runs arbitrary code, including any commands
-   the reply contains, so everything this user writes is untrusted data; only the target, as replayed
+   the reply contains, so everything this uid writes is untrusted data; only the target, as replayed
    below, counts.
-3. The export user runs ``lean-export`` from Prime Intellect's checker, which turns the candidate's
+3. The export step runs ``lean-export`` from Prime Intellect's checker, which turns the candidate's
    object file into bounded JSON data.
-4. The verify user runs ``lean-verify``, which reads only that JSON and the reference object file, and
+4. The verify step runs ``lean-verify``, which reads only that JSON and the reference object file, and
    replays the target's dependency closure in the kernel against the reference's imports. The target
    scores 1 only if it is accepted in proving mode, with the reference's type and the reference's
    statement declarations unchanged, and its axioms are among ``propext``, ``Classical.choice`` and
    ``Quot.sound``.
 
 Root only orchestrates, and adopts the steps' orphaned processes so that it reaps them whatever the
-machine's init does. After each step every process of the step's user is killed and System V IPC
+machine's init does. After each step every process of the step's uid is killed and System V IPC
 objects are removed, before root copies the step's output, a regular file opened without following
 links; while a step runs, its directory's size and file count are checked, a soft bound that a hard
 storage limit on the grading machine would make strict. The reward on stdout is 0
@@ -75,16 +75,17 @@ OBJECT_FILE = "Task.olean"
 PROOF_DATA = "proof.json"
 """The file ``lean-export`` writes and ``lean-verify`` reads."""
 LEAN_VERSION = "4.34.1"
+"""The Lean release ``lean.Dockerfile`` installs (``LEAN_TOOLCHAIN``); each step's uid must run it."""
 LEAN_THREADS = "--threads=4"
-"""Bounds each compile's threads, which count against the step users' process limit."""
+"""Bounds each compile's threads, which count against the step uid's process limit."""
 
 FIRST_STEP_UID, STEP_UID_BLOCKS = 20000, 10000
-"""Each grade's four step users are a block of consecutive uids from 20000 up, chosen at random: process
-limits count every process of a user on the host, so fixed users would let one grade starve another. Two
+"""Each grade's four step uids are a block of consecutive uids from 20000 up, chosen at random: process
+limits count every process of a uid on the host, so fixed uids would let one grade starve another. Two
 grades on one host share a block with probability 1 in 10,000, which neither can see."""
 PR_SET_CHILD_SUBREAPER = 36
 SHARED_DIRECTORIES = ("/tmp", "/var/tmp", "/run/lock", "/dev/shm")
-"""The machine's world-writable directories, closed to the step users before any step runs."""
+"""The machine's world-writable directories, closed to the step uids before any step runs."""
 ALLOWED_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
 TARGET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_'.!?]*")
 """A target name that is safe to write into the reference check as a Lean string."""
@@ -109,7 +110,7 @@ MAX_REPLY = 1 << 20
 MAX_PROOF = 1 << 16
 """Longest proof graded, in bytes."""
 MAX_FILE = 1 << 28
-"""Largest file a step's user may write."""
+"""Largest file a step's uid may write."""
 MAX_STEP_BYTES = 1 << 29
 MAX_STEP_FILES = 2000
 """Bytes and directory entries a step may leave in its directory before it is stopped."""
@@ -117,7 +118,7 @@ MAX_OBJECT = 1 << 28
 MAX_PROOF_DATA = 1 << 27
 """Largest object file and exported proof data copied between steps, in bytes."""
 MAX_PROCESSES = 1024
-"""Processes and threads each step's user may run."""
+"""Processes and threads each step's uid may run."""
 OUTPUT_TAIL = 4000
 """Bytes of a step's output kept for diagnostics."""
 FENCE = re.compile(r"```[ \t]*(?P<language>[\w+-]*)[ \t]*\n(?P<code>.*?)```", re.DOTALL)
@@ -394,7 +395,7 @@ def has_lean_error(log: Path) -> bool:
 
 @dataclass(frozen=True)
 class StepUsers:
-    """The users the four steps run as, for one grade."""
+    """The uids the four steps run as, for one grade."""
 
     reference: int
     candidate: int
@@ -494,7 +495,7 @@ def copy_untrusted(source: Path, destination: Path, limit: int) -> bool:
 
 
 def check_users(steps: GraderSteps) -> None:
-    """Fail as the grader, not as the proof, when a step's user is in use or cannot run the toolchain."""
+    """Fail as the grader, not as the proof, when a step's uid is in use or cannot run the toolchain."""
     for uid in steps.users:
         if processes_of(uid):
             raise GraderFailure(f"user {uid} already runs processes")
@@ -572,7 +573,7 @@ def graded_block(reply: bytes) -> str:
 
 
 def compile_candidate(contract: Contract, block: str, steps: GraderSteps, shared: Path) -> Path:
-    """Compile the candidate as the candidate user; its object file, copied into ``shared``."""
+    """Compile the candidate as the candidate step's uid; its object file, copied into ``shared``."""
     candidate = make_step_dir("candidate", steps.users.candidate)
     (candidate / MODULE_FILE).write_text(candidate_source(contract, block))
     (candidate / MODULE_FILE).chmod(0o644)
@@ -590,7 +591,7 @@ def compile_candidate(contract: Contract, block: str, steps: GraderSteps, shared
 
 
 def export_candidate(candidate: Path, steps: GraderSteps, shared: Path) -> Path:
-    """Export the candidate's object file to proof data as the export user; the data, copied into ``shared``."""
+    """Export the candidate's object file to proof data as the export step's uid; the data, copied into ``shared``."""
     export = make_step_dir("export", steps.users.export)
     result = steps.run("export", steps.users.export, [str(EXPORT_BIN), str(candidate), str(export / PROOF_DATA)], export)
     if result.stopped == Stop.DEADLINE:
@@ -610,7 +611,7 @@ def export_candidate(candidate: Path, steps: GraderSteps, shared: Path) -> Path:
 
 
 def verify_candidate(contract: Contract, reference: Path, proof_data: Path, steps: GraderSteps) -> tuple[float, dict]:
-    """Replay the proof data against the reference as the verify user; the reward and ``lean-verify``'s verdict."""
+    """Replay the proof data against the reference as the verify step's uid; the reward and ``lean-verify``'s verdict."""
     shared = proof_data.parent
     (shared / "reference.olean").write_bytes(reference.read_bytes())
     (shared / "reference.olean").chmod(0o644)

@@ -38,8 +38,8 @@ from taskcompendium.runtime.task_grading import sandbox_grade
 
 LOCAL_GRADER_IMAGE = "local/task-curation-grader:test"
 LEAN_KERNEL_GRADER_IMAGE = "local/task-curation-lean-kernel:test"
-"""The Lean v4.34.1 grader image for ``LEAN_KERNEL_GRADER_PACKAGES``: build it as above with that environment and
-this tag. Its tests run in this image, since the shared local image has no Lean v4.34.1 toolchain."""
+"""The Lean grader image for ``LEAN_KERNEL_GRADER_PACKAGES``: build it as above with that environment and this tag.
+Its tests run in this image, since the shared local image lacks its toolchain."""
 
 
 @dataclass(frozen=True)

@@ -21,7 +21,7 @@ def machines() -> LocalGraderMachines:
 
 @pytest.fixture(scope="session")
 def lean_kernel_machines() -> LocalGraderMachines:
-    """Docker machines running the Lean v4.34.1 grader image; requesting tests skip without it."""
+    """Docker machines running the Lean grader image; requesting tests skip without it."""
     return local_grader_machines(LEAN_KERNEL_GRADER_IMAGE)
 
 

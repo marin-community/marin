@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lean theorem-proving sources, graded on Lean v4.34.1 by kernel replay (``lean_grade.py``).
+"""Lean theorem-proving sources, graded by kernel replay (``lean_grade.py``).
 
 Each task freezes a theorem statement. The solver sees the statement file with the proof left as
 ``sorry`` and replies with a proof term, or with the theorem restated and proved. The grader compiles
@@ -17,7 +17,7 @@ by Lean, is what establishes the contract on every grade.
 ProofNet-Verified is the audited ProofNet: undergraduate textbook exercises whose statements target Lean
 and Mathlib v4.34.0. At the pinned revision every contract validates with the grader's toolchain
 (``check_statements.py``) except two rows the converter leaves out: row 35 ships its proof in place of
-``sorry``, and row 351 states Rudin's exercise 4.8a again, as row 168 does. ProofNet-Verified's v4.34
+``sorry``, and row 351 states Rudin's exercise 4.8a again, as row 168 does. ProofNet-Verified's
 proofs are not public, so its tasks carry only the negative control, a ``sorry`` proof that passes
 through every grader step and must score zero. It is evaluation data.
 """

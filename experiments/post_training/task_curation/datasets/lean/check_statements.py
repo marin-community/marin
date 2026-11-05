@@ -5,15 +5,15 @@
 
 Each row is converted into the grader's contract and its reference, the statement proved by ``sorry``
 followed by the check ``lean_grade.py`` runs, is compiled with the given toolchain under the grader's
-reference timeout. Run it from a Marin checkout on a machine with Lean v4.34.1 and Mathlib v4.34.1, such
-as the toolchain the grader image installs, against the pinned ``proofnet-verified.jsonl``::
+reference timeout. Run it from a Marin checkout on a machine with the Lean and Mathlib the grader image
+installs, against the pinned ``proofnet-verified.jsonl``::
 
     uv run python -m experiments.post_training.task_curation.datasets.lean.check_statements \\
         proofnet-verified.jsonl --lean LEAN --lean-path LEAN_PATH --mathlib-commit COMMIT
 
 The first output line records what was checked; each further line is one row's result. It exits non-zero
-when a row other than the expected rejections fails. At the pinned revision, on Lean v4.34.1 with Mathlib
-``d13f23b``, all 365 converted contracts validate; rerun it when the revision or the toolchain moves.
+when a row other than the expected rejections fails. At the pinned revision, with the grader image's
+toolchain, all 365 converted contracts validate; rerun it when the revision or the toolchain moves.
 """
 
 import argparse

@@ -14,7 +14,7 @@ from experiments.post_training.task_curation.datasets.lean.proofs import sources
 
 PROOFNET = sources()[0].config
 PROOFS_FIXTURE = Path(__file__).parent / "fixtures/lean/proofnet_proofs.json"
-"""Rows copied from the pinned ProofNet-Verified payload, each with a proof checked on Lean v4.34.1."""
+"""Rows copied from the pinned ProofNet-Verified payload, each with a proof checked by the grader's toolchain."""
 
 
 def proofnet_row(**fields: Any) -> dict[str, Any]:

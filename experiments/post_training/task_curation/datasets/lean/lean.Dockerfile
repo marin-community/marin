@@ -1,11 +1,12 @@
-# Lean v4.34.1, Mathlib v4.34.1 and Prime Intellect's proof checker for the Lean proof grader
-# (lean_grade.py beside this file).
+# Lean, Mathlib and Prime Intellect's proof checker for the Lean proof grader (lean_grade.py beside
+# this file), at the toolchain LEAN_TOOLCHAIN pins; lean_grade.LEAN_VERSION must name the same release.
 #
-# Every download is pinned: elan by the SHA-256 of its release archive, Mathlib by commit (tag v4.34.1,
-# whose lean-toolchain is v4.34.1) with the prebuilt object files `lake exe cache get` fetches, and
-# the checker by commit: `lean-export` and `lean-verify` from PrimeIntellect-ai/prime-envs
-# (packages/lean_common/image/checker, Apache-2.0; its LICENSE is copied beside the build). Grading
-# runs `lean` directly with the LEAN_PATH recorded here, so it needs neither the network nor Lake.
+# Every download is pinned: elan by the SHA-256 of its release archive, Mathlib by commit (one whose
+# lean-toolchain is LEAN_TOOLCHAIN, which the build checks) with the prebuilt object files that
+# `lake exe cache get` fetches, and the checker by commit: `lean-export` and `lean-verify` from
+# PrimeIntellect-ai/prime-envs (packages/lean_common/image/checker, Apache-2.0; its LICENSE is copied
+# beside the build). Grading runs `lean` directly with the LEAN_PATH recorded here, so it needs neither
+# the network nor Lake.
 ARG ELAN_VERSION=4.2.4
 ARG ELAN_SHA256=42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
 ARG MATHLIB_COMMIT=d13f23b723b8a846827a245b89c10fc7d3f11612

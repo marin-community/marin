@@ -47,8 +47,8 @@ compiles proofs there through
 [`../datasets/nemotron_ultra/scorers/local_lean_sandbox.py`](../datasets/nemotron_ultra/scorers/local_lean_sandbox.py).
 
 `LEAN_KERNEL_GRADER_PACKAGES` adds the fragment
-[`../datasets/lean/lean.Dockerfile`](../datasets/lean/lean.Dockerfile), which installs elan, Lean v4.34.1, Mathlib
-v4.34.1 (commit `d13f23b`) with its prebuilt oleans under `/opt/lean/mathlib`, and Prime Intellect's `lean-export` and
+[`../datasets/lean/lean.Dockerfile`](../datasets/lean/lean.Dockerfile), which installs elan, Lean, Mathlib with its
+prebuilt oleans under `/opt/lean/mathlib`, and Prime Intellect's `lean-export` and
 `lean-verify` under `/opt/lean/verify`, each pinned by checksum or commit. The Lean proof grader
 [`../datasets/lean/lean_grade.py`](../datasets/lean/lean_grade.py) runs `lean` directly with the `LEAN_PATH` the
 build records, so grading needs neither the network nor Lake.
