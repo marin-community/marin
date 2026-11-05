@@ -9,7 +9,7 @@ from pathlib import Path
 from forge.effects.events import Fingerprint, ReplayPolicy, Resolved, Retrying, StageCompleted
 from forge.effects.log import EventLog, JsonlSink, Status, fold
 
-from .effect_fakes import Answer, Query, Timed
+from .effect_fakes import Answer, Choices, Query, Timed
 
 
 async def test_jsonl_reload_in_new_process_preserves_typed_results_and_replay_keys(tmp_path: Path) -> None:
@@ -58,3 +58,12 @@ async def test_replay_preserves_float_keys_after_numeric_coercion(tmp_path: Path
     await log.record(Resolved(Timed(5), (), 3))
     reloaded = EventLog(replay_from=await sink.read())
     assert reloaded.lookup(Timed(5.0), ()) == 3.0
+
+
+async def test_frozen_set_payloads_roundtrip_with_stable_replay_keys(tmp_path: Path) -> None:
+    sink = JsonlSink(str(tmp_path / "sets.jsonl"))
+    log = EventLog(sink=sink)
+    event = Choices(frozenset({"second", "first"}))
+    await log.record(Resolved(event, (), frozenset({"chosen"})))
+    resumed = EventLog(replay_from=await sink.read())
+    assert resumed.lookup(Choices(frozenset({"first", "second"})), ()) == frozenset({"chosen"})

@@ -66,6 +66,8 @@ def json_value(value: object) -> object:
         return json_value(value.model_dump(mode="python"))
     if isinstance(value, Mapping):
         return {MAPPING_TAG: {key: json_value(item) for key, item in value.items()}}
+    if isinstance(value, frozenset):
+        return sorted((json_value(item) for item in value), key=lambda item: json.dumps(item, sort_keys=True))
     if isinstance(value, (tuple, list)):
         return [json_value(item) for item in value]
     if isinstance(value, float) and value.is_integer():
