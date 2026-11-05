@@ -205,6 +205,10 @@ When a checkpoint pipeline itself runs on Iris, submit its parent with
 their isolated grader workers inherit this profile; Iris forbids a default task
 from elevating a child to it.
 
+Evaluation workers create their environment with the Iris task image's
+`/usr/local/bin/python3.12`. Shellbox requires its Linux namespace and pidfd APIs;
+some downloaded Python builds omit them.
+
 Pipeline retries reuse completed evaluations when their resolved settings match.
 Changes to the model, evaluator, judge, or evaluation configuration create new run directories;
 mutable `dev` versions always create new runs. Curated identities include source
@@ -216,7 +220,8 @@ To extend the catalog:
 - Add model YAML under `serve/models/<org>/<model>.yaml`; see the
   [model schema](serve/models/README.md).
 - Add pinned evaluation source recipes under `experiments/post_training/task_curation/datasets/`
-  and register source selections in `STANDARD_EVALS` in [evals.py](evals.py).
+  and menu declarations under [configs/curated](configs/curated/). Add standard
+  selections to `STANDARD_EVALS` in [evals.py](evals.py).
 - Add Harbor files under `configs/harbor/` and register them with
   `harbor_definition()`. Add keys to `SUITES` when they belong in a suite.
 

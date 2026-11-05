@@ -1,0 +1,5 @@
+name: triviaqa
+sources:
+- evalchemy-triviaqa
+chat_sources:
+- evalchemy-triviaqa-chat

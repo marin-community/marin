@@ -1,0 +1,5 @@
+name: drop
+sources:
+- evalchemy-drop
+chat_sources:
+- evalchemy-drop-chat

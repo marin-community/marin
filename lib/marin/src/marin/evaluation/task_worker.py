@@ -22,6 +22,8 @@ from verifyit.modes.grade_judge import JudgeConnection
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, run_evaluation
 
 DEFAULT_MAX_ATTEMPTS = 3
+# The Iris image's native build exposes the Linux namespace and pidfd APIs Shellbox requires.
+WORKER_PYTHON = "/usr/local/bin/python3.12"
 WORKER_TIMEOUT = 36 * 60 * 60
 SOLVER_ENDPOINT = "EVALUATION_SOLVER_ENDPOINT"
 SOLVER_API_KEY = "EVALUATION_SOLVER_API_KEY"

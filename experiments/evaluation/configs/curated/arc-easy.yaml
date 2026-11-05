@@ -1,0 +1,4 @@
+name: arc-easy
+sources:
+- evalchemy-arc_easy
+max_tokens: 256

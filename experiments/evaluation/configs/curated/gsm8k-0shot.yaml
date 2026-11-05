@@ -1,0 +1,6 @@
+name: gsm8k-0shot
+sources:
+- evalchemy-gsm8k-0shot
+family: gsm8k
+chat_sources:
+- evalchemy-gsm8k-0shot-chat

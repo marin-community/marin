@@ -1,0 +1,4 @@
+name: piqa
+sources:
+- evalchemy-piqa
+max_tokens: 256

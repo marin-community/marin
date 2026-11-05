@@ -1,0 +1,6 @@
+name: gsm8k-smoke
+sources:
+- evalchemy-gsm8k
+limit: 128
+chat_sources:
+- evalchemy-gsm8k-chat

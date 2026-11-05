@@ -1,0 +1,4 @@
+name: arc-challenge
+sources:
+- evalchemy-arc_challenge
+max_tokens: 256

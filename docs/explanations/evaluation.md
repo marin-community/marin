@@ -55,6 +55,10 @@ latest finished attempt per dataset, source row and trial, so retries do not inf
 scores or sample counts. Unfinished attempts and infrastructure failures contribute
 to missing coverage rather than incorrect answers.
 
+Policy answer-equivalence runs also use these coverage counts at finalization.
+They fail with `artifact_failed` when fewer than 90% of selected trials have valid
+scores. The judge is served and recorded under its own model identity.
+
 Protocols declare mean, weighted mean, classification or perplexity reductions.
 Grouped observations use the same reduction. MMLU subjects share a benchmark name
 and combine by item count, while subject summaries remain available. Dataset

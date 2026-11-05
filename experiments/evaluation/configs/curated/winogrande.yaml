@@ -1,0 +1,4 @@
+name: winogrande
+sources:
+- evalchemy-winogrande
+max_tokens: 256

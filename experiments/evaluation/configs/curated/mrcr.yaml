@@ -1,0 +1,5 @@
+name: mrcr
+sources:
+- evalchemy-mrcr
+max_tokens: 4096
+seed: 42
