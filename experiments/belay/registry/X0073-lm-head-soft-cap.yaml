@@ -4,7 +4,7 @@ name: lm_head tanh soft-cap
 category: Output head and loss
 summary: Cap output logits with c*tanh(z/c) before the loss; eval scores capped logits.
 source: agent
-status: done
+status: running
 first_batch: 32
 tags:
 - soft-cap
@@ -459,6 +459,18 @@ trials:
   steps: 3030
   baseline: belay-X0073-control 3.0447 (same commit, seed 0)
   step_time_change: +1%
+- id: t025
+  variant: lm_head tanh soft-cap 10
+  rung: competitive-d512
+  protocol: equal_steps
+  batch: X0073
+  date: '2026-11-05'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0073
+  wandb: []
+  settings:
+    logit_soft_cap: '10'
+  commit: 89f287ed4a
+  priority: batch
 events:
 - type: adopted
   batch: '35'
