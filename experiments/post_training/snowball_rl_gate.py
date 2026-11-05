@@ -131,10 +131,11 @@ def parse_requirement(text: str) -> Requirement:
 
 def check_requirements(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
     """Validate a candidate's control pin and user requirements before GPU submission."""
-    pins = _pins(preset.name) if not control and preset.focus != presets.Focus.TRAIN else ()
+    gated = preset.name in presets.PRESETS and preset.focus != presets.Focus.TRAIN
+    pins = _pins(preset.name) if not control and gated else ()
     if not requirements:
         return
-    if control or preset.focus == presets.Focus.TRAIN:
+    if control or not gated:
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
     rates_path = _pass_rates_path(preset)

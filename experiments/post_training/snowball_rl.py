@@ -61,7 +61,8 @@ import math
 import os
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from functools import wraps
@@ -69,7 +70,11 @@ from pathlib import Path
 
 import click
 import yaml
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.cli.connect import open_iris_client
+from iris.client.client import IrisClient
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import TERMINAL_JOB_STATES, JobState
 from iris.rpc import job_pb2
@@ -87,6 +92,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLLaunchReceipt,
     SkyRLModelSource,
     SkyRLPolicyModel,
     SkyRLReceiptLookupError,
@@ -489,6 +495,45 @@ def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str
     return [{"path": path, "status": status} for status, path in zip(fields[::2], fields[1::2], strict=True)], None
 
 
+@contextmanager
+def _iris_client() -> Iterator[IrisClient]:
+    info = get_job_info()
+    if info is not None and info.controller_address:
+        with IrisClient.in_cluster(info.controller_address) as client:
+            yield client
+    else:
+        with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=presets.REPO_ROOT) as client:
+            yield client
+
+
+def _grafana_links(preset: presets.Preset, receipt: SkyRLLaunchReceipt | None, cluster: str) -> dict[str, str]:
+    if receipt is None or not receipt.result.iris_job_id:
+        return {}
+    run_id = receipt.config.get("run", {}).get("id")
+    if not run_id:
+        return {}
+    try:
+        with _iris_client() as client:
+            job = client.job_status(JobName.from_wire(receipt.result.iris_job_id))
+    except ConnectError as error:
+        if error.code != Code.NOT_FOUND:
+            raise
+        return {}
+    if job.started_at is None or (job.state in TERMINAL_JOB_STATES and job.finished_at is None):
+        return {}
+    training_type = receipt.config.get("runtime", {}).get("training_type")
+    return presets.grafana_links(
+        preset,
+        run_id=run_id,
+        cluster=cluster,
+        training_type=(
+            "async" if training_type == "async" or (training_type is None and preset.recipe.staleness) else "sync"
+        ),
+        started_ms=job.started_at.epoch_ms(),
+        finished_ms=job.finished_at.epoch_ms() if job.finished_at is not None else None,
+    )
+
+
 def _completed_update(path: str, *, generating: bool) -> int | None:
     for metric in reversed(scoring.paths(StoragePath(path) / "exports/metrics/step-*.json")):
         try:
@@ -525,6 +570,7 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
             else {}
         )
         team = receipt.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
+        grafana = _grafana_links(preset, receipt, execution.cluster)
         state = (
             result.state
             if result
@@ -542,6 +588,7 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
                 "iris_job_id": result.iris_job_id if result else None,
                 "wandb_entity": team or "marin-community",
                 **tracking,
+                **({"grafana_links": grafana} if grafana else {}),
                 "latest_completed_update": _completed_update(
                     path, generating=preset.recipe.layout.role_plan.generate_only
                 ),
@@ -602,7 +649,7 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
 
 
 def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Preset) -> None:
-    with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=presets.REPO_ROOT) as client:
+    with _iris_client() as client:
         while (parent := client.job_status(job)).state not in TERMINAL_JOB_STATES:
             time.sleep(60)
     if parent.state != JobState.SUCCEEDED:

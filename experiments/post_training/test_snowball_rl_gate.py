@@ -12,6 +12,7 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlsplit
 
 import click
 import marin.rl.skyrl as adapter
@@ -20,6 +21,8 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
@@ -29,6 +32,7 @@ from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_typ
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
+from rigging.timing import Timestamp
 from scipy.stats import t
 from taskcompendium.grading_result import Outcome
 
@@ -762,7 +766,7 @@ REQUIREMENT = "policy/raw_grad_norm<=1"
 
 
 @pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])
-def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset):
+def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset, monkeypatch):
     controls(recorded_runs, preset)
     if preset == "learning-medium":
         (summary,) = inspect.unwrap(snowball_pass_rates.main.callback)()
@@ -862,6 +866,86 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     printed = status(preset, argv)
     assert printed["runs"][0]["wandb_url"] == "https://wandb.example/team/project/runs/actual-id"
     assert printed["runs"][0]["latest_completed_update"] == 25
+    receipt = json.loads((source / "terminal.json").read_text())
+    linked_receipt = receipt | {"config": {"run": {"id": "run / id?x=1&y=2"}, "runtime": {"training_type": "sync"}}}
+    _json(source / "terminal.json", linked_receipt)
+    started, finished = 1793840000000, 1793840060000
+    native_job = SimpleNamespace(
+        state=JobState.SUCCEEDED, started_at=Timestamp.from_ms(started), finished_at=Timestamp.from_ms(finished)
+    )
+    client = MagicMock(spec=IrisClient)
+    client.job_status.return_value = native_job
+    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    links = status(preset, argv)["runs"][0]["grafana_links"]
+    query = parse_qs(urlsplit(links["run"]).query)
+    assert query["var-run"] == ["run / id?x=1&y=2"]
+    assert query["from"] == [str(started)] and query["to"] == [str(finished)]
+    client.job_status.side_effect = ConnectError(Code.NOT_FOUND, "archived native job")
+    assert "grafana_links" not in status(preset, argv)["runs"][0]
+    client.job_status.side_effect = None
+    native_job.started_at = None
+    assert "grafana_links" not in status(preset, argv)["runs"][0]
+    _json(source / "terminal.json", receipt)
+    if preset == "learning-medium":
+        dashboard = json.loads((presets.REPO_ROOT / "infra/grafana/dashboards/rl_runs.json").read_text())
+        variables = {value["name"] for value in dashboard["templating"]["list"]}
+        titles, pending = {}, list(dashboard["panels"])
+        while pending:
+            panel = pending.pop()
+            titles[panel["id"]] = panel["title"]
+            pending.extend(panel.get("panels", []))
+        speed = {
+            3: "Generated and consumed response tokens / s",
+            102: "Rollout wait vs train step (critical path)",
+            121: "Step composition: exclusive seconds per span",
+            109: "vLLM token throughput",
+        }
+        learning = {22: "Training reward and informative groups", 23: "Evaluation scores", 24: "Optimizer loss and KL"}
+        for name, expected_panels in (
+            ("speed-short", speed),
+            ("speed-medium", speed | {54: "Trainer/vLLM logprob mismatch \u03c1 (staleness 0)"}),
+            ("speed-long", speed),
+            ("learning-medium", learning),
+            ("data-medium", learning),
+            ("train-long", {}),
+        ):
+            asynchronous = name in {"speed-long", "train-long"}
+            generated = presets.grafana_links(
+                presets.PRESETS[name],
+                run_id="run / id?x=1&y=2",
+                cluster="cw-us-east-02a",
+                training_type="async" if asynchronous else "sync",
+                started_ms=started,
+                finished_ms=None,
+            )
+            found = {}
+            for label, url in generated.items():
+                parsed = urlsplit(url)
+                assert (parsed.scheme, parsed.netloc, parsed.path) == (
+                    "https",
+                    "grafana.oa.dev",
+                    f"/d/{dashboard['uid']}/rl-post-training",
+                )
+                values = parse_qs(parsed.query)
+                panel_ids = values.pop("viewPanel", [])
+                assert values == {
+                    "orgId": ["1"],
+                    "timezone": ["utc"],
+                    "from": [str(started)],
+                    "to": ["now"],
+                    "var-training_type": ["async" if asynchronous else "sync"],
+                    "var-cluster": ["cw-us-east-02a"],
+                    "var-run": ["run / id?x=1&y=2"],
+                    "var-job": ["$__all"],
+                    "var-execution": ["$__all"],
+                }
+                assert {key.removeprefix("var-") for key in values if key.startswith("var-")} <= variables
+                if label == "run":
+                    assert not panel_ids
+                else:
+                    (panel_id,) = panel_ids
+                    found[int(panel_id)] = titles[int(panel_id)]
+            assert found == expected_panels
     for step in (26, 27, 28):
         (source / f"exports/metrics/step-{step:06d}.json").unlink()
     assert timers.keys() <= {row["key"] for row in printed["reported_metrics"]}

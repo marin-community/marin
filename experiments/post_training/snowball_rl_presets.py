@@ -12,7 +12,8 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Protocol
+from typing import Literal, Protocol
+from urllib.parse import urlencode
 
 import click
 import pyarrow as pa
@@ -65,6 +66,15 @@ MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
 DEFAULT_SELECTION_VERSION = "2026.11.04"
 JUDGE_KEY = "TOGETHER_API_KEY"
+GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
+GRAFANA_SPEED_PANELS = (
+    ("response_tokens", 3),
+    ("rollout_wait", 102),
+    ("step_composition", 121),
+    ("vllm_throughput", 109),
+)
+GRAFANA_LEARNING_PANELS = (("reward", 22), ("evaluation", 23), ("loss_and_kl", 24))
+GRAFANA_MISMATCH_PANEL = ("logprob_mismatch", 54)
 
 
 class Focus(StrEnum):
@@ -732,6 +742,43 @@ def default_selection() -> ArtifactStep[Artifact]:
 
 def cluster_config_path(cluster: str) -> str:
     return f"lib/iris/config/{cluster}.yaml"
+
+
+def grafana_links(
+    preset: Preset,
+    *,
+    run_id: str,
+    cluster: str,
+    training_type: Literal["sync", "async"],
+    started_ms: int | None,
+    finished_ms: int | None,
+) -> dict[str, str]:
+    """Build dashboard and preset-panel links for a native run with a known start time."""
+    if started_ms is None:
+        return {}
+    query = urlencode(
+        {
+            "orgId": 1,
+            "timezone": "utc",
+            "from": started_ms,
+            "to": finished_ms if finished_ms is not None else "now",
+            "var-training_type": training_type,
+            "var-cluster": cluster,
+            "var-run": run_id,
+            "var-job": "$__all",
+            "var-execution": "$__all",
+        },
+        safe="$",
+    )
+    url = f"{GRAFANA_URL}?{query}"
+    panels = (
+        GRAFANA_SPEED_PANELS
+        if preset.focus == Focus.SPEED
+        else GRAFANA_LEARNING_PANELS if preset.focus in (Focus.LEARNING, Focus.DATA) else ()
+    )
+    if preset.name == "speed-medium":
+        panels = (*panels, GRAFANA_MISMATCH_PANEL)
+    return {"run": url, **{name: f"{url}&viewPanel={panel}" for name, panel in panels}}
 
 
 def artifact_prefix(cluster: str) -> str:
