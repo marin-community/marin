@@ -22,7 +22,7 @@ from marin.inference.iris_vllm import (
     IrisGangCoordinator,
     iris_gang_coordinator,
 )
-from marin.inference.vllm_server import IsolatedTpuVllm
+from marin.inference.vllm_server import VllmLauncher
 
 logger = logging.getLogger(__name__)
 RAY_PORTS = ("ray-gcs", "ray-client", "ray-dashboard", "ray-dashboard-agent")
@@ -60,7 +60,7 @@ def _stop_owned_process(process: subprocess.Popen) -> None:
 
 @contextlib.contextmanager
 def tpu_ray_gang(
-    launcher: IsolatedTpuVllm, *, cpus_per_host: int, chips_per_host: int, timeout_seconds: float
+    launcher: VllmLauncher, *, cpus_per_host: int, chips_per_host: int, timeout_seconds: float
 ) -> Iterator[TpuRayGang]:
     """Own Ray processes on every allocated host until the caller exits.
 
@@ -102,6 +102,7 @@ def tpu_ray_gang(
         command = [
             *launcher.command()[:-1],
             "python",
+            "-P",  # Do not let sibling types.py shadow the standard library.
             str(Path(tpu_ray_runtime.__file__).resolve()),
             "--config",
             str(config_path),

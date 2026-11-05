@@ -1,7 +1,9 @@
+import asyncio
 import logging
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
+import harbor.environments.factory as environment_factory
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
@@ -37,7 +39,7 @@ class _QuickAgent(BaseAgent):
 class _DiagnosticLogFailureEnvironment(BaseEnvironment):
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -46,7 +48,9 @@ class _DiagnosticLogFailureEnvironment(BaseEnvironment):
     def _validate_definition(self) -> None:
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool) -> None:
@@ -133,9 +137,7 @@ def _scored_trial_config(tmp_path: Path) -> TrialConfig:
         trials_dir=trials_dir,
         agent=AgentConfig(import_path="tests.unit.test_trial_log_transfer:_QuickAgent"),
         environment=EnvironmentConfig(
-            import_path=(
-                "tests.unit.test_trial_log_transfer:_DiagnosticLogFailureEnvironment"
-            ),
+            type=EnvironmentType.LOCAL,
             delete=True,
         ),
         verifier=VerifierConfig(),
@@ -143,8 +145,13 @@ def _scored_trial_config(tmp_path: Path) -> TrialConfig:
 
 
 async def test_log_download_failure_does_not_block_scoring(
-    tmp_path: Path, caplog
+    tmp_path: Path, caplog, monkeypatch
 ) -> None:
+    monkeypatch.setattr(
+        environment_factory,
+        "_load_environment_class",
+        lambda _: _DiagnosticLogFailureEnvironment,
+    )
     trial = await Trial.create(_scored_trial_config(tmp_path))
 
     with caplog.at_level(logging.WARNING, logger=trial.logger.name):
