@@ -658,8 +658,8 @@ DECLINABLE_STATES = (IdeaState.PENDING, IdeaState.APPROVED)
 
 
 def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[str, str]:
-    """Close an idea without running it; refuses (writing nothing) an unknown idea or one already planned, running
-    or closed."""
+    """Close an idea without running it, dropping its unclaimed approval event; refuses (writing nothing) an unknown
+    idea or one already planned, running or closed."""
     rows = _rows(conn, "SELECT state FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
     if not rows:
         raise HTTPException(404, f"no idea {idea_id}")
@@ -668,6 +668,10 @@ def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[
     conn.execute(
         text("UPDATE ideas SET state = 'declined', note = :n, updated_at = now() WHERE id = :id"),
         {"n": f"Declined by {login}: {note or 'no reason given'}", "id": idea_id},
+    )
+    # An approved idea's queued approval must not reach a session after the decline.
+    conn.execute(
+        text("DELETE FROM events WHERE kind = 'approved' AND ref = :ref AND session_id IS NULL"), {"ref": str(idea_id)}
     )
     _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} declined idea #{idea_id}"))
     return {"state": IdeaState.DECLINED.value}
@@ -790,8 +794,8 @@ def note_overdue_runs(conn: Connection) -> int:
 
 
 def _record_reviewed_comment(conn: Connection, comment: IntakeReview) -> dict[str, Any]:
-    """Record a #9514 comment an approver reviewed as an intake idea, refusing one that changed since the page showed
-    it or that the registry already holds; returns its idea row."""
+    """Record a #9514 comment an approver reviewed as an intake idea, refusing one whose submitted body no longer
+    strips to the text the page showed, or that the registry already holds; returns its idea row."""
     if comment.url != f"{INTAKE_URL_PREFIX}{comment.comment_id}":
         raise HTTPException(422, f"{comment.url} is not #9514 comment {comment.comment_id}")
     if visible_text(comment.body)[0] != comment.shown:
@@ -825,6 +829,8 @@ def approve_intake_comment(conn: Connection, comment: IntakeApproval, login: str
 def decline_intake_comment(conn: Connection, comment: IntakeDecline, login: str) -> dict[str, Any]:
     """Decline a #9514 comment straight from the admin page, with the approver's reason; it is never queued."""
     idea = _record_reviewed_comment(conn, comment)
+    if idea["state"] != IdeaState.PENDING:
+        raise HTTPException(409, f"idea {idea['id']} is already {idea['state']}; Reload before deciding again")
     return {**decline_idea(conn, idea["id"], login, comment.note), "idea_id": idea["id"]}
 
 
