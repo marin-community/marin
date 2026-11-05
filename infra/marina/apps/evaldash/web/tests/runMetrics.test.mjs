@@ -52,68 +52,53 @@ function nupaRecord() {
     canonical_metrics: {
       nupa5k: { accuracy: 0, digit_match: 0.0030796088040486408, format_valid_rate: 0.0046 },
     },
+    // What the API resolves for a record that declares a benchmark protocol: the primary first, then
+    // the other declared metrics, all under their protocol names.
+    metric_rows: [
+      { task: 'NUPA5K-Loose', metric: 'accuracy', value: 0, declared: true },
+      { task: 'NUPA5K-Loose', metric: 'digit_match', value: 0.0030796088040486408, declared: true },
+      { task: 'NUPA5K-Loose', metric: 'format_valid_rate', value: 0.0046, declared: true },
+    ],
   }
 }
 
-test('the declared protocol metrics replace the raw bucket and per-task flood', () => {
+test('the declared rows lead the table while the raw map keeps its bucket and per-task keys', () => {
   const view = metricView(nupaRecord())
 
-  assert.deepEqual(view.declared, [
+  assert.deepEqual(view.rows, [
     { task: 'NUPA5K-Loose', metric: 'accuracy', value: 0 },
     { task: 'NUPA5K-Loose', metric: 'digit_match', value: 0.0030796088040486408 },
     { task: 'NUPA5K-Loose', metric: 'format_valid_rate', value: 0.0046 },
   ])
+  assert.equal(view.hasDeclared, true)
   // The raw map keeps its whole shape for the folded section: five base metrics, plus a bucket and a
   // per-task row for each of four buckets.
   assert.equal(view.raw.length, 5 + 2 * 4 * 5)
   assert.ok(view.raw.some((row) => row.metric === 'task:add_Integer_Integer/bucket:S/exact_match'))
 })
 
-test('a declared value falls back to the raw source metric when no canonical copy exists', () => {
+test('rows the API reports as undeclared are the whole top table and need no fold', () => {
   const record = nupaRecord()
-  record.canonical_metrics = {}
-
-  const view = metricView(record)
-
-  assert.deepEqual(view.declared, [
-    { task: 'NUPA5K-Loose', metric: 'accuracy', value: 0 },
-    { task: 'NUPA5K-Loose', metric: 'digit_match', value: 0.0030796088040486408 },
-    { task: 'NUPA5K-Loose', metric: 'format_valid_rate', value: 0.0046 },
-  ])
-})
-
-test('records without a declared benchmark keep the raw metric list', () => {
-  const record = nupaRecord()
-  record.eval.tasks = [{ name: 'legacy-task', num_fewshot: 5, benchmark: null }]
-
-  const view = metricView(record)
-
-  assert.deepEqual(view.declared, [])
-  assert.equal(view.raw.length, Object.keys(record.metrics.nupa5k).length)
-})
-
-test('multi-task records resolve each task by its benchmark name', () => {
-  const record = nupaRecord()
-  const benchmark = (task, primary) => ({
-    schema_version: 1,
-    task,
-    primary_metric: primary,
-    metric_kind: 'binary',
-    metrics: [{ name: primary, source_name: 'exact_match', kind: 'binary', higher_is_better: true }],
-    n_benchmark: 10,
-    n_attempted: 10,
-  })
-  record.eval.tasks = [
-    { name: 'alpha', num_fewshot: 0, benchmark: benchmark('alpha', 'accuracy') },
-    { name: 'beta', num_fewshot: 0, benchmark: benchmark('beta', 'accuracy') },
+  record.metric_rows = [
+    { task: 'legacy-task', metric: 'acc', value: 0.5, declared: false },
+    { task: 'legacy-task', metric: 'acc_norm', value: 0.4, declared: false },
   ]
-  record.metrics = { alpha: { exact_match: 0.5 }, beta: { exact_match: 0.25 } }
-  record.canonical_metrics = {}
 
   const view = metricView(record)
 
-  assert.deepEqual(view.declared, [
-    { task: 'alpha', metric: 'accuracy', value: 0.5 },
-    { task: 'beta', metric: 'accuracy', value: 0.25 },
+  assert.deepEqual(view.rows, [
+    { task: 'legacy-task', metric: 'acc', value: 0.5 },
+    { task: 'legacy-task', metric: 'acc_norm', value: 0.4 },
   ])
+  assert.equal(view.hasDeclared, false)
+})
+
+test('a record with no resolved rows falls back to the raw map', () => {
+  const record = nupaRecord()
+  record.metric_rows = []
+
+  const view = metricView(record)
+
+  assert.equal(view.rows.length, Object.keys(record.metrics.nupa5k).length)
+  assert.deepEqual(view.rows, view.raw)
 })

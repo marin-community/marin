@@ -32,12 +32,12 @@ onViewRefresh(refresh)
 
 // A benchmark's declared protocol metrics lead the table; a record that declares none keeps its
 // raw evaluator list.
-const metrics = computed(() => (data.value ? metricView(data.value) : { declared: [], raw: [] }))
-const metricRows = computed<MetricRow[]>(() =>
-  metrics.value.declared.length ? metrics.value.declared : metrics.value.raw,
+const metrics = computed(() =>
+  data.value ? metricView(data.value) : { rows: [], raw: [], hasDeclared: false },
 )
+const metricRows = computed<MetricRow[]>(() => metrics.value.rows)
 const rawRows = computed<MetricRow[]>(() => metrics.value.raw)
-const showRawMetrics = computed(() => metrics.value.declared.length > 0 && rawRows.value.length > 0)
+const showRawMetrics = computed(() => metrics.value.hasDeclared && rawRows.value.length > 0)
 
 const jobRoles = computed(() => Object.keys(data.value?.jobs ?? {}))
 
