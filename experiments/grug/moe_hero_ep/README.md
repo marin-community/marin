@@ -527,6 +527,19 @@ python -m experiments.grug.moe_hero_ep.launch_checkpoint_eval \
   --version <YYYY.MM.DD> --run
 ```
 
+#### Scoring merges of a run's final checkpoints
+
+`--merge <plan.json>` replaces `--checkpoint`. It scores raw checkpoints and in-memory weighted merges of them in one newest-first pass, reading each source's parameters once and writing no weights. `hero_merge_plan_stage1.json` is the plan for the hero's final checkpoints: a window is a uniform mean of its steps, and a candidate's `mix` weights windows. Each candidate logs under `eval_merge/<name>/seq_len_<N>/...`, and a raw source under the name `step-<N>`. Because the checkpoint steps fall during the pass, these metrics log at a pass index instead. `eval_merge/distance/<leaf>/...` holds each source's squared norm and distances from the newest source and the running mean. One pass cannot afford a full Gram matrix, because that needs every pair of sources in memory.
+
+The router bias needs a choice, because it is a per-batch estimate rather than a learned weight. `params.router_bias` is the bias the checkpoint's last step used, and training-time evals and a plain `--checkpoint` score that one. `pending_qb_betas` is the next batch's, one step fresher, and export and resume apply it. A candidate's bias mixes linearly with its weights unless its `bias` field names a `source` (`params` or `pending`) and its own `mix`. Merges need `--nodes 16`: a loaded source, the newest source, the running sum and the result are each about 33.5 GiB per GPU at 64 GPUs. Merge plans do not run MRCR yet.
+
+```bash
+python -m experiments.grug.moe_hero_ep.launch_checkpoint_eval \
+  --run-id hero-merge-4k-step390251 \
+  --merge experiments/grug/moe_hero_ep/hero_merge_plan_stage1.json \
+  --seq-len 4096 --version <YYYY.MM.DD> --run
+```
+
 ### Small-scale hero-shape ablations
 
 `small_scale_abl_launch.py` runs the hero shape — 384 experts / top-8, hidden/2-wide experts in a

@@ -1,0 +1,53 @@
+{
+  "checkpoint_root": "s3://marin-us-east-02a/marin/grug/hero-ctx65k-step372k/2026.08.19.2/checkpoints",
+  "qk_mult": 1.66,
+  "score_raw_steps": [
+    390000
+  ],
+  "windows": {
+    "T": [
+      390251
+    ],
+    "U2": [
+      390251,
+      390000
+    ],
+    "S384000": [
+      384000
+    ]
+  },
+  "candidates": [
+    {
+      "name": "raw",
+      "mix": {
+        "T": 1.0
+      }
+    },
+    {
+      "name": "raw+pending",
+      "mix": {
+        "T": 1.0
+      },
+      "bias": {
+        "source": "pending",
+        "mix": {
+          "T": 1.0
+        }
+      }
+    },
+    {
+      "name": "U2+reproject",
+      "mix": {
+        "U2": 1.0
+      },
+      "reproject_to_newest": true
+    },
+    {
+      "name": "W2",
+      "mix": {
+        "S384000": 0.25,
+        "T": 0.75
+      }
+    }
+  ]
+}

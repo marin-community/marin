@@ -10,13 +10,18 @@ Uncheatable once per eval length under the local dropless MoE backend. Each chec
 checkpoint's step, so one W&B run holds the whole sweep. Nothing is written to a checkpoint's tree. A text
 stream's final partial sequence is kept with masked right padding, since at long lengths most Paloma subsets
 are shorter than one sequence.
+
+With a merge plan, the job instead scores raw checkpoints and in-memory merges of them in one newest-first pass,
+under ``eval_merge/<name>/seq_len_<N>/...``. Merge metrics log at a pass index, since the checkpoint steps fall.
 """
 
 import dataclasses
 import functools
+import itertools
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import get_args
 
 import click
@@ -50,6 +55,16 @@ from experiments.datasets.mrcr import MRCR_CONTEXT_CAP, MRCR_DATASET_REVISION, m
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
+from experiments.grug.moe_hero_ep.checkpoint_merge import (
+    BiasSource,
+    MergePlan,
+    distance_stats,
+    merge_plan_from_json,
+    reproject_to_reference,
+    running_form,
+    weighted_sum,
+    with_mixed_bias,
+)
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_EP_NODES,
@@ -73,6 +88,7 @@ from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     _apply_hero_ep_runtime_defaults,
     _to_dropless_local,
+    _tree_to_memory_kind,
     build_tagged_evaluator,
     restore_template_from,
 )
@@ -81,6 +97,7 @@ from experiments.marin_tokenizer import marin_tokenizer
 logger = logging.getLogger(__name__)
 
 DROPLESS_EVAL_PREFIX = "eval_dropless"
+MERGE_EVAL_PREFIX = "eval_merge"
 HERO_EVAL_SEQ_LENS = (4096, 16384, 65536)
 CHECKPOINT_EVAL_MAX_RETRIES = 3
 
@@ -112,10 +129,14 @@ class CheckpointEvalConfig:
     compute_bpb: bool = True
     tensorstore_cache_bytes: int | None = None
     processes_per_task: int = 1
+    merge: MergePlan | None = None
+    """Score this plan's merges instead of ``checkpoints``."""
 
     def __post_init__(self):
-        if not self.checkpoints:
-            raise ValueError("checkpoints must not be empty")
+        if bool(self.checkpoints) == (self.merge is not None):
+            raise ValueError("Set exactly one of checkpoints and merge")
+        if self.merge is not None and self.mrcr is not None:
+            raise ValueError("A merge plan does not run MRCR yet; score the chosen merge's MRCR separately")
         if not (self.seq_lens or self.mrcr) or len(set(self.seq_lens)) != len(self.seq_lens):
             raise ValueError(f"seq_lens must be distinct and non-empty without MRCR, got {self.seq_lens}")
         for seq_len in self.seq_lens:
@@ -146,17 +167,36 @@ def eval_tokens_per_batch(*, nodes: int, context_axis_size: int, seq_lens: tuple
     return tokens
 
 
+def _params_template(model_config: GrugModelConfig, mp: jmp.Policy) -> Transformer:
+    params = jax.jit(lambda key: mp.cast_to_param(Transformer.init(model_config, key=key)))(jax.random.PRNGKey(0))
+    return restore_template_from(params)
+
+
+def _load_params(template: Transformer, checkpoint_path: str, *, mesh: Mesh) -> tuple[Transformer, int]:
+    exemplar = {"step": jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()), "params": template}
+    loaded = load_checkpoint(exemplar, checkpoint_path, axis_mapping=None, mesh=mesh)
+    return loaded["params"], int(loaded["step"])
+
+
 def load_checkpoint_params(
     model_config: GrugModelConfig, checkpoint_path: str, *, mesh: Mesh, mp: jmp.Policy
 ) -> tuple[Transformer, int]:
     """Read the checkpoint's parameters and step onto ``mesh``; every other leaf stays unread."""
-    params = jax.jit(lambda key: mp.cast_to_param(Transformer.init(model_config, key=key)))(jax.random.PRNGKey(0))
+    return _load_params(_params_template(model_config, mp), checkpoint_path, mesh=mesh)
+
+
+def load_router_biases(template: Transformer, checkpoint_path: str, *, mesh: Mesh) -> dict[BiasSource, jax.Array]:
+    """Read only the checkpoint's stored bias and its pending bias, in the bias's sign convention."""
+    bias = template.stacked_blocks.stacked.mlp.router_bias
     exemplar = {
-        "step": jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
-        "params": restore_template_from(params),
+        "params": {"stacked_blocks": {"stacked": {"mlp": {"router_bias": bias}}}},
+        "pending_qb_betas": bias,
     }
     loaded = load_checkpoint(exemplar, checkpoint_path, axis_mapping=None, mesh=mesh)
-    return loaded["params"], int(loaded["step"])
+    return {
+        BiasSource.PARAMS: loaded["params"]["stacked_blocks"]["stacked"]["mlp"]["router_bias"],
+        BiasSource.PENDING: -loaded["pending_qb_betas"],
+    }
 
 
 def _build_evaluators(config: CheckpointEvalConfig, mesh: Mesh) -> dict[int, TaggedEvaluator]:
@@ -205,7 +245,9 @@ def evaluate_checkpoints(config: CheckpointEvalConfig) -> list[tuple[int, dict[s
                 metrics.update(
                     evaluate_mrcr(
                         params,
-                        dataclasses.replace(config.mrcr, output_path=prefix_join(config.mrcr.output_path, f"step-{step}")),
+                        dataclasses.replace(
+                            config.mrcr, output_path=prefix_join(config.mrcr.output_path, f"step-{step}")
+                        ),
                         mesh=mesh,
                         mp=config.trainer.mp,
                         implementation=config.dropless_moe_implementation,
@@ -231,12 +273,118 @@ def evaluate_checkpoints(config: CheckpointEvalConfig) -> list[tuple[int, dict[s
     return results
 
 
+def evaluate_merge_plan(config: CheckpointEvalConfig) -> tuple[dict[str, dict[str, float]], dict[int, dict[str, float]]]:
+    """Return each scored name's metrics and each source step's distance stats.
+
+    One newest-first pass reads every source's parameters once. The newest source, the running sum and any
+    candidate's own accumulator stay in host memory, so at most three parameter copies are on a GPU at a time
+    and only the scored candidate during its eval.
+    """
+    plan = config.merge
+    if plan is None:
+        raise ValueError("evaluate_merge_plan needs a merge plan")
+    # As in `evaluate_checkpoints`: `expert` folded into `data`, as the training-time dropless eval does.
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1, context_axis_size=config.context_axis_size)
+    read_order = plan.source_steps()
+    forms = {candidate.name: running_form(candidate.weights, read_order) for candidate in plan.candidates}
+    last_running_index = max((f.last_index for f in forms.values() if f is not None and f.running), default=0)
+    last_indices = {
+        candidate.name: max(read_order.index(entry.step) for entry in candidate.weights) for candidate in plan.candidates
+    }
+    log_step = itertools.count()
+    scores: dict[str, dict[str, float]] = {}
+    overlaps: dict[int, dict[str, float]] = {}
+
+    # Under jit, as the train step moves its offloaded optimizer state; the helper needs the tracer's abstract mesh.
+    to_host = jax.jit(lambda tree: _tree_to_memory_kind(tree, "pinned_host"))
+    to_device = jax.jit(lambda tree: _tree_to_memory_kind(tree, "device"))
+
+    def path_of(step: int) -> str:
+        return prefix_join(plan.checkpoint_root, f"step-{step}")
+
+    def score(name: str, params: Transformer) -> None:
+        metrics: dict[str, float] = {}
+        for seq_len, evaluator in evaluators.items():
+            with jax_config.enable_pgle(False):
+                metrics.update(eval_model(evaluator, params, prefix=f"{MERGE_EVAL_PREFIX}/{name}/seq_len_{seq_len}"))
+        levanter.tracker.log(metrics, step=next(log_step))
+        scores[name] = metrics
+
+    with set_mesh(mesh):
+        evaluators = _build_evaluators(config, mesh)
+        template = _params_template(dataclasses.replace(config.model, qk_mult=plan.qk_mult), config.trainer.mp)
+        biases = {step: load_router_biases(template, path_of(step), mesh=mesh) for step in read_order}
+        newest: Transformer | None = None
+        running: Transformer | None = None
+        accumulators: dict[str, Transformer] = {}
+        for index, step in enumerate(read_order):
+            source, loaded_step = _load_params(template, path_of(step), mesh=mesh)
+            if loaded_step != step:
+                raise ValueError(f"{path_of(step)} holds step {loaded_step}")
+            logger.info("Loaded merge source %d of %d: step %d", index + 1, len(read_order), step)
+            if newest is None:
+                newest = running = to_host(source)
+            else:
+                newest_device = to_device(newest)
+                running_device = None if running is None else to_device(running)
+                overlaps[step] = distance_stats(source, newest_device, running_device, index)
+                levanter.tracker.log(
+                    {f"{MERGE_EVAL_PREFIX}/distance/{name}": value for name, value in overlaps[step].items()},
+                    step=next(log_step),
+                )
+                del newest_device
+                if running_device is not None:
+                    running = to_host(weighted_sum([(1.0, running_device), (1.0, source)]))
+                del running_device
+                for candidate in plan.candidates:
+                    weights = {entry.step: entry.weight for entry in candidate.weights}
+                    if forms[candidate.name] is not None or step not in weights:
+                        continue
+                    terms = [(weights[step], source)]
+                    if candidate.name in accumulators:
+                        terms.append((1.0, to_device(accumulators[candidate.name])))
+                    elif read_order[0] in weights:
+                        terms.append((weights[read_order[0]], to_device(newest)))
+                    accumulators[candidate.name] = to_host(weighted_sum(terms))
+                    del terms
+            if step in plan.score_raw_steps:
+                score(f"step-{step}", source)
+            del source
+            for candidate in plan.candidates:
+                if last_indices[candidate.name] != index:
+                    continue
+                form = forms[candidate.name]
+                if form is None:
+                    merged = to_device(accumulators.pop(candidate.name))
+                else:
+                    terms = []
+                    if form.newest:
+                        terms.append((form.newest, to_device(newest)))
+                    if form.running:
+                        terms.append((form.running, to_device(running)))
+                    merged = weighted_sum(terms)
+                    del terms
+                if candidate.reproject_to_newest:
+                    merged = reproject_to_reference(merged, to_device(newest))
+                if candidate.bias is not None:
+                    merged = with_mixed_bias(merged, candidate.bias, biases)
+                logger.info("Scoring merge candidate %s after step %d", candidate.name, step)
+                score(candidate.name, merged)
+                del merged
+            if index >= last_running_index:
+                running = None  # no later candidate reads it
+    return scores, overlaps
+
+
 def _evaluate_checkpoint_local(config: CheckpointEvalConfig) -> None:
     if config.tensorstore_cache_bytes is not None:
         set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
     config.trainer.initialize()
     levanter.tracker.log_configuration(config)
-    evaluate_checkpoints(config)
+    if config.merge is None:
+        evaluate_checkpoints(config)
+    else:
+        evaluate_merge_plan(config)
     levanter.tracker.current_tracker().finish()
 
 
@@ -267,6 +415,7 @@ def build_checkpoint_eval(
     run_id: str,
     checkpoints: tuple[EvalCheckpoint, ...],
     qk_mult_long_scale: float,
+    merge: MergePlan | None = None,
     log_scaling_n_floor: int | None = None,
     log_scaling_alpha: float = HERO_MODEL_CONFIG.log_scaling_alpha,
     seq_lens: tuple[int, ...] = HERO_EVAL_SEQ_LENS,
@@ -279,8 +428,8 @@ def build_checkpoint_eval(
 ) -> ArtifactStep[HeroThroughputResult]:
     """``nodes`` evaluating the hero's model from each of ``checkpoints`` at ``seq_lens`` and, optionally, on MRCR.
 
-    Only each checkpoint's ``qk_mult``, ``qk_mult_long_scale``, ``log_scaling_n_floor`` and ``log_scaling_alpha`` differ from the
-    hero's model. An eval batch holds a rack's 4,194,304 tokens at the full 16 nodes, and the same tokens per GPU
+    Only each checkpoint's ``qk_mult``, ``qk_mult_long_scale``, ``log_scaling_n_floor`` and ``log_scaling_alpha``
+    differ from the hero's model. An eval batch holds a rack's 4,194,304 tokens at the full 16 nodes, and the same tokens per GPU
     on fewer. Capacity
     does not enter the dropless eval.
     """
@@ -364,6 +513,7 @@ def build_checkpoint_eval(
             trainer=trainer,
             resources=ctx.runtime_arg("resources"),
             checkpoints=checkpoints,
+            merge=merge,
             seq_lens=seq_lens,
             eval_tokens_per_batch=tokens_per_batch,
             context_axis_size=context_axis_size,
@@ -390,8 +540,14 @@ def build_checkpoint_eval(
     "checkpoints",
     type=(str, click.FloatRange(min=0, min_open=True)),
     multiple=True,
-    required=True,
     help="A checkpoint directory (step-N) and its Q multiplier for all layers; repeat, in increasing step order.",
+)
+@click.option(
+    "--merge",
+    "merge_plan_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="A merge plan JSON, such as hero_merge_plan_stage1.json, to score instead of --checkpoint.",
 )
 @click.option(
     "--qk-mult-long-scale",
@@ -450,6 +606,7 @@ def build_checkpoint_eval(
 def main(
     run_id: str,
     checkpoints: tuple[tuple[str, float], ...],
+    merge_plan_path: str | None,
     qk_mult_long_scale: float,
     log_scaling_n_floor: int | None,
     log_scaling_alpha: float,
@@ -464,6 +621,7 @@ def main(
     return build_checkpoint_eval(
         run_id=run_id,
         checkpoints=tuple(EvalCheckpoint(path, qk_mult) for path, qk_mult in checkpoints),
+        merge=None if merge_plan_path is None else merge_plan_from_json(Path(merge_plan_path).read_text()),
         qk_mult_long_scale=qk_mult_long_scale,
         log_scaling_n_floor=log_scaling_n_floor,
         log_scaling_alpha=log_scaling_alpha,
