@@ -24,8 +24,13 @@ from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_presets as presets
 
 
-def _render(step, path):
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+def _render(step, path, *, runtime=False):
+    context = (
+        StepContext.for_run(str(path.with_suffix("")), str(path.parent), runtime_args=step.runtime_args, deps=step.deps)
+        if runtime
+        else StepContext.for_fingerprint(step.runtime_args, step.deps)
+    )
+    config = step.build_config(context)
     path.write_text(config.launch_config_yaml)
     return yaml.safe_load(config.launch_config_yaml)
 
@@ -43,7 +48,8 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
 
 
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
-def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path):
+def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_ENTITY", "test-team")
     paths = []
     launches = {}
     for name, preset in presets.PRESETS.items():
@@ -54,7 +60,7 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
             )
             for index, step in enumerate(run.runs):
                 path = tmp_path / f"{name}-{layout.name if layout else 'default'}-{index}.yaml"
-                document = _render(step, path)
+                document = _render(step, path, runtime=True)
                 paths.append(str(path))
                 if index == 0:
                     launches[name] = document
@@ -62,7 +68,7 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
         presets.PRESETS["train-long"], layout=presets.P40, settings=(presets.parse_setting("trainer.max_steps=2"),)
     ).runs[0]
     path = tmp_path / "off-boundary.yaml"
-    _render(off_boundary, path)
+    _render(off_boundary, path, runtime=True)
     paths.append(str(path))
     changed = snowball.build_run(
         presets.PRESETS["learning-medium"],
@@ -79,7 +85,7 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
         ),
     ).runs[0]
     path = tmp_path / "changed-batch.yaml"
-    _render(changed, path)
+    _render(changed, path, runtime=True)
     paths.append(str(path))
     rows = _native(
         """
@@ -99,6 +105,11 @@ print(json.dumps([{
     "training": config.runtime.training_type is not None,
     "callbacks": [entry.type for entry in config.skyrl.trainer.callbacks],
     "steps": config.skyrl.trainer.max_steps,
+    "team": config.iris.wandb_entity,
+    "staleness": config.skyrl.trainer.rollout_buffer.max_staleness_steps,
+    "correction": config.skyrl.trainer.algorithm.off_policy_correction,
+    "reply": config.skyrl.generator.sampling_params.max_generate_length,
+    "export_hf": config.run.export_hf,
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
@@ -108,6 +119,7 @@ print(json.dumps([{
     )
     assert len(rows) == len(paths)
     for row in rows:
+        assert row["team"] == "test-team"
         name = row["name"]
         if "speed-short-" in name or "data-short-" in name:
             assert row["entrypoint"] == "skyrl_train.entrypoints.main_generate", row
@@ -117,6 +129,15 @@ print(json.dumps([{
             assert row["admission"] == expected, row
         if "train-long-" in name:
             assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
+        if "speed-long-" in name:
+            assert (row["staleness"], row["correction"], row["batch"], row["samples"], row["reply"]) == (
+                2,
+                "tis",
+                128,
+                4,
+                8192,
+            )
+            assert not row["fixed"] and not row["validation"] and not row["callbacks"] and not row["export_hf"]
         if row["fixed"]:
             assert not row["overlong_filtering"], row
         if row["training"] and row["validation"]:
@@ -230,6 +251,15 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     assert first.runs[0].name == second.runs[0].name == name()
     assert first.gate.name != second.gate.name
     original_name = name()
+    monkeypatch.delenv("WANDB_ENTITY", raising=False)
+    assert (
+        next(
+            value for value in run().runtime_args.values() if isinstance(value, adapter.IrisSkyRLExecution)
+        ).wandb_entity
+        is None
+    )
+    monkeypatch.setenv("WANDB_ENTITY", "another-team")
+    assert name() == original_name
     monkeypatch.setattr(
         snowball, "_provenance", lambda **kwargs: Provenance("tree-two", "commit-one", False, "branch", "test")
     )

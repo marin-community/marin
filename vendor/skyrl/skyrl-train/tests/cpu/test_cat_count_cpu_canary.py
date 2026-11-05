@@ -344,6 +344,7 @@ def test_task_grading_timers_reach_training_and_evaluation(
 ):
     root = tmp_path / "task-timers"
     cfg = cat_count_config(root, cat_count_policy, steps=2)
+    cfg.trainer.epochs = 2
     tasks = [
         lowered_task(
             text_task(str(n), prompt=PROMPT.format(N=n), source="task-timers").model_copy(
