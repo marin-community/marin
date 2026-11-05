@@ -183,6 +183,11 @@ async def run_evaluations(
                 judges=judges,
                 predict_only=predict_only,
                 extraction_filters={name: grader.extraction_filters for name, grader in definitions.items()},
+                checkpoint_empty_tasks=frozenset(
+                    task for plan in plans
+                    if plan.benchmark is not None and plan.benchmark.EMPTY_RESPONSE_POLICY is EmptyResponsePolicy.SCORE
+                    for task in plan.task_names
+                ),
             )
             async with aclosing(engine.run(_interleave(plans))) as stream:
                 async for completed in stream:
@@ -228,10 +233,14 @@ async def run_evaluations(
             plan.errors.append(
                 SampleCoverageError(f"source declared {plan.expected_examples} examples but yielded {expected}")
             )
+        require_full = not predict_only and plan.benchmark is not None and plan.benchmark.REQUIRES_FULL_COVERAGE
         for manifest in manifests:
             try:
                 missing = manifest.expected_unit_count - manifest.generated_unit_count
-                explained_drops = dropped[manifest.task_name] and missing <= sum(dropped[manifest.task_name].values())
+                explained_drops = (
+                    not require_full and dropped[manifest.task_name]
+                    and missing <= sum(dropped[manifest.task_name].values())
+                )
                 if not explained_drops:
                     manifest.validate_generated()
                 if not predict_only:
@@ -264,8 +273,6 @@ async def run_evaluations(
                     FailureCategory.MALFORMED_MODEL_RESPONSE,
                 )
             )
-        if not predict_only and plan.benchmark is not None and plan.benchmark.REQUIRES_FULL_COVERAGE and score_count != expected:
-            plan.errors.append(SampleCoverageError(f"benchmark requires {expected} grades; received {score_count}"))
         document = None
         if not plan.errors and not predict_only:
             try:

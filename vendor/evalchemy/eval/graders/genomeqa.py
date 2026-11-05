@@ -4,7 +4,6 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-from eval.chat_benchmarks.GPQADiamond.testing_utils import get_multiple_choice_answer
 from eval.completion_response import CompletionContentPolicy, CompletionText
 from eval.contracts.eval_spec import EvalSpec, Grade
 from eval.graders.answer_extraction import final_response_text
@@ -49,8 +48,7 @@ def genomeqa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
             if candidate not in spec.grader.reference["options"]:
                 failure = "invalid_option"
             else:
-                # Feed only the validated candidate to the shared extractor, never analysis.
-                answer = get_multiple_choice_answer(f"Answer: {candidate}")
+                answer = candidate
     correct = float(failure is None and answer == spec.target)
     return Grade(
         {

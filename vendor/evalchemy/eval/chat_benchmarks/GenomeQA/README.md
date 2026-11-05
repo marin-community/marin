@@ -39,7 +39,8 @@ tagged groups emit `{subtask}/genomeqa_macro`, `{format}/genomeqa_macro`,
 continuous so it does not receive a pooled-binomial uncertainty interval.
 
 Both tasks require their complete population and reject arbitrary `--limit`
-subsets. Completed empty responses score zero. Any missing grade suppresses
+subsets. Completed empty responses score zero and remain checkpointed on resume;
+transport failures remain retryable. Any missing grade suppresses
 aggregate publication; the shared runtime retains individual samples and failure
 counts for inspection and resume. The small runtime policy opt-ins preserve the
 default behavior of other benchmarks.

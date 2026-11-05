@@ -458,3 +458,51 @@ def test_transport_drop_cannot_publish_a_full_population_score(require_full):
     assert recovered["task_outcomes"]["task"]["status"] is TaskStatus.SUCCEEDED
     assert recovered["task_outcomes"]["task"]["scored_count"] == 2
     assert recovered["results"]["task"]["num_solved"] == 2
+
+
+@pytest.mark.parametrize("allow_empty", [False, True])
+def test_resume_preserves_scored_empty_answer_while_retrying_transport(allow_empty):
+    class Source(BaseBenchmark):
+        METRICS = ("accuracy",)
+        EMPTY_RESPONSE_POLICY = EmptyResponsePolicy.SCORE if allow_empty else EmptyResponsePolicy.FAIL_TASK
+        REQUIRES_FULL_COVERAGE = True
+
+        def iter_specs(self, options):
+            return iter(())
+
+    def task():
+        return replace(plan(items=[spec(ordinal=0), spec(ordinal=1)]), benchmark=Source())
+
+    empty = CompletionText("", completion_response_from_chat_choice(
+        {}, {"message": {"content": ""}, "finish_reason": "stop"},
+    ), CompletionContentPolicy.FINAL_ONLY)
+    checkpoints = {"task": MemoryCheckpoints()}
+    interrupted = run([empty, FailedGeneration("model_transport")], [task()], checkpoints=checkpoints)
+    assert interrupted["task_outcomes"]["task"]["status"] is TaskStatus.FAILED
+    assert interrupted["task_outcomes"]["task"]["scored_count"] == 1
+    assert interrupted["results"] == {}
+
+    # A scoring task may retry only the transport failure; other tasks still retry empty generations.
+    recovered = run(["yes"] if allow_empty else ["yes", "yes"], [task()], checkpoints=checkpoints)
+    assert recovered["task_outcomes"]["task"]["status"] is TaskStatus.SUCCEEDED
+    assert recovered["results"]["task"]["accuracy"] == (0.5 if allow_empty else 1.0)
+    assert recovered["results"]["task"]["num_solved"] == (1 if allow_empty else 2)
+    by_source = {sample["source_id"]: sample for sample in recovered["samples"]["task"]}
+    assert by_source["0"]["resps"] == ([[""]] if allow_empty else [["yes"]])
+    assert by_source["1"]["resps"] == [["yes"]]
+
+
+def test_full_coverage_policy_preserves_predict_only_transport_exports():
+    class Source(BaseBenchmark):
+        METRICS = ("accuracy",)
+        REQUIRES_FULL_COVERAGE = True
+
+        def iter_specs(self, options):
+            return iter(())
+
+    task = replace(plan(items=[spec(ordinal=0), spec(ordinal=1)]), benchmark=Source())
+    result = run(["yes", FailedGeneration("model_transport")], [task], predict_only=True)
+    outcome = result["task_outcomes"]["task"]
+    assert outcome["status"] is TaskStatus.EXPORTED
+    assert (outcome["expected_count"], outcome["generated_count"], outcome["scored_count"]) == (2, 1, None)
+    assert result["results"] == {}

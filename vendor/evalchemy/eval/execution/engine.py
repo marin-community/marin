@@ -103,12 +103,14 @@ class Evaluator:
         judges: Mapping[str, ModelBackend] | None = None,
         predict_only: bool = False,
         extraction_filters: Mapping[str, tuple[str, ...]] | None = None,
+        checkpoint_empty_tasks: frozenset[str] = frozenset(),
     ):
         self.model = model
         self.grade = grade
         self.judges = judges or {}
         self.predict_only = predict_only
         self.extraction_filters = extraction_filters or {}
+        self.checkpoint_empty_tasks = checkpoint_empty_tasks
         self.sink = sink
         self.pool = ExecutionPool(workers)
         self.io = SerialIO()
@@ -126,7 +128,7 @@ class Evaluator:
                 io=self.io,
                 successful=lambda value: not isinstance(value, FailedGeneration) and not (
                     isinstance(value, CompletionText) and value.response.classification is CompletionClassification.EMPTY
-                    and phase is not FailurePhase.GRADING
+                    and phase is not FailurePhase.GRADING and spec.task not in self.checkpoint_empty_tasks
                 ),
             )
         except ItemFailure:
