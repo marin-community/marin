@@ -57,11 +57,7 @@ from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import Terminal, derive_state
 from verifyit.spec import StructuredExactSpec
 
-from experiments.post_training.capability_driven_envs.biotasks_library.pilot_first3 import (
-    BioTaskIdea,
-    ideas,
-    task_spec,
-)
+from experiments.post_training.capability_driven_envs.biotasks_library.pilot_first3 import BioTaskIdea, task_spec
 
 SAMPLING = LLMPolicy()
 
@@ -69,7 +65,7 @@ SAMPLING = LLMPolicy()
 class ObjectiveBuildInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    idea_id: str
+    idea: BioTaskIdea
 
 
 class UnusedFactory:
@@ -101,10 +97,7 @@ class UnusedModel:
 async def objective_task(context: RLEnvBuildContext, build_input: object) -> TaskSpec:
     del context
     hydrated = ObjectiveBuildInput.model_validate(build_input)
-    matches = [idea for idea in ideas() if idea.idea_id == hydrated.idea_id]
-    if len(matches) != 1:
-        raise ValueError(f"idea identity {hydrated.idea_id!r} matched {len(matches)} ideas")
-    return task_spec(matches[0])
+    return task_spec(hydrated.idea)
 
 
 PROGRAM = rl_env_build_program(sink=objective_task)
@@ -230,7 +223,7 @@ def coordinator(root: Path, idea: BioTaskIdea) -> StageCoordinator:
         services=SERVICES,
         research=ResearchRequirement.OFF,
         model_digest=build_model_digest(model, SAMPLING, SERVICES),
-        build_input=ObjectiveBuildInput(idea_id=idea.idea_id).model_dump(mode="json"),
+        build_input=ObjectiveBuildInput(idea=idea).model_dump(mode="json"),
     )
 
 

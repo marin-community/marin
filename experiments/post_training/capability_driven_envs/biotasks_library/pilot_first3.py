@@ -375,10 +375,10 @@ def task_spec(idea: BioTaskIdea) -> TaskSpec:
         answer_format=JsonValueAnswer(),
         grader=package.grader,
         source=Source(
-            dataset="biotasks-reviewed57-first3",
+            dataset="biotasks-notebooks",
             revision=idea.source_sha256,
             row=idea.idea_id,
-            importer_revision=GENERATOR_REVISION,
+            importer_revision=idea.generator_revision,
         ),
         resources=ResourceGroups(
             worker=tuple(_inline_resource(resource) for resource in idea.resources),
