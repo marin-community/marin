@@ -9,6 +9,7 @@ imports the module its target came from, so the scenarios live on the installed 
 any interpreter can import them regardless of its working directory.
 """
 
+import contextlib
 import multiprocessing
 import os
 import socket
@@ -25,11 +26,11 @@ from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
+from levanter import tensorstore_serialization
 from levanter.tensorstore_serialization import (
     ReplicaRestoreMode,
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
-    _file_io_locking,
     _replica_staging_sharding,
     _shard_write_region,
     plan_array_write,
@@ -42,6 +43,8 @@ DISTRIBUTED_PROCESS_COUNT = 2
 DISTRIBUTED_ARRAY_SIZE = 4096
 _CHUNK_READ_METRIC = "/tensorstore/cache/chunk_cache/reads"
 _LOOPBACK_ADDRESS = "127.0.0.1"
+# Spawned children reach the loopback coordinator directly, not through a proxy.
+_PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 _PINNED_HOST_MEMORY_KIND = "pinned_host"
 # Small enough that every array is worth splitting, so these exercise the split path.
 SPLIT_CONFIG = TensorStoreWriteConfig(min_replica_slice_bytes=1, max_chunk_bytes=4096)
@@ -72,8 +75,9 @@ class _DistributedRestoreResult:
     tensorstore_chunk_reads: int
 
 
-def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str) -> _DistributedRestoreResult:
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+@contextlib.contextmanager
+def _distributed_process(process_id: int, coordinator: str):
+    for name in _PROXY_ENV_VARS:
         os.environ.pop(name, None)
     jax.distributed.initialize(
         coordinator_address=coordinator,
@@ -82,6 +86,31 @@ def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str
         local_device_ids=[process_id],
     )
     try:
+        yield
+    finally:
+        jax.distributed.shutdown()
+
+
+def _run_on_distributed_processes(scenario, *args) -> list:
+    """Run ``scenario(process_id, coordinator, *args)`` in one spawned one-CPU-device process per rank."""
+    with socket.socket() as listener:
+        listener.bind((_LOOPBACK_ADDRESS, 0))
+        port = listener.getsockname()[1]
+    coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
+
+    with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
+        with ProcessPoolExecutor(
+            max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
+        ) as pool:
+            futures = [
+                pool.submit(scenario, process_id, coordinator, *args)
+                for process_id in range(DISTRIBUTED_PROCESS_COUNT)
+            ]
+            return [future.result() for future in futures]
+
+
+def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str) -> _DistributedRestoreResult:
+    with _distributed_process(process_id, coordinator):
         mesh = Mesh(np.array(jax.devices()), ("replica",))
         sharding = NamedSharding(mesh, P())
         pinned = sharding.with_memory_kind(_PINNED_HOST_MEMORY_KIND)
@@ -102,8 +131,6 @@ def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str
                 memory_kinds=frozenset(array.sharding.memory_kind for array in restored.values()),
                 tensorstore_chunk_reads=after - before,
             )
-    finally:
-        jax.distributed.shutdown()
 
 
 def replica_aware_restore_across_processes() -> None:
@@ -113,20 +140,7 @@ def replica_aware_restore_across_processes() -> None:
             "c": np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32) + 1,
         }
         tree_serialize_leaves_tensorstore(tmpdir, expected)
-        with socket.socket() as listener:
-            listener.bind((_LOOPBACK_ADDRESS, 0))
-            port = listener.getsockname()[1]
-        coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
-
-        with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
-            with ProcessPoolExecutor(
-                max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
-            ) as pool:
-                futures = [
-                    pool.submit(_distributed_restore, process_id, coordinator, tmpdir)
-                    for process_id in range(DISTRIBUTED_PROCESS_COUNT)
-                ]
-                results = [future.result() for future in futures]
+        results = _run_on_distributed_processes(_distributed_restore, tmpdir)
 
     for result in results:
         for name in expected:
@@ -137,30 +151,30 @@ def replica_aware_restore_across_processes() -> None:
 
 @dataclass(frozen=True)
 class _SharedLocalWriteResult:
-    file_io_locking: str | None
+    save_locking_modes: list[str | None]
     restored: np.ndarray
 
 
 def _shared_local_write(process_id: int, coordinator: str, checkpoint_path: str) -> _SharedLocalWriteResult:
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
-        os.environ.pop(name, None)
-    jax.distributed.initialize(
-        coordinator_address=coordinator,
-        num_processes=DISTRIBUTED_PROCESS_COUNT,
-        process_id=process_id,
-        local_device_ids=[process_id],
-    )
-    try:
+    with _distributed_process(process_id, coordinator):
         mesh = Mesh(np.array(jax.devices()), ("replica",))
         split = NamedSharding(mesh, P("replica"))
         expected = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+        save_locking_modes: list[str | None] = []
+        write_context = tensorstore_serialization._tensorstore_write_context
+
+        def recording_write_context(config, file_io_locking):
+            save_locking_modes.append(file_io_locking)
+            return write_context(config, file_io_locking)
+
         with jax.set_mesh(mesh):
             # Each process holds, and so must write, half of every array.
             source = {
                 name: jax.make_array_from_callback(expected.shape, split, lambda index, o=offset: expected[index] + o)
                 for offset, name in enumerate(("a", "b", "c"))
             }
-            tree_serialize_leaves_tensorstore(checkpoint_path, source)
+            with mock.patch.object(tensorstore_serialization, "_tensorstore_write_context", recording_write_context):
+                tree_serialize_leaves_tensorstore(checkpoint_path, source)
             restored = tree_deserialize_leaves_tensorstore(
                 checkpoint_path,
                 {name: jax.ShapeDtypeStruct(expected.shape, expected.dtype, sharding=split) for name in source},
@@ -168,27 +182,12 @@ def _shared_local_write(process_id: int, coordinator: str, checkpoint_path: str)
             gathered = np.stack(
                 [np.asarray(multihost_utils.process_allgather(restored[name], tiled=True)) for name in source]
             )
-        return _SharedLocalWriteResult(_file_io_locking(TensorStoreWriteConfig(), checkpoint_path), gathered)
-    finally:
-        jax.distributed.shutdown()
+        return _SharedLocalWriteResult(save_locking_modes, gathered)
 
 
 def shared_local_write_across_processes() -> list[_SharedLocalWriteResult]:
     with TemporaryDirectory() as tmpdir:
-        with socket.socket() as listener:
-            listener.bind((_LOOPBACK_ADDRESS, 0))
-            port = listener.getsockname()[1]
-        coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
-
-        with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
-            with ProcessPoolExecutor(
-                max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
-            ) as pool:
-                futures = [
-                    pool.submit(_shared_local_write, process_id, coordinator, f"{tmpdir}/ckpt")
-                    for process_id in range(DISTRIBUTED_PROCESS_COUNT)
-                ]
-                return [future.result() for future in futures]
+        return _run_on_distributed_processes(_shared_local_write, f"{tmpdir}/ckpt")
 
 
 def _mesh(shape: tuple[int, int] = (2, 4)) -> Mesh:

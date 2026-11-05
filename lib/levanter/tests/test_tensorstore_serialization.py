@@ -571,7 +571,7 @@ def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
 
     expected = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
     for result in results:
-        assert result.file_io_locking == "lockfile"
+        assert result.save_locking_modes == ["lockfile"]
         np.testing.assert_array_equal(result.restored, np.stack([expected, expected + 1, expected + 2]))
 
 
