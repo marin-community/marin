@@ -425,6 +425,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
 | `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `1 + alpha * ln(max(n / this value, 1))`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
 | `--log-scaling-alpha` | the slope `alpha` of that scale; required with `--log-scaling-n-floor` |
+| `--log-scaling-power` | raises that scale to this exponent; defaults to 1, and anything else requires `--log-scaling-n-floor` |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |

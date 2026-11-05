@@ -97,6 +97,7 @@ def build_diagnostic_run(
     qk_mult_long_scale: float | None = None,
     log_scaling_n_floor: int | None = None,
     log_scaling_alpha: float | None = None,
+    log_scaling_power: float | None = None,
     restore_from: str | None = None,
     long_context_start_step: int | None = None,
     moe_implementation: str | None = None,
@@ -186,6 +187,7 @@ def build_diagnostic_run(
             ("qk_mult_long_scale", qk_mult_long_scale),
             ("log_scaling_n_floor", log_scaling_n_floor),
             ("log_scaling_alpha", log_scaling_alpha),
+            ("log_scaling_power", log_scaling_power),
             ("moe_implementation", moe_implementation),
             ("ce_grad_in_forward_token_block_size", ce_grad_in_forward_token_block_size),
         )
@@ -635,6 +637,12 @@ def build_diagnostic_run(
     default=None,
     help="Slope of the log scaling. Required with --log-scaling-n-floor.",
 )
+@click.option(
+    "--log-scaling-power",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Exponent on the log scaling factor. Defaults to 1; anything else requires --log-scaling-n-floor.",
+)
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @click.option(
     "--long-context-start-step",
@@ -684,6 +692,7 @@ def main(
     qk_mult_long_scale: float | None,
     log_scaling_n_floor: int | None,
     log_scaling_alpha: float | None,
+    log_scaling_power: float | None,
     restore_from: str | None,
     long_context_start_step: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -719,6 +728,7 @@ def main(
         qk_mult_long_scale=qk_mult_long_scale,
         log_scaling_n_floor=log_scaling_n_floor,
         log_scaling_alpha=log_scaling_alpha,
+        log_scaling_power=log_scaling_power,
         restore_from=restore_from,
         long_context_start_step=long_context_start_step,
         moe_implementation=moe_implementation,

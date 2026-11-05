@@ -126,6 +126,41 @@ def test_log_scaling_factor_at_slope_0_1_and_floor_65536():
     np.testing.assert_allclose(factor, [[1.0, 1.0, 1.0693147, 1.1386294]], rtol=1e-6)
 
 
+def test_log_scaling_factor_squares_at_power_2():
+    visible_keys = jnp.asarray([[1, 65536, 131072, 262144]], dtype=jnp.int32)
+    factor = model.log_scaling_factor(visible_keys, 65536, 0.1, 2.0)
+    # Literal values of (1 + 0.1 * ln(n / 65536)) ** 2.
+    np.testing.assert_allclose(factor, [[1.0, 1.0, 1.1434339, 1.2964769]], rtol=1e-6)
+
+
+def test_log_scaling_power_1_leaves_the_logits_bitwise_unchanged():
+    base = dataclasses.replace(_log_scaling_config(), log_scaling_n_floor=4, log_scaling_alpha=0.2)
+    tokens = _log_scaling_tokens(base)
+    visible_keys = jnp.asarray([[1, 4, 5, 8]], dtype=jnp.int32)
+
+    expected = 1.0 + 0.2 * jnp.log(jnp.maximum(visible_keys.astype(jnp.float32) / 4, 1.0))
+    assert np.asarray(model.log_scaling_factor(visible_keys, 4, 0.2, 1.0)).tobytes() == np.asarray(expected).tobytes()
+    explicit = _log_scaling_logits(dataclasses.replace(base, log_scaling_power=1.0), tokens)
+    assert explicit.tobytes() == _log_scaling_logits(base, tokens).tobytes()
+
+
+def test_log_scaling_power_2_matches_a_uniform_scale_on_the_last_row():
+    base = _log_scaling_config()
+    tokens = _log_scaling_tokens(base)
+    scaled = _log_scaling_logits(
+        dataclasses.replace(base, log_scaling_n_floor=4, log_scaling_alpha=0.2, log_scaling_power=2.0), tokens
+    )
+    # The last row sees 8 keys, twice the floor.
+    uniform = _log_scaling_logits(dataclasses.replace(base, qk_mult_long_scale=(1 + 0.2 * math.log(2)) ** 2), tokens)
+
+    np.testing.assert_allclose(scaled[:, -1], uniform[:, -1], rtol=1e-5, atol=1e-5)
+
+
+def test_log_scaling_power_refuses_a_run_without_a_floor():
+    with pytest.raises(ValueError, match="requires log_scaling_n_floor"):
+        dataclasses.replace(_tiny_config(), log_scaling_power=2.0)
+
+
 @pytest.mark.parametrize("alpha", [0.1, 0.2])
 def test_log_scaling_scales_only_rows_beyond_the_floor_and_matches_a_uniform_scale(alpha):
     base = _log_scaling_config()
@@ -176,12 +211,14 @@ def test_diagnostic_run_passes_the_log_scaling_slope_to_the_model():
         expert_axis_size=16,
         log_scaling_n_floor=65536,
         log_scaling_alpha=0.25,
+        log_scaling_power=2.0,
         version="dev",
     )
     config = step.build_config(StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps))
 
     assert config.model.log_scaling_n_floor == 65536
     assert config.model.log_scaling_alpha == 0.25
+    assert config.model.log_scaling_power == 2.0
 
 
 def test_log_scaling_keeps_a_bf16_query_bf16(monkeypatch):
