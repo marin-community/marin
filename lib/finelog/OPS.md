@@ -112,7 +112,11 @@ Later files get their own optional budget; already parsed cache entries remain
 usable after it expires. Preparation reads key sections first and skips other
 sections when a segment is already excluded. Cache-local I/O and parsing use
 bounded workers whose permits remain held until the actual work finishes,
-including after async cancellation. Already-running filesystem work may finish.
+including after async cancellation. Each store has eight cache-read workers and
+an independent pool of eight cache-fill writers, so warming cannot occupy the
+read pool. Parsed indexes have eight workers shared by the index cache. Remote
+range reads rely on DataFusion's per-query file window rather than a separate
+store-wide request cap. Already-running filesystem work may finish.
 Parsed sections share the memory-bounded index cache. Source footers needed to
 map spans or exact postings to row groups also use this range interface.
 Object-backed Parquet scans, covering projections, and maintenance reads use

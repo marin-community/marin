@@ -35,7 +35,7 @@ use super::local_file::atomic_write;
 
 /// Concurrent cache-miss downloads across every caller of this store.
 pub(crate) const MAX_PARALLEL_FETCHES: usize = 8;
-const MAX_PARALLEL_RANGE_READS: usize = 8;
+const MAX_PARALLEL_CACHE_READS: usize = 8;
 
 /// Files kept resident for a read, independent of query warming policy.
 #[derive(Default)]
@@ -163,8 +163,8 @@ pub struct CachedObjectStore {
     cache: FileCache,
     /// Bounds concurrent cache-miss downloads.
     fetches: Arc<Semaphore>,
-    range_reads: Arc<Semaphore>,
     read_workers: Arc<ReadWorkers>,
+    fill_workers: Arc<ReadWorkers>,
     /// Bounds write-through uploads independently of reads and flush encoding.
     uploads: Arc<Semaphore>,
     /// Total cache bytes to retain; `None` retains everything.
@@ -188,8 +188,8 @@ impl CachedObjectStore {
             source,
             cache: FileCache::new(root)?,
             fetches: Arc::new(Semaphore::new(MAX_PARALLEL_FETCHES)),
-            range_reads: Arc::new(Semaphore::new(MAX_PARALLEL_RANGE_READS)),
-            read_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_RANGE_READS)),
+            read_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_CACHE_READS)),
+            fill_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_FETCHES)),
             uploads: Arc::new(Semaphore::new(MAX_PARALLEL_UPLOADS)),
             capacity_bytes,
             last_gc: Arc::new(Mutex::new(None)),
@@ -257,7 +257,7 @@ impl CachedObjectStore {
         let cache = self.cache.clone();
         let reference = reference.clone();
         let diagnostics = self.diagnostics.clone();
-        self.read_workers
+        self.fill_workers
             .run(move || {
                 let _permit = permit;
                 let path = cache.write(&reference, &object.bytes)?;
@@ -460,9 +460,6 @@ impl ObjectStore for CachedObjectStore {
         if local.is_some() {
             return Ok(local);
         }
-        let _permit = self.range_reads.acquire().await.map_err(|error| {
-            StatsError::Internal(format!("object range read semaphore: {error}"))
-        })?;
         self.source.read_ranges(reference, ranges).await
     }
 
