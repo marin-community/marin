@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import threading
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -74,6 +75,13 @@ def test_workload_restores_without_preparation_and_rebuilds_expired_or_changed_i
     assert Path(rebuilt["archive_uri"]).exists()
 
 
+@dataclass(frozen=True)
+class ReplayServer:
+    url: str
+    sessions: list[tuple[str | None, str | None]]
+    scrapes: list[str]
+
+
 @pytest.fixture
 def replay_server():
     sessions = []
@@ -123,7 +131,7 @@ def replay_server():
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
         try:
-            yield f"http://127.0.0.1:{server.server_port}", sessions, scrapes
+            yield ReplayServer(f"http://127.0.0.1:{server.server_port}", sessions, scrapes)
         finally:
             server.shutdown()
             thread.join()
@@ -184,7 +192,7 @@ def test_pinned_tools_prepare_restore_replay_and_normalize_physical_gpus(tmp_pat
     assert restored["lineage"]["turns"] >= 20
     point = tmp_path / "point"
     point.mkdir()
-    url, sessions, scrapes = replay_server
+    url = replay_server.url
     # Short replay proves compatibility, and deliberately cannot qualify as a comparison window.
     command = [*benchmark_command(series | {"duration": 3}, 1, url, point / "aiperf_artifacts"), "--unsafe-override"]
     run_logged(
@@ -197,9 +205,11 @@ def test_pinned_tools_prepare_restore_replay_and_normalize_physical_gpus(tmp_pat
     assert json.loads((point / "client-load.jsonl").read_text().splitlines()[0])["available_cpus"] > 0
     requests = [json.loads(row) for row in (point / "aiperf_artifacts/profile_export.jsonl").read_text().splitlines()]
     assert any(row["metadata"]["benchmark_phase"] == "profiling" and not row.get("error") for row in requests)
-    assert len(sessions) > 2 and all(session and session == correlation for session, correlation in sessions)
-    assert len({session for session, _ in sessions}) < len(sessions)
-    assert scrapes
+    assert len(replay_server.sessions) > 2 and all(
+        session and session == correlation for session, correlation in replay_server.sessions
+    )
+    assert len({session for session, _ in replay_server.sessions}) < len(replay_server.sessions)
+    assert replay_server.scrapes
     metrics = point / "aiperf_artifacts/server_metrics_export.json"
     digest = file_digest(metrics)
     pack_server_metrics(point)
