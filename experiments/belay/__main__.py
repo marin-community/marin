@@ -561,7 +561,7 @@ def write_spec(repo: Path, branch: str, text: str, *, dry_run: bool, replace: bo
 MAX_NAME = 50
 MAX_RATIONALE = 160
 RETEST = "retest on current recipe"
-MAINTAINER_NOTE = "Maintainer "  # the app's prefix for a re-queue note
+MAINTAINER_NOTE = "Maintainer "  # the app's prefix for an approver's instructions, at approval or re-queue
 SPECS = Path("experiments/belay/runs")
 
 
