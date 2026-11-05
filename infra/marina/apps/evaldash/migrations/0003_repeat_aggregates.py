@@ -31,8 +31,10 @@ def upgrade(conn: sqlalchemy.Connection) -> None:
         )
     if not updates:
         return
-    update = catalog_runs.update().where(catalog_runs.c.run_id == sqlalchemy.bindparam("target_run_id")).values(
-        record=sqlalchemy.bindparam("projected_record")
+    update = (
+        catalog_runs.update()
+        .where(catalog_runs.c.run_id == sqlalchemy.bindparam("target_run_id"))
+        .values(record=sqlalchemy.bindparam("projected_record"))
     )
     for start in range(0, len(updates), 128):
         conn.execute(update, updates[start : start + 128])
