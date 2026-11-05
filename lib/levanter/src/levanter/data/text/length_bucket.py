@@ -52,7 +52,7 @@ def load_bucket_length_stats(path: str) -> BucketLengthStats:
 
 
 async def document_length_stats(
-    cache: TreeCache[dict], *, thresholds: Sequence[int], chunk_rows: int = DOCUMENT_CHUNK_ROWS
+    cache: TreeCache[dict], *, thresholds: Sequence[int], chunk_rows: int
 ) -> DocumentLengthStats:
     """Count tokens in documents strictly above each threshold, reading only offsets."""
     chunk_totals: list[int] = []
@@ -85,7 +85,7 @@ class LengthBucketIndex:
         threshold: int,
         *,
         statistics: DocumentLengthStats,
-        chunk_rows: int = DOCUMENT_CHUNK_ROWS,
+        chunk_rows: int,
         cached_chunks: int = _CACHED_OFFSET_CHUNKS,
     ):
         if cached_chunks <= 0:

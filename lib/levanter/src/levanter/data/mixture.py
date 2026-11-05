@@ -273,6 +273,9 @@ class MixtureDataset(AsyncDataset[T]):
         counts += blocks_in_stage * self._counts_per_block_per_stage[stage].astype(np.int64)
         return {name: int(count) for name, count in zip(self.dataset_index, counts, strict=True)}
 
+    def first_readable_index(self) -> int:
+        return self.first_index
+
     def _relative_index(self, index: int) -> int:
         if index < self.first_index:
             raise ValueError(f"Mixture index {index} precedes the mixture's first index {self.first_index}")

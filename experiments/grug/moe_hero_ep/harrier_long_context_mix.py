@@ -11,6 +11,7 @@ from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.data.text.length_bucket import load_bucket_length_stats
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe.launch_datakit_moe_mix import _MIXTURE_BLOCK_SIZE
@@ -57,7 +58,6 @@ def _bucket_component(store: str, cell: str, stats_path: str) -> LengthSkewDatas
         long_weight=LONG_CONTEXT_SKEW,
         stats_path=stats_path,
         stats_key=cell,
-        tags=[cell],
     )
 
 
@@ -96,15 +96,6 @@ def long_document_share(length_tokens: LengthTokens, skew: int) -> float:
     )
 
 
-def long_partition_passes(length_tokens: LengthTokens, skew: int, training_tokens: int) -> dict[str, float]:
-    """Return how many times training reads each bucket's long-document stream."""
-    return {
-        cell: weight * training_tokens * skew / (length_tokens[cell][0] + skew * length_tokens[cell][1])
-        for cell, weight in _COOLDOWN_WEIGHTS.items()
-        if length_tokens[cell][1]
-    }
-
-
 def overall_long_partition_passes(length_tokens: LengthTokens, skew: int, training_tokens: int) -> float:
     """Return long tokens read per long token in the store."""
     long_tokens = sum(long for _, long in length_tokens.values())
@@ -114,6 +105,7 @@ def overall_long_partition_passes(length_tokens: LengthTokens, skew: int, traini
 @click.command()
 def main() -> None:
     """Report the skew implied by the published Harrier length statistics."""
+    configure_coreweave_s3()
     length_tokens = read_length_tokens(harrier_length_statistics().path())
     short_total = sum(short for short, _ in length_tokens.values())
     long_total = sum(long for _, long in length_tokens.values())
