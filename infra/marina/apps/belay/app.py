@@ -565,16 +565,21 @@ def _comment_id(url: str) -> str:
     return url.rsplit("issuecomment-", 1)[-1]
 
 
+def registered_comments(conn: Connection) -> dict[str, str]:
+    """Registry id of each #9514 comment the uploaded registry holds, by comment id."""
+    rows = _rows(conn, "SELECT data FROM registry WHERE id = 1")
+    if not rows:
+        return {}
+    return {
+        _comment_id(i["intake"]["url"]): i["xid"] for i in rows[0]["data"]["ideas"] if (i.get("intake") or {}).get("url")
+    }
+
+
 def link_registered_intake(conn: Connection) -> int:
     """Mark each intake idea still waiting for a decision whose #9514 comment already has a registry entry as
     recorded under that entry's id, so it is never queued again; only a maintainer's re-queue runs it. Returns how
     many it marked."""
-    rows = _rows(conn, "SELECT data FROM registry WHERE id = 1")
-    if not rows:
-        return 0
-    registered = {
-        _comment_id(i["intake"]["url"]): i["xid"] for i in rows[0]["data"]["ideas"] if (i.get("intake") or {}).get("url")
-    }
+    registered = registered_comments(conn)
     marked = 0
     for idea in _rows(conn, "SELECT id, url FROM ideas WHERE origin = 'intake' AND state = 'pending'"):
         xid = registered.get(_comment_id(idea["url"] or ""))
@@ -1140,6 +1145,7 @@ def create_api(services: Services) -> RegisteredApi:
             )
             events = _rows(conn, "SELECT id, at, kind, ref, summary, session_id FROM events ORDER BY id DESC LIMIT 200")
             watcher = _rows(conn, "SELECT * FROM watcher WHERE id = 1")[0]
+            registered = registered_comments(conn)
         for s in sessions:
             s["events"] = [e for e in events if e["session_id"] == s["id"]]
         queued = [e for e in events if e["session_id"] is None]
@@ -1161,6 +1167,7 @@ def create_api(services: Services) -> RegisteredApi:
             "watcher": _plain([watcher])[0],
             "nodes_in_use": sum(r["nodes"] for r in live if r["state"] == "running"),
             "nodes_requested": sum(r["nodes"] for r in live),
+            "registered_comments": registered,
         }
 
     @admin.post("/ideas")

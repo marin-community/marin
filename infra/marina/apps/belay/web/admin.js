@@ -253,7 +253,8 @@ function renderIntakeLive() {
     'intake-live',
     intakeComments.map((c) => {
       const idea = known.get(String(c.id))
-      const waiting = !idea || idea.state === 'pending'
+      const registered = state.registered_comments[String(c.id)]
+      const waiting = !registered && (!idea || idea.state === 'pending')
       const first = c.visible.text.trim().split('\n')[0].replace(/\*\*/g, '').slice(0, 110)
       const key = `c${c.id}`
       const expanded = openBodies.has(key)
@@ -295,7 +296,9 @@ function renderIntakeLive() {
                   'Approved and queued',
                 ),
               )
-            : el('span', { class: 'muted small' }, idea.registry_id ? `${idea.state} → ${idea.registry_id}` : idea.state),
+            : registered && !idea?.registry_id
+              ? el('span', { class: 'muted small' }, 'done → ', link(`${PAGES.status}/${registered}`, registered))
+              : el('span', { class: 'muted small' }, idea.registry_id ? `${idea.state} → ${idea.registry_id}` : idea.state),
         ),
         expanded ? storedText(c.visible.text, c.visible.removed) : null,
       )
