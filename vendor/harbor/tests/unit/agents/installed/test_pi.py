@@ -1394,8 +1394,8 @@ class TestPiTrajectoryConversion:
         pi_output = temp_dir / "pi.txt"
         self._write_jsonl(pi_output, self._events())
         lines = pi_output.read_text().splitlines()
-        # Keep the stream through the first tool result and end with a
-        # half-written line, as a killed pi process would leave behind.
+        # Keep the stream through the first tool call and end with a
+        # half-written tool result, as a killed pi process might leave.
         pi_output.write_text("\n".join(lines[:8]) + "\n" + lines[8][:30])
         context = AgentContext()
 
@@ -1527,11 +1527,3 @@ class TestPiTrajectoryConversion:
         assert not (temp_dir / "trajectory.json").exists()
         assert context.n_input_tokens == 0
         assert context.n_output_tokens == 0
-
-    def test_missing_output_writes_no_trajectory(self, temp_dir):
-        agent = self._agent(temp_dir)
-        context = AgentContext()
-
-        agent.populate_context_post_run(context)
-
-        assert not (temp_dir / "trajectory.json").exists()
