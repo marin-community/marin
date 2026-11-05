@@ -10,7 +10,6 @@ from typing import ClassVar, Protocol, runtime_checkable
 
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
-HARBOR_EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
 DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES = 1_048_576
 
 
