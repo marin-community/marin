@@ -139,7 +139,7 @@ def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], boo
                 n_scored=None,
                 kind=kind,
                 declared=True,
-                protocol_metric=name,
+                protocol_metric=_comparison_metric(record, name),
                 protocol_identity=benchmark.identity,
             ),
         )
@@ -160,9 +160,15 @@ _LEGACY_METRIC_ALIASES = {
 }
 
 
-def _legacy_canonical_metric_name(name: str) -> str:
-    """Canonicalize old record metric names so they remain comparable with evaluator metadata."""
-    return _LEGACY_METRIC_ALIASES.get(name, name)
+def _comparison_metric(record: EvalRunRecord, name: str) -> str:
+    """Match curated score names to the vocabulary used by historical results."""
+    metric = base_metric(name)
+    metric = _LEGACY_METRIC_ALIASES.get(metric, metric)
+    if record.evaluation.name in {"humaneval", "humanevalplus", "mbppplus", "cruxeval"} and metric == "accuracy":
+        return "pass_at_1"
+    if record.evaluation.name == "mrcr" and metric == "accuracy":
+        return "mrcr_accuracy"
+    return metric
 
 
 def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False) -> tuple[list[_TaskScore], bool]:
@@ -191,7 +197,7 @@ def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False)
         scores[leaf] = _TaskScore(
             leaf=leaf,
             value=value,
-            metric=selected.name if selected is not None else _legacy_canonical_metric_name(base_metric(name)),
+            metric=selected.name if selected is not None else _comparison_metric(record, name),
             stderr=stderr_for(metrics, name),
             n_scored=task_item_count(metrics),
             kind=selected.kind if selected is not None else None,
