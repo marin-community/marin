@@ -44,12 +44,12 @@ use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
 use crate::store::object_store::{
-    CacheMode, ObjectId, ObjectStore, QueryCacheAdmission, ScanSource,
+    ObjectId, ObjectReference, ObjectStore, QueryCacheAdmission, ScanSource,
 };
 use crate::store::table::query_view::SegmentObjectMap;
 
-/// Concurrent exact existence probes for selected uncached source objects.
-const MAX_PARALLEL_SOURCE_PROBES: usize = 32;
+/// Concurrent index reads or exact probes for selected source objects.
+const MAX_PARALLEL_OBJECT_REQUESTS: usize = 32;
 
 /// A live namespace as one DataFusion table.
 ///
@@ -101,19 +101,41 @@ struct ObjectSources {
 }
 
 impl ObjectSources {
-    /// Fetch exactly the objects `paths` names, plus the artifacts those
-    /// segments advertise.
-    ///
-    /// Resolve the segments `paths` names into what this scan reads: the
-    /// cache file when one exists, otherwise the object's remote URL —
-    /// the query proceeds against the remote while admitted background fills
-    /// materialize the cache for later scans. Reuse and the shared query budget
-    /// gate those fills before the store's fetch semaphore. A source that exists
-    /// nowhere fails the scan: its rows are part of the answer.
-    ///
-    /// Artifacts never block a query. A cached bundle or projection is used; an
-    /// uncached one may be warmed in the background and this scan reads the source
-    /// Parquet — matching the fail-open behavior of a corrupt bundle.
+    fn reader_factory(
+        &self,
+        paths: &[String],
+    ) -> DFResult<Arc<super::object_reader::ObjectReaders>> {
+        let mut references = BTreeMap::new();
+        for objects in paths.iter().filter_map(|path| self.segments.get(path)) {
+            let artifacts = objects
+                .artifacts
+                .projections
+                .values()
+                .map(ObjectReference::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))?;
+            for reference in std::iter::once(objects.source.clone()).chain(artifacts) {
+                let local = self
+                    .store
+                    .planned_local_path(&reference.id)
+                    .map_err(|error| {
+                        datafusion::error::DataFusionError::External(Box::new(error))
+                    })?;
+                let mut locations = vec![local.to_string_lossy().into_owned()];
+                locations.extend(self.store.remote_scan_url(&reference.id));
+                for location in locations {
+                    let url = ListingTableUrl::parse(location)?;
+                    references.insert(url.prefix().to_string(), reference.clone());
+                }
+            }
+        }
+        Ok(Arc::new(super::object_reader::ObjectReaders {
+            store: Arc::clone(&self.store),
+            references,
+        }))
+    }
+    /// Resolve selected sources and projections through the cache-aware store.
+    /// Index sections are read on demand through `ObjectStore::read_range`.
     async fn resolve(
         &self,
         paths: &[String],
@@ -128,7 +150,7 @@ impl ObjectSources {
             };
             match self
                 .store
-                .scan_source(&objects.source, CacheMode::Query(admission))
+                .scan_source(&objects.source, admission)
                 .await
                 .map_err(external)?
             {
@@ -140,18 +162,13 @@ impl ObjectSources {
                     remote_sources.push(objects.source.id.clone());
                 }
             }
-            for reference in objects
-                .artifacts
-                .bundle
-                .iter()
-                .chain(objects.artifacts.projections.values())
-            {
+            for reference in objects.artifacts.projections.values() {
                 let Ok(artifact) = crate::store::object_store::ObjectReference::try_from(reference)
                 else {
                     continue;
                 };
                 self.store
-                    .scan_source(&artifact, CacheMode::Query(admission))
+                    .scan_source(&artifact, admission)
                     .await
                     .map_err(external)?;
             }
@@ -184,7 +201,7 @@ impl ObjectSources {
                     Ok::<_, StatsError>((id, exists))
                 }
             })
-            .buffer_unordered(MAX_PARALLEL_SOURCE_PROBES)
+            .buffer_unordered(MAX_PARALLEL_OBJECT_REQUESTS)
             .try_collect::<Vec<_>>()
             .await?;
         let missing: Vec<String> = checked
@@ -467,6 +484,10 @@ impl NamespaceProvider {
         segments: SegmentObjectMap,
     ) -> Self {
         if !segments.is_empty() {
+            self.indices = Arc::new(
+                self.indices
+                    .with_object_sources(Arc::clone(&store), &segments),
+            );
             self.object_sources = Some(ObjectSources { store, segments });
         }
         self
@@ -595,6 +616,7 @@ impl TableProvider for NamespaceProvider {
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
                 let integer_ranges = crate::query::predicate::int_column_ranges(filters);
+                let admission = state.config().get_extension::<QueryCacheAdmission>();
                 if self.segment_indexes_enabled && !needles.is_empty() && !integer_ranges.is_empty()
                 {
                     segment_paths = tokio::task::spawn_blocking(move || {
@@ -625,23 +647,43 @@ impl TableProvider for NamespaceProvider {
                 if self.segment_indexes_enabled && !needles.is_empty() {
                     let indices = Arc::clone(&self.indices);
                     let artifacts = Arc::clone(&self.segment_artifacts);
-                    let early_needles = needles.clone();
-                    let early_key_ranges = key_ranges.clone();
-                    let pruning = tokio::task::spawn_blocking(move || {
-                        crate::query::trigram_prune::plan_segments(
-                            &segment_paths,
-                            &early_needles,
-                            &early_key_ranges,
-                            &indices,
-                            &artifacts,
-                        )
-                    })
-                    .await
-                    .map_err(|error| {
-                        datafusion::error::DataFusionError::Execution(format!(
-                            "trigram segment prune task join: {error}"
-                        ))
-                    })?;
+                    // Cold bundle ranges run concurrently, but all share the
+                    // registry's short I/O deadline and parsed-section cache.
+                    let groups = if self.object_sources.is_some() {
+                        segment_paths.into_iter().map(|path| vec![path]).collect()
+                    } else {
+                        vec![segment_paths]
+                    };
+                    let parts = stream::iter(groups)
+                        .map(|paths| {
+                            let indices = Arc::clone(&indices);
+                            let artifacts = Arc::clone(&artifacts);
+                            let needles = needles.clone();
+                            let key_ranges = key_ranges.clone();
+                            let pins = admission.clone();
+                            async move {
+                                tokio::task::spawn_blocking(move || {
+                                    let _pins = pins;
+                                    crate::query::trigram_prune::plan_segments(
+                                        &paths,
+                                        &needles,
+                                        &key_ranges,
+                                        &indices,
+                                        &artifacts,
+                                    )
+                                })
+                                .await
+                                .map_err(|error| {
+                                    datafusion::error::DataFusionError::Execution(format!(
+                                        "trigram segment prune task join: {error}"
+                                    ))
+                                })
+                            }
+                        })
+                        .buffered(MAX_PARALLEL_OBJECT_REQUESTS)
+                        .try_collect::<Vec<_>>()
+                        .await?;
+                    let pruning = crate::query::trigram_prune::SegmentPruning::combine(parts);
                     segment_paths = pruning.paths.clone();
                     trigram_pruning = Some(pruning);
                 }
@@ -665,9 +707,12 @@ impl TableProvider for NamespaceProvider {
                     let mut plans: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
                     if !resolved.local.is_empty() {
                         plans.push(
-                            Self::listing_table(Arc::clone(&self.schema), &resolved.local)?
-                                .scan(state, projection, filters, limit)
-                                .await?,
+                            Self::listing_table_for_urls(
+                                Arc::clone(&self.schema),
+                                resolved.local.iter().cloned(),
+                            )?
+                            .scan(state, projection, filters, limit)
+                            .await?,
                         );
                     }
                     if !resolved.remote.is_empty() {
@@ -695,6 +740,13 @@ impl TableProvider for NamespaceProvider {
                     Self::listing_table(Arc::clone(&self.schema), &segment_paths)?
                         .scan(state, projection, filters, limit)
                         .await?
+                };
+                let plan = match &self.object_sources {
+                    Some(sources) => super::file_scan::with_object_readers(
+                        plan,
+                        sources.reader_factory(&segment_paths)?,
+                    ),
+                    None => plan,
                 };
                 if !self.segment_indexes_enabled {
                     return Ok(plan);
@@ -740,8 +792,11 @@ impl TableProvider for NamespaceProvider {
                 let indices = Arc::clone(&self.indices);
                 let artifacts = Arc::clone(&self.segment_artifacts);
                 tokio::task::spawn_blocking(move || {
+                    let _pins = admission;
                     let plan = match trigram_pruning {
-                        Some(pruning) => crate::query::trigram_prune::apply_pruning(plan, &pruning),
+                        Some(pruning) => {
+                            crate::query::trigram_prune::apply_pruning(plan, &pruning, &indices)
+                        }
                         None => plan,
                     };
                     crate::query::exact_prune::apply(
@@ -1973,7 +2028,10 @@ mod tests {
         let paths = vec![path.clone()];
         let artifacts = crate::indices::sidecar_artifacts(&paths);
         let indices = crate::indices::test_index_registry();
-        let needles = HashMap::from([("data".to_string(), vec!["DEBUG".to_string()])]);
+        let needles = HashMap::from([(
+            "data".to_string(),
+            crate::query::trigram_prune::SubstringPredicate::Contains(vec!["DEBUG".to_string()]),
+        )]);
         let pruning = crate::query::trigram_prune::plan_segments(
             &paths,
             &needles,
@@ -1990,7 +2048,7 @@ mod tests {
             .with_segment_indexes_enabled(false);
         let ctx = crate::query::make_ctx();
         let source_plan = provider.scan(&ctx.state(), None, &[], None).await.unwrap();
-        let plan = crate::query::trigram_prune::apply_pruning(source_plan, &pruning);
+        let plan = crate::query::trigram_prune::apply_pruning(source_plan, &pruning, &indices);
         assert_prunes_to_span1(&plan, 1);
         let batches = datafusion::physical_plan::collect(plan, ctx.task_ctx())
             .await
@@ -2057,6 +2115,250 @@ mod tests {
         let plan = probe.scan(&state, None, &[filter], None).await.unwrap();
         assert_prunes_to_span1(&plan, rg1_rows);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn inference_message_alternatives_prune_without_losing_either_branch() {
+        let dir = tempdir("inference_message_alternatives");
+        let path = write_two_span_log_segment(
+            &dir,
+            "data",
+            "idle heartbeat ok",
+            &["model cache hit", "download complete"],
+        );
+        let ctx = crate::query::make_ctx();
+        let provider =
+            NamespaceProvider::build_with_local_artifacts(log_arrow(), std::slice::from_ref(&path))
+                .unwrap();
+        ctx.register_table("logs", Arc::new(provider)).unwrap();
+        let frame = ctx.sql("SELECT data FROM logs WHERE contains(data, 'model cache') OR contains(data, 'download complete') ORDER BY seq").await.unwrap();
+        assert_eq!(
+            first_column_strings(&frame.collect().await.unwrap()),
+            vec!["model cache hit", "download complete"]
+        );
+        // A branch without a usable substring constraint must retain its rows.
+        let rows = ctx
+            .sql(
+                "SELECT data FROM logs WHERE contains(data, 'model cache') OR seq = 1 ORDER BY seq",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&rows),
+            vec!["idle heartbeat ok", "model cache hit"]
+        );
+        let udf = ctx.udf("contains").unwrap();
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf.clone(),
+            vec![col("data"), lit("model cache")],
+        ))
+        .or(Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf,
+            vec![col("data"), lit("download complete")],
+        )));
+        let probe = NamespaceProvider::build_with_local_artifacts(log_arrow(), &[path]).unwrap();
+        let plan = probe
+            .scan(&ctx.state(), None, &[filter], None)
+            .await
+            .unwrap();
+        assert_prunes_to_span1(&plan, 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cold_index_excludes_source_before_remote_parquet_planning() {
+        let dir = tempdir("cold_index_before_source");
+        let path =
+            write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["ordinary shutdown"]);
+        let artifacts = crate::indices::sidecar_artifacts(std::slice::from_ref(&path));
+        let binding = artifacts[&path].binding.clone();
+        let bundle_path = artifacts[&path].bundle.as_ref().unwrap();
+        let header = crate::indices::format::read_header(bundle_path).unwrap();
+        let mut sections: Vec<_> = header
+            .sections
+            .iter()
+            .map(|section| crate::indices::format::SectionInput {
+                id: section.id.clone(),
+                kind: section.kind,
+                method_version: section.method_version,
+                exactness: section.exactness,
+                coverage: section.coverage.clone(),
+                payload: crate::indices::format::read_section(bundle_path, &header, &section.id)
+                    .unwrap(),
+            })
+            .collect();
+        // A large unrelated section must never be transferred for this query.
+        sections.push(crate::indices::format::SectionInput {
+            id: "trigram:unused".into(),
+            kind: crate::indices::format::SectionKind::TrigramBloom,
+            method_version: 1,
+            exactness: crate::indices::format::Exactness::Lossy,
+            coverage: header.sections[0].coverage.clone(),
+            payload: vec![0; 1024 * 1024],
+        });
+        let bundle_bytes = bytes::Bytes::from(
+            crate::indices::format::serialize(&header.binding, &sections).unwrap(),
+        );
+        let remote = Arc::new(
+            crate::store::object_store::build_remote_object_store(
+                dir.join("remote").to_str().unwrap(),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        let remote = crate::test_support::FaultInjectingObjectStore::new(remote);
+        let bundle_id = ObjectId::table("logs", "indices/one.fidx").unwrap();
+        let bundle_version = remote
+            .write(&bundle_id, bundle_bytes.clone())
+            .await
+            .unwrap();
+        let bundle_ref = crate::proto::finelog::stats::ObjectRef::default()
+            .with_object_id(bundle_id.as_str())
+            .with_byte_size(bundle_version.byte_size);
+        let source = ObjectReference {
+            id: ObjectId::table("logs", "objects/one.parquet").unwrap(),
+            version: crate::store::object_store::ObjectVersion {
+                e_tag: None,
+                provider_version: None,
+                byte_size: std::fs::metadata(&path).unwrap().len(),
+                local_value: None,
+            },
+        };
+        // A missing remote source makes any attempt to plan it fail. Its index
+        // proves that this predicate needs none of its rows.
+        let store = Arc::new(
+            crate::store::object_store::CachedObjectStore::new(
+                remote.clone(),
+                dir.join("cache"),
+                None,
+            )
+            .unwrap(),
+        );
+        let planned = store
+            .planned_local_path(&source.id)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let planned_bundle = store.planned_local_path(&bundle_id).unwrap();
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&planned),
+            crate::indices::test_index_registry(),
+        )
+        .unwrap()
+        .with_segment_artifacts(BTreeMap::from([(
+            planned.clone(),
+            crate::store::table_state::LocalArtifacts {
+                binding: binding.clone(),
+                bundle: Some(planned_bundle.clone()),
+                projections: BTreeMap::new(),
+            },
+        )]))
+        .with_object_sources(
+            store.clone(),
+            BTreeMap::from([(
+                planned,
+                crate::store::table::query_view::SegmentObjects {
+                    source: source.clone(),
+                    artifacts: crate::store::table_state::ArtifactReferences {
+                        binding,
+                        bundle: Some(bundle_ref),
+                        projections: BTreeMap::new(),
+                    },
+                },
+            )]),
+        );
+        let config = crate::query::make_ctx()
+            .copied_config()
+            .with_extension(Arc::new(QueryCacheAdmission::new(0, 0)));
+        let ctx = datafusion::prelude::SessionContext::new_with_config(config);
+        crate::query::udf::register_scalar_udfs(&ctx);
+        let provider = Arc::new(provider);
+        ctx.register_table("logs", provider.clone()).unwrap();
+        let rows = ctx.sql("SELECT * FROM logs WHERE contains(data, 'model cache') OR contains(data, 'download complete')").await.unwrap().collect().await.unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        assert!(remote
+            .keys_for(crate::test_support::ObjectOp::Read)
+            .is_empty());
+        let transferred: u64 = remote
+            .ranges_for(&bundle_id)
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum();
+        assert!(transferred > 0 && transferred < bundle_bytes.len() as u64 / 2);
+        provider.indices.invalidate(&planned_bundle);
+        remote.clear_calls();
+        let rows = ctx.sql("SELECT * FROM logs WHERE key LIKE '%/inference-%' AND contains(data, 'ordinary shutdown')").await.unwrap().collect().await.unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        let header = crate::indices::format::parse_header(&bundle_bytes).unwrap();
+        let data = header.section("trigram:data").unwrap();
+        assert!(
+            remote
+                .ranges_for(&bundle_id)
+                .iter()
+                .all(|range| { range.end <= data.offset || range.start >= data.offset + data.len }),
+            "a rejecting key section must avoid reading the data section"
+        );
+        remote
+            .write(
+                &source.id,
+                bytes::Bytes::from(std::fs::read(&path).unwrap()),
+            )
+            .await
+            .unwrap();
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            ctx.udf("contains").unwrap(),
+            vec![col("data"), lit("ordinary shutdown")],
+        ));
+        let plan = provider
+            .scan(&ctx.state(), None, &[filter], None)
+            .await
+            .unwrap();
+        assert_prunes_to_span1(&plan, 1);
+        let rows = datafusion::physical_plan::collect(plan, ctx.task_ctx())
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        assert!(
+            !store.planned_local_path(&source.id).unwrap().exists(),
+            "zero allowance must keep source scans remote"
+        );
+        drop(ctx);
+        store
+            .write(
+                &source.id,
+                bytes::Bytes::from(std::fs::read(&path).unwrap()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !planned_bundle.exists(),
+            "index range reads must not fill a whole bundle"
+        );
+        remote.clear_calls();
+        let ctx = crate::query::make_ctx();
+        ctx.register_table("logs", provider).unwrap();
+        let rows = ctx
+            .sql("SELECT * FROM logs WHERE seq > 100000 AND contains(data, 'model cache')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        assert!(
+            remote
+                .keys_for(crate::test_support::ObjectOp::Read)
+                .is_empty(),
+            "cached source bounds must exclude the segment before downloading its index"
+        );
+        assert!(remote
+            .keys_for(crate::test_support::ObjectOp::ReadRange)
+            .is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

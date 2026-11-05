@@ -17,6 +17,7 @@ pub mod cache;
 pub mod exact;
 pub mod format;
 pub mod group_extrema;
+pub mod input;
 pub mod projection;
 pub mod registry;
 pub mod trigram;
