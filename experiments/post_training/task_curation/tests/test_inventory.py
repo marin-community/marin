@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Selection over admitted TaskSpecs and the complete historical heldout panel."""
+"""Training selection over admitted TaskSpecs and test-panel selection over converted corpora."""
 
 import json
 from collections import Counter
@@ -752,7 +752,7 @@ TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
         ("model-rate", INCOMPLETE_RATES),
     ],
 )
-def test_panel_publication_refuses_remote_graders_and_training_or_development_overlap(tmp_path, failure, cause):
+def test_panel_publication_refuses_bad_sources_overlaps_shortfalls_and_rate_evidence(tmp_path, failure, cause):
     settings = panel_recipe(tmp_path)
     questions, agents = settings.sources
     settings = settings.model_copy(

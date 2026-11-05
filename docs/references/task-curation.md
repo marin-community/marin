@@ -263,7 +263,7 @@ exceptions.
 
 `recipes/snowball-100k.json` names `2026.11.04.1`: 100,000 tasks, including
 16,970 Eurus coding tasks, with local graders. The versioned
-`recipes/snowball-100k-2026.11.04.json` names the E9 release, whose coding quota
+`recipes/snowball-100k-2026.11.04.json` names `2026.11.04`, whose coding quota
 includes 10,317 Eurus tasks and 6,653 Glaive judged tasks. Both use the same
 admitted corpus and development panel. Selection recipes can add `exclusions`
 for evaluation files; those tasks are excluded from training while the published
@@ -274,8 +274,9 @@ immutable version.
 To reproduce either recipe, run the driver inside Iris with `--corpus`
 `s3://marin-us-east-02a/marin/rl-data/inputs/snowball-admitted-030/2026.11.04/corpus.json`
 and `--selection` pointing to that recipe. Use a separate `--artifact-root` for
-an independent rebuild. The E9 publication uses C1 `a3ab540e18` on main
-`8d78991477`; its complete admitted population is the E3 release
+an independent rebuild. `snowball-100k@2026.11.04` was published by the
+selection code at commit `a3ab540e18` on main `8d78991477`. Its admitted
+population is the complete output of the FULL curation campaign
 `snowball-100k-full-2026.10.24.3`, upgraded to TaskSpec 0.30 by validating each
 row with the new defaults. Admission decisions, source recipes, quotas and seed
 are fixed. This schema migration is a release operation: its per-source
