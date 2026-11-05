@@ -14,27 +14,103 @@ The selection defines the 100k training allocation. The launcher defaults to
 128 prompt groups per update, four samples per group, a 24,576-token context
 and an 8,192-token response limit.
 
-The inventory recipe enables batch-invariant arithmetic, fixes the evaluation
-seed to `20261020`, disables prefix caching, and limits each inference worker
-to one scheduled sequence. The inference topology remains DP8/EP8/TP1/PP1.
-Chunked prefill stays enabled with an 8,192-token scheduling budget, and CUDA
-graphs remain enabled. The sequence cap also applies to training generation
-and reduces concurrency.
+## Serving profile and reproducibility
 
-On the fixed 100-task panel, six evaluations across four fresh engine startups
-produced identical prompt and response tokens, text, grades, and recorded
-operational outcomes. Four evaluations used direct SFT loading. Two used normal
-Megatron initialization and NCCL `expert_block` weight transfer, then exited
-before any optimizer step. Each evaluation generated 469,450 response tokens
-with mean rollout reward 0.2002 on H100s with Grug-67B and vLLM revision
-`39e62869693c`.
+The checked-in inventory recipe enables batch-invariant arithmetic, fixes the
+evaluation seed to `20261020`, disables prefix caching, and limits each inference
+worker to one scheduled sequence. It retains DP8/EP8/TP1/PP1, chunked prefill
+with an 8,192-token scheduling budget, and CUDA graphs. The sequence cap also
+applies to training generation and reduces concurrency. Training throughput
+has not been measured.
 
-Batch-invariant arithmetic with concurrent scheduling still produced different
-answers between passes, including with prefix caching disabled and eager
-execution. The one-sequence profile reproduced this fixed panel. Training
-throughput has not been measured.
+Two runtime profiles have reproduced the fixed 100-task panel. They use different
+runtime revisions and produce different answers; their scores are not a
+controlled comparison of serving policies.
 
-## Concurrent-serving measurements
+| Profile | Evidence | Exact agreement | Mean reward | Response tokens per pass |
+| --- | --- | --- | --- | --- |
+| One scheduled sequence; vLLM `39e62869693c` | Six evaluations across four fresh engine startups: four direct SFT and two Megatron initial evaluations | 100/100 tasks | 0.2002 | 469,450 |
+| Concurrent scheduling; corrected vLLM `02872a7e5530` candidate, Torch 2.14.1+cu132 | Four fresh direct-SFT evaluation processes across two eight-H100 jobs on 2026-11-05 | 100/100 tasks | 0.1801 | 503,697 |
+
+Agreement covers prompt and response token IDs and text, grades, verifier
+outcomes, recorded operational outcomes, and reported aggregates. Each pass
+independently attempted and graded all 100 tasks. Missing grades, errors,
+nonfinite values, or any compared-field mismatch fail the check; equal mean
+scores alone do not pass it. The one-sequence Megatron evaluations used NCCL
+`expert_block` weight transfer and exited before any optimizer step.
+
+### Concurrent DP8/EP8 qualification
+
+The four-pass concurrent qualification used the pinned Datakit SFT checkpoint
+and tokenizer above, the original 24,576-token context and 8,192-token reply
+limit, greedy decoding with seed `20261020`, and the original task-owned graders.
+All 400 results were independently graded, verified and finite. There were zero
+task-level or aggregate differences. Evaluation logprobs were not requested.
+The worker sequence limit was 1,024; prefix caching stayed off, while TRITON
+attention, 8,192-token chunked prefill and compilation/CUDA graphs stayed enabled.
+
+This candidate used vLLM `02872a7e55304d288e52fdb906923551b9517501` plus
+the [three IEEE FP32 Triton dot corrections](patches/grug-ieee-fp32-20261105.patch)
+in `batch_invariant.py`, with
+these native TorchInductor settings:
+
+```yaml
+generator:
+  engine_init_kwargs:
+    compilation_config:
+      inductor_compile_config:
+        deterministic: true
+        batch_invariant: false
+        combo_kernels: true
+        benchmark_combo_kernel: false
+```
+
+`batch_invariant: false` here is TorchInductor's separate reduction-policy
+option. vLLM's `VLLM_BATCH_INVARIANT=1` remained enabled. The native CUDA-graph
+capture-size defaults, including size 1, were retained. A separate short-prompt
+diagnostic observed ModelRunnerV2 executing full and piecewise graphs, including
+full size 1; the full scored runs did not collect per-request graph traces.
+
+The numerical source bindings were:
+
+- Qualified native wheel: release
+  [`marin-vllm-gpu-20261103-02872a7e5530`](https://github.com/marin-community/vllm/releases/tag/marin-vllm-gpu-20261103-02872a7e5530),
+  SHA256 `729cffd23294926b5ddbe1a19485b3da8ad8c582b4ea809ed5350779faa67f83`.
+- Candidate `batch_invariant.py`: SHA256
+  `2a70d9021f784b27fd409e085093b5bba1e1c0c4a659116bbb7063b647301436`.
+- Fixed validation parquet:
+  `s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.10.23.2/validation.parquet`,
+  SHA256
+  `958b38bedb04294c6523b21f26cf3aa7a9af43038750bbe849318fbce1a872b7`.
+
+The completed qualification is output version `2026.11.05.2` under
+`s3://marin-us-east-02a/marin/users/dlwh/evals/fixed100-reproducibility/`,
+with `job-{1,2}/pass-{0,1}` for the four independently graded passes. Both jobs
+finished with task exit 0 and no failures or preemptions. The strict comparison
+joined results by frozen canonical task ID, not completion order, with no grade
+cache or reuse.
+
+Earlier full-length evaluations on the corrected vLLM candidate with default
+compiler policy matched only 91/100 replies across four fresh processes. Two
+scores changed in opposite directions while every mean remained 0.20. A later
+qualification attempt stopped at 99/100 verified scores after a Daytona snapshot
+metadata lookup returned HTTP 502. That failed attempt was preserved. The clean
+four-pass qualification above included a bounded retry for read-only snapshot
+metadata GET on HTTP 502/503/504; it did not retry grading, creation POSTs, or
+failed tasks, or change startup deadlines. The
+[lookup retry patch](patches/daytona-snapshot-get-20261105.patch) applies to Marin
+`a2f550d966551876535540063017f85cee01473e`; the resulting `machine.py` SHA256 is
+`42218ba65d5eb62e1ef951197c3e743271928c7b064086848c9e53687c90258a`.
+
+These results qualify this finite panel and pinned standalone evaluation
+configuration. They do not isolate the cause of the earlier nine reply changes,
+prove universal determinism, or qualify training placement and weight transfer
+under the concurrent profile. The numerical candidate and lookup retry were
+validated on separate source branches. This PR retains its one-sequence recipe
+and older runtime pin; its exact head has not been run on GPUs. Adopting the
+concurrent candidate requires a separate runtime integration and qualification.
+
+## Prior DP4 router measurements
 
 [Xiaoyuan's measurements](https://github.com/marin-community/marin/pull/10760#issuecomment-6553179601)
 on Snowball v0.1 (Grug-67B-A2B, update 14 from
@@ -70,11 +146,11 @@ vLLM's defaults; that result does not cover every long-prompt chunk boundary.
 These measurements used a different checkpoint, panel and DP4 setup.
 Xiaoyuan had not tested vLLM `01911be3` as a complete revision, this PR's
 `39e62869693c` pin, or DP8/EP8. The IEEE FP32 router result does not qualify
-`01911be3`'s TF32 router path. Reproducing the full settings on this PR's exact
-runtime, checkpoint and concurrent DP8/EP8 workload remains unverified. These
-finite reply measurements do not establish universal bitwise determinism. The
-exact PR head has not been run on GPUs. This PR retains its one-sequence
-serving profile.
+`01911be3`'s TF32 router path. The DP8/EP8 qualification above used a newer
+runtime and a different combination:
+TRITON attention and native size-1 CUDA graphs remained enabled. It does not
+retroactively qualify the older pins or reproduce every setting in Xiaoyuan's
+DP4 experiment. Neither finite panel establishes universal bitwise determinism.
 
 ## Make or update tasks
 
