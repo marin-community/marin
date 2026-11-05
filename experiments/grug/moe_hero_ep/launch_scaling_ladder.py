@@ -43,7 +43,8 @@ Changelog:
         (see ``trigger_hero.sh``).
     2026-11-03: the hero keeps a permanent checkpoint every 500 steps over its final 5000 steps
         (385500 through 390000, plus the final step), instead of every 6000.
-    2026-11-07 (#8435): the hero trains at 262K context at CP4 x EP16 for 4335 steps past its schedule, to step
+    2026-11-07 (#8435): the hero trains at 262K context with qk_mult 1.66 and qk_mult_long_scale 1.133, global
+        1.88, at CP4 x EP16 for 4335 steps past its schedule, to step
         394586, on the long-context mix, with an eval every 500 steps. Its learning rate moves from 5% to 1% of
         peak over those steps. The run forks hero-ctx65k-step372k at permanent step 390251 (see ``trigger_hero.sh``).
 """

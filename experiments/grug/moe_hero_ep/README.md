@@ -10,7 +10,7 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
   two shared experts of width 3072. Depth rounds up to the nearest even count.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 262144
   (4096 through step 257553, 16384 through step 372000, 65536 through step 390251), query/key multiplier
-  1.66 (1.3 at 4K, 1.48 at 16K), sliding window 2048, and every
+  1.66, times 1.133 on the global layers (1.3 at 4K, 1.48 at 16K, 1.66 at 65K), sliding window 2048, and every
   fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: each rack's 64 GB200 GPUs, on 16 workers with four GPUs each, form 16 expert shards of 4 context
   shards each (CP1 x EP64 through step 390251). Additional racks use the `replica_dcn` axis. Six experts are

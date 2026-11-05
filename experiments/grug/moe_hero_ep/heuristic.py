@@ -103,6 +103,7 @@ HERO_MODEL = GrugModelConfig(
     capacity_factor=1.5,
     initializer_std=0.5 / math.sqrt(_HERO_HIDDEN),
     qk_mult=1.66,
+    qk_mult_long_scale=1.133,
     sconv=True,
     attention_implementation="gpu_fa4_cute_sm100",
     moe_implementation="ragged_all_to_all",
