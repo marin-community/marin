@@ -248,14 +248,18 @@ def winogrande(cache_dir: Path) -> list[dict[str, str]]:
 
 
 def boolq(cache_dir: Path) -> list[dict[str, str]]:
-    """lm-eval boolq scores validation: question and answer.
+    """lm-eval boolq scores validation: passage, question and answer.
 
-    The Wikipedia passage is not indexed, like the passages of lm-eval reading-comprehension
-    tasks, so most questions are too short to index.
+    Unlike the lm-eval reading-comprehension passages, the passage is indexed: most BoolQ
+    questions are too short to index alone, and copies are few-shot exercises and dataset
+    dumps that hold the passage with its question. Pages quoting the same Wikipedia text
+    are marked too.
     """
     name, records = "boolq", []
     for row in read_parquet(BOOLQ, "boolq/validation-00000-of-00001.parquet", cache_dir):
-        records += item_records(name, str(row["idx"]), [row["question"] + "?", "yes" if row["label"] == 1 else "no"])
+        records += item_records(
+            name, str(row["idx"]), [row["passage"], row["question"] + "?", "yes" if row["label"] == 1 else "no"]
+        )
     return records
 
 
@@ -313,7 +317,7 @@ EVAL_POLICY_QA_EVALS: tuple[PinnedEval, ...] = (
     PinnedEval("OlympiadBench", "olympiadbench", *_hf(OLYMPIADBENCH), 2078, olympiadbench),
     PinnedEval("PIQA", "piqa", *_hf(PIQA), 1684, piqa),
     PinnedEval("WinoGrande", "winogrande", *_hf(WINOGRANDE), 1267, winogrande),
-    PinnedEval("BoolQ", "boolq", *_hf(BOOLQ), 92, boolq),
+    PinnedEval("BoolQ", "boolq", *_hf(BOOLQ), 3270, boolq),
     PinnedEval("TruthfulQA", "truthfulqa", *_hf(TRUTHFULQA), 731, truthfulqa),
     PinnedEval("TriviaQA", "triviaqa", *_hf(TRIVIAQA), 5793, triviaqa),
     PinnedEval("AIME24", "aime24", *_vendored(AIME24_FILE), 83, aime24),

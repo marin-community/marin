@@ -27,11 +27,12 @@ GLOBAL_DF_COMMON_MIN_SOURCES = 3
 # records (``-instruction``, ``-solution``, ``-tests`` ...) are scored on their own, so
 # a document holding most of one view is marked. The longest matching prefix wins, so
 # ``humanevalplus-`` overrides ``humaneval``; ``piqa-``, ``winogrande-`` and
-# ``triviaqa-`` also cover the lm-eval records of those tasks. TriviaQA copies are quiz
-# pages that list the question without its answer, and a 13-word question followed by
-# a 3-word answer has only 1 of its 4 n-grams in the question, so its bar is 0.2. BoolQ (a
-# short question once its Wikipedia passage is left out) and the AA v4.1.1 evals are
-# left to the paragraph rule.
+# ``triviaqa-`` also cover the lm-eval records of those tasks. TriviaQA keeps the 0.5 bar
+# although copies that list the question without its answer fall under it: its questions
+# often quote a famous line or definition, and a lower bar marks every page quoting it.
+# TruthfulQA copies put lettered options between a long question and its short best
+# answer, so only the question's n-grams match, and its bar is 0.4. BoolQ, whose records are mostly a Wikipedia
+# passage, and the AA v4.1.1 evals are left to the paragraph rule.
 ITEM_BAR = 0.5
 ITEM_RULE_EVALS: tuple[str, ...] = (
     # AA Intelligence Index v5.0, public parts.
@@ -49,7 +50,7 @@ ITEM_RULE_EVALS: tuple[str, ...] = (
     "olympiadbench",
     "piqa",
     "winogrande",
-    "truthfulqa",
+    "triviaqa",
     "aime24",
     "cruxeval",
     "ifbench",
@@ -71,7 +72,7 @@ ITEM_MATCH = ItemMatchConfig(
         ("mmlu_", 0.5),
         ("leaderboard_mmlu_pro-", 0.5),
         ("uncheatable-", 0.5),
-        ("triviaqa-", 0.2),
+        ("truthfulqa-", 0.4),
         *((f"{name}-", ITEM_BAR) for name in ITEM_RULE_EVALS),
     ),
     min_matched_features=1,
