@@ -96,7 +96,9 @@ entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
 `--steps 25` for the normal iteration. Each run starts from the pinned SFT model.
 The selected data stays cached; training does not curate or resample it.
 
-The launcher binds `train.parquet` and `validation.parquet` from that artifact.
+The launcher binds `train.parquet` and `validation.parquet` from that artifact,
+and the agent protocol probes (`rl-data/protocol-probes`) as a second validation
+source.
 Evaluation attempts the fixed panel before training and after the last update,
 and saves task-level verifier outcomes. Under the run artifact's `exports/`,
 `dumped_evals/global_step_0_evals/` holds the baseline and
@@ -105,6 +107,9 @@ per-dataset JSONL responses and `aggregated_results.jsonl`; compare its
 `avg_score` and `pass_at_1` metrics alongside verifier coverage. The final update saves a checkpoint;
 HF export is opt-in with `--export-hf` and adds a separate export job after training.
 Local graders require the privileged container profile; image graders and host judges use their configured backends.
+
+Each row of `protocol-probes.jsonl` carries its protocol assessment under
+`verification.diagnostics.protocol` and the parsed conversation under `messages`.
 
 ## Compare the iteration
 
