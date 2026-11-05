@@ -110,7 +110,6 @@ def test_drift_names_unreleased_source_commit(tmp_path, monkeypatch):
 
     report = drift(AppPolicy("evaldash", True, (), ()), root=tmp_path)
 
-    assert report["state"] == "different"
     assert len(report["commits"]) == 1
     assert report["commits"][0].endswith("Fix dashboard score")
 

@@ -79,7 +79,7 @@ def git(*arguments: str, root: Path = ROOT) -> str:
     return subprocess.run(["git", *arguments], cwd=root, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
 
 
-def marina(*arguments: str, root: Path = ROOT) -> dict:
+def marina(*arguments: str, root: Path | None = None) -> dict:
     result = subprocess.run(
         ["uv", "run", "--no-sync", "marina", *arguments, "--json"],
         cwd=root,
