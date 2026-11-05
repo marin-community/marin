@@ -13,8 +13,8 @@ ITEM_BERNOULLI_STDERR = "item_bernoulli_n_minus_1"
 logger = logging.getLogger(__name__)
 
 
-def _item_count(count: int | None, items: int, repeats: int, *, benchmark_size: bool = False) -> int | None:
-    if count is None or count <= items or (benchmark_size and count != items * repeats):
+def _item_count(count: int | None, items: int, repeats: int) -> int | None:
+    if count is None or count <= items:
         return count
     if count > (items - 1) * repeats:
         return items
@@ -44,6 +44,11 @@ def _item_coverage(
     attempted = _item_count(source.n_attempted, items, repeats)
     if source.n_attempted is not None and (attempted is None or attempted < scored_items):
         return None, RepeatCoverageBasis.SOURCE
+    benchmark = source.n_benchmark
+    trial_coverage = source.n_scored > items or (source.n_attempted is not None and source.n_attempted > items)
+    # The trial-form producer multiplies the full benchmark size even when num_total is capped.
+    if trial_coverage and benchmark is not None and benchmark >= trials and benchmark % repeats == 0:
+        benchmark //= repeats
     # Trial-level unanswered counts cannot identify partly unanswered items. Every trial
     # unanswered does establish that every represented item lacked an extractable answer.
     if source.n_scored == items:
@@ -54,7 +59,7 @@ def _item_coverage(
         unanswered = 0
     return (
         TaskCoverage(
-            n_benchmark=_item_count(source.n_benchmark, items, repeats, benchmark_size=True),
+            n_benchmark=benchmark,
             n_attempted=attempted,
             n_scored=scored_items,
             n_unanswered=unanswered,

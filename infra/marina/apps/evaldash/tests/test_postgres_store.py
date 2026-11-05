@@ -122,6 +122,26 @@ def test_catalog_projection_reports_repeat_items_and_trials(tmp_path, source_cou
     assert measurement["low"] == pytest.approx(0.42 - 1.96 * repeat.stderr, abs=1e-5)
 
 
+def test_capped_repeat_uses_full_benchmark_in_item_units(tmp_path):
+    source = tmp_path / "fixtures"
+    fixtures.build_fixtures(str(source))
+    record = next(record for record in list_records(str(source)) if record.evaluation.name == "aime24")
+    metrics = {**record.metrics["aime24"], "num_total": 29.0, "solved_avg": 12.0, "accuracy_avg": 12.0 / 29}
+    record = record.model_copy(
+        update={
+            "metrics": {"aime24": metrics},
+            "coverage": {"aime24": TaskCoverage(n_benchmark=300, n_attempted=290, n_scored=290)},
+        }
+    )
+
+    projected = EvalRunRecord.model_validate(results_db.run_row(record)["record"])
+    headline = record_headline(projected)
+    assert headline is not None
+    assert projected.coverage["aime24"].n_benchmark == 30
+    assert (headline["n_attempted"], headline["n_scored"]) == (29, 29)
+    assert headline["benchmark_rate"] == pytest.approx(29 / 30)
+
+
 @pytest.mark.parametrize("source_count", [30, 300, None])
 def test_catalog_projection_recovers_historical_ungraded_or_absent_coverage(tmp_path, source_count):
     source = tmp_path / "fixtures"
