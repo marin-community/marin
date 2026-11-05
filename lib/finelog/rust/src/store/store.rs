@@ -3210,7 +3210,8 @@ mod tests {
                     "SELECT * FROM \"iris.worker\"",
                 )
                 .await
-                .unwrap_err();
+                .err()
+                .expect("the captured snapshot deadline must expire");
                 assert!(
                     crate::query::is_read_deadline(&error),
                     "a later policy change must not extend an existing snapshot's lifetime"

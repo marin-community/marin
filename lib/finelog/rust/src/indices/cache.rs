@@ -501,9 +501,7 @@ impl IndexCache {
         }
     }
 
-    /// Query loads never wait on the synchronous loader's Condvar. A cancelled
-    /// caller owns no shared in-flight entry; concurrent cold loads may race to
-    /// publish the same immutable value into the existing cache.
+    /// Load optional query index state within the current file's deadline.
     async fn get_or_load_async<T>(
         &self,
         key: Key,
@@ -524,6 +522,8 @@ impl IndexCache {
             scope.stats.cache_hits.fetch_add(1, Ordering::Relaxed);
             return Some(value);
         }
+        // Keep query cancellation independent of synchronous loaders. Duplicate
+        // cold loads can race; only one immutable value is retained below.
         self.load_attempts.fetch_add(1, Ordering::Relaxed);
         match &key {
             Key::Header(..) => self.header_load_attempts.fetch_add(1, Ordering::Relaxed),
