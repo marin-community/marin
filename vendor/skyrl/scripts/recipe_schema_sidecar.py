@@ -1,27 +1,40 @@
 """Generation-only types, open mappings, code-default keys and public class names."""
 
+from enum import Enum
 from types import MappingProxyType
 
 from marinskyrl import runtime_options
+from marinskyrl.environment_contract import DebugMode
+from marinskyrl.resource_locator import RolloutModelLoading
+from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
+from skyrl_train.config.query_bias import GrugQueryBiasUpdateMode
+from skyrl_train.config.weight_sync_pause import WeightSyncPauseMode
+from skyrl_train.curriculum import SamplingKind, WeightingKind
+from skyrl_train.dataset.preference_pairs import PreferencePairFormat
+from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.hf_export_schema import HFUploadMode
+from skyrl_train.rollouts.buffer import BatchPolicy
+from skyrl_train.trajectory_selection import TrajectorySelectorKind
+from skyrl_train.utils.trainer_utils import ResumeMode
 from marinskyrl.distillation import DistillationObjectiveKind, DistillationRewardMode
 from skyrl_train.config.ftpo import FTPOBoundary
 from skyrl_train.config.objective_spec import KLEstimator, LossReduction
-from skyrl_train.dynamic_sampling import DynamicSamplingType
+from skyrl_train.dynamic_sampling import DynamicSamplingRewardSource, DynamicSamplingType
 from skyrl_train.group_admission import GroupAdvantageKind
 from skyrl_train.utils.advantage_estimators import AdvantageEstimatorRegistry
 
 
 def _literal(choices) -> str:
-    return "Literal[" + ", ".join(repr(str(choice)) for choice in choices) + "]"
+    return "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
 
 
 TYPES = MappingProxyType(
     {
         "terminal_bench": "OpenMap | None",
         "trainer.strategy": 'Literal["megatron"]',
-        "trainer.resume_mode": 'Literal["none", "latest", "from_path"]',
+        "trainer.resume_mode": _literal(ResumeMode),
         "trainer.progress.mode": 'Literal["auto", "tqdm", "logging"]',
-        "trainer.debug_mode": 'Literal["off", "light", "distributed"]',
+        "trainer.debug_mode": _literal(DebugMode),
         "trainer.preflight_gate.on_failure": 'Literal["abort", "warn"]',
         "trainer.logger": "LoggingBackend | tuple[LoggingBackend, ...]",
         "trainer.policy.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
@@ -32,10 +45,10 @@ TYPES = MappingProxyType(
         "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": (
             'Literal["fully_reshardable", "dp_reshardable"]'
         ),
-        "trainer.rollout_buffer.batch_policy": 'Literal["full_batch", "rolling"]',
-        "trainer.hf_upload_mode": 'Literal["latest", "all"]',
-        "checkpoint_export.hf_upload_mode": 'Literal["latest", "all"]',
-        "trainer.policy.grug_query_bias_update_mode": 'Literal["frozen", "interpolate", "loss_free", "replace"]',
+        "trainer.rollout_buffer.batch_policy": _literal(BatchPolicy),
+        "trainer.hf_upload_mode": _literal(HFUploadMode),
+        "checkpoint_export.hf_upload_mode": _literal(HFUploadMode),
+        "trainer.policy.grug_query_bias_update_mode": _literal(GrugQueryBiasUpdateMode),
         "trainer.algorithm.advantage_estimator": _literal(AdvantageEstimatorRegistry.list_available()),
         "trainer.algorithm.resolved_group_advantage.kind": _literal(GroupAdvantageKind),
         "trainer.algorithm.policy_loss_type": _literal(runtime_options.PolicyLossType),
@@ -47,7 +60,7 @@ TYPES = MappingProxyType(
         ),
         "trainer.algorithm.off_policy_correction_rules": "tuple[CorrectionRule, ...] | None",
         "trainer.algorithm.dynamic_sampling.type": _literal(DynamicSamplingType) + " | None",
-        "trainer.algorithm.dynamic_sampling.informative_on": 'Literal["shaped", "unshaped"]',
+        "trainer.algorithm.dynamic_sampling.informative_on": _literal(DynamicSamplingRewardSource),
         "trainer.algorithm.distillation": "Distillation | None",
         "trainer.algorithm.distillation.objective": _literal(DistillationObjectiveKind),
         "trainer.algorithm.distillation.reward_mode": _literal(DistillationRewardMode),
@@ -58,12 +71,12 @@ TYPES = MappingProxyType(
         "generator.weight_sync_backend": 'Literal["nccl", "gloo"]',
         "generator.weight_sync_transport": _literal(runtime_options.WeightSyncTransport),
         "generator.override_existing_update_group": 'Literal["auto", "enable", "disable"]',
-        "generator.weight_sync_pause.mode": 'Literal["abort", "wait", "keep"]',
+        "generator.weight_sync_pause.mode": _literal(WeightSyncPauseMode),
         "generator.r3_transport": _literal(runtime_options.R3Transport),
         "generator.gdn_backend": _literal(runtime_options.GDNBackend),
         "generator.chat_template": "ChatTemplate | None",
         "generator.chat_template.source": 'Literal["name", "file"]',
-        "generator.error_handling.default_error_treatment": 'Literal["mask", "zero", "passthrough"]',
+        "generator.error_handling.default_error_treatment": _literal(ErrorTreatment),
         "generator.trajectory_retention.phases": 'tuple[Literal["train", "eval"], ...]',
         "trainer.policy.model.lora.dropout": "Annotated[int | float, Field(ge=0, le=1)]",
         "trainer.critic.model.lora.dropout": "Annotated[int | float, Field(ge=0, le=1)]",
@@ -122,10 +135,9 @@ TYPES = MappingProxyType(
         "generator.sampling_params.stop": "tuple[str, ...] | None",
         "generator.eval_sampling_params.stop": "tuple[str, ...] | None",
         "data.sampling.kind": (
-            'Literal["domain-weighted", "naive", "thompson", "learnability", "grade-uniform", '
-            '"grade-adaptive", "grade-prior"] | None'
+            _literal(SamplingKind) + " | None"
         ),
-        "data.sampling.weighting": 'Literal["pass-variance", "group-informative"]',
+        "data.sampling.weighting": _literal(WeightingKind),
         "data.sampling.domain_weights": "NumberMap",
         "data.sampling.seed": "NonNegativeInt | None",
         "trainer.collective_phase_diagnostics": "bool | None",
@@ -134,7 +146,7 @@ TYPES = MappingProxyType(
         "generator.error_handling.zero_exceptions": "tuple[str, ...]",
         "generator.trajectory_retention.redact_fields": "tuple[str, ...]",
         "data.terminal_bench_data": "tuple[str, ...]",
-        "trainer.trajectory_selector.type": 'Literal["best_of_n"] | None',
+        "trainer.trajectory_selector.type": _literal(TrajectorySelectorKind) + " | None",
         "trainer.policy.grug_query_bias_interpolation_weight": "int | float | None",
         "trainer.policy.grug_query_bias_update_rate": "int | float | None",
         "trainer.policy.model.revision": "str | None",
@@ -162,8 +174,8 @@ TYPES = MappingProxyType(
         "checkpoint_export.export_root": "str | None",
         "checkpoint_export.hf_hub_repo_id": "str | None",
         "trainer.evaluation_runner": _literal(runtime_options.EvaluationRunner),
-        "generator.model_loading": 'Literal["stream", "stage_local"]',
-        "data.preference_pair_format": 'Literal["tokenized", "text"]',
+        "generator.model_loading": _literal(RolloutModelLoading),
+        "data.preference_pair_format": _literal(PreferencePairFormat),
     }
 )
 
@@ -215,7 +227,7 @@ UNDECLARED = MappingProxyType(
         "trainer.algorithm.distillation.residency.minimum_residency_seconds": ("int | float", Ellipsis),
         "trainer.algorithm.distillation.domain_gradient_balance.target_shares": ("NumberMap", Ellipsis),
         "trainer.algorithm.distillation.domain_gradient_balance.gap_scale_alpha": ("int | float", Ellipsis),
-        "generator.speculative_decoding.method": ('Literal["eagle3"]', Ellipsis),
+        "generator.speculative_decoding.method": (_literal(SpeculativeDecodingMethod), Ellipsis),
         "generator.speculative_decoding.model.source_uri": ("str", Ellipsis),
         "generator.speculative_decoding.model.source_identity": ("str", Ellipsis),
         "generator.speculative_decoding.num_speculative_tokens": ("PositiveInt", Ellipsis),
@@ -259,6 +271,6 @@ NAMES = MappingProxyType(
         "trainer.ref.megatron_config.torch_profiler_config": "RefTorchProfilerConfig",
         "trainer.policy.megatron_config.optimizer_config_kwargs": "OptimizerConfigKwargs",
         "trainer.ref.megatron_config.optimizer_config_kwargs": "RefOptimizerConfigKwargs",
-        "generator.speculative_decoding.model": "Model",
+        "generator.speculative_decoding.model": "SpeculatorModel",
     }
 )

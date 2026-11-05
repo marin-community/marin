@@ -1,4 +1,6 @@
 import copy
+from collections.abc import Iterator, Mapping
+from typing import Any
 from dataclasses import fields, replace
 from types import SimpleNamespace
 from typing import get_args
@@ -12,13 +14,13 @@ from skyrlrecipe.declared import Callback, Teacher
 from skyrl_train.callbacks.builtin import CALLBACK_REGISTRY
 from marinskyrl import speculative_decoding
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPlacement, TeacherSource
-from skyrlrecipe.documents import MISSING, get_path, leaves, set_path
+from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.ownership import LAUNCH_PATHS
 from skyrlrecipe.rules import SKYRL_INTERNAL_ENGINE_KWARGS
 from scripts.recipe_schema_sidecar import OPEN, UNDECLARED
 from skyrl_train.config.ftpo import FTPOConfig
 
-PENDING_PR3 = {
+LAUNCH_INPUT_CHANGES = {
     "discard": frozenset({"data.train_data", "data.val_data"}),
     "clamp": frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"}),
 }
@@ -34,7 +36,17 @@ FILL_WHEN_UNSET = frozenset(
 )
 
 
-def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_pending_discards(tmp_path, monkeypatch):
+def leaves(document: Mapping[str, Any], prefix: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], Any]]:
+    """Yield indivisible values; empty mappings contribute a leaf."""
+    for key, value in document.items():
+        path = (*prefix, key)
+        if isinstance(value, Mapping) and value:
+            yield from leaves(value, path)
+        else:
+            yield path, value
+
+
+def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_launch_input_changes(tmp_path, monkeypatch):
     source = tmp_path / "ownership.yaml"
     source.write_text(
         "entrypoint: terminal_bench\nterminal_bench: {}\ncontext_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n"
@@ -84,7 +96,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_pend
         set_path(seeded, ".".join(parts), sentinel)
     for path in LAUNCH_PATHS:
         set_path(seeded, path, False if path == "trainer.export_hf_artifact" else f"author-{suffix}")
-    for path in FILL_WHEN_UNSET | PENDING_PR3["clamp"]:
+    for path in FILL_WHEN_UNSET | LAUNCH_INPUT_CHANGES["clamp"]:
         set_path(seeded, path, f"author-{suffix}" if path == "trainer.run_name" else number)
     section_values = {
         name: seeded[name]
@@ -120,8 +132,8 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_pend
         ".".join(parts) for parts, before in leaves(section_values) if get_path(result, ".".join(parts)) != before
     }
     assert LAUNCH_PATHS <= changed
-    assert changed - LAUNCH_PATHS == PENDING_PR3["discard"]
-    for path in FILL_WHEN_UNSET | PENDING_PR3["clamp"]:
+    assert changed - LAUNCH_PATHS == LAUNCH_INPUT_CHANGES["discard"]
+    for path in FILL_WHEN_UNSET | LAUNCH_INPUT_CHANGES["clamp"]:
         assert get_path(result, path) == get_path(seeded, path)
     absent = copy.deepcopy(section_values)
     for path in FILL_WHEN_UNSET:
@@ -131,10 +143,10 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_pend
     for path in FILL_WHEN_UNSET:
         assert get_path(defaults, path) not in (MISSING, None)
     oversized = copy.deepcopy(section_values)
-    for path in PENDING_PR3["clamp"]:
+    for path in LAUNCH_INPUT_CHANGES["clamp"]:
         set_path(oversized, path, 31)
     clamped = launcher._skyrl_config_sections(replace(parsed, **oversized), parameters, SimpleNamespace(gpus_per_node=8))
-    for path in PENDING_PR3["clamp"]:
+    for path in LAUNCH_INPUT_CHANGES["clamp"]:
         assert get_path(clamped, path) == 8
     following = OmegaConf.create(full)
     following.generator.max_turns = 987654

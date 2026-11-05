@@ -1,5 +1,7 @@
 import copy
 import json
+import sys
+from types import ModuleType
 from pathlib import Path
 
 import pytest
@@ -128,7 +130,7 @@ def test_repository_generation_matches_hydra_author_defaults_and_all_group_optio
         assert schema.SkyRLRecipe.from_document(document).to_skyrl() == document, path.name
 
 
-def test_generator_preserves_observed_types_comments_following_nulls_and_sidecar_drift(tmp_path):
+def test_generator_preserves_observed_types_comments_and_sidecar_drift(tmp_path, monkeypatch):
     configs = tmp_path / "config"
     configs.mkdir()
     (configs / "ppo_base_config.yaml").write_text(BASE)
@@ -140,11 +142,13 @@ def test_generator_preserves_observed_types_comments_following_nulls_and_sidecar
     sidecar = {}
     exec(SIDECAR, sidecar)
     sources = generator.source_documents(configs)
-    owners = {"DERIVED_PATHS": frozenset(), "LAUNCH_PATHS": frozenset()}
-    code = generator.render_sources(sources, sidecar, owners)["sections.py"]
-    namespace = {"__name__": "skyrlrecipe._fixture", "__package__": "skyrlrecipe"}
-    exec(compile(code, "generated_fixture.py", "exec"), namespace)
-    model = namespace["RecipeSections"]
+    owned = frozenset()
+    code = generator.render_sections(generator.render_schema(sources, sidecar, owned), owned)
+    module = ModuleType("skyrlrecipe._fixture")
+    module.__package__ = "skyrlrecipe"
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    exec(compile(code, "generated_fixture.py", "exec"), vars(module))
+    model = module.RecipeSections
     for value in (5, 5.0):
         document = {"trainer": {"algorithm": {"cispo": {"cispo_eps_clip_high": value}}}}
         recipe = model.model_validate_json(json.dumps(document))
@@ -154,7 +158,7 @@ def test_generator_preserves_observed_types_comments_following_nulls_and_sidecar
     unnamed = copy.deepcopy(sidecar)
     del unnamed["NAMES"]["trainer.critic.model"]
     with pytest.raises(ValueError, match="trainer.critic.model"):
-        generator.render_sources(sources, unnamed, owners)
+        generator.render_schema(sources, unnamed, owned)
     for name, key, value in (
         ("TYPES", "trainer.misspelled", "int"),
         ("UNDECLARED", "trainer.ckpt_interval", ("int", 99)),
@@ -162,4 +166,4 @@ def test_generator_preserves_observed_types_comments_following_nulls_and_sidecar
         changed = copy.deepcopy(sidecar)
         changed[name][key] = value
         with pytest.raises(ValueError):
-            generator.render_sources(sources, changed, owners)
+            generator.render_schema(sources, changed, owned)
