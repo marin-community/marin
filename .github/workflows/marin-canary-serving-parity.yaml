@@ -67,7 +67,7 @@ jobs:
             -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" -e HF_TOKEN "$HF_TOKEN" \
             -- uv run --package marin-core --group test --extra cpu pytest \
             tests/cluster/vllm/test_snowball_backend_parity.py \
-            -m cluster -o addopts= --import-mode=importlib -x -k "vllm")
+            -m cluster -o addopts= --import-mode=importlib -x -k "vllm and not levanter")
           test -n "$JOB_ID"
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"

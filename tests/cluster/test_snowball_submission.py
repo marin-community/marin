@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import re
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -31,3 +35,35 @@ def test_nightly_bundle_contains_pytest_entrypoint_and_ancestor_fixtures():
         if path.exists()
     )
     assert required <= files
+
+
+def test_nightly_selection_excludes_manual_levanter_arm():
+    root = Path(__file__).resolve().parents[2]
+    workflow = yaml.safe_load((root / ".github/workflows/marin-canary-serving-parity.yaml").read_text())
+    submit = next(step for step in workflow["jobs"]["logprob-check"]["steps"] if step.get("id") == "submit")
+    selection = re.search(r'-k "([^"]+)"', submit["run"]).group(1)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/cluster/vllm/test_snowball_backend_parity.py",
+            "-m",
+            "cluster",
+            "-o",
+            "addopts=",
+            "--import-mode=importlib",
+            "-k",
+            selection,
+            "--collect-only",
+            "-q",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=45,
+        env={**os.environ, "JAX_PLATFORMS": "cpu"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    selected = set(re.findall(r"test_snowball_export_matches_representative_goldens\[([^]]+)\]", result.stdout))
+    assert selected == {"vllm-gpu-pp1", "vllm-gpu-pp2", "vllm-tpu-v4-tp16"}

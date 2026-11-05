@@ -10,9 +10,12 @@ interactive H100 validation::
       -m cluster -o addopts= --import-mode=importlib -vv -s
 """
 
+import inspect
 import uuid
 
+import cloudpickle
 import pytest
+from fray.iris_backend import convert_entrypoint
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.client.client import IrisClient
 from iris.cluster.setup_scripts import default_setup_script
@@ -36,8 +39,6 @@ from tests.cluster.conftest import MARIN_GPU_CLUSTER
 
 PENDING_TIMEOUT = 30 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
-
-pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 300)]
 
 
 def _levanter_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
@@ -68,7 +69,6 @@ def _vllm_job(
         name=f"snowball-parity-vllm-pp{pipeline_parallel_size}-{uuid.uuid4().hex[:8]}",
         entrypoint=Entrypoint.from_callable(
             score_vllm_against_goldens,
-            score_tpu_vllm_against_goldens,
             args=[goldens, attention_backend, pipeline_parallel_size],
         ),
         resources=ResourceConfig.with_gpu(
@@ -81,7 +81,7 @@ def _vllm_job(
                 "VLLM_USE_FLASHINFER_SAMPLER": "0",
             },
         ),
-        priority=job_pb2.PRIORITY_BAND_PRODUCTION,
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
         replicas=pipeline_parallel_size,
         max_retries_failure=0,
         max_retries_preemption=0,
@@ -108,13 +108,16 @@ def _tpu_vllm_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
         resources=resources,
         environment=create_environment(extras=["cpu"], env_vars={"JAX_PLATFORMS": "cpu"}),
         ports=RAY_PORTS,
-        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
         max_retries_failure=0,
         max_retries_preemption=0,
         max_task_failures=0,
     )
 
 
+@pytest.mark.cluster
+@pytest.mark.slow
+@pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 300)
 @pytest.mark.parametrize("backend", ["levanter-gpu", "vllm-gpu-pp1", "vllm-gpu-pp2", "vllm-tpu-v4-tp16"])
 def test_snowball_export_matches_representative_goldens(
     marin_gpu_client: IrisClient,
@@ -136,3 +139,20 @@ def test_snowball_export_matches_representative_goldens(
         pending_timeout=PENDING_TIMEOUT,
         runtime_timeout=RUNTIME_TIMEOUT,
     )
+
+
+@pytest.mark.parametrize("backend", ["vllm-gpu-pp1", "vllm-gpu-pp2", "vllm-tpu-v4-tp16"])
+def test_vllm_job_payload_survives_worker_serialization(backend):
+    goldens = read_representative_goldens()
+    request = (
+        _tpu_vllm_job(goldens) if backend == "vllm-tpu-v4-tp16" else _vllm_job(goldens, "FLASH_ATTN", int(backend[-1]))
+    )
+    entrypoint = convert_entrypoint(request.entrypoint)
+    function, args, kwargs = cloudpickle.loads(entrypoint.workdir_files["_callable.pkl"])
+    bound = inspect.signature(function).bind(*args, **kwargs)
+    assert bound.arguments["goldens"] == goldens
+    if backend == "vllm-tpu-v4-tp16":
+        assert bound.arguments["cpus_per_host"] == request.resources.cpu
+        assert bound.arguments["weights"] == SNOWBALL.tpu_export_uri
+    else:
+        assert bound.arguments["pipeline_parallel_size"] == int(backend[-1])
