@@ -1,8 +1,6 @@
 import asyncio
 import json
 import logging
-import subprocess
-import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +20,6 @@ from harbor.bridges.acp import (
     ACPBridge,
     build_acpx_config,
     extract_target_usage,
-    install_acpx,
 )
 from harbor.bridges.base import BaseBridge
 from harbor.cli.jobs import _validate_bridge_target_agents
@@ -118,145 +115,6 @@ class TestACPConfig:
                 BridgeConfig(kind=BridgeKind.ACP, kwargs={"unknown": True}),
                 GeminiCli(logs_dir=tmp_path),
             )
-
-
-@pytest.mark.unit
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="ACPX prerequisite setup executes POSIX container shell commands",
-)
-class TestACPXInstall:
-    @staticmethod
-    def _write_command(bin_dir: Path, name: str, content: str = "exit 0\n") -> None:
-        path = bin_dir / name
-        path.write_text(f"#!/bin/sh\n{content}")
-        path.chmod(0o755)
-
-    @classmethod
-    async def _run_prerequisite_setup(
-        cls,
-        tmp_path: Path,
-        *,
-        commands: tuple[str, ...],
-        package_manager: str | None = "apk",
-    ) -> tuple[subprocess.CompletedProcess[str], Path]:
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        for command in commands:
-            cls._write_command(bin_dir, command)
-
-        install_log = tmp_path / "install.log"
-        if package_manager is not None:
-            cls._write_command(
-                bin_dir,
-                package_manager,
-                (
-                    f"printf '%s\\n' \"$*\" > {install_log}\n"
-                    'for package in "$@"; do\n'
-                    '  case "$package" in\n'
-                    "    curl|bash)\n"
-                    f"      printf '#!/bin/sh\\nexit 0\\n' > {bin_dir}/\"$package\"\n"
-                    f'      /bin/chmod 755 {bin_dir}/"$package"\n'
-                    "      ;;\n"
-                    "  esac\n"
-                    "done\n"
-                ),
-            )
-
-        environment = MagicMock()
-        prep_result: subprocess.CompletedProcess[str] | None = None
-
-        async def exec_side_effect(*args, **kwargs):
-            nonlocal prep_result
-            if kwargs.get("env") == {"DEBIAN_FRONTEND": "noninteractive"}:
-                prep_result = subprocess.run(
-                    ["/bin/sh", "-c", kwargs["command"]],
-                    env={"PATH": str(bin_dir)},
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                return SimpleNamespace(
-                    return_code=prep_result.returncode,
-                    stdout=prep_result.stdout,
-                    stderr=prep_result.stderr,
-                )
-            if "npm install -g acpx@" in kwargs.get("command", ""):
-                return SimpleNamespace(
-                    return_code=0,
-                    stdout="none:/opt/node:/opt/acpx\n",
-                    stderr="",
-                )
-            return SimpleNamespace(return_code=0, stdout="", stderr="")
-
-        environment.exec = AsyncMock(side_effect=exec_side_effect)
-
-        try:
-            await install_acpx(environment)
-        except RuntimeError:
-            if prep_result is None or prep_result.returncode == 0:
-                raise
-
-        assert prep_result is not None
-        return prep_result, install_log
-
-    @pytest.mark.asyncio
-    async def test_installs_bash_when_curl_is_already_available(self, tmp_path: Path):
-        result, install_log = await self._run_prerequisite_setup(
-            tmp_path,
-            commands=("curl",),
-        )
-
-        assert result.returncode == 0
-        assert install_log.read_text().split() == ["add", "--no-cache", "bash"]
-
-    @pytest.mark.asyncio
-    async def test_skips_package_install_when_curl_and_bash_are_available(
-        self, tmp_path: Path
-    ):
-        result, install_log = await self._run_prerequisite_setup(
-            tmp_path,
-            commands=("curl", "bash"),
-        )
-
-        assert result.returncode == 0
-        assert not install_log.exists()
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("package_manager", "expected_arguments"),
-        [
-            ("apt-get", ["install", "-y", "curl", "bash"]),
-            ("dnf", ["install", "-y", "curl", "bash"]),
-        ],
-    )
-    async def test_installs_both_prerequisites_with_existing_package_managers(
-        self,
-        tmp_path: Path,
-        package_manager: str,
-        expected_arguments: list[str],
-    ):
-        result, install_log = await self._run_prerequisite_setup(
-            tmp_path,
-            commands=(),
-            package_manager=package_manager,
-        )
-
-        assert result.returncode == 0
-        assert install_log.read_text().split() == expected_arguments
-
-    @pytest.mark.asyncio
-    async def test_reports_missing_prerequisite_without_package_manager(
-        self, tmp_path: Path
-    ):
-        result, _ = await self._run_prerequisite_setup(
-            tmp_path,
-            commands=("curl",),
-            package_manager=None,
-        )
-
-        assert result.returncode == 1
-        assert result.stderr.strip() == "Missing ACPX prerequisite: bash"
 
 
 @pytest.mark.unit
@@ -451,9 +309,7 @@ class TestACPExportAndUsage:
         agent = GeminiCli(logs_dir=tmp_path)
         agent.acp_install = AsyncMock()
         agent.acp_command = MagicMock(return_value=["gemini", "--acp"])
-        install = AsyncMock()
         write_config = AsyncMock()
-        monkeypatch.setattr("harbor.bridges.acp.install_acpx", install)
         monkeypatch.setattr("harbor.bridges.acp.write_acpx_config", write_config)
         environment = MagicMock()
         environment.exec = AsyncMock(
@@ -464,7 +320,6 @@ class TestACPExportAndUsage:
         await bridge.setup(environment)
 
         agent.acp_install.assert_awaited_once_with(environment)
-        install.assert_awaited_once_with(environment)
         written = write_config.await_args.args[1]
         assert written["agents"][ACP_TARGET_AGENT_KEY]["command"] == "gemini"
         environment.exec.assert_awaited_once_with("acpx sessions ensure")
@@ -492,7 +347,6 @@ class TestACPExportAndUsage:
             ],
         )
         agent.acp_install = AsyncMock()
-        monkeypatch.setattr("harbor.bridges.acp.install_acpx", AsyncMock())
         write_config = AsyncMock()
         monkeypatch.setattr("harbor.bridges.acp.write_acpx_config", write_config)
         environment = MagicMock()
@@ -565,7 +419,9 @@ class TestTrialBridgeLifecycle:
             _bridge_cleanup_task=None,
             _bridge_trajectory_path=tmp_path / "bridge-trajectory.json",
             _agent_setup_timeout_sec=5,
-            config=SimpleNamespace(trial_name="bridge-test"),
+            config=SimpleNamespace(trial_name="bridge-test", trial_cleanup_grace_sec=5),
+            _first_phase_timeout=None,
+            _pending_cleanup_tasks=set(),
             logger=logging.getLogger("bridge-lifecycle-test"),
             _bridge_exec_env=lambda: {
                 "BRIDGE_SECRET": "secret",
@@ -574,6 +430,10 @@ class TestTrialBridgeLifecycle:
             },
         )
         trial._cleanup_bridge = lambda user: Trial._cleanup_bridge(trial, user)
+        trial._await_phase = lambda awaitable, **kwargs: Trial._await_phase(
+            trial, awaitable, **kwargs
+        )
+        trial._track_cleanup_task = lambda task: Trial._track_cleanup_task(trial, task)
         return trial
 
     def test_claude_code_acp_command_honors_extra_env_routing(self, tmp_path: Path):
@@ -615,7 +475,7 @@ class TestTrialBridgeLifecycle:
         assert trial._bridge_closed is True
 
     @pytest.mark.asyncio
-    async def test_cleanup_context_failure_falls_back_to_unscoped_teardown(
+    async def test_cleanup_context_failure_is_visible_to_trial_finalization(
         self, tmp_path: Path
     ):
         trial = self._trial_stub(tmp_path, ready=False)
@@ -623,9 +483,9 @@ class TestTrialBridgeLifecycle:
         broken_context.__enter__.side_effect = RuntimeError("context failed")
         trial.agent_environment.scoped_exec_env.return_value = broken_context
 
-        await Trial._close_bridge(trial, user=None)
+        with pytest.raises(RuntimeError, match="context failed"):
+            await Trial._close_bridge(trial, user=None)
 
-        trial.bridge.teardown.assert_awaited_once()
         assert trial._bridge_closed is True
 
     @pytest.mark.asyncio
@@ -665,7 +525,8 @@ class TestTrialBridgeLifecycle:
             order.append(name)
 
         async def close(**_kwargs) -> None:
-            await record("close")
+            if "close" not in order:
+                await record("close")
 
         async def recover() -> None:
             await record("recover")
@@ -678,6 +539,7 @@ class TestTrialBridgeLifecycle:
                 install_only=False,
                 trial_name="bridge-test",
                 agent=SimpleNamespace(),
+                trial_cleanup_grace_sec=5,
             ),
             task=SimpleNamespace(
                 config=SimpleNamespace(agent=SimpleNamespace(user=None))
@@ -690,12 +552,19 @@ class TestTrialBridgeLifecycle:
             _run=AsyncMock(),
             _record_exception=AsyncMock(),
             _close_bridge=AsyncMock(side_effect=close),
-            _recover_outputs_safely=AsyncMock(side_effect=recover),
+            _recover_outputs=recover,
+            _collect_runtime_logs=AsyncMock(),
+            _cleanup_agents=AsyncMock(),
+            _stop_agent_environment=AsyncMock(),
             _finalize=AsyncMock(side_effect=finalize),
             _scrub_jobs_dir=MagicMock(),
             _close_logger_handler=MagicMock(),
         )
 
+        trial._recover_outputs_safely = lambda: Trial._recover_outputs_safely(trial)
+        trial._await_phase = lambda awaitable, **kwargs: Trial._await_phase(
+            trial, awaitable, **kwargs
+        )
         await Trial.run(trial)
 
         assert order == ["close", "recover", "finalize"]
@@ -708,7 +577,8 @@ class TestTrialBridgeLifecycle:
             raise asyncio.CancelledError()
 
         async def close(**_kwargs) -> None:
-            order.append("close")
+            if "close" not in order:
+                order.append("close")
 
         async def recover() -> None:
             order.append("recover")
@@ -717,7 +587,9 @@ class TestTrialBridgeLifecycle:
             order.append("finalize")
 
         trial = SimpleNamespace(
-            config=SimpleNamespace(install_only=False, trial_name="bridge-test"),
+            config=SimpleNamespace(
+                install_only=False, trial_name="bridge-test", trial_cleanup_grace_sec=5
+            ),
             task=SimpleNamespace(
                 config=SimpleNamespace(agent=SimpleNamespace(user=None))
             ),
@@ -729,28 +601,38 @@ class TestTrialBridgeLifecycle:
             _run=AsyncMock(),
             _record_exception=AsyncMock(),
             _close_bridge=AsyncMock(side_effect=close),
-            _recover_outputs_safely=AsyncMock(side_effect=recover),
+            _recover_outputs=recover,
+            _collect_runtime_logs=AsyncMock(),
+            _cleanup_agents=AsyncMock(),
+            _stop_agent_environment=AsyncMock(),
             _finalize=AsyncMock(side_effect=finalize),
             _scrub_jobs_dir=MagicMock(),
             _close_logger_handler=MagicMock(),
         )
 
+        trial._recover_outputs_safely = lambda: Trial._recover_outputs_safely(trial)
+        trial._await_phase = lambda awaitable, **kwargs: Trial._await_phase(
+            trial, awaitable, **kwargs
+        )
         with pytest.raises(asyncio.CancelledError):
             await Trial.run(trial)
 
         assert order == ["close", "recover", "finalize"]
 
     @pytest.mark.asyncio
-    async def test_teardown_timeout_is_best_effort(self, tmp_path: Path):
+    async def test_teardown_timeout_is_visible_to_trial_finalization(
+        self, tmp_path: Path
+    ):
         trial = self._trial_stub(tmp_path, ready=False)
-        trial._agent_setup_timeout_sec = 0.01
+        trial.config.trial_cleanup_grace_sec = 0.01
 
         async def slow_teardown(_environment) -> None:
             await asyncio.sleep(60)
 
         trial.bridge.teardown.side_effect = slow_teardown
 
-        await Trial._close_bridge(trial, user=None)
+        with pytest.raises(TimeoutError):
+            await Trial._close_bridge(trial, user=None)
 
         assert trial._bridge_closed is True
 

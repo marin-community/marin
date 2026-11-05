@@ -131,9 +131,12 @@ section { padding-block: 52px 4px; }
 .gate.wide { grid-column: 1 / -1; }
 .gate.planned { border-style: dashed; }
 .capctl { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
-.capctl input, .nodes-in, .priority-in { width: 64px; font: 13px var(--mono); padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.capctl input, .nodes-in, .priority-in, .reason { width: 64px; font: 13px var(--mono); padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
 .grant { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .priority-in { width: auto; }
+.reason { width: 180px; font-family: var(--body); }
+.instructions { flex-basis: 100%; min-width: 0; font: 13px var(--body); padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); resize: vertical; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
 .grant-help { margin: 0 0 8px; max-width: 72ch; }
 .btn.small { font-size: 11px; padding: 2px 8px; margin-left: 8px; }
 .gate h3 .pill { vertical-align: middle; margin-left: 6px; }
