@@ -54,7 +54,7 @@ def _bucket_component(store: str, cell: str, stats_path: str) -> LengthSkewDatas
             flat_cache=True,
         ),
         threshold=LONG_CONTEXT_THRESHOLD,
-        long_repetitions=LONG_CONTEXT_SKEW,
+        long_weight=LONG_CONTEXT_SKEW,
         stats_path=stats_path,
         stats_key=cell,
         tags=[cell],

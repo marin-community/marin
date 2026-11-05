@@ -365,14 +365,33 @@ class ConcatDatasetComponent(DatasetComponentBase):
 @DatasetComponentBase.register_subclass("length_skew")
 @dataclass(frozen=True)
 class LengthSkewDatasetComponent(DatasetComponentBase):
-    """Repeat the virtual long-document stream of one cache within a mixture component."""
+    """Split a training cache into virtual buckets with a relative long-token sampling weight."""
 
     child: DatasetComponent
     threshold: int
-    long_repetitions: int
+    long_weight: float
     stats_path: str
     stats_key: str
     tags: list[str] | None = None
+
+
+def _length_bucket_weights(component: LengthSkewDatasetComponent, seq_len: int) -> dict[LengthBucket, float]:
+    stats = load_bucket_length_stats(component.stats_path).buckets[component.stats_key]
+    long_tokens = stats.tokens_above[component.threshold]
+    if component.long_weight <= 0:
+        raise ValueError("The long-token sampling weight must be positive")
+    weights = {
+        bucket: tokens * multiplier
+        for bucket, tokens, multiplier in (
+            (LengthBucket.SHORT, stats.total_tokens - long_tokens, 1.0),
+            (LengthBucket.LONG, long_tokens, component.long_weight),
+        )
+        if tokens >= seq_len
+    }
+    total = sum(weights.values())
+    if not total:
+        raise ValueError(f"Length-skew component {component.stats_key} has no {seq_len}-token sequences")
+    return {bucket: weight / total for bucket, weight in weights.items()}
 
 
 def _effective_pack(component: DatasetComponent) -> bool | int:
@@ -833,6 +852,19 @@ class LmDataConfig:
             else:
                 raise ValueError(f"Invalid train_weights type: {type(weights)}")
 
+        for name, component in self.components.items():
+            if not isinstance(component, LengthSkewDatasetComponent):
+                continue
+            if (
+                self.prior_context_phases
+                or name in (self.max_train_batches or {})
+                or name in (self.num_validation_sequences or {})
+            ):
+                raise ValueError("Length skew excludes context history and per-component sequence limits")
+            for bucket in LengthBucket:
+                if f"{name}/{bucket}" in self.components:
+                    raise ValueError(f"Component {name}/{bucket} collides with a virtual length bucket")
+
         if self.max_train_batches is not None or self.num_validation_sequences is not None:
             assert (
                 self.experiment_budget is None and self.target_budget is None
@@ -919,41 +951,29 @@ class LmDataConfig:
                 continue
 
             if isinstance(component, LengthSkewDatasetComponent):
+                if split != "train":
+                    continue
                 cache = caches.get(name)
                 if cache is None:
-                    if split == "train":
-                        raise ValueError(f"No cache available for length-skew component {name}")
-                    continue
+                    raise ValueError(f"No cache available for length-skew component {name}")
                 if not isinstance(component.child.format, TextLmDatasetFormat) or _effective_pack(component.child):
                     raise ValueError("Length skew requires an unpacked text cache")
                 stats = load_bucket_length_stats(component.stats_path)
                 cell_stats = stats.buckets[component.stats_key]
-                long_tokens = cell_stats.tokens_above[component.threshold]
-                short_tokens = cell_stats.total_tokens - long_tokens
                 index = LengthBucketIndex(
                     cache,
                     component.threshold,
                     statistics=cell_stats,
                     chunk_rows=stats.chunk_rows,
                 )
-                children: dict[str, AsyncDataset[GrugLmExample]] = {}
-                for bucket, repetitions, tokens in (
-                    (LengthBucket.SHORT, 1, short_tokens),
-                    (LengthBucket.LONG, component.long_repetitions, long_tokens),
-                ):
-                    if tokens < Pos.size:
-                        continue
+                for bucket in _length_bucket_weights(component, Pos.size):
                     token_dataset = LengthBucketTokenSeqDataset(index, Pos.size, bucket=bucket)
-                    lm_dataset = CausalLmDataset(
+                    datasets[f"{name}/{bucket}"] = CausalLmDataset(
                         token_dataset,
                         Pos,
                         eos_id=self.the_tokenizer.eos_token_id,
                         block_cross_document_attention=self.block_cross_document_attention,
                     )
-                    children.update({f"{bucket}-{copy}": lm_dataset for copy in range(repetitions)})
-                if not children:
-                    raise ValueError(f"Length-skew component {name} has no {Pos.size}-token sequences")
-                datasets[name] = ConcatDataset(children)
                 continue
 
             if not isinstance(component, DatasetComponent):
@@ -993,7 +1013,7 @@ class LmDataConfig:
     ) -> MixtureDataset[GrugLmExample]:
         """Return the training mixture, with each source's start offset when ``prior_context_phases`` is set."""
         mix_key, shuffle_key = jax.random.split(key)
-        weights = self.train_weights
+        weights = self._training_weights(Pos.size)
         if isinstance(weights, list):
             weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
         initial_batch_size = batch_schedule.batch_size_at_step(0)
@@ -1018,6 +1038,32 @@ class LmDataConfig:
                 else batch_schedule.global_data_offset_by_step(self.mixture_start_step)
             ),
         )
+
+    def _training_weights(self, seq_len: int) -> dict[str, float] | list[tuple[int, dict[str, float]]] | None:
+        bucket_weights = {
+            name: _length_bucket_weights(component, seq_len)
+            for name, component in self.components.items()
+            if isinstance(component, LengthSkewDatasetComponent) and self._has_nonzero_weight(name)
+        }
+        if not bucket_weights:
+            return self.train_weights
+
+        def expand(weights: dict[str, float]) -> dict[str, float]:
+            expanded: dict[str, float] = {}
+            for name, weight in weights.items():
+                if name in bucket_weights:
+                    expanded.update(
+                        {f"{name}/{bucket}": weight * share for bucket, share in bucket_weights[name].items()}
+                    )
+                else:
+                    expanded[name] = weight
+            return expanded
+
+        weights = self.train_weights
+        if isinstance(weights, list):
+            return [(step, expand(stage)) for step, stage in weights]
+        assert weights is not None
+        return expand(weights)
 
     def _prior_context_phase_offsets(
         self,
@@ -1201,7 +1247,8 @@ class LmDataConfig:
                     items.append((f"{name}/{child_name}", child))
                 continue
             if isinstance(component, LengthSkewDatasetComponent):
-                items.append((name, component.child))
+                if split == "train":
+                    items.append((name, component.child))
                 continue
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")

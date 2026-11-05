@@ -24,7 +24,6 @@ from zephyr.context import ZephyrContext
 from experiments.grug.moe_hero_ep import harrier_long_context_mix, launch_scaling_ladder
 from experiments.grug.moe_hero_ep.harrier_length_stats import write_length_stats
 from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
-    LONG_CONTEXT_SKEW,
     LONG_CONTEXT_TAG,
     harrier_long_context_data_config,
     long_document_share,
@@ -121,17 +120,27 @@ def _partition(token: int) -> tuple[str, str]:
     return next(key for key, value in FIRST_ID.items() if value == first_id)
 
 
-def test_skew_multiplies_long_mass_inside_the_bucket_and_keeps_outer_weights(fake_store):
+@pytest.mark.parametrize(
+    ("skew", "block_size", "expected_sequences"),
+    [
+        (1, 124, {("c01q0", "lte_64k"): 78, ("c01q0", "gt_64k"): 15, ("c02q3", "lte_64k"): 31}),
+        (8, 132, {("c01q0", "lte_64k"): 39, ("c01q0", "gt_64k"): 60, ("c02q3", "lte_64k"): 33}),
+    ],
+)
+def test_statistics_weight_bucket_sampling_and_preserve_cell_share(fake_store, skew, block_size, expected_sequences):
     data = fake_store.data_config()
-    bucket_sequences = {"c01q0": (832 + LONG_CONTEXT_SKEW * 160) // SEQ_LEN, "c02q3": 240 // SEQ_LEN}
-    block_reads = {"c01q0": 12, "c02q3": 4}
-    # Whole blocks that read c01q0 exactly once through its concatenated partitions.
-    blocks = bucket_sequences["c01q0"] // block_reads["c01q0"]
+    data = dataclasses.replace(
+        data,
+        components={
+            name: dataclasses.replace(component, long_weight=skew) for name, component in data.components.items()
+        },
+        mixture_block_size=block_size,
+    )
 
     dataset = data.train_set(
         hax.Axis("position", SEQ_LEN), BatchSchedule(1), key=jax.random.PRNGKey(0)
     ).as_sync_dataset()
-    examples = dataset.get_batch(list(range(START_STEP, START_STEP + blocks * data.mixture_block_size)))
+    examples = dataset.get_batch(list(range(START_STEP, START_STEP + block_size)))
     # EOS and padding sit outside the store's token ids.
     tokens = Counter(
         _partition(int(token))
@@ -140,24 +149,20 @@ def test_skew_multiplies_long_mass_inside_the_bucket_and_keeps_outer_weights(fak
         if 1000 <= token < 50_000
     )
 
-    assert (
-        sum(count for (cell, _), count in tokens.items() if cell == "c01q0") / SEQ_LEN == blocks * block_reads["c01q0"]
-    )
-    assert (
-        sum(count for (cell, _), count in tokens.items() if cell == "c02q3") / SEQ_LEN == blocks * block_reads["c02q3"]
-    )
-    assert tokens["c01q0", "gt_64k"] / tokens["c01q0", "lte_64k"] == pytest.approx(LONG_CONTEXT_SKEW * 160 / 832)
+    assert tokens == {partition: sequences * SEQ_LEN for partition, sequences in expected_sequences.items()}
 
 
-def test_bucket_without_long_tokens_reads_only_short_documents(fake_store):
+def test_virtual_buckets_contain_each_source_token_once(fake_store):
     data = fake_store.data_config()
-
-    bucket = data.train_sets(hax.Axis("position", SEQ_LEN), key=jax.random.PRNGKey(0))["c02q3"].as_sync_dataset()
-    assert len(bucket) == 240 // SEQ_LEN
-    examples = bucket.get_batch(list(range(len(bucket))))
-    assert all(
-        _partition(int(token)) == ("c02q3", "lte_64k") for example in examples for token in np.asarray(example.tokens)
-    )
+    sources = data.train_sets(hax.Axis("position", SEQ_LEN), key=jax.random.PRNGKey(0))
+    assert set(sources) == {"c01q0/short", "c01q0/long", "c02q3/short"}
+    for (cell, partition), first_id in FIRST_ID.items():
+        bucket = sources[f"{cell}/{'long' if partition == 'gt_64k' else 'short'}"].as_sync_dataset()
+        examples = bucket.get_batch(list(range(len(bucket))))
+        actual = np.concatenate([np.asarray(example.tokens) for example in examples])
+        expected = np.arange(first_id, first_id + TOKENS[cell][partition == "gt_64k"])
+        np.testing.assert_array_equal(np.sort(actual), expected)
+    assert data.validation_sets(hax.Axis("position", SEQ_LEN)) == {}
 
 
 def test_read_length_tokens(fake_store):
@@ -170,7 +175,7 @@ def test_reported_share_and_passes(monkeypatch):
 
     assert long_document_share(tokens, 1) == pytest.approx(0.125)
     assert long_document_share(tokens, 4) == pytest.approx(0.5 * 400 / 700)
-    # Half of 1000 tokens read a 700-token concatenation holding the long partition four times.
+    # Half of 1000 tokens go to a cell whose 100 long tokens get weight 400/700.
     assert long_partition_passes(tokens, 4, 1000) == pytest.approx({"a": 500 * 4 / 700})
     assert overall_long_partition_passes(tokens, 4, 1000) == pytest.approx(500 * 4 / 700)
 

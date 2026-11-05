@@ -278,8 +278,10 @@ thresholds; see the
 ### Long-context data
 
 The 262K extension reads the existing Harrier token caches. Each cache is split into virtual streams of documents
-at most 65,536 tokens and above 65,536 tokens. `harrier_long_context_mix.py` concatenates one short stream with
-eight references to the long stream within each cell, preserving the cell's cooldown weight. No token cache or
+at most 65,536 tokens and above 65,536 tokens. `harrier_long_context_mix.py` gives long tokens eight times the
+sampling weight of short tokens within each cell. For a cell with cooldown weight `w`, short-token total `S`, and
+long-token total `L`, the sampler weights are `w*S/(S+8L)` and `w*8L/(S+8L)`. The two weights sum to the cell's
+cooldown weight. Each virtual stream contains its source tokens once and is shuffled independently. No token cache or
 document index is written. Both launchers build the length-statistics artifact as a training dependency when this
 mix is selected. The scan uses one Zephyr task per Harrier cell, reads only cache offsets, and writes
 small per-cell metadata containing total tokens, tokens in documents strictly above 65,536, 131,072, and
@@ -289,9 +291,9 @@ small per-cell metadata containing total tokens, tokens in documents strictly ab
 uv run python -m experiments.grug.moe_hero_ep.harrier_length_stats
 ```
 
-The loader uses these totals for dataset lengths and builds the chunk index in memory. It reads document offsets
-only for the chunks touched by a batch, resolves batch reads concurrently, and retains at most four offset chunks
-per cell in an LRU cache. The command below reports the long-document token share and passes implied
+The loader uses these totals for sampling weights and dataset lengths, and builds the chunk index in memory. It reads
+document offsets only for the chunks touched by a batch, resolves batch reads concurrently, and retains at most four
+offset chunks per cell in an LRU cache. The command below reports the long-document token share and passes implied
 by the statistics:
 
 ```bash
@@ -308,8 +310,7 @@ later step continues in place, a retry repeats the same data, and a restore befo
 
 Diagnostic arms pass `--long-context-start-step N` with their `--restore-from` step and the same `--seed`. The sequence
 stream then depends only on steps since `N`, so a one-rack arm reads a prefix of what a partial-rack arm reads. The
-virtual long stream is repeated in the concatenation, so repeats start inside the first pass, and a bucket wraps to the start
-of the same shuffled order when it runs out.
+sampler advances through each selected bucket's shuffled order and wraps that bucket when it runs out.
 
 Under context parallelism, `attention_context_layout` sets how FA4 assigns query rows to context
 shards. The default, `"zigzag"`, swaps the late half of each shard's queries with its mirror shard so
