@@ -247,6 +247,14 @@ and `uv.lock`, and merges only after the same identity, file, SHA, and CI gates
 pass. Manual dispatch retries a failed or missed update without republishing the
 wheels.
 
+## Snowball family-tree releases
+
+`marin-release-snowball-tree.yaml` publishes the Snowball family-tree app from
+`main` with `scripts/ci/snowball_release.py`. Scheduled runs require the
+repository variable `SNOWBALL_TREE_RELEASE=enabled`. The
+[tree maintenance guide](../../docs/references/snowball-family-tree.md#nightly-publication)
+covers activation and manual runs.
+
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
 This recipe replaces `peter-evans/create-pull-request@v7`. It creates the PR if missing, updates it (force-with-lease) if present, reconciles labels, and writes `pr_url` and `pr_created` to `$GITHUB_OUTPUT`.

@@ -16,8 +16,8 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.rollout_buffer.max_staleness_steps=2 --run
 
-The default preset runs on 40 GPUs: 128 prompts per update with four answers each, 192 generation
-groups generating at once, staleness 4, and an 8192-token request window with a
+The default preset runs on 40 GPUs: 128 prompts per update with four answers each, the in-flight
+group cap that the MarinSkyRL launch derives, staleness 4, and an 8192-token request window with a
 4096-token response cap. To grow the batch, add prompts; more answers per prompt changes the group
 each advantage is computed over. The selected MarinSkyRL revision validates the rollout and
 telemetry settings before the job takes a GPU.
@@ -25,7 +25,6 @@ telemetry settings before the job takes a GPU.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from types import MappingProxyType
@@ -175,8 +174,6 @@ class AsyncPreset:
     # How many updates old a group may be when the trainer consumes it; 0 admits only groups
     # sampled by the current weights.
     max_staleness_steps: int
-    # Maximum prompt groups generating at once. Smaller caps fill a batch in several waves.
-    generation_workers: int
     # Prompt-plus-response budget one request may occupy in the engine, in tokens.
     request_window_tokens: int
     # Longest response the policy may generate, in tokens; it also caps the in-run evaluation.
@@ -198,7 +195,6 @@ DEFAULT = AsyncPreset(
     max_steps=100,
     eval_interval=10,
     max_staleness_steps=4,
-    generation_workers=192,
     request_window_tokens=8192,
     max_new_tokens=4096,
     evals="math500,gsm8k-0shot",
@@ -213,9 +209,8 @@ SMOKE_PRESET = replace(
     max_new_tokens=1024,
     evals="gsm8k-smoke",
 )
-# Every consumed group was sampled by the current weights; workers sit at the trainer's floor of
-# one update's prompts.
-ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=PROMPTS_PER_UPDATE)
+# Every consumed group was sampled by the current weights, so at most one update's prompts generate at once.
+ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0)
 PRESETS: Mapping[str, AsyncPreset] = MappingProxyType(
     {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
 )
@@ -233,7 +228,7 @@ CURRICULUM_TEMPLATE = SNOWBALL_SMOKE
 
 
 ROLE_PLAN_SETTINGS = frozenset(_role_plan_config_values(SNOWBALL_RECIPE.role_plan))
-EVAL_DERIVED_SETTINGS = frozenset({"trainer.eval_before_train", "trainer.ckpt_interval", "trainer.hf_save_interval"})
+EVAL_DERIVED_SETTINGS = frozenset({"trainer.eval_before_train", "trainer.ckpt_interval"})
 
 
 def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
@@ -322,7 +317,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         rollout_buffer=RolloutBuffer(
             max_staleness_steps=preset.max_staleness_steps,
             batch_policy=preset.batch_policy,
-            max_in_flight=preset.generation_workers,
+            # MarinSkyRL's launch derives the cap on prompt groups generating at once.
+            max_in_flight=None,
             object_store_root=None,
         ),
     ).to_skyrl()
@@ -395,8 +391,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
-    # Terminal export aligns with checkpoints and has no earlier periodic export.
-    trainer["hf_save_interval"] = math.ceil(trainer["max_steps"] / trainer["ckpt_interval"]) * trainer["ckpt_interval"]
     # Pool prompts fit beside a complete response in the request window.
     budget = config["context_budget"]
     if MAX_PROMPT_TOKENS > budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]:

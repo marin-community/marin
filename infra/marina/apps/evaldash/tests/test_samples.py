@@ -18,6 +18,7 @@ from finestore.eval import (
 from fsspec.core import url_to_fs
 from marin.evaluation.harbor.trajectory import archive_trajectory
 from marin.evaluation.lm_eval_samples import export_lm_eval_samples, sample_from_lm_eval
+from marin.evaluation.records import MetricKind
 
 
 def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
@@ -479,3 +480,88 @@ def test_sotopia_summary_does_not_use_superseded_attempt(tmp_path) -> None:
 
     assert artifact.available is False
     assert artifact.text is None
+
+
+def test_publication_metric_overrides_saved_binary_verdict_and_keeps_missing_scores_ungraded(tmp_path):
+    fs, root = url_to_fs(str(tmp_path))
+    stored = [
+        EvalSample(
+            task="piqa",
+            doc_id="normalized",
+            kind=SampleKind.MULTIPLE_CHOICE,
+            metrics={"acc": 0.0, "acc_norm": 1.0},
+            correct=False,
+        ),
+        EvalSample(task="piqa", doc_id="missing", kind=SampleKind.MULTIPLE_CHOICE, metrics={"acc": 1.0}, correct=True),
+    ]
+    write_sample_parquet(fs, f"{root}/samples_piqa_20261103.parquet", stored)
+
+    page = fetch_samples(
+        str(tmp_path),
+        "piqa",
+        offset=0,
+        limit=10,
+        correct="all",
+        primary_metric_name="acc_norm",
+        primary_metric_kind=MetricKind.BINARY,
+    )
+
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 0, "ungraded": 1}
+    by_id = {row.doc_id: row for row in page.rows}
+    assert by_id["normalized"].correct is True
+    assert by_id["normalized"].grading.score == 1.0
+    assert by_id["normalized"].grading.metric == "acc_norm"
+    assert by_id["missing"].correct is None
+    assert by_id["missing"].grading.score is None
+    original = fetch_samples(str(tmp_path), "piqa", offset=0, limit=10, correct="all")
+    assert {row.doc_id: row.correct for row in original.rows} == {"normalized": False, "missing": True}
+
+
+def test_continuous_publication_samples_keep_scores_without_binary_verdicts(tmp_path):
+    fs, root = url_to_fs(str(tmp_path))
+    stored = [
+        EvalSample(
+            task="truthfulqa_mc2",
+            doc_id=str(i),
+            kind=SampleKind.MULTIPLE_CHOICE,
+            metrics={"acc": value},
+            correct=bool(value),
+        )
+        for i, value in enumerate([0.0, 1.0])
+    ]
+    write_sample_parquet(fs, f"{root}/samples_truthfulqa_mc2_20261103.parquet", stored)
+
+    page = fetch_samples(
+        str(tmp_path),
+        "truthfulqa_mc2",
+        offset=0,
+        limit=10,
+        correct="all",
+        primary_metric_name="acc",
+        primary_metric_kind=MetricKind.CONTINUOUS,
+    )
+
+    assert page.counts.model_dump() == {"all": 2, "correct": None, "incorrect": None, "ungraded": 0}
+    assert [row.grading.score for row in page.rows] == [0.0, 1.0]
+    assert all(row.correct is None and row.grading.passed is None for row in page.rows)
+
+
+def test_missing_selected_sample_metric_is_reported_without_using_saved_verdict(tmp_path):
+    fs, root = url_to_fs(str(tmp_path))
+    write_sample_parquet(
+        fs,
+        f"{root}/samples_piqa_20261103.parquet",
+        [EvalSample(task="piqa", doc_id="0", kind=SampleKind.MULTIPLE_CHOICE, metrics={"acc": 1.0}, correct=True)],
+    )
+    page = fetch_samples(
+        str(tmp_path),
+        "piqa",
+        offset=0,
+        limit=10,
+        correct="all",
+        primary_metric_name="acc_norm",
+        primary_metric_kind=MetricKind.BINARY,
+    )
+    assert page.available is False
+    assert page.error is not None
+    assert page.rows == ()
