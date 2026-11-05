@@ -84,68 +84,84 @@ def test_slice_ref_with_dslice():
 
 def test_dslice_combination_branches():
     X = hax.Axis("x", 10)
+    # arange makes every value equal its base index, so each view reads back the base indices it selects.
     base = hax.new_ref(hax.arange(X))
 
     ds_ref = base.slice({"x": hax.ds(2, 5)})
 
     ds_plus_slice = ds_ref.slice({"x": slice(1, 3)})
-    prefix = ds_plus_slice._prefix[0]
-    assert isinstance(prefix, type(dslice(0, 1)))
-    assert prefix.start == 3 and prefix.size == 2
+    assert ds_plus_slice.axes == (X.resize(2),)
+    assert jnp.array_equal(ds_plus_slice.value().array, jnp.array([3, 4]))
 
     ds_plus_ds = ds_ref.slice({"x": hax.ds(1, 2)})
-    prefix = ds_plus_ds._prefix[0]
-    assert prefix.start == 3 and prefix.size == 2
+    assert ds_plus_ds.axes == (X.resize(2),)
+    assert jnp.array_equal(ds_plus_ds.value().array, jnp.array([3, 4]))
 
     single = ds_ref.slice({"x": 1})
-    assert single._prefix[0] == 3
+    assert single.axes == ()
+    assert single.value().array == 3
 
     neg = ds_ref.slice({"x": -1})
-    assert neg._prefix[0] == 6
-
-    list_ref = ds_ref.slice({"x": [0, 2]})
-    assert list_ref._prefix[0] == [2, 4]
+    assert neg.axes == ()
+    assert neg.value().array == 6
 
     array_ref = ds_ref.slice({"x": jnp.array([0, 1], dtype=jnp.int32)})
-    assert jnp.array_equal(array_ref._prefix[0], jnp.array([2, 3]))
+    array_value = array_ref.value()
+    assert array_value.axes == (X.resize(2),)
+    assert jnp.array_equal(array_value.array, jnp.array([2, 3]))
 
-    try:
-        array_reslice = array_ref.slice({"x": jnp.array([0], dtype=jnp.int32)})
-        assert array_reslice._prefix[0] == jnp.array([2], dtype=jnp.int32)
-    except NotImplementedError:
-        # Advanced indexing on advanced indexing is not supported yet.
-        pass
+    # Advanced indexing on advanced indexing is not supported yet.
+    with pytest.raises(NotImplementedError):
+        array_ref.slice({"x": jnp.array([0], dtype=jnp.int32)})
 
     Sel = hax.Axis("sel", 2)
     named_idx = hax.arange(Sel).astype(jnp.int32)
     named_ref = ds_ref.slice({"x": named_idx})
-    assert isinstance(named_ref._prefix[0], hax.NamedArray)
-    assert jnp.array_equal(named_ref._prefix[0].array, jnp.array([2, 3]))
+    named_value = named_ref.value()
+    assert named_value.axes == (Sel,)
+    assert jnp.array_equal(named_value.array, jnp.array([2, 3]))
 
-    try:
-        named_reslice = named_ref.slice({"x": hax.NamedArray(jnp.array([1], dtype=jnp.int32), (Sel.resize(1),))})
-        assert isinstance(named_reslice._prefix[0], hax.NamedArray)
-        assert jnp.array_equal(named_reslice._prefix[0].array, jnp.array([3]))
-    except NotImplementedError:
-        # Advanced indexing on advanced indexing is not supported yet.
-        pass
+    with pytest.raises(NotImplementedError):
+        named_ref.slice({"x": hax.NamedArray(jnp.array([1], dtype=jnp.int32), (Sel.resize(1),))})
 
     strided = base.slice({"x": slice(1, 9, 2)})
     strided_sub = strided.slice({"x": slice(1, 3)})
-    strided_prefix = strided_sub._prefix[0]
-    assert (strided_prefix.start, strided_prefix.size, strided_prefix.stride) == (3, 2, 2)
-
-    strided_list = strided.slice({"x": [0, 1]})
-    assert strided_list._prefix[0] == [1, 3]
+    assert strided_sub.axes == (X.resize(2),)
+    assert jnp.array_equal(strided_sub.value().array, jnp.array([3, 5]))
 
     strided_array = strided.slice({"x": jnp.array([0, 1], dtype=jnp.int32)})
-    assert jnp.array_equal(strided_array._prefix[0], jnp.array([1, 3]))
+    strided_array_value = strided_array.value()
+    assert strided_array_value.axes == (X.resize(2),)
+    assert jnp.array_equal(strided_array_value.array, jnp.array([1, 3]))
 
     Sel2 = hax.Axis("sel2", 2)
-    named_idx2 = hax.arange(Sel2).astype(jnp.int32)
-    strided_named = strided.slice({"x": named_idx2})
-    assert isinstance(strided_named._prefix[0], hax.NamedArray)
-    assert jnp.array_equal(strided_named._prefix[0].array, jnp.array([1, 3]))
+    strided_named = strided.slice({"x": hax.arange(Sel2).astype(jnp.int32)})
+    strided_named_value = strided_named.value()
+    assert strided_named_value.axes == (Sel2,)
+    assert jnp.array_equal(strided_named_value.array, jnp.array([1, 3]))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason=(
+        "NamedRef passes a Python list index straight to jax.Ref indexing, which treats the list as "
+        "several indices and fails with 'too many values to unpack'; even base_ref[{'x': [2, 4]}] fails."
+    ),
+)
+@pytest.mark.parametrize("use_stride", [False, True], ids=["dslice", "strided"])
+def test_dslice_combination_list_index_reads(use_stride):
+    X = hax.Axis("x", 10)
+    base = hax.new_ref(hax.arange(X))
+    if use_stride:
+        view, expected = base.slice({"x": slice(1, 9, 2)}).slice({"x": [0, 1]}), [1, 3]
+    else:
+        view, expected = base.slice({"x": hax.ds(2, 5)}).slice({"x": [0, 2]}), [2, 4]
+
+    value = view.value()
+
+    assert value.axes == (X.resize(2),)
+    assert jnp.array_equal(value.array, jnp.array(expected))
 
 
 def test_slice_value_and_unsliced():

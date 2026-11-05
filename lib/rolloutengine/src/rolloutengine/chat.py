@@ -21,10 +21,12 @@ class ChatModel:
     """Serve each ``ModelRequest`` with one chat completion, for a ``TraceMode.MESSAGES`` rollout.
 
     The endpoint renders the messages itself, so a turn has no token IDs, and the token budget counts the
-    ``usage`` that the endpoint reports. The prompt options go into the request: they can set ``max_tokens``
-    and other sampling parameters, and their ``extra_body`` keys replace the keys of ``extra_body``. A failed
-    request, or a response with no usage, is a model failure of the attempt. The client is async, so the
-    session can cancel a request at its deadline. The caller owns the client and closes it.
+    ``usage`` that the endpoint reports. A ``max_tokens`` of ``None`` sends no output limit. The prompt options go
+    into the request: they can set ``max_tokens`` and other sampling parameters, and their ``extra_body`` keys
+    replace the keys of ``extra_body``. With a ``context_window``, a ``tool_calls`` reply whose prompt and
+    completion tokens fill the window is a ``"length"`` stop, since the next request could not be served. A
+    failed request, or a response with no usage, is a model failure of the attempt. The client is async, so
+    the session can cancel a request at its deadline. The caller owns the client and closes it.
     """
 
     client: openai.AsyncOpenAI
