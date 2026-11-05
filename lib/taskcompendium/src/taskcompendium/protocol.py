@@ -14,6 +14,7 @@ assess is ``None``, and the whole assessment is not evaluable when the evidence 
 import json
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
+from pathlib import PurePosixPath
 from typing import Any
 
 from pydantic import JsonValue
@@ -138,10 +139,14 @@ def thinking_disabled(attempt: GradingAttempt) -> bool:
 
 
 def _required_file(task: TaskSpec, attempt: GradingAttempt) -> ProtocolLabel:
-    contents = [attempt.files.get(path) for path in task.output_paths]
-    if any(content is None for content in contents):
+    """Every declared output path, a file or a directory, must hold a nonempty captured file."""
+    captured = [
+        [content for path, content in attempt.files.items() if PurePosixPath(path).is_relative_to(root)]
+        for root in task.output_paths
+    ]
+    if not all(captured):
         return ProtocolLabel.MISSING_FILE
-    if any(not content.strip() for content in contents if content is not None):
+    if not all(any(content.strip() for content in contents) for contents in captured):
         return ProtocolLabel.EMPTY_FILE
     return ProtocolLabel.SUBMITTED
 

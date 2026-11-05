@@ -201,6 +201,15 @@ def test_required_file_reports_submission_completeness_only(files, grade, expect
     assert assessment.protocol_compliance is None
 
 
+def test_required_file_accepts_a_declared_directory_holding_a_file():
+    task = REQUIRED_FILE.model_copy(update={"output_paths": ("/app/out",)})
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, answer(task))), {"/app/out/answer.txt": b"nonce"}
+    )
+    grade = GradeResult(Outcome.GRADED, 1.0)
+    assert assess_protocol(task, attempt, grade)[ProtocolCheck.REQUIRED_FILE].label == "submitted"
+
+
 def test_a_task_implying_several_protocols_is_assessed_for_each():
     task = TOOL.model_copy(update={"environment_requirements": URL.environment_requirements})
     assessments = protocol(task, answer(task), request_settings=THINKING_OFF, raw_responses=(probe_nonce(task.id),))
