@@ -127,15 +127,44 @@ def parse_spec(text: str) -> ExperimentSpec:
 
 
 TRACK_LINE = re.compile(r"^\W*track\W*:\W*([A-Za-z0-9-]+)", re.IGNORECASE | re.MULTILINE)
+# An approver's instructions name a Track anywhere in the text ("... Track: ladder ...").
+TRACK_MENTION = re.compile(r"\btrack\W*:\W*([A-Za-z0-9-]+)", re.IGNORECASE)
 DEFAULT_TRACK = Track.SPEEDRUN
+LADDER = "ladder"
+"""A ``Track:`` value meaning the competitive ladder: one trial per rung, launched together."""
+LADDER_RUNGS = {
+    Track.COMPETITIVE_D512: "d512",
+    Track.COMPETITIVE_D768: "d768",
+    Track.COMPETITIVE_D1024: "d1024",
+    Track.COMPETITIVE_D1280: "d1280",
+}
+"""Each ladder rung's Track and the tag its experiment id carries (``X0037d768``), so each rung has its own spec
+and run names while the app, which reads a run's experiment up to its first ``-``, needs no change."""
+REGISTRY_ID = re.compile(r"X\d{4}")
 
 
-def track_of_comment(text: str) -> tuple[Track, bool]:
-    """The Track on a comment's ``Track:`` line, and whether it was defaulted (no such line: ``speedrun``)."""
-    match = TRACK_LINE.search(text)
+def tracks_of_comment(text: str, instructions: str | None = None) -> tuple[tuple[Track, ...], bool]:
+    """The Tracks an idea runs on, and whether they were defaulted (no Track named: ``speedrun``). An approver's
+    instructions win over the comment's ``Track:`` line; ``ladder`` means every competitive rung."""
+    match = TRACK_MENTION.search(instructions or "") or TRACK_LINE.search(text)
     if match is None:
-        return DEFAULT_TRACK, True
-    return parse_track(match.group(1)), False
+        return (DEFAULT_TRACK,), True
+    if match.group(1).lower() == LADDER:
+        return tuple(LADDER_RUNGS), False
+    return (parse_track(match.group(1)),), False
+
+
+def experiment_id(registry_id: str, track: Track, ladder: bool) -> str:
+    """The id of an idea's spec and runs on ``track``: the registry id, plus the rung tag on a ladder."""
+    return f"{registry_id}{LADDER_RUNGS[track]}" if ladder else registry_id
+
+
+def registry_of(experiment: str) -> str:
+    """The registry id an experiment id belongs to (``X0037d768`` -> ``X0037``)."""
+    match = REGISTRY_ID.match(experiment)
+    if match is None:
+        raise SystemExit(f"refusing: {experiment!r} is not a Belay experiment id")
+    return match.group(0)
 
 
 def parse_track(text: str) -> Track:
