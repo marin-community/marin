@@ -87,11 +87,10 @@ def _vllm_job(
                 "VLLM_USE_FLASHINFER_SAMPLER": "0",
             },
         ),
-        priority=job_pb2.PRIORITY_BAND_INHERIT,
+        priority=job_pb2.PRIORITY_BAND_PRODUCTION,
         replicas=pipeline_parallel_size,
-        max_retries_failure=0,
-        max_retries_preemption=0,
-        max_task_failures=0,
+        max_retries_failure=2,
+        max_task_failures=2,
     )
 
 
@@ -114,10 +113,9 @@ def _tpu_vllm_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
         resources=resources,
         environment=create_environment(extras=["cpu"], env_vars={"JAX_PLATFORMS": "cpu"}),
         ports=RAY_PORTS,
-        priority=job_pb2.PRIORITY_BAND_INHERIT,
-        max_retries_failure=0,
-        max_retries_preemption=0,
-        max_task_failures=0,
+        priority=job_pb2.PRIORITY_BAND_PRODUCTION,
+        max_retries_failure=2,
+        max_task_failures=2,
     )
 
 
@@ -153,6 +151,9 @@ def test_vllm_job_payload_survives_worker_serialization(backend):
     request = (
         _tpu_vllm_job(goldens) if backend == "vllm-tpu-v4-tp16" else _vllm_job(goldens, "FLASH_ATTN", int(backend[-1]))
     )
+    assert request.priority == job_pb2.PRIORITY_BAND_PRODUCTION
+    assert request.max_retries_failure == 2
+    assert request.max_task_failures == 2
     entrypoint = convert_entrypoint(request.entrypoint)
     function, args, kwargs = cloudpickle.loads(entrypoint.workdir_files["_callable.pkl"])
     bound = inspect.signature(function).bind(*args, **kwargs)

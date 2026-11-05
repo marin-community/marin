@@ -77,7 +77,7 @@ jobs:
           if [ -n "$TARGET_CLUSTER" ]; then
             target_args=(--target-cluster "$TARGET_CLUSTER")
           fi
-          JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" job run --no-wait "${target_args[@]}" --no-preemptible --max-retries 0 \
+          JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" job run --no-wait "${target_args[@]}" --no-preemptible --max-retries 0 --priority production \
             --job-name "$RUN_ID" --timeout 12600 \
             --include tests/__init__.py --include tests/conftest.py \
             --include tests/cluster/__init__.py --include tests/cluster/conftest.py \
