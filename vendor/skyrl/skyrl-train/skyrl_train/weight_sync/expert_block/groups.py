@@ -14,7 +14,7 @@ import ray
 import torch
 import torch.distributed as dist
 
-from skyrl_train.distributed.utils import init_custom_process_group
+from skyrl_train.distributed.utils import init_custom_process_group, nccl_group_options
 from skyrl_train.weight_sync.expert_block.schedule import Group
 
 WARMUP_VALUE = 1729
@@ -48,9 +48,18 @@ class RendezvousStore:
 
 
 def create_groups(
-    participant: int, groups: tuple[Group, ...], rendezvous: Rendezvous, *, backend: str = "nccl"
+    participant: int,
+    groups: tuple[Group, ...],
+    rendezvous: Rendezvous,
+    *,
+    max_ctas: int | None,
+    backend: str = "nccl",
 ) -> dict[str, dist.ProcessGroup]:
-    """Create the groups this participant belongs to. If one fails, destroy those already created."""
+    """Create the groups this participant belongs to. If one fails, destroy those already created.
+
+    ``max_ctas`` caps this side's NCCL channels in every group so they match the other side's;
+    ``None`` keeps the process limits.
+    """
     client = dist.TCPStore(
         rendezvous.address,
         rendezvous.port,
@@ -71,6 +80,7 @@ def create_groups(
                 world_size=len(group.members),
                 group_name=group.name,
                 timeout=timedelta(seconds=rendezvous.timeout_seconds),
+                pg_options=nccl_group_options(max_ctas),
             )
     except BaseException:
         destroy_groups(created)

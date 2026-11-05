@@ -385,6 +385,9 @@ generator:
   num_inference_engines: 1
   backend: "vllm"
   vllm_attention_backend: null
+  # NCCL channel limit for the engines' own collectives when trainer.algorithm.batch_invariant=true.
+  # null keeps vLLM's batch-invariant limit of one channel. Weight-sync groups stay at one channel.
+  inference_engine_nccl_max_channels: null
   weight_sync_backend: "nccl"
   # vLLM pause policy during weight sync. abort ends in-flight streams; keep preserves them.
   weight_sync_pause:
