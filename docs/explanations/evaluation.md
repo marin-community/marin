@@ -68,8 +68,12 @@ resume can refresh scores without changing the producer record.
 
 Producer `record.json` files retain execution identity and status. Derived summaries
 live in Evaldash's catalog. Checkpoint report artifacts link the same records and
-archives. Saved historical Evalchemy results retain their archive readers;
-reproduction uses the recorded historical checkout and cohort.
+archives. Historical Evalchemy scores remain eligible alongside curated scores without
+rerunning models. Comparison uses canonical metric names and statistical kinds;
+recorded shot counts must agree when both are known. Missing historical corpus
+identities do not exclude scores. Two runs with recorded, differing corpus identities
+remain separate. Stored scores, uncertainty, coverage and cohort provenance are
+preserved. Reproduction uses the recorded historical checkout and cohort.
 
 ## Other evaluation paths
 

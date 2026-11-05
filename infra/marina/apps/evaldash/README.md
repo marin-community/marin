@@ -28,6 +28,16 @@ reads `{run_id}/.executor_status`. A score is eligible only after that step reac
 without a step status retain the record's historical behavior. Run lists show the step state when it
 is still running or has failed, and run detail shows both the evaluator result and the step state.
 
+Historical Evalchemy summaries remain usable alongside native TaskSpec summaries without rerunning
+models or rewriting archives. Comparison columns match the registry benchmark name, canonical metric
+and statistical kind. Recorded few-shot counts must agree when both are known; older unspecified
+counts remain admissible. Metric aliases bridge `acc,none` and `accuracy`, code-task `accuracy` and
+`pass_at_1`, and MRCR's `accuracy` and `mrcr_accuracy`. The saved score, coverage and uncertainty are
+preserved. Missing historical corpus identities do not exclude these results. When both runs record
+corpus identities, differing identities remain incompatible. Metric changes such as accuracy versus
+normalized accuracy or exact match versus F1 remain separate, and existing cohort and coverage gates
+still apply. Historical verified-cohort labels keep their original policy requirements.
+
 The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
 `s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
 Canonical `evals` roots have precedence when the same migrated `run_id` exists in both locations.

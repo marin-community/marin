@@ -4,6 +4,7 @@
 """The eval statistics engine: intervals under attrition, panel aggregates, and result selection."""
 
 import math
+from dataclasses import replace
 
 import pytest
 from marin.evaluation.eval_measurements import (
@@ -411,6 +412,42 @@ def test_newest_declared_protocol_excludes_legacy_metrics_for_the_column():
 
     assert selection.cells["m"]["drop"].run_id == "declared"
     assert selection.rejections[0].reason == "metric exact_match differs from declared f1"
+
+
+@pytest.mark.parametrize(
+    "identity,shots,metric,kind,admitted",
+    [
+        (None, 5, "accuracy", MetricKind.BINARY, True),
+        (None, None, "accuracy", MetricKind.BINARY, True),
+        (None, 0, "accuracy", MetricKind.BINARY, False),
+        (None, 5, "normalized_accuracy", MetricKind.BINARY, False),
+        (None, 5, "accuracy", MetricKind.CONTINUOUS, False),
+        ("previous-corpus", 5, "accuracy", MetricKind.BINARY, False),
+        ("current-corpus", 5, "accuracy", MetricKind.BINARY, True),
+    ],
+)
+def test_historical_comparisons_preserve_known_protocol_differences(identity, shots, metric, kind, admitted):
+    current = replace(
+        _measurement(
+            model="native", run_id="native", declared=True, protocol_metric="accuracy", created_at="2026-11-05T00:00:00Z"
+        ),
+        protocol_identity="current-corpus",
+        num_fewshot=5,
+    )
+    previous = replace(
+        current,
+        model="historical",
+        run_id="historical",
+        created_at="2026-10-01T00:00:00Z",
+        protocol_identity=identity,
+        num_fewshot=shots,
+        protocol_metric=metric,
+        protocol_kind=kind,
+    )
+    selection = select([previous, current], SelectionRequest())
+    assert ("historical" in selection.cells) is admitted
+    assert selection.cells["native"]["gsm8k"].run_id == "native"
+    assert bool(selection.rejections) is not admitted
 
 
 def test_selection_rejects_failed_runs_but_keeps_them_explainable():

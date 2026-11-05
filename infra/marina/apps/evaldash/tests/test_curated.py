@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 from evaldash.app import Ingestor, MemoryRecordStore
 from evaldash.curated import import_curated_record
+from evaldash.metrics import build_comparison, build_model_detail, build_panel, panel_request
 from evaldash.record_reconciliation import VerificationSchedule, _inspect_record
 from evaldash.results_db import ObservationKind, SourceState
 from evaldash.samples import _archive_task_table
@@ -30,7 +31,19 @@ from finestore.store import DataStore
 from marin.evaluation.curated import CuratedExecutor, CuratedRunSettings
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import CuratedRef, EvalRef, EvalRunRecord, HardwareRef, ModelRef, Provenance, write_record
+from marin.evaluation.records import (
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
+    CuratedRef,
+    EvalRef,
+    EvalRunRecord,
+    EvalTaskRef,
+    HardwareRef,
+    ModelRef,
+    Provenance,
+    TaskCoverage,
+    write_record,
+)
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt
 from marin.rollouts.evaluation_results import logical_samples
@@ -66,15 +79,18 @@ def raw_run(tmp_path):
     return record
 
 
-def write_observations(record, *, summary="mean", metrics=("accuracy",), observations):
+def write_observations(
+    record, *, summary="mean", metrics=("accuracy",), metric_kind="continuous", num_fewshot=None, observations
+):
     protocol = EvaluationProtocol(
         benchmark="colors",
         version="1",
         operation="chat_generation",
         sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=16, stop=(), chat_template_kwargs={}),
         trials=TrialPolicy(count=1, seed=0),
-        metrics=tuple(Metric(name=name, kind="continuous", higher_is_better=True) for name in metrics),
+        metrics=tuple(Metric(name=name, kind=metric_kind, higher_is_better=True) for name in metrics),
         primary_metric=metrics[0],
+        num_fewshot=num_fewshot,
         summary=summary,
         expected_population=2,
     )
@@ -176,6 +192,84 @@ def test_raw_ingestion_and_browser_choose_terminal_trials_without_counting_retri
     table = _archive_task_table(raw_run.results_path, "colors")
     assert sorted(dict(row["metrics"])["accuracy"] for row in table.to_pylist()) == [0, 1]
     assert import_curated_record(raw_run).canonical_metrics["colors"]["accuracy"] == 0.5
+
+
+@pytest.mark.parametrize(
+    "name,historical_metric,canonical_metric,native_metric,kind,shots",
+    [
+        ("mmlu", "acc,none", "accuracy", "acc,none", "binary", 5),
+        ("piqa", "acc_norm,none", "normalized_accuracy", "acc_norm,none", "binary", 0),
+        ("gsm8k", "exact_match,flexible-extract", "accuracy", "exact_match,strict-match", "binary", 5),
+        ("humanevalplus", "pass@1", "pass_at_1", "accuracy", "binary", 0),
+        ("mrcr", "mrcr_accuracy", "mrcr_accuracy", "accuracy", "continuous", 0),
+        ("math500", "accuracy_avg", "accuracy", "accuracy", "binary", 0),
+        ("ifbench", "strict_prompt_accuracy", "strict_prompt_accuracy", "strict_prompt_accuracy", "binary", 0),
+    ],
+)
+def test_native_summary_reuses_historical_scores_in_panel_comparison_and_history(
+    raw_run, name, historical_metric, canonical_metric, native_metric, kind, shots
+):
+    raw_run = raw_run.model_copy(update={"evaluation": raw_run.evaluation.model_copy(update={"name": name})})
+    write_observations(
+        raw_run,
+        metrics=(native_metric,),
+        metric_kind=kind,
+        num_fewshot=shots,
+        observations=[
+            (0, 0, "finished", "graded", {native_metric: 1.0}, {}),
+            (1, 0, "finished", "graded", {native_metric: 0.0}, {}),
+        ],
+    )
+    native = import_curated_record(raw_run)
+    historical = raw_run.model_copy(
+        update={
+            "run_id": "historical",
+            "created_at": "2026-10-01T00:00:00Z",
+            "model": raw_run.model.model_copy(update={"name": "historical-model"}),
+            "evaluation": EvalRef(
+                name=name,
+                mechanism="evalchemy",
+                tasks=(
+                    EvalTaskRef(
+                        name=name,
+                        num_fewshot=shots,
+                        benchmark=BenchmarkMetadataRef(
+                            schema_version=1,
+                            task=name,
+                            primary_metric=canonical_metric,
+                            metric_kind=kind,
+                            metrics=(
+                                BenchmarkMetricRef(
+                                    name=canonical_metric,
+                                    source_name=historical_metric.split(",")[0],
+                                    kind=kind,
+                                    higher_is_better=True,
+                                ),
+                            ),
+                            n_benchmark=10,
+                            n_attempted=10,
+                        ),
+                    ),
+                ),
+            ),
+            "metrics": {name: {historical_metric: 0.6, "sample_len": 10.0}},
+            "canonical_metrics": {name: {canonical_metric: 0.6}},
+            "coverage": {name: TaskCoverage(n_benchmark=10, n_attempted=10, n_scored=10)},
+        }
+    )
+    records = [historical, native]
+    panel = build_panel(records, panel_request())
+    cells = {row["model"]: row["cells"][name] for row in panel["rows"]}
+    assert cells["historical-model"]["value"] == 0.6
+    assert cells["solver"]["value"] == 0.5
+    assert cells["historical-model"]["run_id"] == "historical"
+    assert cells["historical-model"]["n_scored"] == 10
+    comparison = build_comparison(records, panel_request(), ("historical-model", "solver"))
+    assert comparison["shared"] == [name]
+    same_model = native.model_copy(update={"model": historical.model})
+    detail = build_model_detail([historical, same_model], "historical-model")
+    assert detail is not None
+    assert [point["run_id"] for point in detail["history"][name]] == ["historical", "run"]
 
 
 @pytest.mark.parametrize(
