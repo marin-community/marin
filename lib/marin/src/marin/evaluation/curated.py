@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from iris.client.client import JobFailedError, iris_ctx
+from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from openai import OpenAI
@@ -33,6 +34,7 @@ from marin.evaluation.task_worker import (
     JUDGE_ENDPOINT,
     SOLVER_API_KEY,
     SOLVER_ENDPOINT,
+    WORKER_PYTHON,
     WORKER_TIMEOUT,
     execution_config,
     run_worker,
@@ -142,7 +144,11 @@ class CuratedExecutor:
             ),
             name=f"curated-eval-{uuid.uuid4().hex[:8]}",
             resources=ResourceSpec(cpu=8, memory="32g", disk="64g"),
-            environment=EnvironmentSpec(sync_packages=("marin-core",), secrets=secrets, env_vars=dict(env_vars)),
+            environment=EnvironmentSpec(
+                setup_scripts=(default_setup_script(packages=("marin-core",), python_version=WORKER_PYTHON),),
+                secrets=secrets,
+                env_vars=dict(env_vars),
+            ),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             timeout=Duration.from_seconds(WORKER_TIMEOUT),
             max_retries_failure=0,

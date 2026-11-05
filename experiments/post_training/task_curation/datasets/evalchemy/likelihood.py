@@ -50,6 +50,9 @@ def choice_source(
         if template.num_fewshot
         else {}
     )
+    version = (
+        "2026.11.05.2" if template.num_fewshot and template.name in {"boolq", "piqa", "truthfulqa_mc2"} else "2026.11.02"
+    )
     recipe = CurationRecipe(
         name="evalchemy-" + name,
         source=HfSource(
@@ -57,7 +60,7 @@ def choice_source(
         ),
         inputs=inputs,
         convert=partial(convert_choice_document, benchmark=name),
-        version="2026.11.02",
+        version=version,
         intended_use=IntendedUse.EVAL,
     )
     return RlDataSource(
@@ -80,7 +83,7 @@ def choice_source(
             recipe=recipe,
             protocol=EvaluationProtocol(
                 benchmark=name,
-                version="2026.11.02",
+                version=version,
                 operation=OperationKind.CHOICE_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),

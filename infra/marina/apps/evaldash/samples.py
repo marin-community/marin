@@ -43,10 +43,10 @@ from finestore.reader import ReadView
 from fsspec.core import url_to_fs
 from marin.evaluation.metric_selection import PUBLICATION_METRICS, base_metric, declared_sample_metric, primary_filter
 from marin.evaluation.records import BenchmarkMetricRef, EvalRunRecord, MetricKind
+from marin.rollouts.evaluation import RUN_OBJECT
+from marin.rollouts.evaluation_results import logical_samples
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
-
-from .curated import RUN_OBJECT, logical_samples
 
 logger = logging.getLogger(__name__)
 

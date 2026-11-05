@@ -193,7 +193,10 @@ def _sample_indices(
 ) -> list[int]:
     # The pinned task passes eval_doc when both fewshot_split and test_split
     # are None (validation-only tasks), so its sampler draws one extra.
-    exclude = template.name in {"hellaswag", "winogrande", "triviaqa", "nq_open", "drop"} and template.num_fewshot > 0
+    exclude = (
+        template.name in {"hellaswag", "winogrande", "triviaqa", "nq_open", "drop", "boolq", "piqa", "truthfulqa_mc2"}
+        and template.num_fewshot > 0
+    )
     indices = random.sample(range(len(pool)), template.num_fewshot + int(exclude))
     return [index for index in indices if pool[index] != doc][: template.num_fewshot] if exclude else indices
 

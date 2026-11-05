@@ -1,0 +1,4 @@
+name: boolq
+sources:
+- evalchemy-boolq
+max_tokens: 256

@@ -142,6 +142,8 @@ def read_checkpoint_file(
     shuffle = random.Random(0)
     generation = family in {"gsm8k_cot", "bbh_cot_fewshot", "minerva_math"}
     first_n = generation or family in {"leaderboard_bbh", "leaderboard_mmlu_pro", "leaderboard_gpqa"}
+    # In the pinned harness these tasks have equal (unset) fewshot_split and test_split.
+    exclude = family in {"commonsense_qa", "copa"} and template.shots > 0
     for original in documents:
         doc = dict(original)
         if family == "leaderboard_gpqa":
@@ -152,11 +154,9 @@ def read_checkpoint_file(
             shuffle.shuffle(answers)
             doc["prepared_choices"] = answers
         indices = (
-            list(range(template.shots))
-            if first_n
-            else sampler.sample(range(len(pool)), template.shots + int(pool is documents and bool(template.shots)))
+            list(range(template.shots)) if first_n else sampler.sample(range(len(pool)), template.shots + int(exclude))
         )
-        if pool is documents:
+        if exclude:
             indices = [index for index in indices if pool[index] != original][: template.shots]
         prefix = description
         for index in indices:
@@ -210,8 +210,8 @@ def read_humaneval_fewshot(path: StoragePath, _context: ConversionContext) -> It
     documents = list(parquet_documents(path))
     sampler = random.Random(FEWSHOT_SEED)
     for document in documents:
-        indices = sampler.sample(range(len(documents)), 11)
-        selected = [documents[index] for index in indices if documents[index] != document][:10]
+        indices = sampler.sample(range(len(documents)), 10)
+        selected = [documents[index] for index in indices]
         prefix = "".join(
             example["prompt"] + " " + example["test"] + "\ncheck(" + example["entry_point"] + ")\n\n"
             for example in selected

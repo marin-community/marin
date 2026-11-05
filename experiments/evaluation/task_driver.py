@@ -10,6 +10,7 @@ from pathlib import Path
 
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient, Job
+from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from marin.evaluation.task_worker import (
@@ -18,6 +19,7 @@ from marin.evaluation.task_worker import (
     JUDGE_ENDPOINT,
     SOLVER_API_KEY,
     SOLVER_ENDPOINT,
+    WORKER_PYTHON,
     WORKER_TIMEOUT,
     execute_with_retries,
     execution_config,
@@ -55,7 +57,7 @@ def submit_evaluation(
         name=name,
         resources=resources,
         environment=EnvironmentSpec(
-            sync_packages=("marin-core",),
+            setup_scripts=(default_setup_script(packages=("marin-core",), python_version=WORKER_PYTHON),),
             secrets=secrets,
         ),
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,

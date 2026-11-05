@@ -1,0 +1,4 @@
+name: gpqa-diamond
+sources:
+- evalchemy-gpqa-diamond
+seed: 42

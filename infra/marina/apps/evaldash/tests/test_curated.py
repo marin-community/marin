@@ -6,22 +6,38 @@
 import asyncio
 import json
 import math
+from contextlib import nullcontext
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from evaldash.app import Ingestor, MemoryRecordStore
-from evaldash.curated import import_curated_record, logical_samples
+from evaldash.curated import import_curated_record
 from evaldash.record_reconciliation import VerificationSchedule, _inspect_record
 from evaldash.results_db import ObservationKind, SourceState
 from evaldash.samples import _archive_task_table
-from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind, sample_to_archive_row
+from finestore.eval import (
+    EvalSample,
+    EvaluationStore,
+    Grading,
+    SampleKind,
+    sample_from_archive_row,
+    sample_to_archive_row,
+)
 from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
+from marin.evaluation.curated import CuratedExecutor, CuratedRunSettings
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import CuratedRef, EvalRef, EvalRunRecord, HardwareRef, ModelRef, Provenance, write_record
+from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt
+from marin.rollouts.evaluation_results import logical_samples
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection
 from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, Sampling, TrialPolicy
+
+from experiments.evaluation.policy_finalization import PolicyJudge
 
 
 @pytest.fixture
@@ -130,7 +146,7 @@ def write_observations(record, *, summary="mean", metrics=("accuracy",), observa
                             method="fixture",
                             metric=metrics[0],
                             score=values.get(metrics[0]),
-                            detail=json.dumps({"detail": {"weights": weights}}),
+                            detail=json.dumps({"detail": {"metric_weights": weights}}),
                         ),
                         doc=json.dumps({"groups": {"color": "red"}}),
                     )
@@ -202,6 +218,27 @@ def test_failed_and_unfinished_trials_remain_missing_coverage(raw_run):
     assert result.coverage["colors"].errors == {"infra_error": 1, "unfinished": 1}
 
 
+def test_likelihood_evidence_does_not_require_generation_grader_detail(raw_run):
+    write_observations(raw_run, observations=[(0, 0, "finished", "graded", {"accuracy": 1.0}, {})])
+    row = next(iter(logical_samples(ReadView(raw_run.results_path))))
+    sample = sample_from_archive_row(row)
+    assert sample.grading is not None
+    sample = sample.model_copy(
+        update={
+            "grading": sample.grading.model_copy(
+                update={"detail": json.dumps([{"loglikelihood": -2.0, "is_greedy": True}])}
+            )
+        }
+    )
+    with DataStore.open(raw_run.results_path) as store:
+        EvaluationStore(store)
+        with store.transaction() as transaction:
+            transaction.table("samples").add(sample_to_archive_row(sample, trial_id=row["trial_id"]))
+    result = import_curated_record(raw_run)
+    assert result.metrics["colors"]["accuracy"] == 1
+    assert result.coverage["colors"].n_scored == 1
+
+
 def test_reconciliation_refreshes_resumed_raw_results_without_rewriting_launch_record(raw_run, tmp_path):
     write_observations(raw_run, observations=[(0, 0, "finished", "graded", {"accuracy": 0.0}, {})])
     write_record(raw_run, str(tmp_path))
@@ -226,3 +263,55 @@ def test_reconciliation_refreshes_resumed_raw_results_without_rewriting_launch_r
     assert resumed.record is not None
     assert resumed.record.metrics["colors"]["accuracy"] == 0.5
     assert resumed.record.coverage["colors"].n_scored == 2
+
+
+@pytest.mark.parametrize("stored_version", ["1730000000000000", "local-object-hash"])
+def test_reconciliation_recovers_after_invalid_record_is_repaired(raw_run, tmp_path, stored_version):
+    write_record(raw_run, str(tmp_path))
+    path = str(tmp_path / "run" / "record.json")
+    schedule = VerificationSchedule(checked_at=datetime.now(UTC), retry_after=1, revalidate_after=60)
+    state = SourceState(
+        path=path,
+        run_id="run",
+        object_version=stored_version,
+        last_verified_at=schedule.checked_at,
+        next_verify_at=schedule.checked_at,
+        missing_since=None,
+        error="invalid record",
+    )
+    recovered = _inspect_record(path, state, schedule)
+    assert recovered.kind is ObservationKind.CHANGED
+    assert recovered.error is None
+    assert recovered.record is not None
+    assert recovered.record.run_id == "run"
+
+
+@pytest.mark.parametrize("second_outcome", ["graded", "infra_error"])
+def test_policy_finalization_uses_the_same_scored_trial_coverage_as_evaldash(raw_run, monkeypatch, second_outcome):
+    write_observations(
+        raw_run,
+        observations=[
+            (0, 0, "finished", "graded", {"accuracy": 0.0}, {}),
+            (1, 0, "finished", second_outcome, {"accuracy": 0.0} if second_outcome == "graded" else {}, {}),
+        ],
+    )
+    model = ModelConfig(name="judge", location="test/judge", revision="pin", tokenizer_revision="pin")
+    source = CuratedExecutor(("dataset",), CuratedRunSettings(model, None, None, None, None))
+    executor = PolicyJudge(source, model, AcceleratorChoice(platform=Platform.GPU, gpu_type="H100"), 0)
+    session = SimpleNamespace(jobs=(), wait_until_ready=lambda **_kwargs: None)
+    monkeypatch.setattr("experiments.evaluation.policy_finalization.inference_config_for_model", lambda *_a, **_k: None)
+    monkeypatch.setattr("experiments.evaluation.policy_finalization.precache_inference_model", lambda _config: None)
+    monkeypatch.setattr(
+        "experiments.evaluation.policy_finalization.remote_inference", lambda _config: nullcontext(session)
+    )
+    monkeypatch.setattr(CuratedExecutor, "__call__", lambda *_a, **_k: EvaluationOutcome(metrics={}))
+    expected = import_curated_record(raw_run).coverage
+    if second_outcome == "infra_error":
+        with pytest.raises(EvaluationError) as caught:
+            executor(None, raw_run.results_path, {}, backend_state=lambda: None)
+        assert caught.value.status == "artifact_failed"
+        assert caught.value.coverage == expected
+        return
+    result = executor(None, raw_run.results_path, {}, backend_state=lambda: None)
+    assert result.coverage == expected
+    assert result.coverage["colors"].n_scored == 2

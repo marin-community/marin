@@ -46,13 +46,13 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                         SourceFormat.JSONL,
                     ),
                     convert=convert_finance,
-                    version="2026.11.02",
+                    version="2026.11.05.2",
                     intended_use=IntendedUse.EVAL,
                 ),
                 EvaluationProtocol(
                     benchmark="FinanceBench",
                     requires_judge=True,
-                    version="2026.11.02",
+                    version="2026.11.05.2",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
                         temperature=0,

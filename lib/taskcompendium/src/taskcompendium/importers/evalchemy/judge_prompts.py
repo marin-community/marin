@@ -156,7 +156,7 @@ def financebench_spec(question: str, answer: str) -> JudgeSpec:
             ),
             ("correct", "incorrect", "not_attempted"),
         ),
-        model="openai/gpt-oss-120b",
+        model="",
     )
 
 

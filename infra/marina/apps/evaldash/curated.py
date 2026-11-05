@@ -6,9 +6,7 @@
 import json
 import math
 from collections import defaultdict
-from collections.abc import Iterator
 
-from finestore.eval import ARCHIVE_SAMPLES_TABLE
 from finestore.reader import ReadView
 from marin.evaluation.records import (
     BenchmarkMetadataRef,
@@ -16,38 +14,13 @@ from marin.evaluation.records import (
     EvalRunRecord,
     EvalTaskRef,
     MetricKind,
-    TaskCoverage,
 )
-from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT
-from taskcompendium.evaluation.selection import SELECTIONS_TABLE
+from marin.rollouts.evaluation import RUN_OBJECT
+from marin.rollouts.evaluation_results import SCORED_OUTCOMES, evaluation_coverage, logical_samples, terminal_attempts
 from taskcompendium.evaluation.spec import EvaluationProtocol, SummaryKind
 from taskcompendium.identity import canonical_sha256
 
-SUMMARY_REVISION = "2026.11.05.1"
-SCORED_OUTCOMES = frozenset({"graded", "submission_failure"})
-
-
-def terminal_attempts(reader: ReadView) -> dict[tuple[str, str, int], dict]:
-    """Choose the latest finished attempt for each logical trial, including failed grades."""
-    latest = {}
-    for row in reader.iter_rows(ATTEMPTS_TABLE):
-        if row["phase"] != "finished":
-            continue
-        key = (row["dataset"], row["source_row"], row["trial"])
-        if key not in latest or row["retry"] > latest[key]["retry"]:
-            latest[key] = row
-    return latest
-
-
-def logical_samples(reader: ReadView, *, task: str | None = None) -> Iterator[dict]:
-    """Expose one physical sample per logical trial to summaries and the sample browser."""
-    trials = {
-        (f"{row['dataset']}/{row['trial']}/{row['retry']}", row["task_id"]) for row in terminal_attempts(reader).values()
-    }
-    where = [("task", "==", task)] if task is not None else None
-    for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE, where=where):
-        if (row["trial_id"], row["doc_id"]) in trials:
-            yield row
+SUMMARY_REVISION = "2026.11.05.2"
 
 
 def _reduce(values: list[tuple[str, float, float]], kind: SummaryKind, metric: str) -> tuple[float, float | None]:
@@ -81,11 +54,8 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
     manifests = {entry["dataset"]: entry["manifest"] for entry in run["datasets"]}
     attempts = terminal_attempts(reader)
     samples = {(row["trial_id"], row["doc_id"]): row for row in logical_samples(reader)}
-    selected = defaultdict(set)
-    for row in reader.iter_rows(SELECTIONS_TABLE):
-        if row["status"] == "selected":
-            selected[row["dataset"]].add(row["source_row"])
-    metrics, coverage, tasks = {}, {}, []
+    metrics, tasks = {}, []
+    coverage = evaluation_coverage(reader)
     groups = defaultdict(list)
     for dataset, protocol in protocols.items():
         groups[protocol.benchmark].append(dataset)
@@ -97,27 +67,22 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
                 raise ValueError(f"Inconsistent summary protocols for benchmark {name}")
         rows = [row for row in attempts.values() if row["dataset"] in datasets]
         values = defaultdict(list)
-        errors = defaultdict(int)
-        scored, correct = 0, 0
         group_values = defaultdict(lambda: defaultdict(list))
         for attempt in rows:
             if attempt["outcome"] not in SCORED_OUTCOMES:
-                errors[attempt["outcome"] or "unfinished"] += 1
                 continue
             sample = samples[(f"{attempt['dataset']}/{attempt['trial']}/{attempt['retry']}", attempt["task_id"])]
             observed = dict(sample["metrics"] or {})
             if protocol.primary_metric not in observed:
                 score = (sample["grading"] or {}).get("score")
                 if score is None:
-                    errors["ungraded"] += 1
                     continue
                 observed[protocol.primary_metric] = score
-            grade = json.loads((sample["grading"] or {}).get("detail") or "{}")
-            detail = grade.get("detail") or {}
-            weights = detail.get("weights", {})
+            weights = {}
+            if protocol.summary is SummaryKind.WEIGHTED_MEAN:
+                grade = json.loads(sample["grading"]["detail"])
+                weights = grade["detail"].get("metric_weights", {})
             sample_groups = json.loads(sample["doc"] or "{}").get("groups", {})
-            scored += 1
-            correct += observed[protocol.primary_metric] == 1
             for metric in protocol.metrics:
                 if metric.name not in observed:
                     continue
@@ -145,17 +110,7 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
             for metric, observations in group_metrics.items():
                 summary[f"{group}/{metric}"] = _reduce(observations, protocol.summary, metric)[0]
         metrics[name] = summary
-        n_attempted = sum(len(selected[dataset]) * protocols[dataset].trials.count for dataset in datasets)
-        n_benchmark = sum(manifests[dataset]["rows"] * protocols[dataset].trials.count for dataset in datasets)
-        errors["unfinished"] += max(0, n_attempted - len(rows))
         primary = next(metric for metric in protocol.metrics if metric.name == protocol.primary_metric)
-        coverage[name] = TaskCoverage(
-            n_benchmark=n_benchmark,
-            n_attempted=n_attempted,
-            n_scored=scored,
-            n_correct=correct if primary.kind == "binary" else None,
-            errors={name: count for name, count in errors.items() if count},
-        )
         tasks.append(
             EvalTaskRef(
                 name=name,
@@ -174,8 +129,8 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
                         )
                         for metric in protocol.metrics
                     ),
-                    n_benchmark=n_benchmark,
-                    n_attempted=n_attempted,
+                    n_benchmark=coverage[name].n_benchmark,
+                    n_attempted=coverage[name].n_attempted,
                     requires_judge=protocol.requires_judge,
                     identity=canonical_sha256({"datasets": sorted(datasets), "summary_revision": SUMMARY_REVISION}),
                     source={

@@ -11,7 +11,12 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.evaluation.spec import ChoiceLikelihood
-from taskcompendium.importers.checkpoint_harness import CheckpointTemplate, read_checkpoint_file
+from taskcompendium.importers.checkpoint_harness import (
+    CheckpointTemplate,
+    read_checkpoint_file,
+    read_humaneval_fewshot,
+)
+from taskcompendium.importers.evaluation_harness import HarnessTemplate, compile_choice_documents
 from taskcompendium.pipeline.inputs import ConversionContext
 
 
@@ -78,3 +83,65 @@ def test_checkpoint_gpqa_cleans_answers_before_shuffling_and_selecting_gold(tmp_
     assert operation.requests[3].continuation == " (D)"
     assert "(D) Correct. Answer Text\nAnswer: " in operation.requests[3].context
     assert "[ignored]" not in operation.requests[3].context
+
+
+@pytest.mark.parametrize("family", ["boolq", "piqa", "truthfulqa_mc2"])
+def test_validation_fewshots_follow_pinned_harness_draws_across_documents(family):
+    documents = [
+        {
+            "question": f"Question {i}",
+            "passage": f"Passage {i}",
+            "goal": f"Goal {i}",
+            "sol1": "first",
+            "sol2": "second",
+            "label": 0,
+            "mc2_targets": {"choices": ["first", "second"], "labels": [1, 0]},
+        }
+        for i in range(6)
+    ]
+    # ContextSampler at the pinned harness commit, Random(1234), n=2.
+    # Training pools still draw n+1 when both configured split names are unset.
+    pool = documents if family == "truthfulqa_mc2" else [{**doc, "question": "training"} for doc in documents]
+    rows = list(compile_choice_documents(documents[:3], pool, HarnessTemplate(family, 2)))
+    assert [row["fewshot_indices"] for row in rows] == (
+        [[3, 4], [0, 4], [5, 0]] if family == "truthfulqa_mc2" else [[3, 0], [0, 4], [5, 0]]
+    )
+
+
+@pytest.mark.parametrize(
+    "family,expected",
+    [("commonsense_qa", [[3, 4], [0, 4], [5, 0]]), ("agieval_lsat_ar", [[3, 0], [0, 5], [4, 0]])],
+)
+def test_checkpoint_fewshots_use_split_configuration_instead_of_pool_identity(tmp_path, family, expected):
+    documents = [
+        {
+            "question": f"Question {i}",
+            "query": f"Question {i}",
+            "choices": (
+                {"text": ["red", "blue", "green", "white", "black"]} if family == "commonsense_qa" else ["red", "blue"]
+            ),
+            "answerKey": "A",
+            "gold": [0],
+        }
+        for i in range(6)
+    ]
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.Table.from_pylist(documents), path)
+    rows = list(
+        read_checkpoint_file(
+            StoragePath(str(path)),
+            ConversionContext(inputs={}, grader_environment=None),
+            template=CheckpointTemplate(family, shots=2),
+        )
+    )
+    assert [row["fewshot_indices"] for row in rows[:3]] == expected
+
+
+def test_humaneval_ten_shot_prompts_follow_the_pinned_test_split_draws(tmp_path):
+    documents = [{"prompt": f"problem{i}", "test": f"test{i}", "entry_point": f"fn{i}"} for i in range(12)]
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.Table.from_pylist(documents), path)
+    rows = list(read_humaneval_fewshot(StoragePath(str(path)), ConversionContext({}, None)))
+    for row, indices in zip(rows[:2], ([7, 1, 0, 10, 9, 5, 6, 11, 4, 8], [3, 0, 10, 9, 5, 7, 4, 11, 6, 8]), strict=True):
+        expected = "".join(f"problem{i} test{i}\ncheck(fn{i})\n\n" for i in indices)
+        assert row["evaluation_prompt"] == expected + row["prompt"]

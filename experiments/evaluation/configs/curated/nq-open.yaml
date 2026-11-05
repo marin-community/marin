@@ -1,0 +1,5 @@
+name: nq-open
+sources:
+- evalchemy-nq_open
+chat_sources:
+- evalchemy-nq_open-chat
