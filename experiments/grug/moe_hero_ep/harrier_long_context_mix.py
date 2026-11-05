@@ -58,7 +58,6 @@ def _bucket_component(store: str, cell: str, stats_path: str) -> LengthSkewDatas
         long_weight=LONG_CONTEXT_SKEW,
         stats_path=stats_path,
         stats_key=cell,
-        tags=[cell],
     )
 
 
@@ -95,15 +94,6 @@ def long_document_share(length_tokens: LengthTokens, skew: int) -> float:
         weight * skew * length_tokens[cell][1] / (length_tokens[cell][0] + skew * length_tokens[cell][1])
         for cell, weight in _COOLDOWN_WEIGHTS.items()
     )
-
-
-def long_partition_passes(length_tokens: LengthTokens, skew: int, training_tokens: int) -> dict[str, float]:
-    """Return how many times training reads each bucket's long-document stream."""
-    return {
-        cell: weight * training_tokens * skew / (length_tokens[cell][0] + skew * length_tokens[cell][1])
-        for cell, weight in _COOLDOWN_WEIGHTS.items()
-        if length_tokens[cell][1]
-    }
 
 
 def overall_long_partition_passes(length_tokens: LengthTokens, skew: int, training_tokens: int) -> float:

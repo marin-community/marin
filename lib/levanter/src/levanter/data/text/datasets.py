@@ -372,7 +372,6 @@ class LengthSkewDatasetComponent(DatasetComponentBase):
     long_weight: float
     stats_path: str
     stats_key: str
-    tags: list[str] | None = None
 
 
 def _length_bucket_weights(component: LengthSkewDatasetComponent, seq_len: int) -> dict[LengthBucket, float]:

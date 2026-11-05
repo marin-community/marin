@@ -228,20 +228,14 @@ class TreeCache(AsyncDataset[T_co]):
         return await self._reader.get_flat_field_batch(field, offsets, length)
 
     async def flat_field_document_offsets(self, field: str, start: int, stop: int) -> np.ndarray:
-        """Read cumulative token offsets for document rows ``[start, stop)`` without reading tokens."""
-        if start < 0 or stop < start or stop > self.flat_field_num_rows(field):
+        """Read cumulative token offsets for document rows ``[start, stop)``, ``start < stop``, without reading tokens."""
+        if start < 0 or stop <= start or stop > self.flat_field_num_rows(field):
             raise ValueError(f"Invalid document range [{start}, {stop})")
         if not self.is_sharded:
             field_store = _tree_field(self.store.tree, field)
             first = 0 if start == 0 else int(await field_store.offsets[start].read())
             ends = await field_store.offsets[start + 1 : stop + 1].read()
             return np.concatenate(([first], np.asarray(ends, dtype=np.int64)))
-
-        if start == stop:
-            if start == 0:
-                return np.array([0], dtype=np.int64)
-            previous = await self.flat_field_document_offsets(field, start - 1, start)
-            return previous[-1:]
 
         shard_names, row_ends = self._ensure_shard_row_offsets()
         _, field_ends = self._ensure_shard_field_offsets(field)
