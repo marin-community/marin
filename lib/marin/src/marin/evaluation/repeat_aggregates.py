@@ -7,7 +7,7 @@ import logging
 import math
 
 from marin.evaluation.lm_eval_samples import is_scratch_artifact
-from marin.evaluation.records import EvalRunRecord, RepeatAggregate, TaskCoverage
+from marin.evaluation.records import EvalRunRecord, RepeatAggregate, RepeatCoverageBasis, TaskCoverage
 
 ITEM_BERNOULLI_STDERR = "item_bernoulli_n_minus_1"
 logger = logging.getLogger(__name__)
@@ -21,32 +21,45 @@ def _item_count(count: int | None, items: int, repeats: int, *, benchmark_size: 
     return count // repeats if count % repeats == 0 else None
 
 
-def _item_coverage(source: TaskCoverage | None, items: int, repeats: int) -> TaskCoverage | None:
+def _item_coverage(
+    source: TaskCoverage | None, items: int, repeats: int
+) -> tuple[TaskCoverage | None, RepeatCoverageBasis]:
     if source is None:
-        return TaskCoverage(n_scored=items)
+        return TaskCoverage(n_scored=items), RepeatCoverageBasis.ITEMS
 
     trials = items * repeats
-    fully_scored_items = source.n_scored > (items - 1) * repeats
-    if source.n_scored not in (0, items, trials) and not fully_scored_items:
-        return None
-    if source.n_scored == 0 and source.n_attempted not in (items, trials):
-        return None
+    if source.n_scored == 0:
+        if source.n_attempted not in (items, trials):
+            return None, RepeatCoverageBasis.SOURCE
+        scored_items = items
+        basis = RepeatCoverageBasis.ITEMS
+    elif source.n_scored == items or ((items - 1) * repeats < source.n_scored <= trials):
+        scored_items = items
+        basis = RepeatCoverageBasis.ITEMS
+    elif items < source.n_scored < trials:
+        scored_items = math.ceil(source.n_scored / repeats)
+        basis = RepeatCoverageBasis.ITEM_LOWER_BOUND
+    else:
+        return None, RepeatCoverageBasis.SOURCE
     attempted = _item_count(source.n_attempted, items, repeats)
-    if source.n_attempted is not None and (attempted is None or attempted < items):
-        return None
+    if source.n_attempted is not None and (attempted is None or attempted < scored_items):
+        return None, RepeatCoverageBasis.SOURCE
     # Trial-level unanswered counts cannot identify partly unanswered items. Every trial
     # unanswered does establish that every represented item lacked an extractable answer.
     if source.n_scored == items:
         unanswered = source.n_unanswered
     elif source.n_scored > 0 and source.n_unanswered == source.n_scored:
-        unanswered = items
+        unanswered = scored_items
     else:
         unanswered = 0
-    return TaskCoverage(
-        n_benchmark=_item_count(source.n_benchmark, items, repeats, benchmark_size=True),
-        n_attempted=attempted,
-        n_scored=items,
-        n_unanswered=unanswered,
+    return (
+        TaskCoverage(
+            n_benchmark=_item_count(source.n_benchmark, items, repeats, benchmark_size=True),
+            n_attempted=attempted,
+            n_scored=scored_items,
+            n_unanswered=unanswered,
+        ),
+        basis,
     )
 
 
@@ -72,16 +85,17 @@ def normalize_repeat_record(record: EvalRunRecord) -> EvalRunRecord:
             logger.warning("Skipping repeated projection for %s/%s: invalid score or item count", record.run_id, task)
             continue
         source = coverage.get(task)
-        item_coverage = _item_coverage(source, items, repeats)
+        item_coverage, coverage_basis = _item_coverage(source, items, repeats)
         if item_coverage is None:
-            logger.warning("Skipping repeated projection for %s/%s: ambiguous partial coverage", record.run_id, task)
-            continue
-        coverage[task] = item_coverage
+            logger.warning("Retaining source coverage for %s/%s: inconsistent repeated counts", record.run_id, task)
+        else:
+            coverage[task] = item_coverage
         aggregates[task] = RepeatAggregate(
             n_items=items,
             n_repeats=repeats,
             n_trials=items * repeats,
             n_scored_trials=source.n_scored if source is not None and source.n_scored > items else None,
+            coverage_basis=coverage_basis,
             stderr=math.sqrt(score * (1 - score) / (items - 1)),
             stderr_basis=ITEM_BERNOULLI_STDERR,
             source_coverage=source,

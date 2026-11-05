@@ -496,6 +496,14 @@ class TaskCoverage(BaseModel):
     errors: dict[str, int] = Field(default_factory=dict)
 
 
+class RepeatCoverageBasis(StrEnum):
+    """Whether projected coverage counts items, bounds them, or retains source units."""
+
+    ITEMS = "items"
+    ITEM_LOWER_BOUND = "item_lower_bound"
+    SOURCE = "source"
+
+
 class RepeatAggregate(BaseModel):
     """A repeated score's item and trial counts, publication uncertainty, and source coverage."""
 
@@ -505,6 +513,7 @@ class RepeatAggregate(BaseModel):
     n_repeats: int
     n_trials: int
     n_scored_trials: int | None = None
+    coverage_basis: RepeatCoverageBasis
     stderr: float
     stderr_basis: str
     source_coverage: TaskCoverage | None = None

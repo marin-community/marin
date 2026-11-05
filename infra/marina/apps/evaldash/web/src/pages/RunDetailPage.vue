@@ -54,11 +54,17 @@ const jobRoles = computed(() => Object.keys(data.value?.jobs ?? {}))
 const gradedNote = computed<{ label: string; warn: boolean }>(() => {
   const headline = data.value?.headline
   if (!headline) return { label: '', warn: false }
+  if (headline.repeat_aggregation?.coverage_basis === 'source') {
+    return { label: 'source coverage retained; item count uncertain', warn: true }
+  }
   if (headline.interval_kind !== INTERVAL_KIND.IDENTIFIED) {
     return { label: 'attempted count unreported', warn: false }
   }
   const attempted = `${headline.n_attempted ?? 'unknown'}${headline.n_benchmark === null ? '' : ` of ${headline.n_benchmark}`}`
-  const graded = `${headline.n_scored}${headline.n_attempted === null ? '' : ` of ${headline.n_attempted}`}`
+  const gradedCount = headline.repeat_aggregation?.coverage_basis === 'item_lower_bound'
+    ? `at least ${headline.n_scored}`
+    : `${headline.n_scored}`
+  const graded = `${gradedCount}${headline.n_attempted === null ? '' : ` of ${headline.n_attempted}`}`
   return {
     label: `attempted ${attempted} · graded ${graded}`,
     warn: isPartialCoverage(headline) || (headline.benchmark_rate !== null && headline.benchmark_rate < 1),

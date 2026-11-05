@@ -66,6 +66,7 @@ export interface RepeatAggregate {
   n_repeats: number
   n_trials: number
   n_scored_trials: number | null
+  coverage_basis: 'items' | 'item_lower_bound' | 'source'
   stderr: number
   stderr_basis: string
   source_coverage: unknown

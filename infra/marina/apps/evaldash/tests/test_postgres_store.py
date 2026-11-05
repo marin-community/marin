@@ -163,9 +163,13 @@ def test_partial_trial_coverage_does_not_abort_catalog_projection(tmp_path):
     assert projected.repeat_aggregates["aime24"].source_coverage.errors == {"request_failed": 1}
 
     ambiguous = record.model_copy(update={"coverage": {"aime24": TaskCoverage(n_attempted=300, n_scored=200)}})
-    unprojected = EvalRunRecord.model_validate(results_db.run_row(ambiguous)["record"])
-    assert unprojected.repeat_aggregates == {}
-    assert unprojected.coverage["aime24"].n_scored == 200
+    projected_partial = EvalRunRecord.model_validate(results_db.run_row(ambiguous)["record"])
+    partial_headline = record_headline(projected_partial)
+    complete_headline = record_headline(projected)
+    assert partial_headline is not None and complete_headline is not None
+    assert projected_partial.repeat_aggregates["aime24"].coverage_basis == "item_lower_bound"
+    assert projected_partial.coverage["aime24"].n_scored == 20
+    assert partial_headline["high"] - partial_headline["low"] >= complete_headline["high"] - complete_headline["low"]
 
 
 @pytest.mark.parametrize("source_count", [30, 300])

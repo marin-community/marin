@@ -10,9 +10,9 @@
  */
 import { computed } from 'vue'
 import { RUN_STATUS, type MissingCell, type PanelCell } from '@/types/api'
-import { formatCoverage, formatInterval, formatScore } from '@/utils/formatting'
+import { formatInterval, formatScore } from '@/utils/formatting'
 import { scoreColor } from '@/utils/score'
-import { scoredItemsLabel, type BestCell } from '@/utils/panel'
+import { cellCoverageLabel, scoredItemsLabel, type BestCell } from '@/utils/panel'
 import { tip, type TipContent } from '@/composables/tooltip'
 
 interface HistoryPoint {
@@ -87,7 +87,7 @@ const gauges = computed<Gauge[]>(() =>
     const whiskerHeight = Math.max(0, Math.min(1, cell.high) - Math.max(0, cell.low)) * H.value
     const bestY = best ? Math.max(0, Math.min(1, best.value)) * H.value : 0
     const isBest = best?.model === props.model
-    const coverage = formatCoverage(cell.coverage)
+    const coverage = cellCoverageLabel(cell)
     return {
       task, cell, kind: 'score', fillH, whiskerBottom, whiskerHeight, bestY, isBest,
       color: scoreColor(v),

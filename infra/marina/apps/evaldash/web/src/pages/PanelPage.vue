@@ -12,9 +12,9 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
+import { formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
+import { cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
@@ -419,14 +419,19 @@ function protocolLabel(task: string): string {
 function cellTitle(cell: PanelCell): string {
   const scope =
     cell.interval_kind === INTERVAL_KIND.IDENTIFIED
-      ? formatCoverage(cell.coverage)
+      ? cellCoverageLabel(cell)
       : 'attempted count not reported, so completeness is unknown'
   const shotSetting = cell.num_fewshot === null ? 'default shots' : `${cell.num_fewshot}-shot`
   return [
-    `${cell.metric} · ${shotSetting} · ${scoredItemsLabel(cell)} graded`,
-    cell.n_benchmark === null
-      ? 'benchmark size unreported'
-      : `${cell.n_attempted ?? 'unknown'} of ${cell.n_benchmark} benchmark items attempted`,
+    `${cell.metric} · ${shotSetting} · ${scoredItemsLabel(cell)}`,
+    cell.repeat_aggregation?.coverage_basis === 'source'
+      ? 'source coverage retained; item count uncertain'
+      : cell.n_benchmark === null
+        ? 'benchmark size unreported'
+        : `${cell.n_attempted ?? 'unknown'} of ${cell.n_benchmark} benchmark items attempted`,
+    ...(cell.repeat_aggregation?.coverage_basis === 'item_lower_bound'
+      ? [`at least ${cell.n_scored} items scored`]
+      : []),
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
@@ -863,7 +868,7 @@ function goToModel(model: string) {
                     <span
                       v-if="isPartialCoverage(cellFor(row, task)!)"
                       class="block text-[9px] font-mono leading-none text-status-warning"
-                      >{{ formatCoverage(cellFor(row, task)!.coverage) }}</span
+                      >{{ cellCoverageLabel(cellFor(row, task)!) }}</span
                     >
                     <span
                       v-else-if="deltaBest(row, task) !== null"

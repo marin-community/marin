@@ -1,4 +1,5 @@
 import { INTERVAL_KIND, type IntervalKind, type Meta, type PanelCell, type PanelRow } from '@/types/api'
+import { formatCoverage } from './formatting'
 import { compareCells } from './ranking'
 
 export function cohortWarning(cohort: string, meta: Meta): string | null {
@@ -62,4 +63,15 @@ export function isPartialCoverage(cell: Covered): boolean {
 export function scoredItemsLabel(cell: PanelCell): string {
   const repeat = cell.repeat_aggregation
   return repeat ? `${repeat.n_items} items × ${repeat.n_repeats} repeats` : `${cell.n_scored} items`
+}
+
+export function cellCoverageLabel(cell: PanelCell): string {
+  const coverage = formatCoverage(cell.coverage)
+  if (cell.repeat_aggregation?.coverage_basis === 'source') {
+    return coverage ? `${coverage} (source units)` : 'source coverage unreported'
+  }
+  if (cell.repeat_aggregation?.coverage_basis === 'item_lower_bound') {
+    return coverage ? `at least ${coverage}` : 'item coverage lower bound unreported'
+  }
+  return coverage
 }
