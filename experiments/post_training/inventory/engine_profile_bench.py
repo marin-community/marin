@@ -29,7 +29,6 @@ from pathlib import Path
 SERVED_NAME = "snowball"
 PORT = 8011
 HEALTH_TIMEOUT = 25 * 60
-EXPECTED_SHARDS = 40
 NCCL_GUARD_ENV = "MARIN_BI_KEEP_NCCL_DEFAULTS"
 PROBE_MAX_TOKENS = 128
 FILLER_COUNT = 120
@@ -122,9 +121,14 @@ def stage_model(model_uri: str, stage_dir: Path) -> Path | None:
     # fsutil may place the prefix under a nested directory; locate the export by its config.
     configs = sorted(stage_dir.rglob("config.json"))
     model_dir = configs[0].parent if configs else stage_dir
-    shards = sorted(model_dir.glob("*.safetensors"))
-    if len(shards) != EXPECTED_SHARDS:
-        log(f"staging incomplete under {model_dir}: {len(shards)} shards, configs={configs}")
+    index = model_dir / "model.safetensors.index.json"
+    if not configs or not index.exists():
+        log(f"staging incomplete under {model_dir}: configs={configs}, index present={index.exists()}")
+        return None
+    expected = set(json.loads(index.read_text())["weight_map"].values())
+    missing = sorted(name for name in expected if not (model_dir / name).exists())
+    if missing:
+        log(f"staging incomplete under {model_dir}: {len(missing)} of {len(expected)} shards missing: {missing[:3]}")
         return None
     staged_bytes = sum(path.stat().st_size for path in model_dir.iterdir() if path.is_file())
     log(f"staged {staged_bytes / 1e9:.1f} GB to {model_dir} in {time.time() - started:.0f}s")
