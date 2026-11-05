@@ -8,15 +8,16 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
 
 - Model: d6144, 48 layers, 384 routed experts of width 3072, top-8 routing, latent width 3072, and
   two shared experts of width 3072. Depth rounds up to the nearest even count.
-- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 65536
-  (4096 through step 257553, 16384 through step 372000), query/key multiplier 1.66 (1.3 at 4K, 1.48 at
-  16K), sliding window 2048, and every
+- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 262144
+  (4096 through step 257553, 16384 through step 372000, 65536 through step 390251), query/key multiplier
+  1.66 (1.3 at 4K, 1.48 at 16K), sliding window 2048, and every
   fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
-- Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Additional racks use
-  the `replica_dcn` axis. Six experts are on each GPU in each rack.
-- Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 704 global
-  sequences across 11 racks at 65K (11264 at 4K, 2816 at 16K). A one-rack diagnostic defaults to 64
-  sequences.
+- Mesh: each rack's 64 GB200 GPUs, on 16 workers with four GPUs each, form 16 expert shards of 4 context
+  shards each (CP1 x EP64 through step 390251). Additional racks use the `replica_dcn` axis. Six experts are
+  on each GPU in each rack.
+- Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 176 global
+  sequences across 11 racks at 262K (11264 at 4K, 2816 at 16K, 704 at 65K). A one-rack diagnostic defaults
+  to 16 sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
 - MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
@@ -216,7 +217,7 @@ output root and never pruned. Temporary checkpoints expire three days after they
 those a replaced run leaves behind clear themselves.
 
 The hero stops at the end of its 390251-step schedule unless `HERO_SCHEDULE_EXTENSION` in `hero_recipe.py` says
-otherwise. A cutover that trains past the schedule sets it in the deploy PR as
+otherwise; it is set to `ScheduleExtension(steps=4335, final_lr_ratio=0.01)`, which stops at step 394586. A cutover that trains past the schedule sets it in the deploy PR as
 `ScheduleExtension(steps=N, final_lr_ratio=R)`: the run stops at 390251 + N, and over those steps the learning
 rates move linearly from the schedule's floor, 5% of peak, to `R` of peak. `R = 0.05` holds the floor. The heuristic, weight
 decay, data stages, and checkpoint keeps still size from 390251, and every 500th step stays permanent through the extension.
@@ -266,7 +267,7 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 ## Context-length switches
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
-at 4K, 5632 at 8K, 2816 at 16K, and 704 at 65K with the same 390251-step schedule, learning rates, and weight
+at 4K, 5632 at 8K, 2816 at 16K, 704 at 65K, and 176 at 262K with the same 390251-step schedule, learning rates, and weight
 decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch. Do not lengthen the schedule
 to train longer: its length sizes the learning rates and prior context phases. Set the extension described in
 [Hero cutovers](#hero-cutovers-and-wb-lineage) instead.
@@ -320,7 +321,7 @@ by the statistics:
 uv run python -m experiments.grug.moe_hero_ep.harrier_long_context_mix
 ```
 
-`HERO_USES_LONG_CONTEXT_MIX` in `launch_scaling_ladder.py` selects the mix for the hero. The Harrier skip-to-window
+`HERO_USES_LONG_CONTEXT_MIX` in `launch_scaling_ladder.py` selects the mix for the hero, which reads it from step 390251. The Harrier skip-to-window
 replay cannot carry over, since the virtual sources have different token counts across phases. Instead
 `LmDataConfig.mixture_start_step` makes the step at the end of `HERO_CONTEXT_PHASES` read the mixture's first
 sequence, so each bucket starts at the beginning of its shuffled order. Without it, a run with no history would read
@@ -409,7 +410,7 @@ Three quantities set what a sweep can fit on one rack:
 - The receiver buffer is token assignments multiplied by the receiver capacity factor, split
   across the transport's two expert chunks.
 
-The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15 (1.5 at 65K).
+The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15 (1.5 at 65K and 262K).
 
 ## Diagnostic controls
 
@@ -442,9 +443,9 @@ production runs that need a shared checkpoint path under `grug/...`.
 
 ### Bounded diagnostics
 
-`launch_diagnostics.py` uses the d6144 model, Harrier 2026.08.18 data, process layout, watch config,
-and TensorStore cache from the production recipe. Its stop step, evaluation, and checkpoint policy
-stay independent from the production run.
+`launch_diagnostics.py` uses the d6144 model, process layout, watch config, and TensorStore cache from the
+production recipe. It reads the Harrier 2026.08.18 data unless `--long-context-start-step` selects the hero's
+long-context mix. Its stop step, evaluation, and checkpoint policy stay independent from the production run.
 
 The default 25-step diagnostic uses simulated epoching. Set `--schedule-steps 390251` to use the raw
 production mixture. The diagnostic default now matches the production watch and 890 GB RAM request.
@@ -498,16 +499,16 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
     --version dev --run
 ```
 
-The default batch, 64 at 65K, keeps the production local batch of 1 sequence per GPU. The trace
+The default batch, 16 at 262K, keeps the production local batch of one sequence per expert shard. The trace
 does not include the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
 ### Daily hero canary
 
 [`marin-canary-hero-gb200.yaml`](../../../.github/workflows/marin-canary-hero-gb200.yaml) runs the
 hero model and training step from `main` daily on one rack through `launch_diagnostics.py`.
-It leaves out `gate_router_weight_decay` and `prior_context_phases`, which the production
-`launch_scaling_ladder.py` applies. The canary restores the pinned permanent checkpoint
-`step-372000` and trains 35 updates on the production mixture with a fixed seed. One dropless eval
+It leaves out `gate_router_weight_decay`, which the production `launch_scaling_ladder.py` applies and which is 0
+past the schedule. The canary restores the pinned permanent checkpoint `step-390251` and trains 35 updates on the
+long-context mix with a fixed seed. One dropless eval
 runs after the last update. A healthy run holds the rack for about 20 minutes. The diagnostic does
 not exercise cross-rack collectives or checkpoint recovery.
 
@@ -521,7 +522,7 @@ reports median step time, MFU and tokens/s, peak HBM, drop fraction, final train
 eval loss against a baseline: the per-metric median of the last 5 scheduled canaries from the same
 checkpoint, limiting the effect of one outlier. Manual dispatches (`hero-canary-manual-*`) never
 enter it. The run fails when the final train loss is above 1.5 or the dropless eval macro loss
-is above 2.5; one-rack runs end near 0.92 and 2.00. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to Slack.
+is above 2.5; one-rack runs at 262K end near 0.83 and 2.04. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to Slack.
 Re-pin `HERO_CANARY_CHECKPOINT` when the checkpoint layout or context length changes; the next run
 starts a new baseline.
 
@@ -559,7 +560,7 @@ The short convolution exchanges a left halo across sequence shards.
 
 The 4K control uses `--seq-len 4096 --batch-size 1024 --context-axis-size 1
 --expert-axis-size 64 --qk-mult 1.3`. Use the same checkpoint and `--schedule-steps`
-for the 4K control and 262K probe. `--num-steps` is an
+for the 4K control and 262K probe. These sizes are now the default mesh and batch. `--num-steps` is an
 absolute stop step and must exceed the checkpoint step. Record MFU, elapsed step
 time, peak memory, and routing drops after warmup. A throughput probe alone does
 not establish long-context training quality.
@@ -619,7 +620,7 @@ checkpoint policy all follow `--size`:
 | d1024 | 2 | 2048 | 15,276 | every 5% | final only |
 | d1536 | 6 | 6144 | 15,128 | every 5% | final only |
 | d2048 | 11 | 11264 | 20,072 | every 5% | final only |
-| d6144 | 11 | 11264 at 4K, 2816 at 16K, 704 at 65K | 390,251 | every 3000 | every 6k |
+| d6144 | 11 | 11264 at 4K, 2816 at 16K, 704 at 65K, 176 at 262K | 390,251 plus a 4,335-step extension | every 500 | every 6k, then every 500 from step 385,251 |
 
 At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
 batch is one sequence per batch shard: 64 × racks (704 on the hero) without context parallelism, and
