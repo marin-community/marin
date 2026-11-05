@@ -119,10 +119,10 @@ def _log_scaling_tokens(cfg):
     return jax.random.randint(jax.random.key(63), (1, cfg.max_seq_len), 0, cfg.vocab_size)
 
 
-def test_log_scaling_factor_keeps_the_values_of_the_runs_at_slope_0_1():
+def test_log_scaling_factor_at_slope_0_1_and_floor_65536():
     visible_keys = jnp.asarray([[1, 65536, 131072, 262144]], dtype=jnp.int32)
     factor = model.log_scaling_factor(visible_keys, 65536, 0.1)
-    # Literal values of 1 + 0.1 * ln(n / 65536), the fixed slope before it became a config field.
+    # Literal values of 1 + 0.1 * ln(n / 65536), so a changed formula cannot pass unnoticed.
     np.testing.assert_allclose(factor, [[1.0, 1.0, 1.0693147, 1.1386294]], rtol=1e-6)
 
 
