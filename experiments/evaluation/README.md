@@ -200,6 +200,11 @@ a `ModelConfig`. The returned `EvaluationResult.results_paths` lists
 the FineStore archives. Downstream steps should consume that result instead of
 rebuilding paths.
 
+When a checkpoint pipeline itself runs on Iris, submit its parent with
+`--container-profile CONTAINER_PROFILE_PRIVILEGED`. Curated evaluation groups and
+their isolated grader workers inherit this profile; Iris forbids a default task
+from elevating a child to it.
+
 Pipeline retries reuse completed evaluations when their resolved settings match.
 Changes to the model, evaluator, judge, or evaluation configuration create new run directories;
 mutable `dev` versions always create new runs. Curated identities include source

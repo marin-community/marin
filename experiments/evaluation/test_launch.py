@@ -14,6 +14,9 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
+from iris.client.client import IrisClient
+from iris.cluster.client import remote_client
+from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.hardware import Platform
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationBatch, EvaluationError, _record
@@ -265,6 +268,27 @@ def _pipeline_spec(tmp_path):
         cache_key="caller-owned-immutable-artifact",
         version="2026.10.19",
     )
+
+
+def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, monkeypatch):
+    requests = []
+
+    def submit(request, **_kwargs):
+        requests.append(request)
+        return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
+
+    monkeypatch.setattr(
+        remote_client,
+        "ControllerServiceClientSync",
+        lambda **_kwargs: SimpleNamespace(launch_job=submit, close=lambda: None),
+    )
+    batch = prepare_evaluation_batch(_pipeline_spec(tmp_path))
+    with IrisClient.remote("http://controller.invalid") as client:
+        launch_module.launch_group(batch, client)
+
+    (request,) = requests
+    assert request.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
+    assert request.constraints[0].value.string_value == "cw-rno2a"
 
 
 def test_pipeline_changed_launch_tree_creates_new_steps_and_preserves_partial_archive(tmp_path, monkeypatch):
