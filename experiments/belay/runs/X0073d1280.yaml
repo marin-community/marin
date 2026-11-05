@@ -1,0 +1,14 @@
+experiment: X0073d1280
+track: competitive-d1280
+runs:
+  seed0:
+    seed: 0
+    variant: lm_head tanh soft-cap 10
+    flags:
+    - --model-set
+    - logit_soft_cap=10
+  control:
+    seed: 0
+    variant: competitive-d1280 control
+    control: true
+    shared: s7n-d1280L16
