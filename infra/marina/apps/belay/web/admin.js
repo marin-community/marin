@@ -191,6 +191,29 @@ function storedText(text, removed) {
   )
 }
 
+// A #9514 comment as GitHub serves it plus the visible text this page showed: what an intake decision sends.
+function review(c) {
+  return {
+    comment_id: String(c.id),
+    url: c.html_url,
+    author: c.user.login,
+    body: c.body,
+    shown: c.visible.text,
+    posted_at: c.created_at,
+  }
+}
+
+// Decline with the approver's reason, which the declined idea shows; the button waits for a reason.
+function declineWithReason(run) {
+  const reason = el('input', { type: 'text', class: 'reason', placeholder: 'reason to decline', 'aria-label': 'Reason to decline' })
+  const button = el('button', { type: 'button', class: 'btn', disabled: '' }, 'Decline')
+  reason.addEventListener('input', () => {
+    button.disabled = !reason.value.trim()
+  })
+  button.addEventListener('click', () => run(reason.value.trim()))
+  return el('span', { class: 'grant' }, reason, button)
+}
+
 // A primary action with its grant fields (nodes, study hours, priority): the action gets those that are filled.
 function approveWithGrant(label, run) {
   const nodes = nodesInput()
@@ -249,12 +272,16 @@ function renderIntakeLive() {
     return
   }
   const known = new Map(state.ideas.filter((i) => i.comment_id).map((i) => [String(i.comment_id), i]))
+  const rows = intakeComments.map((c) => {
+    const idea = known.get(String(c.id))
+    const registered = state.registered_comments[String(c.id)]
+    return { c, idea, registered, waiting: !registered && (!idea || idea.state === 'pending') }
+  })
+  // Comments still waiting for a decision first; each group stays newest first.
+  rows.sort((a, b) => Number(b.waiting) - Number(a.waiting))
   setChildren(
     'intake-live',
-    intakeComments.map((c) => {
-      const idea = known.get(String(c.id))
-      const registered = state.registered_comments[String(c.id)]
-      const waiting = !registered && (!idea || idea.state === 'pending')
+    rows.map(({ c, idea, registered, waiting }) => {
       const first = c.visible.text.trim().split('\n')[0].replace(/\*\*/g, '').slice(0, 110)
       const key = `c${c.id}`
       const expanded = openBodies.has(key)
@@ -281,24 +308,15 @@ function renderIntakeLive() {
           ),
           link(c.html_url, '↗'),
           waiting
-            ? approveWithGrant('Approve', (grant) =>
-                act(
-                  'intake/approve',
-                  {
-                    comment_id: String(c.id),
-                    url: c.html_url,
-                    author: c.user.login,
-                    body: c.body,
-                    shown: c.visible.text,
-                    posted_at: c.created_at,
-                    ...grant,
-                  },
-                  'Approved and queued',
-                ),
-              )
+            ? approveWithGrant('Approve', (grant) => act('intake/approve', { ...review(c), ...grant }, 'Approved and queued'))
             : registered && !idea?.registry_id
               ? el('span', { class: 'muted small' }, 'done → ', link(`${PAGES.status}/${registered}`, registered))
-              : el('span', { class: 'muted small' }, idea.registry_id ? `${idea.state} → ${idea.registry_id}` : idea.state),
+              : el(
+                  'span',
+                  { class: 'muted small' },
+                  idea.registry_id ? `${idea.state} → ${idea.registry_id}` : idea.state === 'declined' ? idea.note : idea.state,
+                ),
+          waiting ? declineWithReason((note) => act('intake/decline', { ...review(c), note }, 'Declined')) : null,
         ),
         expanded ? storedText(c.visible.text, c.visible.removed) : null,
       )

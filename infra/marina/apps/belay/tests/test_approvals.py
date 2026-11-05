@@ -16,6 +16,7 @@ from belay.app import (
     IdeaReport,
     IntakeApproval,
     IntakeComment,
+    IntakeDecline,
     PriorityBand,
     RunExpectation,
     SessionFinish,
@@ -27,6 +28,7 @@ from belay.app import (
     claim_events,
     create_api,
     decline_idea,
+    decline_intake_comment,
     expect_run,
     finish_session,
     migrate,
@@ -301,6 +303,20 @@ def test_an_intake_comment_the_registry_holds_cannot_be_approved_from_the_admin_
     )
     assert approve_intake_comment(conn, fresh, "ClassicLarry")["state"] == "approved"
     assert approved_events(conn) == 1
+
+
+def test_a_declined_comment_keeps_the_reason_and_is_never_queued(conn) -> None:
+    url = "https://github.com/marin-community/marin/issues/9514#issuecomment-5"
+    review = {"comment_id": "5", "url": url, "author": "a", "body": "Try Z.", "shown": "Try Z.", "posted_at": POSTED}
+    with pytest.raises(ValidationError):
+        IntakeDecline(**review, note="")
+    assert decline_intake_comment(conn, IntakeDecline(**review, note="eval-only"), "ClassicLarry")["state"] == "declined"
+    row = conn.execute(text("SELECT state, note FROM ideas WHERE comment_id = '5'")).one()
+    assert tuple(row) == ("declined", "Declined by ClassicLarry: eval-only")
+    with pytest.raises(HTTPException) as again:
+        approve_intake_comment(conn, IntakeApproval(**review), "ClassicLarry")
+    assert again.value.status_code == 409
+    assert approved_events(conn) == 0
 
 
 class _Services:
