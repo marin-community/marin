@@ -685,7 +685,8 @@ Namespaces:
   ```
 
   Rows can be lost without blocking the controller: a failed snapshot (logged
-  as `controller rows: snapshot failed`) or a failed Finelog flush drops that
+  as `controller rows: snapshot failed`), a failed enqueue (logged as
+  `controller rows: write failed`) or a failed Finelog flush drops that
   transaction's rows. To find gaps, compare daily row counts with the
   controller DB.
 
