@@ -8,6 +8,7 @@ from harbor.environments import daytona
 from harbor.host_capabilities import DaytonaConnection, HostCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import AgentConfig
+from marinskyrl.harbor_environments import HarborEnvironmentSettings
 from omegaconf import OmegaConf
 from shellbox.machine import ExitReason, Result
 from taskcompendium.models import Source
@@ -54,6 +55,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         cleanup_timeout=5,
         service_startup_timeout=5,
         service_shutdown_timeout=5,
+        harbor_environment=HarborEnvironmentSettings(provisioning="native"),
     )
     connections = {
         name: DaytonaConnection(api_key=f"{name}-key", api_url=f"https://{name}.invalid/api", target=f"{name}-target")
