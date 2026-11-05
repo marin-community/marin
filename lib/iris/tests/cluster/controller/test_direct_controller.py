@@ -532,17 +532,14 @@ def test_drain_caps_promotions_per_cycle(state):
 
     with state._db.transaction() as cur:
         batch1 = dispatch.drain_for_dispatch(cur, max_promotions=100)
-    # All 100 dispatched are freshly promoted (no prior ASSIGNED rows).
     assert len(batch1.tasks_to_run) == 100
     assert _count_pending(state) == 150
 
-    # Second drain: 100 newly promoted (the cap still applies), 100 redriven.
     with state._db.transaction() as cur:
         batch2 = dispatch.drain_for_dispatch(cur, max_promotions=100)
     assert len(batch2.tasks_to_run) == 200
     assert _count_pending(state) == 50
 
-    # Third drain: the last 50 promoted, 200 redriven.
     with state._db.transaction() as cur:
         batch3 = dispatch.drain_for_dispatch(cur, max_promotions=100)
     assert len(batch3.tasks_to_run) == 250
@@ -678,7 +675,6 @@ def test_apply_failed_with_retry(state):
             now=Timestamp.now(),
         )
 
-    # Task should be PENDING again (1 failure <= 1 max_retries_failure).
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_PENDING
 
     # The dead attempt 0 must have finished_at_ms stamped even though the task
@@ -694,7 +690,6 @@ def test_apply_failed_with_retry(state):
     assert attempts[0].state == job_pb2.TASK_STATE_FAILED
     assert attempts[0].finished_at_ms is not None
 
-    # Draining again should promote it for a second attempt.
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
     assert len(batch.tasks_to_run) == 1
@@ -735,7 +730,6 @@ def test_apply_worker_failed_from_running(state):
             now=Timestamp.now(),
         )
 
-    # Should be retried (preemption_count=1 <= max_retries_preemption=1).
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 1
@@ -758,8 +752,6 @@ def test_max_failures_kills_dispatch_tasks(state):
     task_ids = submit_direct_job(state, "max-failures", replicas=2)
     _run_tasks(state, task_ids)
 
-    # Fail one task — with max_task_failures=0 this should kill the job,
-    # triggering _kill_non_terminal_tasks for the sibling.
     with state._db.transaction() as cur:
         result = commit_dispatch_updates(
             cur,
@@ -767,7 +759,6 @@ def test_max_failures_kills_dispatch_tasks(state):
             now=Timestamp.now(),
         )
 
-    # The sibling task (task_ids[1]) should have a KILLED task delta.
     killed_task_ids = {tid for tid, delta in result.tasks.items() if delta.state == job_pb2.TASK_STATE_KILLED}
     assert task_ids[1] in killed_task_ids
 
