@@ -4,6 +4,7 @@ import tempfile
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,14 @@ from harbor.literal.rollout_build import (
     read_literal_pairs,
 )
 from harbor.models.agent.context import AgentContext
+from harbor.models.trajectories.agent import Agent
+from harbor.models.trajectories.final_metrics import FinalMetrics
+from harbor.models.trajectories.metrics import Metrics
+from harbor.models.trajectories.observation import Observation
+from harbor.models.trajectories.observation_result import ObservationResult
+from harbor.models.trajectories.step import Step
+from harbor.models.trajectories.tool_call import ToolCall
+from harbor.models.trajectories.trajectory import Trajectory
 from harbor.llms.vllm_tokenization import tokenize_url
 from harbor.models.agent.name import AgentName
 from harbor.utils.env import validate_task_environment
@@ -47,6 +56,7 @@ class _ModelLimits:
 
 class Pi(BaseInstalledAgent):
     _OUTPUT_FILENAME = "pi.txt"
+    _TRAJECTORY_FILENAME = "trajectory.json"
     _DEFAULT_CONTEXT_WINDOW = 32768
     _DEFAULT_MAX_TOKENS = 16384
     _SUPPORTED_THINKING_FORMATS = frozenset({"chat-template", "qwen-chat-template"})
@@ -734,13 +744,68 @@ export default function (pi) {
         if not output_file.exists():
             return
 
+        events, skipped_records = self._read_output_events(output_file)
+        if skipped_records:
+            self.logger.debug(
+                "Skipped %d malformed Pi output record(s) in %s",
+                skipped_records,
+                output_file,
+            )
+
         total_input_tokens = 0
         total_output_tokens = 0
         total_cache_read_tokens = 0
         total_cache_write_tokens = 0
         total_cost = 0.0
 
-        skipped_records = 0
+        for event in events:
+            try:
+                if event.get("type") == "message_end":
+                    message = event.get("message") or {}
+                    if message.get("role") == "assistant":
+                        usage = message.get("usage") or {}
+                        total_input_tokens += usage.get("input", 0)
+                        total_output_tokens += usage.get("output", 0)
+                        total_cache_read_tokens += usage.get("cacheRead", 0)
+                        total_cache_write_tokens += usage.get("cacheWrite", 0)
+                        cost = usage.get("cost") or {}
+                        total_cost += cost.get("total", 0.0)
+            except (AttributeError, TypeError):
+                skipped_records += 1
+
+        context.n_input_tokens = total_input_tokens + total_cache_read_tokens
+        context.n_output_tokens = total_output_tokens
+        context.n_cache_tokens = total_cache_read_tokens
+        context.cost_usd = total_cost if total_cost > 0 else None
+
+        # A malformed or truncated stream yields whatever trajectory the parsed
+        # prefix supports (possibly none). Conversion must never fail the trial.
+        try:
+            trajectory = self._trajectory_from_events(events)
+        except Exception:
+            self.logger.warning(
+                "Failed to convert Pi output %s to an ATIF trajectory",
+                output_file,
+                exc_info=True,
+            )
+            return
+        if trajectory is None:
+            return
+        try:
+            trajectory_path = self.logs_dir / self._TRAJECTORY_FILENAME
+            trajectory_path.write_text(
+                json.dumps(trajectory.to_json_dict(), indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            self.logger.warning(
+                "Failed to write the Pi ATIF trajectory to %s",
+                self.logs_dir / self._TRAJECTORY_FILENAME,
+                exc_info=True,
+            )
+
+    def _read_output_events(self, output_file) -> tuple[list[dict], int]:
+        """Parse pi.txt's JSON lines; unparseable records are skipped and counted."""
         if isinstance(output_file, UPath):
             lines_context = output_file.open(
                 "rb", block_size=_REMOTE_LOG_READ_BLOCK_SIZE
@@ -748,6 +813,8 @@ export default function (pi) {
         else:
             lines_context = output_file.open("rb")
 
+        events: list[dict] = []
+        skipped_records = 0
         with lines_context as lines:
             for raw_line in lines:
                 try:
@@ -758,28 +825,175 @@ export default function (pi) {
                 if not line:
                     continue
                 try:
-                    event = json.loads(line)
-                    if event.get("type") == "message_end":
-                        message = event.get("message") or {}
-                        if message.get("role") == "assistant":
-                            usage = message.get("usage") or {}
-                            total_input_tokens += usage.get("input", 0)
-                            total_output_tokens += usage.get("output", 0)
-                            total_cache_read_tokens += usage.get("cacheRead", 0)
-                            total_cache_write_tokens += usage.get("cacheWrite", 0)
-                            cost = usage.get("cost") or {}
-                            total_cost += cost.get("total", 0.0)
-                except (json.JSONDecodeError, AttributeError, TypeError):
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
                     skipped_records += 1
+        return events, skipped_records
 
-        if skipped_records:
-            self.logger.debug(
-                "Skipped %d malformed Pi output record(s) in %s",
-                skipped_records,
-                output_file,
+    @staticmethod
+    def _pi_timestamp_to_iso(value: Any) -> str | None:
+        """Pi timestamps are ISO strings or epoch milliseconds; ATIF wants ISO."""
+        if isinstance(value, (int, float)) and value > 0:
+            return (
+                datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+        if isinstance(value, str) and value:
+            return value
+        return None
+
+    @staticmethod
+    def _message_text(content: Any) -> str:
+        """The concatenated text of a message's text blocks, or a bare string."""
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text") or "")
+        return "\n".join(part for part in parts if part)
+
+    def _trajectory_from_events(self, events: list[dict]) -> Trajectory | None:
+        """Build the ATIF trajectory from pi.txt's session event stream, or None.
+
+        ``message_end`` events carry the final form of every message, so streaming
+        ``message_update`` deltas and the redundant ``tool_execution_*`` events are
+        skipped. A truncated stream yields a partial trajectory from its prefix.
+        """
+        session_id: str | None = None
+        model_name: str | None = None
+        steps: list[Step] = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "session":
+                candidate = event.get("id")
+                if isinstance(candidate, str) and candidate:
+                    session_id = candidate
+                continue
+            if event.get("type") != "message_end":
+                continue
+            message = event.get("message")
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            timestamp = self._pi_timestamp_to_iso(
+                message.get("timestamp") if message.get("timestamp") is not None else event.get("timestamp")
             )
 
-        context.n_input_tokens = total_input_tokens + total_cache_read_tokens
-        context.n_output_tokens = total_output_tokens
-        context.n_cache_tokens = total_cache_read_tokens
-        context.cost_usd = total_cost if total_cost > 0 else None
+            if role == "system":
+                text = self._message_text(message.get("content"))
+                if not text:
+                    sections = message.get("sections") or {}
+                    if isinstance(sections, dict):
+                        text = sections.get("preamble") or ""
+                if text:
+                    steps.append(
+                        Step(step_id=len(steps) + 1, timestamp=timestamp, source="system", message=text)
+                    )
+            elif role == "user":
+                steps.append(
+                    Step(
+                        step_id=len(steps) + 1,
+                        timestamp=timestamp,
+                        source="user",
+                        message=self._message_text(message.get("content")) or "(empty user message)",
+                    )
+                )
+            elif role == "assistant":
+                content = message.get("content") or []
+                blocks = [block for block in content if isinstance(block, dict)]
+                text = "\n".join(
+                    block.get("text") or "" for block in blocks if block.get("type") == "text"
+                )
+                tool_calls = []
+                for block in blocks:
+                    if block.get("type") != "toolCall":
+                        continue
+                    call = block.get("toolCall")
+                    if not isinstance(call, dict):
+                        call = {key: value for key, value in block.items() if key != "type"}
+                    arguments = call.get("arguments")
+                    tool_calls.append(
+                        ToolCall(
+                            tool_call_id=str(
+                                call.get("id") or call.get("toolCallId") or len(tool_calls) + 1
+                            ),
+                            function_name=str(call.get("name") or call.get("toolName") or "unknown_tool"),
+                            arguments=arguments if isinstance(arguments, dict) else {},
+                        )
+                    )
+                metrics = None
+                usage = message.get("usage")
+                if isinstance(usage, dict):
+                    prompt_tokens = usage.get("input", 0) or 0
+                    completion_tokens = usage.get("output", 0) or 0
+                    total_input_tokens += prompt_tokens
+                    total_output_tokens += completion_tokens
+                    cost = usage.get("cost") or {}
+                    metrics = Metrics(
+                        prompt_tokens=prompt_tokens or None,
+                        completion_tokens=completion_tokens or None,
+                        cost_usd=(cost.get("total") if isinstance(cost, dict) else None) or None,
+                    )
+                step_model = message.get("model")
+                steps.append(
+                    Step(
+                        step_id=len(steps) + 1,
+                        timestamp=timestamp,
+                        source="agent",
+                        model_name=step_model if step_model else None,
+                        message=text or "(empty assistant message)",
+                        tool_calls=tool_calls or None,
+                        metrics=metrics,
+                    )
+                )
+                if step_model and not model_name:
+                    model_name = str(step_model)
+            elif role == "toolResult":
+                text = self._message_text(message.get("content"))
+                call_id = message.get("toolCallId")
+                result = ObservationResult(
+                    source_call_id=str(call_id) if call_id else None,
+                    content=text or None,
+                )
+                if steps and steps[-1].source == "agent":
+                    if steps[-1].observation is None:
+                        steps[-1].observation = Observation(results=[result])
+                    else:
+                        steps[-1].observation.results.append(result)
+                else:
+                    steps.append(
+                        Step(
+                            step_id=len(steps) + 1,
+                            timestamp=timestamp,
+                            source="user",
+                            message="(tool result outside an agent turn)",
+                            observation=Observation(results=[result]),
+                        )
+                    )
+
+        if not steps:
+            return None
+
+        return Trajectory(
+            schema_version="ATIF-v1.7",
+            session_id=session_id,
+            agent=Agent(
+                name=self.name(),
+                version=self._version or "unknown",
+                model_name=model_name,
+            ),
+            steps=steps,
+            final_metrics=FinalMetrics(
+                total_prompt_tokens=total_input_tokens or None,
+                total_completion_tokens=total_output_tokens or None,
+                total_steps=len(steps),
+            ),
+        )

@@ -22,6 +22,7 @@ from harbor.agents.installed.pi import Pi
 from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
+from harbor.models.trajectories.trajectory import Trajectory
 
 
 @pytest.fixture
@@ -1186,3 +1187,244 @@ class TestPiPopulateContext:
         agent.populate_context_post_run(context)
         assert context.n_input_tokens == 10
         assert context.n_output_tokens == 5
+
+
+class TestPiTrajectoryConversion:
+    """populate_context_post_run converts pi.txt into an ATIF trajectory.json.
+
+    PI_SESSION_EVENTS is an anonymized, trimmed slice of a real BFCL pi.txt
+    session stream: one turn with two tool calls, their results, and a final
+    answer.
+    """
+
+    @staticmethod
+    def _events():
+        return [
+            {
+                "type": "session",
+                "version": 3,
+                "id": "11111111-2222-3333-4444-555555555555",
+                "timestamp": "2026-11-05T03:00:00.000Z",
+                "cwd": "/app",
+            },
+            {"type": "agent_start"},
+            {"type": "turn_start"},
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "system",
+                    "content": "",
+                    "sections": {
+                        "preamble": "You are a test assistant operating inside a coding agent harness."
+                    },
+                },
+                "timestamp": 1762309200000,
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "List the files in /app and write a greeting."}],
+                },
+                "timestamp": 1762309200001,
+            },
+            {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "Checking"}},
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Listing the directory before writing."},
+                        {
+                            "type": "toolCall",
+                            "id": "chatcmpl-tool-aaa",
+                            "name": "bash",
+                            "arguments": {"command": "ls -la"},
+                        },
+                    ],
+                    "api": "openai-completions",
+                    "provider": "hosted_vllm",
+                    "model": "hosted_vllm/test-model",
+                    "usage": {
+                        "input": 100,
+                        "output": 20,
+                        "cacheRead": 5,
+                        "cacheWrite": 2,
+                        "cost": {"input": 0, "output": 0, "total": 0},
+                    },
+                    "stopReason": "toolCall",
+                },
+                "timestamp": 1762309200003,
+            },
+            {
+                "type": "tool_execution_start",
+                "toolCallId": "chatcmpl-tool-aaa",
+                "toolName": "bash",
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "chatcmpl-tool-aaa",
+                    "toolName": "bash",
+                    "content": [{"type": "text", "text": "total 4\nhello.txt"}],
+                    "isError": False,
+                    "timestamp": 1762309200004,
+                },
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Writing the greeting now."},
+                        {
+                            "type": "toolCall",
+                            "id": "chatcmpl-tool-bbb",
+                            "name": "write",
+                            "arguments": {"path": "/app/greeting.txt", "content": "hello"},
+                        },
+                    ],
+                    "model": "hosted_vllm/test-model",
+                    "usage": {"input": 140, "output": 35},
+                    "stopReason": "toolCall",
+                },
+                "timestamp": 1762309200005,
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "chatcmpl-tool-bbb",
+                    "toolName": "write",
+                    "content": [{"type": "text", "text": "wrote /app/greeting.txt"}],
+                    "isError": False,
+                    "timestamp": 1762309200006,
+                },
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Done. The directory contains hello.txt and the greeting was written.",
+                        }
+                    ],
+                    "model": "hosted_vllm/test-model",
+                    "usage": {"input": 180, "output": 40},
+                    "stopReason": "stop",
+                },
+                "timestamp": 1762309200007,
+            },
+            {"type": "turn_end"},
+            {"type": "agent_end", "messages": []},
+            {"type": "agent_settled"},
+        ]
+
+    def _agent(self, temp_dir, **kwargs):
+        return Pi(logs_dir=temp_dir, model_name="hosted_vllm/test-model", **kwargs)
+
+    @staticmethod
+    def _write_jsonl(path, events):
+        path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+
+    def test_converts_session_to_valid_atif_trajectory(self, temp_dir):
+        agent = self._agent(temp_dir, version="1.2.3")
+        self._write_jsonl(temp_dir / "pi.txt", self._events())
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        trajectory = Trajectory.model_validate(
+            json.loads((temp_dir / "trajectory.json").read_text())
+        )
+        assert trajectory.schema_version == "ATIF-v1.7"
+        assert trajectory.session_id == "11111111-2222-3333-4444-555555555555"
+        assert trajectory.agent.name == "pi"
+        assert trajectory.agent.version == "1.2.3"
+        assert trajectory.agent.model_name == "hosted_vllm/test-model"
+
+        assert [step.source for step in trajectory.steps] == [
+            "system",
+            "user",
+            "agent",
+            "agent",
+            "agent",
+        ]
+        for step in trajectory.steps:
+            assert step.timestamp is not None and step.timestamp.endswith("Z")
+
+        tool_step = trajectory.steps[2]
+        assert tool_step.message == "Listing the directory before writing."
+        assert tool_step.model_name == "hosted_vllm/test-model"
+        assert [call.function_name for call in tool_step.tool_calls] == ["bash"]
+        assert tool_step.tool_calls[0].tool_call_id == "chatcmpl-tool-aaa"
+        assert tool_step.tool_calls[0].arguments == {"command": "ls -la"}
+        assert tool_step.metrics.prompt_tokens == 100
+        assert tool_step.metrics.completion_tokens == 20
+        result = tool_step.observation.results[0]
+        assert result.source_call_id == "chatcmpl-tool-aaa"
+        assert result.content == "total 4\nhello.txt"
+
+        second_tool_step = trajectory.steps[3]
+        assert [call.function_name for call in second_tool_step.tool_calls] == ["write"]
+        assert second_tool_step.observation.results[0].content == "wrote /app/greeting.txt"
+
+        final = trajectory.steps[4]
+        assert final.message == (
+            "Done. The directory contains hello.txt and the greeting was written."
+        )
+        assert final.tool_calls is None
+        assert final.metrics.prompt_tokens == 180
+
+        assert trajectory.final_metrics.total_prompt_tokens == 420
+        assert trajectory.final_metrics.total_completion_tokens == 95
+        assert trajectory.final_metrics.total_steps == 5
+
+        # The existing usage parsing is unchanged by the conversion.
+        assert context.n_input_tokens == 425  # (100 + 5) + 140 + 180
+        assert context.n_output_tokens == 95
+        assert context.n_cache_tokens == 5
+
+    def test_truncated_output_yields_partial_trajectory(self, temp_dir):
+        agent = self._agent(temp_dir)
+        pi_output = temp_dir / "pi.txt"
+        self._write_jsonl(pi_output, self._events())
+        lines = pi_output.read_text().splitlines()
+        # Keep the stream through the first tool result and end with a
+        # half-written line, as a killed pi process would leave behind.
+        pi_output.write_text("\n".join(lines[:8]) + "\n" + lines[8][:30])
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        trajectory = Trajectory.model_validate(
+            json.loads((temp_dir / "trajectory.json").read_text())
+        )
+        assert [step.source for step in trajectory.steps] == ["system", "user", "agent"]
+        assert [call.function_name for call in trajectory.steps[2].tool_calls] == ["bash"]
+        assert trajectory.steps[2].observation is None
+        assert trajectory.final_metrics.total_steps == 3
+        assert context.n_input_tokens == 105  # 100 + 5 cacheRead
+        assert context.n_output_tokens == 20
+
+    def test_unparseable_output_writes_no_trajectory(self, temp_dir):
+        agent = self._agent(temp_dir)
+        (temp_dir / "pi.txt").write_text("not json at all\n\x01\x02 not json either\n")
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        assert not (temp_dir / "trajectory.json").exists()
+        assert context.n_input_tokens == 0
+        assert context.n_output_tokens == 0
+
+    def test_missing_output_writes_no_trajectory(self, temp_dir):
+        agent = self._agent(temp_dir)
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        assert not (temp_dir / "trajectory.json").exists()
