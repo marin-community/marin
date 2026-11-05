@@ -498,6 +498,18 @@ trials:
     logit_soft_cap: '10'
   commit: 7f34bf9c58
   priority: batch
+- id: t028
+  variant: lm_head tanh soft-cap 10
+  rung: competitive-d1280
+  protocol: equal_steps
+  batch: X0073
+  date: '2026-11-05'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0073
+  wandb: []
+  settings:
+    logit_soft_cap: '10'
+  commit: b3df9e815e
+  priority: batch
 events:
 - type: adopted
   batch: '35'
