@@ -2255,7 +2255,13 @@ class RayPPOTrainer:
                 "rewards": rewards_tensor,
                 "loss_mask": loss_masks_tensor,
                 "rollout_logprobs": rollout_logprobs_tensor,
-                "rollout_staleness": rollout_staleness_tensor,
+                # Lease ages bound unstamped tokens but do not establish their
+                # generating weights. Keep those tokens out of fresh TIM buckets.
+                "rollout_staleness": (
+                    torch.where(policy_steps >= 0, rollout_staleness_tensor, -1)
+                    if policy_steps is not None
+                    else torch.full_like(rollout_staleness_tensor, -1)
+                ),
                 "is_last_step": (
                     torch.tensor(trajectory_batch["is_last_step"], dtype=torch.bool)
                     if trajectory_batch.get("is_last_step", None) is not None
@@ -2981,6 +2987,7 @@ class RayPPOTrainer:
                     training_input["rollout_logprobs"],
                     training_input["loss_mask"],
                     rollout_staleness,
+                    training_input["response_mask"],
                     eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
                     eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
                 )
