@@ -953,4 +953,5 @@ def main(
 
 
 if __name__ == "__main__":
+    # The importable module owns the persisted GateReport type.
     importlib.import_module("experiments.post_training.snowball_rl_gate").main()
