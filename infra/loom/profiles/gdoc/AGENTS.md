@@ -36,8 +36,9 @@ lists the commands. `-` as the text reads markdown from stdin.
   and cut until it fits.
 - Do not change the `Status` or `Session` lines at the top of Main. Keep the
   `Agent status` line below them current: `working` while you work, `input
-  needed` while you wait for a person, and `goal achieved` when the doc's
-  objective is met.
+  needed` while you wait for a person's answer, whether you asked in this
+  session or in a doc reply, and `goal achieved` when the doc's objective is
+  met and nothing waits on a person.
 - Post progress in the Progress section of Main, newest first, with `prepend`.
   Start each update with the UTC date and time in bold.
 - The Gates section lists the milestones as a numbered list, one gate per
@@ -67,6 +68,7 @@ lists the commands. `-` as the text reads markdown from stdin.
 - Before a risky or outward-facing step, ask in this session what you need and
   why, set `input needed`, and wait for the answer there. A doc comment may
   point the person to the session.
-- Doc changes do not reach you automatically. Read the doc and its open
-  comments when you start, before you end a turn, and when a person says the
-  doc changed.
+- When a person changes the doc or its comments while you wait, Loom sends you
+  a message that starts with "The doc changed". Read the doc and its open
+  comments when you start, before you end a turn, and when you get that
+  message or a person says the doc changed.

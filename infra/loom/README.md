@@ -387,8 +387,22 @@ A ```` ```dot ```` block renders with Graphviz and a ```` ```mermaid ```` block
 with a pinned mermaid-cli that `npx` installs on first use. The PNG goes to
 `gs://marin-us-central1/tmp/ttl=1d/loom-gdoc/diagrams/`, which expires after a
 day, and Docs copies it in through a 15-minute URL that the account signs by
-impersonating itself. Doc changes do not reach a session on their own yet; the
-agent reads the doc and its comments at the points its instructions name.
+impersonating itself.
+
+The `gdoc-changes` script watch ([program](watches/gdoc_changes.py)) tells a
+waiting `gdoc` session when a person changes its doc. Every minute it reads the
+Docs revision and the comments of the doc that each such session's goal links.
+When they differ from how they were when the session began to wait, and the
+change holds for one more round, it sends the session a message that starts
+with "The doc changed". The agent's own edits land while it works, so they do
+not trigger it. Register it on a Loom whose server has this checkout:
+
+```bash
+loom watch add gdoc-changes --program "$PWD/infra/loom/watches/gdoc_changes.py" \
+  --every 1m --capabilities observe,nudge
+loom watch run gdoc-changes --dry-run
+loom watch enable gdoc-changes
+```
 
 Outside Loom, the command uses a person's gcloud login, which needs Drive
 access (`gcloud auth login --enable-gdrive-access`). That login cannot sign
