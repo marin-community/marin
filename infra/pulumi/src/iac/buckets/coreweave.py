@@ -77,6 +77,11 @@ BELAY_READ_PREFIXES = (
     f"{BELAY_BUCKET}/marin/datakit/hero_tok/*",
     f"{BELAY_BUCKET}/marin/paloma/*",
     f"{BELAY_BUCKET}/marin/uncheatable_eval/*",
+    # The tokenizer every run stages through mirror://tokenizers/ (levanter.tokenizers).
+    f"{BELAY_BUCKET}/marin/tokenizers/*",
+    # The shared JAX compilation cache (iris.runtime.jax_init), read-only: a Belay run reuses compiled programs but
+    # cannot write entries other runs would load.
+    f"{BELAY_BUCKET}/marin/compilation-cache/*",
 )
 
 
@@ -148,7 +153,12 @@ def belay_grants(temp_bucket: str) -> BelayGrants:
     """Belay may list its buckets, read training and eval data and profiles, and write only its own runs."""
     return BelayGrants(
         list_buckets=tuple(dict.fromkeys((BELAY_BUCKET, temp_bucket))),
-        read_prefixes=(*BELAY_READ_PREFIXES, f"{temp_bucket}/tmp/ttl=30d/xprof/*"),
+        read_prefixes=(
+            *BELAY_READ_PREFIXES,
+            f"{temp_bucket}/tmp/ttl=30d/xprof/*",
+            # The shared XLA autotune cache (iris.runtime.jax_init), read-only for the same reason.
+            f"{temp_bucket}/tmp/ttl=30d/xla-per-fusion-autotune/*",
+        ),
         write_prefixes=(BELAY_RUN_PREFIX, *belay_temp_checkpoint_prefixes(temp_bucket)),
     )
 
