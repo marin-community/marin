@@ -201,6 +201,7 @@ def test_raw_ingestion_and_browser_choose_terminal_trials_without_counting_retri
         ("piqa", "acc_norm,none", "normalized_accuracy", "acc_norm,none", "binary", 0, "normalized_accuracy"),
         ("gsm8k", "exact_match,flexible-extract", "accuracy", "exact_match,strict-match", "binary", 5, "accuracy"),
         ("humanevalplus", "pass@1", "pass_at_1", "accuracy", "binary", 0, "accuracy"),
+        ("humaneval-10shot", "pass@1", "pass_at_1", "accuracy", "binary", 10, "accuracy"),
         ("mrcr", "mrcr_accuracy", "mrcr_accuracy", "accuracy", "continuous", 0, "accuracy"),
         ("math500", "accuracy_avg", "accuracy", "accuracy", "binary", 0, "accuracy"),
         (
