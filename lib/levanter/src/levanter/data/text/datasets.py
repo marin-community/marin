@@ -1138,6 +1138,10 @@ class LmDataConfig:
         initial_batch_size: int | None = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Return shuffled sources, which can include multiple buckets per component.
+
+        Use ``train_mixture`` to combine these sources with their resolved sampling weights.
+        """
         if self.prior_context_phases:
             raise ValueError(
                 "prior_context_phases need per-source start offsets; build training data with train_mixture"

@@ -93,6 +93,9 @@ class MixtureDataset(AsyncDataset[T]):
         self.weight_stages = [
             (start_seq_index, self._normalize_weights(weights)) for start_seq_index, weights in weight_stages
         ]
+        missing = {name for _, stage in self.weight_stages for name in stage if name not in datasets}
+        if missing:
+            raise ValueError(f"Weighted datasets are missing: {sorted(missing)}")
         self.datasets = {
             name: dataset
             for name, dataset in datasets.items()

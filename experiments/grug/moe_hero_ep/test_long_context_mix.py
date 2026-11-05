@@ -21,6 +21,9 @@ from levanter.tokenizers import load_tokenizer
 from marin.execution.lazy import StepContext
 from zephyr.context import ZephyrContext
 
+from experiments.grug.base.train import build_train_dataset as build_base_dataset
+from experiments.grug.fast_track.train import build_train_dataset as build_fast_track_dataset
+from experiments.grug.moe.train import build_train_dataset as build_moe_dataset
 from experiments.grug.moe_hero_ep import harrier_long_context_mix, launch_scaling_ladder
 from experiments.grug.moe_hero_ep.harrier_length_stats import write_length_stats
 from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
@@ -34,6 +37,9 @@ from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import _SPEC
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
+from experiments.grug.moe_hero_ep.train import build_train_dataset as build_hero_dataset
+from experiments.grug.moe_hero_fsdp.train import build_train_dataset as build_fsdp_dataset
+from experiments.june_tpu_67b_a2b.moe.train import build_train_dataset as build_june_dataset
 
 SEQ_LEN = 8
 START_STEP = 390_251
@@ -121,13 +127,27 @@ def _partition(token: int) -> tuple[str, str]:
 
 
 @pytest.mark.parametrize(
+    "build_dataset",
+    [
+        build_base_dataset,
+        build_fast_track_dataset,
+        build_moe_dataset,
+        build_fsdp_dataset,
+        build_hero_dataset,
+        build_june_dataset,
+    ],
+    ids=["base", "fast-track", "moe", "hero-fsdp", "hero-ep", "june"],
+)
+@pytest.mark.parametrize(
     ("skew", "block_size", "expected_sequences"),
     [
         (1, 124, {("c01q0", "lte_64k"): 78, ("c01q0", "gt_64k"): 15, ("c02q3", "lte_64k"): 31}),
         (8, 132, {("c01q0", "lte_64k"): 39, ("c01q0", "gt_64k"): 60, ("c02q3", "lte_64k"): 33}),
     ],
 )
-def test_statistics_weight_bucket_sampling_and_preserve_cell_share(fake_store, skew, block_size, expected_sequences):
+def test_statistics_weight_bucket_sampling_and_preserve_cell_share(
+    fake_store, build_dataset, skew, block_size, expected_sequences
+):
     data = fake_store.data_config()
     data = dataclasses.replace(
         data,
@@ -137,16 +157,13 @@ def test_statistics_weight_bucket_sampling_and_preserve_cell_share(fake_store, s
         mixture_block_size=block_size,
     )
 
-    dataset = data.train_set(
-        hax.Axis("position", SEQ_LEN), BatchSchedule(1), key=jax.random.PRNGKey(0)
+    dataset = build_dataset(
+        data, max_seq_len=SEQ_LEN, batch_schedule=BatchSchedule(1), key=jax.random.PRNGKey(0)
     ).as_sync_dataset()
     examples = dataset.get_batch(list(range(START_STEP, START_STEP + block_size)))
     # EOS and padding sit outside the store's token ids.
     tokens = Counter(
-        _partition(int(token))
-        for example in examples
-        for token in np.asarray(example.tokens.array)
-        if 1000 <= token < 50_000
+        _partition(int(token)) for example in examples for token in np.asarray(example.tokens) if 1000 <= token < 50_000
     )
 
     assert tokens == {partition: sequences * SEQ_LEN for partition, sequences in expected_sequences.items()}
