@@ -16,9 +16,9 @@ from collections.abc import Sequence
 _ALL_DAYS: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)
 _MONDAY: tuple[int, ...] = (1,)
 
-# The step a canary runs only when Iris cancelled it for lack of capacity. A run that
-# took it finished green without running its workload. The hero GB200, Grug multislice
-# and datakit tier 1-3 workflows all use this name; renaming it there hides their skips.
+# The step a canary workflow runs only when Iris cancelled it for lack of capacity. A run
+# that took it finished green without running its workload. Renaming the step in a
+# workflow makes that lane's skips show as ordinary runs.
 _CAPACITY_SKIP_STEP = "Note a skipped day"
 
 

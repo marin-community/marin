@@ -292,7 +292,8 @@ def test_ferries_shape_and_success_rate():
     assert first["group"] == "Canary ferry"
 
 
-def test_nightlies_mark_a_green_run_that_took_the_skip_step_as_skipped():
+@pytest.mark.parametrize(("skip_step_conclusion", "state"), [("success", "skipped"), ("skipped", "run")])
+def test_nightlies_mark_a_green_run_skipped_only_when_its_skip_step_ran(skip_step_conclusion, state):
     lane = next(lane for lane in NIGHTLY_LANES if lane.skip_step is not None)
     run_day = (datetime.now(UTC) - timedelta(days=1)).replace(
         hour=lane.hour, minute=lane.minute, second=0, microsecond=0
@@ -303,7 +304,10 @@ def test_nightlies_mark_a_green_run_that_took_the_skip_step_as_skipped():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/jobs"):
             jobs_requests.append(request.url.path)
-            steps = [{"name": "Report", "conclusion": "skipped"}, {"name": lane.skip_step, "conclusion": "success"}]
+            steps = [
+                {"name": "Report", "conclusion": "skipped"},
+                {"name": lane.skip_step, "conclusion": skip_step_conclusion},
+            ]
             return httpx.Response(200, json={"jobs": [{"steps": steps}]})
         if lane.workflow_file in request.url.path:
             return httpx.Response(200, json={"workflow_runs": [run]})
@@ -314,29 +318,9 @@ def test_nightlies_mark_a_green_run_that_took_the_skip_step_as_skipped():
     rows = source.nightlies()
 
     (cell,) = [row for row in rows if row["lane_id"] == lane.id and row["url"] == "https://x"]
-    assert cell["state"] == "skipped"
+    assert cell["state"] == state
     # A completed run never changes, so its jobs are read once.
     assert len(jobs_requests) == 1
-
-
-def test_nightlies_keep_a_green_run_whose_skip_step_did_not_run_as_a_run():
-    lane = next(lane for lane in NIGHTLY_LANES if lane.skip_step is not None)
-    run_day = (datetime.now(UTC) - timedelta(days=1)).replace(
-        hour=lane.hour, minute=lane.minute, second=0, microsecond=0
-    )
-    run = _run("success", started=run_day.isoformat(), updated=(run_day + timedelta(minutes=5)).isoformat())
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/jobs"):
-            return httpx.Response(200, json={"jobs": [{"steps": [{"name": lane.skip_step, "conclusion": "skipped"}]}]})
-        if lane.workflow_file in request.url.path:
-            return httpx.Response(200, json={"workflow_runs": [run]})
-        return httpx.Response(200, json={"workflow_runs": []})
-
-    rows = _github(handler).nightlies()
-
-    (cell,) = [row for row in rows if row["lane_id"] == lane.id and row["url"] == "https://x"]
-    assert cell["state"] == "run"
 
 
 def test_builds_maps_state_and_finalized_success_rate():
