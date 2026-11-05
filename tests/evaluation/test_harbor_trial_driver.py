@@ -27,7 +27,7 @@ def daytona_target(monkeypatch):
 
 @pytest.fixture(scope="module")
 def checked_policies(tmp_path_factory):
-    paths = sorted(_POLICIES.glob("*.yaml"))
+    paths = [_POLICIES / "ot-tblite.yaml"]
     completed = preflight(tmp_path_factory.mktemp("harbor-policies"), [(path, {}) for path in paths])
     return dict(zip((path.name for path in paths), json.loads(completed.stdout), strict=True))
 

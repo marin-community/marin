@@ -119,7 +119,7 @@ if [ "${#selected_evalchemy_names[@]}" -gt 0 ]; then
 fi
 harbor_names=(
   swebench-verified ot-tblite-recovery tb2-recovery ds-1000-local
-  bfclparity-pi bixbench-pi
+  bfclparity-pi bixbench-pi tau3-pi sotopia-hard
 )
 if [ "${#selected_harbor_names[@]}" -gt 0 ]; then
   [ "$suite" = all ] || [ "$suite" = agentic ] \

@@ -77,12 +77,13 @@ def _evalchemy_metric(metric: PolicyMetric, custom: CustomTaskManager, lm_eval: 
 
 
 def main() -> None:
+    expected = POLICY_METRICS_2026_10_16
     config_names = _campaign_config_names()
-    unknown = config_names - POLICY_METRICS_2026_10_16.keys()
-    if unknown:
-        raise ValueError(f"campaign configs lack metric contracts: {unknown}")
-    # The dated map also describes archived runs; files select active policies.
-    expected = {name: POLICY_METRICS_2026_10_16[name] for name in sorted(config_names)}
+    if set(expected) != config_names:
+        raise ValueError(
+            f"policy metric map differs from campaign configs: missing={config_names - set(expected)}, "
+            f"extra={set(expected) - config_names}"
+        )
 
     custom_names = [metric.task for metric in expected.values() if metric.task in SOURCES]
     custom = CustomTaskManager(task_list=custom_names)

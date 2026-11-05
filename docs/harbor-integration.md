@@ -12,7 +12,8 @@ Preflight checks the policy and model settings before allocating evaluation reso
 Marin's vendored Harbor supports `pi`, `mini-swe-agent`, `codex`, `opencode`,
 `terminus-2` and `terminus-kira`. Job and trial configs must name an agent.
 Other agents, ACP aliases, local adapters and arbitrary import paths fail validation.
-Their old launch profiles and source have been removed; earlier versions remain in Git history.
+Historical Tau3/ACP, Sotopia and AIME smoke policies remain in `experiments/evaluation`.
+Preflight rejects them before task allocation. Unsupported agent source remains in Git history.
 
 Installed CLI agents and foreground Terminus tmux servers run under Shellbox process
 scopes. Background processes survive individual tool calls. At the end of each agent
@@ -57,7 +58,7 @@ Use `--harbor-config` for a policy outside the catalog:
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --limit 2 --dry-run
 ```
 
@@ -85,7 +86,7 @@ hash. To resume the AIME example:
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --limit 2 --resume-results-path "$RESULTS_ROOT"
 ```
 

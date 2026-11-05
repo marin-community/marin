@@ -47,6 +47,7 @@ esac
 
 model=Qwen-Qwen3.5-35B-A3B-Base
 model_config="$ABLATION_DIR/model.yaml"
+tau3_model_config="$ABLATION_DIR/model-tau3.yaml"
 
 validate_marin_checkout
 validate_campaign_configs
@@ -57,6 +58,7 @@ fi
 
 (cd "$MARIN_DIR" && \
   STANDARD_MODEL_CONFIG="$model_config" \
+  TAU3_MODEL_CONFIG="$tau3_model_config" \
   uv run python - <<'PY'
 import os
 from pathlib import Path
@@ -65,11 +67,14 @@ from marin.evaluation.model_config import load_model_config
 
 revision = "0f0813072d2358973511097385626f21fcb6d422"
 standard = load_model_config(Path(os.environ["STANDARD_MODEL_CONFIG"]))
-assert standard.location == "Qwen/Qwen3.5-35B-A3B-Base"
-assert standard.revision == revision
+tau3 = load_model_config(Path(os.environ["TAU3_MODEL_CONFIG"]))
+assert standard.location == tau3.location == "Qwen/Qwen3.5-35B-A3B-Base"
+assert standard.revision == tau3.revision == revision
 assert standard.serve.max_model_len == 73728
-assert standard.serve.tensor_parallel_size == 2
-assert standard.serve.data_parallel_size == 2
+assert tau3.serve.max_model_len == 131072
+assert tau3.generation.max_gen_toks == 32768
+assert standard.serve.tensor_parallel_size == tau3.serve.tensor_parallel_size == 2
+assert standard.serve.data_parallel_size == tau3.serve.data_parallel_size == 2
 PY
 )
 
@@ -87,6 +92,7 @@ launch_evalchemy() {
 launch_harbor() {
   local config=$1
   local selected_model_config=$model_config
+  [ "$config" != tau3-pi ] || selected_model_config=$tau3_model_config
   reset_staging_root
   stage_model_config "$model" "$selected_model_config"
   stage_harbor_configs "$model"
@@ -126,7 +132,7 @@ run_campaign_launch "$submit" "${arguments[@]}"
 
 harbor_names=(
   swebench-verified ot-tblite-recovery tb2-recovery ds-1000-local
-  bfclparity-pi bixbench-pi
+  bfclparity-pi bixbench-pi tau3-pi sotopia-hard
 )
 for name in "${harbor_names[@]}"; do
   launch_harbor "$name"
