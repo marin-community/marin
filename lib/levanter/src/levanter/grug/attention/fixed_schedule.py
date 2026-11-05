@@ -17,7 +17,7 @@ import jax.numpy as jnp
 from haliax.partitioning import _get_mesh
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention import ragged_paged_attention
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import DEFAULT_MASK_VALUE
-from jax.sharding import NamedSharding
+from jax.sharding import NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 
 
@@ -114,16 +114,17 @@ def materialize_contiguous_kv(
         dtype=jnp.bfloat16,
     )
 
-    def write_page(index: int, current: jax.Array) -> jax.Array:
-        sequence = index // spec.pages_per_seq
-        page = index % spec.pages_per_seq
-        return jax.lax.dynamic_update_slice(
-            current,
-            logical[sequence, page][None, ...],
-            (safe_pages[sequence, page], 0, 0, 0),
-        )
-
-    pages = jax.lax.fori_loop(0, spec.max_num_seqs * spec.pages_per_seq, write_page, pages)
+    # Indexed placement must see whole logical updates and a replicated page
+    # accumulator. Otherwise each data shard attempts to update a replicated
+    # result with a shard-local slice, which is rejected by Explicit sharding.
+    mesh = _get_mesh()
+    if mesh is not None and not mesh.empty:
+        replicated = NamedSharding(mesh, P())
+        logical = reshard(logical, replicated)
+        pages = reshard(pages, replicated)
+    pages = pages.at[safe_pages.reshape(-1)].set(
+        logical.reshape(-1, spec.page_size, 2 * spec.num_kv_heads, spec.head_dim)
+    )
     return jnp.where(map_valid & finite, pages, jnp.full_like(pages, jnp.nan))
 
 
