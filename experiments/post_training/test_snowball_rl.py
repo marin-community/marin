@@ -248,7 +248,6 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     assert first.runs[0].name == second.runs[0].name == name()
     assert first.gate.name != second.gate.name
     original_name = name()
-    monkeypatch.delenv("WANDB_ENTITY", raising=False)
     monkeypatch.setenv("WANDB_ENTITY", "another-team")
     assert name() == original_name
     monkeypatch.setattr(
