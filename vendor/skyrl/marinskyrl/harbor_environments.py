@@ -1,16 +1,8 @@
 """Configure Harbor-owned environments for original-package trials."""
 
-from enum import StrEnum
-
 from harbor_config.models.task.config import MCPServerConfig
 from harbor_config.models.trial.config import TrialConfig
 from pydantic import BaseModel, ConfigDict, Field
-
-
-class HarborEnvironmentProvisioning(StrEnum):
-    """How an original-package trial obtains its Harbor environment."""
-
-    NATIVE = "native"
 
 
 class EnvironmentResourceOverrides(BaseModel):
@@ -30,15 +22,6 @@ class HarborTaskBinding(BaseModel):
     environment_resources: EnvironmentResourceOverrides = Field(default_factory=EnvironmentResourceOverrides)
     agent_mcp_servers: list[MCPServerConfig] | None = None
     verifier_environment: dict[str, str] | None = None
-
-
-class HarborEnvironmentSettings(BaseModel):
-    """Explicit native provisioning and task-specific policy for original trials."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    provisioning: HarborEnvironmentProvisioning
-    task_bindings: dict[str, HarborTaskBinding] = Field(default_factory=dict)
 
 
 def apply_task_binding(config: TrialConfig, binding: HarborTaskBinding | None) -> TrialConfig:
