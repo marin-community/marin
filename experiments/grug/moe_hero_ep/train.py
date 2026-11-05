@@ -72,6 +72,7 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
+from experiments.grug.moe_hero_ep.device_memory_probe import log_device_memory_breakdown
 from experiments.grug.moe_hero_ep.model import (
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
@@ -606,6 +607,7 @@ def _log_hbm_diag(label: str, step: int) -> None:
         timeout=60,
     ).stdout.replace("\n", ";")
     logger.info("hbm_diag label=%s step=%d stats=%s nvml_used_free_mib=%s", label, step, stats, smi)
+    log_device_memory_breakdown(f"{label}:{step}")
 
 
 def _hbm_diag_around(hook: Callable[..., None]) -> Callable[..., None]:
@@ -1451,8 +1453,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         set_mesh(_mesh),
                     ):
                         model = _reshard_tree_to_mesh(step.model, _mesh)
+                        log_device_memory_breakdown(f"after_reshard:{step_count}")
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
+                        log_device_memory_breakdown(f"after_eval_model:{step_count}")
                         levanter.tracker.log(log_dict, step=step_count)
                     last_dropless_eval_step = step_count
 
