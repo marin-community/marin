@@ -37,8 +37,8 @@ LONG_CONTEXT_SKEW = 4
 LONG_CONTEXT_TAG = f"harrier-long-context-skew-{LONG_CONTEXT_SKEW}"
 SHORT_PARTITION = "lte_64k"
 LONG_PARTITION = "gt_64k"
-# Extension lengths to report passes for: the range the 262K extension may train.
-REPORTED_TRAINING_TOKENS = (50_000_000_000, 430_000_000_000, 490_000_000_000)
+# Extension length to report passes for: what each finalist 262K extension trains.
+REPORTED_TRAINING_TOKENS = 200_000_000_000
 
 _TOKEN_TABLE_PATH = Path(__file__).with_name("harrier_long_context_mix.json")
 _COOLDOWN_WEIGHTS = {cell: weight for cell, weight in _SPEC.phase_weights[-1] if weight > 0}
@@ -175,15 +175,14 @@ def _print_report(length_tokens: LengthTokens) -> None:
         f"long-document share at the cooldown weights: 1x {long_document_share(length_tokens, 1):.3%}, "
         f"{LONG_CONTEXT_SKEW}x {long_document_share(length_tokens, LONG_CONTEXT_SKEW):.3%}"
     )
-    for training_tokens in REPORTED_TRAINING_TOKENS:
-        passes = long_partition_passes(length_tokens, LONG_CONTEXT_SKEW, training_tokens)
-        overall = overall_long_partition_passes(length_tokens, LONG_CONTEXT_SKEW, training_tokens)
-        most = sorted(passes.items(), key=lambda item: -item[1])[:5]
-        click.echo(
-            f"{training_tokens / 1e9:.0f}B tokens: {overall:.3f} long passes overall; most-read buckets "
-            + ", ".join(f"{cell} {count:.2f}" for cell, count in most)
-        )
-        click.echo("per bucket: " + " ".join(f"{cell}={count:.3f}" for cell, count in sorted(passes.items())))
+    passes = long_partition_passes(length_tokens, LONG_CONTEXT_SKEW, REPORTED_TRAINING_TOKENS)
+    overall = overall_long_partition_passes(length_tokens, LONG_CONTEXT_SKEW, REPORTED_TRAINING_TOKENS)
+    most = sorted(passes.items(), key=lambda item: -item[1])[:5]
+    click.echo(
+        f"{REPORTED_TRAINING_TOKENS / 1e9:.0f}B tokens: {overall:.3f} long passes overall; most-read buckets "
+        + ", ".join(f"{cell} {count:.2f}" for cell, count in most)
+    )
+    click.echo("per bucket: " + " ".join(f"{cell}={count:.3f}" for cell, count in sorted(passes.items())))
 
 
 @click.command()
