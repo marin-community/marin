@@ -38,14 +38,14 @@ from iris.cluster.stats.tables import (
     TASK_STATE_NAMESPACE,
     TASK_STATS_NAMESPACE,
     WORKER_STATS_NAMESPACE,
+    IrisJob,
+    IrisJobConfig,
     IrisProfile,
     IrisProvisioning,
+    IrisTaskAttempt,
     IrisTaskStat,
     IrisTaskState,
     IrisWorkerStat,
-    JobConfigRow,
-    JobRow,
-    TaskAttemptRow,
     TaskEventRow,
 )
 
@@ -122,10 +122,10 @@ def build_log_stack(
         provisioning_table=client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning),
         worker_stats_table=client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat),
         task_state_table=client.get_table(TASK_STATE_NAMESPACE, IrisTaskState),
-        job_table=client.get_table(JOB_NAMESPACE, JobRow, storage_policy=JOB_STORAGE_POLICY),
-        job_config_table=client.get_table(JOB_CONFIG_NAMESPACE, JobConfigRow, storage_policy=JOB_CONFIG_STORAGE_POLICY),
+        job_table=client.get_table(JOB_NAMESPACE, IrisJob, storage_policy=JOB_STORAGE_POLICY),
+        job_config_table=client.get_table(JOB_CONFIG_NAMESPACE, IrisJobConfig, storage_policy=JOB_CONFIG_STORAGE_POLICY),
         task_attempt_table=client.get_table(
-            TASK_ATTEMPT_NAMESPACE, TaskAttemptRow, storage_policy=TASK_ATTEMPT_STORAGE_POLICY
+            TASK_ATTEMPT_NAMESPACE, IrisTaskAttempt, storage_policy=TASK_ATTEMPT_STORAGE_POLICY
         ),
         server=server,
     )

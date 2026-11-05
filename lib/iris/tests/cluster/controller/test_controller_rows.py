@@ -12,7 +12,7 @@ from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
-from iris.cluster.stats.tables import JobConfigRow, JobRow, TaskAttemptRow
+from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTaskAttempt
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
@@ -40,15 +40,15 @@ class RecordedRows:
         return [row for write in table.writes for row in write]
 
     @property
-    def jobs(self) -> list[JobRow]:
+    def jobs(self) -> list[IrisJob]:
         return self._rows(self.tables.job_table)
 
     @property
-    def job_configs(self) -> list[JobConfigRow]:
+    def job_configs(self) -> list[IrisJobConfig]:
         return self._rows(self.tables.job_config_table)
 
     @property
-    def attempts(self) -> list[TaskAttemptRow]:
+    def attempts(self) -> list[IrisTaskAttempt]:
         return self._rows(self.tables.task_attempt_table)
 
 
@@ -111,6 +111,8 @@ def test_submit_writes_one_job_row_and_one_config_row(state):
     assert (config.root_job_id, config.root_submitted_at_ms) == (job.root_job_id, job.root_submitted_at_ms)
     assert config.res_cpu_millicores == 4000
     assert config.res_memory_bytes == 8 * 1024**3
+    assert config.priority_band == "PRIORITY_BAND_INTERACTIVE"
+    assert config.preemption_policy.startswith("JOB_PREEMPTION_POLICY_")
     assert rows.attempts == []
 
 
@@ -150,6 +152,19 @@ def test_mark_jobs_running_writes_a_running_job_row(state):
 
     assert [(j.job_id, j.state) for j in rows.jobs] == [(job_id.to_wire(), "JOB_STATE_RUNNING")]
     assert rows.jobs[0].started_at is not None
+
+
+def test_mark_jobs_running_on_a_running_job_writes_no_row(state):
+    submit_job(state, "train", make_job_request("train"))
+    job_id = JobName.root("test-user", "train")
+    with state._db.transaction() as cur:
+        writes.mark_jobs_running(cur, [job_id], Timestamp.now().epoch_ms())
+    rows = _attach(state, "marin")
+
+    with state._db.transaction() as cur:
+        writes.mark_jobs_running(cur, [job_id], Timestamp.now().epoch_ms())
+
+    assert rows.jobs == []
 
 
 def test_cancel_writes_killed_job_and_attempt_rows(state):

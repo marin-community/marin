@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from itertools import batched
 
 from rigging.timing import Timestamp
-from sqlalchemy import Table, bindparam, case, delete, func, insert, select, text, update
+from sqlalchemy import Table, bindparam, case, delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -517,8 +517,16 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
 
     Non-PENDING jobs keep their state; ``started_at_ms`` is set only if still NULL (first assignment wins).
     """
-    job_ids = list(job_ids)
+    changed: list[JobName] = []
     for chunk in batched(job_ids, _ID_CHUNK_SIZE):
+        changed.extend(
+            tx.execute(
+                select(jobs_table.c.job_id).where(
+                    jobs_table.c.job_id.in_(chunk),
+                    or_(jobs_table.c.state == job_pb2.JOB_STATE_PENDING, jobs_table.c.started_at_ms.is_(None)),
+                )
+            ).scalars()
+        )
         tx.execute(
             update(jobs_table)
             .where(jobs_table.c.job_id.in_(chunk))
@@ -530,7 +538,7 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
                 started_at_ms=func.coalesce(jobs_table.c.started_at_ms, now_ms),
             )
         )
-    controller_rows.record_job_changes(tx, job_ids)
+    controller_rows.record_job_changes(tx, changed)
 
 
 @writes_to(meta_table)

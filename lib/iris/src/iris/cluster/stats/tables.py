@@ -242,7 +242,7 @@ class TaskEventRow(TaskEventDiagnostics):
 
 
 @dataclass
-class JobRow:
+class IrisJob:
     """A snapshot of one controller ``jobs`` row, written when the job changes state.
 
     Rows are appended, never replaced: the job's current state is its row with
@@ -275,7 +275,7 @@ class JobRow:
 
 
 @dataclass
-class JobConfigRow:
+class IrisJobConfig:
     """A job's resource request, written once when the job is submitted."""
 
     key_column: ClassVar[str] = "root_job_id"
@@ -290,8 +290,8 @@ class JobConfigRow:
     res_device_json: str | None
     constraints_json: str | None
     has_coscheduling: bool
-    priority_band: int
-    preemption_policy: int
+    priority_band: str
+    preemption_policy: str
     max_retries_failure: int
     max_retries_preemption: int
     timeout_ms: int | None
@@ -300,7 +300,7 @@ class JobConfigRow:
 
 
 @dataclass
-class TaskAttemptRow:
+class IrisTaskAttempt:
     """A snapshot of one controller ``task_attempts`` row, written when the attempt changes.
 
     An attempt is identified by ``attempt_uid``. ``(task_id, attempt_id)`` joins

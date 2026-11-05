@@ -163,6 +163,7 @@ class Tx:
         self.conn = conn
         self.task_event_table = task_event_table
         self.controller_rows = controller_rows
+        self._pre_commit_hooks: list[Callable[[], None]] = []
         self._hooks: list[Callable[[], None]] = []
         # The DB commit sequence sampled just BEFORE this cursor's snapshot was
         # established (``BEGIN``). It is a conservative lower bound on what the
@@ -203,6 +204,18 @@ class Tx:
         """
         self._hooks.append(hook)
 
+    def register_pre_commit(self, hook: Callable[[], None]) -> None:
+        """Register a hook that runs inside the transaction, just before ``COMMIT``.
+
+        Hooks run in registration order and may read and write through this
+        cursor. An exception rolls the transaction back.
+        """
+        self._pre_commit_hooks.append(hook)
+
+    def _fire_pre_commit_hooks(self) -> None:
+        for hook in self._pre_commit_hooks:
+            hook()
+
     def _fire_hooks(self) -> None:
         for hook in self._hooks:
             hook()
@@ -237,6 +250,7 @@ def write_transaction(
         tx = Tx(conn, caches, seq, task_event_table, controller_rows)
         try:
             yield tx
+            tx._fire_pre_commit_hooks()
         except Exception:
             conn.execute(text("ROLLBACK"))
             raise

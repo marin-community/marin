@@ -664,9 +664,17 @@ Namespaces:
   tags as a JSON object (`json_get(tags, 'category')`); it is NULL until Iris
   accepts job tags at submit.
 
+  `error` is copied in full, as the controller DB stores it (like
+  `iris.task_event.message`, it is not truncated).
+
   Rows are appended, never replaced: an entity has one row per state change.
-  Its current state is its newest row, ordered by `ts DESC, seq DESC`. The
-  latest state of each attempt of a job:
+  Its current state is its newest row, ordered by `ts DESC, seq DESC`. A row is
+  the entity's state at the end of its write transaction; `ts` is taken just
+  before that transaction commits, so it orders the rows of one entity but is
+  not the exact commit time. Use `started_at` / `finished_at` for when things
+  happened. Enum columns (`state`, `priority_band`, `preemption_policy`) hold
+  the proto enum names, such as `TASK_STATE_RUNNING`. The latest state of each
+  attempt of a job:
 
   ```sql
   SELECT * FROM (
