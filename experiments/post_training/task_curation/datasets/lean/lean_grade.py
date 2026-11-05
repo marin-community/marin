@@ -8,51 +8,61 @@ helper declarations), the theorem ``statement`` through its final ``:=``, and th
 name. The reply's last ``lean4``/``lean`` code block (else its last code block, else the whole reply)
 is either a proof term or, when it declares the target theorem itself, a whole file after the imports.
 Both files below are named ``Task.lean``, so that private names agree. Each step runs as its own
-unprivileged user, after the machine's world-writable directories are closed to those users; the three
-steps that write run in a directory only their user can write, and verification writes nothing:
+unprivileged user, chosen afresh for each grade, after the machine's world-writable directories and
+``/tests``, where a source may keep a reference proof hidden from the solver, are closed to those users;
+the three steps that write run in a directory only their user can write, and verification writes nothing:
 
-1. ``REFERENCE_UID`` compiles the reference: the statement proved by ``sorry``, then a check, run by
+1. The reference user compiles the reference: the statement proved by ``sorry``, then a check, run by
    Lean, that the module declares the target as a theorem, that no declaration's statement uses
    ``sorry``, that only the target's proof does, and that the module declares no axiom
    (``native_decide`` declares one).
-2. ``COMPILE_UID`` compiles the candidate: the statement followed by the proof term in parentheses, or
+2. The candidate user compiles the candidate: the statement followed by the proof term in parentheses, or
    the imports followed by the reply's file. Elaboration runs arbitrary code, including any commands
    the reply contains, so everything this user writes is untrusted data; only the target, as replayed
    below, counts.
-3. ``EXPORT_UID`` runs ``lean-export`` from Prime Intellect's checker, which turns the candidate's
+3. The export user runs ``lean-export`` from Prime Intellect's checker, which turns the candidate's
    object file into bounded JSON data.
-4. ``VERIFY_UID`` runs ``lean-verify``, which reads only that JSON and the reference object file, and
+4. The verify user runs ``lean-verify``, which reads only that JSON and the reference object file, and
    replays the target's dependency closure in the kernel against the reference's imports. The target
    scores 1 only if it is accepted in proving mode, with the reference's type and the reference's
    statement declarations unchanged, and its axioms are among ``propext``, ``Classical.choice`` and
    ``Quot.sound``.
 
-Root only orchestrates. After each step every process of the step's user is killed and System V IPC
+Root only orchestrates, and adopts the steps' orphaned processes so that it reaps them whatever the
+machine's init does. After each step every process of the step's user is killed and System V IPC
 objects are removed, before root copies the step's output, a regular file opened without following
 links; while a step runs, its directory's size and file count are checked, a soft bound that a hard
 storage limit on the grading machine would make strict. The reward on stdout is 0
-only for an outcome the proof caused: a Lean error in ``Task.lean``, the candidate's own time or space
-allowance exceeded, or a rejection by ``lean-export`` or ``lean-verify``. Any other failure (a tool or
-user switch that does not work, a reference that does not validate, a step that dies without a Lean
-diagnostic, a malformed verdict, the overall deadline) exits non-zero, so the pipeline records an
-infrastructure error rather than a score. Details go to stderr as JSON.
+only for an outcome the proof caused: the candidate's compile or export failing in any way (the
+reference has just compiled on the same machine, and the export reads only the candidate's object file),
+the candidate's own time or space allowance exceeded, or a rejection by ``lean-verify``. Any other
+failure (a tool or user switch that does not work, a reference that does not validate, ``lean-verify``
+failing or exceeding its allowance, which a valid but slow proof can do, a malformed verdict, the overall
+deadline) exits non-zero, so the pipeline records an infrastructure error rather than a score. RL
+training masks those rollouts; of these outcomes, a reply can reach only ``lean-verify`` running out of
+time or failing on the proof data, after its proof has compiled and exported. Details go to stderr as
+JSON.
 """
 
+import ctypes
 import errno
 import json
 import os
 import re
 import resource
+import secrets
 import signal
 import stat
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-CONFIG = Path("/tests/config.json")
+TESTS = Path("/tests")
+CONFIG = TESTS / "config.json"
 ANSWER = Path("/app/answer.txt")
 LEAN_ROOT = Path("/opt/lean")
 VERIFY_BIN = LEAN_ROOT / "verify/.lake/build/bin/lean-verify"
@@ -62,22 +72,27 @@ IPCRM = Path("/usr/bin/ipcrm")
 WORK = Path("/tmp/lean-grade")
 MODULE_FILE = "Task.lean"
 OBJECT_FILE = "Task.olean"
+PROOF_DATA = "proof.json"
+"""The file ``lean-export`` writes and ``lean-verify`` reads."""
 LEAN_VERSION = "4.34.1"
 LEAN_THREADS = "--threads=4"
 """Bounds each compile's threads, which count against the step users' process limit."""
 
-REFERENCE_UID, COMPILE_UID, EXPORT_UID, VERIFY_UID = 61031, 61032, 61033, 61034
-"""Dedicated users: process limits count every process of a user on the host, not just this machine's."""
-STEP_USERS = (REFERENCE_UID, COMPILE_UID, EXPORT_UID, VERIFY_UID)
+FIRST_STEP_UID, STEP_UID_BLOCKS = 20000, 10000
+"""Each grade's four step users are a block of consecutive uids from 20000 up, chosen at random: process
+limits count every process of a user on the host, so fixed users would let one grade starve another. Two
+grades on one host share a block with probability 1 in 10,000, which neither can see."""
+PR_SET_CHILD_SUBREAPER = 36
 SHARED_DIRECTORIES = ("/tmp", "/var/tmp", "/run/lock", "/dev/shm")
 """The machine's world-writable directories, closed to the step users before any step runs."""
 ALLOWED_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
 TARGET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_'.!?]*")
 """A target name that is safe to write into the reference check as a Lean string."""
 LEAN_ERROR = re.compile(rb"^" + re.escape(MODULE_FILE.encode()) + rb":\d+:\d+: error", re.MULTILINE)
-"""A Lean error diagnostic in the compiled file, the only compile failure that scores 0."""
+"""A Lean error diagnostic in the compiled file, which tells a failed compile from a crashed one."""
 EXPORT_REJECTIONS = ("malformed object file:", "proof data is too large", "invalid header", "incompatible header")
-"""What ``lean-export`` prints when the object file it was given is not one it accepts."""
+"""What ``lean-export`` prints when the object file it was given is not one it accepts; any other failure of
+the export is a crash on the candidate's object file, which scores 0 as well."""
 MISSING_TARGET = "target is not declared in the reference"
 """``lean-verify``'s reason when the reference lacks the target, which the reference check should prevent."""
 
@@ -107,11 +122,10 @@ OUTPUT_TAIL = 4000
 """Bytes of a step's output kept for diagnostics."""
 FENCE = re.compile(r"```[ \t]*(?P<language>[\w+-]*)[ \t]*\n(?P<code>.*?)```", re.DOTALL)
 """A fenced code block and its language tag."""
-IMPORT_LINE = re.compile(r"^\s*import\s.*$", re.MULTILINE)
-COMMENT_OR_STRING = re.compile(r'"(?:\\.|[^"\\])*"|--[^\n]*|/-', re.DOTALL)
-"""A Lean string literal, line comment, or the start of a block comment."""
-LEADING_OPTIONS = r"(?:(?:set_option\s+\S+\s+\S+|open\s[^\n]*?)\s+in\s+)*(?:@\[[^\]]*\]\s*)*"
-"""``set_option ... in`` and ``open ... in`` before a declaration, and its attributes."""
+IMPORT_LINE = re.compile(r"^[ \t]*import\s.*$", re.MULTILINE)
+COMMENT_OR_STRING = re.compile(r'"(?:\\.|\\\Z|[^"\\])*(?:"|\Z)|--[^\n]*|/-', re.DOTALL)
+"""A Lean string literal (one left open runs to the end), a line comment, or the start of a block comment.
+The patterns that read the reply match within a line or run to the end, so each reads it in linear time."""
 
 REFERENCE_CHECK = """
 open Lean in
@@ -221,8 +235,8 @@ def without_comments(source: str) -> str:
 
 def declares_target(block: str, target: str) -> bool:
     """Whether the reply restates the target theorem, outside comments, rather than giving only its proof."""
-    declaration = rf"^\s*{LEADING_OPTIONS}(?:theorem|lemma)\s+{re.escape(target)}(?![\w'.!?])"
-    return re.search(declaration, without_comments(block), re.MULTILINE) is not None
+    declaration = rf"(?<![\w'.!?])(?:theorem|lemma)\s+{re.escape(target)}(?![\w'.!?])"
+    return re.search(declaration, without_comments(block)) is not None
 
 
 def reference_source(contract: Contract) -> str:
@@ -250,6 +264,14 @@ def make_step_dir(name: str, uid: int) -> Path:
     return path
 
 
+def close_grader_files() -> None:
+    """Make ``/tests`` root-only, so that no step reads the task's evidence or the grader's own files."""
+    os.chown(TESTS, 0, 0)
+    TESTS.chmod(0o700)
+    if TESTS.stat().st_mode & 0o077:
+        raise GraderFailure(f"{TESTS} is still open to other users")
+
+
 def close_shared_directories() -> None:
     """Make the machine's world-writable directories writable by root only, so a step writes only its own."""
     for directory in SHARED_DIRECTORIES:
@@ -261,8 +283,27 @@ def close_shared_directories() -> None:
             raise GraderFailure(f"{directory} is still world-writable")
 
 
+def become_subreaper() -> None:
+    """Make the grader the parent of every orphaned process a step leaves, so that the grader reaps them."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        raise GraderFailure(f"cannot adopt the steps' processes: {os.strerror(ctypes.get_errno())}")
+
+
+def reap_orphans() -> None:
+    """Collect every exited process the grader has adopted; called only once the step's own process is collected."""
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            return
+
+
 def kill_user(uid: int) -> None:
-    """Kill every process of ``uid`` in this PID namespace with one signal sent as that user, until none is left."""
+    """Kill every process of ``uid`` in this PID namespace with one signal sent as that user, and reap them,
+    until none is left."""
     for _ in range(50):
         child = os.fork()
         if child == 0:
@@ -274,6 +315,7 @@ def kill_user(uid: int) -> None:
             finally:
                 os._exit(0)
         os.waitpid(child, 0)
+        reap_orphans()
         if not processes_of(uid):
             return
         time.sleep(0.05)
@@ -322,18 +364,21 @@ def as_user(uid: int) -> list[str]:
 
 
 def over_quota(directory: Path) -> bool:
-    """Whether ``directory`` holds more than the step allowance, counted without following links."""
-    entries, size = 0, 0
-    for root, directories, files in os.walk(directory):
+    """Whether ``directory`` holds more than the step allowance, counted without following links; a file or
+    directory that cannot be measured counts as too much."""
+    entries, size, unreadable = 0, 0, []
+    for root, directories, files in os.walk(directory, onerror=unreadable.append):
         entries += len(directories) + len(files)
         for name in files:
             try:
                 size += os.lstat(os.path.join(root, name)).st_size
             except FileNotFoundError:
                 continue
-        if entries > MAX_STEP_FILES or size > MAX_STEP_BYTES:
+            except OSError:
+                return True
+        if unreadable or entries > MAX_STEP_FILES or size > MAX_STEP_BYTES:
             return True
-    return False
+    return bool(unreadable)
 
 
 def has_lean_error(log: Path) -> bool:
@@ -347,12 +392,31 @@ def has_lean_error(log: Path) -> bool:
     return False
 
 
+@dataclass(frozen=True)
+class StepUsers:
+    """The users the four steps run as, for one grade."""
+
+    reference: int
+    candidate: int
+    export: int
+    verify: int
+
+    @classmethod
+    def choose(cls) -> "StepUsers":
+        first = FIRST_STEP_UID + 4 * secrets.randbelow(STEP_UID_BLOCKS)
+        return cls(first, first + 1, first + 2, first + 3)
+
+    def __iter__(self) -> Iterator[int]:
+        return iter((self.reference, self.candidate, self.export, self.verify))
+
+
 class GraderSteps:
     """Runs the grader's steps against one overall deadline."""
 
-    def __init__(self, start: float, lean: str, lean_path: str) -> None:
+    def __init__(self, start: float, lean: str, lean_path: str, users: StepUsers) -> None:
         self.start = start
         self.lean = lean
+        self.users = users
         self.environment = {"PATH": f"{Path(lean).parent}:/usr/bin:/bin", "LEAN_PATH": lean_path}
         """``lean-verify`` runs ``lean`` itself, to find the toolchain's library, so the toolchain is on ``PATH``."""
         self.logs = WORK / "logs"
@@ -430,8 +494,10 @@ def copy_untrusted(source: Path, destination: Path, limit: int) -> bool:
 
 
 def check_users(steps: GraderSteps) -> None:
-    """Fail as the grader, not as the proof, when a step's user cannot run the toolchain."""
-    for uid in STEP_USERS:
+    """Fail as the grader, not as the proof, when a step's user is in use or cannot run the toolchain."""
+    for uid in steps.users:
+        if processes_of(uid):
+            raise GraderFailure(f"user {uid} already runs processes")
         result = subprocess.run(
             [*as_user(uid), steps.lean, "--version"],
             capture_output=True,
@@ -482,10 +548,10 @@ class Rejected(Exception):
 
 def compile_reference(contract: Contract, steps: GraderSteps) -> Path:
     """Compile and check the reference; its object file, which only root can read. Fails as the grader."""
-    reference = make_step_dir("reference", REFERENCE_UID)
+    reference = make_step_dir("reference", steps.users.reference)
     (reference / MODULE_FILE).write_text(reference_source(contract))
     (reference / MODULE_FILE).chmod(0o644)
-    result = steps.run("reference", REFERENCE_UID, steps.compile_argv(), reference)
+    result = steps.run("reference", steps.users.reference, steps.compile_argv(), reference)
     trusted = WORK / "trusted"
     trusted.mkdir(mode=0o700)
     if result.exit_code != 0 or not copy_untrusted(reference / OBJECT_FILE, trusted / OBJECT_FILE, MAX_OBJECT):
@@ -506,52 +572,50 @@ def graded_block(reply: bytes) -> str:
 
 
 def compile_candidate(contract: Contract, block: str, steps: GraderSteps, shared: Path) -> Path:
-    """Compile the candidate as ``COMPILE_UID``; its object file, copied into ``shared``."""
-    candidate = make_step_dir("candidate", COMPILE_UID)
+    """Compile the candidate as the candidate user; its object file, copied into ``shared``."""
+    candidate = make_step_dir("candidate", steps.users.candidate)
     (candidate / MODULE_FILE).write_text(candidate_source(contract, block))
     (candidate / MODULE_FILE).chmod(0o644)
-    result = steps.run("candidate", COMPILE_UID, steps.compile_argv(), candidate)
+    result = steps.run("candidate", steps.users.candidate, steps.compile_argv(), candidate)
     if result.stopped == Stop.DEADLINE:
         raise GraderFailure("the grading deadline passed while the candidate compiled")
     if result.stopped:
         raise Rejected(status=f"compile_{result.stopped}", output=result.tail())
     if result.exit_code != 0:
-        if result.exit_code == 1 and has_lean_error(result.log):
-            raise Rejected(status="compile_failed", output=result.tail())
-        raise GraderFailure(
-            f"the candidate compile ended without a Lean error (exit {result.exit_code}): {result.tail()}"
-        )
+        status = "compile_failed" if result.exit_code == 1 and has_lean_error(result.log) else "compile_crashed"
+        raise Rejected(status=status, exit_code=result.exit_code, output=result.tail())
     if not copy_untrusted(candidate / OBJECT_FILE, shared / "candidate.olean", MAX_OBJECT):
         raise Rejected(status="object_missing_or_oversized")
     return shared / "candidate.olean"
 
 
 def export_candidate(candidate: Path, steps: GraderSteps, shared: Path) -> Path:
-    """Export the candidate's object file to proof data as ``EXPORT_UID``; the data, copied into ``shared``."""
-    export = make_step_dir("export", EXPORT_UID)
-    result = steps.run("export", EXPORT_UID, [str(EXPORT_BIN), str(candidate), str(export / "proof.json")], export)
+    """Export the candidate's object file to proof data as the export user; the data, copied into ``shared``."""
+    export = make_step_dir("export", steps.users.export)
+    result = steps.run("export", steps.users.export, [str(EXPORT_BIN), str(candidate), str(export / PROOF_DATA)], export)
     if result.stopped == Stop.DEADLINE:
         raise GraderFailure("the grading deadline passed while the candidate was exported")
     if result.stopped:
         raise Rejected(status=f"export_{result.stopped}")
     if result.exit_code != 0:
         output = result.tail()
-        if result.exit_code == 1 and any(message in output for message in EXPORT_REJECTIONS):
-            raise Rejected(status="export_rejected", output=output)
-        raise GraderFailure(f"lean-export failed (exit {result.exit_code}): {output}")
-    if not copy_untrusted(export / "proof.json", shared / "proof.json", MAX_PROOF_DATA):
+        rejected = result.exit_code == 1 and any(message in output for message in EXPORT_REJECTIONS)
+        raise Rejected(
+            status="export_rejected" if rejected else "export_crashed", exit_code=result.exit_code, output=output
+        )
+    if not copy_untrusted(export / PROOF_DATA, shared / PROOF_DATA, MAX_PROOF_DATA):
         raise Rejected(status="proof_data_missing_or_oversized")
     candidate.unlink()
-    return shared / "proof.json"
+    return shared / PROOF_DATA
 
 
 def verify_candidate(contract: Contract, reference: Path, proof_data: Path, steps: GraderSteps) -> tuple[float, dict]:
-    """Replay the proof data against the reference as ``VERIFY_UID``; the reward and ``lean-verify``'s verdict."""
+    """Replay the proof data against the reference as the verify user; the reward and ``lean-verify``'s verdict."""
     shared = proof_data.parent
     (shared / "reference.olean").write_bytes(reference.read_bytes())
     (shared / "reference.olean").chmod(0o644)
     argv = [str(VERIFY_BIN), str(shared / "reference.olean"), str(proof_data), "--target", contract.target]
-    result = steps.run("verify", VERIFY_UID, argv, shared, capture=True)
+    result = steps.run("verify", steps.users.verify, argv, shared, capture=True)
     assert result.stdout is not None
     lines = [line for line in result.stdout.read_text(errors="replace").splitlines() if line.startswith("{")]
     if result.exit_code != 0 or not lines:
@@ -592,14 +656,16 @@ def main() -> None:
         if not os.access(tool, os.X_OK):
             raise GraderFailure(f"missing grader tool {tool}")
     WORK.mkdir(mode=0o755)
+    become_subreaper()
+    close_grader_files()
     close_shared_directories()
     resource.setrlimit(resource.RLIMIT_MSGQUEUE, (0, 0))
-    steps = GraderSteps(start, lean, lean_path)
+    steps = GraderSteps(start, lean, lean_path, StepUsers.choose())
     check_users(steps)
     try:
         reward, details = grade(contract, reply, steps)
     finally:
-        for uid in STEP_USERS:
+        for uid in steps.users:
             kill_user(uid)
     if steps.remaining() <= 0:
         raise GraderFailure(f"the {DEADLINE_SECONDS:g} s grading deadline passed before the verdict")

@@ -14,11 +14,12 @@ a prefix that opens a ``namespace``, imports outside Mathlib, or helpers that us
 or ``axiom``. These are text checks on the comment-free source; the grader's own reference check, run
 by Lean, is what establishes the contract on every grade.
 
-ProofNet-Verified is the audited ProofNet: undergraduate textbook exercises whose statements target
-Lean and Mathlib v4.34.0. At the pinned revision every contract but one validates with the grader's
-toolchain (``check_statements.py``); row 35 ships its proof in place of ``sorry``. Its v4.34 proofs are
-not public, so its tasks carry only the negative control, a ``sorry`` proof that passes through every
-grader step and must score zero. It is evaluation data.
+ProofNet-Verified is the audited ProofNet: undergraduate textbook exercises whose statements target Lean
+and Mathlib v4.34.0. At the pinned revision every contract validates with the grader's toolchain
+(``check_statements.py``) except two rows the converter leaves out: row 35 ships its proof in place of
+``sorry``, and row 351 states Rudin's exercise 4.8a again, as row 168 does. ProofNet-Verified's v4.34
+proofs are not public, so its tasks carry only the negative control, a ``sorry`` proof that passes
+through every grader step and must score zero. It is evaluation data.
 """
 
 import re
@@ -39,7 +40,6 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import LEAN_KERNEL_GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     DEADLINE_SECONDS,
-    LEADING_OPTIONS,
     LEAN_VERSION,
     TARGET_NAME,
     Contract,
@@ -55,6 +55,9 @@ LEAN_SCORER_TIMEOUT = DEADLINE_SECONDS + 30.0
 LEAN_GRADER_MEMORY_MB = 8192
 """``lean-verify`` loads Mathlib next to the replayed proof; it peaked near 6 GB on a small proof."""
 
+LEADING_OPTIONS = r"(?:(?:set_option\s+\S+\s+\S+|open(?:[ \t]+(?!in\b)\S+)+)\s+in\s+)*(?:@\[[^\]]*\]\s*)*"
+"""``set_option ... in`` and ``open ... in`` before a declaration, and its attributes; an ``open`` clause is
+the words on its line before its ``in``."""
 SORRY_PROOF = re.compile(r"(?s)^(?P<statement>.*:=)\s*(?:by\s+)?sorry\s*$")
 """A statement whose proof is a single trailing ``sorry``; ``statement`` runs through its final ``:=``."""
 LEADING = re.compile(rf"^\s*{LEADING_OPTIONS}")
@@ -66,7 +69,8 @@ DECLARATION = re.compile(
 """Keywords of the declarations and commands a frozen statement may hold only one of: the target."""
 TARGET = re.compile(rf"(?P<keyword>theorem|lemma)\s+(?P<name>{TARGET_NAME.pattern})(?![\w'.!?])")
 """The target's declaration, with a name the grader accepts; any other name is not a target."""
-PREFIX_DEFECT = re.compile(r"(?<![\w.'])(?:sorry|admit|axiom|namespace)(?![\w'])")
+PREFIX_DEFECT = re.compile(r"(?<![\w.'])(?:sorry|admit|axiom)(?![\w'])")
+NAMESPACE = re.compile(r"(?<![\w.'])namespace(?![\w'])")
 IMPORT = re.compile(r"^\s*import\s+(?P<modules>[^\n]+)$", re.MULTILINE)
 SORRY = re.compile(r"(?<![\w.'])sorry(?![\w'])")
 
@@ -93,6 +97,8 @@ your reply is graded. The statement and the declarations above it must stay unch
 but not `sorry`, `native_decide` or new axioms."""
 
 PROOFNET_VERIFIED_REVISION = "08d4c516eb92d2c1442612a1e5afd5d25d86f4e4"
+REPEATED_EXERCISES = {351: 168}
+"""ProofNet-Verified rows that state an exercise an earlier row states, mapped to that row."""
 
 
 def statement_contract(prefix: str, formal_statement: str, target: str) -> Contract | ImportRejection:
@@ -102,7 +108,9 @@ def statement_contract(prefix: str, formal_statement: str, target: str) -> Contr
     if any(module != "Mathlib" and not module.startswith("Mathlib.") for module in modules):
         return source_defect("non_mathlib_import", "The grader image provides Mathlib only")
     if PREFIX_DEFECT.search(prefix):
-        return source_defect("unproved_helper", "Helpers must be proved, add no axioms and open no namespace")
+        return source_defect("unproved_helper", "Helpers must be proved and add no axioms")
+    if NAMESPACE.search(prefix):
+        return source_defect("opens_namespace", "The prefix must not open a namespace, which renames the target")
     match = SORRY_PROOF.match(formal_statement)
     if match is None or len(SORRY.findall(formal_statement)) != 1:
         return source_defect("no_sorry_proof", "The statement must end in a single sorry proof to replace")
@@ -135,6 +143,8 @@ def proof_task(
 
 def proofnet_contract(data: Mapping[str, Any]) -> Contract | ImportRejection:
     """The frozen contract of one ProofNet-Verified row; ``helper`` declarations join the header."""
+    if (first := REPEATED_EXERCISES.get(data.get("index"))) is not None:
+        return source_defect("repeated_exercise", f"Row {first} states the same exercise")
     header, helper = data.get("header"), data.get("helper") or ""
     name, statement = data.get("name"), data.get("formal_stmt")
     if not all(isinstance(value, str) and value.strip() for value in (header, name, statement)):

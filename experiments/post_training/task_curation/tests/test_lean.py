@@ -3,6 +3,12 @@
 
 """Lean proof sources freeze each statement into the contract the kernel-replay grader checks."""
 
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
 import pytest
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.models import ImportRejection
@@ -13,7 +19,9 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     accepted,
     candidate_source,
     declares_target,
+    over_quota,
     proof_block,
+    without_comments,
 )
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
 from experiments.post_training.task_curation.tests.lean_rows import PROOFNET, contract, proofnet_row
@@ -76,7 +84,7 @@ def test_leading_options_attributes_and_comments_keep_the_target(statement):
         ({"helper": "lemma helper : True := by\n  sorry"}, "unproved_helper"),
         ({"helper": "lemma helper : True := by\n  admit"}, "unproved_helper"),
         ({"helper": "/-- given -/ axiom helper : False"}, "unproved_helper"),
-        ({"helper": "namespace Foo"}, "unproved_helper"),
+        ({"helper": "namespace Foo"}, "opens_namespace"),
         ({"header": "import Mathlib\nimport SomethingElse"}, "non_mathlib_import"),
         ({"header": "import Mathlib Lean"}, "non_mathlib_import"),
         ({"formal_stmt": ""}, "missing_input"),
@@ -120,6 +128,50 @@ def test_a_reply_restates_the_target_only_with_a_declaration_outside_comments(bl
     assert declares_target(block, "t") is restated
 
 
+def test_a_repeated_exercise_is_left_out():
+    result = convert_row(PROOFNET, proofnet_row(index=351))
+    assert isinstance(result, ImportRejection)
+    assert result.reason == "repeated_exercise"
+
+
+PROOF_BYTES, REPLY_BYTES = 1 << 16, 1 << 20
+SLOW_BLOCKS = {
+    "blank_lines": "\n" * PROOF_BYTES,
+    "open_in_per_line": "open X in\n" * (PROOF_BYTES // 10),
+    "open_in_one_line": "open X in " * (PROOF_BYTES // 10),
+    "open_without_in": "open " + "X " * (PROOF_BYTES // 2),
+    "set_option_per_line": "set_option a b in\n" * (PROOF_BYTES // 18),
+    "attributes_per_line": "@[simp]\n" * (PROOF_BYTES // 8),
+    "open_attributes": "@[" * (PROOF_BYTES // 2),
+    "spaces_then_import": " " * PROOF_BYTES + "import",
+    "indented_lines": " \n" * (PROOF_BYTES // 2),
+    "escaped_quotes": '"' + '\\"' * (PROOF_BYTES // 2),
+    "quote_backslash": '"\\' * (PROOF_BYTES // 2),
+    "open_block_comments": "/-" * (PROOF_BYTES // 2),
+    "line_comments": "--\n" * (PROOF_BYTES // 3),
+    "theorem_keywords": "theorem " * (PROOF_BYTES // 8),
+}
+"""Proof blocks of the largest graded size shaped to make a backtracking pattern slow."""
+
+
+@pytest.mark.parametrize("block", list(SLOW_BLOCKS.values()), ids=list(SLOW_BLOCKS))
+def test_a_proof_block_is_read_in_linear_time_before_any_step(block):
+    start = time.monotonic()
+    without_comments(block)
+    declares_target(block, "t")
+    candidate_source(ADD_ZERO, block)
+    assert time.monotonic() - start < 2
+
+
+@pytest.mark.parametrize(
+    "reply", ["```lean4\n" * (REPLY_BYTES // 9), "```" * (REPLY_BYTES // 3), "`" * REPLY_BYTES, "\n" * REPLY_BYTES]
+)
+def test_a_reply_is_read_in_linear_time_before_any_step(reply):
+    start = time.monotonic()
+    proof_block(reply)
+    assert time.monotonic() - start < 2
+
+
 ACCEPTED = {"ok": True, "targets": [{"name": "t", "ok": True, "mode": "prove", "axioms": ["propext"]}]}
 
 
@@ -153,3 +205,51 @@ def test_a_well_formed_verdict_scores_only_a_proof_with_the_standard_axioms(verd
 def test_a_malformed_verdict_is_a_grader_failure(verdict):
     with pytest.raises(GraderFailure):
         accepted(verdict, "t")
+
+
+def test_a_step_directory_too_deep_to_measure_counts_as_over_quota(tmp_path):
+    assert not over_quota(tmp_path)
+    directory = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    for _ in range(300):
+        os.mkdir("d" * 30, dir_fd=directory)
+        deeper = os.open("d" * 30, os.O_RDONLY | os.O_DIRECTORY, dir_fd=directory)
+        os.close(directory)
+        directory = deeper
+    os.close(os.open("hidden", os.O_WRONLY | os.O_CREAT, dir_fd=directory))
+    os.close(directory)
+    assert over_quota(tmp_path)
+
+
+def test_a_file_whose_path_is_too_long_to_measure_counts_as_over_quota(tmp_path):
+    directory = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    depth = (4000 - len(str(tmp_path))) // 31
+    for _ in range(depth):
+        os.mkdir("d" * 30, dir_fd=directory)
+        deeper = os.open("d" * 30, os.O_RDONLY | os.O_DIRECTORY, dir_fd=directory)
+        os.close(directory)
+        directory = deeper
+    os.close(os.open("f" * 200, os.O_WRONLY | os.O_CREAT, dir_fd=directory))
+    os.close(directory)
+    assert over_quota(tmp_path)
+
+
+ADOPTION_PROBE = """
+import os, subprocess, time
+from experiments.post_training.task_curation.datasets.lean.lean_grade import become_subreaper, reap_orphans
+become_subreaper()
+orphan = subprocess.run(["sh", "-c", "sleep 0.5 > /dev/null 2>&1 & echo $!"], capture_output=True, text=True).stdout
+status = open(f"/proc/{orphan.strip()}/status").read()
+parent = next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:"))
+deadline = time.monotonic() + 60
+while "State:\tZ" not in open(f"/proc/{orphan.strip()}/status").read() and time.monotonic() < deadline:
+    time.sleep(0.05)
+reap_orphans()
+print(parent == str(os.getpid()), os.path.exists(f"/proc/{orphan.strip()}"))
+"""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="child subreapers are a Linux feature")
+def test_the_grader_adopts_and_reaps_what_a_step_leaves_running():
+    root = Path(__file__).resolve().parents[4]
+    result = subprocess.run([sys.executable, "-c", ADOPTION_PROBE], capture_output=True, text=True, cwd=root, check=True)
+    assert result.stdout.split() == ["True", "False"], result.stderr

@@ -13,7 +13,7 @@ as the toolchain the grader image installs, against the pinned ``proofnet-verifi
 
 The first output line records what was checked; each further line is one row's result. It exits non-zero
 when a row other than the expected rejections fails. At the pinned revision, on Lean v4.34.1 with Mathlib
-``d13f23b``, all 366 converted contracts validate; rerun it when the revision or the toolchain moves.
+``d13f23b``, all 365 converted contracts validate; rerun it when the revision or the toolchain moves.
 """
 
 import argparse
@@ -37,8 +37,9 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
 )
 from experiments.post_training.task_curation.datasets.lean.proofs import PROOFNET_VERIFIED_REVISION, proofnet_contract
 
-EXPECTED_REJECTIONS = {35: "no_sorry_proof"}
-"""Rows the converter rejects at the pinned revision: row 35's statement carries its proof."""
+EXPECTED_REJECTIONS = {35: "no_sorry_proof", 351: "repeated_exercise"}
+"""Rows the converter rejects at the pinned revision: row 35's statement carries its proof, and row 351
+repeats row 168's exercise."""
 
 
 def check_row(row: dict, lean: str, lean_path: str) -> dict:
