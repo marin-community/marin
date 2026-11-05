@@ -43,6 +43,11 @@ from typing import NamedTuple
 from infra.loom.gdoc.google_api import DOCS_API, GoogleApi, gcloud
 
 CODE_FONT = "Roboto Mono"
+# A code block is a run of shaded paragraphs with no space between them, and space after its last line.
+CODE_SHADING = {"backgroundColor": {"color": {"rgbColor": {"red": 0.95, "green": 0.95, "blue": 0.95}}}}
+CODE_BLOCK_SPACE_BELOW_PT = 8
+# The paragraph styles a new block must not inherit from the paragraph it is inserted at, such as a code line.
+RESET_PARAGRAPH_FIELDS = ("shading", "spaceAbove", "spaceBelow")
 QUOTE_INDENT_PT = 36
 BULLET_PRESET = "BULLET_DISC_CIRCLE_SQUARE"
 NUMBERED_PRESET = "NUMBERED_DECIMAL_ALPHA_ROMAN"
@@ -318,14 +323,30 @@ def _text_style(start: int, end: int, style: dict, fields: str, tab_id: str) -> 
     return {"updateTextStyle": {"range": _range(start, end, tab_id), "textStyle": style, "fields": fields}}
 
 
-def _paragraph_style(start: int, end: int, style: dict, tab_id: str) -> dict:
+def _paragraph_style(start: int, end: int, style: dict, tab_id: str, reset: tuple[str, ...] = ()) -> dict:
+    """Set style on the paragraphs in the range, and reset the fields in reset to the named style's."""
     return {
         "updateParagraphStyle": {
             "range": _range(start, end, tab_id),
             "paragraphStyle": style,
-            "fields": ",".join(style),
+            "fields": ",".join([*style, *reset]),
         }
     }
+
+
+def _points(magnitude: float) -> dict:
+    return {"magnitude": magnitude, "unit": "PT"}
+
+
+def _code_paragraph_requests(start: int, text: str, last_in_block: bool, tab_id: str) -> list[dict]:
+    """Shade the code lines in text, inserted at start, with space after the last line when it ends the block."""
+    end = start + utf16_length(text)
+    style = {"shading": CODE_SHADING, "spaceAbove": _points(0), "spaceBelow": _points(0)}
+    requests = [_paragraph_style(start, end + 1, style, tab_id)]
+    if last_in_block:
+        last_line = start + utf16_length(text[: text.rfind("\n") + 1])
+        requests.append(_paragraph_style(last_line, end + 1, {"spaceBelow": _points(CODE_BLOCK_SPACE_BELOW_PT)}, tab_id))
+    return requests
 
 
 def group_requests(blocks: list[Block], at: int, tab_id: str) -> list[dict]:
@@ -339,12 +360,17 @@ def group_requests(blocks: list[Block], at: int, tab_id: str) -> list[dict]:
     ]
     bullets: list[tuple[int, int, BlockKind]] = []
     block_at = at
-    for block in blocks:
+    for i, block in enumerate(blocks):
         block_end = block_at + utf16_length(block.text)
         named = f"HEADING_{block.level}" if block.kind is BlockKind.HEADING else "NORMAL_TEXT"
         indent = QUOTE_INDENT_PT if block.kind is BlockKind.QUOTE else 0
-        style = {"namedStyleType": named, "indentStart": {"magnitude": indent, "unit": "PT"}, "alignment": "START"}
-        requests.append(_paragraph_style(block_at, block_end + 1, style, tab_id))
+        style = {"namedStyleType": named, "indentStart": _points(indent), "alignment": "START"}
+        requests.append(_paragraph_style(block_at, block_end + 1, style, tab_id, RESET_PARAGRAPH_FIELDS))
+        if block.kind is BlockKind.CODE:
+            # replace-section writes a code block as one block per line, so a line ends its block when the next
+            # block is not code.
+            last_in_block = i + 1 == len(blocks) or blocks[i + 1].kind is not BlockKind.CODE
+            requests += _code_paragraph_requests(block_at, block.text, last_in_block, tab_id)
         if block.kind is BlockKind.CODE and block_end > block_at:
             code_font = {"weightedFontFamily": {"fontFamily": CODE_FONT}}
             requests.append(_text_style(block_at, block_end, code_font, "weightedFontFamily", tab_id))
@@ -476,8 +502,8 @@ def diagram_requests(at: int, uri: str, size_pt: tuple[float, float], tab_id: st
                 "uri": uri,
                 "location": {"index": at, "tabId": tab_id},
                 "objectSize": {
-                    "width": {"magnitude": width, "unit": "PT"},
-                    "height": {"magnitude": height, "unit": "PT"},
+                    "width": _points(width),
+                    "height": _points(height),
                 },
             }
         },

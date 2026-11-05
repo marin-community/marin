@@ -3,7 +3,7 @@
 
 import pytest
 
-from infra.loom.gdoc.cli import AgentStatus, agent_status_request
+from infra.loom.gdoc.cli import AgentStatus, agent_status_request, describe_comment
 from infra.loom.gdoc.docs_format import Tab
 
 
@@ -55,3 +55,14 @@ def test_agent_status_selects_the_chip_option_by_its_name_and_a_doc_without_the_
         agent_status_request(
             Tab("t.0", "Main", [header_paragraph({"textRun": {"content": "Status: draft\n"}})]), AgentStatus.WORKING
         )
+
+
+def test_a_comment_shows_its_quoted_text_unescaped():
+    comment = {
+        "id": "c1",
+        "content": "What kind of review?",
+        "author": {"displayName": "A reader"},
+        "quotedFileContent": {"value": "waiting for readers&#39; comments &amp; replies"},
+    }
+
+    assert 'on the text: "waiting for readers\' comments & replies"' in describe_comment(comment)

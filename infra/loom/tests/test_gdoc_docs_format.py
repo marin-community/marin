@@ -112,6 +112,36 @@ def test_group_requests_name_the_tab_and_stay_inside_the_inserted_text():
     assert all(rng["tabId"] == "t.progress" and 10 <= rng["startIndex"] < rng["endIndex"] <= end for rng in ranges)
 
 
+def test_group_requests_shade_a_code_block_and_space_only_after_its_last_line():
+    requests = group_requests(parse("Intro\n\n```python\na = 1\n\nb = 2\n```\n\nAfter"), at=1, tab_id="t.0")
+    text = requests[0]["insertText"]["text"]
+    assert text == "Intro\na = 1\n\nb = 2\nAfter\n"
+    styles = [r["updateParagraphStyle"] for r in requests if "updateParagraphStyle" in r]
+
+    shaded = [(s["range"]["startIndex"], s["range"]["endIndex"]) for s in styles if "shading" in s["paragraphStyle"]]
+    code_start = 1 + text.index("a = 1")
+    after_start = 1 + text.index("After")
+    assert shaded == [(code_start, after_start)]
+    spaced = [
+        (s["range"]["startIndex"], s["paragraphStyle"]["spaceBelow"]["magnitude"])
+        for s in styles
+        if s["paragraphStyle"].get("spaceBelow", {}).get("magnitude")
+    ]
+    assert spaced == [(1 + text.index("b = 2"), 8)]
+    # The paragraph after the block resets the shading it would otherwise inherit from the code line before it.
+    after_style = next(s for s in styles if s["range"]["startIndex"] == after_start)
+    assert "shading" in after_style["fields"] and "shading" not in after_style["paragraphStyle"]
+
+
+def test_group_requests_space_after_the_last_line_of_a_code_block_written_one_line_per_block():
+    lines = [Block(BlockKind.CODE, line, language="python") for line in ("a = 1", "b = 2")]
+    requests = group_requests([*lines, Block(BlockKind.PARAGRAPH, "After")], at=1, tab_id="t.0")
+    styles = [r["updateParagraphStyle"] for r in requests if "updateParagraphStyle" in r]
+
+    spaced = [s["range"]["startIndex"] for s in styles if s["paragraphStyle"].get("spaceBelow", {}).get("magnitude")]
+    assert spaced == [1 + len("a = 1\n")]
+
+
 def paragraph_element(start: int, text: str, style: str = "NORMAL_TEXT") -> dict:
     return {
         "startIndex": start,

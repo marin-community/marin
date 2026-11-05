@@ -16,6 +16,7 @@ Run it from the root of a marin checkout with the system Python; see `google_api
 """
 
 import argparse
+import html
 import sys
 from enum import StrEnum
 
@@ -94,7 +95,8 @@ def describe_comment(comment: dict) -> str:
     status = "resolved" if is_resolved(comment) else "open"
     lines = [f"- [{comment['id']}] ({status}) {comment['author']['displayName']}: {comment['content']}"]
     if quoted := comment.get("quotedFileContent", {}).get("value"):
-        lines.append(f'  on the text: "{quoted}"')
+        # Drive returns the quoted text HTML-escaped, such as `&#39;` for an apostrophe.
+        lines.append(f'  on the text: "{html.unescape(quoted)}"')
     for reply in comment.get("replies", []):
         action = f" ({reply['action']}d)" if reply.get("action") else ""
         # A reply that only resolves or reopens the comment can come without content.
