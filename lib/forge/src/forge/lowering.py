@@ -89,7 +89,7 @@ LOCAL_CPYTHON = PackageSpec(pypi_packages=())
 LOCAL_READ_ONLY = "read_only"
 """shellbox's ``SystemDirectories.READ_ONLY``, the local factory's default mode for system directories."""
 LOCAL_COPY_ON_WRITE = "copy_on_write"
-"""shellbox's ``SystemDirectories.COPY_ON_WRITE``, the mode ``taskforge_adapters.backends.local_factory`` sets."""
+"""shellbox's ``SystemDirectories.COPY_ON_WRITE``, a local factory's writable system-directory mode."""
 LOCAL_UNWRITABLE_ROOTS: Mapping[str, tuple[str, ...]] = {
     LOCAL_READ_ONLY: ("/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/sys", "/usr"),
     LOCAL_COPY_ON_WRITE: ("/sys",),
@@ -361,7 +361,8 @@ def python_grader(
     solver-visible files at their own paths, so the program reads them there. The program reads the extracted
     answer at ``answer_path`` (``ANSWER_PATH`` for a text answer, ``None`` for a file answer) and
     captured output files at their absolute paths, never stdin, and writes its verdict
-    (``spec.verdict.verdict_json``: the reward and one result per check) to ``spec.verdict.GRADER_VERDICT_PATH``.
+    (``forge.model.verdict.verdict_json``: the reward and one result per check) to
+    ``forge.model.verdict.GRADER_VERDICT_PATH``.
 
     Raises:
         ValueError: a file is named ``grade.py`` or ``config.json``, or two files share a path.

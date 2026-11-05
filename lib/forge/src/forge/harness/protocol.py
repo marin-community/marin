@@ -25,10 +25,11 @@ class StopReason(StrEnum):
 @dataclass(frozen=True, slots=True)
 class Submitted(Exit):
     submission: Submission
+    session: Conversation
 
 
 @dataclass(frozen=True, slots=True)
-class ToolReturn[P](Exit):
+class Returned[P](Exit):
     tool: str
     payload: P
     session: Conversation
@@ -45,11 +46,24 @@ class ToolResult:
     content: str
 
 
+@dataclass(frozen=True, slots=True)
+class SubmitRequest:
+    submission: Submission
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnRequest[P]:
+    tool: str
+    payload: P
+
+
 class Tool[P](Protocol):
     @property
     def schema(self) -> ToolSchema: ...
 
-    async def __call__(self, ctx: Context, args: Mapping[str, object], env: Env) -> ToolResult | ToolReturn[P]: ...
+    async def __call__(
+        self, ctx: Context, args: Mapping[str, object], env: Env
+    ) -> ToolResult | SubmitRequest | ReturnRequest[P]: ...
 
 
 class Harness(Protocol):

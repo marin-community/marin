@@ -210,3 +210,13 @@ def test_individual_model_files_round_trip(workpiece: Workpiece) -> None:
     assert wire.TASK_PROPOSAL.validate_json(wire.TASK_PROPOSAL.dump_json(proposal)) == proposal
     evidence = workpiece.evidence[0]
     assert wire.VALIDATION_RESULT.validate_json(wire.VALIDATION_RESULT.dump_json(evidence)) == evidence
+
+
+def test_tool_schema_snapshot_survives_caller_mutation() -> None:
+    properties = {"path": {"type": "string"}}
+    schema = ToolSchema("read", "Read a file", {"required": ("path",), "properties": properties})
+    saved = wire.TOOL_SCHEMA.dump_json(schema)
+    properties["path"]["type"] = "number"
+    assert wire.TOOL_SCHEMA.dump_json(schema) == saved
+    restored = wire.TOOL_SCHEMA.validate_json(saved)
+    assert restored == schema
