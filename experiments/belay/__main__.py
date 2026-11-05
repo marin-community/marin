@@ -85,6 +85,7 @@ from experiments.belay.page import (
     SESSION_FILE,
     TERMINAL_RUN_STATES,
     Idea,
+    IntakeReaction,
     PageRun,
     PageState,
     Post,
@@ -95,8 +96,8 @@ from experiments.belay.page import (
     page_state,
     post_activity,
     publish_thread,
+    react_to_intake,
     read_thread,
-    reply_to_intake,
     report_idea,
     require_unedited,
     save_session,
@@ -711,11 +712,9 @@ def new_idea(
         body = updated(thread, title(registry_id, entry["name"], spec.track, "plan"), number, section)
     plan_title = title(registry_id, entry["name"], spec.track, "plan")
     publish_thread(registry_id, plan_title, body, idea.id, "plan", dry_run=dry_run)
-    reply = reply_to_intake(
-        idea, f"Running as {registry_id} → {url}", github_posting=state.github_posting, dry_run=dry_run
-    )
+    react_to_intake(idea, IntakeReaction.PICKED_UP, github_posting=state.github_posting, dry_run=dry_run)
     plan = {"summary": entry["name"], "commit": commit, "branch": branch, "track": spec.track.value, "comment": url}
-    report_idea(idea.id, {"state": "planned", "plan": plan, **({"reply_url": reply} if reply else {})}, dry_run=dry_run)
+    report_idea(idea.id, {"state": "planned", "plan": plan}, dry_run=dry_run)
     if dry_run:
         launch_stage(repo, branch, spec, data_runs, None, state, dry_run=True)
         return
@@ -1094,13 +1093,9 @@ def study(registry_id: str, spec_file: Path, *, dry_run: bool) -> None:
     heading, body = study_post(plan, name, StudyStatus.PLAN, budget, commit, priority_line=idea.priority_line)
     publish_thread(registry_id, heading, body, idea.id, "plan", dry_run=dry_run)
     url = thread_url(registry_id)
-    reply = reply_to_intake(
-        idea, f"Running as {registry_id} → {url}", github_posting=state.github_posting, dry_run=dry_run
-    )
+    react_to_intake(idea, IntakeReaction.PICKED_UP, github_posting=state.github_posting, dry_run=dry_run)
     summary = {"summary": plan.question, "commit": commit, "branch": branch, "track": Track.CUSTOM.value, "comment": url}
-    report_idea(
-        idea.id, {"state": "planned", "plan": summary, **({"reply_url": reply} if reply else {})}, dry_run=dry_run
-    )
+    report_idea(idea.id, {"state": "planned", "plan": summary}, dry_run=dry_run)
     launch_study_runs(repo, plan, list(plan.runs), idea, state, dry_run=dry_run)
     heading, body = study_post(plan, name, StudyStatus.RUNNING, budget, commit, priority_line=idea.priority_line)
     publish_thread(registry_id, heading, body, idea.id, "plan", dry_run=dry_run)
@@ -1206,8 +1201,6 @@ def analyze(registry_id: str, script: str, checkpoint: str, *, dry_run: bool) ->
     publish_thread(registry_id, heading, body, idea.id, "result", dry_run=dry_run)
     result = {"kind": "study", "summary": "report", "report": url}
     report_idea(idea.id, {"state": "recorded", "result": result}, dry_run=dry_run)
-    verdict_line = f"{registry_id} · {Track.CUSTOM} · report → {thread_url(registry_id)}"
-    reply_to_intake(idea, verdict_line, github_posting=state.github_posting, dry_run=dry_run)
     say_next(f'{BELAY} score {registry_id} --score na --rationale "a study: no verdict" --model <your model>')
 
 
@@ -1324,9 +1317,8 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     }
     body = with_reproduce(body, earlier)  # sections written before posts carried a Reproduce line
     publish_thread(registry_id, new_title, body, None if idea is None else idea.id, "result", dry_run=dry_run)
-    if idea is not None and not run_equal_time:
-        verdict_line = f"{registry_id} · {spec.track} · {status} → {url}"
-        reply_to_intake(idea, verdict_line, github_posting=state.github_posting, dry_run=dry_run)
+    if idea is not None and not run_equal_time and overall == Verdict.WIN:
+        react_to_intake(idea, IntakeReaction.WON, github_posting=state.github_posting, dry_run=dry_run)
     if idea is not None:
         result = {"rows": [asdict(r) for r in results], "verdict": overall, "kind": PAGE_RESULT_KIND[overall]}
         report_idea(idea.id, {"state": "recorded", "result": {**result, "summary": status}}, dry_run=dry_run)

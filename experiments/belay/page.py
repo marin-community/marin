@@ -18,6 +18,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -282,7 +283,7 @@ def gh_api(args: list[str]) -> str:
 def thread_url(registry_id: str) -> str:
     """The idea's row on the Status page, which opens to its agent thread (a fragment route: Marina's canonical applet
     URL serves only the root document)."""
-    return f"{CONFIG.page_url}#status/{registry_id}"
+    return f"{CONFIG.public_page_url}#status/{registry_id}"
 
 
 def read_thread(registry_id: str) -> str | None:
@@ -308,23 +309,24 @@ def publish_thread(registry_id: str, title: str, body: str, idea_id: int | None,
     return thread_url(registry_id)
 
 
-def reply_to_intake(
-    idea: Idea, text: str, *, github_posting: bool, dry_run: bool, gh: Callable[[list[str]], str] = gh_api
-) -> str | None:
-    """Post the one reply on the idea's #9514 comment, or edit it once it exists; returns its URL. Only for intake
-    ideas, and only when an approver has turned GitHub posting on."""
+class IntakeReaction(StrEnum):
+    """The reactions a session leaves on an idea's #9514 comment; results themselves live on the Status page."""
+
+    PICKED_UP = "eyes"
+    WON = "rocket"
+
+
+def react_to_intake(
+    idea: Idea, reaction: IntakeReaction, *, github_posting: bool, dry_run: bool, gh: Callable[[list[str]], str] = gh_api
+) -> None:
+    """Add ``reaction`` to the idea's #9514 comment (GitHub keeps one per reaction and user, so a repeat is a no-op).
+    Only for intake ideas, and only when an approver has turned GitHub posting on."""
     if idea.url is None or "issuecomment-" not in idea.url:
-        return None
-    body = f"{BOT_MARK} {text}"
+        return
+    comment_id = idea.url.rsplit("issuecomment-", 1)[1]
+    api = f"repos/{CONFIG.repository}/issues/comments/{comment_id}/reactions"
     if dry_run or not github_posting:
-        print(f"would {'edit ' + idea.reply_url if idea.reply_url else 'post'} the #{CONFIG.intake_issue} reply: {body}")
-        return idea.reply_url
-    if idea.reply_url is None:
-        api = f"repos/{CONFIG.repository}/issues/{CONFIG.intake_issue}/comments"
-        url = json.loads(gh([api, "-X", "POST", "-f", f"body={body}"]))["html_url"]
-        print(f"replied {url}")
-        return url
-    comment_id = idea.reply_url.rsplit("issuecomment-", 1)[1]
-    gh([f"repos/{CONFIG.repository}/issues/comments/{comment_id}", "-X", "PATCH", "-f", f"body={body}"])
-    print(f"edited {idea.reply_url}")
-    return idea.reply_url
+        print(f"would react {reaction.value} on {idea.url}")
+        return
+    gh([api, "-X", "POST", "-f", f"content={reaction.value}"])
+    print(f"reacted {reaction.value} on {idea.url}")

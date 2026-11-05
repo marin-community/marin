@@ -33,8 +33,11 @@ class BelayConfig:
     wandb_project: str
     repository: str
     intake_issue: int
-    """Where ideas are suggested; each approved idea gets one reply there, linking its Status row."""
+    """Where ideas are suggested; a session reacts on an idea's comment (picked up, won), and its result is on the
+    public Status page."""
     page_url: str
+    public_page_url: str
+    """The page as anyone sees it, for links in public posts."""
     default_author: str
     """GitHub login credited for ideas with no #9514 comment and no recorded proposer (internal proposals)."""
 
@@ -63,6 +66,7 @@ PRODUCTION = BelayConfig(
     intake_issue=9514,
     # Marina's authenticated applet URL; calls carry the caller's IAP identity (page.call).
     page_url="https://applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/",
+    public_page_url="https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/",
     default_author="ClassicLarry",
 )
 
@@ -75,6 +79,7 @@ DEMO = replace(
     registry_branch="marin_belay_v1_registry_demo",
     registry_checkout=Path.home() / "marin_wt_registry_demo",
     page_url="http://127.0.0.1:8091/belay/",
+    public_page_url="http://127.0.0.1:8091/belay/",
 )
 
 CONFIG = PRODUCTION

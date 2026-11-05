@@ -24,8 +24,8 @@ them.
   2. A maintainer approves it on the Belay admin page, which reads #9514 live and shows the visible text it will
      store (hidden HTML and invisible characters stripped, and flagged). GitHub reactions approve nothing.
   3. The session reads only that stored text (an edit on GitHub after approval is refused), gives the idea its
-     registry id, and posts one reply on the #9514 comment: "Running as X#### → <its Status row>". At the verdict it
-     edits that reply to "X#### · <track> · <verdict> → <its Status row>". Internal proposals get no reply.
+     registry id, and reacts 👀 on the #9514 comment; a final win adds 🚀. Nothing is posted on #9514: results, and
+     declines with the approver's reason, are on the public Status page.
   - Plans, stage tables and verdicts go to the page's agent log, one thread per idea at `#status/X####` on the page, updated in
     place. Nothing new is posted on #9451; its existing comments stay as they are.
 - **How edits are made.**

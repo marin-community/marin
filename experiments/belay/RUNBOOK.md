@@ -85,8 +85,7 @@ A human then decides what happens. Never work around a refusal.
         idea's control at the same code and seed is still running: the two share it);
      3. `checks passed: ...`;
      4. `wrote the X#### thread: ...` (the idea's post on the page's agent log: status `plan`, the planned runs
-        with their steps), then, for a #9514 idea, `replied <url>` (one reply on its comment: "Running as X#### →
-        <its Status row>");
+        with their steps), then, for a #9514 idea, `reacted eyes on <url>` (a 👀 on its comment; no reply);
      5. one `launching belay-X####-<run>` per run;
      6. `next: stop (...)`.
    - **If it refuses because of the priority grant** (a grant below the Track's band), or Iris refuses the band
@@ -166,7 +165,7 @@ no run may be longer than the hours.
    checkpoint under the study's own prefix.
 2. **Run:** `B study X#### --spec <file>`
    - **Expect:** `checks passed: ...`, the spec committed and pushed, `wrote the X#### thread` (status
-     `study plan`), the one #9514 reply ("Running as X#### → <its Status row>") for an intake idea, one
+     `study plan`), `reacted eyes on <url>` for an intake idea, one
      `launching belay-X####-<key>` per run, then `next: stop`.
    - **If it refuses with an escalation** (past the budget, no budget, a `hero-mfu` or production-priority run, a
      setting no config field takes): run the escalate command it prints, then stop. A study never adds model code;
@@ -206,8 +205,7 @@ trials (`comment_url`). Nothing is posted on #9451.
      - the registry entry and the trial's analysis report pushed together
        (`pushed ... as <sha> to origin/<registry branch>`);
      - `wrote the X#### thread: ...`;
-     - at the final verdict of a #9514 idea, `edited <reply url>`: its one reply now reads "X#### · <track> ·
-       <verdict> → <its Status row>";
+     - at a final win of a #9514 idea, `reacted rocket on <url>` (a 🚀 on its comment; other verdicts add nothing);
      - then either the next stage's `launching ...` lines, or `next: stop`.
    - A final win also escalates to the admin page for the adoption decision.
 
@@ -252,7 +250,7 @@ sessions run it only when a maintainer asks. Each post shows a `Reproduce:` line
    be under `s3://<bucket>/tmp/ttl=30d/belay/studies/X####/`.
    - It runs the committed script as a CPU job on the checkpoint's cluster, copies `report.md` and its figures to
      `experiments/belay/analysis/X####/` on the registry branch with the entry's status `report`, marks the thread
-     `report` with the link, and edits the #9514 reply to "X#### · custom · report → <its Status row>".
+     `report` with the link.
    - **If it refuses** (another script, a checkpoint outside the study's prefix, a script not yet committed): fix
      the command, or do section 1c step 3 first.
 2. Score it `na` (section 2d): a study has no verdict.
@@ -375,7 +373,7 @@ metric and rule. Nothing else spells out a launch.
 | Registry branch | Demo: `marin_belay_v1_registry_demo`. The demo never touches `marin_belay_v1_registry` |
 | Runs | Seed 0; cluster, priority and nodes per Track (`B tracks`). An approver may grant an idea a higher Iris priority (`batch` < `interactive` < `production`); its runs then launch at that band in every stage and study run, and the band used is on each trial (`priority`) and in the spec's `launched:` commands. Analysis CPU jobs stay at `batch` |
 | Budget | A soft cap on nodes across all Belay runs, set on the admin page (default 8); a maintainer may grant one idea more nodes at approval. Sessions read both from the page and never change them |
-| Posts | The idea's thread on the Belay page's agent log. A #9514 idea also gets one reply on its comment, posted at registration and edited at the verdict, only when an approver turns GitHub posting on. Internal proposals get no reply |
+| Posts | The idea's thread on the Belay page's agent log. Nothing is posted on #9514: a #9514 idea's comment gets 👀 when a session picks it up and 🚀 at a final win, only when an approver turns GitHub posting on; its result is on the public Status page |
 
 ## 10. Known limits
 

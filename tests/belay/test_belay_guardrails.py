@@ -43,7 +43,16 @@ from experiments.belay.code_change import (
     refuse_outside_allowed,
 )
 from experiments.belay.config import CONFIG, TRACKS, WEEKLY_BRANCH, Track
-from experiments.belay.page import Idea, PageState, publish_thread, read_thread, reply_to_intake, require_unedited
+from experiments.belay.page import (
+    Idea,
+    IntakeReaction,
+    PageState,
+    publish_thread,
+    react_to_intake,
+    read_thread,
+    require_unedited,
+    thread_url,
+)
 from experiments.belay.posts import (
     Comment,
     Row,
@@ -420,7 +429,9 @@ def test_one_thread_per_idea_plan_then_result(app_threads: dict[str, dict]) -> N
     plan_title = title("X0001", "Toy", Track.SPEEDRUN, "plan")
     plan = render(Comment(plan_title, {1: stage_1}, ["Defaults chosen: none"]))
     assert read_thread("X0001") is None
-    assert publish_thread("X0001", plan_title, plan, 3, "plan", dry_run=False) == f"{CONFIG.page_url}#status/X0001"
+    assert (
+        publish_thread("X0001", plan_title, plan, 3, "plan", dry_run=False) == f"{CONFIG.public_page_url}#status/X0001"
+    )
     measured = Row("belay-X0001-seed0", "v", 0, "8\u00d7H100", 3030, 0.2, 0.31, 2.98, -0.0578)
     win = title("X0001", "Toy", Track.SPEEDRUN, "win at equal data")
     result = updated(
@@ -539,28 +550,21 @@ def intake_idea(url: str | None, reply_url: str | None = None) -> Idea:
     )
 
 
-def test_the_intake_reply_is_posted_once_then_edited() -> None:
+def test_a_session_reacts_on_the_suggestion_instead_of_replying() -> None:
     calls: list[list[str]] = []
-
-    def gh(args: list[str]) -> str:
-        calls.append(args)
-        return '{"html_url": "https://github.com/marin-community/marin/issues/9514#issuecomment-77"}'
-
     idea = intake_idea("https://github.com/marin-community/marin/issues/9514#issuecomment-41")
-    status = f"{CONFIG.page_url}#status/X0001"
-    reply = reply_to_intake(idea, f"Running as X0001 → {status}", github_posting=True, dry_run=False, gh=gh)
-    assert reply == "https://github.com/marin-community/marin/issues/9514#issuecomment-77"
-    verdict = f"X0001 · speedrun · win → {status}"
-    edited = reply_to_intake(
-        dataclasses.replace(idea, reply_url=reply), verdict, github_posting=True, dry_run=False, gh=gh
-    )
-    assert edited == reply
-    assert [(c[0], c[2]) for c in calls] == [
-        ("repos/marin-community/marin/issues/9514/comments", "POST"),
-        ("repos/marin-community/marin/issues/comments/77", "PATCH"),
+    react_to_intake(idea, IntakeReaction.PICKED_UP, github_posting=True, dry_run=False, gh=calls.append)
+    react_to_intake(idea, IntakeReaction.WON, github_posting=True, dry_run=False, gh=calls.append)
+    assert calls == [
+        ["repos/marin-community/marin/issues/comments/41/reactions", "-X", "POST", "-f", "content=eyes"],
+        ["repos/marin-community/marin/issues/comments/41/reactions", "-X", "POST", "-f", "content=rocket"],
     ]
-    assert calls[1][-1] == f"body=\U0001f916 {verdict}"
-    assert not any("9451" in part for c in calls for part in c)
+    react_to_intake(idea, IntakeReaction.WON, github_posting=False, dry_run=False, gh=calls.append)
+    assert len(calls) == 2
+
+
+def test_status_links_use_the_public_page() -> None:
+    assert thread_url("X0001").startswith(CONFIG.public_page_url)
 
 
 def test_code_change_may_read_only_the_sources_the_approved_text_names() -> None:
@@ -577,9 +581,8 @@ def test_code_change_may_read_only_the_sources_the_approved_text_names() -> None
     assert named_sources("Try sqrt-softplus routing.") == []
 
 
-def test_an_internal_proposal_gets_no_intake_reply() -> None:
-    reply = reply_to_intake(intake_idea(None), "Running as X0001", github_posting=True, dry_run=False, gh=no_github)
-    assert reply is None
+def test_an_internal_proposal_gets_no_intake_reaction() -> None:
+    react_to_intake(intake_idea(None), IntakeReaction.PICKED_UP, github_posting=True, dry_run=False, gh=no_github)
 
 
 def test_a_later_stage_keeps_earlier_sections_and_renames_train_time() -> None:
