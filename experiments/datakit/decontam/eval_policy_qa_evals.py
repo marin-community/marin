@@ -173,13 +173,17 @@ def cruxeval(cache_dir: Path) -> list[dict[str, str]]:
 
 
 def financebench(cache_dir: Path) -> list[dict[str, str]]:
-    """The vendored 50-item sample: evidence page, question and answer. Filing PDFs are not indexed."""
+    """The vendored 50-item sample: question and answer.
+
+    The evidence page is public filing text, so it is not indexed, like the passages of
+    lm-eval reading-comprehension tasks: indexing it would mark every copy of the filing.
+    """
     name, records = "financebench", []
     for row in read_jsonl(CHAT_BENCHMARKS / FINANCEBENCH_FILE):
         records += item_records(
             name,
             row["id"].removeprefix("financebench_id_"),
-            [row["evidence_text"], row["question"], row["answer"]],
+            [row["question"], row["answer"]],
             {"prompt": row["question"], "answer": row["answer"]},
         )
     return records
@@ -244,21 +248,29 @@ def winogrande(cache_dir: Path) -> list[dict[str, str]]:
 
 
 def boolq(cache_dir: Path) -> list[dict[str, str]]:
-    """lm-eval boolq scores validation: passage, question and answer."""
+    """lm-eval boolq scores validation: question and answer.
+
+    The Wikipedia passage is not indexed, like the passages of lm-eval reading-comprehension
+    tasks, so most questions are too short to index.
+    """
     name, records = "boolq", []
     for row in read_parquet(BOOLQ, "boolq/validation-00000-of-00001.parquet", cache_dir):
-        records += item_records(
-            name, str(row["idx"]), [row["passage"], row["question"] + "?", "yes" if row["label"] == 1 else "no"]
-        )
+        records += item_records(name, str(row["idx"]), [row["question"] + "?", "yes" if row["label"] == 1 else "no"])
     return records
 
 
 def truthfulqa(cache_dir: Path) -> list[dict[str, str]]:
-    """lm-eval truthfulqa_mc2 scores validation: question and all MC2 choices; id is the row index."""
+    """lm-eval truthfulqa_mc2 scores validation: question and best answer, on adjacent lines; id is the row index.
+
+    Copies keep the question and the correct answer but reword, reorder or letter the other
+    choices, so the choices are not indexed. The best answer is MC1's one correct choice.
+    """
     name, records = "truthfulqa", []
     rows = read_parquet(TRUTHFULQA, "multiple_choice/validation-00000-of-00001.parquet", cache_dir)
     for index, row in enumerate(rows):
-        records += item_records(name, str(index), [row["question"], "\n".join(row["mc2_targets"]["choices"])])
+        mc1 = row["mc1_targets"]
+        (best,) = [choice for choice, label in zip(mc1["choices"], mc1["labels"], strict=True) if label == 1]
+        records += item_records(name, str(index), [f"{row['question']}\n{best}"])
     return records
 
 
@@ -301,12 +313,12 @@ EVAL_POLICY_QA_EVALS: tuple[PinnedEval, ...] = (
     PinnedEval("OlympiadBench", "olympiadbench", *_hf(OLYMPIADBENCH), 2078, olympiadbench),
     PinnedEval("PIQA", "piqa", *_hf(PIQA), 1684, piqa),
     PinnedEval("WinoGrande", "winogrande", *_hf(WINOGRANDE), 1267, winogrande),
-    PinnedEval("BoolQ", "boolq", *_hf(BOOLQ), 3270, boolq),
-    PinnedEval("TruthfulQA", "truthfulqa", *_hf(TRUTHFULQA), 817, truthfulqa),
+    PinnedEval("BoolQ", "boolq", *_hf(BOOLQ), 92, boolq),
+    PinnedEval("TruthfulQA", "truthfulqa", *_hf(TRUTHFULQA), 731, truthfulqa),
     PinnedEval("TriviaQA", "triviaqa", *_hf(TRIVIAQA), 5793, triviaqa),
     PinnedEval("AIME24", "aime24", *_vendored(AIME24_FILE), 83, aime24),
     PinnedEval("CRUXEval", "cruxeval", *_hf(CRUXEVAL), 635, cruxeval),
-    PinnedEval("FinanceBench", "financebench", *_vendored(FINANCEBENCH_FILE), 79, financebench),
+    PinnedEval("FinanceBench", "financebench", *_vendored(FINANCEBENCH_FILE), 78, financebench),
     PinnedEval("IFBench", "ifbench", *_hf(IFBENCH), 297, ifbench),
     PinnedEval("MRCR", "mrcr", *_hf(MRCR), 3012, mrcr),
 )
