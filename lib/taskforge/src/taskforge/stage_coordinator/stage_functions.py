@@ -39,9 +39,12 @@ process, with the band of the coordinator's policy, so ``default_review`` is pas
 enforces the MODIFY budget on every review decision.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+from pydantic import JsonValue
 
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
@@ -91,6 +94,7 @@ class Build(Protocol):
         /,
         *,
         research: ResearchRequirement,
+        build_input: JsonValue,
         model_digest: str,
     ) -> TaskDraft: ...
 
@@ -116,3 +120,5 @@ class StageFunctions:
     build: Build
     validate: Validate
     review: Review
+    evidence_gaps: Callable[[ValidationResult], tuple[str, ...]] | None = None
+    """Override the standard solver/control/adversary completeness gate for a custom validation stage."""
