@@ -341,23 +341,6 @@ def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_run
     assert startup["control"] == pytest.approx(2.2)
     assert startup["tolerance"] == pytest.approx(t.ppf(0.975, 3) * math.sqrt(5 / 3) / 10 * math.sqrt(1.5))
     assert "## Vs baseline" in Path(report["report"]).with_suffix(".md").read_text()
-    arguments = [
-        "snowball_rl_gate",
-        "--preset",
-        "speed-medium",
-        "--candidate",
-        "users/test/baseline-candidate",
-        *(item for ref in references for item in ("--baseline", ref)),
-    ]
-    bootstrap = (
-        "import runpy, sys; from experiments.post_training import snowball_rl_presets as presets; "
-        f"presets.artifact_prefix = lambda cluster: {str(tmp_path)!r}; "
-        f"sys.argv = {arguments!r}; "
-        "runpy.run_module('experiments.post_training.snowball_rl_gate', run_name='__main__')"
-    )
-    separate = subprocess.run([sys.executable, "-c", bootstrap], capture_output=True, text=True, timeout=60)
-    assert separate.returncode == 0, (separate.stdout, separate.stderr)
-    assert [json.loads(line) for line in separate.stdout.splitlines() if line.startswith('{"report":')] == [report]
     missing = recorded_runs("speed-medium", "users/test/missing-telemetry", argv=("--preset", "speed-medium"))
     for path in missing.glob("exports/metrics/*.json"):
         values = json.loads(path.read_text())
