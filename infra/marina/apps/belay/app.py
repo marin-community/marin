@@ -870,10 +870,12 @@ def requeue_idea(
     priority: PriorityBand | None = None,
 ) -> dict[str, str]:
     """Keep the maintainer's note (and any node grant) for the session and offer the idea to the next session. A
-    retried re-queue whose event is still unclaimed queues nothing more."""
+    retried re-queue whose event is still unclaimed queues nothing more. Takes an approved or recorded idea, or a
+    planned one a session escalated before launching (its plan never ran)."""
     rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
-    if not rows or rows[0]["state"] not in (IdeaState.APPROVED, IdeaState.RECORDED):
-        raise HTTPException(409, f"idea {idea_id} is neither approved nor recorded")
+    stalled = bool(rows) and rows[0]["state"] == IdeaState.PLANNED and (rows[0]["note"] or "").startswith(ESCALATED)
+    if not rows or not (stalled or rows[0]["state"] in (IdeaState.APPROVED, IdeaState.RECORDED)):
+        raise HTTPException(409, f"idea {idea_id} is neither approved, recorded, nor an escalated plan")
     conn.execute(
         text(
             "UPDATE ideas SET state = 'approved', note = :n, "

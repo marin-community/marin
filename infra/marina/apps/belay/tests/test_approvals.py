@@ -235,6 +235,18 @@ def test_an_approval_without_instructions_leaves_the_note_alone(conn) -> None:
     assert conn.execute(text("SELECT note FROM ideas WHERE id = :id"), {"id": idea_id(conn)}).one().note is None
 
 
+def test_a_plan_a_session_escalated_can_be_requeued_but_a_live_plan_cannot(conn) -> None:
+    record_intake_comment(conn, comment())
+    approve_idea(conn, idea_id(conn), "maintainer")
+    conn.execute(text("UPDATE ideas SET state = 'planned' WHERE id = :id"), {"id": idea_id(conn)})
+    with pytest.raises(HTTPException):
+        requeue_idea(conn, idea_id(conn), "maintainer", "again")
+    conn.execute(
+        text("UPDATE ideas SET note = 'Escalated: registry write failed' WHERE id = :id"), {"id": idea_id(conn)}
+    )
+    assert requeue_idea(conn, idea_id(conn), "maintainer", "again")["state"] == "approved"
+
+
 def test_an_approval_records_its_node_grant(conn) -> None:
     record_intake_comment(conn, comment())
     assert approve_idea(conn, idea_id(conn), "ClassicLarry", node_grant=12)
