@@ -4,7 +4,7 @@
 """The core types: model requests and turns, rollout records and events, exceptions, and the task rollout spec."""
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
@@ -115,6 +115,10 @@ class ModelTurn:
     """Extra data from the transport, such as top-k log probabilities. The engine passes it on unread."""
     usage: TokenUsage | None = None
     """Token counts that the transport reports. The token budget counts them instead of the token IDs."""
+    raw_response: str | None = None
+    """The response decoded with its special tokens, for transports that decode it."""
+    request_settings: Mapping[str, Any] | None = None
+    """The request options the transport applied, including settings it merged in, for transports that report them."""
     reasoning_violation: ReasoningViolation | None = None
     """The malformed reasoning span that the transport found in the reply, if any."""
 

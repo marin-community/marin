@@ -13,6 +13,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
     ScriptGrader,
+    TaskSpec,
     VerifyitGrader,
     grades_with_judge,
     require_resolved_environment,
@@ -24,6 +25,15 @@ from rolloutengine.machines import _machine_spec
 from rolloutengine.models import TaskRolloutSpec
 
 WORKSPACE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
+
+
+def needs_task_machine(task: TaskSpec) -> bool:
+    """Whether ``task`` runs only with a task machine: it requires an environment, or installs resources.
+
+    Tool providers run on the host, so they do not need a machine.
+    """
+    requirements = task.environment_requirements.model_copy(update={"tool_providers": {}})
+    return requirements != EnvironmentRequirements() or bool(task.resources.all + task.resources.worker)
 
 
 def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:

@@ -207,6 +207,15 @@ class _Recorder:
             return tuple(conversation.messages)
         return next((record.messages for record in reversed(self.earlier) if record.steps), None)
 
+    def graded_turns(self) -> tuple[ModelTurn, ...]:
+        """The model turns of the conversation ``graded_messages`` returns, in order."""
+        conversation = self.conversation
+        if conversation is not None and conversation.has_turn:
+            steps = (*conversation.steps, *(() if conversation.pending is None else (conversation.pending,)))
+            return tuple(step.turn for step in steps)
+        record = next((record for record in reversed(self.earlier) if record.steps), None)
+        return () if record is None else tuple(step.turn for step in record.steps)
+
     async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()
         current = self.conversation

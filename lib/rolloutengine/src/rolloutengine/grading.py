@@ -22,12 +22,13 @@ from taskcompendium.models import (
     grades_with_judge,
     judge_spec,
 )
+from taskcompendium.protocol import with_protocol_assessment
 from taskcompendium.runtime.grading import grade_in_sandbox
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
-from rolloutengine.models import TaskRolloutSpec
+from rolloutengine.models import ModelTurn, TaskRolloutSpec
 
 
 def judge_connection(spec: TaskRolloutSpec) -> JudgeConnection:
@@ -61,6 +62,7 @@ async def _grade_rollout(
     spec: TaskRolloutSpec,
     messages: tuple[dict[str, Any], ...],
     outputs: dict[str, bytes],
+    turns: tuple[ModelTurn, ...],
     machine: Machine | None,
     factories: Mapping[str, MachineFactory],
     cleanup: _Cleanup,
@@ -70,28 +72,50 @@ async def _grade_rollout(
 ) -> GradeResult:
     """Grade in process, through the judge service, or in a fresh verifier machine that the attempt owns.
 
-    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended.
+    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended, and
+    ``turns`` the model turns of the graded conversation. The grade carries the attempt's protocol assessments.
     """
     task = spec.task
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     conversation = chat_conversation(list(messages))
+    raw = tuple(turn.raw_response for turn in turns if turn.raw_response is not None)
+    # The thinking check needs every turn, so a transport that decodes none of them records none.
+    raw_responses = raw if len(raw) == len(turns) else ()
+    request_settings = next((turn.request_settings for turn in turns if turn.request_settings is not None), {})
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
-        attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
-        return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
-    if isinstance(grader, VerifyitGrader) and grader.environment is None:
-        return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
-    attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
-    assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
-    selection = spec.verifier_machine
-    assert selection is not None
-    return await grade_in_sandbox(
-        task,
-        attempt,
-        _AttemptMachineFactory(selection, factories, cleanup, resources),
-        _machine_spec(grader.environment, selection),
-        task_machine=machine,
-        timeout=spec.limits.verifier_timeout,
-        judge_connection=judge_connection(spec) if grades_with_judge(grader) else None,
-    )
+        attempt = GradingAttempt(
+            conversation,
+            outputs,
+            stop_reason=stop_reason,
+            raw_responses=raw_responses,
+            request_settings=request_settings,
+        )
+        grade = await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
+    elif isinstance(grader, VerifyitGrader) and grader.environment is None:
+        attempt = GradingAttempt(
+            conversation, stop_reason=stop_reason, raw_responses=raw_responses, request_settings=request_settings
+        )
+        grade = await asyncio.to_thread(grade_answer, task, attempt)
+    else:
+        attempt = GradingAttempt(
+            conversation,
+            outputs,
+            stop_reason=stop_reason,
+            raw_responses=raw_responses,
+            request_settings=request_settings,
+        )
+        assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
+        selection = spec.verifier_machine
+        assert selection is not None
+        grade = await grade_in_sandbox(
+            task,
+            attempt,
+            _AttemptMachineFactory(selection, factories, cleanup, resources),
+            _machine_spec(grader.environment, selection),
+            task_machine=machine,
+            timeout=spec.limits.verifier_timeout,
+            judge_connection=judge_connection(spec) if grades_with_judge(grader) else None,
+        )
+    return with_protocol_assessment(task, attempt, grade)
