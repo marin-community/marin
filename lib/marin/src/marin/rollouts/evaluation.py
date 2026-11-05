@@ -632,17 +632,21 @@ async def run_evaluation(
         async def produce() -> None:
             for root, protocol, manifest in corpora:
                 dataset_id = canonical_sha256(manifest.model_dump(mode="json"))
+                published_protocol = protocol
                 protocol = effective_protocol(protocol, config)
                 records = []
                 selected = 0
                 for decision in select_cases(
                     root,
-                    protocol,
+                    published_protocol,
                     dataset_id=dataset_id,
                     context_window=config.model.context_window,
                     max_tokens=config.max_tokens,
                     limit=config.source_limit,
                     tokenizer=tokenizer,
+                    chat_template_kwargs=(
+                        protocol.sampling.chat_template_kwargs if protocol.sampling is not None else None
+                    ),
                 ):
                     records.append(decision.record.model_dump(mode="json"))
                     if len(records) >= 500 or decision.case is not None:

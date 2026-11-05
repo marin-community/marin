@@ -3,6 +3,7 @@
 
 """Publish complete evaluation populations from the shared conversion pipeline."""
 
+import json
 from collections.abc import Iterator, Mapping
 from functools import partial
 
@@ -28,7 +29,7 @@ from taskcompendium.evaluation.corpus import (
 )
 from taskcompendium.evaluation.spec import EvaluationProtocol
 from taskcompendium.pipeline.inputs import SourceFileOverride
-from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
+from taskcompendium.pipeline.models import IntendedUse, SourceRecipe, SourceStatus
 from taskcompendium.pipeline.source_processing import ConversionResult, SourceProcessingMode, run_source_pipeline
 
 ITEM_SCHEMA = pa.schema([("task_id", pa.string()), ("source_row", pa.string()), ("evaluation_json", pa.string())])
@@ -145,12 +146,30 @@ def publish_evaluation_corpus(
         (shard for row in published.results if (shard := EvaluationShard.model_validate(row)).rows),
         key=lambda shard: source_order(shard.first_source_row),
     )
+    conversion_path = output / "manifest.json"
+    conversion = json.loads(conversion_path.read_text())
+    conversion.update(
+        status=SourceStatus.COMPLETED.value,
+        mode=SourceProcessingMode.QUICK.value,
+        source=recipe.name,
+        source_dataset=recipe.source.dataset,
+        source_revision=recipe.source.revision,
+        recipe_revision=recipe.version,
+        intended_use=IntendedUse.EVAL.value,
+        raw_population_count=result.input_rows,
+        raw_sample_count=result.input_rows,
+        raw_population_census=True,
+        full_expansion=True,
+        processed_rows=result.converted_rows,
+        unprocessed_rows=0,
+    )
+    conversion_path.write_text(json.dumps(conversion, indent=2))
     manifest = EvaluationManifest(
         source_dataset=recipe.source.dataset,
         source_revision=recipe.source.revision,
         importer_revision=recipe.version,
         protocol_hash=protocol.fingerprint,
-        conversion_manifest_sha256=file_sha256(output / "manifest.json"),
+        conversion_manifest_sha256=file_sha256(conversion_path),
         rows=result.input_rows,
         shards=tuple(shards),
     )

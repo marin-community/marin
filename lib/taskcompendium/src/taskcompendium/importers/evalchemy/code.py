@@ -11,6 +11,7 @@ Shellbox bounds startup separately and supplies isolation and resource limits.
 import hashlib
 import json
 from pathlib import Path
+from typing import cast
 
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
@@ -103,7 +104,9 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
         ),
         (*CODE_ASSETS, inline_resource("config.json", json.dumps(config, allow_nan=False, sort_keys=True).encode())),
     )
-    task = conversation_task(row, events=(TextMessage(role="user", content=prompt),), package=package, evidence=problem)
+    task = conversation_task(
+        row, events=(TextMessage(role="user", content=cast(str, prompt)),), package=package, evidence=problem
+    )
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", f"benchmark:{suite}", "code")})
 
 

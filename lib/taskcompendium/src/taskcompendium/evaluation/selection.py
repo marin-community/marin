@@ -261,11 +261,19 @@ def select_cases(
     max_tokens: int,
     limit: int | None,
     tokenizer: EvaluationTokenizer | None,
+    chat_template_kwargs: Mapping[str, bool | str] | None = None,
 ) -> Iterator[SelectionDecision]:
     """Yield a full source-order ledger with task-group ordering and the declared limit stage."""
     corpus = EvaluationCorpus(root)
     if protocol.fingerprint != corpus.protocol.fingerprint:
         raise ValueError("Selection protocol differs from its published corpus")
+    rendering = protocol
+    if protocol.sampling is not None and chat_template_kwargs is not None:
+        rendering = protocol.model_copy(
+            update={
+                "sampling": protocol.sampling.model_copy(update={"chat_template_kwargs": dict(chat_template_kwargs)})
+            }
+        )
     if protocol.context_window is not None:
         context_window = min(context_window, protocol.context_window)
     rows = corpus.rows()
@@ -283,7 +291,7 @@ def select_cases(
             rank = ranks[case.item.source_row]
             if policy.order is CohortOrder.SOURCE and policy.limit_stage is LimitStage.ELIGIBLE:
                 rank = len(eligible)
-            decision = _context_decision(case, protocol, dataset_id, context_window, max_tokens, tokenizer, rank)
+            decision = _context_decision(case, rendering, dataset_id, context_window, max_tokens, tokenizer, rank)
             decisions[case.item.source_row] = decision.record
             if decision.case is not None:
                 eligible.append(case.item.source_row)

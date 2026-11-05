@@ -30,7 +30,7 @@ from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
-from taskcompendium.evaluation.corpus import chat_item
+from taskcompendium.evaluation.corpus import chat_item, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import (
     ChatGeneration,
@@ -1001,3 +1001,39 @@ async def test_generation_failure_archives_provider_body_and_resumes_only_failed
         assert requests[-1] == requests[0]
         await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
         assert len(requests) == 9
+
+
+@pytest.mark.asyncio
+async def test_model_rendering_overrides_preserve_published_corpus_identity(tmp_path, mixed_corpora, run_config):
+    corpus = next(root for root in mixed_corpora if evaluation_protocol(root)[0].operation == "chat_generation")
+    published, _ = evaluation_protocol(corpus)
+    template_options = []
+    requests = []
+
+    class Tokenizer(CharacterTokenizer):
+        def apply_chat_template(self, conversation, **kwargs):
+            template_options.append(kwargs)
+            return super().apply_chat_template(conversation, **kwargs)
+
+    async def model(request):
+        requests.append(request)
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    config = run_config.model_copy(
+        update={
+            "chat_template_kwargs": {"reasoning_effort": "low"},
+            "thinking_off_template_kwargs": {"reasoning_effort": "none"},
+        }
+    )
+    output = str(tmp_path / "rendering")
+    await run_evaluation((corpus,), output, config, model, machine_factories={}, tokenizer=Tokenizer())
+    assert requests
+    assert all(
+        request.options["extra_body"]["chat_template_kwargs"] == {"reasoning_effort": "none"} for request in requests
+    )
+    assert template_options
+    assert all(
+        options["reasoning_effort"] == "none" and "enable_thinking" not in options for options in template_options
+    )
+    saved = json.loads(ReadView(output).read_blob(RUN_OBJECT))
+    assert saved["datasets"][0]["protocol"] == published.model_dump(mode="json")

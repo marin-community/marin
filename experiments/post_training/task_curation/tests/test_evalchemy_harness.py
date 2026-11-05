@@ -3,19 +3,26 @@
 
 """Exercise staged few-shot inputs through native publication and duplicate source identities."""
 
+from dataclasses import replace
+
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import CurationCatalog
 from fray.local_backend import LocalClient
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from zephyr.context import ZephyrContext
 
+from experiments.post_training.task_curation.campaign import CampaignStatus, SourceOutcome, write_campaign_report
+from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.datasets.evalchemy.mmlu import sources
 from experiments.post_training.task_curation.pipeline import source_recipe
 
 
 def test_publication_compiles_staged_fewshots_and_retains_duplicate_rows(tmp_path):
-    dataset = next(source.config for source in sources() if source.name == "evalchemy-mmlu-abstract_algebra")
+    source = next(source for source in sources() if source.name == "evalchemy-mmlu-abstract_algebra")
+    dataset = source.config
+    assert dataset is not None
     document = {
         "question": "Which integer is even?",
         "subject": "abstract_algebra",
@@ -53,3 +60,23 @@ def test_publication_compiles_staged_fewshots_and_retains_duplicate_rows(tmp_pat
         context = operation.requests[0].context
         assert "AUXILIARY_SENTINEL" in context
         assert document["question"].strip() in context
+    catalog_root = str(tmp_path / "catalog")
+    declared = replace(source, info=replace(source.info, count=2), config=replace(dataset, protocol=protocol))
+    write_campaign_report(
+        str(tmp_path / "campaign.json"),
+        CampaignStatus.COMPLETED,
+        mode="quick",
+        outcomes=[SourceOutcome(declared.name, str(output), "completed", pipeline_key="fixture")],
+        run_id="published-eval",
+        started_at="2026-11-05T00:00:00+00:00",
+        source_ids={declared.name: declared.info.id},
+        execution={},
+        catalog_root=catalog_root,
+    )
+    snapshot = publish_catalog(catalog_root, "published-eval", [declared])
+    (published,) = CurationCatalog(catalog_root).sources(snapshot.snapshot_id)
+    assert published.curation is not None
+    assert published.curation.status == "completed"
+    assert published.curation.processed_rows == 2
+    assert published.curation.raw_population_count == 2
+    assert published.declaration.type == "eval"
