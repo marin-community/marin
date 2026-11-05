@@ -48,7 +48,8 @@ known-first-party = ["forge"]
 
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
-project-includes = ["src", "tests"]
+use-ignore-files = false
+project-includes = ["src/**/*.py", "tests/**/*.py"]
 search-path = [
     "src",
     ".",

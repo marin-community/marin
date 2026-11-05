@@ -20,14 +20,9 @@ effects, never whole stages.
   `uv run --frozen pyrefly check`;
   `uv run --frozen --package marin-forge --group test pyrefly check --config lib/forge/pyproject.toml`;
   `./infra/pre-commit.py --all-files --fix`.
-- Use SSH, branches `mark/forge-<wp>`, and squash merges. Never force-push.
-  Do not add attribution trailers. Label PRs `agent-generated`, report net
-  library lines against the work-package budget, and address automated review.
-  Do not request human review or merge; report readiness to the coordinator.
-- Do not edit `lib/taskforge`; it remains frozen during the rewrite.
-- Report verbatim copies from `origin/mark/taskforge-integration` separately as
-  copied lines; they are exempt from the work-package library line budgets.
-
-`Event` alone uses an explicit covariant `TypeVar`: PEP 695 infers invariance
-for its phantom result type. Its event-class registry is the module-state
-exception needed for typed replay; logs never dynamically import classes.
+- Keep dependency direction: model <- effects <- resources <- lowering <- harness
+  <- config <- stages <- coordinator. Copy modules with a source citation.
+- `lib/taskforge` is frozen during the rewrite; adapt its existing GLM client.
+- `Event` alone uses an explicit covariant `TypeVar`: PEP 695 infers invariance
+  for its phantom result type. The event-class registry is the module-state
+  exception needed for typed replay; logs never dynamically import classes.
