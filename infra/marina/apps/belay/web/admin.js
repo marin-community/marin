@@ -144,7 +144,8 @@ function grantOf(nodes, hours, priority) {
 
 function renderPending() {
   // Pending ideas wait for a decision; approval happens only here.
-  const escalated = (i) => i.state === 'approved' && (i.note ?? '').startsWith('Escalated:')
+  // An escalated idea waits for a maintainer: approved, or planned when a session stopped before launching.
+  const escalated = (i) => ['approved', 'planned'].includes(i.state) && (i.note ?? '').startsWith('Escalated:')
   const pending = state.ideas.filter((i) => i.state === 'pending' || escalated(i))
   document.getElementById('pending-n').textContent = String(pending.filter((i) => i.state === 'pending').length)
   if (!pending.length) {
