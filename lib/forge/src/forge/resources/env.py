@@ -4,8 +4,8 @@
 """Single-writer environments with replayable command and binary-file effects."""
 
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import AsyncExitStack
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
@@ -124,16 +124,21 @@ class ShellboxEnv(_RecordedEnv):
         self.machine, self.owned = machine, owned
         super().__init__(image, notify)
 
+    @asynccontextmanager
+    async def _operation(self) -> AsyncIterator[None]:
+        self._check_open()
+        try:
+            yield
+        except RuntimeError as error:
+            raise Restart("Environment machine failed or terminated") from error
+        except (TimeoutError, ConnectionError) as error:
+            raise Transient("Environment operation did not resolve") from error
+
     @override
     async def run(self, cmd: str, *, timeout: float) -> CommandResult:
-        self._check_open()
         started = time.monotonic()
-        try:
+        async with self._operation():
             result = await self.machine.run(Command(("sh", "-c", cmd), timeout=timeout))
-        except MachineTerminated as error:
-            raise Restart("Environment machine terminated") from error
-        except (TimeoutError, ConnectionError) as error:
-            raise Transient("Environment command did not resolve") from error
         code = 124 if result.reason == ExitReason.TIMED_OUT else result.exit_code
         if code is None:
             raise Restart("Environment command ended without an exit status")
@@ -149,29 +154,19 @@ class ShellboxEnv(_RecordedEnv):
 
     @override
     async def read(self, path: PurePosixPath) -> bytes:
-        self._check_open()
-        try:
+        async with self._operation():
             with TemporaryDirectory() as directory:
                 target = Path(directory) / "file"
                 await self.machine.download(str(path), target)
                 return target.read_bytes()
-        except MachineTerminated as error:
-            raise Restart("Environment machine terminated") from error
-        except (TimeoutError, ConnectionError) as error:
-            raise Transient("Environment read did not resolve") from error
 
     @override
     async def write(self, path: PurePosixPath, data: bytes) -> None:
-        self._check_open()
-        try:
+        async with self._operation():
             with TemporaryDirectory() as directory:
                 source = Path(directory) / "file"
                 source.write_bytes(data)
                 await self.machine.upload(source, str(path))
-        except MachineTerminated as error:
-            raise Restart("Environment machine terminated") from error
-        except (TimeoutError, ConnectionError) as error:
-            raise Transient("Environment write did not resolve") from error
         self._record_write(path, data)
 
     @override
