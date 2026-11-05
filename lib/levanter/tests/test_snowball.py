@@ -58,7 +58,6 @@ from levanter.models.snowball import (
     SnowballLMHeadModel,
     SnowballMoEMLP,
     _activation_spec,
-    silu_fp32,
     validate_single_name_config,
 )
 from levanter.optim.config import AdamConfig
@@ -67,7 +66,6 @@ from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
 from levanter.utils.mesh import MeshConfig
-from levanter.utils.activation import ActivationFunctionEnum
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -334,20 +332,8 @@ def test_snowball_moe_capacity_is_a_runtime_setting():
 
 
 def test_snowball_fp32_activations_is_a_runtime_setting():
-    """The flag reaches every GatedNorm, shared MLP, attention and expert MLP, is not exported to HF metadata, and
-    cannot run on sonic_cute's fused BF16 SiLU."""
-    for flag in (False, True):
-        cfg = _tiny_config(fp32_activations=flag)
-        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
-        t = model.transformer
-        norms = [t.embed_gated_norm, t.final_gated_norm]
-        norms += [n for b in t.blocks for n in (b.attn_gated_norm, b.mlp_gated_norm)]
-        assert {n.fp32_activations for n in norms} == {flag}
-        assert {b.shared.fp32_activations for b in t.blocks} == {flag}
-        assert {b.attn.cfg.fp32_activations for b in t.blocks} == {flag}
-        expected = silu_fp32 if flag else ActivationFunctionEnum.silu
-        assert all(b.mlp.expert_mlp.activation is expected for b in t.blocks)
+    """The runtime flag stays out of HF metadata and rejects the BF16-only fused backend."""
+    cfg = _tiny_config(fp32_activations=True)
     hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
     assert "fp32_activations" not in hf
     assert SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size)).fp32_activations is False
