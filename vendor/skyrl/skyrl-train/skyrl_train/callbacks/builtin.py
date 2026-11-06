@@ -402,7 +402,12 @@ class EvaluationCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.eval_on_train_end and self.eval_steps > 0:
+        final_profile = (
+            state.is_last_step
+            and state.global_step > 0
+            and any(profile.schedule == "final" for profile in self.additional_evaluations.values())
+        )
+        if self.eval_on_train_end and self.eval_steps > 0 or final_profile:
             control.should_evaluate = True
         return control
 

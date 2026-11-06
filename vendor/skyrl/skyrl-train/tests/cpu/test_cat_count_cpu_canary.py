@@ -406,6 +406,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
                 {
                     "type": "evaluation",
                     "eval_steps": 3 if resume else 2,
+                    "eval_on_train_end": False,
                     "additional_evaluations": {
                         "full_panel": {
                             "data_files": [str(full_panel)],
