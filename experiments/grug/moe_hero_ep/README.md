@@ -217,8 +217,8 @@ run's `training-control` endpoint with the `request-permanent-checkpoint` header
 output root and never pruned. Temporary checkpoints expire three days after they are written, so
 those a replaced run leaves behind clear themselves.
 
-The hero stops at the end of its 390251-step schedule unless `HERO_SCHEDULE_EXTENSION` in `hero_recipe.py` says
-otherwise; it is set to `ScheduleExtension(steps=3240, final_lr_ratio=0.01)`, which stops at step 393491. A cutover that trains past the schedule sets it in the deploy PR as
+`HERO_SCHEDULE_EXTENSION` in `hero_recipe.py` is set to `ScheduleExtension(steps=3240, final_lr_ratio=0.01)`,
+which stops the hero at step 393491. A cutover that trains past the schedule sets it in the deploy PR as
 `ScheduleExtension(steps=N, final_lr_ratio=R)`: the run stops at 390251 + N, and over those steps the learning
 rates move linearly from the schedule's floor, 5% of peak, to `R` of peak. The heuristic, weight decay, data stages,
 and checkpoint keeps still size from 390251.
