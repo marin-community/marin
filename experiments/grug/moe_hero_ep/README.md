@@ -215,6 +215,19 @@ run's `training-control` endpoint with the `request-permanent-checkpoint` header
 output root and never pruned. Temporary checkpoints expire three days after they are written, so
 those a replaced run leaves behind clear themselves.
 
+The hero stops at the end of its 390251-step schedule unless `HERO_SCHEDULE_EXTENSION` in `hero_recipe.py` says
+otherwise. A cutover that trains past the schedule sets it in the deploy PR as
+`ScheduleExtension(steps=N, final_lr_ratio=R)`: the run stops at 390251 + N, and over those steps the learning
+rates move linearly from the schedule's floor, 5% of peak, to `R` of peak. The heuristic, weight decay, data stages,
+and checkpoint keeps still size from 390251.
+
+A restore past the stop step fails and one at it trains nothing, so a handoff at the stop needs the extension already
+merged. The run writes its final checkpoint before the final dropless eval. A retry that restores the permanent
+checkpoint of the stop step skips the eval, logs `ZERO-STEP SUCCESS`, and succeeds, so run a missing final eval
+offline. Each periodic eval (`HERO_STEPS_PER_EVAL`) runs before that step's checkpoint, so a failure in one costs the
+steps since the last checkpoint and fails again on retry. A rehearsal at a new context length should include an eval
+with `--eval-every`.
+
 Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
 and a pristine checkout. Fork creation requires fetched main; subsequent launches
 use the same SHA recorded on the child, even if main advances.
@@ -255,7 +268,9 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
 at 4K, 5632 at 8K, 2816 at 16K, and 704 at 65K with the same 390251-step schedule, learning rates, and weight
-decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch.
+decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch. Do not lengthen the schedule
+to train longer: its length sizes the learning rates and prior context phases. Set the extension described in
+[Hero cutovers](#hero-cutovers-and-wb-lineage) instead.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
 (`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, `capacity_factor`, or
@@ -435,6 +450,10 @@ stay independent from the production run.
 
 The default 25-step diagnostic uses simulated epoching. Set `--schedule-steps 390251` to use the raw
 production mixture. The diagnostic default now matches the production watch and 890 GB RAM request.
+
+A diagnostic uses `HERO_SCHEDULE_EXTENSION`, and with `--schedule-steps 390251`, `--num-steps` can reach its last step.
+The heuristic scales from the diagnostic's own batch, so one rack runs the same ratios at 0.69 times the 11-rack hero's
+absolute rates and with a higher beta2.
 
 Print the plan without a GPU run:
 

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
+import numpy as np
 import optax
 import pytest
 from levanter.checkpoint import Checkpointer, CheckpointInterval
@@ -16,9 +17,14 @@ from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import launch_scaling_ladder
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HarrierContextPhase
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run, hero_permanent_keeps
-from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
+from experiments.grug.moe_hero_ep.optimizer import (
+    ScheduleExtension,
+    _gate_router_decay_mask,
+    _scale_by_adam_gate_router_decay,
+)
 from experiments.grug.moe_hero_ep.train import FlopsBaseline
 
 # A miniature stacked-hero parameter tree: the two decay targets plus leaves that must be left alone.
@@ -43,7 +49,9 @@ def test_gate_router_decay_state_matches_plain_adam():
     assert jtu.tree_structure(decayed) == jtu.tree_structure(plain)
 
 
-@pytest.mark.parametrize(("count", "expected_wd"), [(0, 0.05), (54_000, 0.05 * (1 - 54_000 / 390_251)), (390_251, 0.0)])
+@pytest.mark.parametrize(
+    ("count", "expected_wd"), [(0, 0.05), (54_000, 0.05 * (1 - 54_000 / 390_251)), (390_251, 0.0), (391_000, 0.0)]
+)
 def test_gate_router_decay_anneals_from_the_step_count(count, expected_wd):
     total_steps = 390_251
     adam = optax.scale_by_adam(0.9, 0.95, 1e-8)
@@ -357,3 +365,66 @@ def test_hero_context_axis_must_split_the_expert_bank(monkeypatch):
     monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
     with pytest.raises(ValueError, match=r"must be divisible by expert \(16\) \* context \(4\) = 64"):
         build_ladder_run(run_id="test-d6144-bank", size="d6144", version="dev")
+
+
+HERO_SCHEDULE_STEPS = 390_251
+_EXTENSION_STEPS = 1084
+_LR_EXTENSION_CANDIDATES = [
+    pytest.param(ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.05), id="hold-5pct"),
+    pytest.param(ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.01), id="decay-5pct-to-1pct"),
+]
+
+
+def _hero_optimizer(extension=None):
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=HERO_SCHEDULE_STEPS, batch_size=704, hidden_dim=6144, seq_len=65536
+    )
+    return dataclasses.replace(optimizer, schedule_extension=extension)
+
+
+def _lr_schedules(optimizer):
+    return [
+        optimizer.lr_scheduler(HERO_SCHEDULE_STEPS),
+        optimizer.lr_scheduler(HERO_SCHEDULE_STEPS, override_lr=optimizer.adam_lr),
+    ]
+
+
+def test_schedule_extension_preserves_rates_through_schedule_end():
+    extension = ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.01)
+    counts = jnp.arange(HERO_SCHEDULE_STEPS + 1)
+    for original, extended in zip(
+        _lr_schedules(_hero_optimizer()), _lr_schedules(_hero_optimizer(extension)), strict=True
+    ):
+        assert jnp.array_equal(jax.vmap(original)(counts), jax.vmap(extended)(counts))
+
+
+@pytest.mark.parametrize("extension", _LR_EXTENSION_CANDIDATES)
+def test_schedule_extension_continues_from_the_floor_to_its_final_ratio(extension):
+    optimizer = _hero_optimizer(extension)
+    peaks = [optimizer.learning_rate, optimizer.adam_lr]
+    counts = jnp.arange(HERO_SCHEDULE_STEPS, HERO_SCHEDULE_STEPS + extension.steps + 2)
+    for peak, schedule in zip(peaks, _lr_schedules(optimizer), strict=True):
+        rates = np.asarray(jax.vmap(schedule)(counts))
+        fractions = np.minimum(np.arange(len(rates)) / extension.steps, 1.0)
+        expected = peak * (0.05 + (extension.final_lr_ratio - 0.05) * fractions)
+        np.testing.assert_allclose(rates, expected, rtol=1e-5)
+
+
+def _hero_config():
+    step = build_ladder_run(run_id="test-extension", size="d6144", version="dev")
+    return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+
+def test_hero_extension_moves_only_the_stop_step_and_the_rate_past_the_schedule(monkeypatch):
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", None)
+    off = _hero_config()
+    extension = ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.01)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", extension)
+    on = _hero_config()
+
+    assert off.stop_after_steps == HERO_SCHEDULE_STEPS
+    assert on == dataclasses.replace(
+        off,
+        optimizer=dataclasses.replace(off.optimizer, schedule_extension=extension),
+        stop_after_steps=HERO_SCHEDULE_STEPS + _EXTENSION_STEPS,
+    )

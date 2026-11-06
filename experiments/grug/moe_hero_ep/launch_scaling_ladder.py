@@ -94,6 +94,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_PROCESSES_PER_TASK,
     HERO_QB_HIST_BINS,
     HERO_RACK_GPUS,
+    HERO_SCHEDULE_EXTENSION,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_TOKENS_PER_RACK,
     HERO_WATCH_INTERVAL,
@@ -171,6 +172,8 @@ TOKENS_PER_ACTIVE_PARAM = 791
 # FINAL_DENSE_CHECKPOINT_STEPS steps.
 FINAL_DENSE_CHECKPOINT_STEPS = 5000
 FINAL_DENSE_CHECKPOINT_EVERY = 500
+# Each periodic eval before the stop step runs before that step's checkpoint.
+HERO_STEPS_PER_EVAL = 3000
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
@@ -212,9 +215,10 @@ def _ladder_model(size: str):
 
 
 def hero_permanent_keeps(num_steps: int) -> list[dict[str, int | None]]:
-    """Permanent-checkpoint ranges for a d6144 run of ``num_steps``: every 6000 steps, a pinned 55000, and
-    every FINAL_DENSE_CHECKPOINT_EVERY steps over the final FINAL_DENSE_CHECKPOINT_STEPS. Ranges that would
-    end at or after the dense tail starts are dropped, so short custom schedules keep increasing `until`s."""
+    """Permanent-checkpoint ranges for a d6144 schedule of ``num_steps``: every 6000 steps, a pinned 55000, and
+    every FINAL_DENSE_CHECKPOINT_EVERY steps over the schedule's final FINAL_DENSE_CHECKPOINT_STEPS and any
+    extension past it. Ranges that would end at or after the dense tail starts are dropped, so short custom
+    schedules keep increasing `until`s."""
     dense_from = num_steps - FINAL_DENSE_CHECKPOINT_STEPS
     early = [{"until": 54000, "every": 6000}, {"until": 55000, "every": 55000}, {"until": dense_from, "every": 6000}]
     keeps: list[dict[str, int | None]] = []
@@ -271,6 +275,9 @@ def build_ladder_run(
     d6144 splits each sequence over the checked-in ``HERO_CONTEXT_AXIS_SIZE`` devices, with each rack's expert
     axis shrunk to ``HERO_RACK_GPUS // HERO_CONTEXT_AXIS_SIZE``, and balances rows when
     ``HERO_BALANCE_ATTENTION_ROWS`` is set. The narrow rungs use neither.
+
+    d6144 trains past its schedule by the checked-in ``HERO_SCHEDULE_EXTENSION``. ``num_steps`` remains the
+    schedule length, which sizes the optimizer, data stages, and checkpoint keeps.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -330,7 +337,7 @@ def build_ladder_run(
     # to every FINAL_DENSE_CHECKPOINT_EVERY steps over the final FINAL_DENSE_CHECKPOINT_STEPS.
     # `keep_permanent=None` still writes the final checkpoint; restore is not used (see run_grug).
     if size == "d6144":
-        steps_per_eval = 3000
+        steps_per_eval = HERO_STEPS_PER_EVAL
         # Permanent checkpoint every 6000 steps, plus a one-off at step 55000 for the post-handoff
         # weight-decay comparison (#8818), and every 500 steps over the final 5000 steps for the
         # end-of-run analysis. Interval keeps are modular within each `until` range, so the 6000
@@ -351,7 +358,11 @@ def build_ladder_run(
         hidden_dim=model.hidden_dim,
         seq_len=seq_len,
     )
-    optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
+    schedule_extension = HERO_SCHEDULE_EXTENSION if hero else None
+    stop_step = num_steps + schedule_extension.steps if schedule_extension is not None else num_steps
+    optimizer = dataclasses.replace(
+        optimizer, gate_router_weight_decay=gate_router_weight_decay, schedule_extension=schedule_extension
+    )
 
     # Uniform hero trainer: expert- and context-parallel within each rack, replicated across racks, MuonH
     # state offloaded to FP32 pinned host.
@@ -482,7 +493,7 @@ def build_ladder_run(
                 # at the start of the curve.
                 eval_at_first_step=size == "d6144",
             ),
-            stop_after_steps=num_steps,
+            stop_after_steps=stop_step,
             processes_per_task=HERO_PROCESSES_PER_TASK,
             max_retries_failure=LADDER_MAX_RETRIES_FAILURE,
             max_task_failures=LADDER_MAX_TASK_FAILURES,
