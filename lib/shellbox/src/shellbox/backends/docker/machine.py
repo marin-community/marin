@@ -291,6 +291,11 @@ class DockerMachine:
                 raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
+        exists = await docker("exec", "--user", "0", self.name, "test", "-e", source)
+        if exists.exit_code == 1:
+            raise FileNotFoundError(source)
+        if exists.exit_code:
+            raise RuntimeError(exists.stderr.decode(errors="replace"))
         target.parent.mkdir(parents=True, exist_ok=True)
         copy_source = f"{source}/." if target.is_dir() else source
         result = await docker("cp", f"{self.name}:{copy_source}", str(target))

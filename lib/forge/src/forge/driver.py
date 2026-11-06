@@ -22,7 +22,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
-from forge.effects.log import EventLog, JsonlSink, fold
+from forge.effects.log import EventLog, JsonlSink, Status, fold
 from forge.model.review import Incomplete
 from forge.model.serialization import TASK_PROPOSAL, WORKPIECE
 from forge.model.workpiece import Terminal, Workpiece
@@ -71,6 +71,23 @@ def publish(workdir: Path, destination: str) -> None:
             target.write(source.read())
 
 
+def recover(workdir: Path, destination: str) -> Status | None:
+    """Read status last-written by publish before restoring its complete snapshot."""
+    try:
+        with open_url(prefix_join(destination, "status.json"), "rb") as source:
+            status_bytes = source.read()
+    except FileNotFoundError:
+        return None
+    status = TypeAdapter(Status).validate_json(status_bytes)
+    snapshot = {"status.json": status_bytes}
+    for name in ("events.jsonl", "workpiece.json"):
+        with open_url(prefix_join(destination, name), "rb") as source:
+            snapshot[name] = source.read()
+    for name, data in snapshot.items():
+        (workdir / name).write_bytes(data)
+    return status
+
+
 async def one(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
@@ -80,6 +97,12 @@ async def one(args: argparse.Namespace) -> None:
         raise ValueError("Proposal id must be a relative path without '..'")
     workdir = Path(args.work_dir) / identity
     workdir.mkdir(parents=True, exist_ok=True)
+    destination = prefix_join(args.output, str(identity))
+    restored = recover(workdir, destination)
+    if restored is not None and restored.terminal is not None:
+        terminal = Terminal(restored.terminal)
+        print(f"SKIP {identity}: published terminal={terminal.value}", flush=True)
+        return
     sink = JsonlSink(str(workdir / "events.jsonl"))
     previous = await sink.read() if Path(sink.path).exists() else ()
     log = EventLog(sink=sink, replay_from=previous)
@@ -112,7 +135,7 @@ async def one(args: argparse.Namespace) -> None:
         (workdir / "workpiece.json").write_bytes(WORKPIECE.dump_json(wp))
         status = fold(tuple(record.event for record in log.records))
         (workdir / "status.json").write_text(json.dumps(asdict(status)))
-        publish(workdir, prefix_join(args.output, str(identity)))
+        publish(workdir, destination)
 
 
 async def run(args: argparse.Namespace) -> None:

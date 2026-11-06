@@ -213,8 +213,7 @@ async def test_shellbox_unexpected_runtime_error_propagates_without_reclassifica
     "failure",
     [
         SimulationError("No such file or directory: /workspace/output"),
-        RuntimeError("tar: /workspace/output: Cannot stat: No such file or directory"),
-        RuntimeError("Could not find the file /workspace/output in container test"),
+        FileNotFoundError(2, "No such file", str(OUTPUT)),
     ],
 )
 async def test_missing_file_is_tool_feedback_without_retry(operation: str, failure: Exception) -> None:
@@ -243,3 +242,14 @@ async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:
     with pytest.raises(Hold, match="environment terminated: cpu_exhausted"):
         await run_command(RunCommand(COMMAND, 5), env, notify=Notes())
     assert machine.calls == 1
+
+
+@pytest.mark.parametrize("workdir", ["/workspace", "/custom/work"])
+async def test_relative_paths_use_environment_workdir(workdir: str) -> None:
+    machine = MemoryMachine()
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack(), workdir)
+    await env.write(PurePosixPath("release_notes.py"), b"notes")
+    assert machine.files == {f"{workdir}/release_notes.py": b"notes"}
+    assert await env.read(PurePosixPath("release_notes.py")) == b"notes"
+    await env.write(PurePosixPath("/absolute.py"), b"absolute")
+    assert machine.files["/absolute.py"] == b"absolute"

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -35,7 +36,7 @@ from forge.resources.clock import Clock
 from forge.resources.env import CommandResult, EnvFactory, FakeCommand, FakeEnv
 from forge.resources.grading import GradingResource
 from forge.resources.ids import Ids
-from forge.resources.inference import FakeInference
+from forge.resources.inference import FakeInference, InferenceRequest
 from forge.resources.rollouts import Engine, RolloutResource
 from forge.wiring import build_config
 
@@ -228,3 +229,60 @@ async def test_driver_persists_programming_failure_then_reraises(
     assert "bug:" in str(result.decisions[-1]) and "Traceback" in str(result.decisions[-1])
     assert json.loads((destination / "status.json").read_text())["terminal"] == "held"
     assert await JsonlSink(str(destination / "events.jsonl")).read()
+
+    # An Iris retry has a fresh local directory, but must not rerun this held workpiece.
+    args.work_dir = str(tmp_path / "retry-work")
+    await driver.one(args)
+    assert (Path(args.work_dir) / driver.proposal_key(str(source)) / "events.jsonl").read_bytes() == (
+        destination / "events.jsonl"
+    ).read_bytes()
+
+
+async def test_driver_resumes_published_partial_log_without_repeated_inference(
+    proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class InterruptedInference(FakeInference):
+        @override
+        async def complete(self, request: InferenceRequest) -> Completion:
+            if len(self.requests) == 2:
+                raise asyncio.CancelledError()
+            return await super().complete(request)
+
+    first = replace(resources(Envs(), ()), inference=InterruptedInference(script("S")))
+    second = resources(Envs(), script("S")[2:])
+    attempts = iter((first, second))
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
+        yield config(arm), next(attempts)
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
+    monkeypatch.setenv("GLM_API_KEY", "fake")
+    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
+    source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
+    source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
+    overlay.write_text("{}")
+    args = Namespace(
+        proposals=str(source),
+        policy=str(overlay),
+        arm="S",
+        output=str(tmp_path / "out"),
+        work_dir=str(tmp_path / "first"),
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await driver.one(args)
+    destination = tmp_path / "out" / driver.proposal_key(str(source))
+    assert json.loads((destination / "status.json").read_text())["terminal"] is None
+    args.work_dir = str(tmp_path / "second")
+    await driver.one(args)
+    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal == Terminal.ACCEPTED
+    assert isinstance(first.inference, FakeInference) and len(first.inference.requests) == 2
+    assert isinstance(second.inference, FakeInference) and len(second.inference.requests) == len(script("S")) - 2
+    published = (destination / "events.jsonl").read_bytes()
+    # Even with no resources left to construct, another fresh attempt exits successfully.
+    args.work_dir = str(tmp_path / "third")
+    await driver.one(args)
+    assert (destination / "events.jsonl").read_bytes() == published

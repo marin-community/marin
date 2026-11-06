@@ -511,3 +511,10 @@ def test_missing_timeout_or_rpc_backstop_closes_the_machine(tmp_path, monkeypatc
     assert result.reason == ExitReason.TIMED_OUT
     assert job.cancelled
     assert deadlines == [0.02 if has_timeout else 0.01]
+
+
+def test_missing_download_is_a_file_error(tmp_path):
+    machine, _ = local_machine(tmp_path)
+    missing = str(tmp_path / "missing file.py")
+    with pytest.raises(FileNotFoundError, match=r"missing file\.py"):
+        asyncio.run(machine.download(missing, tmp_path / "download"))
