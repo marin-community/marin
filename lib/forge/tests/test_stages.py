@@ -184,7 +184,9 @@ async def test_author_reference_describes_valid_wire_values_and_supported_enviro
     await ctx.drain()
     assert harness.session is not None and workpiece.submission is not None
     system = harness.session.messages[0].content
-    environments, schemas = (json.loads(block.split("```", 1)[0]) for block in system.split("```json\n")[1:])
+    environments, task_environments, schemas = (
+        json.loads(block.split("```", 1)[0]) for block in system.split("```json\n")[1:]
+    )
     task = json.loads(workpiece.submission.task.model_dump_json())
     task_schema = Draft202012Validator(schemas["TaskSpec"])
     task_schema.validate(task)
@@ -200,6 +202,9 @@ async def test_author_reference_describes_valid_wire_values_and_supported_enviro
     resolved = tuple(EnvironmentRequirements.model_validate(value) for value in environments)
     assert resolved[0].docker_image == GRADER_BASE_IMAGE and resolved[1].docker_image is None
     assert tuple(machine_backend(value, MachineHost.IRIS).value for value in resolved) == ("gvisor", "shellsim")
+    task_resolved = tuple(EnvironmentRequirements.model_validate(value) for value in task_environments)
+    assert all(value.capabilities == ("shell",) for value in task_resolved)
+    assert tuple(machine_backend(value, MachineHost.IRIS).value for value in task_resolved) == ("gvisor", "shellsim")
 
 
 @pytest.mark.asyncio
