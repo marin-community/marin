@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Data Belay command line: `uv run python -m experiments.data_belay <command>`."""
+"""Data Belay command line: `uv run data-belay <command>`."""
 
 import logging
 import os

@@ -13,25 +13,24 @@ The control depends only on the rung and the seed, so every candidate reuses the
 
 ## Commands
 
-`B` is `uv run python -m experiments.data_belay`. Point `MARIN_PREFIX` at `s3://marin-us-east-02a/marin` for local
-commands that read the tokenizer or write caches.
+Point `MARIN_PREFIX` at `s3://marin-us-east-02a/marin` for local commands that read the tokenizer or write caches.
 
 ```bash
 # 1. Intake: pin the revision, check the license, estimate the size and epochs at each rung.
-B check --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2
+uv run data-belay check --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2
 
-# 2. Tokenize a seeded sample of the dataset's files into a cache (an Iris CPU job).
-B prepare --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2 --submit
+# 2. Tokenize a seeded sample of the dataset's files into a cache (an Iris CPU job). The job prints the cache path.
+uv run data-belay prepare --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2 --submit
 
-# 3. Train each seed of the treatment; the run id is dbelay-<rung>-<candidate>-s<seed>, and the share is the one
-#    the cache was prepared for.
+# 3. Train each seed of the treatment; the run id is dbelay-<rung>-<candidate>-s<seed>. --mix-cache is the token
+#    cache that prepare wrote, not the Hugging Face dataset, and the share is the one the cache was prepared for.
 #    The control (no --candidate) runs once per rung and seed, for the seeds in results.CONTROL_SEEDS.
-B train --rung d512 --seed 0 --candidate finemath-p20 \
+uv run data-belay train --rung d512 --seed 0 --candidate finemath-p20 \
     --mix-cache s3://marin-us-east-02a/marin/data_belay/caches/<...>/train --submit
 
 # 4. Verdict against the shared control, or against another candidate at the same seeds.
-B report --rung d512 --candidate finemath-p20 --seeds 0,1,2
-B report --rung d512 --candidate fineweb-edu-p50 --against fineweb-p50 --seeds 0,1,2,3,4,5
+uv run data-belay report --rung d512 --candidate finemath-p20 --seeds 0,1,2
+uv run data-belay report --rung d512 --candidate fineweb-edu-p50 --against fineweb-p50 --seeds 0,1,2,3,4,5
 ```
 
 `check` refuses a license that is not on the allowlist (NC and ND licenses, `other`, a missing license, or a second
@@ -54,7 +53,7 @@ Every run logs, at its end:
 | Eval Policy code (HumanEval+, MBPP+, CRUXEval-O) | `eval/eval_policy/code/macro_bpb` |
 
 The Eval Policy groups are the BPB of the gold answer after the prompt, on the non-agentic benchmarks of the Marin
-Eval Policy (marin#10197): small ladder models score near chance on the benchmarks themselves. `B build-answer-bpb`
+Eval Policy (marin#10197): small ladder models score near chance on the benchmarks themselves. `uv run data-belay build-answer-bpb`
 writes these caches; GPQA is left out because its dataset is gated. The verdict averages each Eval Policy group's
 task BPBs (`eval/eval_policy/<group>/<task>/bpb`) and leaves out BoolQ, which is logged: its one-token yes/no answer
 varied 10.7% between control seeds.
@@ -72,7 +71,7 @@ group is `better` (interval below 0), `worse` (interval above its harm limit), `
 | `hurts` | a group is worse |
 | `no gain` | no group is better and none is worse |
 
-`B noise --rung d512` prints the control's seed spread. Confirm a d512 result at d768: at 20%,
+`uv run data-belay noise --rung d512` prints the control's seed spread. Confirm a d512 result at d768: at 20%,
 OpenCoder's synthetic code was a `trade-off` at d512 (code −9.1%) and `hurts` at d768 (Paloma +2.4%, Uncheatable
 +2.7%), while FineMath's math gain grew from −12.2% at d512 to −16.7% at d1024. See [`judge.py`](judge.py).
 
