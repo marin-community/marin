@@ -4,6 +4,7 @@
 """Bind real adapters and executable policy at the process boundary."""
 
 import logging
+import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -13,11 +14,12 @@ from typing import override
 
 import httpx
 from iris.client.client import iris_ctx
+from iris.cluster.client import get_job_info
 from iris.cluster.types import JobName
 from pydantic import TypeAdapter
 from rolloutengine.models import ModelRequest, ModelTurn
 from shellbox.backends.docker.machine import DockerMachineFactory
-from shellbox.backends.gvisor.machine import GvisorMachineFactory
+from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
@@ -51,7 +53,12 @@ from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids, NewId, new_id
 from forge.resources.inference import GlmInference, InferenceRequest, complete
 from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
-from forge.resources.sandbox.factories import MachineHost, local_factory, shellsim_factory
+from forge.resources.sandbox.factories import (
+    SANDBOX_SCHEDULING_TIMEOUT,
+    MachineHost,
+    local_factory,
+    shellsim_factory,
+)
 from forge.stages.rules import default_review
 
 
@@ -224,7 +231,16 @@ async def runtime(
     )
     print(f"GLM {type(source).__name__} resolved {source.current().base_url}", flush=True)
     host = MachineHost(policy.setting("runtime.host", str))
-    container = GvisorMachineFactory() if host == MachineHost.IRIS else DockerMachineFactory()
+    # Source: acceptance-measure taskforge/sandbox/factories.py; driver.py controller-url env.
+    container: MachineFactory
+    if host == MachineHost.IRIS:
+        job = get_job_info()
+        controller = os.environ.get("IRIS_CONTROLLER_URL") or (job.controller_address if job else None)
+        if not controller:
+            raise ValueError("Iris sandboxes require a controller URL or an Iris job context")
+        container = IrisMachineFactory(controller_url=controller, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)
+    else:
+        container = DockerMachineFactory()
     factories: dict[str, MachineFactory] = {container.backend.value: container, "shellsim": shellsim_factory()}
     if host == MachineHost.LAPTOP:
         factories["local"] = local_factory()

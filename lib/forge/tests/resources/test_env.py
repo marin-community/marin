@@ -10,6 +10,7 @@ from typing import override
 import pytest
 from rolloutengine.test_support import machine_runtime
 from shellbox.machine import Command, ExitReason, Machine, MachineTerminated, PackageSpec, Result
+from shellsim import SimulationError
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from forge.effects.events import Event, Note, Resolved
@@ -20,10 +21,14 @@ from forge.resources.env import (
     FakeCommand,
     FakeEnv,
     Mutation,
+    ReadFile,
     RunCommand,
     ShellboxEnv,
     ShellboxEnvFactory,
     WriteFile,
+    read_file,
+    run_command,
+    write_file,
 )
 from forge.resources.sandbox.factories import local_factory, shellsim_factory
 
@@ -36,10 +41,12 @@ class MemoryMachine(Machine):
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {}
         self.closed = False
-        self.failure: RuntimeError | TimeoutError | None = None
+        self.failure: Exception | None = None
+        self.calls = 0
 
     @override
     async def run(self, command: Command) -> Result:
+        self.calls += 1
         if self.failure is not None:
             raise self.failure
         if self.closed:
@@ -50,10 +57,16 @@ class MemoryMachine(Machine):
 
     @override
     async def upload(self, source: Path, target: str) -> None:
+        self.calls += 1
+        if self.failure is not None:
+            raise self.failure
         self.files[target] = source.read_bytes()
 
     @override
     async def download(self, source: str, target: Path) -> None:
+        self.calls += 1
+        if self.failure is not None:
+            raise self.failure
         target.write_bytes(self.files[source])
 
     @override
@@ -167,8 +180,9 @@ async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
 @pytest.mark.parametrize(
     "failure,decision",
     [
-        (MachineTerminated("gone"), Restart),
-        (RuntimeError("Machine is closed"), Restart),
+        (MachineTerminated("gone"), Hold),
+        (RuntimeError("Machine is closed"), Hold),
+        (RuntimeError("ShellSim terminated: cpu_exhausted"), Hold),
         (TimeoutError("busy"), Transient),
     ],
 )
@@ -192,3 +206,40 @@ async def test_shellbox_unexpected_runtime_error_propagates_without_reclassifica
     with pytest.raises(RuntimeError) as caught:
         await env.run(COMMAND, timeout=5)
     assert caught.value is bug
+
+
+@pytest.mark.parametrize("operation", ["read", "write", "run"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        SimulationError("No such file or directory: /workspace/output"),
+        RuntimeError("tar: /workspace/output: Cannot stat: No such file or directory"),
+        RuntimeError("Could not find the file /workspace/output in container test"),
+    ],
+)
+async def test_missing_file_is_tool_feedback_without_retry(operation: str, failure: Exception) -> None:
+    machine = MemoryMachine()
+    machine.failure = failure
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    before = env.fingerprint()
+    with pytest.raises(FileNotFoundError) as caught:
+        if operation == "read":
+            await read_file(ReadFile(OUTPUT), env, notify=Notes())
+        elif operation == "write":
+            await write_file(WriteFile(OUTPUT, b"data"), env, notify=Notes())
+        else:
+            await run_command(RunCommand(COMMAND, 5), env, notify=Notes())
+    assert str(OUTPUT) in str(caught.value)
+    if operation != "run":
+        assert caught.value.filename == str(OUTPUT)
+    assert machine.calls == 1
+    assert env.fingerprint() == before
+
+
+async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:
+    machine = MemoryMachine()
+    machine.failure = RuntimeError("ShellSim terminated: cpu_exhausted")
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    with pytest.raises(Hold, match="environment terminated: cpu_exhausted"):
+        await run_command(RunCommand(COMMAND, 5), env, notify=Notes())
+    assert machine.calls == 1

@@ -11,6 +11,7 @@ from typing import Never
 import httpx
 import pytest
 from iris.cluster.types import JobName
+from shellbox.backends.iris.machine import IrisMachineFactory
 
 from forge import wiring
 from forge.driver import inputs, proposal_key
@@ -55,6 +56,8 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
         raise AssertionError("Runtime initialization must not probe a sandbox or transport")
 
     monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("IRIS_CONTROLLER_URL", raising=False)
+    monkeypatch.setattr(wiring, "get_job_info", lambda: SimpleNamespace(controller_address="http://controller"))
     monkeypatch.setattr(wiring, "local_factory", unexpected)
     monkeypatch.setattr(subprocess, "Popen", unexpected)
     monkeypatch.setattr(httpx.AsyncClient, "send", unexpected)
@@ -62,6 +65,11 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
     source = wiring.endpoint_source("http://fake/v1", None, "fake", "glm-5.3")
     async with wiring.runtime(policy, "S", source, "fake") as (_, resources):
         assert set(resources.factories) == {"gvisor", "shellsim"}
+        factory = resources.factories["gvisor"]
+        assert isinstance(factory, IrisMachineFactory)
+        assert factory.controller_url == "http://controller"
+        assert factory.cluster is None
+        assert factory.scheduling_timeout == 600
 
 
 def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: pytest.MonkeyPatch) -> None:

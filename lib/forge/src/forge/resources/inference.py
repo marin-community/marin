@@ -86,7 +86,10 @@ class GlmInference(InferenceClient):
             raise Restart("GLM transport exhausted its retry or hold budget", _retries(error.attempts)) from error
         except ModelRequestRejected as error:
             decision = Transient if error.status in RETRYABLE_STATUSES else Hold
-            raise decision(f"GLM request rejected with status {error.status}", _retries(error.attempts)) from error
+            detail = f": {error.body[:500]}" if decision is Hold else ""
+            raise decision(
+                f"GLM request rejected with status {error.status}{detail}", _retries(error.attempts)
+            ) from error
         return Completion(
             result.content,
             tuple(ToolCall(call.id, call.name, call.arguments) for call in result.tool_calls),

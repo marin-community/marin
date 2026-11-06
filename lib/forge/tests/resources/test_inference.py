@@ -127,10 +127,12 @@ async def test_provider_exhaustion_is_not_retried_by_executor() -> None:
 
 
 async def test_request_rejection_holds_without_retry() -> None:
-    backend = Backend((ModelRequestRejected(400, "", ()),))
+    body = "invalid tool schema: " + "x" * 500 + "excluded suffix"
+    backend = Backend((ModelRequestRejected(400, body, ()),))
     retries = Retries()
-    with pytest.raises(Hold):
+    with pytest.raises(Hold) as caught:
         await complete(request(), GlmInference(backend, "provider-config"), notify=retries)
+    assert caught.value.args[0] == f"GLM request rejected with status 400: {body[:500]}"
     assert len(backend.calls) == 1 and not retries.events
 
 

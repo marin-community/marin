@@ -3,6 +3,7 @@
 
 """Single-writer environments with replayable command and binary-file effects."""
 
+import errno
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -14,6 +15,7 @@ from typing import ClassVar, Protocol, override
 from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineTerminated
+from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, canonical_digest
@@ -129,16 +131,20 @@ class ShellboxEnv(_RecordedEnv):
         super().__init__(image, notify)
 
     @asynccontextmanager
-    async def _operation(self) -> AsyncIterator[None]:
+    async def _operation(self, path: PurePosixPath | None = None) -> AsyncIterator[None]:
         self._check_open()
         try:
             yield
         except MachineTerminated as error:
-            raise Restart("Environment machine terminated") from error
-        except RuntimeError as error:
-            if str(error) != "Machine is closed":
-                raise
-            raise Restart("Environment machine is closed") from error
+            raise Hold(f"environment terminated: {error}") from error
+        except (RuntimeError, SimulationError) as error:
+            detail = str(error)
+            if detail.startswith("ShellSim terminated: ") or detail == "Machine is closed":
+                raise Hold(f"environment terminated: {detail.removeprefix('ShellSim terminated: ')}") from error
+            if "no such file or directory" in detail.lower() or "could not find the file" in detail.lower():
+                missing = str(path) if path is not None else detail.partition("No such file or directory: ")[2] or detail
+                raise FileNotFoundError(errno.ENOENT, "No such file or directory", missing) from error
+            raise
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment operation did not resolve") from error
 
@@ -149,7 +155,7 @@ class ShellboxEnv(_RecordedEnv):
             result = await self.machine.run(Command(("sh", "-c", cmd), timeout=timeout))
         code = 124 if result.reason == ExitReason.TIMED_OUT else result.exit_code
         if code is None:
-            raise Restart("Environment command ended without an exit status")
+            raise Hold("environment terminated: command ended without an exit status")
         value = CommandResult(
             code,
             result.stdout.decode(errors="replace"),
@@ -162,7 +168,7 @@ class ShellboxEnv(_RecordedEnv):
 
     @override
     async def read(self, path: PurePosixPath) -> bytes:
-        async with self._operation():
+        async with self._operation(path):
             with TemporaryDirectory() as directory:
                 target = Path(directory) / "file"
                 await self.machine.download(str(path), target)
@@ -170,7 +176,7 @@ class ShellboxEnv(_RecordedEnv):
 
     @override
     async def write(self, path: PurePosixPath, data: bytes) -> None:
-        async with self._operation():
+        async with self._operation(path):
             with TemporaryDirectory() as directory:
                 source = Path(directory) / "file"
                 source.write_bytes(data)
@@ -200,7 +206,11 @@ class ShellboxEnvFactory(EnvFactory):
                 prepare_machine(requirements, (), self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout)
             )
         except MachineTerminated as error:
-            raise Restart("Environment machine terminated during startup") from error
+            raise Hold(f"environment terminated: {error}") from error
+        except RuntimeError as error:
+            if str(error).startswith("ShellSim terminated: "):
+                raise Hold(f"environment terminated: {str(error).removeprefix('ShellSim terminated: ')}") from error
+            raise
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
         image = canonical_digest((requirements, self.runtime))
