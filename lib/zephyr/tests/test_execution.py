@@ -591,29 +591,45 @@ def _make_task(stage_name: str = "test", shard_idx: int = 0) -> ShardTask:
     )
 
 
-def test_draining_pool_releases_idle_workers_during_the_last_stage_tail(tmp_path, actor_context):
-    """A pool that takes no more pipelines shrinks as the last stage drains.
-
-    Once the final stage's queue is empty, a worker holding nothing in flight
-    gets SHUTDOWN so its capacity returns to the cluster while stragglers on
-    other workers finish.
-    """
+def test_draining_pool_keeps_one_idle_worker_for_last_shard_retry(tmp_path, actor_context):
     coordinator = make_test_coordinator(tmp_path, drain_idle_workers=True)
     try:
-        start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
+        run = start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
 
         coordinator.register_worker("worker-0", MagicMock())
         status, _work = coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE)
-        assert status == PullStatus.RUN_TASK  # drains the queue, worker-0 now busy
+        assert status == PullStatus.RUN_TASK
 
         coordinator.register_worker("worker-1", MagicMock())
         status, _work = coordinator.pull_task("worker-1", TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.NO_WORK_BACKOFF
+
+        coordinator.register_worker("worker-2", MagicMock())
+        status, _work = coordinator.pull_task("worker-2", TEST_WORKER_AVAILABLE)
         assert status == PullStatus.SHUTDOWN
 
-        # worker-0 still owns an in-flight shard that could be requeued onto it,
-        # so it must stay alive even though the queue is empty.
         status, _work = coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE)
         assert status == PullStatus.NO_WORK_BACKOFF
+
+        coordinator._last_seen["worker-0"] = 0.0
+        coordinator.heartbeat("worker-1")
+        coordinator.check_heartbeats(timeout=1.0)
+
+        status, retry = coordinator.pull_task("worker-1", TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
+        assert retry is not None
+        assert retry.attempt == 1
+        coordinator.report_result(
+            "worker-1",
+            run.execution_id,
+            retry.task.shard_idx,
+            retry.attempt,
+            TaskResult(shard=ListShard(refs=[])),
+            CounterSnapshot.empty(),
+            run.stage_generation,
+        )
+        assert run.completed_shards == run.total_shards
+        assert coordinator.pull_task("worker-1", TEST_WORKER_AVAILABLE)[0] == PullStatus.SHUTDOWN
     finally:
         coordinator.shutdown()
 
