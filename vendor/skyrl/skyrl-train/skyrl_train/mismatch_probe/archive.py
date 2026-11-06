@@ -26,7 +26,7 @@ class FrozenProbeSource:
 
 
 class MismatchArchive:
-    """Commit bounded batches of route records, followed by their manifest."""
+    """Commit archive rows in bounded batches, with the manifest last."""
 
     def __init__(self, uri: str, *, writer_id: str):
         self.uri = uri
