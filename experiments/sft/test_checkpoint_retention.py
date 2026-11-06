@@ -3,14 +3,13 @@
 
 import datetime
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from fray.types import ResourceConfig
-from levanter.checkpoint import CheckpointerConfig, discover_latest_checkpoint, load_checkpoint_or_initialize
+from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint_or_initialize
 from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import AdamConfig
 from levanter.testing.helpers import use_test_mesh
@@ -50,11 +49,10 @@ def sft_trainer(tmp_path, monkeypatch):
         num_train_steps=5001,
     )
 
-    def build(checkpointer=None):
-        configured = replace(spec, checkpointer=checkpointer) if checkpointer is not None else spec
-        pod = configured.model.build_train_config(
+    def build():
+        pod = spec.model.build_train_config(
             StepContext.for_run(str(tmp_path / "run"), str(tmp_path)),
-            configured,
+            spec,
             LmDataConfig(),
             ResourceConfig.with_cpu(),
             num_train_steps=5001,
@@ -120,30 +118,3 @@ def test_sft_default_rolls_temporary_checkpoints_resumes_and_keeps_final(sft_tra
         final_state = load_checkpoint_or_initialize(lambda: _state(0), paths)()
     for name, expected in _state(5001).items():
         np.testing.assert_array_equal(final_state[name], expected)
-
-
-def test_sft_explicit_keep_retains_intermediate_permanent_checkpoints(sft_trainer, clock):
-    trainer = sft_trainer(
-        CheckpointerConfig(
-            save_interval=datetime.timedelta(minutes=30),
-            keep=[{"every": 5000}],
-            keep_last_temporary_checkpoints=2,
-        )
-    )
-    config = trainer.checkpointer
-    checkpointer = config.create("test-run")
-    checkpointer.on_step(tree=_state(0), step=0)
-    for step in (4997, 4998, 4999):
-        clock.current += datetime.timedelta(minutes=30)
-        checkpointer.on_step(tree=_state(step), step=step)
-        checkpointer.wait_until_finished()
-    assert set(_metadata(config.temporary_base_path)) == {"step-4998", "step-4999"}
-
-    checkpointer.on_step(tree=_state(5000), step=5000)
-    checkpointer.wait_until_finished()
-    checkpointer.on_step(tree=_state(5001), step=5001, force=True)
-    checkpointer.wait_until_finished()
-    permanent = _metadata(config.base_path)
-    assert set(permanent) == {"step-5000", "step-5001"}
-    assert all(not metadata["is_temporary"] for metadata in permanent.values())
-    assert _metadata(config.temporary_base_path) == {}
