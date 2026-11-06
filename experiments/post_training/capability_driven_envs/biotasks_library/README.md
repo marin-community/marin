@@ -102,6 +102,25 @@ buildability and deterministic control validity only; it is not scientific revie
 rights approval, solver calibration, training approval, or release approval. The
 snapshot remains `internal_unreviewed_do_not_publish`.
 
+## Versioned reference audit and OpenRouter experiment
+
+The preliminary audit is in [REFERENCE_AUDIT.md](REFERENCE_AUDIT.md). The new
+immutable v2 snapshot is at:
+
+```text
+s3://marin-us-east-02a/marin4sc/taskforge/task-library/
+  campaigns/biotasks/combined/v2/snapshots/verified-corrections-1/
+```
+
+`freeze_combined_v2.py` independently recomputes and fixes two objectively
+incorrect references, producing two new task IDs/digests. It retains the other
+303 tasks unchanged: 58 have unresolved audit disputes, while 245 were only
+confirmed by the GLM auditor (not independently validated). The v1 snapshot
+and trial scores remain frozen. Do not treat v2 as a fully audited bank or run
+an official IRT panel on disputed items. See
+[OPENROUTER_DESIGN.md](OPENROUTER_DESIGN.md) for the experiment gate, provider
+pinning, metadata and budget requirements.
+
 ## GLM OpenAI-compatible solver calibration
 
 `calibrate_glm_v1.py` runs frozen TaskSpecs through RolloutEngine's generic
