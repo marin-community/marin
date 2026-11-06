@@ -17,19 +17,21 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 from taskforge.llm.glm_client import EndpointSource
 
-from forge import checkpoint, driver
+from forge import arms, checkpoint, driver
 from forge.config import ForgeConfig
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
 from forge.effects.issues import Restart
 from forge.effects.log import EventLog, JsonlSink, fold
+from forge.harness.protocol import Stopped, StopReason
 from forge.harness.web import FakeWeb
 from forge.model.controls import Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, FinishReason, ToolCall
 from forge.model.proposal import TaskProposal
-from forge.model.review import BandRules, Cause, Decision, Modify, Retry, ValidationResult
+from forge.model.review import BandRules, Cause, Decision, Modify, Reject, RejectKind, Retry, ValidationResult
 from forge.model.serialization import CONTROL, TASK_PROPOSAL, WORKPIECE
-from forge.model.workpiece import Terminal
+from forge.model.stage import Stage
+from forge.model.workpiece import Conversation, Terminal, Workpiece
 from forge.policy import Policy, load_policy
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
@@ -291,3 +293,19 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     args.work_dir = str(tmp_path / "third")
     await driver.one(args)
     assert (destination / "events.jsonl").read_bytes() == published
+
+
+@pytest.mark.parametrize("arm", ["S", "T"])
+@pytest.mark.parametrize("reason", tuple(StopReason))
+def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, arm: str, reason: StopReason) -> None:
+    settings = config(arm)
+    edge = arms.transitions(arm, settings.budget, settings.policy)[(Stage.AUTHOR, Stopped)]
+    previous = Modify(("prior review",))
+    wp = Workpiece(proposal.header.id, proposal).with_(decisions=(previous,))
+    session = Conversation((), ())
+    stopped = edge[1](wp, Stopped(reason, session))
+    published = WORKPIECE.validate_json(WORKPIECE.dump_json(stopped))
+    kind = RejectKind.BUDGET if reason == StopReason.CONTEXT_LIMIT else RejectKind.TASK
+    assert published.terminal == Terminal.ABANDONED
+    assert published.session == session
+    assert published.decisions == (previous, Reject(kind, (f"author stopped: {reason.value}",)))

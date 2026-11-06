@@ -7,10 +7,10 @@ from functools import partial
 from types import MappingProxyType
 
 from forge.config import Edge, Transitions
-from forge.harness.protocol import Returned, Stopped, Submitted
+from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from forge.harness.tools.validate import ValidateRequest
 from forge.model.llm import Message, ToolCall
-from forge.model.review import Accept, Budget, Incomplete, Modify, Reject, Retry
+from forge.model.review import Accept, Budget, Incomplete, Modify, Reject, RejectKind, Retry
 from forge.model.serialization import VALIDATION_RESULT
 from forge.model.stage import Exit, Stage
 from forge.model.workpiece import Conversation, Terminal, Workpiece
@@ -87,7 +87,9 @@ def after_review(wp: Workpiece) -> Stage | None:
 def stopped(wp: Workpiece, result: Exit) -> Workpiece:
     if not isinstance(result, Stopped):
         raise ValueError("Stop edge requires Stopped")
-    return wp.with_(session=result.session, terminal=Terminal.ABANDONED)
+    kind = RejectKind.BUDGET if result.reason == StopReason.CONTEXT_LIMIT else RejectKind.TASK
+    decision = Reject(kind, (f"author stopped: {result.reason.value}",))
+    return wp.with_(session=result.session, terminal=Terminal.ABANDONED, decisions=(*wp.decisions, decision))
 
 
 def transitions(arm: str, budget: Budget, policy: Policy) -> Transitions:
