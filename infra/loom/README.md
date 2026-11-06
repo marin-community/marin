@@ -390,16 +390,20 @@ day, and Docs copies it in through a 15-minute URL that the account signs by
 impersonating itself.
 
 The `gdoc-changes` script watch ([program](watches/gdoc_changes.py)) tells a
-waiting `gdoc` session when a person changes its doc. Every minute it reads the
-Docs revision and the comments of the doc that each such session's goal links.
-When they differ from how they were when the session began to wait, and the
-change holds for one more round, it sends the session a message that starts
-with "The doc changed". The agent's own edits land while it works, so they do
-not trigger it. Register it on a Loom whose server has this checkout:
+waiting `gdoc` session when a person changes its doc. It reads the Docs
+revision and the comments of the doc that each such session's goal links. The
+first read comes when Loom reports the session idle. Then it reads every 5
+seconds, half as often for each minute without a change, down to every 30
+seconds. When the doc differs from how it was when the session began to wait,
+and stays the same for 10 seconds, the watch sends the session a message that
+starts with "The doc changed". The agent's own edits land while it works, so
+they do not trigger it. Each read costs a Docs request and a Drive request,
+and each round that reads a doc runs `gcloud` twice for a token. Register it on
+a Loom whose server has this checkout, from the root of the checkout:
 
 ```bash
 loom watch add gdoc-changes --program "$PWD/infra/loom/watches/gdoc_changes.py" \
-  --every 1m --capabilities observe,nudge
+  --capabilities observe,nudge
 loom watch run gdoc-changes --dry-run
 loom watch enable gdoc-changes
 ```
