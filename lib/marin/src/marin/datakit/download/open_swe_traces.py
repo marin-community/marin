@@ -21,7 +21,7 @@ from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nvidia/Open-SWE-Traces"
 HF_REVISION = "f967cba3312573981a47fd7a7b80029b53909b5f"
-TRANSFORM_VERSION = "2026.09.17.chat-v1"
+TRANSFORM_VERSION = "2026.10.30.success-chat-v2"
 SOURCE_CHAT_SCHEMA = pa.schema([*CHAT_SCHEMA, pa.field("resolved", pa.int32())])
 
 # Rough token weights use each release's uncompressed/compressed size ratio
@@ -79,13 +79,16 @@ OPEN_SWE_TRACES_PARTITIONS = MappingProxyType(
 
 
 def row_to_chat_doc(row: dict) -> list[dict]:
+    if row.get("resolved") != 1:
+        counters.pipeline.update_counter("open_swe_traces/unsuccessful_or_unknown_filtered", 1)
+        return []
     messages = row.get("messages")
     if not messages:
         counters.pipeline.update_counter("open_swe_traces/empty_messages_filtered", 1)
         return []
     tools = [json.loads(tool) for tool in row["tools"]]
-    # The export omits tool_call_id on observations, including parallel calls.
-    # Observations follow their calls in order, so restore IDs before conversion.
+    # The pinned export omits observation IDs; retain its FIFO reconstruction.
+    # Explicit source IDs take precedence over that ordering assumption.
     pending: deque[str] = deque()
     linked_messages: list[dict] = []
     for index, message in enumerate(messages):
@@ -93,12 +96,17 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         if message.get("role") == "assistant" and message.get("tool_calls"):
             calls = []
             for call_index, call in enumerate(message["tool_calls"]):
-                call_id = f"call_{index}_{call_index}"
+                call_id = call.get("id") or f"call_{index}_{call_index}"
                 calls.append({**call, "id": call_id})
                 pending.append(call_id)
             linked["tool_calls"] = calls
-        elif message.get("role") == "tool" and pending:
-            linked["tool_call_id"] = pending.popleft()
+        elif message.get("role") == "tool":
+            call_id = message.get("tool_call_id")
+            if call_id is not None:
+                if call_id in pending:
+                    pending.remove(call_id)
+            elif pending:
+                linked["tool_call_id"] = pending.popleft()
         linked_messages.append(linked)
     return checked_openai_chat_document(
         linked_messages,
