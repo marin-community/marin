@@ -25,8 +25,9 @@ GitHub-flavored markdown and Mermaid diagrams.
 ## Start
 
 Before any other work, write `doc` from this outline, with the Objective from
-the goal, and write the artifact `progress` with a first update. Loom opens the
-session on `doc` once it exists.
+the goal, and write the artifact `progress` with a first update. Neither exists
+yet, so write them without reading them first. Loom shows `doc` in the
+session's Doc tab once it exists.
 
 ```markdown
 ## Objective
