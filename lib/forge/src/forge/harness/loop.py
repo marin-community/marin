@@ -28,7 +28,7 @@ from forge.model.llm import FinishReason, Message, Sampling
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation
 from forge.resources.env import Env
-from forge.resources.inference import InferenceClient, InferenceRequest, complete
+from forge.resources.inference import ContextExceeded, InferenceClient, InferenceRequest, complete
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,9 +56,12 @@ class AgenticHarness(Harness):
                 await ctx.check(Hold)
                 if prompt_tokens >= self.max_prompt_tokens:
                     return Stopped(StopReason.CONTEXT_LIMIT, session)
-                result = await ctx.emit(InferenceRequest(session.messages, schemas, self.sampling))
+                try:
+                    result = await ctx.emit(InferenceRequest(session.messages, schemas, self.sampling))
+                except ContextExceeded:
+                    return Stopped(StopReason.CONTEXT_LIMIT, session)
                 # Provider prompt_tokens already includes the cached portion.
-                prompt_tokens = result.usage.prompt_tokens
+                prompt_tokens = result.usage.prompt_tokens + result.usage.completion_tokens
                 session = Conversation(
                     (
                         *session.messages,
@@ -92,7 +95,10 @@ class AgenticHarness(Harness):
                     if len(content) > self.output_chars:
                         marker = "\n[output truncated]"
                         content = content[: max(0, self.output_chars - len(marker))] + marker[: self.output_chars]
+                    # Estimate only appended text; the provider counted the prior prompt and reply.
+                    prompt_tokens += (len(content) + 3) // 4
                     await ctx.emit(ToolReturned(call.id, call.name, content))
                     session = Conversation((*session.messages, Message("tool", content, tool_call_id=call.id)), schemas)
                 if not result.tool_calls and result.finish_reason == FinishReason.STOP:
+                    prompt_tokens += (len(self.nudge) + 3) // 4
                     session = Conversation((*session.messages, Message("user", self.nudge)), schemas)

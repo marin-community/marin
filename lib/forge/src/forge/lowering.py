@@ -284,7 +284,16 @@ def check(spec: TaskRolloutSpec, factories: Mapping[str, MachineFactory]) -> Non
         ValueError: RolloutEngine rejects the spec.
         NotImplementedError: RolloutEngine cannot run the spec.
     """
-    rollout_engine(factories, command_timeout=None).check(spec)
+    try:
+        rollout_engine(factories, command_timeout=None).check(spec)
+    except ValueError as error:
+        if str(error) != "Environment requirements need a selected machine":
+            raise
+        raise ValueError(
+            'Environment requirements need a selected machine: set capabilities to ["shell"] '
+            f"and docker_image to {GRADER_BASE_IMAGE} (or command_semantics shell_simulator "
+            "with docker_image null); candidate files require it"
+        ) from error
 
 
 def reward_file(

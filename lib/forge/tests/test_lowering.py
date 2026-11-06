@@ -8,7 +8,7 @@ import pytest
 from rolloutengine.models import RolloutLimits, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_limits
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
-from taskcompendium.models import AnswerType, PlainText, Source, StdoutReward
+from taskcompendium.models import AnswerType, CommandSemantics, EnvironmentRequirements, PlainText, Source, StdoutReward
 from verifyit.spec import ExactSpec
 
 from forge.lowering import (
@@ -104,3 +104,21 @@ def test_grader_image_precheck_respects_available_host_factories(image: str | No
         lowered = lower_with_settings(task, settings, factories)
         assert lowered.verifier_machine is not None
         assert lowered.verifier_machine.backend == (Backend.SHELLSIM if image is None else Backend.GVISOR)
+
+
+def test_missing_machine_error_names_the_author_environment_fix() -> None:
+    task = arithmetic_task(
+        environment_requirements=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="lockfile-placeholder"
+        )
+    )
+    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    with pytest.raises(ValueError) as raised:
+        lower_with_settings(task, settings, {})
+    message = str(raised.value)
+    assert 'set capabilities to ["shell"]' in message
+    assert GRADER_BASE_IMAGE in message and "command_semantics shell_simulator" in message
+    assert "candidate files require it" in message
+    repaired = task.model_copy(update={"environment_requirements": requirements(image=None)})
+    spec = lower_with_settings(repaired, settings, {"shellsim": AvailableFactory(Backend.SHELLSIM)})
+    assert spec.task_machine is not None and spec.task_machine.backend == Backend.SHELLSIM

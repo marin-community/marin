@@ -57,7 +57,7 @@ from forge.resources.env import (
     write_file,
 )
 from forge.resources.grading import GradeCandidate, GradingResource, grade
-from forge.resources.inference import FakeInference
+from forge.resources.inference import ContextExceeded, FakeInference
 from forge.resources.sandbox.factories import MachineHost
 from forge.wiring import build_config
 
@@ -315,7 +315,7 @@ async def test_model_window_and_output_allowance_determine_context_exit(output_t
                 call("shell", {"command": "task"}, str(tokens)).tool_calls,
                 usage=Usage(prompt_tokens=tokens, cached_tokens=tokens - 1000),
             )
-            for tokens in (budget - 1, budget)
+            for tokens in (budget - 1000, budget)
         )
     )
     ctx = Context(log=EventLog())
@@ -419,3 +419,40 @@ async def test_repaired_task_machine_allows_file_controls_to_leave_the_tool(name
     else:
         assert isinstance(result, ReturnRequest) and isinstance(result.payload, ValidateRequest)
         assert result.payload.submission.controls == controls
+
+
+async def test_provider_context_overflow_preserves_the_last_completed_conversation() -> None:
+    client = FakeInference((call("shell", {"command": "task"}, "1"), ContextExceeded("maximum context length")))
+    ctx = Context(log=EventLog())
+    result = await AgenticHarness(262144, Sampling(), "use tools", 20000).run(
+        ctx, Conversation((Message("user", "build"),), ()), environment(ctx), client, {"shell": ShellTool()}
+    )
+    await ctx.drain()
+    assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
+    assert result.session.messages == client.requests[1].messages
+    assert result.session.messages[-1].role == "tool"
+    assert result.session.messages[-1].tool_call_id == "1"
+
+
+@pytest.mark.parametrize("completion_tokens,output_chars", [(10, 20), (0, 40)])
+async def test_next_prompt_counts_reply_tokens_and_appended_tool_text(completion_tokens: int, output_chars: int) -> None:
+    ctx = Context(log=EventLog())
+    web = FakeWeb({"query": "x" * 1000}, {})
+    ctx.resource(web, web.fingerprint)
+    ctx.handle(WebSearch, partial(search, notify=ctx.emit), uses=(web,))
+    client = FakeInference(
+        (
+            Completion(
+                "",
+                call("web_search", {"query": "query"}, "1").tool_calls,
+                usage=Usage(prompt_tokens=90, completion_tokens=completion_tokens, cached_tokens=80),
+            ),
+        )
+    )
+    result = await AgenticHarness(100, Sampling(), "use tools", output_chars).run(
+        ctx, Conversation((), ()), environment(ctx), client, {"web_search": WebSearchTool()}
+    )
+    await ctx.drain()
+    assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
+    assert len(client.requests) == 1
+    assert len(result.session.messages[-1].content) == output_chars
