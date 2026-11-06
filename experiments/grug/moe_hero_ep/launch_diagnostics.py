@@ -605,13 +605,13 @@ def build_diagnostic_run(
     "--log-scaling-alpha",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Slope of the log scaling. Required with --log-scaling-n-floor.",
+    help="Slope of the log scaling. Unset keeps the hero's value.",
 )
 @click.option(
     "--log-scaling-power",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Exponent on the log scaling factor. Defaults to 1; anything else requires --log-scaling-n-floor.",
+    help="Exponent on the log scaling factor. Unset keeps the hero's value.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @click.option(
