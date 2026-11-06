@@ -23,7 +23,7 @@ from shellbox.machine import (
     Result,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import ResourceGroups, StdoutReward
+from taskcompendium.models import ResourceGroups, ScriptGrader, StdoutReward
 from taskcompendium.runtime.resources import inline_resource
 
 from forge.effects.context import Context
@@ -36,7 +36,6 @@ from forge.lowering import (
     lower_with_settings,
     requirements,
     rollout_engine,
-    script_grader,
 )
 from forge.model.controls import Candidate, RewardBand
 from forge.resources.grading import GradeCandidate, GradingResource, grade
@@ -123,15 +122,14 @@ def setup(factory: CountedFactory) -> tuple[RoundVerifier, GradingResource]:
 
 
 def event(script: bytes = SCRIPT) -> GradeCandidate:
-    package = script_grader(
-        ("python3", "/tests/grade.py"),
-        StdoutReward(),
+    grader = ScriptGrader(
+        argv=("python3", "/tests/grade.py"),
+        reward=StdoutReward(),
         environment=requirements(image=None),
-        files=(inline_resource("grade.py", script),),
         answer_path="/app/answer.txt",
         timeout=5,
     )
-    task = arithmetic_task(grader=package.grader, resources=ResourceGroups(verifier=package.resources))
+    task = arithmetic_task(grader=grader, resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)))
     spec = lower_with_settings(
         task,
         LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits()),

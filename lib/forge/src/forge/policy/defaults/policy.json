@@ -19,7 +19,6 @@
   "solver.tool_timeout": 120.0,
   "solver.command_timeout": 30.0,
   "solver.cleanup_timeout": 60.0,
-  "grader.timeout": 300.0,
   "author.model": "deepseek-v4.1-flash",
   "author.context_tokens": 262144,
   "solver.model": "glm-5.3",

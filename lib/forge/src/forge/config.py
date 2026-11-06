@@ -11,18 +11,15 @@ from typing import Protocol
 from taskcompendium.models import TaskResource
 
 from forge.harness.protocol import Harness, Tool
-from forge.model.review import BandRules, Budget, Decision, ValidationResult
+from forge.harness.tools.submit import Gate
+from forge.model.review import BandRules, Budget, Decision
 from forge.model.stage import Exit, Stage
-from forge.model.workpiece import Submission, Workpiece
+from forge.model.workpiece import Workpiece
 from forge.policy import Policy
 
 
-class SubmitGate(Protocol):
-    def __call__(self, submission: Submission) -> tuple[str, ...]: ...
-
-
 class ReviewRules(Protocol):
-    def __call__(self, result: ValidationResult, band: BandRules) -> Decision: ...
+    def __call__(self, workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +39,7 @@ class ForgeConfig:
     adversaries: Mapping[str, Harness]
     workspace: WorkspaceHydration
     tools: Mapping[str, Mapping[str, Tool[object]]]
-    submit_gate: SubmitGate
+    submit_gate: Gate
     review: ReviewRules
     band: BandRules
     budget: Budget

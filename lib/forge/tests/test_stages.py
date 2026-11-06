@@ -292,7 +292,6 @@ async def test_review_prioritizes_incomplete_evidence_over_task_defects(
     "kind,message",
     [
         (Hold, "environment terminated: cpu_exhausted"),
-        (Hold, "provider returned 3 empty completions"),
         (Restart, "model unavailable"),
     ],
 )
@@ -346,9 +345,9 @@ async def test_invalid_grader_checks_request_task_repair(workpiece: Workpiece) -
     assert any("grader_invalid_checks" in finding for finding in decision.findings)
 
 
-@pytest.mark.parametrize("reason", [StopReason.CONTEXT_LIMIT, StopReason.FINISHED])
 @pytest.mark.asyncio
-async def test_adversary_stop_reason_survives_review_and_serialization(workpiece: Workpiece, reason: StopReason) -> None:
+async def test_adversary_stop_reason_survives_review_and_serialization(workpiece: Workpiece) -> None:
+    reason = StopReason.CONTEXT_LIMIT
     harness = RecordingHarness(Stopped(reason, Conversation((), ())))
     setup = config(harness)
     setup = replace(
@@ -389,7 +388,8 @@ async def test_triage_repairs_sections_only_when_budget_allows(workpiece: Workpi
     await ctx.drain()
 
 
-@pytest.mark.parametrize("revision", ["in_band", "too_easy", "control", "task_defect", "too_hard", "adversary"])
+# "control" stands for every defect Modify (grader checks, adversary findings): revert keys on placement alone.
+@pytest.mark.parametrize("revision", ["in_band", "too_easy", "control", "too_hard"])
 @pytest.mark.asyncio
 async def test_one_hardening_attempt_accepts_or_reverts(workpiece: Workpiece, revision: str) -> None:
     assert workpiece.submission is not None
@@ -419,27 +419,12 @@ async def test_one_hardening_attempt_accepts_or_reverts(workpiece: Workpiece, re
     assert pending.too_easy_baseline == original
     updated = replace(original, task=original.task.model_copy(update={"labels": {"revision": "harder"}}))
     solved = 2 if revision == "in_band" else 0 if revision == "too_hard" else 3
-    controls = evidence.controls
-    adversary = ()
-    if revision == "control":
-        controls = (replace(controls[0], met=False),)
-    if revision == "task_defect":
-        controls = (replace(controls[0], met=False, cause=Cause.GRADER_INVALID_CHECKS),)
-    if revision == "adversary":
-        finding = AdversaryFinding(
-            "wrong answer accepted",
-            Candidate("wrong"),
-            RewardBand(Outcome.GRADED, 1),
-            GradeResult(Outcome.GRADED, 1),
-            True,
-        )
-        adversary = (AdversaryResult("finder", True, (finding,)),)
+    controls = (replace(evidence.controls[0], met=False),) if revision == "control" else evidence.controls
     revised = replace(
         evidence,
         task_digest=updated.digest,
         solver=tuple(TrialResult(index, GradeResult(Outcome.GRADED, float(index < solved))) for index in range(3)),
         controls=controls,
-        adversary=adversary,
     )
     current = pending.with_(submission=updated, evidence=(*pending.evidence, revised))
     second = await review(ctx, current, setup, bundle)

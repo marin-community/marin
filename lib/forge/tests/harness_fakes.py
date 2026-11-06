@@ -8,7 +8,6 @@ from forge.effects.context import Context
 from forge.harness.protocol import Harness, Tool
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation
-from forge.resources.env import Env
 from forge.resources.inference import InferenceClient
 
 
@@ -19,7 +18,7 @@ class FakeHarness(Harness):
 
     @override
     async def run(
-        self, ctx: Context, session: Conversation, env: Env, client: InferenceClient, tools: Mapping[str, Tool[object]]
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
         index = len(self.sessions)
         self.sessions.append(session)

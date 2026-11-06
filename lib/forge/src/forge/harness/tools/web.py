@@ -7,8 +7,7 @@ from typing import override
 from forge.effects.context import Context
 from forge.harness.protocol import ToolResult
 from forge.harness.tools.base import ValidatedTool
-from forge.harness.web import WebFetch, WebSearch
-from forge.resources.env import Env
+from forge.resources.web import WebFetch, WebSearch
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +27,7 @@ class WebSearchTool(ValidatedTool[SearchArgs]):
     args_type = SearchArgs
 
     @override
-    async def run(self, ctx: Context, args: SearchArgs, env: Env) -> ToolResult:
+    async def run(self, ctx: Context, args: SearchArgs) -> ToolResult:
         return ToolResult(await ctx.emit(WebSearch(args.query)))
 
 
@@ -39,5 +38,5 @@ class WebFetchTool(ValidatedTool[FetchArgs]):
     args_type = FetchArgs
 
     @override
-    async def run(self, ctx: Context, args: FetchArgs, env: Env) -> ToolResult:
+    async def run(self, ctx: Context, args: FetchArgs) -> ToolResult:
         return ToolResult(await ctx.emit(WebFetch(args.url)))

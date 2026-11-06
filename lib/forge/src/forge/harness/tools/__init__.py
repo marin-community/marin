@@ -20,15 +20,20 @@ from forge.policy import Policy
 
 
 def standard_tools(
-    *, policy: Policy, factories: Mapping[str, MachineFactory], settings: LoweringSettings, gate: Gate
+    *,
+    task_path: str,
+    controls_path: str,
+    policy: Policy,
+    factories: Mapping[str, MachineFactory],
+    settings: LoweringSettings,
+    gate: Gate,
 ) -> Mapping[str, Tool[object]]:
-    task_path = policy.setting("author.workdir", str).rstrip("/") + "/task.json"
     tools: tuple[Tool[object], ...] = (
-        ShellTool(),
+        ShellTool(policy.setting("solver.command_timeout", float), policy.setting("solver.tool_timeout", float)),
         ReadFileTool(),
         WriteFileTool(),
         GradeTool(task_path, factories, settings),
-        SubmitTool(gate),
+        SubmitTool(gate, task_path, controls_path),
         FinishTool(),
         WebSearchTool(),
         WebFetchTool(),
@@ -37,10 +42,10 @@ def standard_tools(
 
 
 def adversary_tools(
-    *, task_path: str, factories: Mapping[str, MachineFactory], settings: LoweringSettings
+    *, task_path: str, policy: Policy, factories: Mapping[str, MachineFactory], settings: LoweringSettings
 ) -> Mapping[str, Tool[object]]:
     tools: tuple[Tool[object], ...] = (
-        ShellTool(),
+        ShellTool(policy.setting("solver.command_timeout", float), policy.setting("solver.tool_timeout", float)),
         ReadFileTool(),
         GradeTool(task_path, factories, settings),
         FinishTool(),

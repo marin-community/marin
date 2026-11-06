@@ -17,19 +17,27 @@ from rigging.filesystem.factory import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.machine import MachineSpec
-from taskcompendium.models import AnswerType, PlainText, Source, StdoutReward
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    PlainText,
+    ResourceGroups,
+    ScriptGrader,
+    Source,
+    StdoutReward,
+    TaskSpec,
+    TextMessage,
+)
 from taskcompendium.runtime.resources import inline_resource
 
 import forge
 from forge.effects.issues import Restart
 from forge.lowering import (
-    NO_MACHINE,
-    assemble,
     lower_with_settings,
     lowering_settings,
     requirements,
     rollout_engine,
-    script_grader,
 )
 from forge.model.controls import Candidate
 from forge.policy import load_policy
@@ -38,7 +46,6 @@ from forge.resources.sandbox.images import GRADER_BASE_IMAGE
 from forge.resources.verifier import RoundVerifier
 
 SCRIPT = b"""
-from dataclasses import replace
 from pathlib import Path
 roots = ['/app', '/workspace', '/tests', '/tmp']
 assert all(not (Path(root) / 'candidate-residue').exists() for root in roots)
@@ -48,7 +55,6 @@ for root in roots:
 print(1)
 """
 KILL_SCRIPT = b"""
-from dataclasses import replace
 from pathlib import Path
 import time
 Path('/app/mid-command').write_text('running')
@@ -87,7 +93,6 @@ async def test_verifier_reuse_and_replacement() -> None:
     settings = replace(
         settings,
         verifier_machine=replace(settings.verifier_machine, startup_timeout=1500),
-        limits=settings.limits.model_copy(update={"verifier_timeout": 1500}),
     )
     output = os.environ["PROBE_OUTPUT"]
     results: dict[str, object] = {"passed": False, "workdir": "/app", "grades": []}
@@ -101,25 +106,26 @@ async def test_verifier_reuse_and_replacement() -> None:
         print(json.dumps(results), flush=True)
 
     def event(script: bytes) -> GradeCandidate:
-        package = script_grader(
-            ("python3", "/tests/grade.py"),
-            StdoutReward(),
-            environment=requirements(image=GRADER_BASE_IMAGE, workdir="/app"),
-            files=(inline_resource("grade.py", script),),
-            answer_path="/app/answer.txt",
-            cwd="/app",
-            timeout=180,
+        task = TaskSpec(
+            id="live-lease-probe",
+            context=ConversationInput(events=(TextMessage(role="user", content="Answer 12"),)),
+            environment_requirements=EnvironmentRequirements(),
+            answer_type=AnswerType.TEXT,
+            answer_format=PlainText(),
+            grader=ScriptGrader(
+                argv=("python3", "/tests/grade.py"),
+                reward=StdoutReward(),
+                environment=requirements(image=GRADER_BASE_IMAGE, workdir="/app"),
+                answer_path="/app/answer.txt",
+                cwd="/app",
+                timeout=180,
+            ),
+            resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+            source=Source(dataset="forge-probe", revision="1", row="1", importer_revision="1"),
         )
-        task = assemble(
-            "live-lease-probe",
-            "Answer 12",
-            AnswerType.TEXT,
-            PlainText(),
-            package,
-            Source(dataset="forge-probe", revision="1", row="1", importer_revision="1"),
-            environment=NO_MACHINE,
-        )
-        return GradeCandidate(lower_with_settings(task, settings, {"gvisor": factory}), Candidate("12"))
+        spec = lower_with_settings(task, settings, {"gvisor": factory})
+        spec = spec.model_copy(update={"limits": spec.limits.model_copy(update={"verifier_timeout": 1500})})
+        return GradeCandidate(spec, Candidate("12"))
 
     try:
         for index in range(3):

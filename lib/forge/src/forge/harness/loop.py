@@ -29,8 +29,11 @@ from forge.model.content_hash import canonical_digest
 from forge.model.llm import FinishReason, Message, Sampling
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation
-from forge.resources.env import Env, WriteFile
+from forge.resources.env import WriteFile
 from forge.resources.inference import ContextExceeded, InferenceClient, InferenceRequest, complete
+
+# Mark's policy: nudge until an explicit exit; repeated empty completions indicate provider failure.
+MAX_EMPTY_COMPLETIONS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +49,7 @@ class AgenticHarness(Harness):
 
     @override
     async def run(
-        self, ctx: Context, session: Conversation, env: Env, client: InferenceClient, tools: Mapping[str, Tool[object]]
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
         prompt_tokens, empty_completions, turns = 0, 0, 0
         schemas = tuple(tool.schema for tool in tools.values())
@@ -78,8 +81,8 @@ class AgenticHarness(Harness):
                     schemas,
                 )
                 empty_completions = empty_completions + 1 if not result.content and not result.tool_calls else 0
-                if empty_completions == 3:
-                    raise Hold("provider returned 3 empty completions")
+                if empty_completions == MAX_EMPTY_COMPLETIONS:
+                    raise Hold(f"provider returned {MAX_EMPTY_COMPLETIONS} empty completions")
                 for call in result.tool_calls:
                     await ctx.emit(ToolInvoked(call.id, call.name, call.arguments))
                     try:
@@ -90,9 +93,9 @@ class AgenticHarness(Harness):
                         outcome = ToolResult(f"Invalid arguments: {error}")
                     else:
                         tool = tools.get(call.name)
-                        outcome = (
-                            ToolResult(f"Unknown tool: {call.name}") if tool is None else await tool(ctx, args, env)
-                        )
+                        outcome = ToolResult(f"Unknown tool: {call.name}") if tool is None else await tool(ctx, args)
+                    if len(result.tool_calls) > 1 and isinstance(outcome, (SubmitRequest, ReturnRequest, FinishRequest)):
+                        outcome = ToolResult("Session-returning tools must be called alone. Retry this call by itself.")
                     if isinstance(outcome, SubmitRequest):
                         return Submitted(outcome.submission, session)
                     if isinstance(outcome, ReturnRequest):

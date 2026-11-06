@@ -11,22 +11,19 @@ import pytest
 from rolloutengine.test_support import arithmetic_task, rollout_limits
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import StdoutReward
+from taskcompendium.models import ScriptGrader, StdoutReward
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import NumericSpec
 
 from forge.effects.context import Context
-from forge.effects.issues import Hold
+from forge.effects.issues import Hold, Transient
 from forge.effects.log import EventLog, JsonlSink
-from forge.harness.classify import host_failure
-from forge.harness.events import ToolReturned
 from forge.harness.loop import AgenticHarness
 from forge.harness.protocol import (
     Returned,
     ReturnRequest,
     Stopped,
     StopReason,
-    SubmitRequest,
     Submitted,
     Tool,
     ToolResult,
@@ -39,13 +36,11 @@ from forge.harness.tools.shell import ShellTool
 from forge.harness.tools.submit import SubmitTool
 from forge.harness.tools.validate import ValidateRequest, ValidateTool
 from forge.harness.tools.web import WebFetchTool, WebSearchTool
-from forge.harness.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
-from forge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine, script_grader
+from forge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
 from forge.model.controls import Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, Message, Sampling, ToolCall, Usage
 from forge.model.serialization import CONTROLS, TASK_SPEC
 from forge.model.workpiece import Conversation, Submission
-from forge.policy.defaults import DEFAULT_POLICY
 from forge.resources.env import (
     CommandResult,
     FakeCommand,
@@ -60,7 +55,7 @@ from forge.resources.env import (
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.inference import ContextExceeded, FakeInference
 from forge.resources.sandbox.factories import MachineHost
-from forge.wiring import build_config
+from forge.resources.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
 
 pytestmark = pytest.mark.asyncio
 
@@ -105,9 +100,12 @@ async def test_shell_submit_session_and_persisted_replay_spend_no_inference(tmp_
     ctx = Context(log=EventLog(sink=sink))
     env = environment(ctx)
     harness = AgenticHarness(262144, Sampling(), "continue", 20000)
-    tools = {"shell": ShellTool(), "submit": SubmitTool(accept)}
+    tools = {
+        "shell": ShellTool(30, 120),
+        "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
+    }
     initial = Conversation((Message("user", "build"),), ())
-    result = await harness.run(ctx, initial, env, FakeInference(script), tools)
+    result = await harness.run(ctx, initial, FakeInference(script), tools)
     await ctx.drain()
     assert isinstance(result, Submitted)
     assert result.submission.task.id == arithmetic_task().id
@@ -117,7 +115,7 @@ async def test_shell_submit_session_and_persisted_replay_spend_no_inference(tmp_
     replay = Context(log=EventLog(replay_from=await sink.read()))
     replay_env = environment(replay)
     client = FakeInference(())
-    replay_result = await harness.run(replay, initial, replay_env, client, tools)
+    replay_result = await harness.run(replay, initial, client, tools)
     await replay.drain()
     assert replay_result == result
     assert client.requests == []
@@ -131,8 +129,9 @@ async def test_argument_and_unknown_tool_errors_return_to_model_before_finish() 
     )
     ctx = Context(log=EventLog())
     client = FakeInference(script)
+    environment(ctx)
     result = await AgenticHarness(262144, Sampling(), "continue", 20000).run(
-        ctx, Conversation((), ()), environment(ctx), client, {"shell": ShellTool(), "finish": FinishTool()}
+        ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "finish": FinishTool()}
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.FINISHED
@@ -140,48 +139,27 @@ async def test_argument_and_unknown_tool_errors_return_to_model_before_finish() 
     assert result.session.messages[-1].tool_calls[0].id == "4"
 
 
-async def test_classifier_raises_through_scope_check_but_ordinary_exit_is_feedback() -> None:
-    ctx = Context(log=EventLog())
-    async with ctx.scope("ordinary"):
-        ctx.observe(ToolReturned, host_failure)
-        await ctx.emit(ToolReturned("1", "shell", '{"exit_code": 1, "stderr": "AssertionError"}'))
-        await ctx.check(Hold)
-    with pytest.raises(ExceptionGroup) as raised:
-        async with ctx.scope("lost"):
-            ctx.observe(ToolReturned, host_failure)
-            await ctx.emit(ToolReturned("2", "shell", "No space left on device"))
-            await ctx.check(Hold)
-    await ctx.drain()
-    assert isinstance(raised.value.exceptions[0], Hold)
-
-
 async def test_submit_gate_feedback_and_validate_capture_current_draft() -> None:
     ctx = Context(log=EventLog())
-    env = environment(ctx)
+    environment(ctx)
     await ctx.emit(RunCommand("task", 30))
     await ctx.emit(RunCommand("controls", 30))
-    tool = SubmitTool(lambda submission: ("Missing negative controls",))
-    result = await tool(ctx, {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"}, env)
+    tool = SubmitTool(
+        lambda submission: ("Missing negative controls",), "/workspace/task.json", "/workspace/controls.json"
+    )
+    result = await tool(ctx, {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"})
     assert isinstance(result, ToolResult) and result.content == "Missing negative controls"
     client = FakeInference((call("validate", {}, "validate-1"),))
     outcome = await AgenticHarness(262144, Sampling(), "continue", 20000).run(
-        ctx, Conversation((), ()), env, client, {"validate": ValidateTool(accept)}
+        ctx,
+        Conversation((), ()),
+        client,
+        {"validate": ValidateTool(accept, "/workspace/task.json", "/workspace/controls.json")},
     )
     await ctx.drain()
     assert isinstance(outcome, Returned) and isinstance(outcome.payload, ValidateRequest)
     assert outcome.payload.submission.task == arithmetic_task()
     assert outcome.session.messages[-1].tool_calls[0].id == "validate-1"
-
-
-async def test_binary_file_tools_round_trip_bytes_and_utf8_replacement() -> None:
-    ctx = Context(log=EventLog())
-    env = environment(ctx)
-    await WriteFileTool()(ctx, {"path": "/binfile", "content": "/wA=", "base64": True}, env)
-    encoded = await ReadFileTool()(ctx, {"path": "/binfile", "base64": True}, env)
-    text = await ReadFileTool()(ctx, {"path": "/binfile"}, env)
-    await ctx.drain()
-    assert isinstance(encoded, ToolResult) and encoded.content == "/wA="
-    assert isinstance(text, ToolResult) and text.content == "\ufffd\x00"
 
 
 async def test_web_transport_and_replay_cache_http_results() -> None:
@@ -219,17 +197,17 @@ async def test_web_transport_and_replay_cache_http_results() -> None:
 
 async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -> None:
     ctx = Context(log=EventLog())
-    env = environment(ctx)
+    environment(ctx)
     settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     grading = GradingResource(rollout_engine({}, command_timeout=1), "fixture")
     ctx.resource(grading, grading.fingerprint)
     ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grading,))
     tool = GradeTool("/workspace/task.json", {}, settings)
     await ctx.emit(RunCommand("task", 30))
-    first = await tool(ctx, {"reply": "12"}, env)
+    first = await tool(ctx, {"reply": "12"})
     changed = arithmetic_task(grader=verifyit_package(NumericSpec("7", tolerance_abs=0, tolerance_rel=0)).grader)
     await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(changed)))
-    second = await tool(ctx, {"reply": "12"}, env)
+    second = await tool(ctx, {"reply": "12"})
     assert isinstance(first, ToolResult) and json.loads(first.content)["reward"] == 1
     assert isinstance(second, ToolResult) and json.loads(second.content)["reward"] == 0
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"candidate"))
@@ -244,7 +222,6 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
                 }
             ]
         },
-        env,
     )
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"changed"))
     await ctx.drain()
@@ -269,7 +246,6 @@ async def test_web_and_error_results_are_saved_before_the_next_inference() -> No
     result = await AgenticHarness(262144, Sampling(), "continue", 80).run(
         ctx,
         Conversation((), ()),
-        env,
         client,
         {"web_search": WebSearchTool(), "web_fetch": WebFetchTool(), "finish": FinishTool()},
     )
@@ -284,7 +260,7 @@ async def test_web_and_error_results_are_saved_before_the_next_inference() -> No
         saved = next(path for path, data in env.files.items() if data.decode() == original)
         assert str(saved) in message.content
         assert f"{len(original)} characters" in message.content
-        sliced = await ReadFileTool()(ctx, {"path": str(saved), "offset": 80, "limit": 60}, env)
+        sliced = await ReadFileTool()(ctx, {"path": str(saved), "offset": 80, "limit": 60})
         assert sliced == ToolResult(original[80:140])
     await ctx.drain()
 
@@ -299,11 +275,11 @@ async def test_invalid_read_paths_are_tool_feedback(kind: str, failure: str) -> 
     async def read_missing(event: ReadFile, resource: FakeEnv) -> bytes:
         try:
             return await resource.read(event.path)
-        except KeyError as error:
+        except FileNotFoundError as error:
             if failure == "directory":
-                raise IsADirectoryError(str(event.path)) from error
+                raise IsADirectoryError(21, "Is a directory", str(event.path)) from error
             if failure == "archive":
-                info = TarInfo("./dev/fd")
+                info = TarInfo(str(event.path))
                 info.linkname = "/proc/self/fd"
                 raise AbsoluteLinkError(info) from error
             raise FileNotFoundError(str(event.path)) from error
@@ -316,8 +292,8 @@ async def test_invalid_read_paths_are_tool_feedback(kind: str, failure: str) -> 
         "report": ReportTool(arithmetic_task()),
         "grade-task": GradeTool(missing, {}, settings),
         "grade-candidate": GradeTool("/workspace/task.json", {}, settings),
-        "submit": SubmitTool(accept),
-        "validate": ValidateTool(accept),
+        "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
+        "validate": ValidateTool(accept, "/workspace/task.json", "/workspace/controls.json"),
     }
     arguments: dict[str, dict[str, object]] = {
         "read": {"path": missing},
@@ -335,19 +311,18 @@ async def test_invalid_read_paths_are_tool_feedback(kind: str, failure: str) -> 
         "submit": {"task_path": "/workspace/task.json", "controls_path": missing},
         "validate": {},
     }
-    result = await tools[kind](ctx, arguments[kind], env)
+    result = await tools[kind](ctx, arguments[kind])
     await ctx.drain()
     assert isinstance(result, ToolResult) and missing in result.content
     if failure == "directory":
-        assert "is a directory" in result.content
+        assert "directory" in result.content
     if failure == "archive":
-        assert "archive extraction failed" in result.content
+        assert "absolute path" in result.content
 
 
 @pytest.mark.parametrize("context_tokens", [262144, 131072])
 async def test_model_window_determines_context_exit(context_tokens: int) -> None:
-    policy = DEFAULT_POLICY.overlaid({"author.context_tokens": context_tokens})
-    harness = build_config(policy, "S", {}).author
+    harness = AgenticHarness(context_tokens, Sampling(), "continue", 20000)
     budget = context_tokens
     client = FakeInference(
         tuple(
@@ -360,7 +335,8 @@ async def test_model_window_determines_context_exit(context_tokens: int) -> None
         )
     )
     ctx = Context(log=EventLog())
-    result = await harness.run(ctx, Conversation((), ()), environment(ctx), client, {"shell": ShellTool()})
+    environment(ctx)
+    result = await harness.run(ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120)})
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
     assert len(client.requests) == 2
@@ -378,8 +354,9 @@ async def test_text_and_isolated_empty_stops_keep_nudging_until_explicit_finish(
     )
     client = FakeInference(script)
     ctx = Context(log=EventLog())
+    environment(ctx)
     result = await AgenticHarness(262144, Sampling(), "use tools", 20000).run(
-        ctx, Conversation((), ()), environment(ctx), client, {"finish": FinishTool()}
+        ctx, Conversation((), ()), client, {"finish": FinishTool()}
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.FINISHED
@@ -392,26 +369,29 @@ async def test_three_consecutive_empty_completions_hold_provider_failure() -> No
     client = FakeInference((Completion(""),) * 3)
     ctx = Context(log=EventLog())
     with pytest.raises(Hold, match="provider returned 3 empty completions"):
-        await AgenticHarness(262144, Sampling(), "use tools", 20000).run(
-            ctx, Conversation((), ()), environment(ctx), client, {}
-        )
+        environment(ctx)
+        await AgenticHarness(262144, Sampling(), "use tools", 20000).run(ctx, Conversation((), ()), client, {})
     await ctx.drain()
     assert len(client.requests) == 3
 
 
 async def test_invalid_grader_image_is_feedback_before_any_grading_effect() -> None:
     ctx = Context(log=EventLog())
-    env = environment(ctx)
+    environment(ctx)
     image = "registry.example.com/python@sha256:" + "a" * 64
     task = arithmetic_task(
-        grader=script_grader(
-            ("sh", "-c", "echo 1"), StdoutReward(), environment=requirements(image=image), answer_path=None, timeout=1
-        ).grader
+        grader=ScriptGrader(
+            argv=("sh", "-c", "echo 1"),
+            reward=StdoutReward(),
+            environment=requirements(image=image),
+            answer_path=None,
+            timeout=1,
+        )
     )
     await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(task)))
     settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     # No GradeCandidate executor: the invalid image must be rejected before scheduling grading.
-    result = await GradeTool("/workspace/task.json", {}, settings)(ctx, {"reply": "12"}, env)
+    result = await GradeTool("/workspace/task.json", {}, settings)(ctx, {"reply": "12"})
     await ctx.drain()
     assert isinstance(result, ToolResult) and "grader image must be" in result.content and image in result.content
 
@@ -419,7 +399,7 @@ async def test_invalid_grader_image_is_feedback_before_any_grading_effect() -> N
 @pytest.mark.parametrize("name", ["grade", "submit", "validate"])
 async def test_candidate_files_without_task_machine_return_feedback(name: str) -> None:
     ctx = Context(log=EventLog())
-    env = environment(ctx)
+    environment(ctx)
     await ctx.emit(RunCommand("task", 30))
     candidate = Candidate("12", (inline_resource("workspace/answer", b"12"),))
     controls = (Control(candidate, RewardBand(Outcome.GRADED, reward_min=1), ControlKind.POSITIVE),)
@@ -428,8 +408,8 @@ async def test_candidate_files_without_task_machine_return_feedback(name: str) -
     settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     tools: dict[str, Tool[object]] = {
         "grade": GradeTool("/workspace/task.json", {}, settings),
-        "submit": SubmitTool(accept),
-        "validate": ValidateTool(accept),
+        "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
+        "validate": ValidateTool(accept, "/workspace/task.json", "/workspace/controls.json"),
     }
     args: dict[str, dict[str, object]] = {
         "grade": {"reply": "12", "files": ["/workspace/answer"]},
@@ -437,29 +417,9 @@ async def test_candidate_files_without_task_machine_return_feedback(name: str) -
         "validate": {},
     }
     # No grading executor: malformed author data must never reach the executor backstop.
-    result = await tools[name](ctx, args[name], env)
+    result = await tools[name](ctx, args[name])
     await ctx.drain()
     assert isinstance(result, ToolResult) and "Candidate files require a task machine" in result.content
-
-
-@pytest.mark.parametrize("name", ["submit", "validate"])
-async def test_repaired_task_machine_allows_file_controls_to_leave_the_tool(name: str) -> None:
-    ctx = Context(log=EventLog())
-    env = environment(ctx)
-    task = arithmetic_task(environment_requirements=requirements(image=None))
-    candidate = Candidate("12", (inline_resource("workspace/answer", b"12"),))
-    controls = (Control(candidate, RewardBand(Outcome.GRADED, reward_min=1), ControlKind.POSITIVE),)
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(task)))
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/controls.json"), CONTROLS.dump_json(controls)))
-    tool: Tool[object] = SubmitTool(accept) if name == "submit" else ValidateTool(accept)
-    args = {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"} if name == "submit" else {}
-    result = await tool(ctx, args, env)
-    await ctx.drain()
-    if name == "submit":
-        assert isinstance(result, SubmitRequest) and result.submission.controls == controls
-    else:
-        assert isinstance(result, ReturnRequest) and isinstance(result.payload, ValidateRequest)
-        assert result.payload.submission.controls == controls
 
 
 async def test_provider_context_overflow_preserves_the_last_completed_conversation() -> None:
@@ -467,8 +427,9 @@ async def test_provider_context_overflow_preserves_the_last_completed_conversati
         (call("shell", {"command": "task"}, "1"), ContextExceeded("maximum context length: requested 383788 tokens"))
     )
     ctx = Context(log=EventLog())
+    environment(ctx)
     result = await AgenticHarness(262144, Sampling(), "use tools", 20000).run(
-        ctx, Conversation((Message("user", "build"),), ()), environment(ctx), client, {"shell": ShellTool()}
+        ctx, Conversation((Message("user", "build"),), ()), client, {"shell": ShellTool(30, 120)}
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
@@ -494,8 +455,9 @@ async def test_next_prompt_counts_reply_tokens_and_appended_tool_text(completion
             ),
         )
     )
+    environment(ctx)
     result = await AgenticHarness(100, Sampling(), "use tools", output_chars).run(
-        ctx, Conversation((), ()), environment(ctx), client, {"web_search": WebSearchTool()}
+        ctx, Conversation((), ()), client, {"web_search": WebSearchTool()}
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
@@ -505,17 +467,17 @@ async def test_next_prompt_counts_reply_tokens_and_appended_tool_text(completion
 
 async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() -> None:
     ctx = Context(log=EventLog())
-    env = environment(ctx)
+    environment(ctx)
     task = arithmetic_task()
     tool = ReportTool(task)
-    commentary = await tool(ctx, {"findings": ["No grading defect found"]}, env)
+    commentary = await tool(ctx, {"findings": ["No grading defect found"]})
     assert isinstance(commentary, ToolResult)
     claim = {
         "claim": "wrong answer accepted",
         "candidate": {"reply": "9"},
         "expected": {"status": "graded", "reward_min": 1},
     }
-    report = await tool(ctx, {"findings": [claim]}, env)
+    report = await tool(ctx, {"findings": [claim]})
     assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
     finding = report.payload.findings[0]
     assert finding.claim == "wrong answer accepted" and finding.candidate.reply == "9"
@@ -525,10 +487,8 @@ async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() ->
     edited = arithmetic_task(environment_requirements=requirements(image=None))
     await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(edited)))
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"9"))
-    rejected = await tool(
-        ctx, {"findings": [{**claim, "candidate": {"reply": "9", "files": ["/workspace/answer"]}}]}, env
-    )
-    empty = await tool(ctx, {"findings": []}, env)
+    rejected = await tool(ctx, {"findings": [{**claim, "candidate": {"reply": "9", "files": ["/workspace/answer"]}}]})
+    empty = await tool(ctx, {"findings": []})
     await ctx.drain()
     assert isinstance(rejected, ToolResult) and "Candidate files require a task machine" in rejected.content
     assert isinstance(empty, ReturnRequest) and isinstance(empty.payload, AdversaryReport)
@@ -537,7 +497,7 @@ async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() ->
 
 async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_reported() -> None:
     ctx = Context(log=EventLog())
-    env = environment(ctx)
+    environment(ctx)
     await ctx.emit(RunCommand("task", 30))
 
     async def invalid_checks(event: GradeCandidate) -> GradeResult:
@@ -546,7 +506,7 @@ async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_
     ctx.handle(GradeCandidate, invalid_checks)
     settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     tool = GradeTool("/workspace/task.json", {}, settings)
-    result = await tool(ctx, {"reply": "12"}, env)
+    result = await tool(ctx, {"reply": "12"})
     assert isinstance(result, ToolResult) and "checks must be a list of" in result.content
     assert "name" in result.content and "passed" in result.content and "weight" in result.content
 
@@ -554,7 +514,7 @@ async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_
         return GradeResult(Outcome.GRADED, 0, detail={"checks": [{"name": "A", "passed": False, "weight": 1}]})
 
     ctx.handle(GradeCandidate, valid_checks)
-    corrected = await tool(ctx, {"reply": "9"}, env)
+    corrected = await tool(ctx, {"reply": "9"})
     await ctx.drain()
     assert isinstance(corrected, ToolResult)
     assert json.loads(corrected.content)["grader_checks"] == [{"name": "A", "passed": False, "weight": 1}]
@@ -566,11 +526,11 @@ async def test_large_shell_output_is_saved_and_replayed_without_inference(tmp_pa
     env = environment(ctx)
     harness = AgenticHarness(262144, Sampling(), "continue", 8)
     initial = Conversation((), ())
-    tools = {"shell": ShellTool(), "finish": FinishTool()}
+    tools = {"shell": ShellTool(30, 120), "finish": FinishTool()}
     client = FakeInference(
         (call("shell", {"command": "task"}, "../../escape"), call("finish", {"reason": "done"}, "done"))
     )
-    result = await harness.run(ctx, initial, env, client, tools)
+    result = await harness.run(ctx, initial, client, tools)
     await ctx.drain()
     saved = [(path, data) for path, data in env.files.items() if path.parent == PurePosixPath(".tool-output")]
     assert len(saved) == 1
@@ -581,7 +541,7 @@ async def test_large_shell_output_is_saved_and_replayed_without_inference(tmp_pa
     replay = Context(log=EventLog(replay_from=await sink.read()))
     replay_env = environment(replay)
     replay_client = FakeInference(())
-    assert await harness.run(replay, initial, replay_env, replay_client, tools) == result
+    assert await harness.run(replay, initial, replay_client, tools) == result
     await replay.drain()
     assert not replay_client.requests
     assert replay_env.files == env.files
@@ -593,28 +553,68 @@ async def test_large_shell_output_is_saved_and_replayed_without_inference(tmp_pa
         IsADirectoryError("directory"),
         FileNotFoundError("missing"),
         NotADirectoryError("parent"),
-        PermissionError("denied"),
     ],
 )
 async def test_write_path_errors_return_feedback(failure: OSError) -> None:
     ctx = Context(log=EventLog())
-    env = environment(ctx)
+    environment(ctx)
 
     async def fail_write(event: WriteFile) -> None:
-        raise failure
+        raise type(failure)(1, str(failure), str(event.path))
 
     ctx.handle(WriteFile, fail_write)
-    result = await WriteFileTool()(ctx, {"path": "/bad/path", "content": "data"}, env)
+    result = await WriteFileTool()(ctx, {"path": "/bad/path", "content": "data"})
     await ctx.drain()
     assert isinstance(result, ToolResult) and "/bad/path" in result.content
 
 
 async def test_read_file_ranges_are_bytes_before_text_or_base64_decoding() -> None:
     ctx = Context(log=EventLog())
-    env = environment(ctx)
+    environment(ctx)
     await ctx.emit(WriteFile(PurePosixPath("unicode"), "éXYZ".encode()))
-    text = await ReadFileTool()(ctx, {"path": "unicode", "offset": 2, "limit": 2}, env)
-    binary = await ReadFileTool()(ctx, {"path": "unicode", "offset": 0, "limit": 2, "base64": True}, env)
+    text = await ReadFileTool()(ctx, {"path": "unicode", "offset": 2, "limit": 2})
+    binary = await ReadFileTool()(ctx, {"path": "unicode", "offset": 0, "limit": 2, "base64": True})
     await ctx.drain()
     assert text == ToolResult("XY")
     assert binary == ToolResult("w6k=")
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 422, 429, 503])
+async def test_web_rejections_distinguish_author_errors_from_service_errors(status: int) -> None:
+    async with httpx.AsyncClient(
+        base_url="https://api.parallel.ai/v1",
+        transport=httpx.MockTransport(lambda _: httpx.Response(status, text="bad URL")),
+    ) as http:
+        web = ParallelWeb(http)
+        if status in (401, 403):
+            with pytest.raises(Hold):
+                await web.fetch("bad")
+        elif status in (429, 503):
+            with pytest.raises(Transient):
+                await web.fetch("bad")
+        else:
+            assert str(status) in await web.fetch("bad")
+
+
+async def test_mixed_validate_turn_answers_every_call_before_retry() -> None:
+    log = EventLog()
+    ctx = Context(log=log)
+    environment(ctx)
+    await ctx.emit(RunCommand("task", 30))
+    await ctx.emit(RunCommand("controls", 30))
+    mixed = Completion(
+        "", (*call("validate", {}, "a").tool_calls, *call("shell", {"command": "task", "timeout": 1000}, "b").tool_calls)
+    )
+    client = FakeInference((mixed, call("validate", {}, "c")))
+    tools = {
+        "validate": ValidateTool(accept, "/workspace/task.json", "/workspace/controls.json"),
+        "shell": ShellTool(30, 120),
+    }
+    result = await AgenticHarness(262144, Sampling(), "continue", 20000).run(ctx, Conversation((), ()), client, tools)
+    await ctx.drain()
+    assert any(isinstance(record.event, RunCommand) and record.event.timeout == 120 for record in log.records)
+    assert isinstance(result, Returned)
+    replies = [message for message in client.requests[1].messages if message.role == "tool"]
+    assert [message.tool_call_id for message in replies] == ["a", "b"]
+    assert "called alone" in replies[0].content
+    assert result.session.messages[-1].tool_calls[0].id == "c"

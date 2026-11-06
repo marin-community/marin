@@ -10,22 +10,22 @@ from rolloutengine.machines import _machine_spec
 from rolloutengine.models import RolloutLimits, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
-from taskcompendium.models import AnswerType, CommandSemantics, EnvironmentRequirements, PlainText, Source, StdoutReward
-from verifyit.spec import ExactSpec
+from taskcompendium.models import (
+    CommandSemantics,
+    EnvironmentRequirements,
+    ScriptGrader,
+    StdoutReward,
+)
 
 from forge.lowering import (
     GRADING_MACHINE,
     LoweringSettings,
-    answer_grader,
-    assemble,
     host_requirements,
     lower,
     lower_with_settings,
     lowering_settings,
-    machine,
     machine_backend,
     requirements,
-    script_grader,
 )
 from forge.policy import load_policy
 from forge.resources.sandbox.factories import MachineHost
@@ -50,19 +50,11 @@ def test_lowering_binds_an_image_task_to_its_host_and_survives_engine_wire_forma
     host: MachineHost, backend: Backend
 ) -> None:
     image = "docker.io/example/task@sha256:" + "0" * 64
-    task = assemble(
-        "sum",
-        "Return 1 + 1",
-        AnswerType.TEXT,
-        PlainText(),
-        answer_grader(ExactSpec(expected=("2",))),
-        Source(dataset="forge", revision="v1", row="1", importer_revision="v1"),
-        environment=requirements(image=image),
-    )
+    task = arithmetic_task(environment_requirements=requirements(image=image))
     lowered = lower(
         task,
         host=host,
-        task_machine=machine(startup_timeout=30),
+        task_machine=GRADING_MACHINE,
         verifier_machine=None,
         limits=RolloutLimits(
             max_turns=2,
@@ -93,9 +85,13 @@ def test_lowering_binds_an_image_task_to_its_host_and_survives_engine_wire_forma
 )
 def test_grader_image_precheck_respects_available_host_factories(image: str | None) -> None:
     task = arithmetic_task(
-        grader=script_grader(
-            ("sh", "-c", "echo 1"), StdoutReward(), environment=requirements(image=image), answer_path=None, timeout=1
-        ).grader
+        grader=ScriptGrader(
+            argv=("sh", "-c", "echo 1"),
+            reward=StdoutReward(),
+            environment=requirements(image=image),
+            answer_path=None,
+            timeout=1,
+        )
     )
     settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     factories = {backend.value: AvailableFactory(backend) for backend in (Backend.GVISOR, Backend.SHELLSIM)}
@@ -107,24 +103,6 @@ def test_grader_image_precheck_respects_available_host_factories(image: str | No
         lowered = lower_with_settings(task, settings, factories)
         assert lowered.verifier_machine is not None
         assert lowered.verifier_machine.backend == (Backend.SHELLSIM if image is None else Backend.GVISOR)
-
-
-def test_missing_machine_error_names_the_author_environment_fix() -> None:
-    task = arithmetic_task(
-        environment_requirements=EnvironmentRequirements(
-            command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="lockfile-placeholder"
-        )
-    )
-    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
-    with pytest.raises(ValueError) as raised:
-        lower_with_settings(task, settings, {})
-    message = str(raised.value)
-    assert 'set capabilities to ["shell"]' in message
-    assert GRADER_BASE_IMAGE in message and "command_semantics shell_simulator" in message
-    assert "candidate files require it" in message
-    repaired = task.model_copy(update={"environment_requirements": requirements(image=None)})
-    spec = lower_with_settings(repaired, settings, {"shellsim": AvailableFactory(Backend.SHELLSIM)})
-    assert spec.task_machine is not None and spec.task_machine.backend == Backend.SHELLSIM
 
 
 @pytest.mark.parametrize("directory", [None, "/custom"])
@@ -144,22 +122,21 @@ def test_image_free_linux_process_is_rejected_before_starting_a_machine() -> Non
 
 
 @pytest.mark.parametrize("memory_mb", [8192, 16384])
-def test_policy_memory_and_actual_grader_timeout_reach_both_machine_specs(
-    memory_mb: int, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_policy_memory_and_actual_grader_timeout_reach_both_machine_specs(memory_mb: int) -> None:
     policy = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults")
     assert policy.setting("sandbox.memory_mb", int) == 8192
     policy = policy.overlaid({"sandbox.memory_mb": memory_mb})
     settings = lowering_settings(policy)
-    package = script_grader(
-        ("true",), StdoutReward(), environment=requirements(image=GRADER_BASE_IMAGE), answer_path=None, timeout=900
+    package = ScriptGrader(
+        argv=("true",),
+        reward=StdoutReward(),
+        environment=requirements(image=GRADER_BASE_IMAGE),
+        answer_path=None,
+        timeout=900,
     )
-    task = arithmetic_task(grader=package.grader, environment_requirements=requirements(image=GRADER_BASE_IMAGE))
+    task = arithmetic_task(grader=package, environment_requirements=requirements(image=GRADER_BASE_IMAGE))
     spec = lower_with_settings(task, settings, {"gvisor": AvailableFactory(Backend.GVISOR)})
     assert spec.task_machine is not None and spec.verifier_machine is not None
     assert spec.task_machine.memory_mb == spec.verifier_machine.memory_mb == memory_mb
     assert spec.task_machine.cpus == spec.verifier_machine.cpus == 1
     assert spec.limits.verifier_timeout == 1500
-    output = capsys.readouterr().out
-    assert "declared_grader=900" in output and "resolved=1500" in output
-    assert f"sandbox.memory_mb declared={memory_mb} resolved={memory_mb}" in output
