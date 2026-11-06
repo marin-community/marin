@@ -21,7 +21,17 @@ table. Its exit code is 0 for PASS or completed train-long/control collection,
 1 for FAIL, 2 for INVALID and 3 when submission, the coordinator or missing evidence prevents a verdict. Successful ungated runs also exit 0. Submission without `--wait` returns 0 when accepted.
 The status lists the latest completed update and the W&B URL when the tracker has
 saved one. Set `WANDB_ENTITY` before submission to choose the W&B team; an unset
-value uses `marin-community`. Runs use the `marin-snowball-rl` project. The team changes neither run identity nor pinned configuration. Grafana run and preset-panel links appear when the native job start time is available; active jobs link through the present time.
+value uses `marin-community`. Runs use the `marin-snowball-rl` project.
+
+Completed learning-medium and data-medium candidates publish one `rl_progress` record per replicate.
+The status row includes `rl_progress_url` after publication is verified. Each record keeps the group
+verdict and the run's own update-0 baseline; native success and the quality verdict are separate.
+Coverage below 99% cannot rank. Speed presets and data-short keep their results in the gate report.
+Re-run the standalone gate command to retry publication after a service failure; its saved verdict
+remains available, and the retry reuses the retained summary.
+
+The W&B team changes neither run identity nor pinned configuration. Grafana run and preset-panel links
+appear when the native job start time is available; active jobs link through the present time.
 
 | preset | allocation | workload | measurement |
 |---|---|---|---|

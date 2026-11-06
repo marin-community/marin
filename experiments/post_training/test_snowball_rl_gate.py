@@ -1564,7 +1564,9 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("generate", 0),
     ],
 )
-def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
+def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
+    recorded_runs, monkeypatch, case, expected, publication_transport
+):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setenv("WANDB_ENTITY", "submission-team")
     preset_name = (
@@ -1572,14 +1574,19 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     )
     controls(recorded_runs, preset_name)
     preset = presets.PRESETS[preset_name]
-    built = snowball.build_run(preset, control=case == "control")
-    source = recorded_runs(
-        preset,
-        built.runs[0].name,
-        speed=150 if case in {"fail", "no-wait"} else 101,
-        fingerprint=built.runs[0].fingerprint(),
-        initial_score=0.2 if case == "learning-child" else None,
-    )
+    replicates = 2 if case == "learning-child" else 1
+    built = snowball.build_run(preset, control=case == "control", replicates=replicates)
+    sources = [
+        recorded_runs(
+            preset,
+            step.name,
+            speed=150 if case in {"fail", "no-wait"} else 101,
+            fingerprint=step.fingerprint(),
+            initial_score=0.2 if case == "learning-child" else None,
+        )
+        for step in built.runs
+    ]
+    source = sources[0]
     if built.gate is not None:
         built = replace(built, gate=gate.gate_step(preset, built.runs, inputs=gate.GateInputs()))
     if case == "invalid":
@@ -1607,6 +1614,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         arguments.append("--wait")
     if case == "control":
         arguments.append("--control")
+    if case == "learning-child":
+        arguments.extend(("--replicates", "2"))
     try:
         result = CliRunner().invoke(snowball.main, arguments)
     finally:
@@ -1620,10 +1629,34 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     if case in {"pass", "fail", "invalid"}:
         assert "# speed-medium" in result.output
     if case == "learning-child":
-        snapshot = status(preset_name, [])
-        assert snapshot["runs"][0]["rl_progress_url"].startswith("https://applets.marina.oa.dev/")
-        publications = list((Path(source).parent.parent).rglob("publication.json"))
-        assert publications
+        snapshot = status(preset_name, ["--replicates", "2"])
+        assert all(row["rl_progress_url"].startswith("https://applets.marina.oa.dev/") for row in snapshot["runs"])
+        first_group = set(publication_transport.rows)
+        assert len(first_group) == 2
+        earlier = {path: path.read_bytes() for path in Path(source).parent.parent.rglob("loop-result.json")}
+        retried = sources[1]
+        for filename in ("terminal.json", "resolved-launch.yaml"):
+            path = retried / filename
+            value = json.loads(path.read_text())
+            value["config"]["run"]["attempt_id"] = "second-attempt"
+            _json(path, value)
+        for path in (retried / "exports/metrics").glob("step-*.json"):
+            _json(path, json.loads(path.read_text()) | {"attempt_id": "second-attempt"})
+        pending = status(preset_name, ["--replicates", "2"])
+        assert "report" not in pending and "verdict" not in pending
+        assert all("rl_progress_url" not in row for row in pending["runs"])
+        try:
+            repeated = CliRunner().invoke(snowball.main, arguments)
+        finally:
+            set_job_info(None)
+        assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+        assert len(publication_transport.rows) == 4 and len(set(publication_transport.rows) - first_group) == 2
+        assert all(path.read_bytes() == content for path, content in earlier.items())
+        refreshed = status(preset_name, ["--replicates", "2"])
+        assert refreshed["report"] != snapshot["report"]
+        assert any(
+            attempt.startswith("second-attempt-gate-") for _, attempt in set(publication_transport.rows) - first_group
+        )
     if case == "generate":
         snapshot = status(preset_name, [])
         assert snapshot["runs"][0]["latest_completed_update"] == 0

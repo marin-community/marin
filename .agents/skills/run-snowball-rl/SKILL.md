@@ -196,6 +196,13 @@ Learning-medium and data-medium score the same greedy test panel at update 0 and
 The run’s own update-0 dump supplies its publication baseline; the pass-rate artifact supplies
 initializer statistics by slice. `--baseline` compares separate completed runs in the gate report.
 
+Completed learning-medium and data-medium candidates publish one `rl_progress` record per replicate.
+The status row includes `rl_progress_url` after publication is verified. Each record keeps the group
+verdict and the run's own update-0 baseline; native success and the quality verdict are separate.
+Coverage below 99% cannot rank. Speed presets and data-short keep their results in the gate report.
+Re-run the standalone gate command to retry publication after a service failure; its saved verdict
+remains available, and the retry reuses the retained summary.
+
 ## Record the experiment
 
 One experiment is one change under test, with every run and preset used to judge it. It has one
