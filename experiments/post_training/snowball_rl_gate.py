@@ -47,7 +47,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
-GATE_REVISION = "2026.11.05.2"
+GATE_REVISION = "2026.11.06"
 GATE_REPORT_FILENAME = "gate_report.json"
 GRADER_ERROR_LIMIT = 0.01
 OUTCOME_PREFIX = "generate/outcome/"
@@ -327,7 +327,7 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
     ]
     values = {}
     declared = {metric.key: metric for metric in (*preset.guards, *preset.reported)}
-    extra = set().union(*(row.keys() for row in metrics.values())) - declared.keys()
+    extra = set().union(*(row.keys() for row in metrics.values())) - declared.keys() - {"step", "attempt_id"}
     for metric in (*declared.values(), *(presets.Metric(key, True) for key in sorted(extra))):
         if metric.key.startswith("startup/"):
             first = next((row[metric.key] for _, row in sorted(metrics.items()) if metric.key in row), None)
@@ -697,6 +697,12 @@ def _write_gate(
         for pin, group in grouped.items():
             for candidate in group:
                 _check_control(candidate, pin)
+        if any(candidate.version != controls[0].version for candidate in (*runs, *controls)):
+            raise InvalidComparison(
+                "preset revisions differ, including effective evaluation sampling: "
+                f"candidate={sorted({candidate.version for candidate in runs})}; "
+                f"controls={sorted({candidate.version for candidate in controls})}"
+            )
         if any(candidate.version != presets.PRESET_REVISION for candidate in runs):
             raise InvalidComparison("preset revision differs")
         if any(candidate.panel_ids != controls[0].panel_ids for candidate in (*runs, *controls)):
@@ -754,9 +760,10 @@ def _pins(preset: str) -> tuple[ControlPin, ...]:
     pins = tuple(pin for pin in known if pin.revision == presets.PRESET_REVISION)
     if not pins:
         name, replicas = (known[0].preset, known[0].runs) if known else (preset, 4)
+        revisions = sorted({pin.revision for pin in known})
         raise InvalidComparison(
-            f"no control pin for {preset} at {presets.PRESET_REVISION}; collect with "
-            f"python -m experiments.post_training.snowball_rl --preset {name} "
+            f"no control pin for {preset} at {presets.PRESET_REVISION}; recorded control revisions={revisions}; "
+            f"collect with python -m experiments.post_training.snowball_rl --preset {name} "
             f"--version {presets.PRESET_REVISION} --control --replicates {replicas} --run"
         )
     return pins

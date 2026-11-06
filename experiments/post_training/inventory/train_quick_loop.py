@@ -30,7 +30,7 @@ from marin.training.training import LevanterCheckpoint
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
 from experiments.post_training.inventory.loop_publication import publication_step, run_recorded_loop
 from experiments.post_training.inventory.loop_result import LoopRunConfig
-from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
+from experiments.post_training.task_curation.inventory import SELECTION_PREFIX, TRAIN_FILENAME, VALIDATION_FILENAME
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
@@ -38,7 +38,6 @@ MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory-batch-fixed"
-SELECTION_PREFIX = "rl-data/task-selection"
 DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.10.23.2"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020

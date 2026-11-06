@@ -9,6 +9,7 @@ import runpy
 import shutil
 import sys
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -43,7 +44,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 
 pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
-pytestmark = pytest.mark.usefixtures("source_provenance")
+pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
 
 
 def _json(path, value):
@@ -101,6 +102,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         initial_score=None,
         omit_step=None,
         version=presets.PRESET_REVISION,
+        record_version=None,
         fixed=True,
         mixed=128,
         fingerprint="",
@@ -124,7 +126,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         )
         record = ArtifactRecord(
             name=name,
-            version=version,
+            version=record_version or version,
             fingerprint=fingerprint,
             result_type=result_type_name(SkyRLRun),
             result=result.result_payload(),
@@ -143,6 +145,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                 row["timing/step_wall/unaccounted"] = 0.0
             row |= {metric.key: 0.0 for metric in preset.reported if metric.key.startswith("timing/step_wall/")}
             row |= {
+                "attempt_id": "recorded-attempt",
                 "generate/outcome/graded": 512.0,
                 "loss/policy_loss": 0.01,
                 "policy/raw_grad_norm": 1.0,
@@ -474,11 +477,22 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
         ),
         ("speed-long", {"metrics": {"policy/mismatch/pooled/kl_k3": 100}}, {}, "pass", "regression", set(), None),
+        ("speed-long", {"metrics": {"policy/mismatch/staleness0/kl_k3": 100}}, {}, "fail", "regression", set(), None),
         ("learning-medium", BROKEN, {}, "fail", "regression", BROKEN_FAILS, None),
         ("speed-medium", {"fixed": False}, {}, "fail", "regression", {"fixed_reply_tokens"}, None),
         ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None),
         ("speed-medium", {}, {"fault": {"metrics": AMBIGUOUS}}, "invalid", None, set(), None),
         ("speed-medium", {"version": "2026.10.01"}, {}, "invalid", None, set(), None),
+        pytest.param(
+            "speed-medium",
+            {},
+            {"fault": {"record_version": "2026.10.01"}},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="candidate-and-control-evaluation-revisions-differ",
+        ),
         ("learning-medium", {"drop_task": True}, {}, "invalid", None, {"panel-910/batch_finished"}, None),
         (
             "speed-medium",
@@ -537,8 +551,14 @@ def test_rescore_reports_candidate_and_control_contracts(
             "speed/update_seconds",
             "async/performance/loss_tokens_per_configured_policy_gpu_second",
             "async/performance/response_tokens_per_configured_inference_gpu_second",
+            "policy/mismatch/staleness0/kl_k3",
         }
         assert any(row["metric"] == "policy/mismatch/pooled/kl_k3" for row in report["reported"])
+    if "version" in fault:
+        assert fault["version"] in report["reason"] and presets.PRESET_REVISION in report["reason"]
+    if "record_version" in control_fault.get("fault", {}):
+        assert control_fault["fault"]["record_version"] in report["reason"]
+        assert presets.PRESET_REVISION in report["reason"]
     assert not fault.get("missing_receipt") or report["reason"] == f"no launch receipt at {source}"
     assert not fault.get("unresolved_receipt") or report["reason"].startswith(
         "cannot identify the Iris job lookup-missing-job"
@@ -798,7 +818,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         expected = (
             algorithm | {"trainer.policy.optimizer_config.lr": 1e-6},
             None,
-            "users/test/initializer@2026.10.27",
+            f"{init.name}@{init.version}",
             [pytest.approx(0.295)],
         )
     else:
@@ -918,22 +938,32 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     )
 
 
-def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch):
+@pytest.mark.parametrize("preset", ["speed-long", "speed-medium"])
+def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, preset):
+    if preset == "speed-medium":
+        monkeypatch.setitem(
+            gate.CONTROLS,
+            preset,
+            tuple(replace(pin, revision="2026.10.27") for pin in gate.CONTROLS[preset]),
+        )
     client = MagicMock(spec=IrisClient)
     client.submit.side_effect = AssertionError("an unpinned candidate submitted a coordinator")
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     for command, arguments in (
-        (snowball.main, ["--preset", "speed-long", "--version", presets.PRESET_REVISION, "--run", "--wait"]),
-        (gate.main, ["--preset", "speed-long", "--candidate", "tests/unpinned"]),
+        (snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, "--run", "--wait"]),
+        (gate.main, ["--preset", preset, "--candidate", "tests/unpinned"]),
     ):
         refused = CliRunner().invoke(command, arguments)
         assert refused.exit_code == 2, (refused.output, refused.exception)
         payload = json.loads(refused.output)
-        assert payload["preset"] == "speed-long" and payload["verdict"] == "invalid"
+        assert payload["preset"] == preset and payload["verdict"] == "invalid"
         assert payload["reason"].endswith(
-            "python -m experiments.post_training.snowball_rl --preset speed-long "
+            f"python -m experiments.post_training.snowball_rl --preset {preset} "
             f"--version {presets.PRESET_REVISION} --control --replicates 4 --run"
         )
+        assert presets.PRESET_REVISION in payload["reason"]
+        if preset == "speed-medium":
+            assert "2026.10.27" in payload["reason"]
 
 
 @pytest.mark.parametrize(

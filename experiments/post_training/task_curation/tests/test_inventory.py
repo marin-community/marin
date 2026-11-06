@@ -36,7 +36,9 @@ from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.inventory import (
     AAII_CATEGORIES,
     FULL_VALIDATION_FILENAME,
+    HELDOUT_BLEND,
     HELDOUT_FAMILIES,
+    STRUCTURAL_FAMILY,
     TASK_MANIFEST_FILENAME,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
@@ -45,7 +47,7 @@ from experiments.post_training.task_curation.inventory import (
     validation_task,
 )
 
-FAMILIES = (*HELDOUT_FAMILIES.values(), "structural")
+FAMILIES = (*HELDOUT_FAMILIES.values(), STRUCTURAL_FAMILY)
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +81,7 @@ def heldout_rows() -> list[dict]:
         for index in range(21):
             identifier = f"heldout-{family}-{index}"
             task: dict[str, Any] = {**source_task(identifier).model_dump(mode="json"), "schema_version": "0.27"}
-            if family == "structural":
+            if family == STRUCTURAL_FAMILY:
                 task["source"]["dataset"] = "structure-closure"
                 task["grader"] = {"kind": "session"}
                 config = inline_resource(
@@ -105,7 +107,7 @@ def heldout_rows() -> list[dict]:
                             "task": task,
                             "runtime": {"task_machine": None, "verifier_machine": None},
                             "session": {
-                                "task_session": "structure_closure" if family == "structural" else "shellbox",
+                                "task_session": "structure_closure" if family == STRUCTURAL_FAMILY else "shellbox",
                                 "max_turns": 1,
                             },
                         }
@@ -173,7 +175,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
     families = {f"heldout-{family}-{index}": family for family in FAMILIES for index in range(21)}
     assert [task.id for task in full] == list(families)
     assert Counter(families[task.id] for task in sample) == dict.fromkeys(FAMILIES, 20)
-    structural = next(task for task in full if families[task.id] == "structural")
+    structural = next(task for task in full if families[task.id] == STRUCTURAL_FAMILY)
     assert structural.context.events[-1] == TextMessage(role="assistant", content='{"a":[1')
     assert structural.grader.mode == "structure_closure"
     summary = json.loads((output / "summary.json").read_text())
@@ -212,7 +214,7 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     }
     settings = recipe(tmp_path).model_copy(
         update={
-            "sources": {BLENDS["rlvr1"][dataset].id: family for dataset, family in components.items()},
+            "sources": {BLENDS[HELDOUT_BLEND][dataset].id: family for dataset, family in components.items()},
             "family_limits": {family: 1 for family in components.values()},
         }
     )
@@ -247,10 +249,10 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
             "family": family,
             "aaii_category": AAII_CATEGORIES[family],
             "agentic": "agentic" in original["tags"],
-            "grader_kind": "in_process" if family == "structural" else "package",
-            "upstream_pass_rate": None if family == "structural" else 0.625,
+            "grader_kind": "in_process" if family == STRUCTURAL_FAMILY else "package",
+            "upstream_pass_rate": None if family == STRUCTURAL_FAMILY else 0.625,
         }
-        if family == "structural":
+        if family == STRUCTURAL_FAMILY:
             continue
         assert task.grader.environment == environments[family]
         assert task.resources.model_dump(mode="json") == original["resources"]

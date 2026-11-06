@@ -9,10 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.installed.acp_registry import is_acp_registry_shorthand
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig
+from harbor.models.trial.config import AgentConfig, UserAgentConfig
+from harbor.models.agent.name import AgentName
 from harbor.trial.errors import AgentTimeoutError
 
 from .relay import (
@@ -24,6 +27,8 @@ from .relay import (
     DEFAULT_SEED,
     DEFAULT_TOOL_TIMEOUT_SEC,
     TURN_TIMEOUT_ERROR_PREFIX,
+    ORCHESTRATION_TOOLS,
+    Tau3RuntimeInfrastructureError,
 )
 
 PACKAGE_NAME = "tau3_harbor_acp_relay"
@@ -35,8 +40,24 @@ POLICY_PATTERN = re.compile(
 )
 
 
-class Tau3RuntimeInfrastructureError(RuntimeError):
-    """The benchmark-owned tau3 relay failed during setup or a runtime turn."""
+def candidate_agent_config(
+    agent: AgentConfig, user_agent: UserAgentConfig | None
+) -> AgentConfig:
+    """Reserve Tau3 conversation control for its simulated-user relay."""
+    if (
+        user_agent is None
+        or user_agent.import_path != f"{__name__}:Tau3HarborACPRelay"
+        or agent.name is None
+        or not (agent.name == AgentName.ACP or is_acp_registry_shorthand(agent.name))
+    ):
+        return agent
+    excluded_tools = set(agent.kwargs.get("mcp_excluded_tools", ()))
+    excluded_tools.update(f"mcp_tau3_runtime_{name}" for name in ORCHESTRATION_TOOLS)
+    return agent.model_copy(
+        update={
+            "kwargs": {**agent.kwargs, "mcp_excluded_tools": sorted(excluded_tools)}
+        }
+    )
 
 
 class Tau3HarborACPRelay(BaseAgent):
@@ -71,12 +92,14 @@ class Tau3HarborACPRelay(BaseAgent):
         return "0.1.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
-        install = await environment.exec(
-            "python3 -m pip install --no-cache-dir mcp==1.25.0", user="root"
+        check = await environment.exec(
+            'python3 -c "from mcp import ClientSession; '
+            'from mcp.client.streamable_http import streamablehttp_client"',
+            user="root",
         )
-        if install.return_code != 0:
+        if check.return_code != 0:
             raise Tau3RuntimeInfrastructureError(
-                f"Failed to install MCP client: {install.stderr}"
+                f"Image does not provide the MCP client: {check.stderr}"
             )
 
         prepare = await environment.exec(
@@ -88,9 +111,15 @@ class Tau3HarborACPRelay(BaseAgent):
             )
 
         package_dir = Path(__file__).parent
-        for filename in ("__init__.py", "acpx.py", "relay.py", "runner.py"):
+        for filename in (
+            "__init__.py",
+            "acpx.py",
+            "relay.py",
+            "runner.py",
+            "runtime_client.py",
+        ):
             await environment.upload_file(
-                package_dir / filename, REMOTE_PACKAGE_ROOT / filename
+                package_dir / filename, str(REMOTE_PACKAGE_ROOT / filename)
             )
 
     async def run(
@@ -103,7 +132,7 @@ class Tau3HarborACPRelay(BaseAgent):
         local_policy = self.logs_dir / "tau3-harbor-acp-policy.md"
         local_policy.parent.mkdir(parents=True, exist_ok=True)
         local_policy.write_text(policy, encoding="utf-8")
-        await environment.upload_file(local_policy, REMOTE_POLICY_PATH)
+        await environment.upload_file(local_policy, str(REMOTE_POLICY_PATH))
 
         runtime = self._resolve_runtime_server()
         summary_path = self.environment_logs_dir / SUMMARY_FILENAME

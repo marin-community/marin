@@ -216,6 +216,15 @@ it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
 a session land under `/loom/<job>` instead of inheriting the session container's
 `app` OS account.
 
+The `belay` profile runs approved Marin Belay ideas through
+`experiments/belay/RUNBOOK.md` on the `marin_belay_v1_recipe` branch, one
+session at a time. It reads three Belay secrets: `BELAY_WANDB_API_KEY`, a
+`marin-community` W&B service-account key that the training launcher passes to
+each job, and `BELAY_CW_KEY_ID` and `BELAY_CW_KEY_SECRET`, a CoreWeave access
+key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
+to every CoreWeave job, so this key's access policy bounds what Belay runs can
+read and write. Replies on the intake issue use Loom's GitHub App token.
+
 Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
 from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
 profiles, which accept a per-launch agent override, and the Claude automation
@@ -345,10 +354,45 @@ which keeps the Marin high-level board and the goals document below its
 - the `marin` IAM stack applied first, for the `loom-vm` token-creator grant on
   itself that mints a documents-scoped token.
 
+The `belay` watch runs the `belay` profile every 10 minutes
+([prompt](watches/belay.md)): a cheap check of the Belay app's queue, and a
+runbook session that drains the queue only when events wait. Turning dispatch off in the
+Belay app's admin page pauses it without a Loom deploy.
+
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
 for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
 the IaC fields. Custom script files must already exist on the Loom server.
+
+## Google Doc sessions
+
+The `gdoc` profile ([instructions](profiles/gdoc/AGENTS.md)) runs a session
+whose record of the work is a Google Doc. Launch it with the doc's link in the
+goal. The agent reads, edits, and comments on the doc with
+`python3 -m infra.loom.gdoc` from the marin checkout, which needs only the
+system Python and gcloud. `agent-status` sets the `Agent status` chip that the
+Loom doc templates put in a doc's header.
+
+A session reaches the doc as `loom-vm@hai-gcp-models.iam.gserviceaccount.com`:
+share the doc, or the folder or Shared Drive that holds it, with that account
+as an editor. The account impersonates itself for the Docs and Drive scopes
+through the `roles/iam.serviceAccountTokenCreator` grant on itself in
+`infra/pulumi/src/iac/gcp/loom.py`, so no key is stored. Every session runs as
+this account, so every session can reach every doc shared with it. Doc edits
+and comments direct the doc and the session's work, but anyone with comment
+access can write them, so the agent takes approval for an outward-facing step,
+such as a push or a pull request, only from the Loom session.
+
+A ```` ```dot ```` block renders with Graphviz and a ```` ```mermaid ```` block
+with a pinned mermaid-cli that `npx` installs on first use. The PNG goes to
+`gs://marin-us-central1/tmp/ttl=1d/loom-gdoc/diagrams/`, which expires after a
+day, and Docs copies it in through a 15-minute URL that the account signs by
+impersonating itself. Doc changes do not reach a session on their own yet; the
+agent reads the doc and its comments at the points its instructions name.
+
+Outside Loom, the command uses a person's gcloud login, which needs Drive
+access (`gcloud auth login --enable-gdrive-access`). That login cannot sign
+diagram URLs, so it writes only text.
 
 ## claude.ai connector
 

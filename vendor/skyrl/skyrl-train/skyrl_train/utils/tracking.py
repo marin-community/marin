@@ -17,13 +17,17 @@
 
 import dataclasses
 import json
+import re
 from enum import Enum
 from functools import partial
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Dict, List, Self, Union
+from uuid import uuid4
+from iris.cluster.client.job_info import get_job_info
 from loguru import logger
 from rigging.secrets import require_secret
+from rigging.provenance import launch_provenance
 from omegaconf import DictConfig, OmegaConf
 import pprint
 import ray
@@ -81,13 +85,21 @@ class Tracking:
 
         self.logger = {}
         self.remote_loggers = []
+        tracking_config = OmegaConf.to_container(config, resolve=True) if config is not None else {}
+        runtime = tracking_config.get("runtime", {})
+        job_info = get_job_info()
+        tracking_config.update(
+            run_id=runtime.get("run_id", experiment_name),
+            attempt_id=runtime.get("attempt_id", uuid4().hex[:12]),
+            source_commit=launch_provenance().base_commit,
+            iris_job_id=str(job_info.job_id) if job_info is not None else None,
+        )
 
         if "files" in backends:
-            self.logger["files"] = _FilesAdapter(str(config.trainer.export_path))
+            self.logger["files"] = _FilesAdapter(str(config.trainer.export_path), tracking_config["attempt_id"])
 
         if "wandb" in backends:
             import wandb
-            from omegaconf import OmegaConf
 
             current_node_ip = "head"
             if ray.is_initialized():
@@ -99,7 +111,7 @@ class Tracking:
             run = wandb.init(
                 project=project_name,
                 name=experiment_name,
-                config=OmegaConf.to_container(config, resolve=True),
+                config=tracking_config,
                 group=experiment_name,
                 resume="allow",
                 settings=wandb.Settings(
@@ -120,7 +132,7 @@ class Tracking:
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
             self._prepare_worker_nodes_systems_logging_wandb(
-                project_name, experiment_name, run_id, config, current_node_ip
+                project_name, experiment_name, run_id, tracking_config, current_node_ip
             )
 
         if "mlflow" in backends:
@@ -187,7 +199,7 @@ class Tracking:
                         ).remote(
                             project_name=project_name,
                             experiment_name=experiment_name,
-                            config=OmegaConf.to_container(config, resolve=True),
+                            config=config,
                             run_id=run_id,
                             group_name=experiment_name,
                             x_label=f"node-{node_ip}",
@@ -201,6 +213,11 @@ class Tracking:
                 logger.warning(f"Failed to setup distributed wandb logging: {e}")
         else:
             logger.warning("Ray is not initialized, skipping distributed wandb logging")
+
+    def start(self, *, resumed_step: int | None) -> None:
+        """Keep step files belonging to the checkpoint selected for this attempt."""
+        if "files" in self.logger:
+            self.logger["files"].start(resumed_step=resumed_step)
 
     def log(self, data, step, commit=True):
         for logger_name, logger_instance in self.logger.items():
@@ -238,11 +255,20 @@ class Tracking:
 
 
 class _FilesAdapter:
-    def __init__(self, export_path: str):
+    def __init__(self, export_path: str, attempt_id: str):
         self.directory = join_resource_path(export_path, "metrics")
+        self.attempt_id = attempt_id
         self.step: int | None = None
         self.metrics: dict[str, Any] = {}
         io.makedirs(self.directory, exist_ok=True)
+
+    def start(self, *, resumed_step: int | None) -> None:
+        if not io.exists(self.directory):
+            return
+        for path in io.list_dir(self.directory):
+            match = re.fullmatch(r"step-(\d+)\.json", Path(path).name)
+            if match and (resumed_step is None or int(match[1]) > resumed_step):
+                io.remove(join_resource_path(self.directory, Path(path).name))
 
     def log(self, data: dict[str, Any], step: int) -> None:
         path = join_resource_path(self.directory, f"step-{step:06d}.json")
@@ -250,6 +276,7 @@ class _FilesAdapter:
             self.metrics = json.loads(io.read_bytes(path)) if io.exists(path) else {"step": step}
             self.step = step
         self.metrics.update(data)
+        self.metrics["attempt_id"] = self.attempt_id
         io.write_bytes_atomic(path, (json.dumps(self.metrics, default=float, sort_keys=True) + "\n").encode())
 
     def finish(self) -> None:

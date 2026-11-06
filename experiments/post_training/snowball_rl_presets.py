@@ -40,6 +40,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
+from rolloutengine.models import TASK_TIMING_KEYS
 from taskcompendium.models import TaskSpec, grades_with_judge
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
@@ -54,7 +55,7 @@ from experiments.post_training.task_curation.inventory import (
 )
 
 REPO_ROOT = find_project_root(Path(__file__))
-PRESET_REVISION = "2026.10.27"
+PRESET_REVISION = "2026.11.06"
 RUN_PREFIX = "checkpoints/snowball-rl"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 TRAIN_LONG_RUN = f"{RUN_PREFIX}/train-long-"
@@ -105,7 +106,6 @@ class Gap(StrEnum):
     NO_AGENTIC_TASKS = "no-agentic-tasks"
     NO_IMAGE_SANDBOX = "no-image-sandbox"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
-    EVAL_USES_TRAINING_SAMPLING = "eval-uses-training-sampling"
 
 
 class EvalHarness(StrEnum):
@@ -237,7 +237,11 @@ class PanelEvaluator:
             eval_sampling_params={
                 "temperature": 0.0 if evaluation.answers == 1 else 1.0,
                 "top_p": 1.0,
-                "logprobs": None if config["trainer"]["algorithm"]["off_policy_correction"] == "tis" else 0,
+                "logprobs": (
+                    None
+                    if evaluation.answers == 1 or config["trainer"]["algorithm"]["off_policy_correction"] == "tis"
+                    else 0
+                ),
                 "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
             },
         )
@@ -368,8 +372,8 @@ _GAPS = (
 )
 _PANEL = EVALUATIONS["panel-100"]
 _TIMER_REPORTS = tuple(
-    Metric(f"timing/{phase}/{statistic}", False)
-    for phase in ("grading", "setup")
+    Metric(f"{phase}/{statistic}", False)
+    for phase in sorted(TASK_TIMING_KEYS)
     for statistic in ("mean", "p50", "p95", "max")
 )
 _MISMATCH_REPORTS = tuple(
@@ -434,7 +438,6 @@ _ASYNC_SPEED_REPORTS = (
         Metric(f"policy/mismatch/pooled/{statistic}", False)
         for statistic in ("kl_k3", "log_ratio_abs_mean", "log_ratio_abs_p99", "log_ratio_abs_p999")
     ),
-    Metric("policy/mismatch/staleness0/kl_k3", False),
     *(
         Metric(f"policy/mismatch/{bucket}/selected_tokens", bucket == "staleness0")
         for bucket in ("staleness0", "staleness1", "staleness2", "staleness3", "staleness4-7", "staleness8+")
@@ -449,7 +452,7 @@ _LEARNING_MEDIUM = Preset(
     evaluations=(EVALUATIONS["panel-910"],),
     guards=(Metric("panel-910/family_mean", True),),
     reported=(*_TRAINING_REPORTS, Metric("panel-910/mean", True)),
-    gaps=(*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
+    gaps=_GAPS,
     budget="105-120 min; 70-80 H100-h",
 )
 PRESETS = MappingProxyType(
@@ -521,6 +524,7 @@ PRESETS = MappingProxyType(
                     Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
                     Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
                     Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
+                    Metric("policy/mismatch/staleness0/kl_k3", False),
                 ),
                 reported=_ASYNC_SPEED_REPORTS,
                 gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),
@@ -570,7 +574,7 @@ PRESETS = MappingProxyType(
                 evaluations=(replace(_PANEL, every=10, at_start=True),),
                 checkpoint_every=10,
                 reported=_TIMER_REPORTS,
-                gaps=(*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
+                gaps=_GAPS,
             ),
         )
     }

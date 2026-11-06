@@ -161,7 +161,11 @@ The preflight requires positive role dimensions, checks batch divisibility, and 
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
 rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
 setting. For every launcher, preflight checks policy and reference Megatron parallelism against
-the GPUs assigned to each role.
+the GPUs assigned to each role. Megatron builds separate dense and expert grids. The role GPU count
+must be divisible by both `TP * PP * CP` and `ETP * EP * PP`, where ETP is expert tensor
+parallelism. An omitted or null ETP inherits the role's TP before these checks.
+Context-parallel ranks participate in the expert grid, so EP need not divide dense
+data parallelism.
 
 ## Artifact and runtime boundaries
 

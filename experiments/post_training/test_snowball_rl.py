@@ -36,6 +36,15 @@ def _render(step, path, *, runtime=False):
 
 
 def _native(script, paths):
+    source = str(Path(__file__).resolve().parents[2] / "vendor/skyrl")
+    script = (
+        "from pathlib import Path as SourcePath\n"
+        "from cloud.iris import launch_config as SourceLaunch\n"
+        "import skyrl_train as SourceTrain\n"
+        f"assert all(SourcePath(module.__file__).resolve().is_relative_to({source!r}) "
+        "for module in (SourceLaunch, SourceTrain))\n"
+        "print('SNOWBALL_NATIVE_SOURCE_ORIGINS_PASS')\n" + script
+    )
     result = subprocess.run(
         skyrl_cpu_command("python", "-c", script, *paths), capture_output=True, text=True, timeout=170
     )
@@ -44,7 +53,7 @@ def _native(script, paths):
 
 
 pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
-pytestmark = pytest.mark.usefixtures("source_provenance")
+pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
 
 
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
@@ -95,9 +104,39 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
     paths.append(str(path))
     rows = _native(
         """
-import json, sys
+import asyncio, json, sys
+from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
+from omegaconf import OmegaConf
+from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
+from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 configs = [load_launch_config(path) for path in sys.argv[1:]]
+
+async def check_panel_request(config):
+    sampling = OmegaConf.to_container(config.skyrl.generator.eval_sampling_params, resolve=True)
+    training = OmegaConf.to_container(config.skyrl.generator.sampling_params, resolve=True)
+    class Endpoint:
+        model_name = "fixture"
+        tokenizer = SimpleNamespace(
+            eos_token_id=2, decode=lambda *args, **kwargs: "ok", encode=lambda *args, **kwargs: []
+        )
+        async def tokenize(self, request):
+            return {"tokens": [7]}
+        async def chat_completion(self, request):
+            body = request["json"]
+            apply_openai_sampling(body, training, validate_rollout_logprob_sampling=True)
+            assert body["temperature"] == sampling["temperature"]
+            return {"choices": [{
+                "token_ids": [1], "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"
+            }]}
+    await DirectModelClient(Endpoint()).generate({
+        "prompts": [[{"role": "user", "content": "Return ok."}]],
+        "chat_completion_params": [{}], "sampling_params": sampling,
+    })
+
+for config in configs:
+    if config.inputs.validation_data:
+        asyncio.run(check_panel_request(config))
 print(json.dumps([{
     "name": config.run.id, "entrypoint": config.runtime.entrypoint,
     "nodes": config.iris.allocation.num_nodes, "eval_interval": config.skyrl.trainer.eval_interval,
@@ -157,18 +196,18 @@ print(json.dumps([{
 
 
 @pytest.mark.timeout(180)
-def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch):
+def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
     summary = (Path(selection.path()) / "summary.json").read_text()
     monkeypatch.setattr(presets, "SELECTION_ROOT", "memory://snowball-calibration")
     (
         StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
     expected = {
-        "speed-short": "01291323",
-        "data-short": "aea96ee0",
-        "speed-medium": "13f69efa",
-        "learning-medium": "cff794ee",
-        "speed-long": "11b234e3",
+        "speed-short": "6fdc7a6d",
+        "data-short": "ca281169",
+        "speed-medium": "22a2b760",
+        "learning-medium": "4a0c6aac",
+        "speed-long": "e81929f4",
     }
     paths = []
     for name in expected:
