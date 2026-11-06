@@ -25,7 +25,7 @@ Only ``lower`` builds a ``TaskRolloutSpec``, so moving it is a single-site chang
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pydantic import JsonValue
 from rolloutengine.engine import RolloutEngine
@@ -597,7 +597,12 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
         verifier_timeout=SANDBOX_SCHEDULING_TIMEOUT + policy.setting("grader.timeout", float),
         cleanup_timeout=policy.setting("solver.cleanup_timeout", float),
     )
-    return LoweringSettings(MachineHost(policy.setting("runtime.host", str)), GRADING_MACHINE, GRADING_MACHINE, limits)
+    memory_mb = policy.setting("sandbox.memory_mb", int)
+    if memory_mb <= 0:
+        raise ValueError("sandbox.memory_mb must be positive")
+    settings = replace(GRADING_MACHINE, limits=MachineLimits(memory_mb=memory_mb, cpus=1))
+    print(f"POLICY sandbox.memory_mb declared={memory_mb} resolved={settings.limits.memory_mb} cpus=1", flush=True)
+    return LoweringSettings(MachineHost(policy.setting("runtime.host", str)), settings, settings, limits)
 
 
 def lower_with_settings(
@@ -607,12 +612,22 @@ def lower_with_settings(
     grader = grading_environment(task)
     if grader is not None and grader.docker_image not in (None, GRADER_BASE_IMAGE):
         raise ValueError(f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}")
+    limits = settings.limits
+    if grader is not None:
+        resolved = max(limits.verifier_timeout or 0, verifier_timeout(task.grader))
+        declared = task.grader.timeout if isinstance(task.grader, ScriptGrader) else GRADER_TIMEOUT
+        print(
+            f"POLICY verifier_timeout task={task.id} declared_grader={declared} "
+            f"scheduling={SANDBOX_SCHEDULING_TIMEOUT} declared={limits.verifier_timeout} resolved={resolved}",
+            flush=True,
+        )
+        limits = limits.model_copy(update={"verifier_timeout": resolved})
     return lower(
         task,
         host=settings.host,
         task_machine=settings.task_machine if SHELL_CAPABILITY in task.environment_requirements.capabilities else None,
         verifier_machine=settings.verifier_machine if grading_environment(task) is not None else None,
-        limits=settings.limits,
+        limits=limits,
         factories=factories,
     )
 

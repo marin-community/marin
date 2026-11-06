@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import override
 
 import pytest
@@ -20,11 +21,13 @@ from forge.lowering import (
     host_requirements,
     lower,
     lower_with_settings,
+    lowering_settings,
     machine,
     machine_backend,
     requirements,
     script_grader,
 )
+from forge.policy import load_policy
 from forge.resources.sandbox.factories import MachineHost
 from forge.resources.sandbox.images import GRADER_BASE_IMAGE
 
@@ -138,3 +141,25 @@ def test_missing_workdir_resolves_before_machine_creation(directory: str | None)
 def test_image_free_linux_process_is_rejected_before_starting_a_machine() -> None:
     with pytest.raises(ValueError, match="need a container image on Iris"):
         machine_backend(requirements(image=None, packages=("numpy",)), MachineHost.IRIS)
+
+
+@pytest.mark.parametrize("memory_mb", [8192, 16384])
+def test_policy_memory_and_actual_grader_timeout_reach_both_machine_specs(
+    memory_mb: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    policy = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults")
+    assert policy.setting("sandbox.memory_mb", int) == 8192
+    policy = policy.overlaid({"sandbox.memory_mb": memory_mb})
+    settings = lowering_settings(policy)
+    package = script_grader(
+        ("true",), StdoutReward(), environment=requirements(image=GRADER_BASE_IMAGE), answer_path=None, timeout=900
+    )
+    task = arithmetic_task(grader=package.grader, environment_requirements=requirements(image=GRADER_BASE_IMAGE))
+    spec = lower_with_settings(task, settings, {"gvisor": AvailableFactory(Backend.GVISOR)})
+    assert spec.task_machine is not None and spec.verifier_machine is not None
+    assert spec.task_machine.memory_mb == spec.verifier_machine.memory_mb == memory_mb
+    assert spec.task_machine.cpus == spec.verifier_machine.cpus == 1
+    assert spec.limits.verifier_timeout == 1500
+    output = capsys.readouterr().out
+    assert "declared_grader=900" in output and "resolved=1500" in output
+    assert f"sandbox.memory_mb declared={memory_mb} resolved={memory_mb}" in output

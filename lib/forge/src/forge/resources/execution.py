@@ -3,6 +3,7 @@
 
 """Bounded retries shared by resource executors, outside the effect context."""
 
+from asyncio import sleep
 from collections.abc import Awaitable, Callable
 
 from forge.effects.events import Event, Retrying
@@ -14,6 +15,7 @@ MAX_ATTEMPTS = 3
 
 async def retry_effect[T](event: Event[T], operation: Callable[[], Awaitable[T]], notify: Notify) -> T:
     attempt = 1
+    delay = 1.0
     while True:
         try:
             return await operation()
@@ -21,6 +23,8 @@ async def retry_effect[T](event: Event[T], operation: Callable[[], Awaitable[T]]
             if attempt == MAX_ATTEMPTS:
                 raise Restart(f"{type(event).__name__} exhausted its retry budget: {error}") from error
             notify(Retrying(event, attempt, str(error)))
+            await sleep(delay)
+            delay = min(60.0, delay * 2)
             attempt += 1
 
 
