@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from huggingface_hub import RepoFile
 from levanter.compat.hf_export import HFShardRecord
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from safetensors.numpy import save_file
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
@@ -175,7 +176,7 @@ def upload_fixture(tmp_path, monkeypatch):
         return str(path)
 
     def tokenizer_download(repo_id, *, local_dir, **kwargs):
-        (Path(local_dir) / "tokenizer.json").write_text('{"model": {"type": "BPE"}}')
+        llama3_style_chat_tokenizer().save_pretrained(local_dir)
 
     monkeypatch.setattr(upload_hf, "hf_hub_download", hub_download)
     monkeypatch.setattr(upload_hf, "snapshot_download", tokenizer_download)
@@ -251,6 +252,13 @@ def test_upload_resumes_verified_shards_and_pins_complete_weights(upload_fixture
     assert hub.uploads.count("model-00001-of-00002.safetensors") == 1
     assert pinned["README.md"] == Path(config.model_card).read_bytes()
     assert pinned["LICENSE"] == Path(config.license_file).read_bytes()
+    assert json.loads(pinned["generation_config.json"]) == {
+        "bos_token_id": 1,
+        "do_sample": True,
+        "eos_token_id": [2, 3],
+        "temperature": 0.6,
+        "top_p": 0.95,
+    }
     marker = json.loads(hub.files(config.branch)["hf-upload-manifest.json"])
     assert marker["weights_commit"] == result["weights_commit"]
     assert marker["payload_bytes"] == config.expected_payload_bytes and marker["shards"] == 2

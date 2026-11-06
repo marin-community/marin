@@ -9,7 +9,8 @@ from torch.distributed.tensor import DeviceMesh
 from typing import Optional, Dict, Any, Union, TypeVar
 import torch.optim as optim
 from jaxtyping import Float
-from transformers import GenerationConfig, PretrainedConfig, PreTrainedTokenizer
+from transformers import PretrainedConfig, PreTrainedTokenizer
+from skyrl_train import hf_model_io
 from skyrl_train.io import io
 
 
@@ -122,33 +123,16 @@ class DistributedStrategy(ABC):
             dist.all_gather(ret, data.to(device))
             return torch.cat(ret).cpu() if is_cpu_tensor else torch.cat(ret)
 
-    def save_hf_configs(self, model_config: PretrainedConfig, hf_dir: str, tokenizer: PreTrainedTokenizer = None):
-        """
-        Save model and tokenizer configs to hf_dir
-
-        Args:
-            model_config: PretrainedConfig - huggingface model config
-            hf_dir: str - the directory to save the huggingface configs to
-            tokenizer: PreTrainedTokenizer - tokenizer to save
-        """
+    def save_hf_configs(self, model_config: PretrainedConfig, hf_dir: str, tokenizer: PreTrainedTokenizer):
+        """Save the model config, tokenizer, and canonical generation config to ``hf_dir``."""
         io.makedirs(hf_dir, exist_ok=True)
 
         with io.local_work_dir(hf_dir) as work_dir:
             model_config.save_pretrained(work_dir)
-            if tokenizer:
-                tokenizer.save_pretrained(work_dir)
-
-            if hasattr(model_config, "name_or_path") and model_config.name_or_path:
-                try:
-                    # Some model's name_or_path is empty if not initialized from pretrained,
-                    # in this cases, we don't save generation config.
-                    generation_config = GenerationConfig.from_pretrained(model_config.name_or_path)
-                    # with io.local_work_dir(hf_config_tokenizer_path) as work_dir:
-                    generation_config.save_pretrained(work_dir)
-                except Exception as e:
-                    # if the generation config isn't available, we don't save it
-                    logger.warning(f"Could not save generation config for '{model_config.name_or_path}'. Error: {e}")
-                    pass
+            tokenizer.save_pretrained(work_dir)
+            hf_model_io.write_export_generation_config(
+                work_dir, model_config.name_or_path, tokenizer, tokenizer.chat_template
+            )
 
     @staticmethod
     def get_rng_state():

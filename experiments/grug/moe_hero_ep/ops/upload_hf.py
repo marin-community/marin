@@ -16,8 +16,10 @@ from typing import BinaryIO
 import draccus
 from huggingface_hub import CommitOperationAdd, HfApi, RepoFile, hf_hub_download, snapshot_download
 from levanter.compat.hf_export import HFShardRecord
+from levanter.tokenizers import load_tokenizer
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.hf_generation_config import export_generation_config, write_generation_config
 from rigging.log_setup import configure_logging
 from rigging.secrets import require_secret
 
@@ -313,6 +315,8 @@ def _complete_upload(api: HfApi, config: UploadConfig, plan: _UploadPlan, scratc
         local_dir=metadata,
         allow_patterns=["tokenizer*", "special_tokens_map.json", "added_tokens.json", "chat_template*"],
     )
+    tokenizer = load_tokenizer(str(metadata))
+    write_generation_config(str(metadata), export_generation_config(tokenizer, chat_template=tokenizer.chat_template))
     (metadata / "README.md").write_bytes(card)
     (metadata / "LICENSE").write_bytes(license_text)
     (metadata / "config.json").write_text(config_text)

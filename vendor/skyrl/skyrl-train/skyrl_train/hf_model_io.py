@@ -11,10 +11,31 @@ from loguru import logger
 from marinskyrl.hf_model import normalize_fast_tokenizer_metadata
 from marinskyrl.model_manifest import HF_WEIGHT_INDEX_FILENAME, MODEL_MANIFEST_FILENAME, write_local_model_manifest
 from marinskyrl.resource_locator import join_resource_path
+from rigging.hf_generation_config import (
+    GENERATION_CONFIG_FILENAME,
+    ExportTokenizer,
+    export_generation_config,
+    write_generation_config,
+)
+from transformers.utils import cached_file
 
 from skyrl_train.io import io
 
 HF_WEIGHT_FILENAME = "model.safetensors"
+
+
+def write_export_generation_config(
+    work_dir: str, source_model: str | None, tokenizer: ExportTokenizer, chat_template: str | None
+) -> None:
+    """Write ``generation_config.json``, preserving explicit values from the source model's generation config."""
+    source_config = None
+    if source_model:
+        source_path = cached_file(source_model, GENERATION_CONFIG_FILENAME, _raise_exceptions_for_missing_entries=False)
+        if source_path is not None:
+            source_config = json.loads(Path(source_path).read_text())
+    config = export_generation_config(tokenizer, chat_template=chat_template, explicit=source_config)
+    write_generation_config(work_dir, config)
+    logger.info(f"Wrote {GENERATION_CONFIG_FILENAME} to {work_dir}: {config}")
 
 
 def verify_hf_model_export(export_path: str) -> None:

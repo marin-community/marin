@@ -50,6 +50,7 @@ from levanter.compat.hf_checkpoints import (
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.helpers import use_test_mesh
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from levanter.utils.byte_budget import HostByteBudget
 
 
@@ -576,6 +577,29 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
             assert_trees_all_close(original_value, reloaded_value)
 
     fs.rm(base_path, recursive=True)
+
+
+@pytest.mark.parametrize(
+    ("explicit", "expected"),
+    [
+        (None, {"bos_token_id": 1, "eos_token_id": [2, 3], "do_sample": True, "temperature": 0.6, "top_p": 0.95}),
+        (
+            {"eos_token_id": [2], "temperature": 0.3},
+            {"bos_token_id": 1, "eos_token_id": [2, 3], "do_sample": True, "temperature": 0.3, "top_p": 0.95},
+        ),
+    ],
+)
+def test_save_pretrained_writes_complete_generation_config(local_gpt2_tokenizer_path, tmp_path, explicit, expected):
+    gpt2_config = Gpt2Config(
+        num_layers=1, num_heads=1, hidden_dim=8, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    converter = gpt2_config.hf_checkpoint_converter().replaced(tokenizer=llama3_style_chat_tokenizer())
+
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, gpt2_config, key=PRNGKey(0))
+        converter.save_pretrained(model, str(tmp_path), save_reference_code=False, generation_config=explicit)
+
+    assert json.loads((tmp_path / "generation_config.json").read_text()) == expected
 
 
 def test_causal_lm_architecture_name_is_torch_free():

@@ -49,6 +49,12 @@ from jaxtyping import Array, PRNGKeyArray
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.hf_generation_config import (
+    GENERATION_CONFIG_FILENAME,
+    GenerationConfigDict,
+    export_generation_config,
+    write_generation_config,
+)
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
@@ -122,31 +128,24 @@ SAFE_TENSORS_MODEL = "model.safetensors"
 PYTORCH_WEIGHTS_INDEX_NAME = "pytorch_model.bin.index.json"
 SAFE_TENSORS_INDEX_NAME = "model.safetensors.index.json"
 
-GenerationConfigDict = dict[str, int | list[int]]
-
 
 def build_generation_config(
     tokenizer: "PreTrainedTokenizerBase",
     eos_token_ids: list[int] | None,
 ) -> GenerationConfigDict | None:
-    """Build a validated generation_config dict from explicit EOS token IDs.
+    """Build a validated generation_config override from explicit EOS token IDs.
 
-    The returned dict is suitable for writing as ``generation_config.json``
-    alongside an HF checkpoint.  It tells inference tools like vLLM which
-    tokens should stop generation (e.g. both ``<|end_of_text|>`` and
-    ``<|eot_id|>`` for chat models).
-
-    Normalization guarantees:
-    - Output ``eos_token_id`` is always sorted and deduplicated.
-    - The tokenizer's own ``eos_token_id`` is auto-added if not already present.
+    ``save_pretrained`` preserves these ids and completes the rest of
+    ``generation_config.json`` (end-of-turn stop tokens from the chat template,
+    ``bos_token_id``, and sampling defaults) with
+    :func:`rigging.hf_generation_config.export_generation_config`.
 
     Args:
         tokenizer: The tokenizer that will be saved with the checkpoint.
         eos_token_ids: Explicit list of EOS token IDs, or ``None`` to skip.
 
     Returns:
-        A config dict ready for JSON serialization, or ``None`` if
-        *eos_token_ids* is ``None``.
+        A config override, or ``None`` if *eos_token_ids* is ``None``.
 
     Raises:
         ValueError: If the list is empty, contains non-ints, or contains
@@ -165,19 +164,7 @@ def build_generation_config(
         if not (0 <= tid < vocab_size):
             raise ValueError(f"Token ID {tid} out of range [0, {vocab_size})")
 
-    ids = set(eos_token_ids)
-
-    tok_eos = tokenizer.eos_token_id
-    if tok_eos is None:
-        logger.warning("Tokenizer has no eos_token_id; generation config will use only the provided IDs")
-    elif tok_eos not in ids:
-        logger.info("Auto-adding tokenizer eos_token_id=%d to generation config", tok_eos)
-        ids.add(tok_eos)
-
-    gen_config: GenerationConfigDict = {"eos_token_id": sorted(ids)}
-    if tokenizer.bos_token_id is not None:
-        gen_config["bos_token_id"] = tokenizer.bos_token_id
-    return gen_config
+    return {"eos_token_id": sorted(set(eos_token_ids))}
 
 
 def _coerce_to_hf_tokenizer(tokenizer: PreTrainedTokenizerBase | MarinTokenizer) -> PreTrainedTokenizerBase:
@@ -1114,6 +1101,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         If None, will save code for models that aren't in the HF repo.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
+        :param generation_config: explicit generation_config.json fields to preserve. When the converter has a
+        tokenizer, the written file is completed from it and the shipped chat template by
+        ``rigging.hf_generation_config``; without a tokenizer no generation_config.json is written.
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
         :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
@@ -1253,12 +1243,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 with open(os.path.join(local_path, "config.json"), "w") as f:
                     json.dump(dict_config, f)
 
-                if generation_config is not None:
-                    logger.info(
-                        "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
+                if self.tokenizer is None:
+                    logger.warning("No tokenizer; not writing %s", GENERATION_CONFIG_FILENAME)
+                else:
+                    shipped_template = chat_template if chat_template is not None else self.tokenizer.chat_template
+                    completed = export_generation_config(
+                        self.tokenizer, chat_template=shipped_template, explicit=generation_config
                     )
-                    with open(os.path.join(local_path, "generation_config.json"), "w") as f:
-                        json.dump(generation_config, f)
+                    logger.info("Writing %s: %s", GENERATION_CONFIG_FILENAME, completed)
+                    write_generation_config(local_path, completed)
 
                 if index is not None:
                     with open(os.path.join(local_path, SAFE_TENSORS_INDEX_NAME), "w") as f:
