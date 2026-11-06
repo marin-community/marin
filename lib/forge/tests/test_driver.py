@@ -2,14 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Never
 
+import httpx
 import pytest
 from iris.cluster.types import JobName
 
 from forge import wiring
 from forge.driver import inputs, proposal_key
+from forge.policy import load_policy
 
 
 def test_manifest_selects_ranks_and_path_list_preserves_output_identity(tmp_path: Path) -> None:
@@ -41,6 +46,22 @@ def test_manifest_selects_ranks_and_path_list_preserves_output_identity(tmp_path
 def test_empty_prefix_fails_instead_of_reporting_a_successful_empty_run(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="No proposal"):
         inputs(str(tmp_path))
+
+
+async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected(*_args: object, **_kwargs: object) -> Never:
+        raise AssertionError("Runtime initialization must not probe a sandbox or transport")
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(wiring, "local_factory", unexpected)
+    monkeypatch.setattr(subprocess, "Popen", unexpected)
+    monkeypatch.setattr(httpx.AsyncClient, "send", unexpected)
+    policy = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults").overlaid({"runtime.host": "iris"})
+    source = wiring.endpoint_source("http://fake/v1", None, "fake", "glm-5.3")
+    async with wiring.runtime(policy, "S", source, "fake") as (_, resources):
+        assert set(resources.factories) == {"gvisor", "shellsim"}
 
 
 def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: pytest.MonkeyPatch) -> None:

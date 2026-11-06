@@ -4,7 +4,6 @@
 """Bind real adapters and executable policy at the process boundary."""
 
 import logging
-import sys
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -215,7 +214,7 @@ async def runtime(
     host = MachineHost(policy.setting("runtime.host", str))
     container = GvisorMachineFactory() if host == MachineHost.IRIS else DockerMachineFactory()
     factories: dict[str, MachineFactory] = {container.backend.value: container, "shellsim": shellsim_factory()}
-    if sys.platform == "linux":
+    if host == MachineHost.LAPTOP:
         factories["local"] = local_factory()
     headers = {"x-api-key": parallel_api_key}
     async with (
