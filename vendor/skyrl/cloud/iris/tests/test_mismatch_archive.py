@@ -1,12 +1,13 @@
-"""Large route captures must survive FineStore's transaction size bound."""
+"""Round trips and interrupted writes for mismatch archives."""
 
+import pytest
 from finestore.reader import ReadView
 from finestore.rl.mismatch_probe import MANIFEST_TABLE, SCORES_TABLE, ManifestRow, ScoreRow
 
-from skyrl_train.mismatch_probe.archive import MismatchArchive
+from skyrl_train.mismatch_probe.archive import MismatchArchive, read_frozen_probe
 
 
-def test_route_bank_is_committed_in_bounded_transactions(tmp_path):
+def test_route_bank_larger_than_default_transaction_limit_round_trips(tmp_path):
     # Forty 4K captures of 48 layers x eight uint16 routes exceed the real
     # 100 MB transaction cap. Reuse the immutable bytes in memory.
     routes = bytes(4096 * 48 * 8 * 2)
@@ -62,3 +63,25 @@ def test_route_bank_is_committed_in_bounded_transactions(tmp_path):
     last = next(row for row in restored if row["sample_id"] == "response-39")
     assert last["logprobs"] == [-40.0] * 4096
     assert view.scan(MANIFEST_TABLE).to_pylist()[0]["status"] == "complete"
+
+
+def test_reuse_probe_rejects_an_interrupted_archive(tmp_path):
+    archive = MismatchArchive(str(tmp_path), writer_id="interrupted")
+    try:
+        archive.write(
+            scores=[
+                ScoreRow(
+                    probe_hash="partial",
+                    sample_id="response",
+                    scorer="vllm.generate",
+                    update=0,
+                    global_step=0,
+                    logprobs=[-1.0],
+                )
+            ]
+        )
+    finally:
+        archive.close()
+
+    with pytest.raises(ValueError, match="no manifest table"):
+        read_frozen_probe(str(tmp_path))

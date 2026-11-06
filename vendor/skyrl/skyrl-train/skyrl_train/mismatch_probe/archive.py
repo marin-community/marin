@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from itertools import chain
 
 from finestore.rl import mismatch_probe as mismatch
 from finestore.reader import ReadView
-from finestore.store import DataStore, TransactionTooLarge
+from finestore.store import DataStore
 
 from skyrl_train.config.mismatch_probe import GENERATION_SCORER
 
@@ -26,7 +25,7 @@ class FrozenProbeSource:
 
 
 class MismatchArchive:
-    """Commit archive rows in bounded batches, with the manifest last."""
+    """Write supplied archive rows in one transaction."""
 
     def __init__(self, uri: str, *, writer_id: str):
         self.uri = uri
@@ -40,26 +39,15 @@ class MismatchArchive:
         scores: Sequence[mismatch.ScoreRow] | None = None,
         manifest: mismatch.ManifestRow | None = None,
     ) -> None:
-        entries = iter(
-            chain(
-                ((mismatch.PROBE_TABLE, row) for row in probes or ()),
-                ((mismatch.SCORES_TABLE, row) for row in scores or ()),
-                ((mismatch.MANIFEST_TABLE, manifest),) if manifest is not None else (),
-            )
-        )
-        pending = next(entries, None)
-        while pending is not None:
-            with self.store.transaction() as transaction:
-                table, row = pending
-                # A single oversized row still fails; only an accumulated batch is split.
-                transaction.table(table).add(row.model_dump())
-                pending = None
-                for table, row in entries:
-                    try:
-                        transaction.table(table).add(row.model_dump())
-                    except TransactionTooLarge:
-                        pending = (table, row)
-                        break
+        with self.store.unbounded_transaction() as transaction:
+            for table, rows in (
+                (mismatch.PROBE_TABLE, probes),
+                (mismatch.SCORES_TABLE, scores),
+            ):
+                for row in rows or ():
+                    transaction.table(table).add(row.model_dump())
+            if manifest is not None:
+                transaction.table(mismatch.MANIFEST_TABLE).add(manifest.model_dump())
 
     def close(self) -> None:
         self.store.close()
@@ -68,11 +56,18 @@ class MismatchArchive:
 def read_frozen_probe(uri: str) -> FrozenProbeSource:
     """Read completed source rows, including their generation scores."""
     view = ReadView(uri)
-    manifests = [mismatch.ManifestRow.model_validate(row) for row in view.scan(mismatch.MANIFEST_TABLE).to_pylist()]
+    manifest_table = view.scan(mismatch.MANIFEST_TABLE)
+    if manifest_table is None:
+        raise ValueError(f"reuse_probe source {uri} has no manifest table")
+    manifests = [mismatch.ManifestRow.model_validate(row) for row in manifest_table.to_pylist()]
     if len(manifests) != 1 or manifests[0].status != COMPLETE_STATUS:
         raise ValueError(f"reuse_probe source {uri} is not a single complete mismatch archive")
-    probes = [mismatch.ProbeRow.model_validate(row) for row in view.scan(mismatch.PROBE_TABLE).to_pylist()]
-    scores = [mismatch.ScoreRow.model_validate(row) for row in view.scan(mismatch.SCORES_TABLE).to_pylist()]
+    probe_table = view.scan(mismatch.PROBE_TABLE)
+    score_table = view.scan(mismatch.SCORES_TABLE)
+    if probe_table is None or score_table is None:
+        raise ValueError(f"reuse_probe source {uri} is missing probe or score tables")
+    probes = [mismatch.ProbeRow.model_validate(row) for row in probe_table.to_pylist()]
+    scores = [mismatch.ScoreRow.model_validate(row) for row in score_table.to_pylist()]
     generations = {row.sample_id: row for row in scores if row.scorer == GENERATION_SCORER and row.update == 0}
     if not probes or len(generations) != len(probes):
         raise ValueError("reuse_probe source has incomplete generation-time scores")
