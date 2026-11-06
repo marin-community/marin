@@ -54,14 +54,14 @@ DEFAULT_TASKS = (
 )
 DEFAULT_OUTPUT = (
     "s3://marin-us-east-02a/marin4sc/taskforge/task-library/"
-    "campaigns/biotasks/combined/v1/calibration/glm-5.3-openai-shellsim-v1/results.jsonl"
+    "campaigns/biotasks/combined/v1/calibration/glm-5.3-openai-shellsim-v2/results.jsonl"
 )
 MAX_TOKENS = 4096
 TEMPERATURE = 0.0
 TOP_P = 1.0
 LIMITS = RolloutLimits(
     max_turns=8,
-    max_total_tokens=8192,
+    max_total_tokens=32768,
     model_turn_timeout=600,
     tool_turn_timeout=180,
     total_turn_timeout=1200,
@@ -212,14 +212,14 @@ async def _calibrate(task: TaskSpec, config: CalibrationConfig, root: Path) -> d
     }
     return {
         "campaign_format": "biotasks-openai-calibration-v1",
-        "campaign_id": "biotasks/combined/v1/calibration/glm-5.3-openai-shellsim-v1",
+        "campaign_id": "biotasks/combined/v1/calibration/glm-5.3-openai-shellsim-v2",
         "trial_type": "ordinary_solver",
         "task_id": task.id,
         "frozen_task_digest": frozen_task_digest,
         "execution_task_digest": task_digest(lowered.spec, COMMAND_TIMEOUT),
         "execution_backend": Backend.SHELLSIM.value,
         "task_source": task.source.model_dump(mode="json"),
-        "task_family": task.tags[-1],
+        "task_family": task.tags[-2],
         "model": config.model,
         "endpoint_kind": "openai_compatible",
         "relay_job": config.relay_job,
