@@ -40,6 +40,9 @@ def compare(reference_paths: list[Path], observations: Path, maximum_probability
                 "position": row["position"],
                 "variant": row["variant"],
                 "max_returned_logprob_error": max(abs(actual[token] - float(values[token])) for token in actual),
+                "max_returned_probability_error": max(
+                    abs(float(np.exp(actual[token])) - float(np.exp(values[token]))) for token in actual
+                ),
             }
         )
         parity.assert_matches(max_probability_error=maximum_probability_error)

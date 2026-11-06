@@ -9,6 +9,7 @@ import inspect
 import json
 import logging
 import os
+import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -20,9 +21,10 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 from haliax import Axis
+from iris.jax.init import initialize_jax
+from jax.experimental.multihost_utils import sync_global_devices
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from levanter.distributed import DistributedConfig
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.utils.jax_utils import leaf_key_paths
@@ -36,6 +38,8 @@ from rigging.log_setup import configure_logging
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_cpu import CpuCheckpointWeights, CpuExportConfig
 from experiments.grug.moe_hero_ep.ops.vibe_check.sample import next_logits
+
+from .snowball_routers import restore as restore_snowball_routers
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +160,9 @@ def score_hero(
     return np.concatenate(rows)
 
 
-def score_snowball(predictions: tuple[Prediction, ...], weights: str, revision: str, attention: str) -> np.ndarray:
+def score_snowball(
+    predictions: tuple[Prediction, ...], weights: str, revision: str, attention: str, router_weights: Path
+) -> np.ndarray:
     spec = ModelSpec(
         weights=weights,
         revision=None if "://" in weights else revision,
@@ -174,13 +180,14 @@ def score_snowball(predictions: tuple[Prediction, ...], weights: str, revision: 
         spec, config_overrides={"attention_implementation": attention, "moe_implementation": "sonic"}
     ) as loaded:
         assert isinstance(loaded.model, SnowballLMHeadModel)
+        model = restore_snowball_routers(loaded.model, router_weights, weights, revision)
         for start in range(0, len(predictions), batch_size):
             batch = predictions[start : start + batch_size]
             tokens, positions = padded_batch(batch, batch_size)
             axes = (Axis("batch", batch_size), Axis("position", tokens.shape[1]))
             with hax.axis_mapping(loaded.trainer.compute_axis_mapping):
                 scores = snowball_logprobs(
-                    loaded.model,
+                    model,
                     hax.named(jnp.asarray(tokens), axes),
                     hax.named(jnp.asarray(positions), (axes[0],)),
                 )
@@ -196,15 +203,23 @@ def main() -> None:
     parser.add_argument("--export-manifest", type=Path)
     parser.add_argument("--weights")
     parser.add_argument("--revision")
+    parser.add_argument("--router-weights", type=Path)
     parser.add_argument("--attention", required=True)
     parser.add_argument("--moe", default="sonic")
     parser.add_argument("--expert-parallel-size", type=int, default=1)
     parser.add_argument("--single-host", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
+    jax.config.update("jax_default_matmul_precision", "highest")
     if not args.single_host:
-        DistributedConfig().initialize()
+        # A one-shot validation job must let Iris collect outputs before completion.
+        initialize_jax()
     configure_logging(logging.INFO if jax.process_index() == 0 else logging.WARNING)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    (args.output.parent / f"reference-start-{jax.process_index()}.json").write_text(
+        json.dumps({"arguments": {key: str(value) for key, value in vars(args).items()}, "devices": str(jax.devices())})
+        + "\n"
+    )
     assert jax.default_backend() == "gpu"
     predictions = read_predictions(args.cases)
     if args.model == "hero":
@@ -221,8 +236,8 @@ def main() -> None:
         scores = score_hero(predictions, request, config, args.expert_parallel_size)
         weights = request["checkpoint"]
     else:
-        assert args.weights and args.revision
-        scores = score_snowball(predictions, args.weights, args.revision, args.attention)
+        assert args.weights and args.revision and args.router_weights
+        scores = score_snowball(predictions, args.weights, args.revision, args.attention, args.router_weights)
         weights = {"uri": args.weights, "revision": None if "://" in args.weights else args.revision}
         if "://" in args.weights:
             weights["source_revision"] = args.revision
@@ -244,6 +259,8 @@ def main() -> None:
                 "hidden": "bfloat16",
                 "lm_projection_output": "float32" if args.model == "hero" else "bfloat16",
                 "log_softmax": "float32",
+                "router_weights": "bfloat16" if args.model == "hero" else "float32",
+                "jax_default_matmul_precision": jax.config.jax_default_matmul_precision,
             },
             "case_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
             "rows": [
@@ -261,17 +278,30 @@ def main() -> None:
             "weights": weights,
             "attention": args.attention,
             "moe": args.moe,
+            "router_weights_sha256": (
+                hashlib.sha256(args.router_weights.read_bytes()).hexdigest() if args.model == "snowball" else None
+            ),
             "source_sha256": {
                 name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
                 for name, path in (
                     ("hero_model", inspect.getfile(Transformer)),
                     ("snowball_model", inspect.getfile(SnowballLMHeadModel)),
+                    ("snowball_routers", inspect.getfile(restore_snowball_routers)),
                     ("reference", __file__),
                 )
             },
         }
         (args.output / "scores.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    if jax.distributed.is_initialized():
+        sync_global_devices("reference-output-written")
+        jax.distributed.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        if output_dir := os.environ.get("IRIS_OUTPUT_DIR"):
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            (Path(output_dir) / "reference-error.txt").write_text(traceback.format_exc())
+        raise
