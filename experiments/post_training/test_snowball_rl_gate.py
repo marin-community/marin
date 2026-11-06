@@ -1274,7 +1274,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
             presets.PRESETS[preset], tasks=presets.selection_artifact(tasks), requirements=(REQUIREMENT,)
         )
         argv = ["--require", REQUIREMENT, "--tasks", f"unused@{presets.DEFAULT_SELECTION_VERSION}", "--tasks", tasks]
-        expected = ({}, tasks, None, [])
+        expected = ({}, tasks, None, [pytest.approx(0.195)])
     assert status(preset, argv)["runs"][0]["wandb_entity"] == "planned-team"
     initial = 0.2 if preset == "learning-medium" else None
     timers = {
