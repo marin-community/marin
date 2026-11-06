@@ -688,7 +688,7 @@ class MegatronModelWrapper:
                     tis_cap=score_centering_tis_cap(self.cfg.trainer.algorithm),
                     eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
                     eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
-                )
+                ).loss
 
             structural = None
             if data.ftpo is not None and data.ftpo.weights is not None:

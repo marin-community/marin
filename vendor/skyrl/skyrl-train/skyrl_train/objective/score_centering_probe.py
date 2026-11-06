@@ -24,8 +24,11 @@ def collate_score_probe(
 ) -> dict[str, torch.Tensor]:
     """Select surviving probe positions, then collate their compact behavior heads.
 
-    Positions index full responses. Output pads only the selected positions,
-    with invalid head IDs distinguishing padding from response position zero.
+    Positions index full responses. The returned head fields share the dense
+    collation contract and add ``score_probe_positions`` [batch, sampled].
+    Output pads only the selected positions, with invalid head IDs distinguishing
+    padding from response position zero. The caller supplies old-policy scores
+    and source steps aligned to the returned full-response positions.
     """
     positions = trajectory_batch["score_probe_positions"]
     index_rows = trajectory_batch["score_probe_indices"]
@@ -87,20 +90,18 @@ def hypothetical_score_probe(
     hypothetical correction, including the modeled tail. They do not measure
     parameter gradients or learning benefit.
     """
-    compute_dtype = torch.float64 if head.dtype == torch.float64 else torch.float32
-    with torch.enable_grad():
-        probe_head = head.detach().to(compute_dtype).requires_grad_()
-        unit_correction = ppo_tis_score_centering_correction(
-            probe_head,
-            head,
-            behavior_head,
-            torch.ones_like(advantages),
-            valid,
-            tis_cap=tis_cap,
-            eps_clip_low=eps_clip_low,
-            eps_clip_high=eps_clip_high,
-        )
-        residual = torch.autograd.grad(unit_correction.sum(), probe_head)[0][valid]
+    terms = ppo_tis_score_centering_correction(
+        head,
+        head,
+        behavior_head,
+        torch.ones_like(advantages),
+        valid,
+        tis_cap=tis_cap,
+        eps_clip_low=eps_clip_low,
+        eps_clip_high=eps_clip_high,
+    )
+    unit_correction = terms.loss
+    residual = terms.head_coefficients[valid]
     count = int(valid.sum())
     metrics = {
         "observed": float(count > 0),

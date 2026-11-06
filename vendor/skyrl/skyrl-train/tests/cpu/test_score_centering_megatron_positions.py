@@ -124,7 +124,7 @@ def _packed_cp_reference(rank, rendezvous):
                 tis_cap=1.3,
                 eps_clip_low=0.2,
                 eps_clip_high=0.2,
-            )
+            ).loss
             torch.testing.assert_close(correction[valid], expected_correction[valid], atol=1e-5, rtol=1e-5)
             weights = mask * torch.tensor([1.0, 0.5, 1.0]).repeat(4)
             selected_loss = (torch.where(valid, correction, 0) * weights).sum() / weights.sum()
