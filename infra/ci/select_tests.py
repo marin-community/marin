@@ -796,6 +796,10 @@ def classify(
         # runs before source-root handling. The change is invisible to the Python
         # import graph, so force-select the owning scope and mark it for a source
         # build; its own tests exercise the extension.
+        if filepath.startswith("lib/rigging/rust/"):
+            forced.update({"iris", "finelog"})
+            native_changed.update({"iris", "finelog"})
+            continue
         native_scope = next(
             (scope for scope, crate_dir in NATIVE_CRATE_DIR.items() if filepath.startswith(f"{crate_dir}/")),
             None,

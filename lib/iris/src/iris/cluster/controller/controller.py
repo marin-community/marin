@@ -866,6 +866,9 @@ class Controller:
             default_user_role=(
                 auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
             ),
+            shared_grants=(
+                auth.shared_grants.config.model_dump() if auth is not None and auth.shared_grants is not None else None
+            ),
         )
 
     def stop(self) -> None:

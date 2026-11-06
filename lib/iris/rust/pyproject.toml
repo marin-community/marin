@@ -27,6 +27,8 @@ cache-keys = [
     "Cargo.toml",
     "Cargo.lock",
     "src/**/*.rs",
+    "../../rigging/rust/Cargo.toml",
+    "../../rigging/rust/src/**/*.rs",
     "pyext/Cargo.toml",
     "pyext/src/**/*.rs",
     "iris_native.pyi",

@@ -1,5 +1,91 @@
 # Marin auth management service
 
+## Application adapters and local operation
+
+Applications select their authentication backend at startup. Python services use
+`rigging.shared_grants.SharedGrantClient`; Iris native ingress and Finelog share
+the `marin-grants` Rust crate. Both implementations use the signed grant contract
+and the same conformance fixtures. They verify pinned keys, issuer, audience,
+expiry and token scope locally, then request a current decision from
+`POST /v1/authorize`. The receiving service supplies the action and actual resource.
+Token scope never supplies group memberships or native administrator privileges.
+
+The shared trust configuration contains public material:
+
+```json
+{
+  "issuer": "https://auth.example",
+  "public_keys": ["-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"],
+  "authority_url": "https://auth.example",
+  "ca_bundle": "/etc/marin-auth/ca.pem",
+  "timeout": 5
+}
+```
+
+Outside isolated loopback tests the authority requires HTTPS. The receiving
+service returns 403 for a denial and 503 when a current decision is missing or
+malformed. No outage changes the
+backend to native or local authentication. Decisions are not cached by these
+adapters, so relationship removal applies to the next protected operation.
+
+| Service | Configuration | Shared operations and resource boundary |
+| --- | --- | --- |
+| Iris | `auth.shared_grants` in cluster YAML | `job.submit`, `job.read`, `job.cancel` against `/clusters/NAME/jobs/namespace/job/` |
+| Marina | `MarinaConfig.shared_grants`, or a JSON file named by `MARINA_SHARED_GRANTS_CONFIG` | `app.read`, `app.release` against `/apps/UUID/` |
+| Finelog | A `shared_grants` entry in `auth` / `--auth-policy` | `logs.query` against the server's configured `/instances/NAME/` |
+| Grafana alert bridge | A JSON file named by `LOOM_ALERT_AUTH_CONFIG` | Authenticate through OpenBao, obtain one bounded grant per alert, then launch a pinned Loom profile |
+
+Iris derives `NAME` from the controller's configured cluster name, so a grant
+cannot be replayed into the same job namespace on another cluster. It accepts
+shared callers only on launch, individual/batch job-status and
+cancellation RPCs. It denies other RPCs and endpoint proxies. Shared launches
+require the sandbox container profile, which withholds native Iris task
+credentials. Shared callers cannot submit a job handed off from another cluster.
+Removing a grant stops
+subsequent operations, but does not itself terminate an already submitted job.
+An operator can still cancel that job using native authority. Shared submission
+of ordinary task profiles needs grant-bound task credentials before it is safe.
+
+Marina resolves named routes to stable app UUIDs and filters its app directory
+through the same checks. Release grants can update a specified UUID, including
+its first revision, but cannot create an unbounded random app, change visibility,
+archive apps, manage hosts, invoke write APIs, or use MCP. Native IAP and local
+operation retain their existing permissions. Applications proxied through Marina receive the
+verified identity without the incoming bearer or browser credentials.
+
+Finelog grants cover **all data in one instance**, including SQL over multiple
+clusters. They are not row or cluster filters. Shared callers cannot ingest,
+register/drop tables, report relay status, or use diagnostic/admin HTTP routes.
+Native replication JWTs retain their separate origin-cluster binding. For example:
+
+```yaml
+auth:
+  - type: shared_grants
+    instance: research-logs
+    trust:
+      issuer: https://auth.example
+      public_keys: ["<public Ed25519 PEM>"]
+      authority_url: https://auth.example
+      timeout: 5
+```
+
+Grafana's shared configuration names `authority_url`, `bao_address`,
+`bao_token_file`, `actor`, optional `ca_bundle`, and `grant_ttl` (300 seconds by
+default). The rotating OpenBao token file needs only permission to obtain that
+workload's `marin-auth` identity token. The actor must match that authenticated
+principal. Alert labels and text cannot select permissions, repositories, or
+launch overrides. Grant creation persists its idempotency key per authenticated
+principal; retries reuse the original grant without extending its expiry, and
+revoked/expired grants cannot be recreated under the same key.
+
+Local development requires neither OpenBao nor OpenFGA. Keep the existing native
+backend and bind it to loopback: Iris's local controller creates an ephemeral
+signing key; Marina without IAP admits loopback; Finelog's default is loopback
+only; Loom supports its native local mode. Installing shared trust selects a
+different backend rather than modifying these local paths. Loom's existing
+shared-mode latch also prevents removing shared trust from reopening implicit
+local administration on that database.
+
 `marin-auth` deploys OpenBao, OpenFGA, and the Marin credential service in a dedicated management
 namespace. OpenFGA stores standing relationships in external PostgreSQL; the
 credential service retains the runtime grant ledger. It owns no training resources. The three OpenBao replicas use separate retained
@@ -575,14 +661,24 @@ storage are for the synthetic proof, not a production deployment.
 The proof exercises transitive `marin-team` -> `marin-research` membership,
 combined Loom/Iris grants, out-of-scope and blocked descendants, live group
 removal against an existing JWT, credential expiry, key rotation, and Loom
-completion revocation. Iris submission is an authorization check; no Iris job
-is submitted. The scripted ACP agent obtains a native OpenBao storage identity;
+completion revocation. The application proof submits and cancels a sandbox job
+through native Iris ingress and persistence; its isolated backend has no workers,
+so it does not execute a Kubernetes task. It also exercises UUID-scoped Marina
+reads/releases with disposable PostgreSQL, whole-instance Finelog SQL over two
+synthetic clusters, and a Grafana alert launch with a fake Slack HTTP endpoint.
+Removing the group edge denies existing tokens at the receiving services. A failed
+OpenFGA credential produces 503, recovery restores access, and native local
+backends remain usable during the outage. No external messages are sent.
+The scripted ACP agent obtains a native OpenBao storage identity;
 CoreWeave S3/WIF enforcement still requires the separate live storage procedure.
 
-Build the production image with `infra/auth/Dockerfile`. Build the proof image
-with `trial/Dockerfile`, passing `AUTH_IMAGE` and named BuildKit contexts
-`proof-tools` (reviewed `bao`, `openfga`, `loom`, and matching `tapestry` binaries) and `loom-source`
-(the matching Loom checkout). Run it locally without network first. Publish
+Build the proof image with `trial/Dockerfile` and named BuildKit contexts:
+`proof-tools` contains reviewed, container-compatible `bao`, `openfga`, `loom`,
+matching `tapestry`, and `finelog-server` binaries; `loom-source` is the matching
+Loom checkout; `proof-wheels` contains the built Iris native wheel. Use Finelog's
+production Debian builder for its binary; a host binary can require a newer libc.
+The image installs disposable PostgreSQL and the application dependency closure.
+Run it locally without network first. Publish
 and pin its digest before `pulumi preview` and `pulumi up` in `trial/`.
 Set the trial's `kubernetes_context` and `image` config explicitly. Save the Job's
 JSON evidence, then destroy the trial stack after inspection. The Job has a

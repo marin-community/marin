@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from importlib.resources import files
 
+import httpx
 import jwt
 import pytest
 from rigging.auth import StaticTokenProvider
@@ -19,6 +20,7 @@ from rigging.grant_auth import (
     verified_grant_token,
 )
 from rigging.grants import GrantDenied, GrantStore, Permission, PrincipalAuthority
+from rigging.shared_grants import SHARED_GRANT_ROLE, SharedGrantClient, SharedGrantConfig, SharedGrantUnavailable
 from rigging.token_authority import JwksVerifier, generate_ed25519_keypair
 from starlette.testclient import TestClient
 
@@ -125,6 +127,55 @@ def test_http_exchange_authorizes_multiple_services_with_distinct_audiences(auth
             auth.service.authorize(storage, audience="cw_s3", action="s3:PutObject", resource="s3://logs/alerts/write")
         with pytest.raises(GrantDenied):
             auth.service.authorize(storage, audience="cw_s3", action="s3:GetObject", resource="s3://logs/private/read")
+
+
+def test_receiving_service_checks_current_authority_and_recovers_after_outage(auth, monkeypatch):
+    grant = _session_grant(auth)
+    token = auth.service.exchange("session-one-identity", grant_id=grant.id, audience="iris")["access_token"]
+    remote = SharedGrantClient(
+        SharedGrantConfig(
+            issuer="https://auth.example",
+            public_keys=(auth.signer.key.public_pem,),
+            authority_url="https://auth.example",
+        ),
+        audience="iris",
+    )
+    unavailable = [False]
+    with TestClient(create_app(auth.service)) as authority:
+
+        def post(_url, *, headers, json, **_kwargs):
+            if unavailable[0]:
+                return httpx.Response(503)
+            return authority.post("/v1/authorize", headers=headers, json=json)
+
+        monkeypatch.setattr("rigging.shared_grants.requests.post", post)
+        assert remote.verify(token).role == SHARED_GRANT_ROLE
+        assert remote.authorize(token, action="job.submit", resource="/alice/train").grant_id == grant.id
+        with pytest.raises(GrantDenied):
+            remote.authorize(token, action="job.submit", resource="/other/train")
+        unavailable[0] = True
+        with pytest.raises(SharedGrantUnavailable):
+            remote.authorize(token, action="job.submit", resource="/alice/train")
+        unavailable[0] = False
+        assert remote.authorize(token, action="job.submit", resource="/alice/train").grant_id == grant.id
+        auth.store.revoke(grant.id, principal=grant.owner)
+        with pytest.raises(GrantDenied):
+            remote.authorize(token, action="job.submit", resource="/alice/train")
+
+
+def test_retrying_grant_creation_preserves_identity_and_expiry(auth):
+    request = dict(
+        actor="loom:one", permissions=auth.permissions, expires_at=auth.clock[0] + 100, idempotency_key="alert-one"
+    )
+    original = auth.store.create("user:alice", **request)
+    retry = auth.store.create("user:alice", **{**request, "expires_at": auth.clock[0] + 200})
+    assert retry.id == original.id
+    assert retry.expires_at == original.expires_at
+    with pytest.raises(GrantDenied):
+        auth.store.create("user:alice", **{**request, "actor": "loom:two"})
+    auth.store.revoke(original.id, principal=original.owner)
+    with pytest.raises(GrantDenied):
+        auth.store.create("user:alice", **request)
 
 
 def test_http_owner_cannot_be_self_asserted_and_actor_must_authenticate(auth):

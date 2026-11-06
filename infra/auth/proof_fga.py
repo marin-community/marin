@@ -80,6 +80,14 @@ def configure_proof(operator: OpenFGAOperator) -> dict:
             for service, action, resource in [
                 ("loom", "session.create", "/auth-proof/"),
                 ("iris", "job.submit", "/proof/"),
+                ("iris", "job.read", "/proof/"),
+                ("iris", "job.cancel", "/proof/"),
+                ("iris", "job.submit", "/clusters/isolated-proof/jobs/proof/"),
+                ("iris", "job.read", "/clusters/isolated-proof/jobs/proof/"),
+                ("iris", "job.cancel", "/clusters/isolated-proof/jobs/proof/"),
+                ("marina", "app.read", "/apps/"),
+                ("marina", "app.release", "/apps/"),
+                ("finelog", "logs.query", "/instances/proof/"),
                 ("cw_s3", "credentials.issue", "diagnostics"),
             ]
         ),
@@ -87,6 +95,11 @@ def configure_proof(operator: OpenFGAOperator) -> dict:
             "user": "group:marin-research#member",
             "relation": "blocked",
             "object": scope_object("iris", "job.submit", "/proof/private/"),
+        },
+        {
+            "user": "group:marin-research#member",
+            "relation": "blocked",
+            "object": scope_object("iris", "job.submit", "/clusters/isolated-proof/jobs/proof/private/"),
         },
     ]
     operator.reconcile(store_id, model_id, relationships)

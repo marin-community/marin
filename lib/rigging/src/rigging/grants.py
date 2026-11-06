@@ -198,6 +198,14 @@ class GrantStore:
                 policy_revision TEXT NOT NULL
             )"""
         )
+        self._connection.execute(
+            """CREATE TABLE IF NOT EXISTS grant_requests (
+                principal TEXT NOT NULL,
+                request_key TEXT NOT NULL,
+                grant_id TEXT NOT NULL REFERENCES grants(id),
+                PRIMARY KEY (principal, request_key)
+            )"""
+        )
 
     def close(self) -> None:
         self._connection.close()
@@ -263,6 +271,7 @@ class GrantStore:
         permissions: tuple[Permission, ...],
         expires_at: float,
         parent_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> Grant:
         """Create a root from standing policy, or attenuate the caller's grant.
 
@@ -272,10 +281,28 @@ class GrantStore:
         """
         if not actor or not permissions:
             raise GrantDenied("A grant needs an actor and permissions")
+        if idempotency_key is not None and not 1 <= len(idempotency_key) <= 128:
+            raise GrantDenied("Idempotency keys require 1-128 characters")
         with self._transaction():
             now = self._now()
             if not math.isfinite(expires_at) or expires_at <= now:
                 raise GrantDenied("Grant lifetime has ended")
+            if idempotency_key is not None:
+                row = self._connection.execute(
+                    "SELECT grant_id FROM grant_requests WHERE principal = ? AND request_key = ?",
+                    (principal, idempotency_key),
+                ).fetchone()
+                if row is not None:
+                    existing, _ = self._active(row["grant_id"], now)
+                    if (
+                        existing.actor != actor
+                        or existing.parent_id != parent_id
+                        or existing.expires_at > expires_at
+                        or not permissions_cover(existing.permissions, permissions)
+                        or not permissions_cover(permissions, existing.permissions)
+                    ):
+                        raise GrantDenied("Idempotency key belongs to a different grant request")
+                    return existing
             if parent_id is None:
                 authority = self._authorities.get(principal)
                 if (
@@ -329,6 +356,10 @@ class GrantStore:
                     grant.policy_revision,
                 ),
             )
+            if idempotency_key is not None:
+                self._connection.execute(
+                    "INSERT INTO grant_requests VALUES (?, ?, ?)", (principal, idempotency_key, grant.id)
+                )
             return grant
 
     def authorize(self, grant_id: str, *, actor: str, service: str, action: str, resource: str) -> Grant:

@@ -86,7 +86,8 @@ def isolated_loom(
             "child.on('exit', code => process.exit(code ?? 1));\n"
             "for await (const line of createInterface({input:process.stdin})) {\n"
             "  const message = JSON.parse(line);\n"
-            "  if (message.method === 'session/prompt' && process.env.LOOM_SESSION_ID) {\n"
+            "  if (message.method === 'session/prompt' && process.env.LOOM_SESSION_ID "
+            "&& process.env.MARIN_GRANT_TOKEN) {\n"
             "    const response = await fetch(process.env.MARIN_AUTH_URL + "
             f"{json.dumps('/v1/storage/' + quote(verify_storage_binding, safe='') + '/token')}, {{\n"
             "      method:'POST', redirect:'error',\n"
@@ -126,12 +127,12 @@ def isolated_loom(
                 if process.poll() is not None:
                     raise RuntimeError(f"isolated Loom exited; see {log_path}")
                 listening = [line for line in log_path.read_text().splitlines() if line.startswith("loom listening on ")]
-                if listening:
+                if listening and (home / "loom-token").is_file():
                     base_url = listening[-1].removeprefix("loom listening on ")
                     break
                 time.sleep(0.05)
             if not base_url:
-                raise TimeoutError(f"isolated Loom did not start; see {log_path}")
+                raise TimeoutError(f"isolated Loom did not become ready: {log_path.read_text()}")
             fixture = IsolatedLoom(
                 base_url, home / "loom-token", repo, marker if verify_storage_binding is not None else None, session
             )

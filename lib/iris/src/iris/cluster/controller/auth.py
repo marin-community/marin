@@ -3,20 +3,16 @@
 
 """Auth setup for the controller — verifier creation and JWT key management.
 
-All service tokens are asymmetric EdDSA (Ed25519) JWTs. The controller is its
-own signing authority: it mints with a per-cluster private key (sourced from a
-``SecretSpec``, never stored in the DB) and verifies against the matching public
-key. :class:`JwtTokenManager` is a thin policy wrapper over
-:mod:`rigging.token_authority` — it owns role/claim semantics and the per-plane
-audience discipline. Verification is fully stateless: a pure crypto check plus
-the audience/scope binding, with no database access at all. Tokens are never
-revoked. Authorization is config-driven and resolved entirely in memory: cluster
-config is the sole source of truth for roles. A :class:`RolePolicy` — a frozen map
-built from :class:`AuthConfig` at controller start (explicit ``auth.user_roles``,
-``auth.admin_users``, and a provider-derived default) — answers ``role_for`` with no DB
-projection and no reconciliation. IAP users hold no minted token: their role is
-resolved per request from the verified assertion, so deprovisioning is
-edit-config-and-reload (rebuild the map) and takes effect on the next request.
+Native worker/task tokens use the controller's per-cluster Ed25519 key, sourced
+from a ``SecretSpec``. ``JwtTokenManager`` owns their role and audience rules;
+``RolePolicy`` resolves native IAP roles from deployment configuration. Native
+tokens remain stateless and expire without a revocation database.
+
+An explicit shared-grant deployment also accepts a pinned external signing
+authority. Its callers have a separate role with only scoped job RPCs. Each
+operation checks the actual cluster-qualified job resource with the shared
+authority. It cannot obtain native worker/admin rights or anonymous loopback
+access. Local controllers retain their native ephemeral-key path.
 
 Per-plane audience discipline (RFC 8725) is the load-bearing security invariant:
 every minted token names exactly one ``aud`` (plane), and the control-plane
@@ -36,7 +32,11 @@ from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from urllib.parse import unquote
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
 from rigging.auth import RefreshingTokenProvider, TokenProvider
+from rigging.grants import GrantDenied, Permission
 from rigging.server_auth import (
     ANONYMOUS_ADMIN,
     IAP_ISSUER,
@@ -45,10 +45,14 @@ from rigging.server_auth import (
     AuthOutcome,
     AuthRequest,
     IapAssertionVerifier,
+    JwtAuthenticator,
     RequestAuthPolicy,
     TokenVerifier,
     VerifiedIdentity,
+    extract_bearer_token,
+    get_verified_identity,
 )
+from rigging.shared_grants import SHARED_GRANT_ROLE, SharedGrantClient, SharedGrantUnavailable
 from rigging.token_authority import (
     DEFAULT_LEEWAY_SECONDS,
     JwksVerifier,
@@ -184,6 +188,7 @@ class NativeProxyAuthConfig:
     admin_users: tuple[str, ...] = ()
     user_roles: dict[str, str] = dataclasses.field(default_factory=dict)
     default_user_role: str = DEFAULT_USER_ROLE
+    shared_grants: dict | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -527,10 +532,44 @@ class ControllerAuth:
     allowed_submitters: tuple[str, ...] = ()
     iap_audience: str | None = None
     federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
+    shared_grants: SharedGrantClient | None = None
+    shared_job_prefix: str = ""
 
     @property
     def worker_token(self) -> str | None:
         return self.worker_token_provider.get_token() if self.worker_token_provider is not None else None
+
+
+@dataclasses.dataclass(frozen=True)
+class _NativeOrSharedVerifier:
+    native: TokenVerifier
+    shared: SharedGrantClient
+
+    def verify(self, token: str) -> VerifiedIdentity:
+        try:
+            return self.native.verify(token)
+        except ValueError:
+            return self.shared.verify(token)
+
+
+def authorize_shared_operation(
+    auth: ControllerAuth, context: RequestContext | None, *, action: str, resource: str
+) -> None:
+    """Recheck a shared caller's operation; native callers retain Iris policy."""
+    identity = get_verified_identity()
+    if identity is None or identity.role != SHARED_GRANT_ROLE:
+        return
+    token = extract_bearer_token(dict(context.request_headers())) if context is not None else None
+    if auth.shared_grants is None or token is None or not auth.shared_job_prefix:
+        raise ConnectError(Code.PERMISSION_DENIED, "Shared authorization is required")
+    try:
+        access = auth.shared_grants.authorize(token, action=action, resource=auth.shared_job_prefix + resource + "/")
+        if access.actor != identity.user_id:
+            raise GrantDenied("Request identity does not match its grant")
+    except ValueError as error:
+        raise ConnectError(Code.PERMISSION_DENIED, "Grant does not authorize this operation") from error
+    except SharedGrantUnavailable as error:
+        raise ConnectError(Code.UNAVAILABLE, "Shared authorization is unavailable") from error
 
 
 def authorize_owner_if_configured(auth: ControllerAuth, owner: str) -> None:
@@ -550,6 +589,9 @@ def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
     request verifier is always the JWT manager, so a cidr-only cluster still
     admits its worker JWTs presented from outside the trusted network.
     """
+    if auth is not None and auth.shared_grants is not None:
+        assert auth.verifier is not None
+        return RequestAuthPolicy(authenticators=(JwtAuthenticator(auth.verifier),), verifier=auth.verifier)
     if auth is None or auth.provider is None:
         return RequestAuthPolicy.permissive(verifier=auth.verifier if auth is not None else None)
     return RequestAuthPolicy.enforcing(
@@ -677,6 +719,24 @@ def create_controller_auth(
     request_verifier: TokenVerifier = (
         _ControlPlaneOrFederationVerifier(jwt_mgr, federation_verifier) if federation_verifier is not None else jwt_mgr
     )
+
+    if auth_config is not None and auth_config.shared_grants is not None:
+        if not cluster_name or "/" in cluster_name or auth_config.shared_grants.issuer in {cluster_name, _LEGACY_ISSUER}:
+            raise ValueError("Shared-grant controllers require a stable cluster name")
+        shared_job_prefix = f"/clusters/{cluster_name}/jobs"
+        Permission("iris", frozenset({"job.submit"}), shared_job_prefix + "/")
+        shared = SharedGrantClient(auth_config.shared_grants, audience="iris")
+        return ControllerAuth(
+            verifier=_NativeOrSharedVerifier(request_verifier, shared),
+            provider="shared_grants",
+            worker_token_provider=worker_token_provider,
+            jwt_manager=jwt_mgr,
+            role_policy=_build_role_policy(auth_config, None),
+            allowed_submitters=allowed_submitters,
+            federation_keys=federation_peers,
+            shared_grants=shared,
+            shared_job_prefix=shared_job_prefix,
+        )
 
     # Null-auth: no login-provider arm and no trusted CIDRs. The anonymous/loopback
     # admin identity is assigned by the permissive auth chain, not resolved here.

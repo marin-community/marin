@@ -84,13 +84,6 @@ class LoomLaunchRequest(BaseModel):
     goal: str
 
 
-class AuthorizationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    audience: str
-    action: str
-    resource: str
-
-
 class LoomCredentialRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     resource: str
@@ -228,29 +221,6 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
         )
         return JSONResponse(asdict(run), status_code=201)
 
-    async def authorize(request: Request) -> JSONResponse:
-        token = extract_bearer_token(dict(request.headers))
-        if token is None:
-            raise GrantDenied("A grant access token is required")
-        payload = AuthorizationRequest.model_validate(await request.json())
-        grant = await run_in_threadpool(
-            authority.authorize,
-            token,
-            audience=payload.audience,
-            action=payload.action,
-            resource=payload.resource,
-        )
-        return JSONResponse(
-            {
-                "grant_id": grant.id,
-                "owner": grant.owner,
-                "actor": grant.actor,
-                "expires_at": grant.expires_at,
-                "policy_revision": grant.policy_revision,
-            },
-            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
-        )
-
     async def loom_credentials(request: Request) -> JSONResponse:
         token = extract_bearer_token(dict(request.headers))
         if token is None or launcher is None:
@@ -317,7 +287,6 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
             Route("/.well-known/jwks.json", public_keys, methods=["GET"]),
             Route("/healthz", health, methods=["GET"]),
             Route("/v1/loom/launch", launch_loom, methods=["POST"]),
-            Route("/v1/authorize", authorize, methods=["POST"]),
             Route("/v1/loom/credentials", loom_credentials, methods=["POST"]),
         ]
     )

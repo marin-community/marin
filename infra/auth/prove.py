@@ -15,7 +15,6 @@ import secrets
 import socket
 import subprocess
 import tempfile
-import threading
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -23,7 +22,6 @@ from pathlib import Path
 import httpx
 import jwt
 import requests
-import uvicorn
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -33,6 +31,7 @@ from rigging.openbao import OpenBaoClient, OpenBaoTransitSigner
 
 from infra.auth.bootstrap import OperatorClient, configure
 from infra.auth.proof_fga import configure_proof, isolated_openfga
+from infra.auth.proof_http import serve
 from infra.auth.prove_loom import isolated_loom, run_loom_proof
 from infra.auth.service import ServiceConfig, create_service
 
@@ -145,27 +144,14 @@ def _identity_jwt(operator: OperatorClient, token_file: Path, role: str, ca_file
     return client.request("GET", f"identity/oidc/token/{role}")["data"]["token"]
 
 
-@contextmanager
-def _serve(app, port: int):
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", access_log=False))
-    thread = threading.Thread(target=server.run)
-    thread.start()
-    try:
-        deadline = time.monotonic() + 15
-        while not server.started:
-            if not thread.is_alive() or time.monotonic() >= deadline:
-                raise RuntimeError("The local grant service did not start")
-            time.sleep(0.05)
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        server.should_exit = True
-        thread.join(timeout=15)
-        if thread.is_alive():
-            raise RuntimeError("The local grant service did not shut down")
-
-
 def prove(
-    executable: Path, *, openfga_executable: Path, loom_executable: Path | None = None, loom_source: Path | None = None
+    executable: Path,
+    *,
+    openfga_executable: Path,
+    loom_executable: Path | None = None,
+    loom_source: Path | None = None,
+    postgres_bin: Path | None = None,
+    finelog_executable: Path | None = None,
 ) -> dict:
     """Return evidence without exposing credentials or initialization secrets."""
     with tempfile.TemporaryDirectory(prefix="marin-auth-proof-") as scratch:
@@ -251,7 +237,7 @@ def prove(
                 "coreweave_storage": "not contacted",
                 "checks": [],
             }
-            with _serve(app, auth_port), httpx.Client(base_url=auth_url, timeout=30) as client:
+            with serve(app, auth_port), httpx.Client(base_url=auth_url, timeout=30) as client:
                 response = client.post(
                     "/v1/grants",
                     headers=headers,
@@ -432,6 +418,27 @@ def prove(
                     )
                 else:
                     service.revoke(grant_id, "launcher")
+                if postgres_bin is not None:
+                    from infra.auth.prove_services import (  # noqa: PLC0415 - optional application dependencies
+                        run_service_proof,
+                    )
+
+                    assert finelog_executable is not None and loom is not None
+                    evidence["services"] = run_service_proof(
+                        directory / "applications",
+                        trust_issuer=auth_url,
+                        public_keys=next_signer.public_keys(),
+                        client=client,
+                        caller=caller,
+                        fga=fga,
+                        fga_config=fga_config,
+                        bao_address=operator.address,
+                        bao_token_file=caller_file,
+                        bao_ca=certificate,
+                        postgres_bin=postgres_bin,
+                        finelog_executable=finelog_executable,
+                        loom=loom,
+                    )
                 assert exchange(native_grant, "cw_s3", token_type=ACCESS_TOKEN_TYPE).status_code == 403
                 assert (
                     client.post(
@@ -449,9 +456,13 @@ def main() -> None:
     parser.add_argument("--openfga", type=Path, required=True)
     parser.add_argument("--loom", type=Path)
     parser.add_argument("--loom-source", type=Path)
+    parser.add_argument("--postgres-bin", type=Path)
+    parser.add_argument("--finelog", type=Path)
     args = parser.parse_args()
     if bool(args.loom) != bool(args.loom_source):
         parser.error("--loom and --loom-source must be supplied together")
+    if args.postgres_bin and (not args.finelog or not args.loom):
+        parser.error("--postgres-bin requires --finelog and --loom")
     print(
         json.dumps(
             prove(
@@ -459,6 +470,8 @@ def main() -> None:
                 openfga_executable=args.openfga.resolve(),
                 loom_executable=args.loom,
                 loom_source=args.loom_source,
+                postgres_bin=args.postgres_bin,
+                finelog_executable=args.finelog,
             ),
             indent=2,
         )

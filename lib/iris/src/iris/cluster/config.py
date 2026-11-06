@@ -33,6 +33,7 @@ from rigging.secrets import (
     is_secret_reference,
     resolve_secret_spec,
 )
+from rigging.shared_grants import SharedGrantConfig
 from rigging.timing import Duration
 
 from iris.cluster.egress import parse_egress_rules
@@ -616,8 +617,9 @@ class IapAuthConfig(_Config):
 
 
 class AuthConfig(_OneofConfig):
-    _ONEOF_ARMS = ("iap",)
+    _ONEOF_ARMS = ("iap", "shared_grants")
     iap: IapAuthConfig | None = None
+    shared_grants: SharedGrantConfig | None = None
     # Network-location trust, orthogonal to the login-provider arm: a tokenless
     # request whose *direct transport peer* is inside one of these CIDRs
     # authenticates as the anonymous admin identity (like loopback). Requests
@@ -655,6 +657,12 @@ class AuthConfig(_OneofConfig):
     # it explicitly, e.g. ["*@openathena.ai"]. A local_admin (CIDR/loopback) identity
     # is never a valid federation submitter regardless of this list.
     allowed_submitters: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_explicit_shared_auth(self):
+        if self.shared_grants is not None and (self.optional or self.trusted_cidrs):
+            raise ValueError("Shared-grant deployments cannot admit anonymous or network-trusted callers")
+        return self
 
     @field_validator("trusted_cidrs")
     @classmethod

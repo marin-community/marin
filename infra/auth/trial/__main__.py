@@ -63,8 +63,8 @@ job = k8s.batch.v1.Job(
                         },
                         "env": [{"name": "HOME", "value": "/tmp"}],
                         "resources": {
-                            "requests": {"cpu": "500m", "memory": "512Mi", "ephemeral-storage": "1Gi"},
-                            "limits": {"cpu": "2", "memory": "2Gi", "ephemeral-storage": "4Gi"},
+                            "requests": {"cpu": "1", "memory": "1Gi", "ephemeral-storage": "1Gi"},
+                            "limits": {"cpu": "4", "memory": "4Gi", "ephemeral-storage": "8Gi"},
                         },
                         "volume_mounts": [{"name": "scratch", "mount_path": "/tmp"}],
                     }

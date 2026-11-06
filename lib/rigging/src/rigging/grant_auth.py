@@ -284,6 +284,14 @@ class _GrantRequest(BaseModel):
     permissions: tuple[_PermissionRequest, ...]
     expires_at: float
     parent_id: str | None = None
+    idempotency_key: str | None = None
+
+
+class _AuthorizationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    audience: str
+    action: str
+    resource: str
 
 
 def _grant_response(grant: Grant) -> dict:
@@ -292,6 +300,25 @@ def _grant_response(grant: Grant) -> dict:
 
 def create_app(service: GrantAuthService) -> Starlette:
     """Mount grant creation/revocation and RFC 8693 token exchange endpoints."""
+
+    async def authorize(request: Request) -> JSONResponse:
+        token = extract_bearer_token(dict(request.headers))
+        if token is None:
+            raise GrantDenied("A grant access token is required")
+        payload = _AuthorizationRequest.model_validate(await request.json())
+        grant = await run_in_threadpool(
+            service.authorize, token, audience=payload.audience, action=payload.action, resource=payload.resource
+        )
+        return JSONResponse(
+            {
+                "grant_id": grant.id,
+                "actor": grant.actor,
+                "owner": grant.owner,
+                "expires_at": grant.expires_at,
+                "policy_revision": grant.policy_revision,
+            },
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
 
     def principal(request: Request) -> str:
         token = extract_bearer_token(dict(request.headers))
@@ -311,6 +338,7 @@ def create_app(service: GrantAuthService) -> Starlette:
             permissions=tuple(Permission(item.service, item.actions, item.resource) for item in payload.permissions),
             expires_at=payload.expires_at,
             parent_id=payload.parent_id,
+            idempotency_key=payload.idempotency_key,
         )
         return JSONResponse(_grant_response(grant), status_code=201)
 
@@ -353,6 +381,7 @@ def create_app(service: GrantAuthService) -> Starlette:
     return Starlette(
         routes=[
             Route("/v1/grants", create, methods=["POST"]),
+            Route("/v1/authorize", authorize, methods=["POST"]),
             Route("/v1/grants/{grant_id}/revoke", revoke, methods=["POST"]),
             Route("/oauth/token", exchange, methods=["POST"]),
         ],

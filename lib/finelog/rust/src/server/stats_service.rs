@@ -120,6 +120,9 @@ fn write_origin_cluster(ctx: &RequestContext) -> Result<Option<String>, ConnectE
     match request_identity(ctx) {
         Some(AuthIdentity::Jwt { cluster }) => Ok(Some(cluster.clone())),
         Some(AuthIdentity::Network) => Ok(None),
+        Some(AuthIdentity::SharedGrant { .. }) => Err(ConnectError::permission_denied(
+            "read grants cannot write rows",
+        )),
         None => Err(ConnectError::internal(
             "finelog: request reached a handler with no auth identity",
         )),

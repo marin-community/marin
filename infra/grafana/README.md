@@ -657,6 +657,13 @@ reaches it instead of launching a second session — see [Loom's
 slack-trigger docs](https://github.com/marin-community/loom/blob/main/docs/slack-trigger.md).
 The session link is threaded under the announcement.
 
+For the shared-auth trial, `LOOM_ALERT_AUTH_CONFIG` selects the OpenBao/grant
+launcher instead of Google federation. Each alert gets an idempotent, short-lived
+grant for the configured Loom profile; the broker and Loom enforce the pinned
+launch configuration. Alert content supplies the goal, not the repository or
+authority. The existing Google launcher remains the native deployment choice.
+See [configuration and limits](../auth/README.md#application-adapters-and-local-operation).
+
 Generic firing groups feed the live `Grafana operator` session on the `operator`
 channel. `TrainingProgressStalled`, `TrainingLossSpike`,
 `TrainingTelemetryGone`, and `TrainingOptimizerUnstable` also carry the trusted
@@ -785,7 +792,8 @@ uv run pytest                     # bridge unit tests
 cd marin-infra-panel
 npm ci
 npm run typecheck && npm run lint && npm run test:ci && npm run build
-docker build -t marin-grafana .
+cd ..
+docker build -f Dockerfile -t marin-grafana ../..
 docker run --rm -p 3000:8080 -e PORT=8080 marin-grafana
 # → http://localhost:3000 (without an IAP identity header, anonymous Viewer; panels need VPC access to finelog)
 ```

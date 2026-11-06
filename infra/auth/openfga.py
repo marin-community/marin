@@ -18,6 +18,8 @@ ACTIONS = frozenset(
     {
         ("loom", "session.create"),
         ("iris", "job.submit"),
+        ("iris", "job.read"),
+        ("iris", "job.cancel"),
         ("finelog", "logs.query"),
         ("finelog", "logs.ingest"),
         ("marina", "app.read"),
