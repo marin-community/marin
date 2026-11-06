@@ -8,7 +8,7 @@ The race (before fix):
 2. Main thread is in _collect_results / _regroup_result_refs (between
    _wait_for_stage returning and self.shutdown())
 3. Background coordinator loop calls _check_worker_group
-4. worker_group.is_done() returns True (workers exited cleanly!)
+4. worker_group.status() returns SUCCEEDED (workers exited cleanly!)
 5. Coordinator calls abort("Worker job terminated permanently...")
 
 Fix: a draining coordinator ignores expected worker exit after all shards complete.
@@ -17,9 +17,10 @@ Fix: a draining coordinator ignores expected worker exit after all shards comple
 from unittest.mock import MagicMock
 
 import pytest
+from fray.types import JobStatus
 from zephyr.coordinator import PullStatus
 from zephyr.shuffle import ListShard
-from zephyr.stage_io import ShardTask, TaskResult
+from zephyr.stage_io import ShardTask, TaskResult, ZephyrPoolLostError, ZephyrWorkerError
 from zephyr.testing.coordinator import (
     TEST_TASK_COST,
     TEST_WORKER_AVAILABLE,
@@ -62,15 +63,27 @@ def test_check_worker_group_skips_after_completed_stage(draining_coordinator):
     assert run.completed_shards == run.total_shards
 
     mock_group = MagicMock()
-    mock_group.is_done.return_value = True
+    mock_group.status.return_value = JobStatus.SUCCEEDED
     draining_coordinator._worker_group = mock_group
     draining_coordinator._check_worker_group()
 
     assert draining_coordinator.get_fatal_error() is None
 
 
-def test_check_worker_group_still_aborts_mid_stage(draining_coordinator):
-    """Worker group dying while shards are still in-flight must abort."""
+@pytest.mark.parametrize(
+    ("worker_job_status", "error_type"),
+    [
+        # Iris gave up on a worker: the failure may repeat, so the driver must not retry.
+        (JobStatus.FAILED, ZephyrWorkerError),
+        # Every worker exited cleanly, so the pool released its last worker too early.
+        (JobStatus.SUCCEEDED, ZephyrPoolLostError),
+    ],
+)
+def test_check_worker_group_aborts_mid_stage(draining_coordinator, worker_job_status, error_type):
+    """A worker job that ends with a shard outstanding aborts the stage.
+
+    The error type tells the driver whether a fresh pool may retry the pipeline.
+    """
     tasks = [
         ShardTask(
             shard_idx=shard_idx,
@@ -97,10 +110,9 @@ def test_check_worker_group_still_aborts_mid_stage(draining_coordinator):
     )
 
     mock_group = MagicMock()
-    mock_group.is_done.return_value = True
+    mock_group.status.return_value = worker_job_status
     draining_coordinator._worker_group = mock_group
     draining_coordinator._check_worker_group()
 
-    fatal_error = draining_coordinator.get_fatal_error()
-    assert fatal_error is not None
-    assert "Worker job terminated permanently" in fatal_error
+    with pytest.raises(error_type):
+        draining_coordinator._wait_for_stage(run)

@@ -13,6 +13,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from fray.types import JobStatus
+
 
 class ActorUnavailableError(RuntimeError):
     """Raised when an actor endpoint is temporarily unavailable."""
@@ -153,11 +155,13 @@ class ActorGroup(Protocol):
         """
         ...
 
-    def is_done(self) -> bool:
-        """Return True if the underlying job has permanently terminated.
+    def status(self) -> JobStatus:
+        """Return the lifecycle state of the underlying job.
 
-        When True, no new actors will ever come online — the group is dead.
-        Local backends always return False (in-process actors don't independently fail).
+        Once the state is finished, no new actors will ever come online. A
+        SUCCEEDED group ended because every actor exited cleanly; FAILED means
+        the backend gave up on an actor. Local groups stay RUNNING, because
+        in-process actors do not fail independently.
         """
         ...
 
