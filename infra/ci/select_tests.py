@@ -1010,7 +1010,7 @@ def experiment_asset_tests(areas: set[str], repo_root: Path) -> list[str]:
 
 
 def load_test_seconds(path: Path) -> dict[str, float]:
-    """Per-file test time written by ``infra/ci/test_timings.py``, keyed by repo-relative path."""
+    """Per-file test time written by ``infra/ci/shard_timings.py``, keyed by repo-relative path."""
     return {test: float(seconds) for test, seconds in json.loads(path.read_text()).items()}
 
 
@@ -1303,7 +1303,7 @@ def main() -> None:
         "--test-seconds",
         type=Path,
         metavar="JSON",
-        help="Per-file test times from infra/ci/test_timings.py, used to balance shards",
+        help="Per-file test times from infra/ci/shard_timings.py, used to balance shards",
     )
     args = parser.parse_args()
     if not (args.base_ref or args.run_all_tests):

@@ -11,7 +11,7 @@ and overlays the sums on the previous timings so files missing from a partial ru
 their last value.
 
 Usage:
-    python3 -m infra.ci.test_timings --reports DIR --output test_seconds.json [--previous OLD.json]
+    python3 -m infra.ci.shard_timings --reports DIR --output test_seconds.json [--previous OLD.json]
 """
 
 import argparse

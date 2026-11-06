@@ -15,6 +15,10 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Actions cache key prefix for the per-file test times that balance unit shards.
+  UNIT_TIMINGS_CACHE: unit-test-seconds
+
 jobs:
   select:
     runs-on: ubuntu-latest
@@ -39,8 +43,8 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: test_seconds.json
-          key: unit-test-seconds-latest
-          restore-keys: unit-test-seconds-
+          key: ${{ env.UNIT_TIMINGS_CACHE }}-latest
+          restore-keys: ${{ env.UNIT_TIMINGS_CACHE }}-
 
       - id: analyze
         env:
@@ -163,18 +167,18 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: test_seconds.json
-          key: unit-test-seconds-latest
-          restore-keys: unit-test-seconds-
+          key: ${{ env.UNIT_TIMINGS_CACHE }}-latest
+          restore-keys: ${{ env.UNIT_TIMINGS_CACHE }}-
 
       # Files a failed or partial run did not time keep their previous value.
       - name: Sum per-file test times
-        run: python3 -m infra.ci.test_timings --reports "$RUNNER_TEMP/junit" --previous test_seconds.json --output test_seconds.json
+        run: python3 -m infra.ci.shard_timings --reports "$RUNNER_TEMP/junit" --previous test_seconds.json --output test_seconds.json
 
       - name: Save timings
         uses: actions/cache/save@v6
         with:
           path: test_seconds.json
-          key: unit-test-seconds-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ${{ env.UNIT_TIMINGS_CACHE }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   slow:
     if: ${{ github.event_name == 'schedule' }}
