@@ -234,8 +234,21 @@ async def _calibrate(task: TaskSpec, config: CalibrationConfig, root: Path) -> d
                 for step in rollout_steps(rollout):
                     response_id = step.turn.metadata.get("response_id")
                     if not isinstance(response_id, str):
-                        raise RuntimeError("OpenRouter response lacks a generation ID")
-                    metadata = await _generation_metadata(metadata_client, response_id)
+                        provider_evidence.append(
+                            {"response_id": None, "metadata_error": "missing response ID", "route_matches": False}
+                        )
+                        continue
+                    try:
+                        metadata = await _generation_metadata(metadata_client, response_id)
+                    except (httpx.HTTPError, ValueError, RuntimeError) as error:
+                        provider_evidence.append(
+                            {
+                                "response_id": response_id,
+                                "metadata_error": f"{type(error).__name__}: {error}",
+                                "route_matches": False,
+                            }
+                        )
+                        continue
                     provider_evidence.append(
                         {
                             "response_id": response_id,
