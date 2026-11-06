@@ -15,5 +15,15 @@
   "budget.max_modify_rounds": 2,
   "author.max_turns": 100,
   "author.max_prompt_tokens": 120000,
-  "tools.output_chars": 20000
+  "tools.output_chars": 20000,
+  "runtime.host": "iris",
+  "author.image": "",
+  "author.packages": [],
+  "author.workdir": "/workspace",
+  "solver.attempt_timeout": 3600.0,
+  "solver.turn_timeout": 1800.0,
+  "solver.tool_timeout": 120.0,
+  "solver.command_timeout": 30.0,
+  "solver.cleanup_timeout": 60.0,
+  "grader.timeout": 300.0
 }

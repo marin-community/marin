@@ -1,0 +1,98 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Adapted from Taskforge integration 9807c5cfb3, stage50_validate/{classify,outcome}.py.
+
+"""Classify completed grades and interrupted trials without discarding evidence."""
+
+import math
+
+from rolloutengine.models import (
+    LENGTH_STOP_REASON,
+    MAX_TURNS_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
+    GradedRollout,
+    RolloutInterrupted,
+    RolloutOperation,
+)
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import NoGrader, TaskSpec
+
+from forge.effects.events import Resolved
+from forge.effects.issues import Hold, Restart
+from forge.model.review import Cause
+
+TASK_DEFECTS = frozenset(
+    {
+        Cause.TASK_SETUP,
+        Cause.SUBMISSION_UNSUPPORTED,
+        Cause.GRADER_MISSING_REWARD,
+        Cause.GRADER_EMPTY_REWARD,
+        Cause.GRADER_INVALID_REWARD,
+        Cause.GRADER_REWARD_RANGE,
+        Cause.INVALID_TASK,
+        Cause.VERIFIER_SKIPPED,
+    }
+)
+
+
+def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | None:
+    if grade.status is Outcome.SUBMISSION_FAILURE:
+        return None
+    if grade.status is Outcome.GRADED:
+        if grade.reward is None:
+            return Cause.GRADER_MISSING_REWARD
+        if not math.isfinite(grade.reward):
+            return Cause.GRADER_INVALID_REWARD
+        return None if grade.score_min <= grade.reward <= grade.score_max else Cause.GRADER_REWARD_RANGE
+    if grade.status is Outcome.INVALID_TASK:
+        return Cause.INVALID_TASK
+    if grade.status is Outcome.UNAVAILABLE:
+        return Cause.VERIFIER_SKIPPED if task is not None and isinstance(task.grader, NoGrader) else Cause.NO_GRADE
+    return {
+        GradingFailure.TIMEOUT: Cause.GRADER_TIMEOUT,
+        GradingFailure.MISSING_REWARD: Cause.GRADER_MISSING_REWARD,
+        GradingFailure.EMPTY_REWARD: Cause.GRADER_EMPTY_REWARD,
+        GradingFailure.INVALID_REWARD: Cause.GRADER_INVALID_REWARD,
+        GradingFailure.EXECUTION: Cause.GRADER_EXECUTION,
+        None: Cause.GRADER_INFRA,
+    }[grade.failure]
+
+
+def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
+    stop = result.rollout.stop_reason
+    if stop == TOTAL_TURN_TIMEOUT_STOP_REASON:
+        return Cause.AGENT_TIMEOUT
+    if stop == MAX_TURNS_STOP_REASON:
+        return Cause.BUDGET_EXHAUSTED
+    if stop in (LENGTH_STOP_REASON, "context"):
+        return Cause.GENERATION_LIMIT
+    return grade_cause(result.grade, task)
+
+
+def restart_cause(error: Restart) -> Cause:
+    linked: BaseException | None = error
+    while linked is not None:
+        if isinstance(linked, RolloutInterrupted):
+            original = linked.__cause__
+            if linked.operation in (RolloutOperation.START, RolloutOperation.PREPARE) and (
+                isinstance(original, RuntimeError) and str(original).startswith("Environment setup command ")
+            ):
+                return Cause.TASK_SETUP
+            return {
+                RolloutOperation.START: Cause.MACHINE_START,
+                RolloutOperation.PREPARE: Cause.SESSION_PREPARE,
+                RolloutOperation.MODEL: Cause.MODEL_UNAVAILABLE,
+                RolloutOperation.ADVANCE: Cause.TOOL_EXECUTION,
+                RolloutOperation.GRADE: Cause.GRADER_RAISED,
+                RolloutOperation.ATTEMPT: Cause.ATTEMPT_TIMEOUT,
+            }[linked.operation]
+        linked = linked.__cause__
+    return Cause.UNCLASSIFIED
+
+
+async def host_failure(event: Resolved[object]) -> None:
+    value = event.value
+    grade = value.grade if isinstance(value, GradedRollout) else value
+    if isinstance(grade, GradeResult) and grade_cause(grade) in (Cause.GRADER_INFRA, Cause.GRADER_TIMEOUT):
+        raise Hold(grade.error or "Grader infrastructure unavailable")

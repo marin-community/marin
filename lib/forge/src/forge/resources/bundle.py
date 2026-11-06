@@ -9,6 +9,7 @@ from types import MappingProxyType
 
 from shellbox.machine import MachineFactory
 
+from forge.harness.web import WebClient
 from forge.resources.clock import Clock
 from forge.resources.env import EnvFactory
 from forge.resources.grading import GradingResource
@@ -26,6 +27,7 @@ class Resources:
     clock: Clock
     ids: Ids
     factories: Mapping[str, MachineFactory]
+    web: WebClient
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "factories", MappingProxyType(dict(self.factories)))
