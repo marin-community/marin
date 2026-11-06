@@ -16,7 +16,7 @@ from eval.data_sources import fetch_hf, fetch_url
 from eval.execution.generation import canonical_generation_kwargs
 from eval.limits import ensure_context_window, require_context_length
 from eval.sources.common import SourceOptions, text_specs
-from eval.task import BaseBenchmark, EmptyResponsePolicy
+from eval.task import BaseBenchmark
 
 DATASET = "HuggingFaceBio/genomeqa"
 REVISION = "e655e415fa30681dddbaf4acc182bcbd8ac41943"
@@ -75,8 +75,6 @@ class GenomeQABenchmark(BaseBenchmark):
         groups={tag: "{group}/{metric}" for tag in ("cell", "subtask", "format")},
         trial_metric=None,
     )
-    EMPTY_RESPONSE_POLICY = EmptyResponsePolicy.SCORE
-    REQUIRES_FULL_COVERAGE = True
     CELLS = CELL_COUNTS
 
     def __init__(self, logger=None):

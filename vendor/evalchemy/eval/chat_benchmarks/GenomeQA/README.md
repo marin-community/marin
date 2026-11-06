@@ -38,12 +38,12 @@ tagged groups emit `{subtask}/genomeqa_macro`, `{format}/genomeqa_macro`,
 `{subtask}/{format}/accuracy`, and `count_{group}` metrics. The macro is declared
 continuous so it does not receive a pooled-binomial uncertainty interval.
 
-Both tasks require their complete population and reject arbitrary `--limit`
-subsets. Completed empty responses score zero and remain checkpointed on resume;
-transport failures remain retryable. Any missing grade suppresses
-aggregate publication; the shared runtime retains individual samples and failure
-counts for inspection and resume. The small runtime policy opt-ins preserve the
-default behavior of other benchmarks.
+Both tasks select their complete population and reject arbitrary `--limit`
+subsets. Execution uses Evalchemy's existing failure and checkpoint behavior:
+mostly-empty runs fail, empty responses can be retried on resume, and transport
+drops can leave aggregates over fewer graded questions. Inspect expected,
+generated, and graded counts before reporting a complete benchmark score.
+No GenomeQA-specific runtime policy is added.
 
 Dashboard subtask columns and public sample-access restrictions are follow-up
 work in #10981. Keep GenomeQA runs out of public dashboard records until those
