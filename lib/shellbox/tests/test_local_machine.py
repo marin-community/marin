@@ -129,6 +129,13 @@ def test_local_factory_reports_unsupported_host(monkeypatch):
         LocalMachineFactory()
 
 
+@pytest.mark.parametrize("module, name", [(os, "pidfd_open"), (signal, "pidfd_send_signal")])
+def test_local_factory_reports_missing_pidfd_support(monkeypatch, module, name):
+    monkeypatch.delattr(module, name, raising=False)
+    with pytest.raises(SandboxUnavailable, match=name):
+        LocalMachineFactory()
+
+
 def test_local_numeric_limits_allow_execution_without_delegation(undelegated_factory):
     async def check():
         machine = await undelegated_factory.create(MachineSpec(HostImage(), workdir="/app", cpus=2, memory_mb=256))

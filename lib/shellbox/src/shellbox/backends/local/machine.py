@@ -266,6 +266,13 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     """``bwrap`` alone, or the bundled bwrap followed by any bwrap on ``PATH``; the caller probes each in turn."""
     if sys.platform != "linux":
         raise SandboxUnavailable("The local bubblewrap backend requires Linux")
+    missing = [
+        f"{module.__name__}.{name}"
+        for module, name in ((os, "pidfd_open"), (signal, "pidfd_send_signal"))
+        if not hasattr(module, name)
+    ]
+    if missing:
+        raise SandboxUnavailable(f"The local bubblewrap backend requires Python with {', '.join(missing)}")
     # This dependency is installed only on Linux.
     from bubblewrap_bin import bwrap_path  # noqa: PLC0415
 

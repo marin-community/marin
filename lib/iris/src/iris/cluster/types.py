@@ -797,7 +797,7 @@ class EnvironmentSpec:
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
         if self.setup_scripts is None:
-            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
             extras = list(self.extras or [])
             setup_scripts = [
                 default_setup_script(
