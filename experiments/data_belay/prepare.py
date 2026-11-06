@@ -5,13 +5,15 @@
 
 The sample is a seeded random subset of the split's data files that holds at least ``FILE_MARGIN`` times the new-data
 tokens of the largest rung, by the intake estimate. Whole files keep the dataset's documents whole, and a random subset
-avoids reading only the head of a dataset whose files are ordered (by date, source or score).
+avoids reading only the head of a dataset whose files are ordered (by date, source or score). Each tokenize shard stops
+after ``max_rows`` documents, so that a dataset with a few huge files is not tokenized whole.
 """
 
 import dataclasses
 import hashlib
 import json
 import logging
+import math
 import random
 
 from datasets import load_dataset_builder
@@ -36,6 +38,8 @@ class CachePlan:
 
     cache_path: str
     files: tuple[str, ...]
+    max_rows: int
+    """Documents per tokenize shard: ``FILE_MARGIN`` times the rows that hold the need, by the intake estimate."""
     estimated_tokens: int
     need_tokens: int
 
@@ -69,15 +73,18 @@ def plan_cache(report: IntakeReport, need_tokens: int, seed: int = SAMPLE_SEED) 
         raise ValueError(f"{report.repo} split {report.split!r} lists no file sizes")
     chosen = select_files(files, report.estimated_tokens / total_bytes, need_tokens, seed)
     paths = tuple(sorted(f.path for f in chosen))
+    max_rows = math.ceil(FILE_MARGIN * need_tokens / report.sample.tokens_per_row)
     identity = json.dumps(
-        {"files": paths, "text_field": report.text_field, "tokenizer": "hero-bpe-v16384"}, sort_keys=True
+        {"files": paths, "max_rows": max_rows, "text_field": report.text_field, "tokenizer": "hero-bpe-v16384"},
+        sort_keys=True,
     )
     digest = hashlib.sha256(identity.encode()).hexdigest()[:10]
     slug = report.repo.replace("/", "--")
     name = f"{report.config or 'default'}-{report.split}-{digest}"
     estimated = round(sum(f.size for f in chosen) * report.estimated_tokens / total_bytes)
+    estimated = min(estimated, round(max_rows * report.sample.tokens_per_row))
     path = prefix_join(CACHE_ROOT, f"{slug}/{report.revision[:12]}/{name}")
-    return CachePlan(path, paths, estimated, need_tokens)
+    return CachePlan(path, paths, max_rows, estimated, need_tokens)
 
 
 def build_cache(report: IntakeReport, plan: CachePlan, tokenizer: str) -> dict:
@@ -88,6 +95,7 @@ def build_cache(report: IntakeReport, plan: CachePlan, tokenizer: str) -> dict:
         cache_path=plan.cache_path,
         tokenizer=tokenizer,
         format=TextLmDatasetFormat(text_key=report.text_field),
+        sample_count=plan.max_rows,
     )
     tokenize(config)
     stats = json.loads(StoragePath(prefix_join(plan.train_cache, ".stats.json")).read_text())
