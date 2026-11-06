@@ -267,13 +267,13 @@ both. A context that needs context parallelism also sets `HERO_CONTEXT_AXIS_SIZE
 `hero_recipe.py`, and `HERO_BALANCE_ATTENTION_ROWS` when row balancing pays off at that context. Each
 rack's 64 GPUs then form 64 / CP expert shards of CP sequence shards each, and the eval batch follows
 (see [Scaling ladder](#scaling-ladder)). Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
-only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-scaling-n-floor` and
-`--log-scaling-alpha` on `launch_diagnostics.py`, the only launcher with those flags.
+only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-scaling-n-floor`,
+`--log-scaling-alpha` and `--log-scaling-power` on `launch_diagnostics.py`, the only launcher with those flags.
 `qk_mult_long_scale` multiplies `qk_mult` on the global layers only. `log_scaling_n_floor` and `log_scaling_alpha`, which must be set together, add a
 position-dependent factor on the global layers, in the form of Inkling's log scaling: a query that sees `n`
 keys in its document is multiplied by `1 + log_scaling_alpha * ln(max(n / log_scaling_n_floor, 1))`, so queries within
 the floor are unchanged. At the end of a 262K document, a floor of 65536 gives `1 + 1.386 * log_scaling_alpha` and a floor of 128000
-gives `1 + 0.717 * log_scaling_alpha`. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
+gives `1 + 0.717 * log_scaling_alpha`. `log_scaling_power` raises that factor to an exponent, default 1, so a floor of 65536, slope 0.1 and power 2 give 1.296 at the end of a 262K document. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
 Hero exports and upload, refuses log scaling instead of serving the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
 data seed, component order, and token store unchanged. The QK and capacity values need measured
@@ -410,6 +410,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
 | `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `1 + alpha * ln(max(n / this value, 1))`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
 | `--log-scaling-alpha` | the slope `alpha` of that scale; required with `--log-scaling-n-floor` |
+| `--log-scaling-power` | raises that scale to this exponent; defaults to 1, and anything else requires `--log-scaling-n-floor` |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
