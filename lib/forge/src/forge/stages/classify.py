@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Adapted from Taskforge integration 9807c5cfb3, stage50_validate/{classify,outcome}.py.
 
 """Classify completed grades and interrupted trials without discarding evidence."""
 

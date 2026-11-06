@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Replayable web search and extraction; transport adapted from Taskforge agentic/parallel.py."""
+"""Replayable web search and extraction."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass

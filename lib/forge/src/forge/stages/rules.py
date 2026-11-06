@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Adapted from Taskforge integration 9807c5cfb3, stage60_review/rules.py and stage50_validate/evidence.py.
 
 """Review complete evidence before accepting or requesting author repair."""
 
