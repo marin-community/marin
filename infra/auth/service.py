@@ -34,6 +34,8 @@ from starlette.routing import Route
 from infra.auth.loom import LoomLauncher
 from infra.auth.openfga import ACTIONS, AuthorizationUnavailable, OpenFGAPolicy, ProviderIdentity
 
+REFRESH_AUDIENCES = frozenset({"cw_s3"})
+
 
 class PermissionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -156,6 +158,7 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
         signer,
         verifier,
         max_token_ttl=config.max_token_ttl,
+        refresh_audiences=REFRESH_AUDIENCES,
     )
     bindings = {
         binding.name: OpenBaoStorageIssuer(

@@ -34,7 +34,6 @@ TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
 JWT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:jwt"
 ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 GRANT_VERSION = 1
-REFRESH_AUDIENCES = frozenset({"cw_s3"})
 
 
 class IdentityVerifier(Protocol):
@@ -70,6 +69,7 @@ class GrantAuthService:
         verifier: GrantTokenVerifier,
         *,
         max_token_ttl: int,
+        refresh_audiences: frozenset[str],
         now: Callable[[], float] = time.time,
     ):
         if max_token_ttl <= 0:
@@ -79,6 +79,7 @@ class GrantAuthService:
         self._signer = signer
         self._verifier = verifier
         self._max_token_ttl = max_token_ttl
+        self._refresh_audiences = refresh_audiences
         self._now = now
 
     def exchange(self, subject_token: str, *, grant_id: str, audience: str) -> dict:
@@ -135,8 +136,8 @@ class GrantAuthService:
         }
 
     def refresh(self, token: str, *, audience: str) -> dict:
-        """Renew a storage access token without changing audience or bounds."""
-        if audience not in REFRESH_AUDIENCES:
+        """Renew an allowed audience without changing the token's bounds."""
+        if audience not in self._refresh_audiences:
             raise GrantDenied("This audience requires a fresh workload identity")
         grant, permissions = _verified_access_grant(self._verifier, self.store, audience=audience, token=token)
         return self.mint_for(grant, audience=audience, permissions=permissions)

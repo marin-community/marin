@@ -11,7 +11,7 @@ import httpx
 import jwt
 import pytest
 import requests
-from rigging.grant_auth import JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT, GrantAuthService
+from rigging.grant_auth import ACCESS_TOKEN_TYPE, JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT, GrantAuthService
 from rigging.token_authority import generate_ed25519_keypair, public_jwk_from_pem
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
@@ -169,6 +169,24 @@ def exchange(client, grant_id, audience):
     )
     assert response.status_code == 200, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+@pytest.mark.parametrize("audience,expected", [("cw_s3", 200), ("loom", 403)])
+def test_service_refreshes_only_storage_tokens(environment, audience, expected):
+    with TestClient(environment.app) as client:
+        grant_id = create_grant(client)
+        headers = exchange(client, grant_id, audience)
+        response = client.post(
+            "/oauth/token",
+            data={
+                "grant_type": TOKEN_EXCHANGE_GRANT,
+                "subject_token_type": ACCESS_TOKEN_TYPE,
+                "subject_token": headers["Authorization"].removeprefix("Bearer "),
+                "grant_id": grant_id,
+                "audience": audience,
+            },
+        )
+        assert response.status_code == expected
 
 
 def test_service_denies_broader_provider_and_revoked_parent(environment):

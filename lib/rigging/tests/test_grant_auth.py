@@ -66,7 +66,12 @@ class AuthEnvironment:
 
 
 @pytest.fixture
-def auth(tmp_path, grant_permissions, grant_policy):
+def refresh_audiences():
+    return frozenset({"cw_s3"})
+
+
+@pytest.fixture
+def auth(tmp_path, grant_permissions, grant_policy, refresh_audiences):
     clock = [time.time()]
     store = GrantStore(
         tmp_path / "grants.db",
@@ -80,7 +85,15 @@ def auth(tmp_path, grant_permissions, grant_policy):
         expected_audiences=frozenset({"loom", "iris", "cw_s3"}),
         leeway_seconds=0,
     )
-    service = GrantAuthService(store, IdentityDirectory(), signer, verifier, max_token_ttl=60, now=lambda: clock[0])
+    service = GrantAuthService(
+        store,
+        IdentityDirectory(),
+        signer,
+        verifier,
+        max_token_ttl=60,
+        refresh_audiences=refresh_audiences,
+        now=lambda: clock[0],
+    )
     yield AuthEnvironment(store, service, signer, grant_permissions, clock)
     store.close()
 
@@ -259,6 +272,19 @@ def test_http_service_tokens_require_identity_for_renewal(auth, audience):
         assert refreshed.status_code == 403
         reissued = client.post("/oauth/token", data=_token_request("session-one-identity", grant.id, audience=audience))
         assert reissued.status_code == 200
+
+
+@pytest.mark.parametrize("refresh_audiences,expected", [(frozenset(), 403), (frozenset({"iris"}), 200)])
+def test_http_refresh_uses_deployment_policy(auth, refresh_audiences, expected):
+    grant = _session_grant(auth)
+    with TestClient(create_app(auth.service)) as client:
+        issued = client.post("/oauth/token", data=_token_request("session-one-identity", grant.id))
+        assert issued.status_code == 200
+        refreshed = client.post(
+            "/oauth/token",
+            data=_token_request(issued.json()["access_token"], grant.id, token_type=ACCESS_TOKEN_TYPE),
+        )
+        assert refreshed.status_code == expected
 
 
 def test_revocation_stops_existing_tokens_exchange_and_refresh(auth):

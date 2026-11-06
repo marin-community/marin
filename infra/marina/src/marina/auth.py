@@ -31,7 +31,7 @@ ADMIN_ROLE = "admin"
 
 
 def build_policy(iap_audience: str | None, shared: SharedGrantClient | None = None) -> RequestAuthPolicy:
-    """The enforcing chain: IAP assertion when an audience is configured, then loopback."""
+    """Select shared grants or the native IAP/loopback authentication chain."""
     if shared is not None:
         if iap_audience is not None:
             raise ValueError("Select either shared grants or IAP authentication")

@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from rigging.grants import Grant, GrantDenied, Permission, permissions_cover
+from rigging.shared_grants import authority_origin
 from rigging.token_authority import JwksVerifier, VerifiedClaims, public_jwk_from_pem
 
 TRANSIT_KEY_CACHE_TTL = 300
@@ -31,16 +32,9 @@ class OpenBaoClient:
     """Make bounded requests using a caller-managed, rotating Bao token file."""
 
     def __init__(self, address: str, token_file: Path, *, ca_bundle: str | bool = True, timeout: float = 10):
-        parsed = urlsplit(address)
-        if parsed.scheme != "https" and not (
-            parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-        ):
-            raise ValueError("OpenBao requires HTTPS outside loopback")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
-            raise ValueError("OpenBao address must be an origin")
         if ca_bundle is False:
             raise ValueError("OpenBao TLS verification cannot be disabled")
-        self.address = address.rstrip("/")
+        self.address = authority_origin(address)
         self.token_file = token_file
         self.ca_bundle = ca_bundle
         self.timeout = timeout

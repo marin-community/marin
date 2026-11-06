@@ -9,12 +9,12 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import jwt
 import requests
 from rigging.auth import RefreshingTokenProvider
 from rigging.grant_auth import ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT
+from rigging.shared_grants import authority_origin
 
 
 class StorageCredentials:
@@ -29,16 +29,9 @@ class StorageCredentials:
         token_file: Path,
         now: Callable[[], float] = time.time,
     ):
-        parsed = urlsplit(auth_url)
-        if parsed.scheme != "https" and not (
-            parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-        ):
-            raise ValueError("The grant service requires HTTPS outside loopback")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
-            raise ValueError("The grant service URL must be an origin")
         if not binding or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in binding):
             raise ValueError("invalid storage binding name")
-        self.auth_url = auth_url.rstrip("/")
+        self.auth_url = authority_origin(auth_url)
         self.binding = binding
         self.token_file = token_file
         self.grant_id = jwt.decode(grant_token, options={"verify_signature": False})["grant_id"]
