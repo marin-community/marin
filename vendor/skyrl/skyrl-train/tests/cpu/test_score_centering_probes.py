@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,6 @@ from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dynamic_sampling import GroupSelectionPolicy
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
-from skyrl_train.objective.losses import PolicyLossInputs, ppo_policy_loss
 from skyrl_train.rollouts.buffer import (
     BatchPolicy,
     RolloutBuffer,
@@ -180,7 +180,7 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
 
 @pytest.mark.parametrize("flat_rewards", [False, True])
 @pytest.mark.parametrize("candidate_count", [32, 128])
-def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(
+def test_consumed_probe_keeps_alignment_source_context_and_training_inputs_unchanged(
     flat_rewards, candidate_count, megatron_wrapper, monkeypatch, single_rank_group
 ):
     config = get_default_config()
@@ -237,8 +237,7 @@ def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(
         batch = trainer.convert_to_training_input(
             {**trajectory, **evidence}, ["prompt", "prompt"], rollout_staleness=[3, 3]
         )
-        parameters = torch.nn.Parameter(current.log())
-        optimizer = torch.optim.SGD([parameters], lr=0.1, momentum=0.9)
+        parameters = current.log()
         logprobs = parameters.log_softmax(-1)
         response = torch.zeros((2, 4096), dtype=torch.long)
         response[1, 0] = 129
@@ -311,20 +310,14 @@ def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(
             assert metrics[prefix + "current_omitted_mass_mean"] == pytest.approx(0.25 * omitted, abs=1e-7)
             assert metrics[prefix + "behavior_omitted_mass_mean"] == pytest.approx(0.75 * omitted, abs=1e-7)
             assert not any(key.startswith("score_") for key in batch)
-        weights = (old - batch["rollout_logprobs"]).exp().clamp(max=2.0)
-        loss = ppo_policy_loss(
-            PolicyLossInputs(logprobs[response], old, batch["rollout_logprobs"], advantages, batch["loss_mask"]),
-            config.trainer.algorithm,
-        ).values
-        loss = (loss * weights * batch["loss_mask"]).sum() / batch["loss_mask"].sum()
-        loss.backward()
-        optimizer.step()
         results.append(
             (
-                parameters.detach().clone(),
-                parameters.grad.clone(),
-                optimizer.state[parameters]["momentum_buffer"].clone(),
+                {name: None if tensor is None else tensor.detach().clone() for name, tensor in batch.items()},
+                deepcopy(batch.metadata),
             )
         )
-    for baseline, observed in zip(results[0], results[1], strict=True):
-        torch.testing.assert_close(observed, baseline, atol=0, rtol=0)
+    baseline, observed = results
+    assert observed[0].keys() == baseline[0].keys()
+    for name, tensor in baseline[0].items():
+        torch.testing.assert_close(observed[0][name], tensor, atol=0, rtol=0, equal_nan=True)
+    assert observed[1] == baseline[1]
