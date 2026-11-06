@@ -36,7 +36,7 @@ from pydantic import JsonValue
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
-from shellbox.machine import Backend, MachineFactory, NetworkPolicy, PackageSpec
+from shellbox.machine import DEFAULT_WORKDIR, Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
@@ -152,7 +152,7 @@ def requirements(
     image: str | None,
     packages: Sequence[str] = (),
     setup: Sequence[str] = (),
-    workdir: str = "/workspace",
+    workdir: str = DEFAULT_WORKDIR,
     env: Mapping[str, str] | None = None,
 ) -> EnvironmentRequirements:
     """The task machine's contents, all visible to the agent.
@@ -594,6 +594,8 @@ def host_requirements(
     host without a local factory, ``RolloutEngine.check`` rejects it as an unknown factory. Every
     other requirement is unchanged.
     """
+    if requirements.command_semantics is not None and not requirements.working_directory:
+        requirements = requirements.model_copy(update={"working_directory": DEFAULT_WORKDIR})
     local = factories.get(Backend.LOCAL.value)
     if requirements.docker_image != GRADER_BASE_IMAGE or local is None:
         return requirements

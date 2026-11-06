@@ -256,7 +256,7 @@ def test_docker_wire_preserves_resource_limits_and_per_command_users(monkeypatch
 
     async def scenario():
         machine = await DockerMachineFactory().create(
-            MachineSpec(DockerImage("fixture"), workdir="", cpus=2, memory_mb=1536, storage_mb=1024, gpus=1)
+            MachineSpec(DockerImage("fixture"), workdir="/workspace", cpus=2, memory_mb=1536, storage_mb=1024, gpus=1)
         )
         try:
             await machine.run(Command(("id", "-u"), user="1001"))
@@ -269,10 +269,10 @@ def test_docker_wire_preserves_resource_limits_and_per_command_users(monkeypatch
     launch = requests[0]
     limits = {flag: launch[launch.index(flag) + 1] for flag in ("--cpus", "--memory", "--storage-opt", "--gpus")}
     assert limits == {"--cpus": "2", "--memory": "1536m", "--storage-opt": "size=1024M", "--gpus": "1"}
-    assert requests[2][requests[2].index("--user") + 1] == "1001"
-    assert requests[3][requests[3].index("--user") + 1] == "1002"
-    assert "--user" not in requests[4]
-    assert "-w" not in requests[4]
+    assert requests[3][requests[3].index("--user") + 1] == "1001"
+    assert requests[4][requests[4].index("--user") + 1] == "1002"
+    assert "--user" not in requests[5]
+    assert requests[5][requests[5].index("-w") + 1] == "/workspace"
     assert requests[-1][0:2] == ("rm", "-f")
 
 
@@ -523,3 +523,9 @@ def test_download_distinguishes_missing_file_from_exec_failure(tmp_path, monkeyp
     with pytest.raises(FileNotFoundError if exit_code == 1 else RuntimeError):
         asyncio.run(machine.download("/missing.py", tmp_path / "download"))
     assert calls == [("exec", "--user", "0", "container", "test", "-e", "/missing.py")]
+
+
+@pytest.mark.parametrize("factory_type", [DockerMachineFactory, GvisorMachineFactory])
+def test_empty_workdir_is_rejected_before_docker_submission(factory_type):
+    with pytest.raises(ValueError, match="workdir must not be empty"):
+        asyncio.run(factory_type().create(MachineSpec(DockerImage("fixture"), workdir="")))

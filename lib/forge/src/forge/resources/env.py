@@ -14,7 +14,7 @@ from typing import ClassVar, Protocol, override
 
 from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineTerminated
+from shellbox.machine import DEFAULT_WORKDIR, Command, ExitReason, Machine, MachineFactory, MachineTerminated
 from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 
@@ -127,7 +127,7 @@ class ShellboxEnv(_RecordedEnv):
     """An owned Shellbox machine; nonzero command exits remain ordinary results."""
 
     def __init__(
-        self, machine: Machine, image: str, notify: Notify, owned: AsyncExitStack, workdir: str = "/workspace"
+        self, machine: Machine, image: str, notify: Notify, owned: AsyncExitStack, workdir: str = DEFAULT_WORKDIR
     ) -> None:
         self.machine, self.owned = machine, owned
         self.workdir = PurePosixPath(workdir)
@@ -138,6 +138,8 @@ class ShellboxEnv(_RecordedEnv):
         self._check_open()
         try:
             yield
+        except IsADirectoryError as error:
+            raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path)) from error
         except MachineTerminated as error:
             raise Hold(f"environment terminated: {error}") from error
         except (RuntimeError, SimulationError) as error:
@@ -146,6 +148,8 @@ class ShellboxEnv(_RecordedEnv):
             detail = str(error)
             if detail.startswith("ShellSim terminated: ") or detail == "Machine is closed":
                 raise Hold(f"environment terminated: {detail.removeprefix('ShellSim terminated: ')}") from error
+            if "is a directory" in detail.lower():
+                raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path) if path else detail) from error
             if isinstance(error, SimulationError) and "no such file or directory" in detail.lower():
                 missing = str(path) if path is not None else detail.partition("No such file or directory: ")[2] or detail
                 raise FileNotFoundError(errno.ENOENT, "No such file or directory", missing) from error
@@ -221,7 +225,7 @@ class ShellboxEnvFactory(EnvFactory):
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
         image = canonical_digest((requirements, self.runtime))
-        return ShellboxEnv(machine, image, self.notify, owned, requirements.working_directory or "/workspace")
+        return ShellboxEnv(machine, image, self.notify, owned, requirements.working_directory or DEFAULT_WORKDIR)
 
 
 @dataclass(frozen=True, slots=True)

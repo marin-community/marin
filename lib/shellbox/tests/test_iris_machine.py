@@ -518,3 +518,9 @@ def test_missing_download_is_a_file_error(tmp_path):
     missing = str(tmp_path / "missing file.py")
     with pytest.raises(FileNotFoundError, match=r"missing file\.py"):
         asyncio.run(machine.download(missing, tmp_path / "download"))
+
+
+def test_empty_workdir_is_rejected_before_iris_submission():
+    factory = IrisMachineFactory(controller_url="http://unused")
+    with pytest.raises(ValueError, match="workdir must not be empty"):
+        asyncio.run(factory.create(MachineSpec(RegistryImage("fixture"), workdir="")))

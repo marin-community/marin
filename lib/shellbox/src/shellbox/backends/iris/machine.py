@@ -340,6 +340,8 @@ class IrisMachineFactory:
         self.secret_env = dict(secret_env or {})
 
     def _check_spec(self, spec: MachineSpec) -> RegistryImage:
+        if not spec.workdir:
+            raise ValueError("Machine workdir must not be empty")
         if spec.gpus:
             raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
         if not isinstance(spec.source, RegistryImage):
