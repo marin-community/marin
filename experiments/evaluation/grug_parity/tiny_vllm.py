@@ -37,7 +37,7 @@ def main() -> None:
         max_num_batched_tokens=16,
         enable_chunked_prefill=True,
         enable_prefix_caching=True,
-        enforce_eager=True,
+        compilation_config={"mode": 3, "cudagraph_mode": "NONE"},
         max_logprobs=128,
         kv_cache_memory_bytes=128 * 1024**2,
         quantization=args.quantization,
