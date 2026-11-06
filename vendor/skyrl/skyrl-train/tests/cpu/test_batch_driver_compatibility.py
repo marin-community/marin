@@ -7,6 +7,7 @@ import pytest
 from hydra import compose, initialize_config_dir
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.trainer import RayPPOTrainer
+from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.utils.utils import validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
@@ -15,6 +16,22 @@ from transformers import PreTrainedTokenizerFast
 class RecordedRows:
     def set_trajectory_sink(self, sink):
         pass
+
+
+def test_batch_admission_counts_final_trials_in_stepwise_rows():
+    policy = GroupAdmissionPolicy(
+        GroupAdvantageInvariant.exact_physical(physical_group_size=2), rollout_logprobs_required=True
+    )
+    batch = {
+        "response_ids": [[1], [2], [3]],
+        "loss_masks": [[1], [1], [1]],
+        "rollout_logprobs": [np.asarray([-0.1])] * 3,
+        "is_last_step": [False, True, True],
+    }
+    (admission,) = policy.evaluate_batch(batch, ["a", "a", "a"])
+    assert admission.physical_count == 2
+    assert admission.row_indices == (0, 1, 2)
+    assert admission.decision.rejections == ()
 
 
 @pytest.fixture
