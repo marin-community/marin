@@ -21,7 +21,7 @@ def _arms(changes: dict[str, float]) -> tuple[dict, dict]:
         ({"math": -0.05}, Verdict.HELPS),
         # A gain in one group does not hide a harm beyond the limit in another.
         ({"math": -0.05, "paloma": 0.03}, Verdict.HURTS),
-        ({}, Verdict.NEUTRAL),
+        ({}, Verdict.NO_GAIN),
         # A harm inside the limit keeps a gain a gain.
         ({"code": -0.04, "paloma": 0.004}, Verdict.HELPS),
     ],
@@ -34,8 +34,10 @@ def test_verdict(changes, expected):
         assert delta.low <= changes.get(delta.group, 0.0) + 1e-9 <= delta.high + 2e-9
 
 
-def test_noisy_arms_are_inconclusive():
+def test_a_gain_with_a_possible_harm_is_a_trade_off():
     control = {group: CONTROL for group in GROUP_METRICS}
-    treatment = {group: [0.97, 1.03, 1.01] for group in GROUP_METRICS}
+    treatment = {group: [v * 0.95 for v in CONTROL[:3]] for group in GROUP_METRICS}
+    # Too noisy to rule out a harm beyond the limit, and not wholly above it.
+    treatment["paloma"] = [0.97, 1.03, 1.01]
     verdict, _ = judge(control, treatment, LIMITS)
-    assert verdict is Verdict.INCONCLUSIVE
+    assert verdict is Verdict.TRADE_OFF

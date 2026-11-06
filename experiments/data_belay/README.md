@@ -53,12 +53,42 @@ writes these caches; GPQA is left out because its dataset is gated.
 
 ## Verdict
 
-For each group, `Δ` is the treatment's mean BPB over the control's, minus 1, with a Welch t interval over seeds.
-`helps` needs one group wholly below 0 and no group that can reach its harm limit; `hurts` is a group wholly above
-its harm limit. See [`judge.py`](judge.py).
+For each group, `Δ` is the treatment's mean BPB over the control's, minus 1, with a Welch t interval over seeds. A
+group is `better` (interval below 0), `worse` (interval above its harm limit), `neutral` (interval below the limit) or
+`unresolved`. The harm limit is 1%, or 2.5 seed SDs of the d512 control where the seeds vary more.
+
+| Verdict | Rule |
+|---|---|
+| `helps` | a group is better, and every other group is better or neutral |
+| `trade-off` | a group is better, and another group may be past its harm limit |
+| `hurts` | a group is worse |
+| `no gain` | no group is better and none is worse |
+
+`B noise --rung d512` prints the control's seed spread. `B report --against <candidate>` compares two candidates at
+the same seeds, for example a filtered dataset against the unfiltered one. Confirm a d512 result at d768: at 20%,
+OpenCoder's synthetic code was a `trade-off` at d512 (code −9.1%) and `hurts` at d768 (Paloma +2.4%, Uncheatable
++2.7%). See [`judge.py`](judge.py).
+
+## Validation runs (2026-11-06)
+
+| Candidate, share | Rung, seeds | Paloma | Uncheatable | knowledge | commonsense | math | code | Verdict |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| FineMath-4plus, 20% | d512, 6 | +0.08% | +0.72% | +0.02% | +0.53% | −12.17% | −0.44% | trade-off |
+| FineMath-4plus, 20% | d768, 3 | +0.13% | +0.46% | −0.70% | +0.58% | −14.79% | −1.86% | trade-off |
+| OpenCoder synthetic code, 20% | d512, 3 | +1.49% | +1.33% | +0.78% | +1.85% | +1.72% | −9.05% | trade-off |
+| OpenCoder synthetic code, 20% | d768, 3 | +2.36% | +2.68% | +2.12% | +2.57% | +3.41% | −6.52% | hurts |
+| FineWeb-2 Chinese, 20% | d512, 3 | +0.79% | +1.07% | +0.84% | +1.34% | +1.69% | +1.96% | no gain |
+| FineWeb, 50% | d512, 6 | −2.43% | −0.01% | −2.68% | −5.13% | +3.69% | +7.78% | hurts |
+| FineWeb-Edu against FineWeb, 50% | d512, 6 | +2.34% | +0.92% | +0.00% | +3.11% | −0.67% | +0.94% | hurts |
+
+Each `Δ` is BPB against the control at the same rung (6 control seeds at d512, 3 at d768), negative is better. The
+runs are `dbelay-<rung>-<candidate>-s<seed>` in W&B `marin-community/marin_moe`.
 
 ## Limits
 
 - No contamination scan yet: a gain on one eval set alone needs a check for leakage.
-- The sample is whole files, so a dataset with few large files is sampled coarsely.
+- The sample is whole files, so a dataset with few large files is sampled coarsely, and one file tokenizes on one
+  worker.
+- A seed sets both the model init and the data order. FineWeb-Edu runs varied about 1% between seeds on Paloma, twice
+  as much as the control.
 - Text datasets only: the text field must be a string.

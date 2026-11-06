@@ -12,8 +12,12 @@ with a Welch t interval over the seeds of both arms. Each group gets a call:
   beyond the limit.
 * ``unresolved``: the interval reaches the harm limit but does not lie above it; more seeds narrow it.
 
-The verdict is ``hurts`` when some group is worse, ``helps`` when some group is better and every other group is
-better or neutral, ``neutral`` when every group is neutral, and ``inconclusive`` otherwise.
+The verdict:
+
+* ``hurts``: some group is worse.
+* ``helps``: some group is better, and every other group is better or neutral.
+* ``trade-off``: some group is better, and some other group is unresolved: it may be harmed beyond its limit.
+* ``no gain``: no group is better and none is worse.
 """
 
 import dataclasses
@@ -59,8 +63,8 @@ class GroupCall(StrEnum):
 class Verdict(StrEnum):
     HELPS = "helps"
     HURTS = "hurts"
-    NEUTRAL = "neutral"
-    INCONCLUSIVE = "inconclusive"
+    TRADE_OFF = "trade-off"
+    NO_GAIN = "no gain"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -105,11 +109,11 @@ def verdict(deltas: Sequence[GroupDelta]) -> Verdict:
     calls = [d.call for d in deltas]
     if GroupCall.WORSE in calls:
         return Verdict.HURTS
-    if GroupCall.BETTER in calls and all(c in (GroupCall.BETTER, GroupCall.NEUTRAL) for c in calls):
-        return Verdict.HELPS
-    if all(c is GroupCall.NEUTRAL for c in calls):
-        return Verdict.NEUTRAL
-    return Verdict.INCONCLUSIVE
+    if GroupCall.BETTER not in calls:
+        return Verdict.NO_GAIN
+    if GroupCall.UNRESOLVED in calls:
+        return Verdict.TRADE_OFF
+    return Verdict.HELPS
 
 
 def judge(
