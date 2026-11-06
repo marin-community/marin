@@ -20,6 +20,7 @@ from forge.effects.events import Event, Fingerprint, ReplayPolicy, event_digest
 from forge.model.controls import Candidate
 from forge.resources.execution import Notify, retry_effect
 from forge.resources.rollouts import Engine, interruption
+from forge.resources.sandbox.images import DEFAULT_MODE
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +58,9 @@ def candidate_turns(candidate: Candidate, spec: TaskRolloutSpec) -> tuple[Mappin
         target = PurePosixPath("/", file.path)
         path, parent = shlex.quote(str(target)), shlex.quote(str(target.parent))
         data = shlex.quote(base64.b64encode(resource_bytes(file)).decode())
-        command = f"mkdir -p {parent} && printf %s {data} | base64 -d > {path} && chmod {file.mode or '644'} {path}"
+        command = (
+            f"mkdir -p {parent} && printf %s {data} | base64 -d > {path} && chmod {file.mode or DEFAULT_MODE} {path}"
+        )
         turns.append(
             {
                 "role": "assistant",

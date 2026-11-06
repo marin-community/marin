@@ -289,7 +289,7 @@ def check(spec: TaskRolloutSpec, factories: Mapping[str, MachineFactory]) -> Non
 def reward_file(
     path: str, file_format: RewardFileFormat, key: str = "reward", pass_above: float | None = None
 ) -> FileReward:
-    """Read the score from one reward file the grader writes."""
+    """Configure a reward from one score file the grader writes."""
     return FileReward(files=(RewardFile(path=path, format=file_format, key=key),), pass_above=pass_above)
 
 
