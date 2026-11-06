@@ -91,7 +91,7 @@ class RungNeed:
 class IntakeReport:
     repo: str
     revision: str
-    config: str | None
+    config: str
     split: str
     text_field: str
     licenses: tuple[str, ...]
@@ -151,20 +151,20 @@ def _card_licenses(info) -> tuple[str, ...]:
     return tuple(card_license) if isinstance(card_license, list) else (card_license,)
 
 
-def _num_rows(repo: str, config: str | None, split: str) -> int:
+def _num_rows(repo: str, config: str, split: str) -> int:
     token = get_token()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     response = requests.get(DATASETS_SERVER_SIZE_URL, params={"dataset": repo}, headers=headers, timeout=60)
     response.raise_for_status()
     splits = response.json()["size"]["splits"]
-    matches = [s for s in splits if s["split"] == split and (config is None or s["config"] == config)]
+    matches = [s for s in splits if s["split"] == split and s["config"] == config]
     if not matches:
         available = sorted({(s["config"], s["split"]) for s in splits})
         raise ValueError(f"{repo} has no split {split!r} in config {config!r}; available (config, split): {available}")
     return sum(s["num_rows"] for s in matches)
 
 
-def _first_rows(repo: str, sha: str, config: str | None, split: str, text_field: str) -> list[dict[str, Any]]:
+def _first_rows(repo: str, sha: str, config: str, split: str, text_field: str) -> list[dict[str, Any]]:
     """The first ``SAMPLE_ROWS`` rows of the split at commit ``sha``.
 
     A Parquet split is read by row groups, so the sample costs a few range requests. Other formats stream.
@@ -212,17 +212,20 @@ def run_intake(
     """Pin the revision, classify the license and estimate the size of ``request``."""
     info = HfApi().dataset_info(request.repo, revision=request.revision)
     licenses = _card_licenses(info)
+    # One config name for the sample, the row count and the cache plan: with no config given, the builder's default.
+    # The size endpoint lists every config, so counting rows without a name would sum all of them.
+    config = load_dataset_builder(request.repo, request.config, revision=info.sha).config.name
     sample = sample_stats(
-        _first_rows(request.repo, info.sha, request.config, request.split, request.text_field),
+        _first_rows(request.repo, info.sha, config, request.split, request.text_field),
         request.text_field,
         tokenizer,
     )
-    num_rows = _num_rows(request.repo, request.config, request.split)
+    num_rows = _num_rows(request.repo, config, request.split)
     estimated_tokens = round(sample.tokens_per_row * num_rows)
     return IntakeReport(
         repo=request.repo,
         revision=info.sha,
-        config=request.config,
+        config=config,
         split=request.split,
         text_field=request.text_field,
         licenses=licenses,
