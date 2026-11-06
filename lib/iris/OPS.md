@@ -650,8 +650,15 @@ Namespaces:
   a job writes them, after each write transaction that changes the job or
   attempt: at submit, when an attempt is created, when it starts (with its node)
   and when it finishes. A job handed off to a federation peer is written only by
-  that peer. `cluster` is the writing controller's cluster config name, never
-  empty.
+  that peer. On the hub, `cluster` is the writing controller's cluster config
+  name, never empty. A controller whose Finelog forwards (the CoreWeave
+  clusters) leaves `cluster` empty on its regional store, because a forwarder
+  ships only rows whose `cluster` is empty; the forwarder stamps them with its
+  `forwarding.cluster`, which the controller requires to equal its cluster
+  name. A controller whose Finelog does not forward sets `cluster` itself:
+  `marin` writes straight to the hub, and `marin-dev` keeps its own store. So
+  on a regional store, filter on `cluster = ''`; on the hub, on the cluster
+  name.
 
   Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id)`, because
   job ids are reused after a job ends. `root_submitted_at_ms` is epoch
