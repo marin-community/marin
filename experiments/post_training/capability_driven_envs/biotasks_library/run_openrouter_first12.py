@@ -49,14 +49,18 @@ class PinnedModel:
     context_window: int
 
 
-def _read_panel() -> tuple[list[PinnedModel], str]:
-    data = MANIFEST.read_bytes()
+def _read_panel(manifest_path: Path = MANIFEST) -> tuple[list[PinnedModel], str]:
+    data = manifest_path.read_bytes()
     manifest = json.loads(data)
-    if manifest["panel_id"] != "biotasks-v2-openrouter-first12-diagnostic":
+    if manifest["panel_id"] not in {
+        "biotasks-v2-openrouter-first12-diagnostic",
+        "biotasks-v2-openrouter-first12-infrastructure-recovery1",
+    }:
         raise ValueError("Unexpected OpenRouter manifest")
     models = manifest["models"]
-    if len(models) != 12 or len({row["model"] for row in models}) != 12:
-        raise ValueError("Expected 12 different model IDs")
+    expected = 12 if manifest["panel_id"] == "biotasks-v2-openrouter-first12-diagnostic" else 1
+    if len(models) != expected or len({row["model"] for row in models}) != expected:
+        raise ValueError(f"Expected {expected} different model IDs")
     rows = [PinnedModel(**row) for row in models]
     if any(row.context_window < 32768 or not row.provider_tag or not row.provider_name for row in rows):
         raise ValueError("Invalid pinned provider or context window")
@@ -122,18 +126,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tasks", default=V2_ROOT + "taskspecs.jsonl")
     parser.add_argument("--output", default=OUTPUT)
+    parser.add_argument("--manifest", type=Path, default=MANIFEST)
     args = parser.parse_args()
     fs, path = fsspec.core.url_to_fs(args.output)
     if fs.exists(path):
         raise FileExistsError(f"refusing to overwrite diagnostic results: {args.output}")
     task = _load_task(args.tasks)
-    models, sha = _read_panel()
+    models, sha = _read_panel(args.manifest)
     rows = [
         {"task_json": task.model_dump_json(), "pinned": vars(model), "panel_manifest_sha256": sha} for model in models
     ]
-    pipeline = Dataset.from_list(rows).reshard(12).map_shard(_shard).reshard(1).write_jsonl(args.output)
+    pipeline = Dataset.from_list(rows).reshard(len(rows)).map_shard(_shard).reshard(1).write_jsonl(args.output)
     with ZephyrContext(
-        max_workers=12,
+        max_workers=len(rows),
         resources=ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=True),
         coordinator_resources=ResourceConfig(cpu=0.1, ram="2g", disk="8g", preemptible=False),
         name="biotasks-openrouter-first12-one-item",

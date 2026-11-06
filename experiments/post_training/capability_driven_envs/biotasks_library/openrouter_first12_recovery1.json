@@ -1,0 +1,8 @@
+{
+  "schema_version": "1",
+  "panel_id": "biotasks-v2-openrouter-first12-infrastructure-recovery1",
+  "supersedes_failed_model_route": "meta-llama/llama-4-maverick@google-vertex/us-east5",
+  "models": [
+    {"model": "meta-llama/llama-4-maverick", "provider_tag": "digitalocean", "provider_name": "DigitalOcean", "context_window": 524288}
+  ]
+}
