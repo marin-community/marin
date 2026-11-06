@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 import base64
-import json
-import sys
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import fsspec
 import yaml
 from omegaconf import OmegaConf
-from rigging.provenance import launch_provenance
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
-from cloud.iris import skyrl_entrypoint, training_driver
+from cloud.iris import training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -33,9 +28,6 @@ from skyrl_train.dataset.tasks import source_row_task
 from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
-from skyrl_train.entrypoints import main_base
-from skyrl_train.io import io
-from skyrl_train.utils.tracking import Tracking
 
 
 def test_training_channels_require_compatible_weight_transport() -> None:
@@ -363,27 +355,9 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
     assert seen[0].model_source_uri is None
 
 
-@pytest.mark.parametrize("storage", ["local", "s3"])
-def test_task_materializes_the_forwarded_launch_document(tmp_path: Path, monkeypatch, storage) -> None:
+def test_task_materializes_the_forwarded_launch_document(tmp_path: Path) -> None:
     destination = tmp_path / "launch.yaml"
-    raw = _raw_config()
-    export_root = str(tmp_path / "exports")
-    if storage == "s3":
-        export_root = "s3://tracker-test/exports"
-        filesystem = fsspec.filesystem("memory")
-        list_directory = filesystem.ls
-
-        def list_objects(path, detail=True, **kwargs):
-            entries = list_directory(path, detail=detail, **kwargs)
-            return entries if detail else [entry.removeprefix("s3://") for entry in entries]
-
-        monkeypatch.setattr(filesystem, "ls", list_objects)
-        resolve = io.filesystem_and_path
-        monkeypatch.setattr(
-            io, "filesystem_and_path", lambda uri: (filesystem, uri) if uri.startswith("s3://") else resolve(uri)
-        )
-    raw["artifacts"]["export_root"] = export_root
-    contents = yaml.safe_dump(raw).encode()
+    contents = yaml.safe_dump(_raw_config()).encode()
 
     path = materialize_launch_config(
         str(destination),
@@ -392,44 +366,6 @@ def test_task_materializes_the_forwarded_launch_document(tmp_path: Path, monkeyp
 
     assert path == str(destination)
     assert destination.read_bytes() == contents
-
-    initialized = {}
-    run = SimpleNamespace(
-        id="issued-id",
-        url="https://wandb.example/team/project/runs/issued-id",
-        define_metric=lambda *args, **kwargs: None,
-        log=lambda **kwargs: None,
-        finish=lambda **kwargs: None,
-    )
-
-    def init(**kwargs):
-        initialized.update(kwargs["config"])
-        return run
-
-    monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(init=init, Settings=lambda **kwargs: kwargs))
-    monkeypatch.setenv("WANDB_API_KEY", "test-wandb-key")
-    monkeypatch.setenv("IRIS_TASK_ID", "/tests/training/0:3")
-
-    def training(config):
-        io.write_bytes_atomic(f"{export_root}/metrics/step-000008.json", b'{"step":8}')
-        with Tracking("project", "name", ["files", "wandb"], config) as tracker:
-            tracker.start(resumed_step=None)
-            tracker.log({"loss": 0.25}, step=0)
-
-    monkeypatch.setattr(main_base, "run", training)
-    skyrl_entrypoint.run_config(destination)
-    assert {key: initialized[key] for key in ("run_id", "attempt_id", "source_commit", "iris_job_id")} == {
-        "run_id": raw["run"]["id"],
-        "attempt_id": raw["run"]["attempt_id"],
-        "source_commit": launch_provenance().base_commit,
-        "iris_job_id": "/tests/training",
-    }
-    assert not io.exists(f"{export_root}/metrics/step-000008.json")
-    assert json.loads(io.read_bytes(f"{export_root}/metrics/step-000000.json")) == {
-        "step": 0,
-        "attempt_id": raw["run"]["attempt_id"],
-        "loss": 0.25,
-    }
 
 
 def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) -> None:

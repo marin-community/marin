@@ -2,7 +2,10 @@
 
 import json
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from examples.cat_count.cpu_canary import HELD_OUT_N, PROMPT, TRAIN_N
 from omegaconf import DictConfig, OmegaConf
@@ -118,6 +121,26 @@ def run_cat_count(cfg: DictConfig, worker_env: dict[str, str]) -> None:
         "cat_count_flipped_grpo", flipped_grpo, group_contract=AdvantageEstimatorRegistry.group_contract("grpo")
     )
     run_tiny_training(cfg)
+
+
+def run_tracked_cat_count(cfg: DictConfig, worker_env: dict[str, str]) -> None:
+    def init(**kwargs):
+        path = Path(cfg.trainer.export_path).parent / "wandb-init.json"
+        path.write_text(json.dumps(kwargs["config"]))
+        return SimpleNamespace(
+            id="issued-id",
+            url="https://wandb.example/team/project/runs/issued-id",
+            define_metric=lambda *args, **kwargs: None,
+            log=lambda **kwargs: None,
+            finish=lambda **kwargs: None,
+        )
+
+    sdk = SimpleNamespace(init=init, Settings=lambda **kwargs: kwargs)
+    with (
+        patch.dict(sys.modules, {"wandb": sdk}),
+        patch.dict(os.environ, {"WANDB_API_KEY": "test-wandb-key", "IRIS_TASK_ID": "/tests/native-tracking/0:3"}),
+    ):
+        run_cat_count(cfg, worker_env)
 
 
 def run_cat_count_generate(cfg: DictConfig, worker_env: dict[str, str]) -> None:
