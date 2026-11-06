@@ -105,3 +105,65 @@ def test_checkpoint_eval_scores_each_checkpoint_at_each_length_with_its_own_qk_m
             assert abs(rescaled[prefix + "/loss"] - metrics[prefix + "/loss"]) > 1e-4
     """
     run_on_cpu_devices(script, device_count=4)
+
+
+@pytest.mark.timeout(240)
+def test_hyperball_merge_keeps_each_sphere_norm_and_linear_merge_shrinks_it():
+    script = """
+        import tempfile
+
+        import jax
+        import jax.numpy as jnp
+        import jmp
+        import numpy as np
+        from levanter.checkpoint import save_checkpoint
+        from levanter.grug.sharding import compact_grug_mesh
+        from levanter.utils.jax_utils import leaf_key_paths
+
+        from experiments.grug.moe_hero_ep import model
+        from experiments.grug.moe_hero_ep.launch_checkpoint_eval import (
+            EvalCheckpoint, MergeSpace, hyperball_axes, merged_params,
+        )
+        from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+
+        config = model.GrugModelConfig(
+            vocab_size=64, hidden_dim=32, intermediate_dim=16, shared_expert_intermediate_dim=16,
+            num_shared_experts=1, num_experts=4, num_experts_per_token=2, num_layers=2, num_heads=4,
+            num_kv_heads=2, local_kv_heads=2, global_kv_heads=2, head_dim=8, max_seq_len=8,
+            sliding_window=4, global_every=2, initializer_std=0.1, qk_mult=1.0,
+            attention_implementation="reference", moe_implementation="fixed_all_to_all",
+        )
+        mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+        mp = jmp.get_policy("float32")
+        with tempfile.TemporaryDirectory() as directory, jax.set_mesh(mesh):
+            first = model.Transformer.init(config, key=jax.random.key(3))
+            second = model.Transformer.init(config, key=jax.random.key(4))
+            for step, params in ((17, first), (23, second)):
+                state = {"step": jnp.array(step, dtype=jnp.int32), "params": params}
+                save_checkpoint(state, step=step, checkpoint_path=f"{directory}/step-{step}", is_temporary=False)
+            sources = ((directory + "/step-17", 0.5), (directory + "/step-23", 0.5))
+
+            linear, step, metrics = merged_params(config, EvalCheckpoint(sources, 1.0), mesh=mesh, mp=mp)
+            on_ball = EvalCheckpoint(sources, 1.0, space=MergeSpace.HYPERBALL)
+            ball, _, _ = merged_params(config, on_ball, mesh=mesh, mp=mp)
+
+            paths = jax.tree.leaves(leaf_key_paths(first))
+            groups = jax.tree.leaves(GrugMoeMuonHConfig().create_mask(first))
+            leaves = zip(jax.tree.leaves(first), jax.tree.leaves(second), jax.tree.leaves(linear),
+                         jax.tree.leaves(ball), paths, groups, strict=True)
+            spheres = 0
+            for a, b, lin, hb, path, group in leaves:
+                np.testing.assert_allclose(lin, (a + b) / 2, rtol=1e-6, atol=1e-7)
+                axes = hyperball_axes(path, a.ndim, group)
+                if axes is None:
+                    np.testing.assert_allclose(hb, lin, rtol=1e-6)
+                    continue
+                spheres += 1
+                norm = lambda x: np.sqrt(np.sum(np.square(np.asarray(x)), axis=axes, keepdims=True))
+                np.testing.assert_allclose(norm(hb), (norm(a) + norm(b)) / 2, rtol=1e-5)
+                # The same direction as the linear average, only rescaled.
+                np.testing.assert_allclose(np.asarray(hb) / norm(hb), np.asarray(lin) / norm(lin), atol=1e-6)
+        assert step == 23 and spheres > 0
+        assert metrics["merge/norm_ratio_min"] < metrics["merge/norm_ratio_mean"] < 1.0
+    """
+    run_on_cpu_devices(script, device_count=1)

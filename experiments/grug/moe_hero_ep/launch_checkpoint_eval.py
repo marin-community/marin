@@ -15,12 +15,14 @@ import functools
 import logging
 import os
 from dataclasses import dataclass
+from enum import StrEnum
 
 import click
 import jax
 import jax.numpy as jnp
 import jmp
 import levanter.tracker
+import numpy as np
 from fray.cluster import ResourceConfig
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
@@ -36,6 +38,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.jax_utils import leaf_key_paths
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
@@ -62,6 +65,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
     DEFAULT_DROPLESS_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -84,6 +88,16 @@ HERO_EVAL_SEQ_LENS = (4096, 16384, 65536)
 CHECKPOINT_EVAL_MAX_RETRIES = 3
 
 
+class MergeSpace(StrEnum):
+    """How a weight merge combines its sources."""
+
+    LINEAR = "linear"
+    """The weighted average of the raw parameters."""
+    HYPERBALL = "hyperball"
+    """The weighted average, then each MuonH / AdamH leaf rescaled to its sources' norm over the optimizer's sphere
+    axes, so the merge stays on the hyperball the hero trained on."""
+
+
 @dataclass(frozen=True)
 class EvalCheckpoint:
     """The model to score: one checkpoint directory (``step-N``), or a weighted average of several (a weight merge),
@@ -94,6 +108,7 @@ class EvalCheckpoint:
     qk_mult: float
     label: str = ""
     """A name for the merge in logs (empty for a single checkpoint)."""
+    space: MergeSpace = MergeSpace.LINEAR
 
     def __post_init__(self):
         if not self.sources:
@@ -104,6 +119,22 @@ class EvalCheckpoint:
     @classmethod
     def single(cls, path: str, qk_mult: float) -> "EvalCheckpoint":
         return cls(((path, 1.0),), qk_mult)
+
+
+def hyperball_axes(path: str, ndim: int, group: str) -> tuple[int, ...] | None:
+    """The axes whose joint Frobenius norm the hero's optimizer holds fixed for a leaf, or None for an Adam leaf.
+
+    Mirrors ``_scale_invariant_hyperball_updates`` (MuonH) and ``scale_by_adamh`` (AdamH) in
+    ``experiments/grug/moe_hero_ep/optimizer.py`` with the hero's ``ExpertNormalization.ALL_EXPERTS``: a matrix is one
+    sphere, a stacked leaf has one sphere per leading (layer) index, and a routed expert bank is one sphere per layer.
+    """
+    if group == "adam":
+        return None
+    if ndim <= 2:
+        return tuple(range(ndim))
+    if group == "muonh" and path.endswith((".expert_mlp.w_gate", ".expert_mlp.w_up", ".expert_mlp.w_down")):
+        return tuple(range(ndim - 3, ndim))
+    return tuple(range(1, ndim))
 
 
 @dataclass(frozen=True)
@@ -149,22 +180,54 @@ def load_checkpoint_params(
 
 def merged_params(
     model_config: GrugModelConfig, checkpoint: EvalCheckpoint, *, mesh: Mesh, mp: jmp.Policy
-) -> tuple[Transformer, int]:
-    """The weighted average of ``checkpoint.sources``' parameters, and the latest source's step. Sources load one at a
-    time into a float32 running sum, so at most two copies of the parameters are held; floating leaves are cast back
-    to their dtype, and any other leaf is taken from the last source."""
-    total, last_step, dtypes = None, 0, None
+) -> tuple[Transformer, int, dict[str, float]]:
+    """The weighted average of ``checkpoint.sources``' parameters, the latest source's step, and the merge's norm
+    metrics. Sources load one at a time into a float32 running sum, so at most two copies of the parameters are held;
+    floating leaves are cast back to their dtype, and any other leaf is taken from the last source.
+
+    The metrics give the merged-to-source norm ratio on the hyperball leaves (min and mean over spheres), measured
+    before any ``MergeSpace.HYPERBALL`` rescale: how far a linear average falls inside the spheres.
+    """
+    totals, target_norms, axes, dtypes, treedef, last_step = None, None, None, None, None, 0
     for path, weight in checkpoint.sources:
         params, step = load_checkpoint_params(model_config, path, mesh=mesh, mp=mp)
         logger.info("Loaded step %d from %s (merge weight %g)", step, path, weight)
         last_step = max(last_step, step)
-        if dtypes is None:
-            dtypes = jax.tree.map(lambda x: x.dtype, params)
-            total = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=jnp.float32) if _is_float(x) else x, params)
-        total = jax.tree.map(functools.partial(_weighted_sum, weight=weight), total, params)
-        del params  # free this source before loading the next
-    merged = jax.tree.map(lambda t, dtype: t.astype(dtype) if jnp.issubdtype(dtype, jnp.floating) else t, total, dtypes)
-    return merged, last_step
+        leaves, leaf_treedef = jax.tree.flatten(params)
+        if treedef is None:
+            treedef = leaf_treedef
+            dtypes = [x.dtype for x in leaves]
+            paths = jax.tree.leaves(leaf_key_paths(params))
+            groups = jax.tree.leaves(GrugMoeMuonHConfig().create_mask(params))
+            axes = [
+                hyperball_axes(p, x.ndim, g) if _is_float(x) else None
+                for x, p, g in zip(leaves, paths, groups, strict=True)
+            ]
+            totals = [jnp.zeros_like(x, dtype=jnp.float32) if _is_float(x) else x for x in leaves]
+            target_norms = [None if a is None else 0.0 for a in axes]
+        elif leaf_treedef != treedef:
+            raise ValueError(f"{path} has a different parameter structure than the merge's first source")
+        totals = [_weighted_sum(t, x, weight=weight) for t, x in zip(totals, leaves, strict=True)]
+        target_norms = [
+            None if a is None else n + weight * _sphere_norm(x, a)
+            for n, x, a in zip(target_norms, leaves, axes, strict=True)
+        ]
+        del params, leaves  # free this source before loading the next
+    spheres = [(i, a) for i, a in enumerate(axes) if a is not None]
+    ratios = [np.asarray(_sphere_norm(totals[i], a) / target_norms[i]).ravel() for i, a in spheres]
+    ratios = np.concatenate(ratios)
+    norm_metrics = {"merge/norm_ratio_min": float(ratios.min()), "merge/norm_ratio_mean": float(ratios.mean())}
+    logger.info("Merged-to-source norm ratio over %d hyperball leaves: %s", len(spheres), norm_metrics)
+    if checkpoint.space == MergeSpace.HYPERBALL:
+        for i, a in spheres:
+            totals[i] = totals[i] * (target_norms[i] / _sphere_norm(totals[i], a))
+    merged = [t.astype(d) if jnp.issubdtype(d, jnp.floating) else t for t, d in zip(totals, dtypes, strict=True)]
+    return jax.tree.unflatten(treedef, merged), last_step, norm_metrics
+
+
+def _sphere_norm(x, axes: tuple[int, ...]):
+    """The float32 Frobenius norm of ``x`` over ``axes``, kept as size-1 dims."""
+    return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axes, keepdims=True))
 
 
 def _weighted_sum(total, x, *, weight: float):
@@ -205,12 +268,12 @@ def evaluate_checkpoints(config: CheckpointEvalConfig) -> list[tuple[int, dict[s
                 raise ValueError("The data config has no validation sets")
         for checkpoint in config.checkpoints:
             model = dataclasses.replace(config.model, qk_mult=checkpoint.qk_mult)
-            params, step = merged_params(model, checkpoint, mesh=mesh, mp=config.trainer.mp)
+            params, step, norm_metrics = merged_params(model, checkpoint, mesh=mesh, mp=config.trainer.mp)
             if results and step <= results[-1][0]:
                 raise ValueError(f"checkpoint steps must increase: {checkpoint.sources[-1][0]} is step {step}")
             what = f"merge {checkpoint.label}" if checkpoint.label else "parameters"
             logger.info("Scoring %s of step %d (qk_mult %g)", what, step, checkpoint.qk_mult)
-            metrics: dict[str, float] = {}
+            metrics: dict[str, float] = dict(norm_metrics) if len(checkpoint.sources) > 1 else {}
             for seq_len, evaluator in evaluators.items():
                 with jax_config.enable_pgle(False):
                     length_metrics = eval_model(evaluator, params, prefix=f"{DROPLESS_EVAL_PREFIX}/seq_len_{seq_len}")
@@ -359,6 +422,13 @@ def build_checkpoint_eval(
     help="The Q multiplier for the merged model (required with --merge-source).",
 )
 @click.option(
+    "--merge-space",
+    type=click.Choice([space.value for space in MergeSpace]),
+    default=MergeSpace.LINEAR.value,
+    show_default=True,
+    help="linear: average the raw parameters; hyperball: then rescale each MuonH/AdamH sphere to its sources' norm.",
+)
+@click.option(
     "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
     default=1.0,
@@ -380,6 +450,7 @@ def main(
     checkpoints: tuple[tuple[str, float], ...],
     merge_sources: tuple[tuple[str, float], ...],
     merge_qk_mult: float | None,
+    merge_space: str,
     qk_mult_long_scale: float,
     seq_lens: tuple[int, ...],
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -390,7 +461,7 @@ def main(
             raise click.UsageError("--merge-source needs --merge-qk-mult")
         total = sum(weight for _, weight in merge_sources)
         sources = tuple((path, weight / total) for path, weight in merge_sources)
-        evaluated = (EvalCheckpoint(sources, merge_qk_mult, label=run_id),)
+        evaluated = (EvalCheckpoint(sources, merge_qk_mult, label=run_id, space=MergeSpace(merge_space)),)
     else:
         evaluated = tuple(EvalCheckpoint.single(path, qk) for path, qk in checkpoints)
     return build_checkpoint_eval(
