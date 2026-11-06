@@ -612,7 +612,7 @@ def _is_heading(element: dict, heading: str) -> bool:
 
 
 def _naming_tabs(error: MissingHeading, document: dict, tab: Tab) -> MissingHeading:
-    """The error with the doc's tabs, since an older doc keeps its Progress section in a tab of its own."""
+    """The error with the doc's tabs, since the heading may be in another tab."""
     tabs = [found.title for found in doc_tabs(document)]
     return MissingHeading(f"{error}, in tab {tab.title!r}; the doc's tabs are {tabs}, and --tab picks one")
 
@@ -1051,13 +1051,8 @@ class TabLength(NamedTuple):
     pages: float
 
 
-def tab_length(tab: Tab, exclude_section: str | None) -> TabLength:
-    """(words, images, estimated pages) of a tab, without one section (its heading and content) when given
-    and the tab has it. Docs has no page count, so pages are an estimate."""
-    if exclude_section and any(_is_heading(element, exclude_section) for element in tab.body):
-        start, end, _ = section_bounds(tab.body, exclude_section)
-        kept = [e for e in tab.body if e["endIndex"] != start and not start <= e.get("startIndex", 0) < end]
-        tab = Tab(tab.id, tab.title, kept)
+def tab_length(tab: Tab) -> TabLength:
+    """(words, images, estimated pages) of a tab. Docs has no page count, so pages are an estimate."""
     # Plain text, without tab_text's markdown markers, which would count as words.
     texts = []
     for element in tab.body:

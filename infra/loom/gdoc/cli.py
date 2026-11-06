@@ -8,7 +8,7 @@ Run it from the root of a marin checkout with the system Python; see `google_api
     python3 -m infra.loom.gdoc append DOC_ID "Markdown" [--tab TAB]   # or `-` to read it from stdin
     python3 -m infra.loom.gdoc prepend DOC_ID - [--section HEADING] [--tab TAB]   # newest first, below the heading
     python3 -m infra.loom.gdoc replace-section DOC_ID "Heading" - [--tab TAB]   # preserves unchanged paragraphs
-    python3 -m infra.loom.gdoc length DOC_ID [--exclude-section HEADING] [--tab TAB]   # words and estimated pages
+    python3 -m infra.loom.gdoc length DOC_ID [--tab TAB]   # words and estimated pages
     python3 -m infra.loom.gdoc comment DOC_ID "A comment on the doc."
     python3 -m infra.loom.gdoc comments DOC_ID                     # every comment with its id, status and replies
     python3 -m infra.loom.gdoc reply DOC_ID COMMENT_ID "Text" [--resolve]
@@ -146,7 +146,6 @@ def _parser() -> argparse.ArgumentParser:
     length = commands.add_parser("length", help="Print a tab's words, images and estimated pages.")
     length.add_argument("doc_id")
     length.add_argument("--tab", help="Tab title; the first tab when not given.")
-    length.add_argument("--exclude-section", help="Heading of a section not to count.")
     comments = commands.add_parser(
         "comments", help="Print every comment with its id, status, the text it is on, and its replies."
     )
@@ -198,7 +197,7 @@ def main() -> None:
             print(doc_markdown(api, args.doc_id))
     elif args.command == "length":
         tab = find_tab(read_document(api, args.doc_id), args.tab)
-        words, images, pages = tab_length(tab, args.exclude_section)
+        words, images, pages = tab_length(tab)
         print(f"tab {tab.title!r}: {words} words, {images} images, about {pages:.1f} pages")
     elif args.command == "comments":
         comments = sorted(doc_comments(api, args.doc_id), key=lambda c: (is_resolved(c), c["modifiedTime"]))

@@ -23,24 +23,26 @@ landing workflow.
 Run `python3 -m infra.loom.gdoc` from the root of the marin checkout; `--help`
 lists the commands. `-` as the text reads markdown from stdin.
 
-- `read DOC_ID [--tab TAB]`, `length DOC_ID --exclude-section Progress`
-- `prepend DOC_ID - --section Progress`, `append DOC_ID -`
+- `read DOC_ID [--tab TAB]`, `length DOC_ID`
+- `prepend DOC_ID - --tab Progress`, `append DOC_ID -`
 - `replace-section DOC_ID "HEADING" -`
 - `comments DOC_ID`, `comment DOC_ID "TEXT"`, `reply DOC_ID COMMENT_ID "TEXT" [--resolve]`
 - `agent-status DOC_ID STATUS`
 
 ## Keep the doc
 
-- Keep the Main tab at most 3 pages, not counting its Progress section, with
-  only the most critical information. After a change, check it with `length`
-  and cut until it fits.
+- The doc has two tabs: Main holds the work, and Progress holds the progress
+  updates.
+- Keep the Main tab at most 3 pages, with only the most critical information.
+  After a change, check it with `length` and cut until it fits.
 - Do not change the `Status` or `Session` lines at the top of Main. Keep the
   `Agent status` line below them current: `working` while you work, `input
   needed` while you wait for a person's answer, whether you asked in this
   session or in a doc reply, and `goal achieved` when the doc's objective is
   met and nothing waits on a person.
-- Post progress in the Progress section of Main, newest first, with `prepend`.
-  Start each update with the UTC date and time in bold.
+- Post progress in the Progress tab, newest first, with `prepend --tab
+  Progress`. Start each update with the UTC date and time in bold. Do not put
+  progress updates in Main.
 - The Gates section lists the milestones as a numbered list, one gate per
   item. Start each gate with one status emoji: ✅ done, 🔄 in progress, ⏸️
   waiting, ❌ failed or dropped, ⬜ not started. Give the date after a done

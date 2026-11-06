@@ -188,7 +188,7 @@ def test_tabs_are_found_by_title_and_long_tabs_count_pages():
     }
     assert find_tab(document, "progress").id == "t.1"
     assert find_tab(document, None).title == "Main"
-    assert tab_length(find_tab(document, "Main"), None) == (1000, 0, 2.0)
+    assert tab_length(find_tab(document, "Main")) == (1000, 0, 2.0)
 
 
 def test_table_fill_writes_the_last_cell_first_and_bolds_the_header():
@@ -248,23 +248,6 @@ def test_section_top_is_below_the_heading_and_needs_a_paragraph_after_a_last_hea
     assert section_top(with_entries, "Progress") == (16, False)
     heading_last = body(("Gates\n", "HEADING_3"), ("Progress\n", "HEADING_3"))
     assert section_top(heading_last, "Progress") == (16, True)
-
-
-def test_tab_length_can_leave_out_the_progress_section():
-    words = "word " * 500
-    tab_body = body((words + "\n", "NORMAL_TEXT"), ("Progress\n", "HEADING_3"), (words + words + "\n", "NORMAL_TEXT"))
-    document = {
-        "tabs": [{"tabProperties": {"tabId": "t.0", "title": "Main"}, "documentTab": {"body": {"content": tab_body}}}]
-    }
-    main = find_tab(document, "Main")
-    assert tab_length(main, None)[0] == 1501
-    assert tab_length(main, "Progress") == (500, 0, 1.0)
-
-
-def test_tab_length_counts_the_whole_tab_when_it_has_no_section_to_leave_out():
-    # An older doc keeps Progress in a tab of its own, so Main has no Progress heading.
-    main = Tab("t.0", "Main", body(("word " * 500 + "\n", "NORMAL_TEXT"), ("Gates\n", "HEADING_3")))
-    assert tab_length(main, "Progress") == tab_length(main, None)
 
 
 LISTS = {"L1": {"listProperties": {"nestingLevels": [{"glyphType": "DECIMAL"}]}}}
