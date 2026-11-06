@@ -97,8 +97,7 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
     (
         "trainer.policy={megatron_config: {tensor_model_parallel_size: 2}}",
         "trainer.seed=23",
-        "generator.eval_sampling_params.max_generate_length=32",
-        "extra_env.PROBE=1",
+        'context_budget={"max_turns":2}',
         "generator.engine_init_kwargs.user_option=1",
         "trainer.max_ckpts_to_keep=2",
         "generator.chat_template={source: name, name_or_path: other}",
