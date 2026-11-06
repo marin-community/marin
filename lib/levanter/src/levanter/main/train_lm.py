@@ -28,7 +28,7 @@ from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig, build_generation_config
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -138,6 +138,36 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig, fp32_f
     )
 
 
+def hf_initialization(config: TrainLmConfig, tokenizer) -> tuple[HFCheckpointConverter, LmConfig]:
+    """The converter and model config ``main`` uses for ``initialize_from_hf``.
+
+    The converter reads ``initialize_from_hf`` (or the model's default checkpoint) with ``tokenizer``. With
+    ``use_hf_model_config`` the model config is the checkpoint's HF architecture with the requested runtime
+    settings restored (``preserve_hf_runtime_settings``); otherwise it is ``config.model`` unchanged.
+    """
+    assert isinstance(config.model, HFCompatConfig)
+    converter = config.model.hf_checkpoint_converter()
+    converter.warn_if_tokenizer_mismatch(tokenizer)
+
+    if isinstance(config.initialize_from_hf, str):
+        converter = converter.replaced(reference_checkpoint=config.initialize_from_hf, tokenizer=tokenizer)
+    else:
+        converter = converter.replaced(tokenizer=tokenizer)
+
+    if config.pad_tokenizer_to_match_model:
+        converter = converter.with_tokenizer_padded_to_match_model()
+
+    if not config.use_hf_model_config:
+        return converter, config.model
+    # TODO: log diff of old and new config
+    model_config = preserve_hf_runtime_settings(
+        converter.config_from_hf_config(converter.default_hf_config),
+        config.model,
+        config.trainer.fp32_fields,
+    )
+    return converter, model_config
+
+
 def _load_lm_model_from_configured_source(
     *,
     config: TrainLmConfig,
@@ -207,26 +237,9 @@ def main(config: TrainLmConfig):
         if config.trainer.initialize_from is not None:
             raise ValueError("Cannot specify both initialize_from_hf and initialize_from")
 
-        assert isinstance(config.model, HFCompatConfig)
-        converter = config.model.hf_checkpoint_converter()
-        converter.warn_if_tokenizer_mismatch(tokenizer)
-
-        if isinstance(config.initialize_from_hf, str):
-            converter = converter.replaced(reference_checkpoint=config.initialize_from_hf, tokenizer=tokenizer)
-        else:
-            converter = converter.replaced(tokenizer=tokenizer)
-
-        if config.pad_tokenizer_to_match_model:
-            converter = converter.with_tokenizer_padded_to_match_model()
-
-        if config.use_hf_model_config:
-            # TODO: log diff of old and new config
-            # NB: gross mutability
-            config.model = preserve_hf_runtime_settings(
-                converter.config_from_hf_config(converter.default_hf_config),
-                config.model,
-                config.trainer.fp32_fields,
-            )
+        converter, model_config = hf_initialization(config, tokenizer)
+        # NB: gross mutability
+        config.model = model_config
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
         converter = converter.replaced(tokenizer=tokenizer)
