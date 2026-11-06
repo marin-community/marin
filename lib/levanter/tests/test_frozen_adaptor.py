@@ -15,10 +15,11 @@ import pytest
 import safetensors
 from haliax.state_dict import to_torch_compatible_state_dict
 
-from levanter.adaptor import FrozenParameterAdaptorConfig
+from levanter.adaptor import AdaptorExportConfig, FrozenParameterAdaptorConfig
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, save_hf_checkpoint_callback
+from levanter.fp32_fields import with_fp32_fields
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.main.train_lm import (
@@ -28,7 +29,7 @@ from levanter.main.train_lm import (
 )
 from levanter.testing.helpers import use_test_mesh
 from levanter.trainer import Trainer, TrainerConfig
-from levanter.trainer_state import FrozenParameterStorage, TrainerState
+from levanter.trainer_state import TrainerState
 
 
 class TinyRoutedModel(eqx.Module):
@@ -60,8 +61,7 @@ def initial_state(model):
         adaptor.apply(model, key=jax.random.PRNGKey(0)),
         key=jax.random.PRNGKey(0),
         is_trainable=adaptor.trainable_filter(model),
-        mp=jmp.get_policy("p=f32,c=bf16"),
-        frozen_parameter_storage=FrozenParameterStorage.NATIVE,
+        mp=with_fp32_fields(jmp.get_policy("p=f32,c=bf16"), ("router_bias",)),
     )
 
 
@@ -75,32 +75,7 @@ def test_frozen_adaptor_updates_other_weights_despite_nonzero_bias_gradient():
     assert int(updated.step) == 1
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float16, jnp.bfloat16])
-def test_native_frozen_storage_preserves_input_dtype_while_default_uses_compute(dtype):
-    base = tiny_model()
-    base = eqx.tree_at(lambda model: model.router_bias, base, base.router_bias.astype(dtype))
-    adaptor = FrozenParameterAdaptorConfig(("router_bias",))
-    policy = jmp.get_policy("p=f32,c=bf16")
-    for storage in FrozenParameterStorage:
-        state = TrainerState.init(
-            optax.adamw(0.1),
-            base,
-            key=jax.random.PRNGKey(0),
-            mp=policy,
-            is_trainable=adaptor.trainable_filter(base),
-            frozen_parameter_storage=storage,
-        )
-        updated = update(state)
-        expected = base.router_bias.array
-        if storage == FrozenParameterStorage.COMPUTE:
-            expected = expected.astype(jnp.bfloat16)
-        assert updated.model.router_bias.dtype == expected.dtype
-        np.testing.assert_array_equal(updated.model.router_bias.array, expected)
-        if dtype == jnp.float32 and storage == FrozenParameterStorage.COMPUTE:
-            assert not np.array_equal(updated.model.router_bias.array.astype(jnp.float32), base.router_bias.array)
-
-
-def test_frozen_adaptor_native_resume_restores_optimizer_and_pinned_base(tmp_path):
+def test_frozen_adaptor_partial_resume_restores_optimizer_and_pinned_base(tmp_path):
     base = tiny_model()
     state = initial_state(base)
     for _ in range(16):
@@ -130,8 +105,8 @@ def test_frozen_adaptor_native_resume_restores_optimizer_and_pinned_base(tmp_pat
 
 
 @pytest.fixture
-def native_snowball(tmp_path, local_gpt2_tokenizer_path):
-    """A 26-layer Snowball saved as a mixed-dtype HF source, loaded with native frozen storage."""
+def fp32_snowball(tmp_path, local_gpt2_tokenizer_path):
+    """A 26-layer Snowball saved as a bf16 HF source with fp32 router biases, loaded with them kept in fp32."""
     config = SnowballConfig(
         vocab_size=16,
         hidden_dim=8,
@@ -149,8 +124,8 @@ def native_snowball(tmp_path, local_gpt2_tokenizer_path):
         reference_checkpoint=None,
         tokenizer=local_gpt2_tokenizer_path,
     )
-    overrides = {f"model.layers.{layer}.mlp.router.bias": "float32" for layer in range(26)}
-    adaptor = FrozenParameterAdaptorConfig(("router_bias",), hf_save_dtype_overrides=overrides)
+    fp32_keys = {f"model.layers.{layer}.mlp.router.bias" for layer in range(26)}
+    adaptor = FrozenParameterAdaptorConfig(("router_bias",))
     with jax.set_mesh(compact_grug_mesh()):
         model = SnowballLMHeadModel.init(hax.Axis("vocab", 16), config, key=jax.random.PRNGKey(0))
         model = eqx.tree_at(
@@ -166,17 +141,17 @@ def native_snowball(tmp_path, local_gpt2_tokenizer_path):
             save_tokenizer=False,
             save_reference_code=False,
             dtype=jnp.bfloat16,
-            dtype_overrides=overrides,
+            fp32_fields=("router_bias",),
         )
         source_converter = converter.replaced(reference_checkpoint=RepoRef(source_path))
         trainer_config = TrainerConfig(
-            id="native-frozen-storage",
+            id="fp32-router-bias",
             mp=jmp.get_policy("p=f32,c=bf16"),
-            frozen_parameter_storage=FrozenParameterStorage.NATIVE,
+            fp32_fields=("router_bias",),
             tracker=(),
             require_accelerator=False,
             load_checkpoint=False,
-            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "native")),
+            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "ckpts")),
         )
         lm_config = TrainLmConfig(model=config, adapter=adaptor, trainer=trainer_config, initialize_from_hf=True)
         trainer = Trainer(trainer_config, optax.adamw(0.1, weight_decay=0.1), loss, add_default_hooks=False)
@@ -192,7 +167,7 @@ def native_snowball(tmp_path, local_gpt2_tokenizer_path):
         yield types.SimpleNamespace(
             model=model,
             original=to_torch_compatible_state_dict(model),
-            overrides=overrides,
+            fp32_keys=fp32_keys,
             adaptor=adaptor,
             converter=converter,
             trainer_config=trainer_config,
@@ -204,7 +179,7 @@ def native_snowball(tmp_path, local_gpt2_tokenizer_path):
 
 
 def stepped(env):
-    """Native-storage state after two updates, and the gradients used for them."""
+    """State after two updates with fp32 router biases, and the gradients used for them."""
     loaded = _load_lm_model_from_configured_source(**env.source_kwargs)
     state = env.trainer.initial_state(
         jax.random.PRNGKey(0),
@@ -219,9 +194,9 @@ def stepped(env):
 
 def resumed(env, state, grads):
     """Save at step 1, restore with the reloaded pinned base, and take one more update."""
-    checkpoint = str(env.tmp_path / "native" / "step-1")
+    checkpoint = str(env.tmp_path / "ckpts" / "step-1")
     save_checkpoint(state.saveable_state, step=1, checkpoint_path=checkpoint)
-    assert (env.tmp_path / "native" / "step-1" / "metadata.json").exists()
+    assert (env.tmp_path / "ckpts" / "step-1" / "metadata.json").exists()
     restored = load_checkpoint(state.saveable_state, checkpoint)
     reloaded_base = _load_lm_model_from_configured_source(**env.source_kwargs)
     restored = dataclasses.replace(
@@ -233,9 +208,9 @@ def resumed(env, state, grads):
     return restored.take_step(grads, key=jax.random.PRNGKey(3))[0]
 
 
-def test_compute_storage_rounds_frozen_biases_to_compute_dtype(native_snowball):
-    env = native_snowball
-    compute_config = dataclasses.replace(env.trainer_config, frozen_parameter_storage=FrozenParameterStorage.COMPUTE)
+def test_without_fp32_fields_frozen_biases_round_to_compute_dtype(fp32_snowball):
+    env = fp32_snowball
+    compute_config = dataclasses.replace(env.trainer_config, fp32_fields=())
     compute_trainer = Trainer(compute_config, optax.adamw(0.1), loss, add_default_hooks=False)
     rounded = _load_lm_model_from_configured_source(
         **{
@@ -250,8 +225,8 @@ def test_compute_storage_rounds_frozen_biases_to_compute_dtype(native_snowball):
         assert not np.array_equal(block.mlp.router_bias, original_block.mlp.router_bias)
 
 
-def test_native_frozen_biases_receive_gradients_but_stay_fixed(native_snowball):
-    env = native_snowball
+def test_fp32_frozen_biases_receive_gradients_but_stay_fixed(fp32_snowball):
+    env = fp32_snowball
     state, grads = stepped(env)
     for block in grads.transformer.blocks:
         assert np.all(np.asarray(block.mlp.router_bias) != 0)
@@ -259,19 +234,8 @@ def test_native_frozen_biases_receive_gradients_but_stay_fixed(native_snowball):
         np.testing.assert_array_equal(block.mlp.router_bias, original_block.mlp.router_bias)
 
 
-def test_native_partial_checkpoint_resume_matches_uninterrupted(native_snowball):
-    env = native_snowball
-    state, grads = stepped(env)
-    restored = resumed(env, state, grads)
-    uninterrupted = state.take_step(grads, key=jax.random.PRNGKey(3))[0]
-    for actual_leaf, expected_leaf in zip(
-        jax.tree.leaves(restored.opt_state), jax.tree.leaves(uninterrupted.opt_state)
-    ):
-        np.testing.assert_array_equal(actual_leaf, expected_leaf)
-
-
-def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(native_snowball):
-    env = native_snowball
+def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(fp32_snowball):
+    env = fp32_snowball
     state, grads = stepped(env)
     restored = resumed(env, state, grads)
     updated = to_torch_compatible_state_dict(restored.model)
@@ -279,7 +243,7 @@ def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(native_snowball):
         str(env.tmp_path),
         env.converter,
         save_dtype=jnp.bfloat16,
-        dtype_overrides=env.adaptor.hf_save_dtype_overrides,
+        fp32_fields=env.trainer_config.fp32_fields,
         save_tokenizer=False,
         save_reference_code=False,
     )
@@ -291,10 +255,36 @@ def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(native_snowball):
             actual.update({name: shard.get_tensor(name) for name in shard.keys()})
     assert set(actual) == set(env.original)
     for name, value in actual.items():
-        if name in env.overrides:
+        if name in env.fp32_keys:
             assert value.dtype == jnp.float32
             np.testing.assert_array_equal(value, env.original[name])
         else:
             assert value.dtype == jnp.bfloat16
             np.testing.assert_array_equal(value, updated[name].astype(jnp.bfloat16))
     assert not np.array_equal(updated["model.embed_tokens.weight"], env.original["model.embed_tokens.weight"])
+
+
+def test_frozen_adaptor_export_hook_carries_fp32_fields(tmp_path):
+    adaptor = FrozenParameterAdaptorConfig(("router_bias",))
+    saves = []
+    converter = types.SimpleNamespace(save_pretrained=lambda model, path, **kwargs: saves.append((model, kwargs)))
+    hooks = []
+    trainer = types.SimpleNamespace(
+        run_id="run",
+        config=types.SimpleNamespace(checkpointer=None, fp32_fields=("router_bias",)),
+        add_hook=lambda hook, *, every: hooks.append((hook, every)),
+    )
+    adaptor.install_export_hooks(
+        trainer=trainer,
+        converter=converter,
+        tokenizer=None,
+        export=AdaptorExportConfig(hf_save_path=str(tmp_path), hf_save_steps=4, hf_save_dtype="bfloat16"),
+    )
+    [(hook, every)] = hooks
+    assert every == 4
+    model = tiny_model()
+    hook(types.SimpleNamespace(step=4, eval_model=model))
+    [(saved, kwargs)] = saves
+    assert saved is model
+    assert kwargs["dtype"] == jnp.bfloat16
+    assert kwargs["fp32_fields"] == ("router_bias",)
