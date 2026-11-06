@@ -5,11 +5,12 @@ import asyncio
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from forge.effects.events import Fingerprint, Note, ReplayPolicy, Resolved, Retrying, StageCompleted
+from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, Retrying, StageCompleted
 from forge.effects.issues import LogFailure
 from forge.effects.log import EventLog, JsonlSink, Record, Status, fold
 
@@ -33,7 +34,7 @@ async def test_jsonl_reload_in_new_process_preserves_typed_results_and_replay_ke
     script = """
 import asyncio, sys
 from tests.effect_fakes import Answer, Query
-from forge.effects.events import Fingerprint, Note, ReplayPolicy
+from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy
 from forge.effects.log import EventLog, JsonlSink
 async def main():
     log = EventLog(replay_from=await JsonlSink(sys.argv[1]).read())
@@ -127,3 +128,18 @@ async def test_records_queued_during_upload_coalesce_into_one_incremental_batch(
         (Note("first"),),
         (Note("second"), Note("third")),
     )
+
+
+async def test_unencodable_event_does_not_poison_later_persistence(tmp_path: Path) -> None:
+    @dataclass(frozen=True, slots=True)
+    class Invalid(Event[None]):
+        opaque: object
+
+    sink = JsonlSink(str(tmp_path / "valid.jsonl"))
+    log = EventLog(sink=sink)
+    await log.record(Note("before"))
+    with pytest.raises(LogFailure):
+        await log.record(Invalid(object()))
+    await log.record(Note("after"))
+    assert tuple(record.event for record in await sink.read()) == (Note("before"), Note("after"))
+    assert tuple(record.sequence for record in log.records) == (1, 2)

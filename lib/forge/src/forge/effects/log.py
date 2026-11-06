@@ -199,6 +199,10 @@ class EventLog:
         return tuple(self._records)
 
     async def record(self, event: Event[object]) -> None:
+        try:
+            json.dumps(_encode(event), sort_keys=True, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise LogFailure("Cannot encode the event") from error
         record = Record(len(self._records) + 1, time.time(), event)
         self._records.append(record)
         if isinstance(event, Resolved):
@@ -215,7 +219,7 @@ class EventLog:
                     await self._sink.write(batch)
                     del self._pending[: len(batch)]
                     return
-                except (OSError, LogFailure) as error:
+                except OSError as error:
                     if attempt + 1 == self._attempts:
                         raise LogFailure("Could not persist the event stream") from error
                     await self._sleep(min(2**attempt, 30))
