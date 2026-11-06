@@ -9,6 +9,7 @@ import httpx
 import pytest
 from rolloutengine.test_support import arithmetic_task, rollout_limits
 from taskcompendium.grader import verifyit_package
+from taskcompendium.models import StdoutReward
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import NumericSpec
 
@@ -17,7 +18,7 @@ from forge.effects.issues import Hold
 from forge.effects.log import EventLog, JsonlSink
 from forge.harness.classify import host_failure
 from forge.harness.events import ToolReturned
-from forge.harness.loop import AgenticHarness, Limits
+from forge.harness.loop import AgenticHarness
 from forge.harness.protocol import Returned, ReturnRequest, Stopped, StopReason, Submitted, Tool, ToolResult
 from forge.harness.tools.adversary import AdversaryReport, ReportTool
 from forge.harness.tools.files import ReadFileTool, WriteFileTool
@@ -28,7 +29,7 @@ from forge.harness.tools.submit import SubmitTool
 from forge.harness.tools.validate import ValidateRequest, ValidateTool
 from forge.harness.tools.web import WebFetchTool, WebSearchTool
 from forge.harness.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
-from forge.lowering import GRADING_MACHINE, LoweringSettings, rollout_engine
+from forge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine, script_grader
 from forge.model.llm import Completion, Message, Sampling, ToolCall, Usage
 from forge.model.serialization import TASK_SPEC
 from forge.model.workpiece import Conversation, Submission
@@ -91,7 +92,7 @@ async def test_shell_submit_session_and_persisted_replay_spend_no_inference(tmp_
     sink = JsonlSink(str(tmp_path / "session.jsonl"))
     ctx = Context(log=EventLog(sink=sink))
     env = environment(ctx)
-    harness = AgenticHarness(Limits(5, None), Sampling(), "continue", 20000)
+    harness = AgenticHarness(262144, Sampling(), "continue", 20000)
     tools = {"shell": ShellTool(), "submit": SubmitTool(accept)}
     initial = Conversation((Message("user", "build"),), ())
     result = await harness.run(ctx, initial, env, FakeInference(script), tools)
@@ -111,35 +112,6 @@ async def test_shell_submit_session_and_persisted_replay_spend_no_inference(tmp_
     assert replay_env.files == env.files
 
 
-@pytest.mark.parametrize(
-    "limits,script,reason,turns",
-    [
-        (Limits(None, None), (Completion("first"), Completion("second")), StopReason.FINISHED, 2),
-        (Limits(1, None), (Completion("first"),), StopReason.TURN_LIMIT, 1),
-        (
-            Limits(None, 10),
-            (Completion("first", usage=Usage(prompt_tokens=10, cached_tokens=4)),),
-            StopReason.CONTEXT_LIMIT,
-            1,
-        ),
-    ],
-)
-async def test_nudge_and_limits_preserve_completed_conversation(
-    limits: Limits, script: tuple[Completion, ...], reason: StopReason, turns: int
-) -> None:
-    ctx = Context(log=EventLog())
-    client = FakeInference(script)
-    result = await AgenticHarness(limits, Sampling(), "use tools", 20000).run(
-        ctx, Conversation((), ()), environment(ctx), client, {}
-    )
-    await ctx.drain()
-    assert isinstance(result, Stopped) and result.reason == reason
-    assert len(client.requests) == turns
-    assert Message("user", "use tools") in result.session.messages
-    if turns == 2:
-        assert client.requests[1].messages[-1] == Message("user", "use tools")
-
-
 async def test_argument_and_unknown_tool_errors_return_to_model_before_finish() -> None:
     script = (
         Completion("", (ToolCall("1", "shell", "{"), ToolCall("2", "missing", "{}"), ToolCall("3", "shell", "{}"))),
@@ -147,7 +119,7 @@ async def test_argument_and_unknown_tool_errors_return_to_model_before_finish() 
     )
     ctx = Context(log=EventLog())
     client = FakeInference(script)
-    result = await AgenticHarness(Limits(3, None), Sampling(), "continue", 20000).run(
+    result = await AgenticHarness(262144, Sampling(), "continue", 20000).run(
         ctx, Conversation((), ()), environment(ctx), client, {"shell": ShellTool(), "finish": FinishTool()}
     )
     await ctx.drain()
@@ -180,7 +152,7 @@ async def test_submit_gate_feedback_and_validate_capture_current_draft() -> None
     result = await tool(ctx, {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"}, env)
     assert isinstance(result, ToolResult) and result.content == "Missing negative controls"
     client = FakeInference((call("validate", {}, "validate-1"),))
-    outcome = await AgenticHarness(Limits(2, None), Sampling(), "continue", 20000).run(
+    outcome = await AgenticHarness(262144, Sampling(), "continue", 20000).run(
         ctx, Conversation((), ()), env, client, {"validate": ValidateTool(accept)}
     )
     await ctx.drain()
@@ -271,7 +243,7 @@ async def test_web_and_error_results_are_capped_before_the_next_inference() -> N
         call("unknown" * 100, {}, "3").tool_calls[0],
     )
     client = FakeInference((Completion("", calls), call("finish", {"reason": "done"}, "4")))
-    result = await AgenticHarness(Limits(3, None), Sampling(), "continue", 80).run(
+    result = await AgenticHarness(262144, Sampling(), "continue", 80).run(
         ctx,
         Conversation((), ()),
         environment(ctx),
@@ -341,3 +313,52 @@ async def test_model_window_and_output_allowance_determine_context_exit(output_t
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
     assert len(client.requests) == 2
     assert not any(message.role == "user" for message in result.session.messages)
+
+
+async def test_text_and_isolated_empty_stops_keep_nudging_until_explicit_finish() -> None:
+    script = (
+        Completion("first"),
+        Completion(""),
+        Completion("second"),
+        Completion(""),
+        Completion(""),
+        call("finish", {"reason": "done"}, "finish"),
+    )
+    client = FakeInference(script)
+    ctx = Context(log=EventLog())
+    result = await AgenticHarness(262144, Sampling(), "use tools", 20000).run(
+        ctx, Conversation((), ()), environment(ctx), client, {"finish": FinishTool()}
+    )
+    await ctx.drain()
+    assert isinstance(result, Stopped) and result.reason == StopReason.FINISHED
+    assert len(client.requests) == len(script)
+    assert all(request.messages[-1] == Message("user", "use tools") for request in client.requests[1:])
+    assert result.session.messages[-1].tool_calls[0].id == "finish"
+
+
+async def test_three_consecutive_empty_completions_hold_provider_failure() -> None:
+    client = FakeInference((Completion(""),) * 3)
+    ctx = Context(log=EventLog())
+    with pytest.raises(Hold, match="provider returned 3 empty completions"):
+        await AgenticHarness(262144, Sampling(), "use tools", 20000).run(
+            ctx, Conversation((), ()), environment(ctx), client, {}
+        )
+    await ctx.drain()
+    assert len(client.requests) == 3
+
+
+async def test_invalid_grader_image_is_feedback_before_any_grading_effect() -> None:
+    ctx = Context(log=EventLog())
+    env = environment(ctx)
+    image = "registry.example.com/python@sha256:" + "a" * 64
+    task = arithmetic_task(
+        grader=script_grader(
+            ("sh", "-c", "echo 1"), StdoutReward(), environment=requirements(image=image), answer_path=None, timeout=1
+        ).grader
+    )
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(task)))
+    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    # No GradeCandidate executor: the invalid image must be rejected before scheduling grading.
+    result = await GradeTool("/workspace/task.json", {}, settings)(ctx, {"reply": "12"}, env)
+    await ctx.drain()
+    assert isinstance(result, ToolResult) and "grader image must be" in result.content and image in result.content
