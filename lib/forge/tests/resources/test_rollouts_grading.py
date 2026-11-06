@@ -20,7 +20,7 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.test_support import arithmetic_task, rollout_spec
-from shellbox.machine import MachineTerminated
+from shellbox.machine import ExecSetupFailed, MachineTerminated
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -161,7 +161,7 @@ async def test_grading_repeated_timeout_returns_the_second_grade() -> None:
 )
 async def test_grading_retries_pre_command_websocket_setup_failures(failures: int, reason: str) -> None:
     interrupted = RolloutInterrupted(Rollout("trial", (), "interrupted"), RolloutOperation.GRADE)
-    interrupted.__cause__ = RuntimeError(f"Iris exec failed: {reason}")
+    interrupted.__cause__ = ExecSetupFailed(reason)
     success = GradedRollout(Rollout("trial", (), "stop"), GradeResult(Outcome.GRADED, 1, "ok"))
     engine = FakeEngine((*([interrupted] * failures), success))
     events: list[Event[None]] = []

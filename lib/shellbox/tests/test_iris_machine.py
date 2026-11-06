@@ -32,7 +32,15 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, ExitReason, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
+from shellbox.machine import (
+    Command,
+    ExecSetupFailed,
+    ExitReason,
+    MachineSpec,
+    MachineTerminated,
+    NetworkPolicy,
+    UnsupportedMachineSpec,
+)
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -663,3 +671,22 @@ def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
             await machine.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "message,kind",
+    [
+        ("Websocket setup failed (status 0): handshake refused", ExecSetupFailed),
+        ("'NoneType' object has no attribute 'decode'", ExecSetupFailed),
+        ("Non-integer exec status: invalid literal for int()", MachineTerminated),
+        ("invalid literal for int(): error executing command in container: container not found", MachineTerminated),
+    ],
+)
+def test_controller_wire_errors_are_classified_at_shellbox_boundary(tmp_path: Path, message: str, kind) -> None:
+    class Rpc:
+        def exec_in_container(self, request, timeout_ms):
+            return SimpleNamespace(exit_code=0, stdout="", stderr="", error=message)
+
+    machine, _ = local_machine(tmp_path, Rpc(), LocalTask(TaskState.RUNNING))
+    with pytest.raises(kind, match="Iris exec failed"):
+        asyncio.run(machine.run(Command(("true",))))

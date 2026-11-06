@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from typing import ClassVar, Protocol
 
 from rolloutengine.models import GradedRollout, Model, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
+from shellbox.machine import ExecSetupFailed, MachineTerminated
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy
 from forge.effects.issues import Restart, Transient
-from forge.resources.execution import Notify, exec_machine_lost, exec_setup_failed, retry_effect
+from forge.resources.execution import Notify, has_cause, retry_effect
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,9 +37,9 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart:
         cause = cause.__cause__
     detail = ": " + " <- ".join(causes)[:300] if causes else ""
     message = f"Rollout interrupted during {error.operation}{detail}"
-    if exec_machine_lost(error):
+    if has_cause(error, MachineTerminated):
         return Restart(message)
-    retryable = error.operation == RolloutOperation.START or exec_setup_failed(error)
+    retryable = error.operation == RolloutOperation.START or has_cause(error, ExecSetupFailed)
     return Transient(message) if retryable else Restart(message)
 
 

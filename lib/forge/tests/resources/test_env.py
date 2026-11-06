@@ -9,7 +9,16 @@ from typing import override
 
 import pytest
 from rolloutengine.test_support import machine_runtime
-from shellbox.machine import Command, ExitReason, Machine, MachineTerminated, PackageSpec, Result
+from shellbox.machine import (
+    Command,
+    ExecSetupFailed,
+    ExitReason,
+    Machine,
+    MachineResourceExhausted,
+    MachineTerminated,
+    PackageSpec,
+    Result,
+)
 from shellsim import SimulationError
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
@@ -179,10 +188,10 @@ async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
     "failure,decision",
     [
         (MachineTerminated("gone"), Restart),
-        (MachineTerminated("Iris sandbox OOMKilled"), Hold),
+        (MachineResourceExhausted("Iris sandbox OOMKilled"), Hold),
         (MachineTerminated("Iris sandbox is preempted: WorkloadEvictedDueToPreempted"), Restart),
-        (RuntimeError("Machine is closed"), Restart),
-        (RuntimeError("ShellSim terminated: cpu_exhausted"), Hold),
+        (MachineTerminated("Machine is closed"), Restart),
+        (MachineResourceExhausted("ShellSim terminated: cpu_exhausted"), Hold),
         (TimeoutError("busy"), Transient),
     ],
 )
@@ -237,9 +246,9 @@ async def test_missing_file_is_tool_feedback_without_retry(operation: str, failu
 
 async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:
     machine = MemoryMachine()
-    machine.failure = RuntimeError("ShellSim terminated: cpu_exhausted")
+    machine.failure = MachineResourceExhausted("ShellSim terminated: cpu_exhausted")
     env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
-    with pytest.raises(Hold, match="environment terminated: cpu_exhausted"):
+    with pytest.raises(Hold, match="cpu_exhausted"):
         await run_command(RunCommand(COMMAND, 5), env, notify=Notes())
     assert machine.calls == 1
 
@@ -264,7 +273,7 @@ async def test_relative_paths_use_environment_workdir(workdir: str) -> None:
 )
 async def test_websocket_setup_failure_retries_only_three_times(reason: str) -> None:
     machine = MemoryMachine()
-    machine.failure = RuntimeError(f"Iris exec failed: {reason}")
+    machine.failure = ExecSetupFailed(reason)
     env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
     events: list[Event[None]] = []
     with pytest.raises(Restart, match="exhausted its retry budget"):
@@ -281,7 +290,7 @@ async def test_websocket_setup_failure_retries_only_three_times(reason: str) -> 
     ],
 )
 async def test_machine_startup_websocket_failure_is_transient(monkeypatch: pytest.MonkeyPatch, reason: str) -> None:
-    failure = RuntimeError(f"Iris exec failed: {reason}")
+    failure = ExecSetupFailed(reason)
 
     @asynccontextmanager
     async def failed_start(*args: object, **kwargs: object) -> AsyncIterator[Machine]:
@@ -323,7 +332,7 @@ async def test_directory_read_names_requested_path_without_retry(failure: Except
 )
 async def test_noninteger_exec_status_requires_new_machine_without_retry(detail: str) -> None:
     machine = MemoryMachine()
-    machine.failure = RuntimeError(f"Iris exec failed: {detail}")
+    machine.failure = MachineTerminated(detail)
     env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
     events: list[Event[None]] = []
     with pytest.raises(Restart) as caught:

@@ -220,6 +220,14 @@ class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
 
 
+class MachineResourceExhausted(MachineTerminated):
+    """The machine exhausted its resource budget; recreating it cannot repair the task."""
+
+
+class ExecSetupFailed(RuntimeError):
+    """Transport setup failed before the command was sent, so retry is safe."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 

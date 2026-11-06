@@ -9,7 +9,7 @@ from collections.abc import Callable
 from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import StageCompleted
-from forge.effects.issues import Hold, Restart
+from forge.effects.issues import Hold, Restart, Transient
 from forge.effects.log import EventLog
 from forge.model.content_hash import digest
 from forge.model.proposal import TaskProposal
@@ -29,7 +29,7 @@ def reasons(error: BaseException) -> tuple[str, ...]:
     cause: BaseException | None = error
     while cause is not None and id(cause) not in seen:
         seen.add(id(cause))
-        details.append(str(cause))
+        details.append(f"{type(cause).__name__}: {cause}")
         cause = cause.__cause__
     return (" <- ".join(details),)
 
@@ -63,7 +63,7 @@ async def run_workpiece(
                 result: Exit | None = None
                 try:
                     result = await STAGES[stage](ctx, wp, config, resources)
-                except* Restart as error:
+                except* (Restart, Transient) as error:
                     logging.warning(
                         "Stage %s round %d attempt %d of %d: %s",
                         stage,
@@ -93,15 +93,9 @@ async def run_workpiece(
                     raise ValueError("Transition stopped without a terminal workpiece")
                 if following is not None:
                     stage = following
-    except* Hold as error:
+    except* (Hold, Restart, Transient) as error:
         interrupted = True
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
-    except* Restart as error:
-        interrupted = True
-        wp = wp.with_(
-            terminal=Terminal.HELD,
-            decisions=(*wp.decisions, Incomplete(tuple(f"restart: {reason}" for reason in reasons(error)))),
-        )
     finally:
         try:
             await ctx.drain()

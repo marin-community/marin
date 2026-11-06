@@ -14,13 +14,23 @@ from typing import ClassVar, Protocol, override
 
 from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
-from shellbox.machine import DEFAULT_WORKDIR, Command, ExitReason, FileReader, Machine, MachineFactory, MachineTerminated
+from shellbox.machine import (
+    DEFAULT_WORKDIR,
+    Command,
+    ExecSetupFailed,
+    ExitReason,
+    FileReader,
+    Machine,
+    MachineFactory,
+    MachineResourceExhausted,
+    MachineTerminated,
+)
 from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, digest
 from forge.effects.issues import Hold, Restart, Transient
-from forge.resources.execution import Notify, exec_machine_lost, exec_setup_failed, retry_effect
+from forge.resources.execution import Notify, retry_effect
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,19 +152,14 @@ class ShellboxEnv(_RecordedEnv):
             yield
         except IsADirectoryError as error:
             raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path)) from error
+        except MachineResourceExhausted as error:
+            raise Hold(f"environment terminated: {error}") from error
         except MachineTerminated as error:
-            decision = Hold if "oomkilled" in str(error).lower() else Restart
-            raise decision(f"environment terminated: {error}") from error
+            raise Restart(f"environment terminated: {error}") from error
+        except ExecSetupFailed as error:
+            raise Transient(str(error)) from error
         except (RuntimeError, SimulationError) as error:
-            if exec_machine_lost(error):
-                raise Restart(f"environment needs a fresh machine: {error}") from error
-            if exec_setup_failed(error):
-                raise Transient(str(error)) from error
             detail = str(error)
-            if detail == "Machine is closed":
-                raise Restart("environment needs a fresh machine: Machine is closed") from error
-            if detail.startswith("ShellSim terminated: "):
-                raise Hold(f"environment terminated: {detail.removeprefix('ShellSim terminated: ')}") from error
             if "is a directory" in detail.lower():
                 raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path) if path else detail) from error
             if path is not None:
@@ -234,17 +239,12 @@ class ShellboxEnvFactory(EnvFactory):
             machine = await owned.enter_async_context(
                 prepare_machine(requirements, (), self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout)
             )
+        except MachineResourceExhausted as error:
+            raise Hold(f"environment terminated: {error}") from error
         except MachineTerminated as error:
-            decision = Hold if "oomkilled" in str(error).lower() else Restart
-            raise decision(f"environment terminated: {error}") from error
-        except RuntimeError as error:
-            if exec_machine_lost(error):
-                raise Restart(f"environment needs a fresh machine: {error}") from error
-            if exec_setup_failed(error):
-                raise Transient(str(error)) from error
-            if str(error).startswith("ShellSim terminated: "):
-                raise Hold(f"environment terminated: {str(error).removeprefix('ShellSim terminated: ')}") from error
-            raise
+            raise Restart(f"environment terminated: {error}") from error
+        except ExecSetupFailed as error:
+            raise Transient(str(error)) from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
         image = digest((requirements, self.runtime))

@@ -22,8 +22,9 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 
 from forge.checkpoint import CheckpointSink
-from forge.coordinator import run_workpiece
+from forge.coordinator import reasons, run_workpiece
 from forge.effects.events import StageCompleted
+from forge.effects.issues import Hold, LogFailure, Restart, Transient
 from forge.effects.log import EventLog, JsonlSink, Status, fold
 from forge.model.proposal import TASK_PROPOSAL, TaskProposal
 from forge.model.review import Incomplete
@@ -137,11 +138,17 @@ async def one(args: argparse.Namespace) -> None:
             )
             async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
-    except Exception:
+    except* (Hold, Restart, Transient, LogFailure) as error:
+        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
+        await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
+        logging.warning("Forge workpiece %s held: %s", proposal.header.id, reasons(error))
+    except* Exception as error:
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
         await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
         logging.exception("Forge workpiece %s failed", proposal.header.id)
+        if len(error.exceptions) == 1:
+            raise error.exceptions[0] from None
         raise
     finally:
         (workdir / "workpiece.json").write_bytes(WORKPIECE.dump_json(wp))

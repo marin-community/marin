@@ -24,7 +24,7 @@ from forge import checkpoint, driver
 from forge.config import ForgeConfig
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
-from forge.effects.issues import Restart
+from forge.effects.issues import Restart, Transient
 from forge.effects.log import EventLog, JsonlSink, fold
 from forge.harness.protocol import Stopped, StopReason
 from forge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
@@ -404,3 +404,36 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
     await driver.one(driver_args)
     assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.ACCEPTED
     assert isinstance(second.inference, FakeInference) and not second.inference.requests
+
+
+@pytest.mark.parametrize("failures", [1, 3])
+async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, failures: int
+) -> None:
+    class Starting(Envs):
+        calls = 0
+
+        @override
+        async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+            self.calls += 1
+            if self.calls <= failures:
+                raise Transient("Environment startup did not resolve")
+            return await super().create(requirements)
+
+    envs = Starting()
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
+        yield config(arm), resources(envs, script("S"))
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    assert envs.calls == min(failures + 1, 3)
+    assert result.terminal is (Terminal.ACCEPTED if failures == 1 else Terminal.HELD)
+    if failures == 3:
+        assert "Transient: Environment startup did not resolve" in str(result.decisions[-1])
+        assert "bug:" not in str(result.decisions[-1])

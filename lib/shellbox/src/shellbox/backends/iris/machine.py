@@ -36,8 +36,10 @@ from shellbox.machine import (
     Backend,
     Command,
     CommandSemantics,
+    ExecSetupFailed,
     ExecutionRequirements,
     ExitReason,
+    MachineResourceExhausted,
     MachineSpec,
     MachineTerminated,
     NetworkPolicy,
@@ -165,7 +167,7 @@ class IrisMachine:
             # A timed-out ``run`` closes the machine while this thread may still be retrying.
             with self._admission:
                 if self._closed:
-                    raise RuntimeError("Machine is closed")
+                    raise MachineTerminated("Machine is closed")
                 attempt_id = uuid.uuid4().hex
                 self._in_flight[attempt_id] = argv
             try:
@@ -197,9 +199,16 @@ class IrisMachine:
                     "error executing command in container",
                     "cannot exec in a",
                     "not running",
+                    "container not found",
                 )
             ):
                 raise MachineTerminated(str(error)) from error
+            # Older controllers flatten Kubernetes transport exceptions into this wire string.
+            if (
+                response.error.startswith("Websocket setup failed (status 0):")
+                or response.error == "'NoneType' object has no attribute 'decode'"
+            ):
+                raise ExecSetupFailed(str(error)) from error
             raise error
         return ExecOutput(exit_code=response.exit_code, stdout=response.stdout, stderr=response.stderr)
 
@@ -208,9 +217,11 @@ class IrisMachine:
         status = self.task.status()
         if status.state != TaskState.RUNNING:
             detail = str(status.error_message or cause)
+            kind = MachineTerminated
             if "oomkilled" in detail.lower():
+                kind = MachineResourceExhausted
                 detail += f" (memory request: {self.spec.memory_mb or DEFAULT_MEMORY_MB} MiB)"
-            raise MachineTerminated(f"Iris sandbox task {self.task.task_id} is {status.state}: {detail}") from cause
+            raise kind(f"Iris sandbox task {self.task.task_id} is {status.state}: {detail}") from cause
 
     async def _script(self, script: str, timeout: float | None = None) -> ExecOutput:
         return await asyncio.to_thread(self._exec_sync, ["sh", "-c", script], timeout)
@@ -270,7 +281,7 @@ class IrisMachine:
 
     async def run(self, command: Command) -> Result:
         if self._closed:
-            raise RuntimeError("Machine is closed")
+            raise MachineTerminated("Machine is closed")
         if command.user is not None and command.user not in await self._user_identity():
             uid, name = await self._user_identity()
             raise UnsupportedMachineSpec(
