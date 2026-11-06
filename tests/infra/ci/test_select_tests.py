@@ -925,7 +925,7 @@ def test_shards_without_timings_spread_each_directory_across_runners() -> None:
 
 
 def test_shards_balance_recorded_test_time() -> None:
-    """Expensive files land on different shards, and an untimed file counts as the median."""
+    """No shard carries more recorded time than the single most expensive file."""
     test_seconds = {"tests/test_moe.py": 300.0, "tests/test_train.py": 280.0, "tests/test_a.py": 10.0}
     test_seconds |= {f"tests/test_small_{index}.py": 10.0 for index in range(9)}
     files = sorted([*test_seconds, "tests/test_new.py"])
@@ -935,5 +935,3 @@ def test_shards_balance_recorded_test_time() -> None:
     assert sorted(path for chunk in chunks for path in chunk) == files
     loads = [sum(test_seconds.get(path, 10.0) for path in chunk) for chunk in chunks]
     assert max(loads) == 300.0
-    assert ["tests/test_moe.py" in chunk for chunk in chunks].count(True) == 1
-    assert not any("tests/test_moe.py" in chunk and "tests/test_train.py" in chunk for chunk in chunks)
