@@ -85,7 +85,7 @@ export interface PanelCell {
   created_at: string
   version: string | null
   git_sha: string
-  eval_runtime: string
+  eval_runtime: string | null
 }
 
 // Why a (model, benchmark) has no cell: a rejected run (failed status, coverage below the gate, the
@@ -294,7 +294,7 @@ export interface EvalRecord {
   canonical_metrics: Record<string, Record<string, number>>
   jobs: Record<string, string>
   log_tails: Record<string, string[]>
-  provenance: { git_sha: string; eval_runtime: string; launch_host: string }
+  provenance: { git_sha: string; eval_runtime?: string | null; launch_host: string }
   timing: { started_at: string; finished_at: string | null } | null
   serving: {
     tensor_parallel_size: number | null

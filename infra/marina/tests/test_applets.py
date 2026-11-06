@@ -1042,6 +1042,11 @@ def test_static_cache_encoding_and_html_fallback(tmp_path: Path, database_url: s
     assert unchanged.status_code == 304
     assert client.get(f"{prefix}/client-route", headers={"accept": "application/json"}).status_code == 404
     assert client.get(f"{prefix}/client-route", headers={"accept": "text/html"}).status_code == 200
+    browser = {"accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+    dotted_route = client.get(f"{prefix}/runs/model-v0.1-math500", headers=browser)
+    assert dotted_route.status_code == 200
+    assert dotted_route.content == (packaged / "dist" / "index.html").read_bytes()
+    assert client.get(f"{prefix}/assets/missing-chunk.js", headers={"accept": "*/*"}).status_code == 404
 
 
 def test_publish_prunes_old_revisions_and_allocates_after_rollback(tmp_path: Path, database_url: str) -> None:
