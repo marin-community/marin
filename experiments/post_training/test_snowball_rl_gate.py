@@ -544,6 +544,7 @@ BROKEN = {
         "generate/outcome/infra_error": 10,
     },
     "unscored": 20,
+    "initial_unscored": 20,
     "duplicate_task": True,
     "omit_step": 25,
     "argv": ("snowball", "--init", "users/test/missing@2026.10.27"),
@@ -637,7 +638,16 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             False,
             id="candidate-and-control-evaluation-revisions-differ",
         ),
-        ("learning-medium", {"drop_task": True}, {}, "invalid", None, {"test_panel/batch_finished"}, None, False),
+        (
+            "learning-medium",
+            {"drop_task": True},
+            {},
+            "invalid",
+            None,
+            {"test_panel/batch_finished", "test_panel/initial/batch_finished"},
+            None,
+            False,
+        ),
         (
             "speed-medium",
             {"metrics": {"policy/mismatch/staleness0/selected_tokens": 0}},
@@ -748,7 +758,7 @@ def test_rescore_reports_candidate_and_control_contracts(
     if preset == "speed-long":
         monkeypatch.setitem(gate.CONTROLS, preset, (gate.ControlPin(preset, "09026fd100", presets.PRESET_REVISION, 4),))
     controls(recorded_runs, preset, **control_fault)
-    source = recorded_runs(preset, f"users/test/{preset}", score=0.495, **fault)
+    source = recorded_runs(preset, f"users/test/{preset}", **({"score": 0.495} | fault))
     if selection_change:
         monkeypatch.setattr(presets, "DEFAULT_SELECTION_VERSION", "2099.01.01")
         _json(Path(presets.default_selection().path()) / "summary.json", {"full_validation_rows": 73})
@@ -785,7 +795,12 @@ def test_rescore_reports_candidate_and_control_contracts(
         assert control_fault["fault"]["record_version"] in report["reason"]
         assert presets.PRESET_REVISION in report["reason"]
     if "panel_identity" in fault:
-        assert presets.EVALUATIONS["test_panel"].source in report["reason"]
+        if fault["panel_identity"] is None:
+            assert (
+                "recorded panel version is missing or malformed" in report["reason"] and "identity" in report["reason"]
+            )
+        else:
+            assert presets.EVALUATIONS["test_panel"].source in report["reason"]
         if fault["panel_identity"]:
             assert fault["panel_identity"] in report["reason"]
     elif verdict != "invalid":
@@ -886,7 +901,8 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     wrong_rates = pq.read_table(path).to_pylist()
     wrong_rates[0]["task_id"] = "different-panel"
     pq.write_table(pa.Table.from_pylist(wrong_rates), path)
-    invalid_rates = rescore("learning-medium", "--candidate", "users/test/detail")
+    recorded_runs("learning-medium", "users/test/wrong-rates", answers=answers)
+    invalid_rates = rescore("learning-medium", "--candidate", "users/test/wrong-rates")
     assert invalid_rates["verdict"] == "invalid" and "pass-rate panel" in invalid_rates["reason"]
 
 

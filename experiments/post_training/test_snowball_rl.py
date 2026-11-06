@@ -119,7 +119,7 @@ class InferenceService:
         return {"choices": [{
             "message": {"role": "assistant", "content": "answer"},
             "token_ids": [3], "finish_reason": "stop",
-            "logprobs": {"content": [{"logprob": -0.1}]} if body.get("logprobs") else None,
+            "logprobs": {"content": [{"logprob": -0.1}]} if self.body.get("logprobs") else None,
         }]}
 
 async def native_request(parameters, overrides, validate):
