@@ -1,6 +1,6 @@
 ---
 name: run-snowball-rl
-description: Choose, run, and read a Snowball RL preset through `experiments/post_training/snowball_rl.py` (speed-short, speed-medium, speed-long, data-short, data-medium, learning-medium, train-long) and its pass, fail, or invalid verdict against pinned controls, and record each experiment in a GitHub experiment issue. Use to measure or regression-check a vLLM, inference-speed, trainer, numerics, task-selection, task-sampling, evaluation, or RL-algorithm change on Snowball, to read Snowball answers for chain-of-thought inspection, and to explain a Snowball gate report. New RL launch files and other RL experiments belong to launch-rl.
+description: Choose, run, and read a Snowball RL preset through `experiments/post_training/snowball_rl.py` (speed-short, speed-medium, speed-long, data-short, data-medium, learning-medium, learning-long, data-long, train-long) and its pass, fail, or invalid verdict against pinned controls, and record each experiment in a GitHub experiment issue. Use to measure or regression-check a vLLM, inference-speed, trainer, numerics, task-selection, task-sampling, evaluation, or RL-algorithm change on Snowball, to read Snowball answers for chain-of-thought inspection, and to explain a Snowball gate report. New RL launch files and other RL experiments belong to launch-rl.
 ---
 
 # Run Snowball RL
@@ -91,6 +91,7 @@ you need and read under the run's `output` path:
 - `exports/dumped_evals/<session>/<data source>.jsonl`, where `<session>` is `global_step_<N>_evals`
   for an evaluation after update N, or `eval_only` for data-short. Each line is one answer with
   `task_id`, `input_prompt`, `output_response`, `score`, `stop_reason`, and `verification`.
+- learning-long and data-long run 100 asynchronous updates on 40 H100 (about four hours estimated). Their `test_panel_100` runs at update 0 and every 25 updates and supplies the dashboard baseline/final reward. Their `test_panel` runs only at update 100 and supplies the verdict. An early stop does not produce that final panel; missing final evidence gives INVALID. data-long requires `--tasks`, refuses `--set`, and uses learning-long controls. Default candidates keep no checkpoint/export; controls and `--keep-weights` keep final HF weights for rescoring.
 - learning-medium and data-medium write the 1,500-task `test_panel` at update 0 and after update 25;
   train-long writes the 100-task `test_panel_100` at update 0 and every 10 updates.
 - speed-short's quality answers are under

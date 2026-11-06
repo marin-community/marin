@@ -34,6 +34,8 @@ appear when the native job start time is available; active jobs link through the
 | speed-long | 40 H100, east | 20 asynchronous updates, staleness 2 and TIS, replies up to 8,192 tokens | median update time and learner/engine tokens/s/GPU over updates 3–20; target 45–75 minutes |
 | learning-medium | 40 H100, east | the 1,500-task greedy test panel at update 0 and after 25 synchronous RLOO-N updates | final panel equal-family mean; training metrics over updates 21–25 |
 | data-medium | 40 H100, east | learning-medium on candidate tasks | same fixed panel and recipe as learning-medium |
+| learning-long | 40 H100, east | 100 asynchronous RLOO-N updates; fast panel at update 0 and every 25; full panel only at update 100 | final full-panel equal-family mean; training metrics over updates 91–100; about four hours estimated |
+| data-long | 40 H100, east | learning-long on `--tasks`; accepts no `--set` | learning-long controls and final-panel verdict |
 | train-long | 112 H100, Reno; optional 40 H100, east | asynchronous training, default 100 updates | checkpoints, 100-task fast panel every 10 updates, HF export; no verdict |
 
 East means `cw-us-east-02a`; Reno means `cw-rno2a`. The 40-H100 layout has 32
@@ -45,9 +47,11 @@ Speed-long uses the asynchronous 40-H100 recipe without evaluation, checkpoints 
 export. It guards throughput and staleness-0 k3 mismatch, and reports phase timings, grading/setup
 timers, staleness summaries and selected-token counts by staleness bucket.
 
+Long learning/data runs publish their own fast-panel update-0 and update-100 measurements. The full panel runs once at update 100, including when it is a periodic evaluation; it never runs before training or after an early stop. A completed run with no full-panel result is INVALID. Default candidates keep no checkpoint or export; controls and `--keep-weights` keep final HF weights for panel rescoring. Qualified long controls are required before candidate submission.
+
 ## Dashboard publication
 
-Completed learning-medium, data-medium and train-long candidates publish one `rl_progress` record per replicate.
+Completed learning-medium, data-medium, learning-long, data-long and train-long candidates publish one `rl_progress` record per replicate.
 The status row includes `rl_progress_url` after publication is verified. Gated records keep the group
 verdict; train-long has no quality verdict. Each uses its own update-0 baseline and keeps the native result.
 Gated records below 99% scored coverage cannot rank. Train-long publishes only with full baseline and final coverage. Speed presets and data-short keep their results in the gate report.
@@ -223,8 +227,7 @@ difficulty. It contains no tasks from the 910-task development panel. `PanelEval
 supplies native evaluation callbacks, sampling settings and versioned validation data sources.
 
 Named panels use one seeded greedy answer per task, with natural replies up to
-`EVAL_REPLY_TOKENS` (8,192). Training keeps its own sampling. Learning-medium,
-data-medium and train-long use the deterministic engine profile: batch-invariant arithmetic,
+`EVAL_REPLY_TOKENS` (8,192). Training keeps its own sampling. Learning-medium, data-medium, learning-long, data-long and train-long use the deterministic engine profile: batch-invariant arithmetic,
 TRITON_ATTN with the pinned attention-helper hash, and prefix caching disabled.
 Speed-short, speed-medium, speed-long and data-short use the throughput profile:
 FLASH_ATTN, prefix caching enabled and batch invariance disabled. Speed-short's quality

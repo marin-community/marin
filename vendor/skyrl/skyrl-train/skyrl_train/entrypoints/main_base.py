@@ -564,6 +564,16 @@ class BasePPOExp:
         from skyrl_train.rollouts.context import TrainingContext  # noqa: PLC0415
         from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
 
+        evaluation_datasets = {}
+        for callback in cfg.trainer.get("callbacks") or []:
+            if callback.get("type") != "evaluation":
+                continue
+            for name, profile in parse_evaluation_profiles(callback.get("additional_evaluations")).items():
+                if profile.data_files is not None:
+                    dataset = self.get_eval_dataset(profile.data_files)
+                    if dataset is None:
+                        raise ValueError(f"evaluation profile {name} requires a dataset")
+                    evaluation_datasets[name] = dataset
         return RayPPOTrainer(
             context=TrainingContext.from_config(cfg, train_dataset, trajectory_runner),
             cfg=cfg,
@@ -571,6 +581,7 @@ class BasePPOExp:
             tokenizer=tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
+            evaluation_datasets=evaluation_datasets,
             inference_engine_client=inference_engine_client,
             trajectory_runner=trajectory_runner,
             eval_trajectory_runner=(

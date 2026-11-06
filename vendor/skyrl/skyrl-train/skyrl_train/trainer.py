@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 import io as stdlib_io
@@ -134,7 +135,7 @@ from skyrl_train.utils.utils import (
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 from skyrl_train.metric_names import PROMPTS_DROPPED_TOO_LONG_METRIC
-from skyrl_train.evaluation_profiles import EvaluationProfile, evaluation_profile_config
+from skyrl_train.evaluation_profiles import EvaluationProfile, evaluation_profile_config, parse_evaluation_profiles
 from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.callbacks.base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
@@ -357,7 +358,27 @@ class RayPPOTrainer:
         eval_dataset: Optional[PromptDataset] = None,
         eval_trajectory_runner: TrajectoryRunner | None = None,
         callbacks: Optional[List[TrainerCallback]] = None,
+        evaluation_datasets: Mapping[str, PromptDataset] | None = None,
     ):
+        profiles = {
+            name: profile
+            for callback in cfg.trainer.get("callbacks") or []
+            if callback.get("type") == "evaluation"
+            for name, profile in parse_evaluation_profiles(callback.get("additional_evaluations")).items()
+        }
+        evaluation_datasets = evaluation_datasets or {}
+        unknown = evaluation_datasets.keys() - profiles.keys()
+        if unknown:
+            raise ValueError(f"evaluation datasets have no matching profile: {sorted(unknown)}")
+        missing = {
+            name for name, profile in profiles.items() if profile.data_files is not None
+        } - evaluation_datasets.keys()
+        if missing:
+            raise ValueError(f"evaluation profiles require named datasets: {sorted(missing)}")
+        self.evaluation_dataloaders = {
+            name: build_eval_dataloader(evaluation_profile_config(cfg, profiles[name], name), dataset)
+            for name, dataset in evaluation_datasets.items()
+        }
         self.cfg = cfg
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
@@ -518,22 +539,21 @@ class RayPPOTrainer:
     async def eval(
         self,
         *,
-        sampling_params: Dict[str, Any] | None = None,
-        n_samples_per_prompt: int | None = None,
+        profile: EvaluationProfile | None = None,
         val_set_name: str | None = None,
         evaluation_pool: EvaluationPool | None = None,
     ) -> Dict[str, float]:
-        """Evaluate the current policy with optional sampling overrides and a named output directory."""
-        cfg = evaluation_profile_config(
-            self.cfg,
-            EvaluationProfile(sampling_params=sampling_params, n_samples_per_prompt=n_samples_per_prompt),
-            val_set_name,
+        """Evaluate the current policy with a named dataset and sampling profile."""
+        profile = profile or EvaluationProfile()
+        cfg = evaluation_profile_config(self.cfg, profile, val_set_name)
+        dataloader = (
+            self.evaluation_dataloaders[val_set_name] if profile.data_files is not None else self.eval_dataloader
         )
         evaluator = evaluate_step_wise if cfg.trainer.step_wise_training else evaluate
         session = nullcontext(evaluation_pool) if evaluation_pool is not None else self._evaluation_session()
         async with session as pool:
             return await evaluator(
-                eval_dataloader=self.eval_dataloader,
+                eval_dataloader=dataloader,
                 trajectory_runner=self.eval_trajectory_runner,
                 cfg=cfg,
                 global_step=self.global_step,

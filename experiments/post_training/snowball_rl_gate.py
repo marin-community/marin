@@ -878,7 +878,7 @@ def _compare(
         if preset.focus == presets.Focus.SPEED
         else {key: presets.Metric(key, not key.endswith("all_wrong_fraction")) for key in keys}
     )
-    telemetry = _DETAIL_METRICS.get(CONTROLS[preset.name][0].preset, ())
+    telemetry = _DETAIL_METRICS.get(control_pins(preset.name)[0].preset, ())
     details.update({metric.key: metric for metric in telemetry if metric.key in noise and metric.key not in guard_keys})
     counts = Counter(map(_breakdown_group, (*details, *(key for key in declared if key.startswith(prefixes)))))
     reported = []
@@ -1058,10 +1058,11 @@ def _write_gate(
 
 
 def control_pins(preset: str) -> tuple[ControlPin, ...]:
-    known = CONTROLS.get(preset, ())
+    control_preset = "learning-long" if preset == "data-long" else preset
+    known = CONTROLS.get(control_preset, ())
     pins = tuple(pin for pin in known if pin.revision == presets.PRESET_REVISION)
     if not pins:
-        name, replicas = (known[0].preset, known[0].runs) if known else (preset, 4)
+        name, replicas = (known[0].preset, known[0].runs) if known else (control_preset, 4)
         revisions = sorted({pin.revision for pin in known})
         raise InvalidComparison(
             f"no control pin for {preset} at {presets.PRESET_REVISION}; recorded control revisions={revisions}; "

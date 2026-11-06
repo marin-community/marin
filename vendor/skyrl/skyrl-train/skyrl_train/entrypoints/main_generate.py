@@ -72,6 +72,14 @@ class EvalOnlyEntrypoint(BasePPOExp):
         return asyncio.run(self._evaluate())
 
     async def _evaluate(self) -> dict[str, Any]:
+        profiles = [
+            (name, profile)
+            for callback in self.cfg.trainer.get("callbacks") or []
+            if callback.get("type") == "evaluation"
+            for name, profile in parse_evaluation_profiles(callback.get("additional_evaluations")).items()
+        ]
+        if any(profile.schedule == "final" for _, profile in profiles):
+            raise ValueError("final evaluation profiles require training updates")
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
 
         inference_engine_client = self.create_inference_engine_client(operation=EntrypointOperation.GENERATE)
@@ -132,26 +140,21 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 )
                 results["generate/vllm/generation_tokens"] = generated_tokens
                 results["generate/tokens_per_second_per_gpu"] = generated_tokens / elapsed / num_rollout_gpus(self.cfg)
-            for callback in self.cfg.trainer.get("callbacks") or []:
-                if callback.get("type") != "evaluation":
-                    continue
-                for name, profile in parse_evaluation_profiles(callback.get("additional_evaluations")).items():
-                    profile_cfg = evaluation_profile_config(self.cfg, profile, name)
-                    dataset = (
-                        self.eval_dataset if profile.data_files is None else self.get_eval_dataset(profile.data_files)
-                    )
-                    if dataset is None:
-                        raise ValueError(f"evaluation profile {name} requires a dataset")
-                    profile_results = await evaluate(
-                        eval_dataloader=build_eval_dataloader(profile_cfg, dataset),
-                        trajectory_runner=trajectory_runner,
-                        cfg=profile_cfg,
-                        global_step=None,
-                        tokenizer=self.tokenizer,
-                        val_set_name=name,
-                        trajectory_sink=trajectory_sink,
-                    )
-                    results.update(named_evaluation_metrics(profile_results, name))
+            for name, profile in profiles:
+                profile_cfg = evaluation_profile_config(self.cfg, profile, name)
+                dataset = self.eval_dataset if profile.data_files is None else self.get_eval_dataset(profile.data_files)
+                if dataset is None:
+                    raise ValueError(f"evaluation profile {name} requires a dataset")
+                profile_results = await evaluate(
+                    eval_dataloader=build_eval_dataloader(profile_cfg, dataset),
+                    trajectory_runner=trajectory_runner,
+                    cfg=profile_cfg,
+                    global_step=None,
+                    tokenizer=self.tokenizer,
+                    val_set_name=name,
+                    trajectory_sink=trajectory_sink,
+                )
+                results.update(named_evaluation_metrics(profile_results, name))
         finally:
             try:
                 await trajectory_runner.shutdown()

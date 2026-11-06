@@ -61,6 +61,17 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
                 paths.append(str(path))
                 if index == 0:
                     launches[name] = document
+    initializer_path = tmp_path / "long-initializer" / "hf"
+    initializer_path.mkdir(parents=True)
+    for filename in ("config.json", "tokenizer_config.json"):
+        (initializer_path / filename).write_text("{}")
+    long_init = ArtifactStep.adopt(
+        "tests/long-initializer", "2026.10.26", str(initializer_path.parent), kind=LevanterCheckpoint
+    )
+    initialized = snowball.build_run(presets.PRESETS["learning-long"], init=long_init).runs[0]
+    path = tmp_path / "initialized-long.yaml"
+    _render(initialized, path, runtime=True)
+    paths.append(str(path))
     for label, options in (("kept", {"keep_weights": True}), ("control", {"control": True})):
         retained = snowball.build_run(presets.PRESETS["learning-medium"], **options)
         path = tmp_path / f"{label}-weights.yaml"
@@ -139,7 +150,7 @@ def quality_request(config):
         return None
     profile = parse_evaluation_profiles(config.skyrl.trainer.callbacks[0].additional_evaluations)["test_panel"]
     merged = evaluation_profile_config(config.skyrl, profile, "test_panel")
-    assert config.inputs.validation_data[0].identity != config.inputs.evaluation_data.test_panel[0].identity
+    assert tuple(config.inputs.validation_data) != tuple(config.inputs.evaluation_data.test_panel)
     return asyncio.run(native_request(get_vllm_sampling_params(merged.generator.eval_sampling_params),
                                      {"temperature": 1.0}, True))
 
@@ -165,6 +176,14 @@ print(json.dumps([{
     "export_hf": config.run.export_hf,
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
+    "profile_inputs": (OmegaConf.to_container(config.inputs.evaluation_data)
+                       if config.inputs.get("evaluation_data") else {}),
+    "profiles": {name: OmegaConf.to_container(profile, resolve=True)
+                 for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"
+                 for name, profile in (entry.get("additional_evaluations") or {}).items()},
+    "primary_steps": [entry.get("eval_steps") for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
+    "primary_start": [entry.get("eval_before_train") for entry in config.skyrl.trainer.callbacks
+                      if entry.type == "evaluation"],
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"]
         if config.runtime.training_type is not None else [],
     "wire": asyncio.run(native_request(
@@ -187,7 +206,9 @@ print(json.dumps([{
     for row in rows:
         assert row["team"] == ("marin-community" if "speed-short-" in row["name"] else "test-team")
         name = row["name"]
-        quality_training = any(part in name for part in ("learning-medium-", "data-medium-", "train-long-"))
+        quality_training = any(
+            part in name for part in ("learning-medium-", "data-medium-", "learning-long-", "data-long-", "train-long-")
+        )
         assert row["engine_profile"] == (
             [True, "TRITON_ATTN", False] if quality_training else [False, "FLASH_ATTN", True]
         )
@@ -209,6 +230,19 @@ print(json.dumps([{
             assert ("hf_model_save" in row["callbacks"]) == saved
         if "speed-long-" in name:
             assert not row["validation"] and not row["export_hf"]
+        if "learning-long-" in name or "data-long-" in name:
+            assert row["nodes"] == 5 and row["steps"] == 100
+            assert row["primary_steps"] == [25] and row["primary_start"] == [True]
+            assert row["terminal_eval"] == [False]
+            assert row["profiles"]["test_panel"]["schedule"] == "final"
+            source = row["profile_inputs"]["test_panel"][0]
+            assert (
+                source["identity"].partition(":")[0]
+                == f"{presets.SELECTION_PREFIX}/{presets.EVALUATIONS['test_panel'].source}"
+            )
+            assert source["relative_path"] == "full_validation.parquet"
+            assert row["quality_wire"] == greedy_wire
+            assert not row["export_hf"] and "checkpoint" not in row["callbacks"]
         if row["fixed"]:
             assert not row["overlong_filtering"], row
         if row["wire"] is not None:
@@ -229,6 +263,14 @@ print(json.dumps([{
     assert learning["inputs"]["model"] == data["inputs"]["model"]
     assert learning["inputs"]["validation_data"] == data["inputs"]["validation_data"]
     assert learning["inputs"]["train_data"] != data["inputs"]["train_data"]
+    long_learning, long_data = launches["learning-long"], launches["data-long"]
+    assert long_learning["skyrl"] == long_data["skyrl"]
+    assert long_learning["inputs"]["validation_data"] == long_data["inputs"]["validation_data"]
+    assert long_learning["inputs"]["evaluation_data"] == long_data["inputs"]["evaluation_data"]
+    assert long_learning["inputs"]["train_data"] != long_data["inputs"]["train_data"]
+    for options in ({}, {"tasks": selection, "settings": (presets.parse_setting("trainer.max_steps=2"),)}):
+        with pytest.raises(click.BadParameter, match="data presets require"):
+            snowball.build_run(presets.PRESETS["data-long"], **options)
     with pytest.raises(click.BadParameter, match="owned by"):
         snowball.build_run(
             presets.PRESETS["learning-medium"],
@@ -253,15 +295,16 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     ).write_text(summary)
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
-        "speed-short": "770b2ac4",
-        "data-short": "f2cb9dae",
-        "speed-medium": "f8e77acd",
-        "learning-medium": "796fdf74",
-        "speed-long": "5a20d9a8",
+        "speed-short": ("770b2ac4", "0335d15c", "2093a4fd"),
+        "data-short": ("f2cb9dae", "729855c5", "50e0b730"),
+        "speed-medium": ("f8e77acd", "72953642", "340dd45e"),
+        "learning-medium": ("796fdf74", "60fd95c3", "7af0ece3"),
+        "speed-long": ("5a20d9a8", "f9d97e72", "0b72b45a"),
     }
     paths = []
     for name in expected:
         step = snowball.build_run(presets.PRESETS[name], control=True).runs[0]
+        assert step.fingerprint() == expected[name][2]
         path = tmp_path / f"{name}.yaml"
         _render(step, path)
         paths.append(str(path))
@@ -274,18 +317,25 @@ from cloud.iris.launch_config import load_launch_config
 os.environ["HOME"] = "/snowball-pin-home"
 configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
 print(json.dumps([
-    {"skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
+    {"envelope": OmegaConf.to_container(config, resolve=True),
+     "skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
      "allocation": OmegaConf.to_container(config.iris.allocation, resolve=True)}
     for config in configs
 ], sort_keys=True))
 """,
         paths,
     )
+    assert {
+        name: fingerprint_hash(json.dumps(config.pop("envelope"), sort_keys=True))
+        for name, config in zip(expected, configs, strict=True)
+    } == {name: hashes[1] for name, hashes in expected.items()}
     actual = {
         name: fingerprint_hash(json.dumps(config, sort_keys=True))
         for name, config in zip(expected, configs, strict=True)
     }
-    assert actual == expected, "Gated config changed. Top-level key hashes: " + json.dumps(
+    assert actual == {
+        name: hashes[0] for name, hashes in expected.items()
+    }, "Gated config changed. Top-level key hashes: " + json.dumps(
         {
             name: {
                 section: {key: fingerprint_hash(json.dumps(value, sort_keys=True)) for key, value in values.items()}

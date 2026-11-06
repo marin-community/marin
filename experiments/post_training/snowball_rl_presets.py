@@ -480,6 +480,16 @@ _LEARNING_MEDIUM = Preset(
     gaps=_GAPS,
     budget="105-120 min; 70-80 H100-h",
 )
+_LEARNING_LONG = replace(
+    _LEARNING_MEDIUM,
+    duration=Duration.LONG,
+    recipe=_ASYNC_P40,
+    updates=100,
+    measured=range(91, 101),
+    evaluations=(replace(EVALUATIONS["test_panel_100"], every=25, at_start=True), EVALUATIONS["test_panel"]),
+    reported=(*_LEARNING_MEDIUM.reported, Metric("test_panel_100/mean", True)),
+    budget="about 4 h; about 160 H100-h (estimate)",
+)
 PRESETS = MappingProxyType(
     {
         preset.name: preset
@@ -558,6 +568,8 @@ PRESETS = MappingProxyType(
             ),
             _LEARNING_MEDIUM,
             replace(_LEARNING_MEDIUM, focus=Focus.DATA),
+            _LEARNING_LONG,
+            replace(_LEARNING_LONG, focus=Focus.DATA),
             Preset(
                 focus=Focus.TRAIN,
                 duration=Duration.LONG,
@@ -939,7 +951,7 @@ def run_command(*, help_text: str | None = None):
                 "init_name",
                 metavar="NAME@VERSION",
                 help="Initial weights: a published model artifact, or a finished train-long run (its HF export). "
-                "learning-medium and train-long only. The initial weights are evaluated too, so the report shows "
+                "learning presets and train-long only. The initial weights are evaluated too, so the report shows "
                 "the gain.",
             ),
             click.option(
@@ -989,7 +1001,7 @@ def run_command(*, help_text: str | None = None):
                 is_flag=True,
                 help="Run the preset's control replicates from a clean checkout with only its pinned default "
                 "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require, "
-                "--keep-weights and data-medium, which uses learning-medium's controls.",
+                "--keep-weights and data-medium/data-long, which use the corresponding learning preset's controls.",
             ),
         )
         command = rl_build_options(function)

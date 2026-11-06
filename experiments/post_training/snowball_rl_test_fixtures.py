@@ -80,13 +80,15 @@ def source_provenance(monkeypatch):
 
 @pytest.fixture
 def synthetic_current_controls(monkeypatch):
+    long_pin = gate.ControlPin("learning-long", "09026fd100", presets.PRESET_REVISION, 4)
     monkeypatch.setattr(
         gate,
         "CONTROLS",
         {
             name: tuple(replace(pin, revision=presets.PRESET_REVISION) for pin in pins)
             for name, pins in gate.CONTROLS.items()
-        },
+        }
+        | {"learning-long": (long_pin,), "data-long": (long_pin,)},
     )
 
 
@@ -329,6 +331,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, publication_transport, reque
             else:
                 launch["inputs"]["validation_data"] = [descriptor]
             for step, average in sessions.items():
+                if index and not preset.recipe.layout.role_plan.generate_only and step == 0:
+                    continue
                 failed_answers = initial_unscored if step == 0 else quality_unscored if index else unscored
                 rows = answers or [
                     answer(

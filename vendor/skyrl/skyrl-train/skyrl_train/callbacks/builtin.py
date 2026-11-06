@@ -325,8 +325,6 @@ class EvaluationCallback(TrainerCallback):
         self.eval_on_train_end = eval_on_train_end
         self.eval_before_train = eval_before_train
         self.additional_evaluations = parse_evaluation_profiles(additional_evaluations)
-        if any(profile.data_files is not None for profile in self.additional_evaluations.values()):
-            raise ValueError("dataset-selecting evaluation profiles require the generate entrypoint")
         self.metric_groups = metric_groups or {}
         self.stop_when = {name: EvaluationStopConfig(**value) for name, value in (stop_when or {}).items()}
         self._initial_values: Dict[str, float] = {}
@@ -340,15 +338,15 @@ class EvaluationCallback(TrainerCallback):
         async def collect(name, parameters):
             additional = await trainer.eval(
                 val_set_name=name,
-                sampling_params=parameters.sampling_params,
-                n_samples_per_prompt=parameters.n_samples_per_prompt,
+                profile=parameters,
                 evaluation_pool=pool,
             )
             metrics.update(named_evaluation_metrics(additional, name))
 
         async with asyncio.TaskGroup() as tasks:
             for name, parameters in self.additional_evaluations.items():
-                tasks.create_task(collect(name, parameters))
+                if parameters.schedule == "every_evaluation" or state.is_last_step and state.global_step > 0:
+                    tasks.create_task(collect(name, parameters))
         return metrics
 
     async def on_evaluate_async(
@@ -404,7 +402,12 @@ class EvaluationCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.eval_on_train_end and self.eval_steps > 0:
+        final_profile = (
+            state.is_last_step
+            and state.global_step > 0
+            and any(profile.schedule == "final" for profile in self.additional_evaluations.values())
+        )
+        if self.eval_on_train_end and self.eval_steps > 0 or final_profile:
             control.should_evaluate = True
         return control
 

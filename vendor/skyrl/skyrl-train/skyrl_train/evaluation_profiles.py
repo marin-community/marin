@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
@@ -13,6 +13,11 @@ class EvaluationProfile:
     sampling_params: dict[str, Any] | None = None
     n_samples_per_prompt: int | None = None
     data_files: list[str] | None = None
+    schedule: Literal["every_evaluation", "final"] = "every_evaluation"
+
+    def __post_init__(self):
+        if self.schedule not in ("every_evaluation", "final"):
+            raise ValueError(f"unknown evaluation schedule: {self.schedule}")
 
 
 def named_evaluation_profiles(config: Mapping[str, Any], name: str) -> list[Mapping[str, Any]]:
