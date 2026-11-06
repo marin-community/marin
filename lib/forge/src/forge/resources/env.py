@@ -20,7 +20,7 @@ from taskcompendium.models import EnvironmentRequirements
 
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, canonical_digest
 from forge.effects.issues import Hold, Restart, Transient
-from forge.resources.execution import Notify, exec_setup_failed, retry_effect
+from forge.resources.execution import Notify, exec_machine_lost, exec_setup_failed, retry_effect
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,13 +143,17 @@ class ShellboxEnv(_RecordedEnv):
         except IsADirectoryError as error:
             raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path)) from error
         except MachineTerminated as error:
-            decision = Restart if "preempted" in str(error).lower() else Hold
+            decision = Hold if "oomkilled" in str(error).lower() else Restart
             raise decision(f"environment terminated: {error}") from error
         except (RuntimeError, SimulationError) as error:
+            if exec_machine_lost(error):
+                raise Restart(f"environment needs a fresh machine: {error}") from error
             if exec_setup_failed(error):
                 raise Transient(str(error)) from error
             detail = str(error)
-            if detail.startswith("ShellSim terminated: ") or detail == "Machine is closed":
+            if detail == "Machine is closed":
+                raise Restart("environment needs a fresh machine: Machine is closed") from error
+            if detail.startswith("ShellSim terminated: "):
                 raise Hold(f"environment terminated: {detail.removeprefix('ShellSim terminated: ')}") from error
             if "is a directory" in detail.lower():
                 raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path) if path else detail) from error
@@ -231,9 +235,11 @@ class ShellboxEnvFactory(EnvFactory):
                 prepare_machine(requirements, (), self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout)
             )
         except MachineTerminated as error:
-            decision = Restart if "preempted" in str(error).lower() else Hold
+            decision = Hold if "oomkilled" in str(error).lower() else Restart
             raise decision(f"environment terminated: {error}") from error
         except RuntimeError as error:
+            if exec_machine_lost(error):
+                raise Restart(f"environment needs a fresh machine: {error}") from error
             if exec_setup_failed(error):
                 raise Transient(str(error)) from error
             if str(error).startswith("ShellSim terminated: "):

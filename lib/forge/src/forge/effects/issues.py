@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+# A container that cannot execute commands must Restart on a fresh machine; retrying
+# its WriteFile or grading RPC cannot repair a terminating pod. OOM remains a Hold.
+
 # A failed verifier reset raises MachineTerminated and discards the lease. Rollout
-# interruption then selects Transient at startup or Restart during grading, never a score.
+# interruption then selects Restart at every phase, never a score.
 
 # Lowering rejects image-free Linux process requirements with ValueError: an unsupported
 # task contract needs repair, not a retry on the same Iris host.

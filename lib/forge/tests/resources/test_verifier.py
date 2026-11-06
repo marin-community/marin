@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -64,14 +65,17 @@ print(int(clean and Path('/app/answer.txt').read_text() == '12'))
 
 
 class CountedMachine(Machine):
-    def __init__(self, machine: Machine, die: bool) -> None:
+    def __init__(self, machine: Machine, die: bool, failure: RuntimeError | None = None) -> None:
         self.machine, self.die, self.closed = machine, die, False
+        self.failure = failure
 
     @override
     async def run(self, command: Command) -> Result:
         if self.die and command.argv == ("python3", "/tests/grade.py"):
             self.die = False
-            raise MachineTerminated("preempted during grader")
+            raise self.failure or MachineTerminated("killed during grader") from RuntimeError(
+                "Iris exec failed: 'NoneType' object has no attribute 'decode'"
+            )
         return await self.machine.run(command)
 
     @override
@@ -91,10 +95,11 @@ class CountedMachine(Machine):
 class CountedFactory(MachineFactory):
     backend = Backend.SHELLSIM
 
-    def __init__(self, *, die: bool = False) -> None:
+    def __init__(self, *, die: bool = False, failure: RuntimeError | None = None) -> None:
         self.factory = shellsim_factory()
         self.machines: list[CountedMachine] = []
         self.die = die
+        self.failure = failure
 
     @override
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
@@ -104,7 +109,7 @@ class CountedFactory(MachineFactory):
     async def create(self, spec: MachineSpec) -> Machine:
         # A controlled startup cost makes the avoided factory call measurable without cluster traffic.
         await asyncio.sleep(0.05)
-        machine = CountedMachine(await self.factory.create(spec), self.die and not self.machines)
+        machine = CountedMachine(await self.factory.create(spec), self.die and not self.machines, self.failure)
         self.machines.append(machine)
         return machine
 
@@ -163,11 +168,21 @@ async def test_grades_and_solver_share_clean_machine_and_rehydrate_resources() -
     assert factory.machines[0].closed
 
 
-async def test_dead_verifier_restarts_with_one_replacement() -> None:
-    factory = CountedFactory(die=True)
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        RuntimeError(
+            "Iris exec failed: invalid literal for int() with base 10: 'Internal error occurred: "
+            "error executing command in container: stopped'"
+        ),
+    ],
+)
+async def test_dead_verifier_restarts_with_one_replacement(failure: RuntimeError | None) -> None:
+    factory = CountedFactory(die=True, failure=failure)
     pool, resource = setup(factory)
     try:
-        with pytest.raises(Restart, match="preempted during grader"):
+        with pytest.raises(Restart):
             await resource.grade(event())
         assert factory.machines[0].closed
         assert (await resource.grade(event())).reward == 1
@@ -318,6 +333,7 @@ async def test_reset_preserves_iris_capture_files_and_runtime_directory(tmp_path
                 re.sub(r"/(tmp|workspace|tests|app)(?=/|[\s'\"]|$)", lambda match: str(tmp_path / match.group(1)), part)
                 for part in request.command
             ]
+            command[-1] = f"export PATH={shlex.quote(str(tmp_path / 'bin'))}:$PATH\n" + command[-1]
             result = subprocess.run(command, capture_output=True, text=True, timeout=30)
             return controller_pb2.Controller.ExecInContainerResponse(
                 exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr
@@ -325,6 +341,16 @@ async def test_reset_preserves_iris_capture_files_and_runtime_directory(tmp_path
 
     for name in ("tmp", "workspace", "tests", "app"):
         (tmp_path / name).mkdir()
+    # Model mount points: removing their contents is allowed, unlinking a root is not.
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    protected = "|".join(shlex.quote(str(tmp_path / name)) for name in ("tmp", "workspace", "tests", "app"))
+    (binary / "rm").write_text(
+        f'#!/bin/sh\nfor target do\ncase "$target" in {protected}) '
+        'echo "rm: Device or resource busy" >&2; exit 1;; esac\ndone\nexec /bin/rm "$@"\n'
+    )
+    (binary / "rm").chmod(0o755)
+    inodes = {name: (tmp_path / name).stat().st_ino for name in ("tmp", "workspace", "tests", "app")}
     runtime = tmp_path / "tmp/.shellbox"
     runtime.mkdir()
     (runtime / "state").write_text("runtime")
@@ -341,6 +367,7 @@ async def test_reset_preserves_iris_capture_files_and_runtime_directory(tmp_path
         assert (tmp_path / "tmp/.shellbox-stale-out").read_text() == "capture"
         assert not (tmp_path / "tmp/candidate-leftover").exists()
         assert not (tmp_path / "workspace/previous").exists()
+        assert all((tmp_path / name).stat().st_ino == inode for name, inode in inodes.items())
         await lease.reset()
         assert (await lease.run(Command(("printf", "second reset"), cwd="/workspace"))).stdout == b"second reset"
     finally:

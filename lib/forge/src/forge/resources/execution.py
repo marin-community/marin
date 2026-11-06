@@ -6,6 +6,8 @@
 from asyncio import sleep
 from collections.abc import Awaitable, Callable
 
+from shellbox.machine import MachineTerminated
+
 from forge.effects.events import Event, Retrying
 from forge.effects.issues import Restart, Transient
 
@@ -28,8 +30,30 @@ async def retry_effect[T](event: Event[T], operation: Callable[[], Awaitable[T]]
             attempt += 1
 
 
+def exec_machine_lost(error: BaseException) -> bool:
+    """A container that cannot be exec'd needs replacement, not an RPC retry."""
+    seen: set[int] = set()
+    cause: BaseException | None = error
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, MachineTerminated):
+            return True
+        detail = str(cause)
+        if detail.startswith("Iris exec failed: ") and (
+            detail.startswith("Iris exec failed: Non-integer exec status:")
+            or "error executing command in container" in detail
+            or "cannot exec in a" in detail
+            or "not running" in detail
+        ):
+            return True
+        cause = cause.__cause__
+    return False
+
+
 def exec_setup_failed(error: BaseException) -> bool:
-    """Recognize Iris exec setup/status failures, including rollout wrappers."""
+    """Recognize retryable Iris websocket setup failures, including rollout wrappers."""
+    if exec_machine_lost(error):
+        return False
     seen: set[int] = set()
     cause: BaseException | None = error
     while cause is not None and id(cause) not in seen:
@@ -40,8 +64,6 @@ def exec_setup_failed(error: BaseException) -> bool:
         if detail.startswith("Iris exec failed: ") and (
             "'NoneType' object has no attribute 'decode'" in detail
             or detail.startswith("Iris exec failed: Websocket setup failed (status 0): ")
-            or detail.startswith("Iris exec failed: Non-integer exec status: ")
-            or ("invalid literal for int()" in detail and "error executing command in container" in detail)
         ):
             return True
         cause = cause.__cause__

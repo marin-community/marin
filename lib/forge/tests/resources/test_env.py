@@ -178,9 +178,10 @@ async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
 @pytest.mark.parametrize(
     "failure,decision",
     [
-        (MachineTerminated("gone"), Hold),
+        (MachineTerminated("gone"), Restart),
+        (MachineTerminated("Iris sandbox OOMKilled"), Hold),
         (MachineTerminated("Iris sandbox is preempted: WorkloadEvictedDueToPreempted"), Restart),
-        (RuntimeError("Machine is closed"), Hold),
+        (RuntimeError("Machine is closed"), Restart),
         (RuntimeError("ShellSim terminated: cpu_exhausted"), Hold),
         (TimeoutError("busy"), Transient),
     ],
@@ -320,14 +321,19 @@ async def test_directory_read_names_requested_path_without_retry(failure: Except
         "error executing command in container: failed to exec'",
     ],
 )
-async def test_noninteger_exec_status_is_retried_and_retained_at_exhaustion(detail: str) -> None:
+@pytest.mark.parametrize("writing", [False, True])
+async def test_noninteger_exec_status_requires_new_machine_without_retry(detail: str, writing: bool) -> None:
     machine = MemoryMachine()
     machine.failure = RuntimeError(f"Iris exec failed: {detail}")
     env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
     events: list[Event[None]] = []
     with pytest.raises(Restart) as caught:
-        await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
-    assert machine.calls == 3
+        if writing:
+            await write_file(WriteFile(OUTPUT, b"data"), env, notify=events.append)
+        else:
+            await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
+    assert machine.calls == 1
+    assert not events
     assert detail in str(caught.value)
 
 

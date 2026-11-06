@@ -24,6 +24,7 @@ from shellbox.machine import (
     Result,
 )
 
+from forge.resources.execution import exec_machine_lost
 from forge.resources.rollouts import Engine
 
 # Preserve the machine's original supervisor processes, including its idle child.
@@ -54,6 +55,17 @@ if len(sys.argv) > 1:
 else:
     print(json.dumps({str(pid): started for pid, (_, started) in processes.items()}))
 """
+CLEAR_ROOTS = """
+for root do
+    if test -L "$root" || { test -e "$root" && ! test -d "$root"; }; then
+        rm -f -- "$root" || exit
+    elif test -d "$root"; then
+        find "$root" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + || exit
+    fi
+done
+"""
+"""Clear contents without unlinking directories that may be mount points."""
+
 RESET_ROOTS = frozenset({"/app", "/workspace", "/tests", "/tmp"})
 SYSTEM_ROOTS = frozenset(
     {"/", "/bin", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/proc", "/sbin", "/sys", "/usr", "/var", "/opt"}
@@ -158,7 +170,7 @@ class VerifierLease(Machine):
         if self.baseline:
             await self.checked(Command(("python3", "-c", PROCESS_RESET, self.baseline), cwd="/", user="0", timeout=30))
         roots = tuple(sorted(self.roots - {"/tmp"}))
-        await self.checked(Command(("rm", "-rf", "--", *roots), cwd="/", user="0", timeout=30))
+        await self.checked(Command(("sh", "-c", CLEAR_ROOTS, "forge-clear", *roots), cwd="/", user="0", timeout=30))
         # Iris captures this very command under /tmp/.shellbox-*. Preserve both
         # its current capture prefix and a dedicated runtime directory if present.
         await self.checked(
@@ -201,6 +213,11 @@ class VerifierLease(Machine):
         except (MachineTerminated, asyncio.CancelledError, TimeoutError):
             self.broken = True
             raise
+        except RuntimeError as error:
+            if exec_machine_lost(error):
+                self.broken = True
+                raise MachineTerminated(f"Verifier container cannot be exec'd: {error}") from error
+            raise
         if result.reason == ExitReason.TIMED_OUT:
             self.broken = True
         return result
@@ -215,11 +232,18 @@ class VerifierLease(Machine):
                     self.track_path("/" + member.name.lstrip("/"))
             new_roots = tuple(sorted(self.roots - previous_roots))
             if new_roots:
-                await self.checked(Command(("rm", "-rf", "--", *new_roots), cwd="/", user="0", timeout=30))
+                await self.checked(
+                    Command(("sh", "-c", CLEAR_ROOTS, "forge-clear", *new_roots), cwd="/", user="0", timeout=30)
+                )
         try:
             await self.machine.upload(source, target)
         except (MachineTerminated, asyncio.CancelledError, TimeoutError):
             self.broken = True
+            raise
+        except RuntimeError as error:
+            if exec_machine_lost(error):
+                self.broken = True
+                raise MachineTerminated(f"Verifier container cannot be exec'd: {error}") from error
             raise
 
     @override
@@ -228,6 +252,11 @@ class VerifierLease(Machine):
             await self.machine.download(source, target)
         except (MachineTerminated, asyncio.CancelledError, TimeoutError):
             self.broken = True
+            raise
+        except RuntimeError as error:
+            if exec_machine_lost(error):
+                self.broken = True
+                raise MachineTerminated(f"Verifier container cannot be exec'd: {error}") from error
             raise
 
     @override

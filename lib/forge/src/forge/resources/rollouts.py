@@ -10,7 +10,7 @@ from rolloutengine.models import GradedRollout, Model, RolloutInterrupted, Rollo
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy
 from forge.effects.issues import Restart, Transient
-from forge.resources.execution import Notify, exec_setup_failed, retry_effect
+from forge.resources.execution import Notify, exec_machine_lost, exec_setup_failed, retry_effect
 from forge.resources.grade_health import check_timeout
 
 
@@ -37,6 +37,8 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart:
         cause = cause.__cause__
     detail = ": " + " <- ".join(causes)[:300] if causes else ""
     message = f"Rollout interrupted during {error.operation}{detail}"
+    if exec_machine_lost(error):
+        return Restart(message)
     retryable = error.operation == RolloutOperation.START or exec_setup_failed(error)
     return Transient(message) if retryable else Restart(message)
 
