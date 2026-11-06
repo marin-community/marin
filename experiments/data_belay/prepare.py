@@ -84,7 +84,7 @@ def plan_cache(
     )
     digest = hashlib.sha256(identity.encode()).hexdigest()[:10]
     slug = report.repo.replace("/", "--")
-    name = f"{report.config or 'default'}-{report.split}-{digest}"
+    name = f"{report.config}-{report.split}-{digest}"
     estimated = round(sum(f.size for f in chosen) * report.estimated_tokens / total_bytes)
     estimated = min(estimated, round(max_rows * report.sample.tokens_per_row))
     path = prefix_join(cache_root, f"{slug}/{report.revision[:12]}/{name}")
