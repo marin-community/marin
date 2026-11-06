@@ -91,36 +91,6 @@ An **answer** is the task’s semantic result, identified by `answer_type`. A **
 
 For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a `numeric` grader that expects `12`. The `PlainText`, `JsonAnswer`, and `AnswerCall` formats carry that answer as `12`, `{"answer":"12"}`, and a final `submit_answer({"answer":"12"})` call, respectively. Each extracts the string `12` for the same grader, which accepts both `12` and `12.0`. A task asking for a function call has `answer_type=native_action`; its context retains the conversation and its `final_tools` field describes the source functions. The grader and expected answer are never added to the model-visible input. Importers must make source output instructions agree with the task's answer format, or reject rows they cannot safely rewrite. A raw-output requirement in a source message would conflict with `JsonAnswer` or `AnswerCall`; `answer_type=text` alone cannot detect that conflict in prose.
 
-## Protocol probes
-
-`taskcompendium.examples.protocol_probes` builds evaluation tasks for four agent protocols. Each
-answer is a nonce derived from the task id, so on the file, tool and URL probes the ordinary reward
-is the protocol result: a model cannot pass without writing the file, running the command or
-fetching the page.
-
-| Probe | The model must | How to read a failure |
-| --- | --- | --- |
-| `required_file` | Write the nonce to `/app/answer.txt` | The file is graded; an answer in chat scores 0 |
-| `tool_execution` | Run `cat /probe/nonce` with `run_command` and reply with its output | The conversation shows whether a call was made, rejected or failed, or written as text |
-| `url_loading` | Call `fetch_url` on the declared page and reply with its token | The tool observations show HTTP and network failures apart from no attempt |
-| `thinking_disabled` | Reply with a given token | Under a launch that turns thinking off, the response tokens show whether reasoning was emitted |
-
-The URL probe declares its pages through a `fetch-v1` tool provider (`taskcompendium.fetch`), which
-serves `fetch_url` from the task's pages without network access. Every call gets a JSON observation,
-so an HTTP error, a network failure and an unknown URL reach the model as distinct results.
-
-`experiments/post_training/inventory/protocol_probes_eval.py` evaluates the probes against a
-checkpoint on one 8xH100 node, with SkyRL's evaluation-only entrypoint and thinking off by default:
-
-```bash
-uv run python -m experiments.post_training.inventory.protocol_probes_eval \
-  --model snowball-v0.1 --version "$RUN_VERSION" --run
-```
-
-`--model datakit-sft` probes the quick RL loop's starting checkpoint. Under the run's
-`exports/dumped_evals/`, each `protocol-probes.jsonl` row keeps `score`, the parsed conversation
-under `messages` and the exact `response_token_ids`; classify failures from them offline.
-
 ## What can a task represent?
 
 ### Text answers

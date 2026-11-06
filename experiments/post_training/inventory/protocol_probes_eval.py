@@ -30,7 +30,7 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
-    materialize_role_plan_config,
+    _materialize_role_plan_config,
     skyrl_step,
 )
 from rolloutengine.models import MachineRuntimeSpec
@@ -141,7 +141,7 @@ def build_eval(model: str, version: str, cluster: str, thinking: bool) -> Artifa
         n_samples_per_prompt=1,
     )
     config = eval_config(thinking)
-    materialize_role_plan_config(config, plan)
+    _materialize_role_plan_config(config, plan)
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(f"{ARTIFACT_NAME}/{model}"),

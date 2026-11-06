@@ -545,7 +545,7 @@ def _set_config_value(config: dict[str, object], dotted_key: str, value: object)
     node[parts[-1]] = value
 
 
-def materialize_role_plan_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
+def _materialize_role_plan_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
     """Render the typed Marin role plan into the SkyRL Hydra document."""
     for dotted_key, value in _role_plan_config_values(role_plan).items():
         _set_config_value(config, dotted_key, value)
@@ -802,7 +802,7 @@ def _launch_config_yaml(
     output: SkyRLOutputPaths,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
-    materialize_role_plan_config(recipe, spec.topology.role_plan)
+    _materialize_role_plan_config(recipe, spec.topology.role_plan)
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
