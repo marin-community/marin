@@ -3,41 +3,35 @@
 
 """Grade a Lean proof of a frozen theorem statement by kernel replay.
 
-``/tests/config.json`` is the task's contract: the statement file's ``prefix`` (imports, ``open``s and
-helper declarations), the theorem ``statement`` through its final ``:=``, and the ``target`` theorem
-name. The reply's last ``lean4``/``lean`` code block (else its last code block, else the whole reply)
-is either a proof term or, when it declares the target theorem itself, a whole file after the imports.
-Both files below are named ``Task.lean``, so that private names agree. Each grade runs in a fresh
-sandbox. Root runs the trusted steps; the reply's own steps run as one unprivileged uid, chosen at random
-for the grade, in a directory only that uid can write, after the machine's world-writable directories
-and ``/tests``, where a source may keep a reference proof hidden from the solver, are closed to it:
+The task's contract, ``/tests/config.json``, holds the statement file's ``prefix`` (imports, ``open``s and
+helper declarations), the theorem ``statement`` up to its final ``:=``, and the ``target`` theorem's name.
+The graded part of the reply is its last ``lean4`` or ``lean`` code block, else its last code block, else
+the whole reply. It is either a proof term or, if it declares the target itself, a whole file after the
+imports.
 
-1. Root compiles the reference: the statement proved by ``sorry``, then a check, run by Lean, that the
-   module declares the target as a theorem, that no declaration's statement uses ``sorry``, that only
-   the target's proof does, and that the module declares no axiom (``native_decide`` declares one).
-2. The candidate's uid compiles the candidate: the statement followed by the proof term in parentheses,
-   or the imports followed by the reply's file. Elaboration runs arbitrary code, including any commands
-   the reply contains, so everything this uid writes is untrusted data; only the target, as replayed
-   below, counts.
-3. The same uid runs ``lean-export`` from Prime Intellect's checker, which turns the candidate's object
-   file into bounded JSON data. Then every process of that uid is killed, and root copies the data, a
-   regular file opened without following links.
-4. Root runs ``lean-verify``, which reads only that copy and the reference object file, and replays the
-   target's dependency closure in the kernel against the reference's imports. The target scores 1 only
-   if it is accepted in proving mode, with the reference's type and the reference's statement
-   declarations unchanged, and its axioms are among ``propext``, ``Classical.choice`` and ``Quot.sound``.
+Each grade runs in a fresh sandbox, in four steps:
 
-While the candidate's steps run, their directory's size and file count are checked, a soft bound that a
-hard storage limit on the grading machine would make strict. The reward on stdout is 0 only for an
-outcome the proof caused: the candidate's compile or export failing in any way (the reference has just
-compiled on the same machine, and the export reads only the candidate's object file), the candidate's
-own time or space allowance exceeded, its proof data missing or unreadable, or a rejection by
-``lean-verify``. Any other failure (a tool or uid switch that does not work, a reference that does not
-validate, ``lean-verify`` failing or exceeding its allowance, which a valid but slow proof can do, a
-malformed verdict, the overall deadline) exits non-zero, so the pipeline records an infrastructure error
-rather than a score. RL training masks those rollouts; of these outcomes, a reply can reach only
-``lean-verify`` running out of time or failing on the proof data, after its proof has compiled and
-exported. Details go to stderr as JSON.
+1. Root compiles the reference: the statement proved by ``sorry``, plus a check, run by Lean, that the
+   target is a theorem, that only its proof uses ``sorry``, and that the file declares no axiom
+   (``native_decide`` adds one).
+2. A random unprivileged uid compiles the candidate. Compiling runs any code the reply contains, so
+   everything this uid writes is untrusted. Both files are named ``Task.lean``, so private names agree.
+3. The same uid runs Prime Intellect's ``lean-export``, which turns the compiled file into JSON proof data.
+   Then the uid's processes are killed and root copies the data.
+4. Root runs ``lean-verify``, which replays the target in the kernel against the reference. The proof
+   scores 1 only if it proves the reference's statement, keeps the reference's other declarations, and
+   uses no axioms beyond ``propext``, ``Classical.choice`` and ``Quot.sound``.
+
+Before step 1, ``/tests`` (which can hold a reference proof the solver must not see) and the machine's
+world-writable directories are closed to the candidate's uid. While steps 2 and 3 run, the size of their
+directory is checked.
+
+The reward on stdout is 0 for anything the proof causes: a failed or crashed compile or export, running
+out of time or space, missing proof data, or a rejection by ``lean-verify``. Any other failure (a broken
+reference or tool, ``lean-verify`` failing or timing out, a malformed verdict, the overall deadline) exits
+non-zero, so the pipeline records an infrastructure error. RL training skips those rollouts, and a reply
+can reach one only with proof data that ``lean-verify`` cannot finish checking. Details go to stderr as
+JSON.
 """
 
 import errno
@@ -91,7 +85,7 @@ MISSING_TARGET = "target is not declared in the reference"
 
 STEP_SECONDS = {"reference": 90.0, "candidate": 120.0, "export": 30.0, "verify": 90.0}
 """Each step's own allowance. The candidate's compile or export exceeding its allowance scores 0; the
-reference or verify step exceeding its allowance is an infrastructure error. The 366 ProofNet-Verified
+reference or verify step exceeding its allowance is an infrastructure error. The ProofNet-Verified
 references compiled in 12.6 s at the median and 33 s at most, so the trusted steps have room for a busy
 machine."""
 DEADLINE_SECONDS = 360.0
