@@ -117,8 +117,8 @@ cross CP ranks; vocabulary logits stay local.
 
 The compact chat adapter transports owned NumPy arrays through existing vLLM
 APIs. K128 requests 129 candidates to preserve the natural head when the sampled
-token lies outside it. Numeric scores retain ordinary chat's −9999 minimum; ties sort by probability
-and then token ID. Aborted continuations retain response-token
+token lies outside it. Numeric scores retain ordinary chat's −9999 minimum. Candidates sort by decreasing
+probability, then token ID. Aborted continuations retain response-token
 alignment and policy stamps. Public chat responses keep their schema.
 
 ## Capture cost and evidence
