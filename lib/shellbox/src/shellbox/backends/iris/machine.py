@@ -239,20 +239,23 @@ class IrisMachine:
             encoded = base64.b64encode(data[offset : offset + TRANSFER_CHUNK_BYTES]).decode("ascii")
             await self._checked(f"printf '%s' {encoded} | base64 -d >> {quoted}")
 
-    async def _download_bytes(self, source: str, limit: int | None = None, *, offset: int = 0) -> tuple[bytes, bool]:
+    async def _download_bytes(
+        self, source: str, limit: int | None = None, *, offset: int = 0, known_file: bool = False
+    ) -> tuple[bytes, bool]:
         if offset < 0 or (limit is not None and limit < 0):
             raise ValueError("File offset and limit must be nonnegative")
         quoted = shlex.quote(source)
-        probe = await self._script(
-            f"if test -d {quoted}; then exit 2; elif test -e {quoted}; then exit 0; else exit 1; fi"
-        )
+        inspect = f"wc -c < {quoted}"
+        if not known_file:
+            inspect = f"if test -d {quoted}; then exit 2; elif test -f {quoted}; then {inspect}; else exit 1; fi"
+        probe = await self._script(inspect)
         if probe.exit_code == 2:
             raise IsADirectoryError(source)
         if probe.exit_code == 1:
             raise FileNotFoundError(source)
         if probe.exit_code:
             raise OSError(f"Cannot inspect {source}: {probe.stderr or probe.stdout}")
-        size = int((await self._checked(f"wc -c < {quoted}")).strip())
+        size = int(probe.stdout.strip())
         remaining = max(0, size - offset)
         count = remaining if limit is None else min(remaining, limit)
         chunks = []
@@ -318,8 +321,12 @@ class IrisMachine:
             rpc_timeout = (command.timeout if command.timeout is not None else DEFAULT_JOB_TTL) + RPC_PADDING_SECONDS
             response = await asyncio.wait_for(self._script(script, timeout=rpc_timeout), timeout=backstop)
             elapsed = time.monotonic() - started
-            stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
-            stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
+            stdout, stdout_truncated = await self._download_bytes(
+                stdout_path, command.output_limit_bytes, known_file=True
+            )
+            stderr, stderr_truncated = await self._download_bytes(
+                stderr_path, command.output_limit_bytes, known_file=True
+            )
             # GNU timeout returns 137 if its kill-after escalation was needed.
             expired = timed_command and command.timeout is not None and elapsed >= command.timeout
             if timed_command and response.exit_code in (124, 137) and not expired:
@@ -372,12 +379,13 @@ class IrisMachine:
         await self._upload_bytes(source.read_bytes(), target)
 
     async def download(self, source: str, target: Path) -> None:
-        probe = await self._script(f"test -d {shlex.quote(source)}")
-        if probe.exit_code == 0:
+        try:
+            data, _ = await self._download_bytes(source)
+        except IsADirectoryError:
             remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
             await self._checked(f"tar czf {shlex.quote(remote_archive)} -C {shlex.quote(source)} .")
             try:
-                data, _ = await self._download_bytes(remote_archive)
+                data, _ = await self._download_bytes(remote_archive, known_file=True)
                 target.mkdir(parents=True, exist_ok=True)
                 with tempfile.NamedTemporaryFile(suffix=".tar.gz") as archive:
                     Path(archive.name).write_bytes(data)
@@ -386,7 +394,6 @@ class IrisMachine:
             finally:
                 await self._script(f"rm -f {shlex.quote(remote_archive)}")
             return
-        data, _ = await self._download_bytes(source)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 

@@ -484,7 +484,7 @@ def test_command_timeout_keeps_output_and_machine_usable(tmp_path, monkeypatch, 
         now[0] += elapsed if "timeout -k" in text else 0
         return iris_backend.ExecOutput(exit_code if "timeout -k" in text else 0, "", "")
 
-    async def download(path, limit=None):
+    async def download(path, limit=None, *, known_file=False):
         return (b"partial output" if path.endswith("-out") else b"diagnostic"), False
 
     monkeypatch.setattr(machine, "_script", script)
@@ -684,3 +684,19 @@ def test_controller_wire_errors_are_classified_at_shellbox_boundary(tmp_path: Pa
     machine, _ = local_machine(tmp_path, Rpc(), LocalTask(TaskState.RUNNING))
     with pytest.raises(kind, match="Iris exec failed"):
         asyncio.run(machine.run(Command(("true",))))
+
+
+@pytest.mark.parametrize("script,count", [("true", 4), ("printf out", 5), ("printf out; printf err >&2", 6)])
+def test_command_capture_exec_rpc_count(tmp_path: Path, script: str, count: int) -> None:
+    class CountingRpc(LocalRpc):
+        calls = 0
+
+        def exec_in_container(self, request, timeout_ms):
+            self.calls += 1
+            return super().exec_in_container(request, timeout_ms)
+
+    rpc = CountingRpc()
+    machine, _ = local_machine(tmp_path, rpc)
+    result = asyncio.run(machine.run(Command(("sh", "-c", script))))
+    assert result.exit_code == 0
+    assert rpc.calls == count

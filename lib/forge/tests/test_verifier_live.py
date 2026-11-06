@@ -15,8 +15,8 @@ from typing import override
 import pytest
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
-from shellbox.machine import MachineSpec
+from shellbox.backends.iris.machine import ExecOutput, IrisMachine, IrisMachineFactory
+from shellbox.machine import Command, MachineSpec
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -41,8 +41,8 @@ from forge.lowering import (
 )
 from forge.model.controls import Candidate
 from forge.policy import load_policy
-from forge.resources.grading import GradeCandidate, GradingResource
 from forge.resources.sandbox.images import GRADER_BASE_IMAGE
+from forge.resources.grading import GradeCandidate, GradingResource
 from forge.resources.verifier import RoundVerifier
 
 SCRIPT = b"""
@@ -81,7 +81,7 @@ class Factory(IrisMachineFactory):
     not all(os.environ.get(key) for key in ("IRIS_CONTROLLER_URL", "CW_KEY_ID", "CW_KEY_SECRET", "PROBE_OUTPUT")),
     reason="requires a live Iris job, storage credentials, and artifact destination",
 )
-async def test_verifier_reuse_and_replacement() -> None:
+async def test_verifier_reuse_and_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
     configure_coreweave_s3()
     factory = Factory()
     engine = rollout_engine({"gvisor": factory}, command_timeout=30)
@@ -93,6 +93,7 @@ async def test_verifier_reuse_and_replacement() -> None:
     settings = replace(
         settings,
         verifier_machine=replace(settings.verifier_machine, startup_timeout=1500),
+        task_machine=replace(settings.task_machine, startup_timeout=1500),
     )
     output = os.environ["PROBE_OUTPUT"]
     results: dict[str, object] = {"passed": False, "workdir": "/app", "grades": []}
@@ -170,6 +171,44 @@ async def test_verifier_reuse_and_replacement() -> None:
         assert recovered.reward == 1 and len(factory.created) == 2, recovered
         results["replacement_seconds"] = time.monotonic() - started
         results["replacement_lease"] = recovered.diagnostics["verifier_lease"]
+        recovered_machine = factory.created[-1]
+        calls = 0
+        original_exec = IrisMachine._exec_sync
+
+        def counted_exec(self: IrisMachine, argv: list[str], timeout: float | None = None) -> ExecOutput:
+            nonlocal calls
+            calls += 1
+            return original_exec(self, argv, timeout)
+
+        monkeypatch.setattr(IrisMachine, "_exec_sync", counted_exec)
+        counts = []
+        for command, expected in (("true", 4), ("printf out", 5), ("printf out; printf err >&2", 6)):
+            calls = 0
+            command_result = await recovered_machine.run(Command(("sh", "-c", command)))
+            assert command_result.exit_code == 0 and calls == expected, (command_result, calls)
+            counts.append(calls)
+        results["exec_calls_before"] = [6, 7, 8]
+        results["exec_calls_after"] = counts
+        results["verifier_machine_count"] = len(factory.created)
+        save()
+        large = event(
+            SCRIPT.replace(b"print(1)", b"assert Path('/workspace/large.bin').read_bytes() == b'x' * 210000\nprint(1)")
+        )
+        task = large.spec.task.model_copy(
+            update={
+                "environment_requirements": requirements(image=GRADER_BASE_IMAGE, workdir="/workspace"),
+                "output_paths": ("/workspace/large.bin",),
+            }
+        )
+        large_spec = lower_with_settings(task, settings, {"gvisor": factory})
+        large_spec = large_spec.model_copy(
+            update={"limits": large_spec.limits.model_copy(update={"verifier_timeout": 1500})}
+        )
+        large = GradeCandidate(large_spec, Candidate("12", (inline_resource("large.bin", b"x" * 210000),)))
+        large_grade = await resource.grade(large)
+        assert large_grade.reward == 1, large_grade
+        results["candidate_bytes"] = 210000
+        results["candidate_grade"] = large_grade.reward
         results["passed"] = True
         save()
     except Exception:
