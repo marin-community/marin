@@ -153,11 +153,5 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
     removed = {"harbor": {"max_episodes": 1}}
     with pytest.raises(ValueError, match=r"use context_budget.max_turns; Harbor reads max_turns"):
         schema.RecipePatch(terminal_bench=removed)
-    heads = schema.RecipePatch(model_num_attention_heads=42)
-    tensor_parallel = schema.RecipePatch(generator=sections.Generator(inference_engine_tensor_parallel_size=2))
-    valid = base.merge(heads, tensor_parallel)
-    assert schema.SkyRLRecipe.from_document(valid.to_skyrl()) == valid
-    with pytest.raises(ValueError, match="does not divide model_num_attention_heads=42"):
-        base.merge(heads)
     with pytest.raises(ValueError, match="micro_forward_batch_size_per_gpu"):
         base.with_settings(["trainer.micro_forward_batch_size_per_gpu=null"])

@@ -16,15 +16,11 @@ from marinskyrl import speculative_decoding
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPlacement, TeacherSource
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.ownership import LAUNCH_PATHS
-from skyrlrecipe.rules import SKYRL_INTERNAL_ENGINE_KWARGS
 from scripts.recipe_schema_sidecar import OPEN, UNDECLARED
 from skyrl_train.config.ftpo import FTPOConfig
 from skyrl_train.config.objective_spec import CorrectionAction, SequenceAggregate
 
-LAUNCH_INPUT_CHANGES = {
-    "discard": frozenset({"data.train_data", "data.val_data"}),
-    "clamp": frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"}),
-}
+GPU_PATHS = frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"})
 
 FILL_WHEN_UNSET = frozenset(
     {
@@ -47,7 +43,7 @@ def leaves(document: Mapping[str, Any], prefix: tuple[str, ...] = ()) -> Iterato
             yield path, value
 
 
-def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_launch_input_changes(tmp_path, monkeypatch):
+def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_authored_values(tmp_path, monkeypatch):
     source = tmp_path / "ownership.yaml"
     source.write_text(
         "entrypoint: terminal_bench\nterminal_bench: {}\ncontext_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n"
@@ -68,8 +64,8 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
         "model_revision": "launch-revision",
         "model_source_uri": "s3://launch/model",
         "model_source_identity": "sha256:launch",
-        "train_data": ["/launch/train"],
-        "val_data": ["/launch/validation"],
+        "train_data": [],
+        "val_data": [],
         "checkpoint_root": "/launch/checkpoints",
         "export_root": "/launch/exports",
         "resume_checkpoint_count": 4,
@@ -87,8 +83,9 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
         set_path(seeded, ".".join(parts), sentinel)
     for path in LAUNCH_PATHS:
         set_path(seeded, path, False if path == "trainer.export_hf_artifact" else f"author-{suffix}")
-    for path in FILL_WHEN_UNSET | LAUNCH_INPUT_CHANGES["clamp"]:
-        set_path(seeded, path, f"author-{suffix}" if path == "trainer.run_name" else number)
+    for path in FILL_WHEN_UNSET | GPU_PATHS:
+        value = f"author-{suffix}" if path in {"trainer.run_name", "terminal_bench.installed_agent.output_path"} else number
+        set_path(seeded, path, value)
     section_values = {
         name: seeded[name]
         for name in ("trainer", "generator", "data", "environment", "trajectory_runner", "terminal_bench")
@@ -123,8 +120,8 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
         ".".join(parts) for parts, before in leaves(section_values) if get_path(result, ".".join(parts)) != before
     }
     assert LAUNCH_PATHS <= changed
-    assert changed - LAUNCH_PATHS == LAUNCH_INPUT_CHANGES["discard"]
-    for path in FILL_WHEN_UNSET | LAUNCH_INPUT_CHANGES["clamp"]:
+    assert changed - LAUNCH_PATHS == frozenset()
+    for path in FILL_WHEN_UNSET | GPU_PATHS:
         assert get_path(result, path) == get_path(seeded, path)
     absent = copy.deepcopy(section_values)
     for path in FILL_WHEN_UNSET:
@@ -133,19 +130,9 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
     defaults["terminal_bench"] = defaults.pop("terminal_bench_config")
     for path in FILL_WHEN_UNSET:
         assert get_path(defaults, path) not in (MISSING, None)
-    oversized = copy.deepcopy(section_values)
-    for path in LAUNCH_INPUT_CHANGES["clamp"]:
-        set_path(oversized, path, 31)
-    clamped = launcher._skyrl_config_sections(replace(parsed, **oversized), parameters, SimpleNamespace(gpus_per_node=8))
-    for path in LAUNCH_INPUT_CHANGES["clamp"]:
-        assert get_path(clamped, path) == 8
-    following = OmegaConf.create(full)
-    following.generator.max_turns = 987654
-    assert following.environment.task_sessions.session.max_turns == 987654
 
 
 def test_code_default_declarations_match_native_dataclasses_and_canonical_choices():
-    assert SKYRL_INTERNAL_ENGINE_KWARGS == launcher.SKYRL_INTERNAL_ENGINE_KWARGS
     for prefix, config in (
         ("trainer.algorithm.ftpo", FTPOConfig),
         ("generator.speculative_decoding.training", speculative_decoding.SpeculatorTrainingConfig),

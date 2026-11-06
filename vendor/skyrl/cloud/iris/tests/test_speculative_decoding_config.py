@@ -129,7 +129,7 @@ def test_frozen_object_store_speculator_is_supported(tmp_path: Path) -> None:
     config = _base_config()
     model = config["generator"]["speculative_decoding"]["model"]
     model["source_uri"] = "s3://models/snowball/eagle3"
-    model["source_identity"] = "snowball-eagle3@step-1888"
+    model["source_identity"] = "sha256:" + "a" * 64
     config["generator"]["speculative_decoding"]["training"] = None
 
     parsed = parse_rl_config(str(_write_config(tmp_path, config)))
@@ -157,7 +157,7 @@ def test_gcs_alias_is_normalized_for_vllm_runai_loading(tmp_path: Path) -> None:
     config = _base_config()
     model = config["generator"]["speculative_decoding"]["model"]
     model["source_uri"] = "gcs://models/snowball/eagle3"
-    model["source_identity"] = "snowball-eagle3@step-1888"
+    model["source_identity"] = "sha256:" + "a" * 64
 
     parsed = parse_rl_config(str(_write_config(tmp_path, config)))
     resolved = parse_speculative_decoding_config(
