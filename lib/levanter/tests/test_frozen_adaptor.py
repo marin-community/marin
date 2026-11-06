@@ -15,7 +15,7 @@ import pytest
 import safetensors
 from haliax.state_dict import to_torch_compatible_state_dict
 
-from levanter.adaptor import FrozenParameterAdaptorConfig
+from levanter.adaptor import AdaptorExportConfig, FrozenParameterAdaptorConfig
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, save_hf_checkpoint_callback
@@ -298,3 +298,30 @@ def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(native_snowball):
             assert value.dtype == jnp.bfloat16
             np.testing.assert_array_equal(value, updated[name].astype(jnp.bfloat16))
     assert not np.array_equal(updated["model.embed_tokens.weight"], env.original["model.embed_tokens.weight"])
+
+
+def test_frozen_adaptor_export_hook_carries_dtype_overrides(tmp_path):
+    overrides = {"model.layers.0.mlp.router.bias": "float32"}
+    adaptor = FrozenParameterAdaptorConfig(("router_bias",), hf_save_dtype_overrides=overrides)
+    saves = []
+    converter = types.SimpleNamespace(save_pretrained=lambda model, path, **kwargs: saves.append((model, kwargs)))
+    hooks = []
+    trainer = types.SimpleNamespace(
+        run_id="run",
+        config=types.SimpleNamespace(checkpointer=None),
+        add_hook=lambda hook, *, every: hooks.append((hook, every)),
+    )
+    adaptor.install_export_hooks(
+        trainer=trainer,
+        converter=converter,
+        tokenizer=None,
+        export=AdaptorExportConfig(hf_save_path=str(tmp_path), hf_save_steps=4, hf_save_dtype="bfloat16"),
+    )
+    [(hook, every)] = hooks
+    assert every == 4
+    model = tiny_model()
+    hook(types.SimpleNamespace(step=4, eval_model=model))
+    [(saved, kwargs)] = saves
+    assert saved is model
+    assert kwargs["dtype"] == jnp.bfloat16
+    assert kwargs["dtype_overrides"] == overrides

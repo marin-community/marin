@@ -1400,6 +1400,7 @@ def save_hf_checkpoint_callback(
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
+    dtype_overrides: Mapping[str, str] | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1411,6 +1412,7 @@ def save_hf_checkpoint_callback(
     :param upload_to_hf:
     :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
     (written to both tokenizer_config.json and chat_template.jinja)
+    :param dtype_overrides: per-state-dict-key storage dtypes that override save_dtype
     :param hf_upload_kwargs:
     :return:
     """
@@ -1431,6 +1433,7 @@ def save_hf_checkpoint_callback(
             dtype=save_dtype,
             generation_config=generation_config,
             chat_template=chat_template,
+            dtype_overrides=dtype_overrides,
             **my_upload_kwargs,
         )
 
