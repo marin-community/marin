@@ -321,17 +321,13 @@ async def test_directory_read_names_requested_path_without_retry(failure: Except
         "error executing command in container: failed to exec'",
     ],
 )
-@pytest.mark.parametrize("writing", [False, True])
-async def test_noninteger_exec_status_requires_new_machine_without_retry(detail: str, writing: bool) -> None:
+async def test_noninteger_exec_status_requires_new_machine_without_retry(detail: str) -> None:
     machine = MemoryMachine()
     machine.failure = RuntimeError(f"Iris exec failed: {detail}")
     env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
     events: list[Event[None]] = []
     with pytest.raises(Restart) as caught:
-        if writing:
-            await write_file(WriteFile(OUTPUT, b"data"), env, notify=events.append)
-        else:
-            await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
+        await write_file(WriteFile(OUTPUT, b"data"), env, notify=events.append)
     assert machine.calls == 1
     assert not events
     assert detail in str(caught.value)

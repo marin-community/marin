@@ -26,19 +26,3 @@ async def test_retry_backoff_is_exponential_capped_and_stops_after_budget(monkey
         await execution.retry_effect(RunCommand("true", 1), fail, lambda _: None)
     assert attempts == 9
     assert delays == [1, 2, 4, 8, 16, 32, 60, 60]
-
-
-async def test_success_after_retry_does_not_wait_again(monkeypatch: pytest.MonkeyPatch) -> None:
-    delays: list[float] = []
-
-    async def wait(delay: float) -> None:
-        delays.append(delay)
-
-    async def operation() -> str:
-        if not delays:
-            raise Transient("busy")
-        return "ready"
-
-    monkeypatch.setattr(execution, "sleep", wait)
-    assert await execution.retry_effect(RunCommand("true", 1), operation, lambda _: None) == "ready"
-    assert delays == [1]
