@@ -517,11 +517,30 @@ class ZephyrCoordinator:
                 # lose tasks.
                 self._maybe_requeue_worker_tasks(worker_id)
             else:
+                self._retire_superseded_attempts(task_id)
                 self._worker_handles[worker_id] = worker_handle
                 self._worker_task_ids[worker_id] = task_id
                 self._worker_states[worker_id] = WorkerState.ACTIVE
                 self._last_seen[worker_id] = time.monotonic()
                 logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
+
+    def _retire_superseded_attempts(self, task_id: str) -> None:
+        """Mark earlier attempts of ``task_id`` FAILED and requeue their shards. Lock held.
+
+        Iris starts a new attempt once it treats the previous one as lost, so the
+        old attempt's shards move now rather than after the heartbeat timeout.
+        Otherwise a draining pool sees the shard as in flight on the lost
+        attempt, releases the new attempt as idle, and then aborts when the
+        worker job ends with that shard outstanding.
+        """
+        if not task_id:
+            return
+        for old_id, old_task_id in self._worker_task_ids.items():
+            if old_task_id != task_id or self._worker_states.get(old_id) in {WorkerState.FAILED, WorkerState.DONE}:
+                continue
+            logger.warning("Worker %s superseded by a new attempt of task %s; requeueing its shards", old_id, task_id)
+            self._worker_states[old_id] = WorkerState.FAILED
+            self._maybe_requeue_worker_tasks(old_id)
 
     def deregister_worker(self, worker_id: str) -> None:
         """Remove a sub-worker that has finished its stage pool."""

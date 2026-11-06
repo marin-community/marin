@@ -618,6 +618,31 @@ def test_draining_pool_releases_idle_workers_during_the_last_stage_tail(tmp_path
         coordinator.shutdown()
 
 
+def test_draining_pool_hands_a_lost_attempts_shard_to_its_replacement(tmp_path, actor_context):
+    """A new Iris attempt of a worker task takes over the old attempt's shard.
+
+    Iris replaces a worker task whose host fails before the coordinator's
+    heartbeat timeout notices. The replacement must receive the shard instead of
+    SHUTDOWN; otherwise the worker job ends with the shard outstanding and the
+    pool aborts.
+    """
+    coordinator = make_test_coordinator(tmp_path, drain_idle_workers=True)
+    try:
+        run = start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
+        coordinator.register_worker("pool-0-a0", MagicMock(), task_id="/job/pool/0")
+        assert coordinator.pull_task("pool-0-a0", TEST_WORKER_AVAILABLE)[0] == PullStatus.RUN_TASK
+
+        coordinator.register_worker("pool-0-a1", MagicMock(), task_id="/job/pool/0")
+        status, work = coordinator.pull_task("pool-0-a1", TEST_WORKER_AVAILABLE)
+
+        assert status == PullStatus.RUN_TASK
+        assert work is not None and work.task.shard_idx == 0
+        assert run.in_flight[0].worker_id == "pool-0-a1"
+        assert coordinator.get_status().workers["pool-0-a0"]["state"] == "failed"
+    finally:
+        coordinator.shutdown()
+
+
 def test_draining_pool_keeps_workers_before_the_last_stage(tmp_path, actor_context):
     """Draining must not release workers at an intermediate stage boundary.
 
