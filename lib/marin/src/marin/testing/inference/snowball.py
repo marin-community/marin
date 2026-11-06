@@ -189,7 +189,11 @@ def _prompt_batches(cases: tuple[RepresentativeCase, ...]) -> tuple[PromptBatch,
 
 @dataclass(frozen=True)
 class ScoringBatch:
-    """A full ``BATCH_SIZE`` batch whose first ``num_real`` rows are distinct cases; the rest repeat one as filler."""
+    """A full ``BATCH_SIZE`` batch whose first ``num_real`` rows are distinct cases; the rest repeat one as filler.
+
+    Filler rows are never scored, but their tokens are valid for MoE dispatch. That is harmless when dispatch is
+    dropless; under a lower capacity factor, as in the ablation's capacity-off arm, they add to expert load.
+    """
 
     batch: PromptBatch
     num_real: int
