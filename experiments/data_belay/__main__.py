@@ -51,7 +51,7 @@ def _dataset_options(command):
     for option in reversed(
         [
             click.option("--dataset", "repo", required=True, help="Hugging Face dataset id."),
-            click.option("--revision", default=None, help="Commit, tag or branch; pinned to a commit."),
+            click.option("--revision", default=None, help="Commit, tag or branch; it must resolve to the head commit."),
             click.option("--config", "config_name", default=None, help="Dataset config (subset)."),
             click.option("--split", default="train", show_default=True),
             click.option("--text-field", default="text", show_default=True),
@@ -178,7 +178,7 @@ def train(
     args += ["--eval-manifest", prefix_join(ANSWER_BPB_ROOT, ANSWER_BPB_MANIFEST)]
     if mix_cache is not None:
         configure_coreweave_s3()
-        # The share the cache was sized and intake-checked for, so the epochs stay within the check.
+        # The share that prepare sized the cache for and checked its epochs at, on the built cache.
         args += ["--mix-cache", mix_cache, "--mix-share", str(cache_share(mix_cache))]
     if num_steps is not None:
         args += ["--num-steps", str(num_steps)]

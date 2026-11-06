@@ -23,7 +23,7 @@ from marin.processing.tokenize.cache_stats import read_tokenized_cache_stats
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.data_belay.intake import IntakeReport
+from experiments.data_belay.intake import MAX_EPOCHS, IntakeReport
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +88,29 @@ def plan_cache(report: IntakeReport, need_tokens: int, tokenizer: str, seed: int
     return CachePlan(path, paths, max_rows, estimated, need_tokens)
 
 
+def cache_epochs(need_tokens: int, cache_tokens: int, dataset_tokens: int) -> float:
+    """Epochs of the built cache that the largest rung reads; raises when the cache is too small for the need.
+
+    A dataset that holds the need must give a cache that holds it too, so it is read at most once. A smaller dataset
+    repeats, but at most ``MAX_EPOCHS`` times: intake estimates its epochs over the whole dataset, and this checks
+    them on the tokens that training actually reads.
+    """
+    epochs = need_tokens / cache_tokens
+    if epochs > MAX_EPOCHS:
+        raise ValueError(f"the cache's {cache_tokens:,} tokens repeat {epochs:.2f} times for a need of {need_tokens:,}")
+    if dataset_tokens >= need_tokens and epochs > 1:
+        raise ValueError(
+            f"the cache holds {cache_tokens:,} tokens, less than the need of {need_tokens:,} of a dataset of about "
+            f"{dataset_tokens:,} tokens; the intake estimate was too high for the sampled files"
+        )
+    return epochs
+
+
 def build_cache(report: IntakeReport, plan: CachePlan, tokenizer: str) -> dict:
-    """Tokenize the plan's files (skipped when the cache exists) and write the cache manifest."""
+    """Tokenize the plan's files (skipped when the cache exists), check its epochs, then write the cache manifest.
+
+    ``train`` reads its share from the manifest, so a cache without one cannot be trained on.
+    """
     config = TokenizeConfig(
         train_paths=list(plan.files),
         validation_paths=[],
@@ -99,15 +120,21 @@ def build_cache(report: IntakeReport, plan: CachePlan, tokenizer: str) -> dict:
         sample_count=plan.max_rows,
     )
     tokenize(config)
-    stats = dataclasses.asdict(read_tokenized_cache_stats(plan.cache_path, "train"))
-    manifest = {"intake": json.loads(report.to_json()), "plan": dataclasses.asdict(plan), "stats": stats}
+    stats = read_tokenized_cache_stats(plan.cache_path, "train")
+    epochs = cache_epochs(plan.need_tokens, stats.total_tokens, report.estimated_tokens)
+    manifest = {
+        "intake": json.loads(report.to_json()),
+        "plan": dataclasses.asdict(plan),
+        "stats": dataclasses.asdict(stats),
+        "epochs_at_need": epochs,
+    }
     StoragePath(prefix_join(plan.cache_path, MANIFEST_NAME)).write_text(json.dumps(manifest, indent=2))
     logger.info("cache %s: %s", plan.train_cache, stats)
     return manifest
 
 
 def cache_share(train_cache: str) -> float:
-    """The share that ``train_cache`` was prepared and intake-checked for, from its manifest."""
+    """The share that ``train_cache`` was prepared for and its epochs were checked at, from its manifest."""
     cache_path = train_cache.rstrip("/").removesuffix("/train")
     manifest = json.loads(StoragePath(prefix_join(cache_path, MANIFEST_NAME)).read_text())
     return float(manifest["intake"]["share"])

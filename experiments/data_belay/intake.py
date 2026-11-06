@@ -210,7 +210,12 @@ def run_intake(
     request: DatasetRequest, share: float, rung_tokens: dict[str, int], tokenizer: MarinTokenizer
 ) -> IntakeReport:
     """Pin the revision, classify the license and estimate the size of ``request``."""
-    info = HfApi().dataset_info(request.repo, revision=request.revision)
+    api = HfApi()
+    info = api.dataset_info(request.repo, revision=request.revision)
+    head = api.dataset_info(request.repo).sha
+    if info.sha != head:
+        # The datasets-server row count describes the head commit only.
+        raise ValueError(f"{request.repo}@{info.sha} is not the head commit {head}; intake can only size the head")
     licenses = _card_licenses(info)
     # One config name for the sample, the row count and the cache plan: with no config given, the builder's default.
     # The size endpoint lists every config, so counting rows without a name would sum all of them.

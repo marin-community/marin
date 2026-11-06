@@ -35,7 +35,10 @@ B report --rung d512 --candidate fineweb-edu-p50 --against fineweb-p50 --seeds 0
 ```
 
 `check` refuses a license that is not on the allowlist (NC and ND licenses, `other`, a missing license, or a second
-license that is not on the list) and a share that reads the dataset more than 4 times at the largest rung.
+license that is not on the list), a share that reads the dataset more than 4 times at the largest rung, and a revision
+other than the head commit, because the row count comes from the datasets-server, which sizes the head only.
+`prepare` checks the epochs again on the cache it built, and writes the manifest that `train` reads only when they
+pass.
 
 ## Metrics
 
