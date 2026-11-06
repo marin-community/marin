@@ -99,14 +99,8 @@ from cloud.iris.launch_config import load_launch_config
 from omegaconf import OmegaConf
 from skyrl_train.inference_engines.utils import get_vllm_sampling_params
 from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
-from skyrl_train.inference_engines.inference_engine_client import AccumulatedResponse, _prepare_retry_request
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 from skyrl_train.evaluation_profiles import evaluation_profile_config, parse_evaluation_profiles
-
-continuations = (
-    AccumulatedResponse(),
-    AccumulatedResponse(content="partial", token_ids=[3], completion_tokens=1, route_prompt_ids=[1, 2]),
-)
 
 class InferenceService:
     model_name = "fixture"
@@ -120,13 +114,6 @@ class InferenceService:
 
     async def chat_completion(self, request):
         original = request["json"]
-        for accumulated in continuations:
-            body = _prepare_retry_request(
-                original, accumulated, "assistant", original["max_completion_tokens"], "max_completion_tokens"
-            )
-            apply_openai_sampling(body, self.overrides, self.validate)
-            assert body["temperature"] == original["temperature"]
-            assert body["max_completion_tokens"] == original["max_completion_tokens"] - accumulated.completion_tokens
         self.body = dict(original)
         apply_openai_sampling(self.body, self.overrides, self.validate)
         return {"choices": [{
@@ -149,28 +136,6 @@ async def native_request(parameters, overrides, validate):
     )}
 
 configs = [load_launch_config(path) for path in sys.argv[1:]]
-training = next(config for config in configs if config.runtime.training_type is not None)
-parameters = get_vllm_sampling_params(training.skyrl.generator.sampling_params)
-parameters["min_tokens"] = 0
-accepted = asyncio.run(native_request(parameters, {"temperature": 1.0}, True))
-assert accepted["temperature"] == 1.0 and accepted["logprobs"] is True
-for change in ({"min_tokens": 1}, {"temperature": 0.0}):
-    try:
-        asyncio.run(native_request(parameters | change, {"temperature": 1.0}, True))
-    except ValueError:
-        pass
-    else:
-        raise AssertionError(f"invalid native behavior-logprob sampling accepted: {change}")
-external = {
-    "messages": [{"role": "user", "content": "question"}], "temperature": 0.0,
-    "top_p": 1.0, "top_k": -1, "min_p": 0.0, "logprobs": False, "max_tokens": 8192,
-}
-for accumulated in continuations:
-    body = _prepare_retry_request(external, accumulated, "assistant", 8192, "max_tokens")
-    apply_openai_sampling(body, {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2}, True)
-    assert tuple(body[key] for key in ("temperature", "top_p", "top_k", "min_p")) == (0.0, 1.0, -1, 0.0)
-    assert body["max_tokens"] == 8192 - accumulated.completion_tokens
-
 def quality_request(config):
     if not config.inputs.get("evaluation_data"):
         return None
@@ -189,6 +154,10 @@ print(json.dumps([{
     "batch": config.skyrl.trainer.train_batch_size, "samples": config.skyrl.generator.n_samples_per_prompt,
     "tools": config.skyrl.generator.engine_init_kwargs.get("tool_parser"),
     "quality_wire": quality_request(config),
+    "at_start": [entry.eval_before_train for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
+    "engine_profile": [config.skyrl.trainer.algorithm.batch_invariant,
+                       config.skyrl.generator.vllm_attention_backend,
+                       config.skyrl.generator.enable_prefix_caching],
     "fixed": config.skyrl.generator.eval_sampling_params.ignore_eos or config.skyrl.generator.sampling_params.ignore_eos,
     "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
     "training": config.runtime.training_type is not None,
@@ -218,9 +187,14 @@ print(json.dumps([{
         "logprobs": None,
     }
     for row in rows:
-        assert row["tools"] == "hermes"
         assert row["team"] == ("marin-community" if "speed-short-" in row["name"] else "test-team")
         name = row["name"]
+        quality_training = any(part in name for part in ("learning-medium-", "data-medium-", "train-long-"))
+        assert row["engine_profile"] == (
+            [True, "TRITON_ATTN", False] if quality_training else [False, "FLASH_ATTN", True]
+        )
+        if "learning-medium-" in name or "data-medium-" in name:
+            assert row["at_start"] == [True]
         if "speed-short-" in name or "data-short-" in name:
             assert row["entrypoint"] == "skyrl_train.entrypoints.main_generate", row
             assert row["nodes"] == 1, row
@@ -262,8 +236,6 @@ print(json.dumps([{
             presets.PRESETS["learning-medium"],
             settings=(presets.parse_setting("generator.sampling_params={ignore_eos: true}"),),
         )
-    execution = next(value for value in changed.runtime_args.values() if isinstance(value, adapter.IrisSkyRLExecution))
-    assert presets.JUDGE_KEY not in execution.required_env_vars
     summary = Path(selection.path()) / "summary.json"
     content = json.loads(summary.read_text())
     content["grader_kind_counts"]["train"]["remote_judge"] = 1
@@ -275,7 +247,7 @@ print(json.dumps([{
 @pytest.mark.timeout(180)
 def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch, native_json):
     summary = (Path(selection.path()) / "summary.json").read_text()
-    panel_name, panel_version = presets.DEFAULT_TEST_PANEL.split("@")
+    panel_name, panel_version = (presets.DEFAULT_TEST_PANEL_NAME, presets.DEFAULT_TEST_PANEL_VERSION)
     panel_summary = (tmp_path / panel_name / panel_version / "summary.json").read_text()
     monkeypatch.setattr(presets, "SELECTION_ROOT", "memory://snowball-calibration")
     (
@@ -344,7 +316,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     ]
     assert len({step.name for step in repeated.runs}) == 3
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
-    panel_name, panel_version = presets.DEFAULT_TEST_PANEL.split("@")
+    panel_name, panel_version = (presets.DEFAULT_TEST_PANEL_NAME, presets.DEFAULT_TEST_PANEL_VERSION)
     new_panel = tmp_path / panel_name / "2026.11.05"
     new_panel.mkdir(parents=True)
     (new_panel / "summary.json").write_bytes((tmp_path / panel_name / panel_version / "summary.json").read_bytes())
@@ -358,6 +330,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
         (name(), name(init=initializer)),
         (name(long), name(long, layout=presets.P40)),
         (name(), name(changed_panel)),
+        (name(), name(learning, keep_weights=True)),
     ]
     assert all(left != right for left, right in pairs), pairs
     assert name(

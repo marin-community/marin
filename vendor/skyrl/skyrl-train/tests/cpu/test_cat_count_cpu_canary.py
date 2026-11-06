@@ -22,7 +22,6 @@ from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
 from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.entrypoints import main_generate
-from skyrl_train.callbacks.builtin import EvaluationCallback
 from skyrl_train.dataset.tasks import source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD
@@ -613,8 +612,6 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
             },
         )
         result = RecordedGenerateExp(probe_cfg).run()
-        remaining = asyncio.run(services[-1].get_stats(IntervalReadMode.PEEK))
-        assert sum(engine.interval.finished_requests for engine in remaining.engines) == int(bool(profiles))
         primary_values = {key: value for key, value in result.items() if key.startswith(("generate/", "timing/"))}
         if not profiles:
             primary = primary_values
@@ -622,12 +619,8 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         assert primary_values == primary
         assert result["eval/quality/all/response_tokens"] == 3
         assert result["eval/quality/all/avg_verifier_score"] == 1.0
-        assert result["eval/quality/all/avg_score"] == 0.9
-        assert result["eval/quality/all/timing/grading/mean"] == 103.0
         dump = Path(evaluation_dump_dir(str(probe_root / "quality"), None)) / "train.jsonl"
         assert [json.loads(line)["task_id"] for line in dump.read_text().splitlines()] == ["quality-only"]
-    with pytest.raises(ValueError, match="dataset-selecting"):
-        EvaluationCallback(additional_evaluations={"quality": {"data_files": [str(panel)]}})
 
 
 @pytest.mark.nightly

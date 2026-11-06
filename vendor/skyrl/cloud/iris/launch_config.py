@@ -11,6 +11,8 @@ from typing import Any, Mapping
 
 from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 
+from skyrl_train.evaluation_profiles import named_evaluation_profiles
+
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.objective_spec import validate_objective
@@ -279,13 +281,7 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
 
 def _validate_evaluation_data(config: DictConfig, *, source_recipe: bool) -> None:
     for name in config.inputs.get("evaluation_data", {}):
-        profiles = [
-            profile
-            for callback in config.skyrl.get("trainer", {}).get("callbacks") or []
-            if callback.get("type") == "evaluation"
-            for profile_name, profile in (callback.get("additional_evaluations") or {}).items()
-            if profile_name == name
-        ]
+        profiles = named_evaluation_profiles(config.skyrl, name)
         if not profiles:
             raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
         if source_recipe and any(profile.get("data_files") is not None for profile in profiles):

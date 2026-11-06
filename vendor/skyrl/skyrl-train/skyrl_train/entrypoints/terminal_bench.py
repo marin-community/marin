@@ -33,7 +33,7 @@ class TerminalBenchExp(BasePPOExp):
         )
         return prompts_dataset
 
-    def get_eval_dataset(self, data_files=None):
+    def get_eval_dataset(self, data_files: list[str] | None = None):
         data_files = self.cfg.data.val_data if data_files is None else data_files
         if self.cfg.trainer.eval_interval <= 0 or not data_files:
             return None

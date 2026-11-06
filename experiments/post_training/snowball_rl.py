@@ -27,7 +27,7 @@ gives what the preset runs, its cost, what it measures and the changes it is for
   data-medium      learning-medium trained on --tasks instead of the default selection;
                    40 H100, about 2 h. Measures the panel score after training on the new
                    selection. For a new task selection that passed data-short.
-  train-long       the async production loop with checkpoints, fast_panel every 10 updates and
+  train-long       the async production loop with checkpoints, test_panel_100 every 10 updates and
                    an HF export; 112 H100, or 40 with --layout p40. For release training and
                    for models that later runs load with --init. No verdict.
 
@@ -70,7 +70,6 @@ import logging
 import math
 import os
 import subprocess
-import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
@@ -111,7 +110,6 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     artifact_identity,
     read_skyrl_launch_receipt,
-    skyrl_cpu_command,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
@@ -122,6 +120,7 @@ from experiments.post_training import snowball_rl_gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.inventory import loop_publication, loop_result
+from experiments.post_training.inventory.train_quick_loop import ATTENTION_HELPER_SHA256
 from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     GraderKind,
@@ -144,6 +143,7 @@ def training_config(
     evaluations: tuple[presets.Evaluation, ...] = (),
 ) -> dict:
     recipe = preset.recipe
+    deterministic = recipe.engine_profile == presets.EngineProfile.DETERMINISTIC
     plan = recipe.layout.role_plan
     config = {
         "context_budget": {
@@ -180,7 +180,7 @@ def training_config(
             "training_metrics": True,
             "rollout_spans": True,
             "policy_train_spans": True,
-            "algorithm": {**deepcopy(dict(recipe.estimator)), "batch_invariant": preset.name != "speed-short"},
+            "algorithm": {**deepcopy(dict(recipe.estimator)), "batch_invariant": deterministic},
             "policy": {"optimizer_config": deepcopy(dict(recipe.optimizer))},
             "rollout_buffer": {
                 "max_staleness_steps": recipe.staleness,
@@ -195,10 +195,8 @@ def training_config(
         "generator": {
             "backend": "vllm",
             "model_dtype": "bfloat16",
-            "vllm_attention_backend": "FLASH_ATTN" if preset.name == "speed-short" else "TRITON_ATTN",
-            "required_vllm_attention_helper_sha256": (
-                None if preset.name == "speed-short" else presets.VLLM_ATTENTION_HELPER_SHA256
-            ),
+            "vllm_attention_backend": "TRITON_ATTN" if deterministic else "FLASH_ATTN",
+            "required_vllm_attention_helper_sha256": ATTENTION_HELPER_SHA256 if deterministic else None,
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
             "weight_sync_pause": {"mode": "keep", "clear_cache": True},
@@ -207,7 +205,7 @@ def training_config(
             "gpu_memory_utilization": 0.75,
             "max_num_seqs": 1024,
             "max_num_batched_tokens": 8192,
-            "enable_prefix_caching": preset.name == "speed-short",
+            "enable_prefix_caching": not deterministic,
             "trajectory_reward_shaping": {
                 "enabled": True,
                 "overlong": {"penalty_scale": 0.0},
@@ -282,7 +280,13 @@ def _provenance(*, control: bool) -> Provenance:
     return provenance
 
 
-def _callbacks(preset: presets.Preset, evaluations: tuple[presets.Evaluation, ...], expected_tasks: int) -> list[dict]:
+def _callbacks(
+    preset: presets.Preset,
+    evaluations: tuple[presets.Evaluation, ...],
+    expected_tasks: int,
+    *,
+    keep_weights: bool = False,
+) -> list[dict]:
     callbacks = []
     if preset.checkpoint_every:
         callbacks.append({"type": "checkpoint", "save_steps": preset.checkpoint_every})
@@ -302,6 +306,13 @@ def _callbacks(preset: presets.Preset, evaluations: tuple[presets.Evaluation, ..
                     "save_on_train_end": True,
                 },
             ]
+        )
+    if keep_weights:
+        callbacks.extend(
+            (
+                {"type": "checkpoint", "save_steps": preset.updates + 1, "save_on_train_end": True},
+                {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
+            )
         )
     return callbacks
 
@@ -391,35 +402,6 @@ def _run_step(
     )
 
 
-def _validate_control_panel_steps(
-    steps: list[ArtifactStep[SkyRLRun]], expected: list[dict], controls: list[str], preset: presets.Preset
-) -> None:
-    with tempfile.TemporaryDirectory(prefix="snowball-control-panels-") as directory:
-        paths = []
-        for index, step in enumerate(steps):
-            config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-            path = Path(directory) / f"panel-{index}.yaml"
-            path.write_text(config.launch_config_yaml)
-            paths.append(str(path))
-        program = (
-            "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
-            "from cloud.iris.launch_config import load_launch_config\n"
-            "print(json.dumps([OmegaConf.to_container(load_launch_config(Path(path)), resolve=True) "
-            "for path in sys.argv[1:]]))\n"
-        )
-        result = subprocess.run(
-            skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=180
-        )
-        if result.returncode:
-            raise click.BadParameter("The recorded control recipes could not be composed for panel re-scoring")
-        compiled = json.loads(result.stdout.splitlines()[-1])
-        for control, before, after in zip(controls, expected, compiled, strict=True):
-            if presets.panel_settings(preset, after) != before:
-                raise click.BadParameter(
-                    f"re-score for {control} changes the recorded evaluation or engine settings; use matching code"
-                )
-
-
 def _recorded_step(
     step: ArtifactStep[SkyRLRun], preset: presets.Preset, layout: presets.Layout
 ) -> ArtifactStep[SkyRLRun]:
@@ -436,40 +418,40 @@ def _recorded_step(
     return replace(step, run=launch)
 
 
-def _control_panel_runs(preset: presets.Preset, panel: str, wandb_entity: str) -> SnowballRun:
-    evaluation_preset = presets.rescore_preset(preset, panel)
+def _panel_rescore_runs(preset: presets.Preset, panel: str) -> SnowballRun:
+    evaluation_preset = presets.panel_rescore_preset(preset, panel)
     selection = presets.selection_artifact(panel)
     evaluation = evaluation_preset.evaluations[0]
     if presets.selection_summary(selection)["grader_kind_counts"][evaluation.file].get(GraderKind.REMOTE_JUDGE, 0):
         raise click.BadParameter("Snowball evaluation selections must contain no AI-judge-graded tasks")
     pins = snowball_rl_gate.control_pins(preset.name)
-    steps, protocols, names = [], [], []
+    steps = []
+    wandb_entity = os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY
     for pin in pins:
         original_preset = presets.PRESETS[pin.preset]
         for index in range(pin.runs):
             name = presets.control_name(pin.preset, pin.main_commit, index)
-            path = str(StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster)) / name / pin.revision)
+            path = snowball_rl_gate._control_path(preset, pin, index)
             record = presets.artifact_record(path)
             receipt = read_skyrl_launch_receipt(path)
             if receipt is None or receipt.result.state != "succeeded":
                 raise click.BadParameter(f"control {name}@{pin.revision} did not complete successfully")
             original = receipt.config
-            protocol = presets.panel_settings(original_preset, original)
+            protocol = snowball_rl_gate.evaluation_protocol(original_preset, original)
             authored = yaml.safe_load(record.config["launch_config_yaml"])
             config = deepcopy(authored["skyrl"])
+            binding = snowball_rl_gate.control_model_binding(path, original_preset, original)
             if original_preset.recipe.layout.role_plan.generate_only:
-                source = original["inputs"]["model"]
-                model_name, _, model_version = source["identity"].partition(":")[0].rpartition("@")
+                model_name, _, model_version = binding["identity"].partition(":")[0].rpartition("@")
                 model = ArtifactHfModel(
-                    ArtifactStep.adopt(model_name, model_version, source["uri"], kind=LevanterCheckpoint),
-                    source["tokenizer_uri"],
-                    source["tokenizer_revision"],
+                    ArtifactStep.adopt(model_name, model_version, binding["uri"], kind=LevanterCheckpoint),
+                    binding["tokenizer_uri"],
+                    binding["tokenizer_revision"],
                     relative_path="",
                 )
             else:
-                export = (record.result or {}).get("hf_model_uri")
-                if not export or not presets.exists(StoragePath(export) / "config.json"):
-                    raise click.BadParameter(f"control {name}@{pin.revision} has no retained HF weights")
+                if not binding["uri"] or not presets.exists(StoragePath(binding["uri"]) / "config.json"):
+                    raise click.BadParameter(f"control {name}@{pin.revision} has no kept HF weights")
                 model = SkyRLPolicyModel(
                     apply(name, SkyRLRun.raw_load, version=pin.revision, artifact_type=SkyRLRun, pin=path, source=path)
                 )
@@ -487,7 +469,7 @@ def _control_panel_runs(preset: presets.Preset, panel: str, wandb_entity: str) -
                 eval_n_samples_per_prompt=protocol["generator"]["eval_n_samples_per_prompt"],
             )
             step = _run_step(
-                presets.control_panel_name(name, pin.revision, panel),
+                presets.panel_rescore_name(name, pin.revision, panel),
                 config,
                 model,
                 selection,
@@ -499,9 +481,6 @@ def _control_panel_runs(preset: presets.Preset, panel: str, wandb_entity: str) -
                 wandb_entity=wandb_entity,
             )
             steps.append(_recorded_step(step, preset, presets.E8))
-            protocols.append(protocol)
-            names.append(f"{name}@{pin.revision}")
-    _validate_control_panel_steps(steps, protocols, names, evaluation_preset)
     return SnowballRun(tuple(steps))
 
 
@@ -519,19 +498,9 @@ def build_run(
     keep_weights: bool = False,
     requirements: tuple[str, ...] = (),
     baselines: tuple[str, ...] = (),
-    rescore_panel: str | None = None,
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY
-    if rescore_panel is not None:
-        if not control or any(
-            (settings, tasks, init, layout, resume_from, evaluations, requirements, baselines, keep_weights)
-        ):
-            raise click.BadParameter("--rescore-panel requires --control with no experiment overrides")
-        if replicates != 1:
-            raise click.BadParameter("--rescore-panel scores every pinned control; omit --replicates")
-        _provenance(control=True)
-        return _control_panel_runs(preset, rescore_panel, wandb_entity)
     snowball_rl_gate.validate_candidate(preset, requirements, control=control)
     learning = (
         preset.focus in (presets.Focus.LEARNING, presets.Focus.DATA) and not preset.recipe.layout.role_plan.generate_only
@@ -624,14 +593,7 @@ def build_run(
     if generating and profiles:
         config["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": profiles}]
     if not generating:
-        config["trainer"]["callbacks"] = _callbacks(preset, chosen, expected_tasks)
-    if learning and export_hf:
-        config["trainer"]["callbacks"].extend(
-            (
-                {"type": "checkpoint", "save_steps": preset.updates + 1, "save_on_train_end": True},
-                {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
-            )
-        )
+        config["trainer"]["callbacks"] = _callbacks(preset, chosen, expected_tasks, keep_weights=learning and export_hf)
     changes = {
         "tasks": (selection.name, selection.version),
         "init": None if init is None else (init.name, init.version),
@@ -946,7 +908,7 @@ def _run_command(function: Callable) -> click.Command:
                 if wait and job is not None:
                     preset = presets.PRESETS[kwargs["preset_name"]]
                     if kwargs.get("rescore_panel"):
-                        preset = presets.rescore_preset(preset, kwargs["rescore_panel"])
+                        preset = presets.panel_rescore_preset(preset, kwargs["rescore_panel"])
                     _wait_for_run(job, handles, preset)
             except click.exceptions.Exit:
                 raise
@@ -986,23 +948,41 @@ def main(
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
     preset = presets.PRESETS[preset_name]
     layout = presets.LAYOUTS[layout_name] if layout_name else None
-    run = build_run(
-        preset,
-        settings=tuple(presets.parse_setting(setting) for setting in settings),
-        tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
-        init=presets.published_artifact(init_name) if init_name else None,
-        resume_from=presets.published_artifact(resume_name) if resume_name else None,
-        layout=layout,
-        evaluations=evaluations,
-        replicates=replicates,
-        control=control,
-        keep_weights=keep_weights,
-        requirements=requirements,
-        baselines=baselines,
-        rescore_panel=rescore_panel,
-    )
     if rescore_panel is not None:
-        preset = presets.rescore_preset(preset, rescore_panel)
+        if not control or any(
+            (
+                settings,
+                tasks_name,
+                init_name,
+                layout_name,
+                resume_name,
+                evaluations,
+                requirements,
+                baselines,
+                keep_weights,
+            )
+        ):
+            raise click.BadParameter("--rescore-panel requires --control with no experiment overrides")
+        if replicates != 1:
+            raise click.BadParameter("--rescore-panel scores every pinned control; omit --replicates")
+        _provenance(control=True)
+        run = _panel_rescore_runs(preset, rescore_panel)
+        preset = presets.panel_rescore_preset(preset, rescore_panel)
+    else:
+        run = build_run(
+            preset,
+            settings=tuple(presets.parse_setting(setting) for setting in settings),
+            tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
+            init=presets.published_artifact(init_name) if init_name else None,
+            resume_from=presets.published_artifact(resume_name) if resume_name else None,
+            layout=layout,
+            evaluations=evaluations,
+            replicates=replicates,
+            control=control,
+            keep_weights=keep_weights,
+            requirements=requirements,
+            baselines=baselines,
+        )
     if resume_name and (presets.REPO_ROOT / ".git").exists():
         source_tree = presets.run_tree_hash(resume_name)
         changes, reason = _changed_paths(source_tree, ("vendor/skyrl", "lib/marin/src/marin/rl"))

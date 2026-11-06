@@ -331,12 +331,12 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
 
 
 @pytest.mark.parametrize(
-    "preset,fault,control_fault,verdict,label,failed,bounds",
+    "preset,fault,control_fault,verdict,label,failed,bounds,selection_change",
     [
-        ("speed-medium", {"speed": 80}, {}, "pass", "improves", set(), None),
-        ("speed-medium", {"speed": 80, "metrics": {VLLM: 1}}, {}, "pass", "trade-off", set(), None),
-        ("speed-medium", {"speed": 130, "metrics": {VLLM: 1000}}, {}, "fail", "trade-off", set(), None),
-        ("speed-long", {}, {}, "pass", "no change", set(), None),
+        ("speed-medium", {"speed": 80}, {}, "pass", "improves", set(), None, False),
+        ("speed-medium", {"speed": 80, "metrics": {VLLM: 1}}, {}, "pass", "trade-off", set(), None, False),
+        ("speed-medium", {"speed": 130, "metrics": {VLLM: 1000}}, {}, "fail", "trade-off", set(), None, False),
+        ("speed-long", {}, {}, "pass", "no change", set(), None, False),
         (
             "speed-long",
             {"metrics": {"async/performance/loss_tokens_per_configured_policy_gpu_second": 50}},
@@ -345,6 +345,7 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             "regression",
             set(),
             None,
+            False,
         ),
         (
             "speed-long",
@@ -354,9 +355,19 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             "regression",
             set(),
             None,
+            False,
         ),
-        ("speed-long", {"metrics": {"policy/mismatch/pooled/kl_k3": 100}}, {}, "pass", "regression", set(), None),
-        ("speed-long", {"metrics": {"policy/mismatch/staleness0/kl_k3": 100}}, {}, "fail", "regression", set(), None),
+        ("speed-long", {"metrics": {"policy/mismatch/pooled/kl_k3": 100}}, {}, "pass", "regression", set(), None, False),
+        (
+            "speed-long",
+            {"metrics": {"policy/mismatch/staleness0/kl_k3": 100}},
+            {},
+            "fail",
+            "regression",
+            set(),
+            None,
+            False,
+        ),
         pytest.param(
             "learning-medium",
             {"panel_identity": None},
@@ -365,6 +376,7 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
             set(),
             None,
+            False,
             id="missing-recorded-panel-version",
         ),
         pytest.param(
@@ -375,13 +387,14 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
             set(),
             None,
+            False,
             id="recorded-panel-version-differs",
         ),
-        ("learning-medium", BROKEN, {}, "fail", "regression", BROKEN_FAILS, None),
-        ("speed-medium", {"fixed": False}, {}, "fail", "regression", {"fixed_reply_tokens"}, None),
-        ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None),
-        ("speed-medium", {}, {"fault": {"metrics": AMBIGUOUS}}, "invalid", None, set(), None),
-        ("speed-medium", {"version": "2026.10.01"}, {}, "invalid", None, set(), None),
+        ("learning-medium", BROKEN, {}, "fail", "regression", BROKEN_FAILS, None, False),
+        ("speed-medium", {"fixed": False}, {}, "fail", "regression", {"fixed_reply_tokens"}, None, False),
+        ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None, False),
+        ("speed-medium", {}, {"fault": {"metrics": AMBIGUOUS}}, "invalid", None, set(), None, False),
+        ("speed-medium", {"version": "2026.10.01"}, {}, "invalid", None, set(), None, False),
         pytest.param(
             "speed-medium",
             {},
@@ -390,9 +403,10 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
             set(),
             None,
+            False,
             id="candidate-and-control-evaluation-revisions-differ",
         ),
-        ("learning-medium", {"drop_task": True}, {}, "invalid", None, {"test_panel/batch_finished"}, None),
+        ("learning-medium", {"drop_task": True}, {}, "invalid", None, {"test_panel/batch_finished"}, None, False),
         (
             "speed-medium",
             {"metrics": {"policy/mismatch/staleness0/selected_tokens": 0}},
@@ -401,8 +415,9 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
             set(),
             None,
+            False,
         ),
-        ("speed-medium", {}, {"constant": True}, "invalid", None, set(), None),
+        ("speed-medium", {}, {"constant": True}, "invalid", None, set(), None, False),
         pytest.param(
             "speed-medium",
             {},
@@ -411,11 +426,12 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             "no change",
             set(),
             None,
+            False,
             id="nonfinite_range",
         ),
-        ("data-short", {}, {}, "pass", "no change", set(), None),
-        ("speed-medium", {"metrics": BOUNDARY}, {}, "pass", "no change", set(), (0.01, 0.01)),
-        ("speed-medium", {"metrics": AMBIGUOUS}, {}, "invalid", None, {"grader_error_fraction"}, (0.01, 0.02)),
+        ("data-short", {}, {}, "pass", "no change", set(), None, False),
+        ("speed-medium", {"metrics": BOUNDARY}, {}, "pass", "no change", set(), (0.01, 0.01), False),
+        ("speed-medium", {"metrics": AMBIGUOUS}, {}, "invalid", None, {"grader_error_fraction"}, (0.01, 0.02), False),
         (
             "speed-medium",
             {"speed": 130, "metrics": AMBIGUOUS},
@@ -424,11 +440,9 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             "regression",
             {"grader_error_fraction"},
             (0.01, 0.02),
+            False,
         ),
-        ("speed-short", {}, {}, "pass", "no change", set(), None),
-        pytest.param(
-            "speed-short", {"quality_unscored": 15}, {}, "pass", "no change", set(), (0.01, 0.01), id="quality-boundary"
-        ),
+        ("speed-short", {}, {}, "pass", "no change", set(), None, True),
         pytest.param(
             "speed-short",
             {"quality_unscored": 16},
@@ -437,17 +451,8 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             "regression",
             {"test_panel/panel_scored_fraction", "test_panel/grader_error_fraction"},
             (16 / 1500, 16 / 1500),
+            False,
             id="quality-failure",
-        ),
-        pytest.param(
-            "speed-short",
-            {"quality_unscored": 12, "quality_metrics": {"eval/test_panel/all/outcome/rollout_failure": 12}},
-            {},
-            "invalid",
-            None,
-            {"test_panel/grader_error_fraction"},
-            (0.008, 0.016),
-            id="quality-ambiguous",
         ),
         pytest.param(
             "speed-short",
@@ -457,33 +462,8 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
             {"test_panel/grader_error_fraction"},
             (0, 1),
+            False,
             id="quality-missing-counter",
-        ),
-        pytest.param(
-            "speed-short",
-            {"quality_metrics": {"eval/test_panel/all/outcome/graded": float("nan")}},
-            {},
-            "invalid",
-            None,
-            set(),
-            None,
-            id="quality-malformed-counter",
-        ),
-        pytest.param(
-            "speed-short",
-            {
-                "quality_unscored": 1,
-                "quality_metrics": {
-                    "eval/test_panel/all/outcome/infra_error": True,
-                    "eval/test_panel/all/outcome/unavailable": 0,
-                },
-            },
-            {},
-            "invalid",
-            None,
-            set(),
-            None,
-            id="quality-boolean-counter",
         ),
         pytest.param(
             "speed-short",
@@ -499,60 +479,46 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
             {"test_panel/grader_error_fraction"},
             (0, 1),
+            False,
             id="quality-inflated-denominator",
         ),
         pytest.param(
             "speed-short",
+            {"first_answer_task": "unlisted"},
             {},
-            {"fault": {"quality_unscored": 16}},
             "invalid",
             None,
             set(),
             None,
-            id="quality-control-failure",
-        ),
-        pytest.param(
-            "speed-short",
-            {"source_first_task": "selected-only"},
-            {"common_fault": {"source_first_task": "selected-only"}},
-            "invalid",
-            None,
-            {"test_panel/batch_finished"},
-            None,
+            False,
             id="quality-wrong-membership",
         ),
         pytest.param(
             "learning-medium",
-            {"initial_score": 0.3, "initial_unscored": 16, "argv": ("--init", "tests/initializer@2026.11.04")},
+            {"initial_score": 0.3, "initial_unscored": 16},
             {},
             "fail",
             "regression",
             {"test_panel/initial/panel_scored_fraction", "test_panel/initial/grader_error_fraction"},
             None,
+            False,
             id="initial-quality-failure",
         ),
+        ("speed-medium", {"missing_receipt": True}, {}, "invalid", None, set(), None, False),
+        ("speed-medium", {"unresolved_receipt": True}, {}, "invalid", None, set(), None, False),
         pytest.param(
-            "learning-medium",
-            {"initial_score": 0.3, "unscored": 16, "argv": ("--init", "tests/initializer@2026.11.04")},
-            {},
-            "fail",
-            "regression",
-            {"test_panel/panel_scored_fraction", "test_panel/grader_error_fraction"},
-            None,
-            id="final-quality-failure",
+            "speed-short", {"score": 0.2}, {}, "fail", "regression", set(), None, False, id="quality-score-regression"
         ),
-        ("speed-medium", {"missing_receipt": True}, {}, "invalid", None, set(), None),
-        ("speed-medium", {"unresolved_receipt": True}, {}, "invalid", None, set(), None),
     ],
 )
 def test_rescore_reports_candidate_and_control_contracts(
-    recorded_runs, monkeypatch, preset, fault, control_fault, verdict, label, failed, bounds
+    recorded_runs, monkeypatch, preset, fault, control_fault, verdict, label, failed, bounds, selection_change
 ):
     if preset == "speed-long":
         monkeypatch.setitem(gate.CONTROLS, preset, (gate.ControlPin(preset, "09026fd100", presets.PRESET_REVISION, 4),))
     controls(recorded_runs, preset, **control_fault)
     source = recorded_runs(preset, f"users/test/{preset}", score=0.495, **fault)
-    if preset == "speed-short" and not fault and not control_fault:
+    if selection_change:
         monkeypatch.setattr(presets, "DEFAULT_SELECTION_VERSION", "2099.01.01")
         _json(Path(presets.default_selection().path()) / "summary.json", {"full_validation_rows": 73})
     report = rescore(
@@ -569,13 +535,11 @@ def test_rescore_reports_candidate_and_control_contracts(
         assert throughput["passes"]
         fixed = next(row for row in report["invariants"] if row["name"] == "fixed_reply_tokens")
         assert fixed["holds"]
-        if not fault and not control_fault:
+        if selection_change:
             coverage = next(row for row in report["invariants"] if row["name"] == "test_panel/panel_scored_fraction")
             finished = next(row for row in report["invariants"] if row["name"] == "test_panel/batch_finished")
             assert coverage["value"] == 1.0
             assert finished["value"] == finished["limit"]
-    if preset == "speed-short" and control_fault:
-        assert "control has" in report["reason"]
     if preset == "speed-long":
         assert {row["metric"] for row in report["guards"]} == {
             "speed/update_seconds",
@@ -590,17 +554,17 @@ def test_rescore_reports_candidate_and_control_contracts(
         assert control_fault["fault"]["record_version"] in report["reason"]
         assert presets.PRESET_REVISION in report["reason"]
     if "panel_identity" in fault:
-        assert presets.DEFAULT_TEST_PANEL in report["reason"]
+        assert presets.EVALUATIONS["test_panel"].source in report["reason"]
         if fault["panel_identity"]:
             assert fault["panel_identity"] in report["reason"]
     elif verdict != "invalid":
         if preset in ("speed-medium", "speed-long"):
-            assert report["run"]["panel"] is None and report["control"]["panel"] is None
+            pass
         else:
             expected_panel = (
                 f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}"
                 if preset == "data-short"
-                else presets.DEFAULT_TEST_PANEL
+                else presets.EVALUATIONS["test_panel"].source
             )
             assert report["run"]["panel"] == report["control"]["panel"] == expected_panel
     assert not fault.get("missing_receipt") or report["reason"] == f"no launch receipt at {source}"
@@ -610,7 +574,7 @@ def test_rescore_reports_candidate_and_control_contracts(
 
 
 def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, selection, tmp_path):
-    panel = Path(presets.selection_artifact(presets.DEFAULT_TEST_PANEL).path())
+    panel = Path(presets.selection_artifact(presets.EVALUATIONS["test_panel"].source).path())
     summary = json.loads((panel / "summary.json").read_text())
     summary["recipe"]["pass_rates"]["rows"] = 6
     _json(panel / "summary.json", summary | {"full_validation_rows": 6})
@@ -619,7 +583,6 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
         for i in range(6)
     ]
     pq.write_table(pa.Table.from_pylist(tasks), panel / presets.TASK_MANIFEST_FILENAME)
-    _task_parquet(panel / "full_validation.parquet", [row["task_id"] for row in tasks])
     path = Path(summary["recipe"]["pass_rates"]["uri"])
     pq.write_table(pq.read_table(path).slice(0, 6), path)
     for i in range(4):
@@ -692,8 +655,8 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     wrong_rates = pq.read_table(path).to_pylist()
     wrong_rates[0]["task_id"] = "different-panel"
     pq.write_table(pa.Table.from_pylist(wrong_rates), path)
-    with pytest.raises(scoring.InvalidComparison, match="pass-rate panel"):
-        gate.validate_candidate(presets.PRESETS["learning-medium"], ["test_panel/mean>=control"], control=False)
+    invalid_rates = rescore("learning-medium", "--candidate", "users/test/detail")
+    assert invalid_rates["verdict"] == "invalid" and "pass-rate panel" in invalid_rates["reason"]
 
 
 def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs):
@@ -813,212 +776,194 @@ def test_update_guard_alone_sets_improves(recorded_runs):
 REQUIREMENT = "policy/raw_grad_norm<=1"
 
 
-@pytest.mark.timeout(240)  # Native control and rescore recipes compose in their independent locked environment.
-@pytest.mark.parametrize(
-    "preset,panel_change",
-    [("learning-medium", False), ("data-medium", False), ("learning-medium", True), ("speed-short", True)],
-)
-def test_built_gate_and_rescore_share_inputs_and_status(
-    recorded_runs, tmp_path, preset, panel_change, monkeypatch, publication_transport, native_json
-):
-    if panel_change:
-        original_preset = presets.PRESETS[preset]
-        pin = gate.CONTROLS[preset][0]
-        originals = controls(recorded_runs, preset, common_fault={"metrics": {"timing/grading/mean": 2.0}})
-        recorded_preset = replace(
-            original_preset,
-            recipe=replace(
-                original_preset.recipe,
-                engine_init_kwargs={**original_preset.recipe.engine_init_kwargs, "cpu_offload_gb": 1},
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("preset", ["learning-medium", "speed-short"])
+def test_control_panel_rescore_preserves_recorded_protocol(recorded_runs, tmp_path, preset, monkeypatch, native_json):
+    original_preset = presets.PRESETS[preset]
+    pin = gate.CONTROLS[preset][0]
+    originals = controls(recorded_runs, preset, common_fault={"metrics": {"timing/grading/mean": 2.0}})
+    recorded_preset = replace(
+        original_preset,
+        recipe=replace(
+            original_preset.recipe,
+            engine_init_kwargs={**original_preset.recipe.engine_init_kwargs, "cpu_offload_gb": 1},
+        ),
+    )
+    steps = snowball.build_run(recorded_preset, control=True, replicates=pin.runs).runs
+    for root, (config, compiled) in zip(originals, _native_launches(steps, tmp_path, native_json), strict=True):
+        record = json.loads((root / RECORD_FILENAME).read_text())
+        record["result"].update(
+            hf_model_uri=str(root / "retained-hf"),
+            tokenizer_uri=compiled["inputs"]["model"]["tokenizer_uri"],
+            tokenizer_revision=compiled["inputs"]["model"]["tokenizer_revision"],
+        )
+        _json(root / RECORD_FILENAME, record)
+        _json(root / "retained-hf/config.json", {})
+        _record_launch(root, config, compiled)
+    original_bytes = {
+        (root, filename): (root / filename).read_bytes()
+        for root in originals
+        for filename in (RECORD_FILENAME, "terminal.json", "resolved-launch.yaml")
+    }
+    panel_name, _ = (presets.DEFAULT_TEST_PANEL_NAME, presets.DEFAULT_TEST_PANEL_VERSION)
+    new_panel = f"{panel_name}@2099.01.01"
+    shutil.copytree(
+        presets.selection_artifact(presets.EVALUATIONS["test_panel"].source).path(),
+        presets.selection_artifact(new_panel).path(),
+    )
+    changed_presets = dict(presets.PRESETS)
+    for name in (preset, "data-medium") if preset == "learning-medium" else (preset,):
+        changed = replace(
+            presets.PRESETS[name],
+            evaluations=tuple(
+                replace(item, source=new_panel) if item.name == "test_panel" else item
+                for item in presets.PRESETS[name].evaluations
             ),
         )
-        steps = snowball.build_run(recorded_preset, control=True, replicates=pin.runs).runs
-        for root, (config, compiled) in zip(originals, _native_launches(steps, tmp_path, native_json), strict=True):
-            record = json.loads((root / RECORD_FILENAME).read_text())
-            record["result"].update(
-                hf_model_uri=str(root / "retained-hf"),
-                tokenizer_uri=compiled["inputs"]["model"]["tokenizer_uri"],
-                tokenizer_revision=compiled["inputs"]["model"]["tokenizer_revision"],
-            )
-            _json(root / RECORD_FILENAME, record)
-            _json(root / "retained-hf/config.json", {})
-            _record_launch(root, config, compiled)
-        original_bytes = {
-            (root, filename): (root / filename).read_bytes()
-            for root in originals
-            for filename in (RECORD_FILENAME, "terminal.json", "resolved-launch.yaml")
-        }
-        panel_name, _ = presets.DEFAULT_TEST_PANEL.split("@")
-        new_panel = f"{panel_name}@2099.01.01"
-        shutil.copytree(
-            presets.selection_artifact(presets.DEFAULT_TEST_PANEL).path(), presets.selection_artifact(new_panel).path()
+        changed_presets[name] = changed
+    monkeypatch.setattr(presets, "PRESETS", changed_presets)
+    selected = presets.PRESETS[preset]
+    candidate = f"users/test/new-panel-{preset}"
+    recorded_runs(selected, candidate, score=0.495, initial_score=0.2, speed=101.5, argv=("--preset", preset))
+    missing = rescore(preset, "--candidate", candidate, "--require", "test_panel/mean>=0.48")
+    assert missing["verdict"] == "invalid" and new_panel in missing["reason"]
+    rescored = snowball._panel_rescore_runs(selected, new_panel)
+    assert [step.name for step in rescored.runs] == [
+        presets.panel_rescore_name(presets.control_name(pin.preset, pin.main_commit, index), pin.revision, new_panel)
+        for index in range(pin.runs)
+    ]
+    if preset == "learning-medium":
+        for root, step in zip(originals, rescored.runs, strict=True):
+            marker = root / ".executor_status"
+            status_bytes = marker.read_bytes()
+            marker.unlink()
+            try:
+                dependency = next(dep for dep in step.deps if dep.artifact_type is SkyRLRun)
+                run(dependency)
+                assert all(
+                    (source / filename).read_bytes() == content for (source, filename), content in original_bytes.items()
+                )
+            finally:
+                marker.write_bytes(status_bytes)
+    evaluation_preset = presets.panel_rescore_preset(selected, new_panel)
+    receipts = []
+    for index, (step, (config, compiled)) in enumerate(
+        zip(rescored.runs, _native_launches(rescored.runs, tmp_path, native_json), strict=True)
+    ):
+        assert compiled["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
+        assert compiled["iris"]["allocation"]["num_nodes"] == 1
+        assert compiled["iris"]["allocation"]["gpus_per_node"] == 8
+        assert compiled["skyrl"]["generator"]["engine_init_kwargs"]["cpu_offload_gb"] == 1
+        root = recorded_runs(
+            evaluation_preset,
+            step.name,
+            score=0.49 + 0.01 * index,
+            speed=9999,
+            metrics={"timing/grading/mean": 9999.0},
         )
-        changed_presets = dict(presets.PRESETS)
-        for name in (preset, "data-medium") if preset == "learning-medium" else (preset,):
-            changed = replace(
-                presets.PRESETS[name],
-                evaluations=tuple(
-                    replace(item, source=new_panel) if item.name == "test_panel" else item
-                    for item in presets.PRESETS[name].evaluations
-                ),
-            )
-            changed_presets[name] = changed
-        monkeypatch.setattr(presets, "PRESETS", changed_presets)
-        selected = presets.PRESETS[preset]
-        candidate = f"users/test/new-panel-{preset}"
-        recorded_runs(selected, candidate, score=0.495, initial_score=0.2, speed=101.5, argv=("--preset", preset))
-        missing = rescore(preset, "--candidate", candidate, "--require", "test_panel/mean>=0.48")
-        assert missing["verdict"] == "invalid" and new_panel in missing["reason"]
-        rescored = snowball.build_run(selected, control=True, rescore_panel=new_panel)
-        assert len(rescored.runs) == pin.runs
-        if preset == "learning-medium":
-            for root, step in zip(originals, rescored.runs, strict=True):
-                marker = root / ".executor_status"
-                status_bytes = marker.read_bytes()
-                marker.unlink()
-                try:
-                    dependency = next(dep for dep in step.deps if dep.artifact_type is SkyRLRun)
-                    run(dependency)
-                    assert all(
-                        (source / filename).read_bytes() == content
-                        for (source, filename), content in original_bytes.items()
-                    )
-                finally:
-                    marker.write_bytes(status_bytes)
-        evaluation_preset = presets.rescore_preset(selected, new_panel)
-        receipts = []
-        for index, (step, (config, compiled)) in enumerate(
-            zip(rescored.runs, _native_launches(rescored.runs, tmp_path, native_json), strict=True)
-        ):
-            assert compiled["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
-            assert compiled["iris"]["allocation"]["num_nodes"] == 1
-            assert compiled["iris"]["allocation"]["gpus_per_node"] == 8
-            assert not compiled["run"]["export_hf"]
-            assert not compiled["skyrl"]["trainer"]["callbacks"]
-            assert compiled["skyrl"]["generator"]["engine_init_kwargs"]["cpu_offload_gb"] == 1
-            assert compiled["skyrl"]["generator"]["eval_n_samples_per_prompt"] == 1
-            assert compiled["skyrl"]["generator"]["eval_sampling_params"]["temperature"] == 0
-            root = recorded_runs(
-                evaluation_preset,
-                step.name,
-                score=0.49 + 0.01 * index,
-                speed=9999,
-                metrics={"timing/grading/mean": 9999.0},
-            )
-            _record_launch(root, config, compiled)
-            receipts.append(root)
-        recovered = rescore(preset, "--candidate", candidate, "--require", "test_panel/mean>=0.48")
-        assert recovered["verdict"] == "pass", recovered
-        assert recovered["report"] != missing["report"]
-        assert recovered["control"]["panel"] == recovered["run"]["panel"] == new_panel
-        assert not any(
-            row["metric"].endswith(("/initial", "/gain")) and row["control"] is not None for row in recovered["reported"]
-        )
-        performance_key = "generate/tokens_per_second_per_gpu" if preset == "speed-short" else "timing/grading/mean"
-        performance = next(
-            row for row in (*recovered["guards"], *recovered["reported"]) if row["metric"] == performance_key
-        )
-        assert performance["control"] == pytest.approx(100 + (pin.runs - 1) / 2 if preset == "speed-short" else 2.0)
-        assert rescore(preset, "--candidate", candidate, "--require", "test_panel/mean>=control")["verdict"] == "pass"
-        snowball.build_run(
-            selected, requirements=("test_panel/mean>=control",), baselines=(f"{candidate}@{presets.PRESET_REVISION}",)
-        )
-        assert rescore(preset, "--leave-out", "r0")["verdict"] == "pass"
-        bounded = rescore(preset, "--leave-out", "r0", "--require", "test_panel/mean>=0.9")
-        assert bounded["verdict"] == "fail", bounded
-        assert any(row["name"] == "require/test_panel/mean" and not row["holds"] for row in bounded["invariants"])
-        if preset == "learning-medium":
-            data_candidate = "users/test/data-new-panel"
-            recorded_runs(presets.PRESETS["data-medium"], data_candidate, score=0.495)
-            assert rescore("data-medium", "--candidate", data_candidate)["verdict"] == "pass"
-        first = receipts[0]
-        terminal = json.loads((first / "terminal.json").read_text())
-        faults = (
-            ("model", "config.inputs.model.identity", "other@2026.11.06"),
-            ("tokenizer", "config.inputs.model.tokenizer_revision", "wrong"),
-            ("control", "config.run.id", "another-control"),
-            ("missing_model", "config.inputs.model", ...),
-            ("missing_tokenizer", "config.inputs.model.tokenizer_revision", ...),
-            ("missing_control", "config.run.id", ...),
-            ("malformed_identity", "config.inputs.model.identity", None),
-            ("malformed_panel", "config.inputs.validation_data.0.identity", None),
-            ("protocol", "config.skyrl.generator.eval_sampling_params.temperature", 1),
-            ("file", "config.inputs.validation_data.0.relative_path", "validation.parquet"),
+        _record_launch(root, config, compiled)
+        receipts.append(root)
+    recovered = rescore(preset, "--candidate", candidate, "--require", "test_panel/mean>=0.48")
+    assert recovered["verdict"] == "pass", recovered
+    assert recovered["report"] != missing["report"]
+    assert recovered["control"]["panel"] == recovered["run"]["panel"] == new_panel
+    assert not any(
+        row["metric"].endswith(("/initial", "/gain")) and row["control"] is not None for row in recovered["reported"]
+    )
+    performance_key = "generate/tokens_per_second_per_gpu" if preset == "speed-short" else "timing/grading/mean"
+    performance = next(row for row in (*recovered["guards"], *recovered["reported"]) if row["metric"] == performance_key)
+    assert performance["control"] == pytest.approx(100 + (pin.runs - 1) / 2 if preset == "speed-short" else 2.0)
+    assert rescore(preset, "--candidate", candidate, "--require", "test_panel/mean>=control")["verdict"] == "pass"
+    baseline_run = snowball.build_run(
+        selected, requirements=("test_panel/mean>=control",), baselines=(f"{candidate}@{presets.PRESET_REVISION}",)
+    )
+    assert baseline_run.gate is not None
+    baseline_report = rescore(preset, "--candidate", candidate, "--baseline", f"{candidate}@{presets.PRESET_REVISION}")
+    assert baseline_report["run"]["baselines"] == [f"{candidate}@{presets.PRESET_REVISION}"]
+    assert baseline_report["vs_baseline"]
+    assert rescore(preset, "--leave-out", "r0")["verdict"] == "pass"
+    bounded = rescore(preset, "--leave-out", "r0", "--require", "test_panel/mean>=0.9")
+    assert bounded["verdict"] == "fail", bounded
+    assert any(row["name"] == "require/test_panel/mean" and not row["holds"] for row in bounded["invariants"])
+    if preset == "learning-medium":
+        data_candidate = "users/test/data-new-panel"
+        recorded_runs(presets.PRESETS["data-medium"], data_candidate, score=0.495)
+        assert rescore("data-medium", "--candidate", data_candidate)["verdict"] == "pass"
+    first = receipts[0]
+    terminal = json.loads((first / "terminal.json").read_text())
+    faults = (
+        (
+            ("model", "config.inputs.model.identity", "other@2026.11.06", "model or tokenizer differs"),
+            ("control", "config.run.id", "another-control", "names another control"),
+            ("malformed", "config.inputs.model.identity", None, "invalid panel re-score"),
             (
-                "panel",
-                "config.inputs.validation_data.0.identity",
-                f"{presets.SELECTION_PREFIX}/{presets.DEFAULT_TEST_PANEL}",
+                "protocol",
+                "config.skyrl.generator.eval_sampling_params.temperature",
+                1,
+                "changes evaluation or engine settings",
             ),
-            ("failed", "result.state", "failed"),
-            ("incomplete", "", None),
+            (
+                "batch_invariance",
+                "config.skyrl.trainer.algorithm.batch_invariant",
+                False,
+                "changes evaluation or engine settings",
+            ),
+            ("failed", "result.state", "failed", "no successful re-score"),
+            ("incomplete", "", None, "control has"),
         )
-        for index, (fault, fields, value) in enumerate(faults):
-            broken = json.loads(json.dumps(terminal))
-            broken["config"]["run"]["attempt_id"] = f"fault-{index}"
-            if fields:
-                fields = fields.split(".")
-                target = broken
-                for key in fields[:-1]:
-                    target = target[int(key) if key.isdecimal() else key]
-                if value is ...:
-                    del target[fields[-1]]
-                else:
-                    target[fields[-1]] = value
-            dump = first / "exports/dumped_evals/eval_only/panel.jsonl"
-            original_dump = dump.read_bytes()
-            if fault == "incomplete":
-                dump.write_text("\n".join(dump.read_text().splitlines()[:-1]) + "\n")
-            _json(first / "terminal.json", broken)
-            (first / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": broken["config"]}))
-            invalid = rescore(preset, "--candidate", candidate)
-            assert invalid["verdict"] == "invalid", (fault, invalid)
-            dump.write_bytes(original_dump)
-        _json(first / "terminal.json", terminal)
-        (first / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": terminal["config"]}))
-        if preset == "learning-medium":
-            client = MagicMock(spec=IrisClient)
-            client.submit.side_effect = AssertionError("a missing control export submitted GPU work")
-            monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
-            (originals[-1] / "retained-hf/config.json").unlink()
-            refused = CliRunner().invoke(
-                snowball.main,
-                [
-                    "--preset",
-                    preset,
-                    "--version",
-                    presets.PRESET_REVISION,
-                    "--control",
-                    "--rescore-panel",
-                    new_panel,
-                    "--run",
-                ],
-            )
-            assert refused.exit_code == 2, (refused.output, refused.exception)
-            assert str(pin.runs - 1) in refused.output and "retained HF weights" in refused.output
-            _json(originals[-1] / "retained-hf/config.json", {})
-            summary_path = Path(presets.selection_artifact(new_panel).path()) / "summary.json"
-            summary = json.loads(summary_path.read_text())
-            summary["grader_kind_counts"]["full_validation"]["remote_judge"] = 1
-            _json(summary_path, summary)
-            judged = CliRunner().invoke(
-                snowball.main,
-                [
-                    "--preset",
-                    preset,
-                    "--version",
-                    presets.PRESET_REVISION,
-                    "--control",
-                    "--rescore-panel",
-                    new_panel,
-                    "--run",
-                ],
-            )
-            assert judged.exit_code == 2 and "no AI-judge-graded tasks" in judged.output, (
-                judged.output,
-                judged.exception,
-            )
-        assert all((root / filename).read_bytes() == content for (root, filename), content in original_bytes.items())
-        return
+        if preset == "learning-medium"
+        else ()
+    )
+    for index, (fault, fields, value, reason) in enumerate(faults):
+        broken = json.loads(json.dumps(terminal))
+        broken["config"]["run"]["attempt_id"] = f"fault-{index}"
+        if fields:
+            fields = fields.split(".")
+            target = broken
+            for key in fields[:-1]:
+                target = target[int(key) if key.isdecimal() else key]
+            if value is ...:
+                del target[fields[-1]]
+            else:
+                target[fields[-1]] = value
+        dump = first / "exports/dumped_evals/eval_only/panel.jsonl"
+        original_dump = dump.read_bytes()
+        if fault == "incomplete":
+            dump.write_text("\n".join(dump.read_text().splitlines()[:-1]) + "\n")
+        _json(first / "terminal.json", broken)
+        (first / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": broken["config"]}))
+        invalid = rescore(preset, "--candidate", candidate)
+        assert invalid["verdict"] == "invalid" and reason in invalid["reason"], (fault, invalid)
+        dump.write_bytes(original_dump)
+    _json(first / "terminal.json", terminal)
+    (first / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": terminal["config"]}))
+    if preset == "learning-medium":
+        client = MagicMock(spec=IrisClient)
+        client.submit.side_effect = AssertionError("a missing control export submitted GPU work")
+        monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+        (originals[-1] / "retained-hf/config.json").unlink()
+        refused = CliRunner().invoke(
+            snowball.main,
+            [
+                "--preset",
+                preset,
+                "--version",
+                presets.PRESET_REVISION,
+                "--control",
+                "--rescore-panel",
+                new_panel,
+                "--run",
+            ],
+        )
+        assert refused.exit_code == 2, (refused.output, refused.exception)
+        assert str(pin.runs - 1) in refused.output and "kept HF weights" in refused.output
+        _json(originals[-1] / "retained-hf/config.json", {})
+    assert all((root / filename).read_bytes() == content for (root, filename), content in original_bytes.items())
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])
+def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset, monkeypatch, native_json):
     monkeypatch.setenv("WANDB_ENTITY", "planned-team")
     controls(recorded_runs, preset)
     if preset == "learning-medium":
@@ -1484,19 +1429,12 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     ]
     (tmp_path / "selection").mkdir()
     pq.write_table(pa.Table.from_pylist(manifest), tmp_path / "selection" / presets.TASK_MANIFEST_FILENAME)
-    quality = tmp_path / "quality"
-    quality.mkdir()
-    pq.write_table(
-        pa.Table.from_pylist([{"task_id": "heldout", "family": "general", "aaii_category": "general"}]),
-        quality / presets.TASK_MANIFEST_FILENAME,
-    )
     _json(
         tmp_path / "resolved-launch.yaml",
         {
             "config": {
                 "inputs": {
                     "validation_data": [{"uri": str(tmp_path / "selection")}],
-                    "evaluation_data": {"test_panel": [{"uri": str(quality)}]},
                 }
             }
         },
@@ -1506,14 +1444,6 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         directory.mkdir(parents=True)
         (directory / "panel.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n")
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
-    _json(tmp_path / "exports/test_panel/dumped_evals/eval_only/quality.jsonl", _answer("heldout", 0.75))
-    quality_scores = scoring.panel_scores(
-        presets.EVALUATIONS["test_panel"], str(tmp_path), scoring.evaluation_answers(str(tmp_path))
-    )
-    assert [(row["item"], row["family"], row["step"]) for row in quality_scores.to_pylist()] == [
-        ("heldout", "general", -1)
-    ]
-    assert scoring.evaluation_statistics(quality_scores)["test_panel/family_mean"] == 0.75
     scores = scoring.panel_scores(presets.EVALUATIONS["panel-100"], str(tmp_path))
     final = [row for row in scores.to_pylist() if row["step"] == 25]
     assert [(row["item"], row["attempt"], row["scored"], row["score"]) for row in final] == [

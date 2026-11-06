@@ -59,7 +59,7 @@ def run_recorded_loop(config: LoopRunConfig) -> SkyRLRun:
         try:
             publish_summary(
                 PublicationConfig(
-                    summary_uri=prefix_join(config.skyrl.output.export_root, RESULT_FILENAME),
+                    summary_uri=prefix_join(config.skyrl.output.export_root, "loop-result.json"),
                     receipt_uri=prefix_join(config.skyrl.output.export_root, "loop-publication.json"),
                 )
             )
