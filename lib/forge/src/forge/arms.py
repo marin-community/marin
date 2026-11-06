@@ -47,9 +47,7 @@ def validated(wp: Workpiece, result: Exit, *, tool: bool) -> Workpiece:
 
 
 def after_validation(wp: Workpiece) -> Stage:
-    if wp.session and wp.session.messages[-1].role == "tool":
-        return Stage.AUTHOR
-    return Stage.REVIEW
+    return Stage.AUTHOR if wp.session and wp.session.messages[-1].role == "tool" else Stage.REVIEW
 
 
 def decided(wp: Workpiece, result: Exit, *, budget: Budget, policy: Policy) -> Workpiece:

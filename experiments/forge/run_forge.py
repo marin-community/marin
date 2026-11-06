@@ -22,11 +22,11 @@ def main() -> None:
     args = parser.parse_args()
     if min(args.shards, args.concurrency, args.cpu) < 1:
         raise ValueError("Shard count, concurrency and CPU must be positive")
-    credentials = [
-        item
-        for key in ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_BASE_URL", "GLM_API_KEY")
-        for item in ("-e", key, os.environ[key])
-    ]
+    endpoint = tuple(key for key in ("GLM_RELAY_JOB", "GLM_BASE_URL") if os.environ.get(key))
+    if len(endpoint) != 1:
+        raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
+    keys = ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", *endpoint)
+    credentials = [item for key in keys for item in ("-e", key, os.environ[key])]
     if "PARALLEL_API_KEY" in os.environ:
         credentials += ["-e", "PARALLEL_API_KEY", os.environ["PARALLEL_API_KEY"]]
     options = {

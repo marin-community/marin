@@ -4,23 +4,24 @@
 """Bind real adapters and executable policy at the process boundary."""
 
 import logging
-import os
 import sys
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from types import MappingProxyType
 from typing import override
 
 import httpx
+from iris.client.client import iris_ctx
+from iris.cluster.types import JobName
 from pydantic import TypeAdapter
 from rolloutengine.models import ModelRequest, ModelTurn
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, TaskResource
-from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.rollout_model import model_turn
 
@@ -53,6 +54,37 @@ from forge.resources.inference import GlmInference, InferenceRequest, complete
 from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from forge.resources.sandbox.factories import MachineHost, local_factory, shellsim_factory
 from forge.stages.rules import default_review
+
+
+# Source: acceptance-measure worktree, taskforge/llm/glm_client.py:168-196.
+@dataclass(frozen=True, slots=True)
+class RelayEndpoint(EndpointSource):
+    """Resolve the live Iris relay; copied from Taskforge's acceptance-measure branch."""
+
+    job: str
+    token: str = field(repr=False)
+    pool: Pool
+    model: str
+
+    @override
+    def current(self) -> GlmEndpoint:
+        client = iris_ctx().client
+        if client is None:
+            raise RuntimeError("Iris client is unavailable inside the task")
+        endpoints = client.resolver_for_job(JobName.from_string(self.job)).resolve(self.model).endpoints
+        if not endpoints:
+            raise RuntimeError(f"GLM relay {self.job} has no registered endpoint for {self.model}")
+        url = endpoints[0].url.rstrip("/")
+        return GlmEndpoint(url if url.endswith("/v1") else f"{url}/v1", self.token, self.pool)
+
+
+def endpoint_source(base_url: str | None, relay_job: str | None, token: str, model: str) -> EndpointSource:
+    if bool(base_url) == bool(relay_job):
+        raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
+    if relay_job:
+        return RelayEndpoint(relay_job, token, Pool.BULK, model)
+    assert base_url is not None
+    return FixedEndpoint(GlmEndpoint(base_url, token, Pool.BULK))
 
 
 def install(ctx: Context, resources: Resources) -> None:
@@ -88,15 +120,10 @@ class Environments(EnvFactory):
         return await ShellboxEnvFactory(factory, runtime, cleanup, logging.info).create(requirements)
 
 
-@dataclass(frozen=True, slots=True)
-class SolverModel:
-    client: GlmClient
-    sampling: LLMPolicy
-
-    async def __call__(self, request: ModelRequest) -> ModelTurn:
-        if request.continuation is not None or request.prompt_token_ids is not None:
-            raise ValueError("GLM solver requires messages trace")
-        return model_turn(await self.client.complete(request.messages, self.sampling, request.options))
+async def solver_turn(client: GlmClient, sampling: LLMPolicy, request: ModelRequest) -> ModelTurn:
+    if request.continuation is not None or request.prompt_token_ids is not None:
+        raise ValueError("GLM solver requires messages trace")
+    return model_turn(await client.complete(request.messages, sampling, request.options))
 
 
 def build_resources(
@@ -113,7 +140,7 @@ def build_resources(
     return Resources(
         Environments(factories, settings),
         GlmInference(client, digest(provider)),
-        RolloutResource(engine, SolverModel(client, sampling), digest((provider, sampling, execution))),
+        RolloutResource(engine, partial(solver_turn, client, sampling), digest((provider, sampling, execution))),
         GradingResource(engine, execution),
         Clock(),
         Ids(),
@@ -145,17 +172,15 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         for name in policy.setting("adversary.roster", tuple)
     }
     tools = {"author": standard_tools(policy=policy, factories=factories, settings=settings, gate=submit_gate)}
+    root = policy.setting("author.workdir", str)
     if arm == "T":
-        root = policy.setting("author.workdir", str)
         tools["author"] = {
             **tools["author"],
             "validate": ValidateTool(submit_gate, f"{root}/task.json", f"{root}/controls.json"),
         }
     tools.update(
         {
-            name: adversary_tools(
-                policy=policy, task_path="/workspace/task.json", factories=factories, settings=settings
-            )
+            name: adversary_tools(policy=policy, task_path=f"{root}/task.json", factories=factories, settings=settings)
             for name in adversaries
         }
     )
@@ -180,22 +205,21 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
 
 
 @asynccontextmanager
-async def runtime(policy: Policy, arm: str) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
+async def runtime(
+    policy: Policy, arm: str, source: EndpointSource, parallel_api_key: str
+) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
     provider = TypeAdapter(LLMProviderConfig).validate_python(
         {key.removeprefix("provider."): value for key, value in policy.entries.items() if key.startswith("provider.")}
     )
-    source = FixedEndpoint(GlmEndpoint(os.environ["GLM_BASE_URL"], os.environ["GLM_API_KEY"], Pool.BULK))
+    print(f"GLM {type(source).__name__} resolved {source.current().base_url}", flush=True)
     host = MachineHost(policy.setting("runtime.host", str))
     container = GvisorMachineFactory() if host == MachineHost.IRIS else DockerMachineFactory()
     factories: dict[str, MachineFactory] = {container.backend.value: container, "shellsim": shellsim_factory()}
     if sys.platform == "linux":
         factories["local"] = local_factory()
+    headers = {"x-api-key": parallel_api_key}
     async with (
         GlmClient(source, provider) as client,
-        httpx.AsyncClient(
-            base_url="https://api.parallel.ai/v1/",
-            headers={"x-api-key": os.environ.get("PARALLEL_API_KEY", "")},
-            timeout=60,
-        ) as http,
+        httpx.AsyncClient(base_url="https://api.parallel.ai/v1/", headers=headers, timeout=60) as http,
     ):
         yield build_config(policy, arm, factories), build_resources(policy, client, factories, ParallelWeb(http))

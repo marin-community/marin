@@ -14,6 +14,7 @@ from rolloutengine.models import GradedRollout, Model, ModelRequest, ModelTurn, 
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
+from taskforge.llm.glm_client import EndpointSource
 
 from forge import driver
 from forge.config import ForgeConfig
@@ -200,10 +201,15 @@ async def test_driver_persists_programming_failure_then_reraises(
     proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @asynccontextmanager
-    async def broken_runtime(policy: Policy, arm: str) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
+    async def broken_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
         yield build_config(policy, arm, {}), resources(Envs(), ())
 
     monkeypatch.setattr(driver, "runtime", broken_runtime)
+    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
+    monkeypatch.setenv("GLM_API_KEY", "fake")
+    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
     source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
     source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
     overlay.write_text("{}")
