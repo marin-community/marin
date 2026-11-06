@@ -4,8 +4,41 @@
 import copy
 import json
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+from taskcompendium.convert.answers import answer_task
+from taskcompendium.models import Source
+from taskcompendium.pipeline.models import RawRow
+from verifyit.spec import ExactSpec
+
 from experiments.post_training.inventory import publish_loop_result as publication
+from experiments.post_training.task_curation.inventory import TASK_SPEC_COLUMN
 from infra.marina.apps.rl_progress.server.app import comparison_fields
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value))
+
+
+def answer(task, score, *, low=0, high=1, status="verified", tokens=1, error=None):
+    verification = {"status": status, "score": score, "score_min": low, "score_max": high}
+    return {"task_id": task, "response_token_ids": [1] * tokens, "exception_type": error, "verification": verification}
+
+
+def task_parquet(path, identifiers):
+    template = answer_task(
+        RawRow("template", Source(dataset="fixture", revision="1", row="template", importer_revision="1"), {}),
+        prompt="Reply yes.",
+        spec=ExactSpec(expected=("yes",)),
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{TASK_SPEC_COLUMN: template.model_copy(update={"id": item}).model_dump_json()} for item in identifiers]
+        ),
+        path,
+    )
 
 
 def result_record():

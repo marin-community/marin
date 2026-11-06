@@ -16,13 +16,10 @@ from rigging.timing import Timestamp
 
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training import test_snowball_rl_gate as gate_tests
 from experiments.post_training.inventory import loop_publication
 from experiments.post_training.inventory.publication_test_support import result_record
 
 pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
-recorded_runs = gate_tests.recorded_runs
-publication_transport = gate_tests.publication_transport
 
 
 def _json(path, value):

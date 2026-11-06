@@ -78,14 +78,7 @@ def _native_identity(path: str) -> tuple[str, str]:
     return identity
 
 
-def _snowball_record(path: str, native: tuple[str, str] | None = None) -> dict | None:
-    if native is None:
-        try:
-            config = read_skyrl_launch_config(path)
-        except FileNotFoundError:
-            return None
-        run = config.get("run", {})
-        native = run.get("id"), run.get("attempt_id")
+def _snowball_record(path: str, native: tuple[str, str]) -> dict | None:
     source = StoragePath(path) / "exports/attempts" / str(native[1]) / RESULT_FILENAME
     if not presets.exists(source):
         return None
