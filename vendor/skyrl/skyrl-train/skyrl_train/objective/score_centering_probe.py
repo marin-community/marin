@@ -22,62 +22,42 @@ def collate_score_probe(
     *,
     sampled_logprobs: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
-    """Map per-response probe arrays to padded [batch, sampled-position] tensors.
+    """Select surviving probe positions, then collate their compact behavior heads.
 
-    ``score_probe_{positions,indices,logprobs}`` share rows and position order.
-    Positions index the full response, including masked tokens. Later loss masks
-    remove evidence; padding uses invalid candidate IDs. Sampled-token scores
-    validate the behavior head before returning ``score_topk_indices``,
-    ``score_behavior_logprobs`` and ``score_probe_positions`` (empty if none survive).
-    Callers must provide aligned ``score_probe_source_steps`` (-1 for unknown)
-    and ``score_old_logprobs`` for these positions before summarizing.
+    Positions index full responses. Output pads only the selected positions,
+    with invalid head IDs distinguishing padding from response position zero.
     """
     positions = trajectory_batch["score_probe_positions"]
     index_rows = trajectory_batch["score_probe_indices"]
     score_rows = trajectory_batch["score_probe_logprobs"]
-    size = len(response_token_ids)
-    if any(len(rows) != size for rows in (positions, index_rows, score_rows)):
+    if any(len(rows) != len(response_token_ids) for rows in (positions, index_rows, score_rows)):
         raise ValueError("score probe channels must align with response rows")
-    width = max((len(row) for row in positions if row is not None), default=0)
-    if width == 0:
-        return {}
-    position_rows, compact_responses, compact_indices, compact_scores, compact_masks = [], [], [], [], []
+    position_rows, token_rows, compact_indices, compact_scores = [], [], [], []
     for row, response in enumerate(response_token_ids):
-        selected = (
-            np.asarray(positions[row], dtype=np.int64) if positions[row] is not None else np.empty(0, dtype=np.int64)
-        )
-        count = len(selected)
-        if count and (np.any(selected < 0) or np.any(selected >= len(response)) or len(np.unique(selected)) != count):
+        selected = np.asarray(positions[row] if positions[row] is not None else [], dtype=np.int64)
+        if np.any(selected < 0) or np.any(selected >= len(response)) or len(np.unique(selected)) != len(selected):
             raise ValueError("score probe positions must be unique response positions")
-        if count and (index_rows[row] is None or score_rows[row] is None):
+        if len(selected) and (index_rows[row] is None or score_rows[row] is None):
             raise ValueError("score probe positions require aligned behavior head evidence")
-        # Trainer-side filters can mask tokens after the rollout worker sampled
-        # positions. Drop their evidence without changing the optimization mask.
         keep = np.asarray(trajectory_batch["loss_masks"][row], dtype=np.bool_)[selected]
         selected = selected[keep]
-        count = len(selected)
         position_rows.append(torch.from_numpy(selected))
-        compact_responses.append([response[index] for index in selected])
-        compact_indices.append(index_rows[row][keep] if count else np.empty((0, top_k), dtype=np.int32))
-        compact_scores.append(score_rows[row][keep] if count else np.empty((0, top_k), dtype=np.float32))
-        compact_masks.append([1] * count)
-    width = max(map(len, compact_responses))
-    if width == 0:
+        token_rows.append(np.asarray(response, dtype=np.int64)[selected].tolist())
+        compact_indices.append(index_rows[row][keep] if len(selected) else np.empty((0, top_k), dtype=np.int32))
+        compact_scores.append(score_rows[row][keep] if len(selected) else np.empty((0, top_k), dtype=np.float32))
+    if not any(len(row) for row in position_rows):
         return {}
-    compact_positions = pad_sequence(position_rows, batch_first=True)
-    mask = torch.arange(width).unsqueeze(0) < torch.tensor([len(row) for row in position_rows]).unsqueeze(1)
-    sampled = sampled_logprobs.gather(1, compact_positions).float()
-    compact = {
-        "student_topk_indices": compact_indices,
-        "behavior_topk_logprobs": compact_scores,
-        "loss_masks": compact_masks,
-    }
-    indices, behavior = collate_score_centering(compact, compact_responses, mask, top_k, sampled_logprobs=sampled)
-    return {
-        "score_topk_indices": indices,
-        "score_behavior_logprobs": behavior,
-        "score_probe_positions": compact_positions,
-    }
+    padded_positions = pad_sequence(position_rows, batch_first=True)
+    tensors = collate_score_centering(
+        compact_indices,
+        compact_scores,
+        token_rows,
+        [[1] * len(row) for row in token_rows],
+        top_k,
+        sampled_logprobs=sampled_logprobs.gather(1, padded_positions).float(),
+    )
+    tensors["score_probe_positions"] = padded_positions
+    return tensors
 
 
 @torch.no_grad()
@@ -107,16 +87,20 @@ def hypothetical_score_probe(
     hypothetical correction, including the modeled tail. They do not measure
     parameter gradients or learning benefit.
     """
-    unit_correction = ppo_tis_score_centering_correction(
-        head,
-        head,
-        behavior_head,
-        torch.ones_like(advantages),
-        valid,
-        tis_cap=tis_cap,
-        eps_clip_low=eps_clip_low,
-        eps_clip_high=eps_clip_high,
-    )
+    compute_dtype = torch.float64 if head.dtype == torch.float64 else torch.float32
+    with torch.enable_grad():
+        probe_head = head.detach().to(compute_dtype).requires_grad_()
+        unit_correction = ppo_tis_score_centering_correction(
+            probe_head,
+            head,
+            behavior_head,
+            torch.ones_like(advantages),
+            valid,
+            tis_cap=tis_cap,
+            eps_clip_low=eps_clip_low,
+            eps_clip_high=eps_clip_high,
+        )
+        residual = torch.autograd.grad(unit_correction.sum(), probe_head)[0][valid]
     count = int(valid.sum())
     metrics = {
         "observed": float(count > 0),
@@ -150,14 +134,7 @@ def hypothetical_score_probe(
     if torch.any(age[known] < 0):
         raise ValueError("score probe source version is ahead of the learner snapshot")
     ordinary = -advantages[valid] * delta.clamp(max=math.log(tis_cap)).exp()
-    p_log = head[valid].to(unit_advantage.dtype)
-    q_log = behavior_head[valid].to(unit_advantage.dtype)
-    p, q = p_log.exp(), q_log.exp()
-    p_tail = (1 - p.sum(-1)).clamp_min(TAIL_MASS_FLOOR)
-    q_tail = (1 - q.sum(-1)).clamp_min(TAIL_MASS_FLOOR)
-    # At current=old, PPO clipping is inactive and q*w = min(p, cap*q).
-    tail_scale = (tis_cap * q_tail / p_tail).clamp(max=1)
-    residual = q * (p_log - q_log).clamp(max=math.log(tis_cap)).exp() - tail_scale[:, None] * p
+    p = head[valid].to(unit_advantage.dtype).exp()
     total = residual.sum(-1)
     unit_logit_l1 = (residual - p * total[:, None]).abs().sum(-1)
     unit_logit_l1 += (1 - p.sum(-1)).clamp_min(0) * total.abs()
