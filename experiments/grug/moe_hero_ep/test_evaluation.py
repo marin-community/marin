@@ -35,11 +35,26 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
             axis_types=(AxisType.Explicit,) * 5,
         )
         config = model.GrugModelConfig(
-            vocab_size=128, hidden_dim=32, intermediate_dim=16, shared_expert_intermediate_dim=16,
-            num_shared_experts=1, num_experts=4, num_experts_per_token=2, num_layers=2, num_heads=4,
-            num_kv_heads=2, local_kv_heads=2, global_kv_heads=2, head_dim=8, max_seq_len=16,
-            sliding_window=4, global_every=2, capacity_factor=4.0, initializer_std=0.1,
-            attention_implementation="reference", moe_implementation="fixed_all_to_all",
+            vocab_size=128,
+            hidden_dim=32,
+            intermediate_dim=16,
+            shared_expert_intermediate_dim=16,
+            num_shared_experts=1,
+            num_experts=4,
+            num_experts_per_token=2,
+            num_layers=2,
+            num_heads=4,
+            num_kv_heads=2,
+            local_kv_heads=2,
+            global_kv_heads=2,
+            head_dim=8,
+            max_seq_len=16,
+            sliding_window=4,
+            global_every=2,
+            capacity_factor=4.0,
+            initializer_std=0.1,
+            attention_implementation="reference",
+            moe_implementation="fixed_all_to_all",
         )
         stream = io.StringIO()
         tracker = JsonLoggerConfig(logger_name="test.multilength.dropless").init(run_id=None)
@@ -54,9 +69,7 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
                 [{"input_ids": np.array([1, 2, 3], dtype=np.int32)}], cache_path + "/validation", metadata={}
             )
             data = LmDataConfig(
-                components={"paloma/tiny": DatasetComponent(
-                    cache_dir=cache_path, format=TextLmDatasetFormat()
-                )},
+                components={"paloma/tiny": DatasetComponent(cache_dir=cache_path, format=TextLmDatasetFormat())},
                 tokenizer=directory,
             )
             transformer = model.Transformer.init(config, key=jax.random.key(0))
@@ -64,13 +77,20 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
             logits = jax.jit(lambda params, ids: params.logits(ids))
             before = np.asarray(logits(transformer, tokens))
             hooks = train.build_eval_hooks(
-                data_config=data, train_seq_len=16, mesh=mesh,
+                data_config=data,
+                train_seq_len=16,
+                mesh=mesh,
                 eval_cfg=train.GrugEvalConfig(
-                    eval_batch_size=2, seq_lens=(2, 4, 8, 16, 4), compute_bpb=False,
-                    eval_current=False, eval_ema=False, dropless_eval=True,
+                    eval_batch_size=2,
+                    seq_lens=(2, 4, 8, 16, 4),
+                    compute_bpb=False,
+                    eval_current=False,
+                    eval_ema=False,
+                    dropless_eval=True,
                     dropless_eval_moe_implementation="scatter",
                 ),
-                mp=jmp.get_policy("float32"), eval_ema=False,
+                mp=jmp.get_policy("float32"),
+                eval_ema=False,
             )
             step = SimpleNamespace(step=10, model=transformer, emit_event=events.append)
             with current_tracker(tracker):
@@ -93,7 +113,9 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
             assert metrics[prefix + "/paloma/tiny/loss"] > 0
         np.testing.assert_allclose(
             [metrics[f"eval_dropless/seq_len_{length}/loss"] for length in (8, 16)],
-            metrics["eval_dropless/seq_len_4/loss"], rtol=1e-5, atol=1e-5,
+            metrics["eval_dropless/seq_len_4/loss"],
+            rtol=1e-5,
+            atol=1e-5,
         )
         assert metrics["eval_dropless/loss"] == metrics["eval_dropless/seq_len_16/loss"]
         np.testing.assert_array_equal(after, before)
