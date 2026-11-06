@@ -62,7 +62,7 @@ BatchedTagArray = Int[Array, "... tag"]
 @dataclasses.dataclass
 class EvalResult:
     micro_avg_loss: float  # per token across all datasets
-    macro_avg_loss: float  # average of per-dataset average losses
+    macro_avg_loss: float  # average of per-dataset average losses, over tags with scored tokens
     tag_macro_losses: dict[str, float]  # per tag average-per-token loss
     tag_micro_losses: dict[str, float]  # per tag total loss, for "parent" tags
     total_eval_loading_time: float
@@ -630,7 +630,9 @@ class TaggedEvaluator(Generic[Ex, M]):
         for parent, children in self.hierarchy.items():
             mask = np.zeros(self.dataset.num_tags, dtype=bool)
             mask[children] = 1
-            mask = mask & (total_tokens_per_tag_cpu > 0)
+            mask = mask & scored_tags
+            if not mask.any():
+                continue
 
             tag_macro_loss[parent] = np.mean(mean_loss_per_tag_cpu, where=mask)
             tag_micro_loss[parent] = np.average(mean_loss_per_tag_cpu, weights=total_tokens_per_tag_cpu * mask)
@@ -641,6 +643,7 @@ class TaggedEvaluator(Generic[Ex, M]):
 
         for tag, index in self.dataset.tag_to_index.items():
             if not scored_tags[index]:
+                logger.warning(f"Eval tag {tag} has no scored tokens; leaving it out of the macros and logs")
                 continue
             tag_micro_loss[tag] = float(mean_loss_per_tag_cpu[index])
             if self.bytes_per_token is not None:
