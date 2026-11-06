@@ -11,6 +11,10 @@
     "count": 500,
     "sha256": "269f4a78bc59444649948be97a3f238083c012a2983c524fe9e919cf3a7545ff"
   },
+  "SimpleQAVerified": {
+    "count": 1000,
+    "sha256": "f7de97a8ce5d8c424e88883d3522bcd1dc722509ccb29798cfe79c00f52b2107"
+  },
   "IFEval": {
     "count": 500,
     "sha256": "87fb8fe7bdeb99543e4e5cd6dfaa84a45024b1fc1b574b53bdb5e64263a87827"

@@ -41,6 +41,7 @@ SOURCES = {
     'SWEbench': ('eval.chat_benchmarks.SWEbench.eval_instruct', 'SWEBenchBenchmark'),
     'SimpleQA': ('eval.chat_benchmarks.SimpleQA.eval_instruct', 'SimpleQABenchmark'),
     'SimpleQAMini': ('eval.chat_benchmarks.SimpleQAMini.eval_instruct', 'SimpleQAMiniBenchmark'),
+    'SimpleQAVerified': ('eval.chat_benchmarks.SimpleQAVerified.eval_instruct', 'SimpleQAVerifiedBenchmark'),
     'WildBench': ('eval.chat_benchmarks.WildBench.eval_instruct', 'WildBenchBenchmark'),
     'alpaca_eval': ('eval.chat_benchmarks.alpaca_eval.eval_instruct', 'AlpacaBenchmark'),
     'zeroeval': ('eval.chat_benchmarks.zeroeval.eval_instruct', 'ZeroEvalBenchmark'),

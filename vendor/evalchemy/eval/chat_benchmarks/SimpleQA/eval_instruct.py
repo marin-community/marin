@@ -26,6 +26,7 @@ class SimpleQABenchmark(BaseBenchmark):
     PRIMARY_METRIC = "accuracy"
     SOURCE = SourceRef("basicv8vc/SimpleQA", "train", HF_REVISION)
     REQUIRES_JUDGE = True
+    GRADER = "simpleqa"
 
     def __init__(
         self,
@@ -94,6 +95,6 @@ class SimpleQABenchmark(BaseBenchmark):
     def iter_specs(self, options):
         return text_specs(
             self.load_questions(), options, prompt=lambda row: row["question"], target=lambda row: row["answer"],
-            grader="simpleqa", generation_kwargs={"do_sample": False, "temperature": 0,
+            grader=self.GRADER, generation_kwargs={"do_sample": False, "temperature": 0,
                                            "max_gen_toks": self.max_new_tokens},
         )

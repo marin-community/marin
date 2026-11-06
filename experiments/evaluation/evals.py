@@ -359,6 +359,7 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "ifbench",
     "mrcr",
     "graphwalks",
+    "simpleqa-verified",
 )
 
 EVALS: dict[str, EvaluationDefinition] = {

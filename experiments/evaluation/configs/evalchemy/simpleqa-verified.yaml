@@ -1,0 +1,24 @@
+# SimpleQA Verified: 1,000 short-form factuality questions graded correct / incorrect / not attempted
+# by an LLM judge with the benchmark's autorater prompt. The leaderboard judge is gpt-4.1-2025-04-14;
+# this config uses gpt-oss-120b, so scores are not directly comparable to published numbers.
+tasks: [SimpleQAVerified]
+task_options:
+  SimpleQAVerified:
+    num_fewshot: 0
+    task_alias: simpleqa-verified
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+# Greedy decoding with room for a short answer and brief justification.
+max_tokens: 2048
+runtime_extras: [simpleqaverified]
+# The benchmark measures direct factual recall without tools or reasoning.
+chat_template_kwargs:
+  enable_thinking: false
+judge:
+  base_url: https://api.together.xyz/v1
+  model: openai/gpt-oss-120b
+  api_key:
+    - env:TOGETHER_API_KEY
+    - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest

@@ -12,6 +12,7 @@ from eval.chat_benchmarks.MATH500.eval_instruct import MATH500Benchmark
 from eval.chat_benchmarks.MixEval.eval_instruct import MixEvalBenchmark
 from eval.chat_benchmarks.SimpleQA.eval_instruct import SimpleQABenchmark
 from eval.chat_benchmarks.SimpleQAMini.eval_instruct import SimpleQAMiniBenchmark
+from eval.chat_benchmarks.SimpleQAVerified.eval_instruct import SimpleQAVerifiedBenchmark
 from eval.contracts.eval_spec import SourceRef
 from eval.sources.common import SourceOptions
 
@@ -21,6 +22,7 @@ from eval.sources.common import SourceOptions
     ("MATH500", MATH500Benchmark, {}),
     ("SimpleQA", SimpleQABenchmark, {}),
     ("SimpleQAMini", SimpleQAMiniBenchmark, {}),
+    ("SimpleQAVerified", SimpleQAVerifiedBenchmark, {}),
     ("IFEval", IFEvalBenchmark, {}),
     ("MixEval", MixEvalBenchmark, {}),
     ("MixEvalHard", MixEvalBenchmark, {"benchmark": "mixeval_hard"}),

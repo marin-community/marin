@@ -18,6 +18,8 @@ from rigging.secrets import is_secret_reference
 RESERVED_ENDPOINT_MODEL_ARGS = frozenset(
     {"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests", "chat_template_kwargs"}
 )
+EXTERNAL_JUDGE_TASKS = frozenset({"FinanceBench", "OlympiadBench", "SimpleQAVerified"})
+"""Evalchemy tasks that run alone and grade through an explicitly configured external judge."""
 
 
 class ChatTokenizerBackend(StrEnum):
@@ -103,9 +105,9 @@ class EvalchemyConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_judge_task(self) -> EvalchemyConfig:
-        judge_task = self.tasks in {("FinanceBench",), ("OlympiadBench",)}
+        judge_task = len(self.tasks) == 1 and self.tasks[0] in EXTERNAL_JUDGE_TASKS
         if self.judge is not None and not judge_task:
-            raise ValueError("judge is supported only for a single FinanceBench or OlympiadBench task")
+            raise ValueError(f"judge is supported only for a single task among {sorted(EXTERNAL_JUDGE_TASKS)}")
         if judge_task and self.judge is None:
             raise ValueError(f"{self.tasks[0]} requires an explicit judge configuration")
         return self
