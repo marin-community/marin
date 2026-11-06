@@ -268,7 +268,7 @@ class _FilesAdapter:
         for path in io.list_dir(self.directory):
             match = re.fullmatch(r"step-(\d+)\.json", Path(path).name)
             if match and (resumed_step is None or int(match[1]) > resumed_step):
-                io.remove(path)
+                io.remove(join_resource_path(self.directory, Path(path).name))
 
     def log(self, data: dict[str, Any], step: int) -> None:
         path = join_resource_path(self.directory, f"step-{step:06d}.json")
