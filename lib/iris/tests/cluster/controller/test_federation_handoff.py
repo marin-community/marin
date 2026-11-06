@@ -248,8 +248,6 @@ def test_a_federated_job_carries_its_container_profile_to_the_peer(tmp_path, log
 
 
 def test_a_federated_job_carries_its_tags_to_the_peer(tmp_path, log_client):
-    """The peer writes the iris.job rows of the handed-off job and its children, so it
-    needs the tags, and an untagged child on the peer inherits them."""
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
