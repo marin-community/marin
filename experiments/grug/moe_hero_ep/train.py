@@ -1088,17 +1088,6 @@ def _make_train_step(
     return train_step
 
 
-def _check_restored_step(restored_step: int, stop_step: int) -> None:
-    """Reject a restore past the stop step, which would otherwise train nothing and report success.
-
-    A restore exactly at the stop step is allowed, because a retry after the final checkpoint lands there.
-    """
-    if restored_step > stop_step:
-        raise ValueError(f"Restored step {restored_step} is past the stop step {stop_step}; nothing would train")
-    if restored_step == stop_step:
-        logger.warning("Restored step %d is the stop step; this run trains no steps", restored_step)
-
-
 def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
     """Whether a complete permanent checkpoint of ``step`` exists under the checkpointer's permanent root."""
     # Every process must take the same branch around the collective save, so process 0 decides for all.
@@ -1279,7 +1268,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         # both use it so a run reports against the steps it will actually take.
         stop_step = config.stop_step
         restored_step = int(state.step)
-        _check_restored_step(restored_step, stop_step)
+        # A restore exactly at the stop is allowed, because a retry after the final checkpoint lands there.
+        if restored_step > stop_step:
+            raise ValueError(f"Restored step {restored_step} is past the stop step {stop_step}; nothing would train")
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=stop_step)
