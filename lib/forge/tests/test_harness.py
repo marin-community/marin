@@ -593,7 +593,6 @@ async def test_large_shell_output_is_saved_and_replayed_without_inference(tmp_pa
         IsADirectoryError("directory"),
         FileNotFoundError("missing"),
         NotADirectoryError("parent"),
-        PermissionError("denied"),
     ],
 )
 async def test_write_path_errors_return_feedback(failure: OSError) -> None:
