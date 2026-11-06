@@ -28,6 +28,7 @@ from taskcompendium.models import (
     FunctionDefinition,
     GradingAttempt,
     JsonAnswer,
+    JsonObjectInFinal,
     JsonSubmission,
     JsonValueAnswer,
     PlainText,
@@ -205,7 +206,7 @@ def submission_instruction(answer_format: BaseAnswerFormat) -> str:
             return "Put your final answer within \\boxed{}."
         case JsonAnswer():
             return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
-        case JsonValueAnswer():
+        case JsonValueAnswer() | JsonObjectInFinal():
             return "Give your final answer as one JSON value, without Markdown fences."
         case AnswerCall():
             return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
