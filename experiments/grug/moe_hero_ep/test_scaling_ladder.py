@@ -105,6 +105,8 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
         dp_racks=1,
         num_steps=1,
         schedule_steps=390_251,
+        long_context_start_step=390_251,
+        restore_from="s3://bucket/checkpoints/step-390251",
         version="dev",
         gc_interval=100,
     )
@@ -117,7 +119,6 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
     )
 
     # The diagnostic is one rack of the hero: the same model, and the hero's per-rack batch at its context.
-    # It trains at that context from its start, so it carries no context history.
     assert diagnostic_config.model == ladder_config.model
     assert (
         diagnostic_config.trainer.trainer.train_batch_size
@@ -140,6 +141,7 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
         progress_watchdog=diagnostic_config.trainer.trainer.progress_watchdog,
         checkpointer=diagnostic_config.trainer.trainer.checkpointer,
         load_checkpoint_path=diagnostic_config.trainer.trainer.load_checkpoint_path,
+        load_checkpoint=diagnostic_config.trainer.trainer.load_checkpoint,
     )
     assert diagnostic_config.data.target_budget is ladder_config.data.target_budget is None
     assert diagnostic_config.data.experiment_budget is ladder_config.data.experiment_budget is None
@@ -171,7 +173,8 @@ def test_d6144_continues_the_checked_in_context_history_and_narrow_rungs_start_f
 
     phases = launch_scaling_ladder.HERO_CONTEXT_PHASES
     assert hero.flops_baseline == FlopsBaseline(phases[-1].end_step, launch_scaling_ladder.HERO_FLOPS_BASELINE_TOTAL)
-    assert [(p.end_step, p.seq_len) for p in hero.data.prior_context_phases] == [(p.end_step, p.seq_len) for p in phases]
+    # The long-context mix starts where the history ends instead of replaying it.
+    assert hero.data.prior_context_phases == []
     assert narrow.flops_baseline is None
     assert narrow.data.prior_context_phases == []
 

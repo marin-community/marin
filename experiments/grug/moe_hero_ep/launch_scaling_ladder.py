@@ -1,23 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hero-shape scaling ladder: one recipe, five widths.
+"""Hero-shape scaling ladder across five widths.
 
-Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
-Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
-and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
-rung predicts the d6144 hero. ``d6144`` is the hero itself.
+The narrow rungs train at 4K with the Harrier 2026.08.18 mixture. The d6144 rung is the production hero:
+it uses 262K context, CP4 x EP16, the long-context mix, and a learning-rate extension.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
     d1024    2     2048    15276  every 5%    final only    128B    162M    4.0B    2.7e20
     d1536    6     6144    15128  every 5%    final only    381B    481M   11.5B    1.8e21
     d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
-    d6144   11      704   390251  every 3000  every 6k       18T     23B     535B    2.7e24
+    d6144   11      176   390251  every 500   every 6k       18T     23B     535B    2.7e24
 
 At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step (the d6144
-hero trained at 4K with batch 11264 until step 257553 and at 16K with batch 2816 until step 372000).
+hero trained at 4K with batch 11264 until step 257553, at 16K with batch 2816 until step 372000, and at 65K
+with batch 704 until step 390251).
 Eval batch is one sequence per batch shard: 64 x racks, or (64 / CP) x racks with CP-way context
 parallelism. Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
 analytic estimate (forward+backward, including attention and the latent-MoE correction), with the
@@ -140,9 +138,10 @@ HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (
     HarrierContextPhase(end_step=257_553, seq_len=4096),
     HarrierContextPhase(end_step=372_000, seq_len=16384),
+    HarrierContextPhase(end_step=390_251, seq_len=65536),
 )
 # The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
-HERO_FLOPS_BASELINE_TOTAL: float | None = 2.6276788418873884e24
+HERO_FLOPS_BASELINE_TOTAL: float | None = 2.7998053065367505e24
 
 
 def _hero_flops_baseline(
@@ -173,7 +172,7 @@ TOKENS_PER_ACTIVE_PARAM = 791
 FINAL_DENSE_CHECKPOINT_STEPS = 5000
 FINAL_DENSE_CHECKPOINT_EVERY = 500
 # Each periodic eval before the stop step runs before that step's checkpoint.
-HERO_STEPS_PER_EVAL = 3000
+HERO_STEPS_PER_EVAL = 500
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
@@ -251,7 +250,8 @@ def build_ladder_run(
     ``num_steps`` defaults to the steps needed to train ``TOKENS_PER_ACTIVE_PARAM`` tokens per active
     parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set dropless. The
     narrow rungs eval every 5% of the run and keep only the forced final
-    checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
+    checkpoint; the d6144 hero evals every ``HERO_STEPS_PER_EVAL`` steps and keeps a permanent checkpoint every 6000,
+    or every ``FINAL_DENSE_CHECKPOINT_EVERY`` from the schedule's final ``FINAL_DENSE_CHECKPOINT_STEPS`` on.
     ``checkpoint_every`` and ``eval_every`` override those cadences for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
     resumes from the newest checkpoint it finds. ``initialize_from_checkpoint`` is another run's
@@ -333,7 +333,7 @@ def build_ladder_run(
     run_flops = flops_per_example * batch_size * num_steps
 
     # The narrow rungs are short: eval every 5% of the run and keep only the forced final checkpoint.
-    # The d6144 hero is long: eval every 3000 steps and keep a permanent checkpoint every 6000, densified
+    # The d6144 hero is long: eval every HERO_STEPS_PER_EVAL steps and keep a permanent checkpoint every 6000, densified
     # to every FINAL_DENSE_CHECKPOINT_EVERY steps over the final FINAL_DENSE_CHECKPOINT_STEPS.
     # `keep_permanent=None` still writes the final checkpoint; restore is not used (see run_grug).
     if size == "d6144":
@@ -547,7 +547,7 @@ def build_ladder_run(
     "--eval-every",
     type=click.IntRange(min=1),
     default=None,
-    help="Eval every N steps. Default follows the rung (3000 at d6144, every 5% elsewhere).",
+    help=f"Eval every N steps. Default follows the rung ({HERO_STEPS_PER_EVAL} at d6144, every 5% elsewhere).",
 )
 @click.option(
     "--gate-router-weight-decay",
