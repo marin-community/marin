@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import subprocess
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -15,7 +14,7 @@ import yaml
 from iris.rpc import controller_pb2, job_pb2
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
+from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
@@ -35,29 +34,12 @@ def _render(step, path, *, runtime=False):
     return yaml.safe_load(config.launch_config_yaml)
 
 
-def _native(script, paths):
-    source = str(Path(__file__).resolve().parents[2] / "vendor/skyrl")
-    script = (
-        "from pathlib import Path as SourcePath\n"
-        "from cloud.iris import launch_config as SourceLaunch\n"
-        "import skyrl_train as SourceTrain\n"
-        f"assert all(SourcePath(module.__file__).resolve().is_relative_to({source!r}) "
-        "for module in (SourceLaunch, SourceTrain))\n"
-        "print('SNOWBALL_NATIVE_SOURCE_ORIGINS_PASS')\n" + script
-    )
-    result = subprocess.run(
-        skyrl_cpu_command("python", "-c", script, *paths), capture_output=True, text=True, timeout=170
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout.splitlines()[-1])
-
-
 pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
 pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
 
 
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
-def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path, monkeypatch):
+def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path, monkeypatch, native_json):
     paths = []
     launches = {}
     for name, preset in presets.PRESETS.items():
@@ -109,7 +91,7 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
     path = tmp_path / "changed-batch.yaml"
     _render(changed, path, runtime=True)
     paths.append(str(path))
-    rows = _native(
+    rows = native_json(
         """
 import asyncio, json, sys
 from types import SimpleNamespace
@@ -291,7 +273,7 @@ print(json.dumps([{
 
 
 @pytest.mark.timeout(180)
-def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
+def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch, native_json):
     summary = (Path(selection.path()) / "summary.json").read_text()
     panel_name, panel_version = presets.DEFAULT_TEST_PANEL.split("@")
     panel_summary = (tmp_path / panel_name / panel_version / "summary.json").read_text()
@@ -313,7 +295,7 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
         path = tmp_path / f"{name}.yaml"
         _render(step, path)
         paths.append(str(path))
-    configs = _native(
+    configs = native_json(
         """
 import json, os, sys
 from pathlib import Path

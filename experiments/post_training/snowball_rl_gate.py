@@ -671,6 +671,12 @@ def _load_control(
                 "uri": record.result["hf_model_uri"],
             }
         actual = rescored.config["inputs"]["model"]
+        if not all(
+            isinstance(source[key], str) and source[key]
+            for source in (model, actual)
+            for key in ("identity", "uri", "tokenizer_uri", "tokenizer_revision")
+        ):
+            raise ValueError("model binding fields must be nonempty strings")
         if actual["identity"].partition(":")[0] != model["identity"].partition(":")[0] or any(
             actual[key] != model[key] for key in ("uri", "tokenizer_uri", "tokenizer_revision")
         ):
@@ -686,7 +692,9 @@ def _load_control(
             )
         panel = _load_run(selected, evaluation_preset, rates)
     except (KeyError, TypeError, ValueError) as error:
-        raise InvalidComparison(f"invalid panel re-score for control {path}: {selected}: {error}") from error
+        raise InvalidComparison(
+            f"invalid panel re-score for control {path} on panel {evaluation.source}: {selected}: {error}"
+        ) from error
     prefix = evaluation.name + "/"
     native_prefix = (
         f"eval/{evaluation.name}/"

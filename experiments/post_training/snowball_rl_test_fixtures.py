@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
 from dataclasses import replace
 
 import pytest
 from marin.execution.lazy import ArtifactStep
+from marin.rl.skyrl import skyrl_cpu_command
 from rigging.provenance import Provenance
 
 from experiments.post_training import snowball_rl as snowball
@@ -70,3 +72,23 @@ def synthetic_current_controls(monkeypatch):
             for name, pins in gate.CONTROLS.items()
         },
     )
+
+
+@pytest.fixture
+def native_json():
+    def execute(script, paths):
+        source = str(presets.REPO_ROOT / "vendor/skyrl")
+        program = (
+            "from pathlib import Path as SourcePath\nfrom cloud.iris import launch_config as SourceLaunch\n"
+            "import skyrl_train as SourceTrain\n"
+            f"assert all(SourcePath(module.__file__).resolve().is_relative_to({source!r}) "
+            "for module in (SourceLaunch, SourceTrain))\n"
+            "print('SNOWBALL_NATIVE_SOURCE_ORIGINS_PASS')\n" + script
+        )
+        result = subprocess.run(
+            skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=170
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout.splitlines()[-1])
+
+    return execute

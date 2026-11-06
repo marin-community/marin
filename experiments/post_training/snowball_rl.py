@@ -88,7 +88,7 @@ from iris.resources.state import TERMINAL_JOB_STATES, JobState
 from iris.rpc import job_pb2
 from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, apply
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.rl.cli import submit_or_run
@@ -452,7 +452,9 @@ def _control_panel_runs(preset: presets.Preset, panel: str) -> SnowballRun:
                 export = (record.result or {}).get("hf_model_uri")
                 if not export or not presets.exists(StoragePath(export) / "config.json"):
                     raise click.BadParameter(f"control {name}@{pin.revision} has no retained HF weights")
-                model = SkyRLPolicyModel(ArtifactStep.adopt(name, pin.revision, path, kind=SkyRLRun))
+                model = SkyRLPolicyModel(
+                    apply(name, SkyRLRun.raw_load, version=pin.revision, artifact_type=SkyRLRun, pin=path, source=path)
+                )
             config["trainer"].update(
                 max_steps=1,
                 eval_interval=1,
