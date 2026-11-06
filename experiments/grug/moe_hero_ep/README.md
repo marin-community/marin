@@ -217,7 +217,7 @@ output root and never pruned. Temporary checkpoints expire three days after they
 those a replaced run leaves behind clear themselves.
 
 The hero stops at the end of its 390251-step schedule unless `HERO_SCHEDULE_EXTENSION` in `hero_recipe.py` says
-otherwise; it is set to `ScheduleExtension(steps=4335, final_lr_ratio=0.01)`, which stops at step 394586. A cutover that trains past the schedule sets it in the deploy PR as
+otherwise; it is set to `ScheduleExtension(steps=3240, final_lr_ratio=0.01)`, which stops at step 393491. A cutover that trains past the schedule sets it in the deploy PR as
 `ScheduleExtension(steps=N, final_lr_ratio=R)`: the run stops at 390251 + N, and over those steps the learning
 rates move linearly from the schedule's floor, 5% of peak, to `R` of peak. The heuristic, weight decay, data stages,
 and checkpoint keeps still size from 390251.
@@ -621,7 +621,7 @@ checkpoint policy all follow `--size`:
 | d1024 | 2 | 2048 | 15,276 | every 5% | final only |
 | d1536 | 6 | 6144 | 15,128 | every 5% | final only |
 | d2048 | 11 | 11264 | 20,072 | every 5% | final only |
-| d6144 | 11 | 11264 at 4K, 2816 at 16K, 704 at 65K, 176 at 262K | 390,251 plus a 4,335-step extension | every 500 | every 6k, then every 500 from step 385,251 |
+| d6144 | 11 | 11264 at 4K, 2816 at 16K, 704 at 65K, 176 at 262K | 390,251 plus a 3,240-step extension | every 500 | every 6k, then every 500 from step 385,251 |
 
 At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
 batch is one sequence per batch shard: 64 × racks (704 on the hero) without context parallelism, and
