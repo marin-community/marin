@@ -147,6 +147,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         quality_metrics=None,
         initial_unscored=0,
         source_first_task="task-0",
+        panel_identity="",
     ):
         preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
         root = tmp_path / name / version
@@ -204,7 +205,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                 row["generate/wall_seconds"] = 1.0
             if step != omit_step:
                 _json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
-        launch = {"inputs": {"validation_data": [], "evaluation_data": {}}}
+        launch = {"skyrl": {"trainer": {"seed": presets.SEED}}, "inputs": {"validation_data": [], "evaluation_data": {}}}
         if unresolved_receipt:
             launch |= {
                 "artifacts": {"attempts_root": str(root / "attempts")},
@@ -225,7 +226,11 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         sessions = {-1 if preset.updates == 0 else preset.updates: score}
         sessions |= {0: initial_score} if initial_score is not None else {}
         for index, evaluation in enumerate(preset.evaluations):
-            selected = evaluation.tasks(selection, presets.default_selection())
+            task_options = [argv[index + 1] for index, value in enumerate(argv[:-1]) if value == "--tasks"]
+            default = presets.default_selection()
+            selected = evaluation.tasks(
+                presets.selection_artifact(task_options[-1]) if task_options else default, default
+            )
             run_panel = Path(selected.path())
             if first_panel_task != "task-0":
                 original = pq.read_table(run_panel / presets.TASK_MANIFEST_FILENAME).to_pylist()
@@ -253,13 +258,22 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                     run_panel / presets.TASK_MANIFEST_FILENAME,
                 )
                 _task_parquet(run_panel / f"{evaluation.file}.parquet", [source_first_task, *identifiers[1:]])
+            binding = selected
+            if evaluation.sample is not None:
+                binding = presets.sampled_tasks_step(
+                    selected, evaluation.file, evaluation.sample, presets.SEED, local_only=evaluation.local_only
+                )
             descriptor = {
                 "uri": str(run_panel),
                 "relative_path": f"{evaluation.file}.parquet",
                 "kind": "directory",
-                "identity": f"{selected.name}@{selected.version}",
+                "identity": f"{binding.name}@{binding.version}",
                 "local_path": str(run_panel),
             }
+            if panel_identity is None:
+                descriptor.pop("identity")
+            elif panel_identity:
+                descriptor["identity"] = panel_identity
             if index:
                 launch["inputs"]["evaluation_data"][evaluation.name] = [descriptor]
             else:
@@ -572,6 +586,26 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ),
         ("speed-long", {"metrics": {"policy/mismatch/pooled/kl_k3": 100}}, {}, "pass", "regression", set(), None),
         ("speed-long", {"metrics": {"policy/mismatch/staleness0/kl_k3": 100}}, {}, "fail", "regression", set(), None),
+        pytest.param(
+            "learning-medium",
+            {"panel_identity": None},
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="missing-recorded-panel-version",
+        ),
+        pytest.param(
+            "learning-medium",
+            {"panel_identity": "rl-data/task-selection/other-panel@2026.11.01"},
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="recorded-panel-version-differs",
+        ),
         ("learning-medium", BROKEN, {}, "fail", "regression", BROKEN_FAILS, None),
         ("speed-medium", {"fixed": False}, {}, "fail", "regression", {"fixed_reply_tokens"}, None),
         ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None),
@@ -784,6 +818,20 @@ def test_rescore_reports_candidate_and_control_contracts(
     if "record_version" in control_fault.get("fault", {}):
         assert control_fault["fault"]["record_version"] in report["reason"]
         assert presets.PRESET_REVISION in report["reason"]
+    if "panel_identity" in fault:
+        assert presets.DEFAULT_TEST_PANEL in report["reason"]
+        if fault["panel_identity"]:
+            assert fault["panel_identity"] in report["reason"]
+    elif verdict != "invalid":
+        if preset in ("speed-medium", "speed-long"):
+            assert report["run"]["panel"] is None and report["control"]["panel"] is None
+        else:
+            expected_panel = (
+                f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}"
+                if preset == "data-short"
+                else presets.DEFAULT_TEST_PANEL
+            )
+            assert report["run"]["panel"] == report["control"]["panel"] == expected_panel
     assert not fault.get("missing_receipt") or report["reason"] == f"no launch receipt at {source}"
     assert not fault.get("unresolved_receipt") or report["reason"].startswith(
         "cannot identify the Iris job lookup-missing-job"

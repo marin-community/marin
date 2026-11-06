@@ -215,6 +215,7 @@ class RunMetadata(BaseModel):
     replicates: int
     requirements: tuple[str, ...]
     baselines: tuple[str, ...] = ()
+    panel: str | None = None
 
 
 class ControlMetadata(BaseModel):
@@ -222,6 +223,7 @@ class ControlMetadata(BaseModel):
     revision: str
     runs: int
     gate_revision: str = GATE_REVISION
+    panel: str | None = None
 
 
 class GateReport(Artifact):
@@ -427,12 +429,43 @@ def _session_invariants(
 class RunData:
     path: str
     version: str
+    panel: str | None
     provenance: dict
     values: dict[str, float]
     panel_ids: dict[str, frozenset[str]]
     invariants: tuple[Invariant, ...]
     missing_tokens: bool
     slices: dict[str, tuple[int, float | None]]
+
+
+def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) -> str | None:
+    panels = [evaluation for evaluation in preset.evaluations if evaluation.harness == presets.EvalHarness.PANEL]
+    if not panels:
+        return None
+    evaluation = next((item for item in panels if item.file != scoring.TRAIN_STEM), panels[0])
+    default = presets.default_selection()
+    selection = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
+    selected = evaluation.tasks(selection, default)
+    panel = f"{selected.name.removeprefix(presets.SELECTION_PREFIX + '/')}@{selected.version}"
+    binding = selected
+    if evaluation.sample is not None:
+        binding = presets.sampled_tasks_step(
+            selected,
+            evaluation.file,
+            evaluation.sample,
+            launch["skyrl"]["trainer"]["seed"],
+            local_only=evaluation.local_only,
+        )
+    expected = f"{binding.name}@{binding.version}"
+    sources = launch["inputs"].get("evaluation_data", {}).get(evaluation.name, launch["inputs"]["validation_data"])
+    recorded = {source.get("identity", "").partition(":")[0] for source in sources}
+    if not recorded or "" in recorded or any("@" not in identity for identity in recorded):
+        raise InvalidComparison(f"recorded panel version is missing; expected {panel}")
+    if recorded != {expected}:
+        raise InvalidComparison(
+            f"recorded panel differs from preset: expected {panel} ({expected}); recorded {sorted(recorded)}"
+        )
+    return panel
 
 
 def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs: GateInputs = GateInputs()) -> RunData:
@@ -453,6 +486,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
     ]
     answers = scoring.evaluation_answers(path) if preset.evaluations else []
     launch = read_skyrl_launch_config(path) if preset.evaluations else {}
+    panel = _panel_identity(preset, launch, inputs)
     named = launch.get("inputs", {}).get("evaluation_data", {})
     scores, initial_scores, panel_ids = [scoring.EVAL_SCORE_SCHEMA.empty_table()], [], {}
     for evaluation in preset.evaluations:
@@ -540,6 +574,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
     return RunData(
         path=path,
         version=presets.artifact_record(path).version,
+        panel=panel,
         provenance=terminal.result.provenance,
         values=values,
         panel_ids=panel_ids,
@@ -733,7 +768,9 @@ def _write_gate(
         runs = [_load_run(path, preset, rates, inputs) for path in run_paths]
         if runs:
             fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
-            metadata = metadata.model_copy(update={field: runs[0].provenance[key] for field, key in fields.items()})
+            metadata = metadata.model_copy(
+                update={"panel": runs[0].panel, **{field: runs[0].provenance[key] for field, key in fields.items()}}
+            )
         invariants = [
             row.model_copy(update={"replicate": index})
             for index, candidate in enumerate(runs)
@@ -746,6 +783,7 @@ def _write_gate(
         controls = [candidate for group in grouped.values() for candidate in group]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
+        control = control.model_copy(update={"panel": controls[0].panel})
         for pin, group in grouped.items():
             for candidate in group:
                 _check_control(candidate, pin)
