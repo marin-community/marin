@@ -19,7 +19,7 @@ from forge.effects.context import Context
 from forge.effects.issues import Hold, Restart
 from forge.effects.log import EventLog
 from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
-from forge.harness.tools.adversary import AdversaryReport
+from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport
 from forge.harness.web import FakeWeb
 from forge.lowering import machine_backend, requirements
 from forge.model import serialization as wire
@@ -224,11 +224,18 @@ async def test_validate_collects_controls_and_concurrent_trials_despite_one_rest
     assert isinstance(default_review(result, config(harness).band), Incomplete)
 
 
+@pytest.mark.parametrize("reply,confirmed", [("9", False), ("12", True)])
 @pytest.mark.asyncio
-async def test_validate_adversary_reports_are_graded_and_environment_closed(workpiece: Workpiece) -> None:
+async def test_validate_adversary_reports_are_graded_and_environment_closed(
+    workpiece: Workpiece, reply: str, confirmed: bool
+) -> None:
     session = Conversation((), ())
     harness = RecordingHarness(
-        Returned("report", AdversaryReport(("wrong answer accepted",), (Candidate("9"),)), session)
+        Returned(
+            "report",
+            AdversaryReport((AdversaryClaim("wrong answer accepted", Candidate(reply), RewardBand(Outcome.GRADED, 1)),)),
+            session,
+        )
     )
     setup = config(harness)
     setup = replace(
@@ -241,11 +248,13 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(work
     bundle = resources(ctx)
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
-    assert evidence.adversary == (
-        AdversaryResult("finder", True, ("wrong answer accepted",), (GradeResult(Outcome.GRADED, 0),)),
-    )
-    assert isinstance(default_review(evidence, setup.band), Modify)
+    finding = evidence.adversary[0].findings[0]
+    assert evidence.adversary[0].completed and finding.candidate.reply == reply
+    assert finding.grade is not None and finding.grade.reward == float(confirmed)
+    assert finding.met is confirmed
+    assert isinstance(default_review(evidence, setup.band), Modify if confirmed else Accept)
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
+    assert bundle.envs.requested[0].docker_image == GRADER_BASE_IMAGE
 
 
 @pytest.mark.parametrize(
@@ -273,6 +282,46 @@ async def test_review_prioritizes_incomplete_evidence_over_task_defects(
     ctx = Context(log=EventLog())
     result = await review(ctx, workpiece.with_(evidence=(evidence,)), config(harness), resources(ctx))
     assert isinstance(result, Decided) and isinstance(result.decision, decision)
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+@pytest.mark.asyncio
+async def test_adversary_environment_hold_is_incomplete_evidence(workpiece: Workpiece, grouped: bool) -> None:
+    failure = Hold("environment terminated: cpu_exhausted")
+    harness = RecordingHarness(ExceptionGroup("observer", [failure]) if grouped else failure)
+    setup = config(harness)
+    setup = replace(
+        setup,
+        policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
+        adversaries={"finder": harness},
+        tools={"finder": {}},
+    )
+    ctx = Context(log=EventLog())
+    bundle = resources(ctx)
+    evidence = (await validate(ctx, workpiece, setup, bundle)).result
+    await ctx.drain()
+    assert evidence.adversary == (AdversaryResult("finder", False, ()),)
+    assert len(evidence.solver) == 3 and len(evidence.controls) == 2
+    assert isinstance(default_review(evidence, setup.band), Incomplete)
+    assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
+
+
+@pytest.mark.asyncio
+async def test_invalid_grader_checks_request_task_repair(workpiece: Workpiece) -> None:
+    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
+    setup = config(harness)
+    ctx = Context(log=EventLog())
+    bundle = resources(ctx)
+    invalid = GradeResult(Outcome.GRADED, 1, detail={"checks": {"total": True}})
+    grader = GradingResource(CandidateEngine(invalid), "invalid-checks")
+    ctx.resource(grader, grader.fingerprint)
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grader,))
+    evidence = (await validate(ctx, workpiece, setup, bundle)).result
+    await ctx.drain()
+    assert all(control.cause is Cause.GRADER_INVALID_CHECKS for control in evidence.controls)
+    decision = default_review(evidence, setup.band)
+    assert isinstance(decision, Modify)
+    assert any("grader_invalid_checks" in finding for finding in decision.findings)
 
 
 @pytest.mark.parametrize("repair_budget", [0, 1])

@@ -21,6 +21,7 @@ from taskcompendium.models import NoGrader, TaskSpec
 from forge.effects.events import Resolved
 from forge.effects.issues import Hold, Restart
 from forge.model.review import Cause
+from forge.model.verdict import grader_checks
 
 TASK_DEFECTS = frozenset(
     {
@@ -29,6 +30,7 @@ TASK_DEFECTS = frozenset(
         Cause.GRADER_MISSING_REWARD,
         Cause.GRADER_EMPTY_REWARD,
         Cause.GRADER_INVALID_REWARD,
+        Cause.GRADER_INVALID_CHECKS,
         Cause.GRADER_REWARD_RANGE,
         Cause.INVALID_TASK,
         Cause.VERIFIER_SKIPPED,
@@ -37,6 +39,10 @@ TASK_DEFECTS = frozenset(
 
 
 def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | None:
+    try:
+        grader_checks(grade)
+    except ValueError:
+        return Cause.GRADER_INVALID_CHECKS
     if grade.status is Outcome.SUBMISSION_FAILURE:
         return None
     if grade.status is Outcome.GRADED:

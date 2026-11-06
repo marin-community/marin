@@ -11,6 +11,8 @@ from enum import StrEnum
 
 from taskcompendium.grading_result import GradeResult
 
+from forge.model.controls import Candidate, RewardBand
+
 
 class Cause(StrEnum):
     """Why a trial has no grade. Incomplete evaluation cannot support acceptance."""
@@ -58,6 +60,7 @@ class Cause(StrEnum):
     GRADER_MISSING_REWARD = "grader_missing_reward"
     GRADER_EMPTY_REWARD = "grader_empty_reward"
     GRADER_INVALID_REWARD = "grader_invalid_reward"
+    GRADER_INVALID_CHECKS = "grader_invalid_checks"
     GRADER_REWARD_RANGE = "grader_reward_range"
     """The grader returned a reward outside its declared score range: a grader defect, and the trial
     has no usable grade."""
@@ -164,14 +167,27 @@ class ControlResult:
 
 
 @dataclass(frozen=True, slots=True)
+class AdversaryFinding:
+    claim: str
+    candidate: Candidate
+    expected: RewardBand
+    grade: GradeResult | None
+    met: bool
+    cause: Cause | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "candidate", replace(self.candidate))
+        object.__setattr__(self, "grade", deepcopy(self.grade))
+
+
+@dataclass(frozen=True, slots=True)
 class AdversaryResult:
     name: str
     completed: bool
-    findings: tuple[str, ...]
-    grades: tuple[GradeResult, ...] = ()
+    findings: tuple[AdversaryFinding, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "grades", deepcopy(self.grades))
+        object.__setattr__(self, "findings", tuple(replace(finding) for finding in self.findings))
 
 
 @dataclass(frozen=True, slots=True)

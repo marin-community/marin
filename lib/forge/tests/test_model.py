@@ -32,6 +32,7 @@ from forge.model.proposal import (
 )
 from forge.model.review import (
     Accept,
+    AdversaryFinding,
     AdversaryResult,
     BandOutcome,
     BandRules,
@@ -86,7 +87,7 @@ def workpiece() -> Workpiece:
         "task-digest",
         (TrialResult(0, GradeResult(Outcome.GRADED, 1.0)), TrialResult(1, None, Cause.MODEL_TIMEOUT)),
         (ControlResult(0, GradeResult(Outcome.GRADED, 1.0), True),),
-        (AdversaryResult("shortcut", True, ("No defect found",), (GradeResult(Outcome.GRADED, 0),)),),
+        (AdversaryResult("shortcut", True, ()),),
     )
     session = Conversation(
         (Message("user", "make a task"), Message("assistant", "", (ToolCall("1", "submit", "{}"),), reasoning="done")),
@@ -251,11 +252,12 @@ def test_validation_evidence_detaches_grade_payloads(workpiece: Workpiece) -> No
     grade = GradeResult(Outcome.GRADED, 1.0, detail={"checks": ["passed"]}, diagnostics={"attempt": {"id": 1}})
     trial = TrialResult(0, grade)
     control = ControlResult(0, grade, True)
-    adversary = AdversaryResult("shortcut", True, (), (grade,))
+    finding = AdversaryFinding("wrong answer accepted", Candidate("wrong"), RewardBand(Outcome.GRADED, 1), grade, True)
+    adversary = AdversaryResult("shortcut", True, (finding,))
     evidence = ValidationResult("task", (trial,), (control,), (adversary,))
     saved_round = workpiece.with_(evidence=(evidence,))
     saved = wire.WORKPIECE.dump_json(saved_round)
-    for produced in (grade, trial.grade, control.grade, adversary.grades[0]):
+    for produced in (grade, trial.grade, control.grade, adversary.findings[0].grade):
         assert produced is not None and produced.detail is not None
         produced.detail["checks"].append("changed")
         produced.diagnostics["attempt"]["id"] = 2

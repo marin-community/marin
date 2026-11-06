@@ -21,7 +21,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 
 from forge.effects.context import Context
-from forge.effects.issues import Restart
+from forge.effects.issues import Hold, Restart
 from forge.harness.protocol import Harness, Tool
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation
@@ -33,16 +33,18 @@ from forge.resources.rollouts import Engine
 class Environments(EnvFactory):
     def __init__(self) -> None:
         self.created: list[FakeEnv] = []
+        self.requested: list[EnvironmentRequirements] = []
 
     @override
     async def create(self, requirements: EnvironmentRequirements) -> FakeEnv:
+        self.requested.append(requirements)
         env = FakeEnv(requirements.model_dump_json(), {}, lambda event: None)
         self.created.append(env)
         return env
 
 
 class RecordingHarness(Harness):
-    def __init__(self, result: Exit | Restart) -> None:
+    def __init__(self, result: Exit | Restart | Hold | ExceptionGroup) -> None:
         self.result = result
         self.session: Conversation | None = None
         self.files: Mapping[PurePosixPath, bytes] = {}
@@ -54,7 +56,7 @@ class RecordingHarness(Harness):
         self.session = session
         assert isinstance(env, FakeEnv)
         self.files = dict(env.files)
-        if isinstance(self.result, Restart):
+        if isinstance(self.result, (Restart, Hold, ExceptionGroup)):
             raise self.result
         return self.result
 

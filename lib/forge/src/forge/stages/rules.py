@@ -42,7 +42,11 @@ def default_review(result: ValidationResult, band: BandRules) -> Decision:
         trial.cause or (Cause.NO_GRADE if trial.grade is None else grade_cause(trial.grade))
         for trial in (*result.solver, *result.controls)
     )
-    causes.update(grade_cause(grade) for adversary in result.adversary for grade in adversary.grades)
+    causes.update(
+        finding.cause or (Cause.NO_GRADE if finding.grade is None else grade_cause(finding.grade))
+        for adversary in result.adversary
+        for finding in adversary.findings
+    )
     unavailable = tuple(
         f"{count} ungraded trial(s): {cause}"
         for cause, count in sorted((cause, count) for cause, count in causes.items() if cause is not None)
@@ -56,7 +60,9 @@ def default_review(result: ValidationResult, band: BandRules) -> Decision:
         f"Control {control.index} violates its expected reward" for control in result.controls if not control.met
     )
     findings += tuple(f"{count} ungraded trial(s): {cause}" for cause, count in causes.items() if cause in TASK_DEFECTS)
-    findings += tuple(f"{trial.name}: {finding}" for trial in result.adversary for finding in trial.findings)
+    findings += tuple(
+        f"{trial.name}: {finding.claim}" for trial in result.adversary for finding in trial.findings if finding.met
+    )
     if findings:
         return Modify(findings)
     solved = sum(passed(trial.grade) for trial in result.solver if trial.grade is not None)

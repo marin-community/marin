@@ -11,15 +11,15 @@ from rolloutengine.models import TaskRolloutSpec, TraceMode
 from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import Resolved
-from forge.effects.issues import Restart
+from forge.effects.issues import Hold, Restart
 from forge.harness.protocol import Returned
-from forge.harness.tools.adversary import AdversaryReport
-from forge.lowering import lower_with_settings, lowering_settings, requirements
+from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
+from forge.lowering import host_requirements, lower_with_settings, lowering_settings, requirements
 from forge.model import serialization as wire
 from forge.model.controls import Control
 from forge.model.llm import Message
 from forge.model.proposal import render
-from forge.model.review import AdversaryResult, ControlResult, TrialResult, ValidationResult
+from forge.model.review import AdversaryFinding, AdversaryResult, ControlResult, TrialResult, ValidationResult
 from forge.model.workpiece import Conversation, Workpiece
 from forge.resources.bundle import Resources
 from forge.resources.env import WriteFile
@@ -50,20 +50,49 @@ async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt
 async def adversary_result(
     ctx: Context, workpiece: Workpiece, config: ForgeConfig, resources: Resources, spec: TaskRolloutSpec, name: str
 ) -> AdversaryResult:
-    requested = spec.task.environment_requirements if spec.task_machine is not None else requirements(image=None)
+    result = AdversaryResult(name, False, ())
     try:
-        env = await resources.envs.create(requested)
-    except Restart:
-        return AdversaryResult(name, False, ())
+        result = await run_adversary(ctx, workpiece, config, resources, spec, name)
+    except* (Hold, Restart):
+        pass
+    return result
+
+
+async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim) -> AdversaryFinding:
+    try:
+        grade = await ctx.emit(GradeCandidate(spec, claim.candidate))
+    except Restart as error:
+        return AdversaryFinding(claim.claim, claim.candidate, claim.expected, None, False, restart_cause(error))
+    cause = grade_cause(grade, spec.task)
+    return AdversaryFinding(
+        claim.claim, claim.candidate, claim.expected, grade, cause is None and claim.expected.met_by(grade), cause
+    )
+
+
+async def run_adversary(
+    ctx: Context, workpiece: Workpiece, config: ForgeConfig, resources: Resources, spec: TaskRolloutSpec, name: str
+) -> AdversaryResult:
+    requested = (
+        spec.task.environment_requirements
+        if spec.task_machine is not None
+        else requirements(
+            image=config.policy.setting("adversary.image", str) or None,
+            workdir=config.policy.setting("author.workdir", str),
+        )
+    )
+    files = (*spec.task.resources.all, *spec.task.resources.worker)
+    env = await resources.envs.create(
+        host_requirements(requested, resources.factories, tuple(f"/{file.path}" for file in files))
+    )
     try:
         async with ctx.scope(f"adversary:{name}"):
             install_env(ctx, env)
-            await hydrate(ctx, (*spec.task.resources.all, *spec.task.resources.worker))
+            await hydrate(ctx, files)
             task_json = wire.TASK_SPEC.dump_json(spec.task)
             await ctx.emit(
                 WriteFile(PurePosixPath(config.policy.setting("author.workdir", str), "task.json"), task_json)
             )
-            tools = config.tools[name]
+            tools = {**config.tools[name], "report": ReportTool(spec.task)}
             session = Conversation(
                 (
                     Message("system", config.policy.prompt("adversary.system").render()),
@@ -84,12 +113,8 @@ async def adversary_result(
             ):
                 return AdversaryResult(name, False, ())
             report = outcome.payload
-            grades = await asyncio.gather(
-                *(asyncio.ensure_future(ctx.emit(GradeCandidate(spec, candidate))) for candidate in report.candidates)
-            )
-            return AdversaryResult(name, True, report.findings, tuple(grades))
-    except Restart:
-        return AdversaryResult(name, False, ())
+            findings = await asyncio.gather(*(claim_result(ctx, spec, claim) for claim in report.findings))
+            return AdversaryResult(name, True, tuple(findings))
     finally:
         await env.close()
 
