@@ -17,7 +17,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 from taskforge.llm.glm_client import EndpointSource
 
-from forge import driver
+from forge import checkpoint, driver
 from forge.config import ForgeConfig
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
@@ -272,8 +272,13 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "first"),
     )
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    final_publish = driver.publish
+    # Simulate preemption: only periodic snapshots reach storage, not the finally upload.
+    monkeypatch.setattr(driver, "publish", lambda *_args: None)
     with pytest.raises(asyncio.CancelledError):
         await driver.one(args)
+    monkeypatch.setattr(driver, "publish", final_publish)
     destination = tmp_path / "out" / driver.proposal_key(str(source))
     assert json.loads((destination / "status.json").read_text())["terminal"] is None
     args.work_dir = str(tmp_path / "second")

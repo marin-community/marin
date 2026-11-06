@@ -20,6 +20,7 @@ from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
+from forge.checkpoint import CheckpointSink
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
 from forge.effects.log import EventLog, JsonlSink, Status, fold
@@ -105,26 +106,28 @@ async def one(args: argparse.Namespace) -> None:
         return
     sink = JsonlSink(str(workdir / "events.jsonl"))
     previous = await sink.read() if Path(sink.path).exists() else ()
-    log = EventLog(sink=sink, replay_from=previous)
     wp = Workpiece(proposal.header.id, proposal)
+    checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
+    log = EventLog(sink=checkpoints, replay_from=previous)
     try:
-        declared = load_policy(Path(__file__).parent / "policy" / "defaults")
-        with open_url(args.policy, "rt") as source:
-            policy = declared.overlaid(parse_overlay(source.read()))
-        print("\n".join(resolution_lines(declared, policy)), flush=True)
-        print(
-            f"POLICY max_prompt_tokens provider.context_tokens={policy.setting('provider.context_tokens', int)} "
-            f"sampling.max_tokens={policy.setting('sampling.max_tokens', int)} resolved={prompt_limit(policy)}",
-            flush=True,
-        )
-        source = endpoint_source(
-            os.environ.get("GLM_BASE_URL"),
-            os.environ.get("GLM_RELAY_JOB"),
-            os.environ["GLM_API_KEY"],
-            policy.setting("provider.model", str),
-        )
-        async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
-            wp = await run_workpiece(proposal, config, resources, log)
+        async with checkpoints.running():
+            declared = load_policy(Path(__file__).parent / "policy" / "defaults")
+            with open_url(args.policy, "rt") as source:
+                policy = declared.overlaid(parse_overlay(source.read()))
+            print("\n".join(resolution_lines(declared, policy)), flush=True)
+            print(
+                f"POLICY max_prompt_tokens provider.context_tokens={policy.setting('provider.context_tokens', int)} "
+                f"sampling.max_tokens={policy.setting('sampling.max_tokens', int)} resolved={prompt_limit(policy)}",
+                flush=True,
+            )
+            source = endpoint_source(
+                os.environ.get("GLM_BASE_URL"),
+                os.environ.get("GLM_RELAY_JOB"),
+                os.environ["GLM_API_KEY"],
+                policy.setting("provider.model", str),
+            )
+            async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
+                wp = await run_workpiece(proposal, config, resources, log)
     except Exception:
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))

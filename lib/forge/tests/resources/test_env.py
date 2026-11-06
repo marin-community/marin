@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import override
@@ -15,6 +15,7 @@ from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from forge.effects.events import Event, Note, Resolved, Retrying
 from forge.effects.issues import Hold, Restart, Transient
+from forge.resources import env as env_module
 from forge.resources.env import (
     CommandResult,
     Env,
@@ -271,3 +272,25 @@ async def test_websocket_setup_failure_retries_only_three_times(reason: str) -> 
         await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
     assert machine.calls == 3
     assert len(events) == 2 and all(isinstance(event, Retrying) for event in events)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "Websocket setup failed (status 0): handshake refused",
+        "'NoneType' object has no attribute 'decode'",
+    ],
+)
+async def test_machine_startup_websocket_failure_is_transient(monkeypatch: pytest.MonkeyPatch, reason: str) -> None:
+    failure = RuntimeError(f"Iris exec failed: {reason}")
+
+    @asynccontextmanager
+    async def failed_start(*args: object, **kwargs: object) -> AsyncIterator[Machine]:
+        raise failure
+        yield MemoryMachine()
+
+    monkeypatch.setattr(env_module, "prepare_machine", failed_start)
+    factory = ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, Notes())
+    with pytest.raises(Transient) as caught:
+        await factory.create(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR))
+    assert caught.value.__cause__ is failure
