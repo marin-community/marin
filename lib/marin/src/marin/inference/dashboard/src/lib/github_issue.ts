@@ -27,18 +27,19 @@ export interface IssueDraft {
  *
  * `transcript` is the conversation's plain-text rendering (see `plainTextChat`), or `null` when the
  * reporter omits the conversation. Omitting it also drops the conversation title and custom
- * template instructions, which are conversation content.
+ * template instructions, which are conversation content. Included instructions open the
+ * transcript so the URL budget can shorten them.
  *
  * The dashboard URL is never included: it carries the Iris capability token.
  */
 export function issueDraft(
   conversation: Conversation,
-  transcript: string | null,
+  chatTranscript: string | null,
   info: ServingInfo | null,
   params: SamplingParams,
   maxUrlLength = MAX_ISSUE_URL_LENGTH,
 ): IssueDraft {
-  const included = transcript !== null
+  const included = chatTranscript !== null
   const title = issueTitle(conversation, included)
   const setup = setupSection(conversation, info, params, included)
   const urlFor = (body: string) => {
@@ -48,9 +49,14 @@ export function issueDraft(
     return url.toString()
   }
 
-  if (transcript === null) {
+  if (chatTranscript === null) {
     return { url: withinLimit(urlFor(issueBody(setup, OMITTED_CONVERSATION)), maxUrlLength), fullTranscript: null }
   }
+
+  const instructions = conversation.customInstructions.trim()
+  const transcript = instructions
+    ? `[custom template instructions]\n${instructions}\n\n${chatTranscript}`
+    : chatTranscript
 
   const fullUrl = urlFor(issueBody(setup, conversationSection(transcript, false)))
   if (fullUrl.length <= maxUrlLength) return { url: fullUrl, fullTranscript: null }
@@ -99,7 +105,7 @@ function setupSection(
     `- Thinking: ${THINKING_LABELS[conversation.thinkingMode]}`,
   )
   if (includeConversation && conversation.customInstructions.trim()) {
-    lines.push(`- Custom template instructions: ${inlineCode(conversation.customInstructions.trim())}`)
+    lines.push('- Custom template instructions: set (first section of the transcript)')
   }
   if (conversation.pythonTools.trim()) lines.push('- Python tools: configured (source not included)')
   if (conversation.shellWorkspace) lines.push('- Shell workspace: enabled (files not included)')
@@ -133,11 +139,6 @@ function elideMiddle(chars: string[], kept: number): string {
   const tail = kept - head
   const omitted = chars.length - kept
   return `${chars.slice(0, head).join('')}\n\n[… ${omitted} characters omitted …]\n\n${chars.slice(chars.length - tail).join('')}`
-}
-
-function inlineCode(text: string): string {
-  const ticks = '`'.repeat(longestBacktickRun(text) + 1)
-  return `${ticks} ${text.replace(/\s+/g, ' ')} ${ticks}`
 }
 
 function longestBacktickRun(text: string): number {
