@@ -1109,19 +1109,6 @@ def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
     return bool(broadcast_one_to_all(jnp.array(committed, dtype=jnp.bool_)))
 
 
-def _save_final_checkpoint(
-    checkpointer: Checkpointer | None, state: GrugTrainState, state_callbacks: StateCallbackRunner[GrugTrainState]
-) -> None:
-    if checkpointer is None:
-        return
-    with callbacks.progress_event_scope(
-        state_callbacks.emit_event,
-        callbacks.ProgressEvent.CHECKPOINT_STARTED,
-        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
-    ):
-        checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
-
-
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
@@ -1452,9 +1439,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if not jnp.isfinite(metrics["train/loss"]):
                     raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {current_step}.")
                 duration = time.perf_counter() - step_start
-                # A periodic eval due at the stop step must not be able to lose the run's last steps either.
-                if current_step == stop_step:
-                    _save_final_checkpoint(checkpointer, state, state_callbacks)
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
@@ -1538,7 +1522,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     stop_step,
                 )
             else:
-                _save_final_checkpoint(checkpointer, state, state_callbacks)
+                if checkpointer is not None:
+                    with callbacks.progress_event_scope(
+                        state_callbacks.emit_event,
+                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                    ):
+                        checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
                 if not preempted:
                     state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
         finally:

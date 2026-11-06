@@ -1769,17 +1769,16 @@ def test_run_trains_past_its_schedule_and_resumes_at_the_extension_rate(extensio
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.parametrize("failing_pass", [pytest.param(1, id="periodic"), pytest.param(2, id="forced")])
-def test_final_hook_failure_keeps_the_checkpoint_and_a_retry_exits_without_repeating_either(extension_run, failing_pass):
+def test_final_hook_failure_keeps_the_checkpoint_and_a_retry_exits_without_repeating_either(extension_run):
     visits = []
 
-    def fail_at_the_stop_step(step):
+    def fail_in_the_forced_pass(step):
         visits.append(step.step)
-        if visits.count(4) == failing_pass:
+        if visits.count(4) == 2:
             raise RuntimeError("final eval failed")
 
     with pytest.raises(RuntimeError, match="final eval failed"):
-        extension_run.run(stop_step=5, device_memory_hook=fail_at_the_stop_step)
+        extension_run.run(stop_step=5, device_memory_hook=fail_in_the_forced_pass)
     written = _committed_checkpoints(extension_run.checkpoint_root)[5]
 
     retry_visits = []
