@@ -3,14 +3,13 @@
 
 """Proposal documents: JSON round trip, canonical digest and the parser's refusals.
 
-Invariants: the task runs on the solver machine it declares (``solver_machine_violation``).
+Invariants: proposal structure and research claims agree.
 """
 
 import json
 from collections.abc import Callable
 from dataclasses import replace
 
-import jsonschema
 import pytest
 
 from forge.model.proposal import (
@@ -22,7 +21,6 @@ from forge.model.proposal import (
     ResearchItem,
     ResearchKind,
     ResearchNeed,
-    SolverMachine,
     SourceKind,
     SourceRef,
     TaskProposal,
@@ -31,7 +29,6 @@ from forge.model.proposal import (
     parse,
     render,
 )
-from forge.model.serialization import proposal_request_fields as document_request_fields
 
 BODY = """## Task
 Find the kernel of the map.
@@ -64,7 +61,6 @@ def proposal() -> TaskProposal:
             id=PROPOSAL_ID,
             source=SOURCE,
             environment=Environment.CONTAINER,
-            solver_machine=None,
             verification=Verification.CODE,
             grounding=Grounding.UNVERIFIED,
             research_need=ResearchNeed.NEEDED,
@@ -79,7 +75,7 @@ def proposal() -> TaskProposal:
     )
 
 
-def test_json_round_trip_preserves_typed_content_and_canonical_digest(proposal: TaskProposal) -> None:
+def test_json_round_trip_preserves_typed_content_and_digest(proposal: TaskProposal) -> None:
     authored = json.loads(render(proposal))
     authored["body"] = authored["body"].replace("\n", "\r\n") + "  \n"
     authored["header"]["research"][0]["purpose"] += "   "
@@ -102,27 +98,6 @@ def test_escaped_strings_and_fenced_headings_survive_round_trip(proposal: TaskPr
     parsed = parse(render(expected))
     assert parsed == expected
     assert "## Build plan" in body_sections(parsed.body)["Task"]
-    schema = document_request_fields(PROPOSAL_ID, SOURCE)["response_format"]["json_schema"]["schema"]
-    jsonschema.validate(json.loads(render(parsed)), schema)
-
-
-COMPATIBLE = [
-    *((Environment.REASONING, machine) for machine in SolverMachine),
-    *((Environment.SHELLSIM, machine) for machine in SolverMachine if machine is not SolverMachine.NONE),
-]
-INCOMPATIBLE = [(Environment.CONTAINER, SolverMachine.CPYTHON), (Environment.SHELLSIM, SolverMachine.NONE)]
-
-
-@pytest.mark.parametrize("environment,machine", [*COMPATIBLE, *INCOMPATIBLE, (Environment.REASONING, None)])
-def test_the_solver_machine_must_fit_the_environment(
-    proposal: TaskProposal, environment: Environment, machine: SolverMachine | None
-) -> None:
-    expected = replace(proposal, header=replace(proposal.header, environment=environment, solver_machine=machine))
-    if (environment, machine) in COMPATIBLE:
-        assert parse(render(expected)) == expected
-    else:
-        with pytest.raises(ProposalFormatError, match="solver_machine"):
-            parse(render(expected))
 
 
 def forged_key(raw: str, key: str) -> str:
@@ -193,16 +168,7 @@ def test_research_decision_and_list_agree_even_for_null_proposals(proposal: Task
     ).header.null_reason
 
 
-def test_generation_schema_pins_identity(proposal: TaskProposal) -> None:
-    schema = document_request_fields(PROPOSAL_ID, SOURCE)["response_format"]["json_schema"]["schema"]
-    raw = json.loads(render(proposal))
-    jsonschema.validate(raw, schema)
-    raw["header"]["source"]["hash"] = "wrong hash"
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(raw, schema)
-
-
-def test_composite_round_trip_remains_readable_but_is_not_offered_to_generation(proposal: TaskProposal) -> None:
+def test_composite_round_trip_checks_weights(proposal: TaskProposal) -> None:
     raw = json.loads(render(proposal))
     raw["header"].update(
         verification="composite",
@@ -215,9 +181,12 @@ def test_composite_round_trip_remains_readable_but_is_not_offered_to_generation(
     assert composite.header.verification is Verification.COMPOSITE
     assert [part.weight for part in composite.header.composite] == [0.25, 0.75]
     assert parse(render(composite)) == composite
-    schema = document_request_fields(PROPOSAL_ID, SOURCE)["response_format"]["json_schema"]["schema"]
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(raw, schema)
     raw["header"]["composite"][0]["weight"] = 0.5
     with pytest.raises(ProposalFormatError, match="not 1"):
         parse(json.dumps(raw))
+
+
+def test_existing_catalog_drops_obsolete_solver_machine(proposal: TaskProposal) -> None:
+    parsed = parse(with_header(render(proposal), "solver_machine", "packages"))
+    assert parsed == proposal
+    assert "solver_machine" not in json.loads(render(parsed))["header"]

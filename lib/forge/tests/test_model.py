@@ -4,6 +4,7 @@
 from dataclasses import replace
 
 import pytest
+from pydantic import TypeAdapter
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AnswerType,
@@ -16,15 +17,13 @@ from taskcompendium.models import (
     TextMessage,
 )
 
-from forge.model import serialization as wire
 from forge.model.controls import Candidate, Control, ControlKind, RewardBand
-from forge.model.llm import Completion, Message, Sampling, ToolCall, ToolSchema, Usage
+from forge.model.llm import Message, Role, ToolCall, ToolSchema
 from forge.model.proposal import (
     Environment,
     Grounding,
     ProposalHeader,
     ResearchNeed,
-    SolverMachine,
     SourceKind,
     SourceRef,
     TaskProposal,
@@ -32,13 +31,12 @@ from forge.model.proposal import (
 )
 from forge.model.review import (
     Accept,
-    AdversaryFinding,
     AdversaryResult,
     BandOutcome,
     BandRules,
-    Budget,
     Cause,
     ControlResult,
+    Decision,
     Incomplete,
     Modify,
     Reject,
@@ -47,10 +45,8 @@ from forge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from forge.model.source import PlannedSlot, ProposalBatch, SlotFailure, SlotProposal
-from forge.model.workpiece import Conversation, Submission, Terminal, Workpiece
-from forge.policy import Policy, Prompt, load_policy
-from forge.policy.defaults import DEFAULTS_DIR
+from forge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
+from forge.policy import Policy, Prompt
 
 
 @pytest.fixture
@@ -69,7 +65,6 @@ def workpiece() -> Workpiece:
             id="sum",
             source=SourceRef(SourceKind.CAPABILITY, "arithmetic", "abc"),
             environment=Environment.REASONING,
-            solver_machine=SolverMachine.NONE,
             verification=Verification.CODE,
             composite=(),
             grounding=Grounding.UNVERIFIED,
@@ -85,12 +80,15 @@ def workpiece() -> Workpiece:
     controls = (Control(Candidate("2"), RewardBand(Outcome.GRADED, reward_min=1), ControlKind.POSITIVE),)
     evidence = ValidationResult(
         "task-digest",
-        (TrialResult(0, GradeResult(Outcome.GRADED, 1.0)), TrialResult(1, None, Cause.MODEL_TIMEOUT)),
+        (TrialResult(0, GradeResult(Outcome.GRADED, 1.0)), TrialResult(1, None, Cause.AGENT_TIMEOUT)),
         (ControlResult(0, GradeResult(Outcome.GRADED, 1.0), True),),
         (AdversaryResult("shortcut", True, ()),),
     )
     session = Conversation(
-        (Message("user", "make a task"), Message("assistant", "", (ToolCall("1", "submit", "{}"),), reasoning="done")),
+        (
+            Message(Role.USER, "make a task"),
+            Message(Role.ASSISTANT, "", (ToolCall("1", "submit", "{}"),), reasoning="done"),
+        ),
         (ToolSchema("submit", "Submit the task", {"type": "object", "properties": {"task": {"type": "string"}}}),),
     )
     return Workpiece(
@@ -105,9 +103,9 @@ def workpiece() -> Workpiece:
 
 
 def test_saved_workpiece_round_trip_keeps_conversation_evidence_and_decisions(workpiece: Workpiece) -> None:
-    restored = wire.WORKPIECE.validate_json(wire.WORKPIECE.dump_json(workpiece))
+    restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece))
     assert restored == workpiece
-    assert restored.evidence[0].solver[1].cause is Cause.MODEL_TIMEOUT
+    assert restored.evidence[0].solver[1].cause is Cause.AGENT_TIMEOUT
     assert isinstance(restored.decisions[0], Modify)
     assert isinstance(restored.decisions[1], Incomplete)
     assert restored.session is not None
@@ -124,15 +122,17 @@ def test_saved_workpiece_round_trip_keeps_conversation_evidence_and_decisions(wo
         Incomplete(("machine gone",)),
     ],
 )
-def test_decision_round_trip_preserves_variant(decision: wire.Decision) -> None:
-    restored = wire.DECISION.validate_json(wire.DECISION.dump_json(decision))
+def test_decision_round_trip_preserves_variant(decision: Decision) -> None:
+    restored = TypeAdapter(Accept | Reject | Modify | Retry | Incomplete).validate_json(
+        TypeAdapter(Accept | Reject | Modify | Retry | Incomplete).dump_json(decision)
+    )
     assert restored == decision
     assert type(restored) is type(decision)
 
 
 def test_workpiece_replace_does_not_change_previous_round(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
-    saved_round = wire.WORKPIECE.dump_json(workpiece)
+    saved_round = WORKPIECE.dump_json(workpiece)
     edited_task = workpiece.submission.task.model_copy(deep=True)
     edited_task.labels["revision"] = "1"
     revised = workpiece.with_(
@@ -142,12 +142,11 @@ def test_workpiece_replace_does_not_change_previous_round(workpiece: Workpiece) 
         decisions=(*workpiece.decisions, Accept(BandOutcome.IN_BAND)),
         terminal=Terminal.ACCEPTED,
     )
-    edited_task.labels["revision"] = "unsubmitted edit"
-    assert wire.WORKPIECE.dump_json(workpiece) == saved_round
+    assert WORKPIECE.dump_json(workpiece) == saved_round
     assert revised.submission is not None
     assert revised.submission.task.labels["revision"] == "1"
     assert revised.submission.digest != workpiece.submission.digest
-    assert wire.WORKPIECE.validate_json(wire.WORKPIECE.dump_json(revised)) == revised
+    assert WORKPIECE.validate_json(WORKPIECE.dump_json(revised)) == revised
 
 
 def test_submission_digest_tracks_task_and_controls_but_excludes_notes(workpiece: Workpiece) -> None:
@@ -171,7 +170,6 @@ def test_submission_digest_tracks_task_and_controls_but_excludes_notes(workpiece
 def test_band_placement_includes_both_boundaries(rate: float, placement: BandOutcome) -> None:
     band = BandRules(0.2, 0.8, frozenset({BandOutcome.IN_BAND}))
     assert band.place(rate) is placement
-    assert wire.BAND_RULES.validate_json(wire.BAND_RULES.dump_json(band)).place(rate) is placement
 
 
 def test_expected_zero_accepts_submission_failure_but_reference_does_not() -> None:
@@ -180,86 +178,10 @@ def test_expected_zero_accepts_submission_failure_but_reference_does_not() -> No
     assert not RewardBand(Outcome.GRADED, reward_min=1).met_by(failure)
 
 
-def test_policy_overlay_and_serialization_preserve_digest_and_original() -> None:
+def test_policy_overlay_changes_digest_and_preserves_original() -> None:
     policy = Policy({"author.system": Prompt("Hello {name}"), "author.turns": 2, "author.tags": ("a",)})
     updated = policy.overlaid({"author.system": "Welcome {name}", "author.tags": ["b"]})
-    restored = wire.POLICY.validate_json(wire.POLICY.dump_json(updated))
-    assert restored == updated
-    assert restored.prompt("author.system").render(name="Ada") == "Welcome Ada"
-    assert restored.stage_digest("author") != policy.stage_digest("author")
+    assert updated.prompt("author.system").render(name="Ada") == "Welcome Ada"
+    assert updated.stage_digest("author") != policy.stage_digest("author")
     assert policy.prompt("author.system").render(name="Ada") == "Hello Ada"
-    assert restored.setting("author.tags", tuple) == ("b",)
-
-
-def test_bundled_policy_survives_serialization() -> None:
-    policy = load_policy(DEFAULTS_DIR)
-    restored = wire.POLICY.validate_json(wire.POLICY.dump_json(policy))
-    assert restored == policy
-    assert restored.stage_digest("proposer") == policy.stage_digest("proposer")
-
-
-def test_individual_model_files_round_trip(workpiece: Workpiece) -> None:
-    """Each standalone file representation also works outside a workpiece envelope."""
-    assert workpiece.session is not None and workpiece.submission is not None
-    proposal = workpiece.proposal
-    completion = Completion("done", usage=Usage(10, 2, 1, 8))
-    slot = SlotProposal(1, proposal, workpiece.session.messages, (completion,), None)
-    failure = SlotFailure(2, "invalid proposal", (), (completion,))
-    batch = ProposalBatch(workpiece.session.messages, (completion,), (slot, failure))
-    assert wire.PROPOSAL_BATCH.validate_json(wire.PROPOSAL_BATCH.dump_json(batch)) == batch
-    assert wire.SLOT_PROPOSAL.validate_json(wire.SLOT_PROPOSAL.dump_json(slot)) == slot
-    assert wire.SLOT_FAILURE.validate_json(wire.SLOT_FAILURE.dump_json(failure)) == failure
-    planned = PlannedSlot(1, None)
-    assert wire.PLANNED_SLOT.validate_json(wire.PLANNED_SLOT.dump_json(planned)) == planned
-    sampling = Sampling(temperature=0.5, top_p=0.9, max_tokens=100)
-    assert wire.SAMPLING.validate_json(wire.SAMPLING.dump_json(sampling)) == sampling
-    assert wire.COMPLETION.validate_json(wire.COMPLETION.dump_json(completion)) == completion
-    budget = Budget(3, 2)
-    assert wire.BUDGET.validate_json(wire.BUDGET.dump_json(budget)) == budget
-    assert wire.SUBMISSION.validate_json(wire.SUBMISSION.dump_json(workpiece.submission)) == workpiece.submission
-    assert wire.CONVERSATION.validate_json(wire.CONVERSATION.dump_json(workpiece.session)) == workpiece.session
-    assert wire.TASK_PROPOSAL.validate_json(wire.TASK_PROPOSAL.dump_json(proposal)) == proposal
-    evidence = workpiece.evidence[0]
-    assert wire.VALIDATION_RESULT.validate_json(wire.VALIDATION_RESULT.dump_json(evidence)) == evidence
-
-
-def test_tool_schema_snapshot_survives_caller_mutation() -> None:
-    properties = {"path": {"type": "string"}}
-    schema = ToolSchema("read", "Read a file", {"required": ("path",), "properties": properties})
-    saved = wire.TOOL_SCHEMA.dump_json(schema)
-    properties["path"]["type"] = "number"
-    assert wire.TOOL_SCHEMA.dump_json(schema) == saved
-    restored = wire.TOOL_SCHEMA.validate_json(saved)
-    assert restored == schema
-
-
-def test_submission_detaches_mutable_task_inputs_and_keeps_content_digest(workpiece: Workpiece) -> None:
-    assert workpiece.submission is not None
-    original = workpiece.submission.task.model_copy(deep=True)
-    original.labels["owner"] = "author"
-    original.environment_requirements.environment_variables["MODE"] = "safe"
-    saved = Submission(original, workpiece.submission.controls, "snapshot")
-    content_digest = saved.digest
-    original.labels["owner"] = "changed"
-    original.environment_requirements.environment_variables["MODE"] = "changed"
-    assert saved.task.labels == {"owner": "author"}
-    assert saved.task.environment_requirements.environment_variables == {"MODE": "safe"}
-    assert saved.digest == content_digest
-    assert wire.SUBMISSION.validate_json(wire.SUBMISSION.dump_json(saved)) == saved
-
-
-def test_validation_evidence_detaches_grade_payloads(workpiece: Workpiece) -> None:
-    grade = GradeResult(Outcome.GRADED, 1.0, detail={"checks": ["passed"]}, diagnostics={"attempt": {"id": 1}})
-    trial = TrialResult(0, grade)
-    control = ControlResult(0, grade, True)
-    finding = AdversaryFinding("wrong answer accepted", Candidate("wrong"), RewardBand(Outcome.GRADED, 1), grade, True)
-    adversary = AdversaryResult("shortcut", True, (finding,))
-    evidence = ValidationResult("task", (trial,), (control,), (adversary,))
-    saved_round = workpiece.with_(evidence=(evidence,))
-    saved = wire.WORKPIECE.dump_json(saved_round)
-    for produced in (grade, trial.grade, control.grade, adversary.findings[0].grade):
-        assert produced is not None and produced.detail is not None
-        produced.detail["checks"].append("changed")
-        produced.diagnostics["attempt"]["id"] = 2
-    assert wire.WORKPIECE.dump_json(saved_round) == saved
-    assert wire.WORKPIECE.validate_json(saved) == saved_round
+    assert updated.setting("author.tags", tuple) == ("b",)

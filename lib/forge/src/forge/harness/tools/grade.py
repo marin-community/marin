@@ -9,6 +9,7 @@ from typing import override
 
 from pydantic import ValidationError
 from shellbox.machine import MachineFactory
+from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource
 
 from forge.effects.context import Context
@@ -17,7 +18,6 @@ from forge.harness.tools.base import ValidatedTool
 from forge.lowering import LoweringSettings, check_candidates, lower_with_settings
 from forge.model.content_hash import pretty_json
 from forge.model.controls import Candidate
-from forge.model.serialization import TASK_SPEC
 from forge.model.verdict import grader_checks
 from forge.resources.env import ReadFile
 from forge.resources.grading import GradeCandidate
@@ -51,7 +51,7 @@ class GradeTool(ValidatedTool[CandidateArgs]):
     @override
     async def run(self, ctx: Context, args: CandidateArgs) -> ToolResult:
         try:
-            task = TASK_SPEC.validate_json(await ctx.emit(ReadFile(PurePosixPath(self.task_path))))
+            task = TaskSpec.model_validate_json(await ctx.emit(ReadFile(PurePosixPath(self.task_path))))
             candidate = await read_candidate(ctx, args)
             check_candidates(task, (candidate,))
             spec = lower_with_settings(task, self.settings, self.factories)

@@ -22,8 +22,6 @@ from forge.model.verdict import grader_checks
 
 TASK_DEFECTS = frozenset(
     {
-        Cause.TASK_SETUP,
-        Cause.SUBMISSION_UNSUPPORTED,
         Cause.GRADER_MISSING_REWARD,
         Cause.GRADER_EMPTY_REWARD,
         Cause.GRADER_INVALID_REWARD,
@@ -74,7 +72,7 @@ def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
     return grade_cause(result.grade, task)
 
 
-async def host_failure(event: Resolved[object]) -> None:
+async def grader_infra_unavailable(event: Resolved[object]) -> None:
     value = event.value
     grade = value.grade if isinstance(value, GradedRollout) else value
     if isinstance(grade, GradeResult) and grade_cause(grade) is Cause.GRADER_INFRA:

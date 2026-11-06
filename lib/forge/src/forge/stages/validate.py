@@ -3,6 +3,7 @@
 
 """Build validation evidence through concurrent grading, solver and adversary effects."""
 
+
 import asyncio
 from pathlib import PurePosixPath
 
@@ -15,9 +16,8 @@ from forge.effects.issues import Hold
 from forge.harness.protocol import Returned, Stopped
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from forge.lowering import host_requirements, lower_with_settings, lowering_settings, requirements
-from forge.model import serialization as wire
 from forge.model.controls import Control
-from forge.model.llm import Message
+from forge.model.llm import Message, Role
 from forge.model.proposal import render
 from forge.model.review import AdversaryFinding, AdversaryResult, ControlResult, TrialResult, ValidationResult
 from forge.model.workpiece import Conversation, Workpiece
@@ -26,7 +26,7 @@ from forge.resources.env import WriteFile
 from forge.resources.grading import GradeCandidate
 from forge.resources.rollouts import SolverRollout
 from forge.stages.author import hydrate, install_env, sandbox_limits
-from forge.stages.classify import grade_cause, host_failure, trial_cause
+from forge.stages.classify import grade_cause, grader_infra_unavailable, trial_cause
 from forge.stages.exits import Validated
 from forge.stages.summary import task_manifest
 
@@ -88,7 +88,7 @@ async def run_adversary(
         async with ctx.scope(f"adversary:{name}"):
             install_env(ctx, env)
             await hydrate(ctx, files)
-            task_json = wire.TASK_SPEC.dump_json(spec.task)
+            task_json = spec.task.model_dump_json().encode()
             await ctx.emit(
                 WriteFile(PurePosixPath(config.policy.setting("author.workdir", str), "task.json"), task_json)
             )
@@ -96,11 +96,11 @@ async def run_adversary(
             session = Conversation(
                 (
                     Message(
-                        "system",
+                        Role.SYSTEM,
                         config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
                     ),
                     Message(
-                        "user",
+                        Role.USER,
                         config.policy.prompt("adversary.user").render(
                             task=task_manifest(spec.task),
                             proposal=render(workpiece.proposal),
@@ -111,7 +111,7 @@ async def run_adversary(
                 ),
                 tuple(tool.schema for tool in tools.values()),
             )
-            outcome = await config.adversaries[name].run(ctx, session, env, resources.inference_for("adversary"), tools)
+            outcome = await config.adversaries[name].run(ctx, session, resources.inference_for("adversary"), tools)
             if (
                 not isinstance(outcome, Returned)
                 or outcome.tool != "report"
@@ -144,7 +144,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: ForgeConfig, reso
     if k < 1:
         raise ValueError("Validation needs at least one solver trial")
     async with ctx.scope("validate"):
-        ctx.observe(Resolved, host_failure)
+        ctx.observe(Resolved, grader_infra_unavailable)
         controls, solver, adversary = await asyncio.gather(
             asyncio.gather(
                 *(control_result(ctx, spec, index, control) for index, control in enumerate(submission.controls))

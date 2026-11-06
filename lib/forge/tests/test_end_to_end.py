@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import logging
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -25,13 +26,12 @@ from forge.effects.events import StageCompleted
 from forge.effects.issues import Restart
 from forge.effects.log import EventLog, JsonlSink, fold
 from forge.harness.protocol import Stopped, StopReason
-from forge.model.controls import Candidate, Control, ControlKind, RewardBand
+from forge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, FinishReason, ToolCall
-from forge.model.proposal import TaskProposal
-from forge.model.review import BandRules, Cause, Decision, Modify, Reject, RejectKind, Retry, ValidationResult
-from forge.model.serialization import CONTROL, TASK_PROPOSAL, WORKPIECE
+from forge.model.proposal import TASK_PROPOSAL, TaskProposal
+from forge.model.review import BandRules, Budget, Decision, Modify, Reject, RejectKind
 from forge.model.stage import Stage
-from forge.model.workpiece import Conversation, Terminal, Workpiece
+from forge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
 from forge.policy import Policy, load_policy
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
@@ -114,7 +114,7 @@ def script(arm: str) -> tuple[Completion, ...]:
         *validate,
         call(
             "submit",
-            {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json", "notes": "done"},
+            {"notes": "done"},
             "submit",
         ),
     )
@@ -169,7 +169,8 @@ async def test_crash_resume_replays_commands_without_repeating_inference(proposa
     assert resumed.envs.created[0].executed == ["inspect", "write-draft"]
 
 
-def needs_revision(result: ValidationResult, band: BandRules) -> Decision:
+def needs_revision(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+    result = workpiece.evidence[-1]
     return Modify((f"Revise {result.task_digest} for band {band.low}-{band.high}",))
 
 
@@ -195,21 +196,19 @@ async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
     assert len(wp.decisions) == 2
 
 
-async def test_host_classifier_holds_workpiece(proposal: TaskProposal) -> None:
-    wp = await run_workpiece(proposal, config("S"), resources(Envs(host_failure=True), script("S")), EventLog())
-    assert wp.terminal == Terminal.HELD
-    assert "space" in str(wp.decisions[-1]).lower()
-
-
-def retry_review(result: ValidationResult, band: BandRules) -> Decision:
-    assert result.solver and band.low > 0
-    return Retry(Cause.MODEL_UNAVAILABLE, 1)
-
-
 async def test_validation_retry_budget_holds_without_restarting_author(proposal: TaskProposal) -> None:
-    settings = replace(config("S"), review=retry_review)
+    settings = config("S")
+
+    class UngradedEngine(GradeEngine):
+        @override
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+            assert run_id is not None
+            return GradedRollout(Rollout(run_id, (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
+
+    bundle = resources(Envs(), script("S"))
+    bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=UngradedEngine()))
     log = EventLog()
-    wp = await run_workpiece(proposal, settings, resources(Envs(), script("S")), log)
+    wp = await run_workpiece(proposal, settings, bundle, log)
     assert wp.terminal == Terminal.HELD
     assert len(wp.decisions) == settings.budget.max_validation_retries + 1
     stages = [r.event.stage for r in log.records if isinstance(r.event, StageCompleted)]
@@ -363,6 +362,7 @@ async def test_container_filter_skips_before_runtime_or_subprocess(
     proposal: TaskProposal,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
     command: str,
 ) -> None:
@@ -386,8 +386,9 @@ async def test_container_filter_skips_before_runtime_or_subprocess(
 
     monkeypatch.setattr(driver, "runtime", unexpected)
     monkeypatch.setattr(driver.subprocess, "Popen", unexpected)
-    await (driver.one(args) if command == "one" else driver.run(args))
-    output = capsys.readouterr().out
+    with caplog.at_level(logging.INFO):
+        await (driver.one(args) if command == "one" else driver.run(args))
+    output = caplog.text + capsys.readouterr().out
     assert f"SKIP {proposal.header.id}: environment=container" in output
     if command == "run":
         assert "SUMMARY submitted=0 completed=0 failed=0 skipped=1" in output

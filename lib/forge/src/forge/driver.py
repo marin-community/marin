@@ -25,10 +25,9 @@ from forge.checkpoint import CheckpointSink
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
 from forge.effects.log import EventLog, JsonlSink, Status, fold
-from forge.model.proposal import TaskProposal
+from forge.model.proposal import TASK_PROPOSAL, TaskProposal
 from forge.model.review import Incomplete
-from forge.model.serialization import TASK_PROPOSAL, WORKPIECE
-from forge.model.workpiece import Terminal, Workpiece
+from forge.model.workpiece import WORKPIECE, Terminal, Workpiece
 from forge.policy import Policy, load_policy, parse_overlay
 from forge.wiring import endpoint_source, runtime
 

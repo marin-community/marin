@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import override
 
+from taskcompendium.models import TaskSpec
+
 from forge.effects.context import Context
 from forge.harness.protocol import SubmitRequest, ToolResult
 from forge.harness.tools.base import ValidatedTool
 from forge.lowering import check_candidates
-from forge.model.serialization import CONTROLS, TASK_SPEC
+from forge.model.controls import CONTROLS
 from forge.model.workpiece import Submission
 from forge.resources.env import ReadFile
 
@@ -21,7 +23,7 @@ async def read_submission(
     ctx: Context, task_path: str, controls_path: str, notes: str, gate: Gate
 ) -> Submission | ToolResult:
     try:
-        task = TASK_SPEC.validate_json(await ctx.emit(ReadFile(PurePosixPath(task_path))))
+        task = TaskSpec.model_validate_json(await ctx.emit(ReadFile(PurePosixPath(task_path))))
         controls = CONTROLS.validate_json(await ctx.emit(ReadFile(PurePosixPath(controls_path))))
         check_candidates(task, tuple(control.candidate for control in controls))
     except ValueError as error:

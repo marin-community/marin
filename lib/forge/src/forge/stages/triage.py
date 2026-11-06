@@ -3,14 +3,17 @@
 
 """Deterministic preflight with at most one repair, disabled by a zero repair budget."""
 
+from functools import partial
+
 from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import Note
-from forge.model.llm import Message, Sampling
+from forge.model.llm import Message, Role
 from forge.model.proposal import ProposalFormatError, TaskProposal, parse, render
 from forge.model.workpiece import Workpiece
+from forge.policy import sampling
 from forge.resources.bundle import Resources
-from forge.resources.inference import InferenceRequest
+from forge.resources.inference import InferenceRequest, complete
 from forge.stages.checks import CHECKS, run_checks
 from forge.stages.exits import Triaged, TriageRejected
 
@@ -20,32 +23,37 @@ def problems(proposal: TaskProposal) -> tuple[str, ...]:
 
 
 async def triage(
-    ctx: Context, workpiece: Workpiece, config: ForgeConfig, _resources: Resources
+    ctx: Context, workpiece: Workpiece, config: ForgeConfig, resources: Resources
 ) -> Triaged | TriageRejected:
     proposal = workpiece.proposal
     if proposal.header.null_reason is not None:
         return TriageRejected((f"Null proposal: {proposal.header.null_reason}",))
     async with ctx.scope("triage"):
-        for check in run_checks(proposal, CHECKS):
+        checks = run_checks(proposal, CHECKS)
+        for check in checks:
             await ctx.emit(Note(f"{check.name}: {check.status}: {check.reason}"))
-        reasons = problems(proposal)
+        reasons = tuple(f"{check.name}: {check.reason}" for check in checks if check.blocks)
         if not reasons:
             return Triaged(proposal)
         if config.policy.setting("budget.max_triage_repairs", int) < 1:
             return TriageRejected(reasons)
+        # Triage repairs use the explicitly selected author role and its sampling policy.
+        client = resources.inference_for("author")
+        ctx.resource(client, client.fingerprint)
+        ctx.handle(InferenceRequest, partial(complete, notify=ctx.emit), uses=(client,))
         completion = await ctx.emit(
             InferenceRequest(
                 (
-                    Message("system", config.policy.prompt("triage.system").render()),
+                    Message(Role.SYSTEM, config.policy.prompt("triage.system").render()),
                     Message(
-                        "user",
+                        Role.USER,
                         config.policy.prompt("triage.user").render(
                             proposal=render(proposal), reasons="\n".join(reasons)
                         ),
                     ),
                 ),
                 (),
-                Sampling(),
+                sampling(config.policy),
             )
         )
         try:

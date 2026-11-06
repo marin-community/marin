@@ -6,12 +6,8 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from types import MappingProxyType
-from typing import Annotated
 
-from pydantic import PlainSerializer
-
-from forge.model.json import FrozenJson, freeze_json, thaw_json
+from pydantic import TypeAdapter
 
 
 class FinishReason(StrEnum):
@@ -21,10 +17,11 @@ class FinishReason(StrEnum):
     ABORT = "abort"
 
 
-class ReasoningEffort(StrEnum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
+class Role(StrEnum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +33,7 @@ class ToolCall:
 
 @dataclass(frozen=True, slots=True)
 class Message:
-    role: str
+    role: Role
     content: str
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str | None = None
@@ -47,21 +44,7 @@ class Message:
 class ToolSchema:
     name: str
     description: str
-    parameters: Annotated[Mapping[str, FrozenJson], PlainSerializer(thaw_json)]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "parameters", MappingProxyType({key: freeze_json(value) for key, value in self.parameters.items()})
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class Sampling:
-    temperature: float = 1.0
-    top_p: float = 0.95
-    max_tokens: int | None = None
-    reasoning_effort: ReasoningEffort = ReasoningEffort.HIGH
-    max_continuations: int | None = None
+    parameters: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,3 +64,6 @@ class Completion:
     continuations: int = 0
     reasoning: str = ""
     retries: tuple[str, ...] = ()
+
+
+TOOL_SCHEMA = TypeAdapter(ToolSchema)

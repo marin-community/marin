@@ -6,9 +6,10 @@
 """Authored candidates and their expected rewards; reward checks copied from Taskforge."""
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import StrEnum
 
+from pydantic import TypeAdapter
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskResource
 
@@ -76,9 +77,6 @@ class Candidate:
     reply: str
     files: tuple[TaskResource, ...] = ()
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "files", tuple(file.model_copy(deep=True) for file in self.files))
-
 
 @dataclass(frozen=True, slots=True)
 class Control:
@@ -86,5 +84,6 @@ class Control:
     expected: RewardBand
     kind: ControlKind
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "candidate", replace(self.candidate))
+
+CONTROL = TypeAdapter(Control)
+CONTROLS = TypeAdapter(tuple[Control, ...])

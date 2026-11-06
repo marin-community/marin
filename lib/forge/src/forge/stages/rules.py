@@ -13,14 +13,17 @@ from forge.model.review import (
     Accept,
     BandOutcome,
     BandRules,
+    Budget,
     Cause,
     Decision,
     Incomplete,
     Modify,
     Reject,
     RejectKind,
+    Retry,
     ValidationResult,
 )
+from forge.model.workpiece import Workpiece
 from forge.stages.classify import TASK_DEFECTS, grade_cause
 
 
@@ -33,7 +36,35 @@ def passed(grade: GradeResult) -> bool:
     return reward >= score_max or math.isclose(reward, score_max, rel_tol=1e-9, abs_tol=1e-9)
 
 
-def default_review(result: ValidationResult, band: BandRules) -> Decision:
+TRANSIENT_CAUSES = frozenset({Cause.AGENT_TIMEOUT, Cause.GRADER_INFRA, Cause.NO_GRADE})
+
+
+def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+    result = workpiece.evidence[-1]
+    decision = assess(result, band)
+    if isinstance(decision, Incomplete):
+        retryable = [
+            t.cause or (grade_cause(t.grade) if t.grade is not None else Cause.NO_GRADE)
+            for t in (*result.solver, *result.controls)
+        ]
+        retries = sum(isinstance(item, Retry) for item in workpiece.decisions)
+        cause = next((cause for cause in retryable if cause in TRANSIENT_CAUSES), None)
+        if cause is not None and retries < budget.max_validation_retries:
+            return Retry(cause, retries + 1)
+    # Mark's policy: one hardening attempt, then tagged acceptance; restore baseline on regression.
+    if isinstance(decision, Modify) and BandOutcome.TOO_EASY in band.accepted:
+        if workpiece.too_easy_baseline is not None:
+            revert = decision.placement is not BandOutcome.TOO_EASY
+            reasons = ("accepted_with: too_easy",)
+            if revert:
+                reasons += ("Hardening regressed; reverted to the previously validated submission", *decision.findings)
+            return Accept(BandOutcome.TOO_EASY, reasons, revert=revert)
+        if decision.placement is BandOutcome.TOO_EASY and workpiece.round >= budget.max_modify_rounds:
+            return Accept(BandOutcome.TOO_EASY, ("accepted_with: too_easy", "Shared modification budget exhausted"))
+    return decision
+
+
+def assess(result: ValidationResult, band: BandRules) -> Decision:
     if result.lowering_error is not None:
         return Incomplete((f"Lowering failed: {result.lowering_error}",))
     if not result.solver or not result.controls:
@@ -73,7 +104,7 @@ def default_review(result: ValidationResult, band: BandRules) -> Decision:
         return Modify(findings)
     solved = sum(passed(trial.grade) for trial in result.solver if trial.grade is not None)
     place = band.place(solved / len(result.solver))
-    if place in band.accepted:
+    if place is BandOutcome.IN_BAND and place in band.accepted:
         return Accept(place)
     finding = f"{solved} of {len(result.solver)} trials solved: {place}"
     if place is BandOutcome.TOO_EASY:

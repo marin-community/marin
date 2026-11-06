@@ -41,10 +41,10 @@ from forge.lowering import (
     rollout_engine,
 )
 from forge.model.content_hash import digest
-from forge.model.llm import Sampling
 from forge.model.review import BandOutcome, BandRules, Budget
 from forge.model.workpiece import Submission, Workpiece
 from forge.policy import Policy, load_policy, resolution_lines
+from forge.policy import sampling as policy_sampling
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock, Now, now
 from forge.resources.env import Env, EnvFactory, ShellboxEnvFactory
@@ -142,9 +142,7 @@ def build_resources(
     engine = verifiers = RoundVerifier(base_engine, settings.limits.cleanup_timeout)
     execution = digest((settings, command_timeout))
     provider = {key: value for key, value in policy.entries.items() if key.startswith("provider.")}
-    sampling = TypeAdapter(LLMPolicy).validate_python(
-        {key.removeprefix("sampling."): value for key, value in policy.entries.items() if key.startswith("sampling.")}
-    )
+    sampling = policy_sampling(policy)
     inference = {
         role: GlmInference(client, digest((provider, role, policy.setting(f"{role}.context_tokens", int))))
         for role, client in clients.items()
@@ -182,9 +180,7 @@ def prompt_limit(policy: Policy, role: str = "author") -> int:
 
 def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactory]) -> ForgeConfig:
     settings = lowering_settings(policy)
-    sampling = TypeAdapter(Sampling).validate_python(
-        {key.removeprefix("sampling."): value for key, value in policy.entries.items() if key.startswith("sampling.")}
-    )
+    sampling = policy_sampling(policy)
     author = AgenticHarness(
         prompt_limit(policy),
         sampling,
@@ -195,7 +191,7 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         name: AgenticHarness(
             prompt_limit(policy, "adversary"),
             sampling,
-            "Finish your audit.",
+            policy.prompt("adversary.nudge").template,
             policy.setting("tools.output_chars", int),
         )
         for name in policy.setting("adversary.roster", tuple)
@@ -227,7 +223,13 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         policy.setting("budget.max_modify_rounds", int), policy.setting("budget.max_validation_retries", int)
     )
     band = BandRules(
-        policy.setting("band.low", float), policy.setting("band.high", float), frozenset({BandOutcome.IN_BAND})
+        policy.setting("band.low", float),
+        policy.setting("band.high", float),
+        (
+            frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_EASY})
+            if policy.setting("band.accept_too_easy", bool)
+            else frozenset({BandOutcome.IN_BAND})
+        ),
     )
     return ForgeConfig(
         policy,

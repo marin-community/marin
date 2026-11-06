@@ -11,3 +11,5 @@ from forge.policy import Policy, load_policy
 
 DEFAULTS_DIR = Path(__file__).parent
 DEFAULT_POLICY: Policy = load_policy(DEFAULTS_DIR)
+
+# Experiments enable adversaries explicitly; an empty roster explicitly disables adversarial validation.

@@ -9,7 +9,6 @@ The prompt file ``prompts/<group>/<name>.md`` is the key ``<group>.<name>``; ``p
 prompt file ends with one newline, which the loader drops; templates render with ``str.format``.
 """
 
-import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,7 +16,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated
 
-from pydantic import PlainSerializer
+from pydantic import PlainSerializer, TypeAdapter
+from taskforge.llm.policy import LLMPolicy
 
 from forge.model.content_hash import digest
 
@@ -36,7 +36,7 @@ class Prompt:
 
     @property
     def sha256(self) -> str:
-        return hashlib.sha256(self.template.encode()).hexdigest()
+        return digest(self.template)
 
     def render(self, **fields: object) -> str:
         return self.template.format(**fields)
@@ -130,3 +130,9 @@ def resolution_lines(declared: Policy, resolved: Policy) -> list[str]:
         f"POLICY {key} declared={shown(declared.entries[key])} resolved={shown(value)}"
         for key, value in sorted(resolved.entries.items())
     ]
+
+
+def sampling(policy: Policy) -> LLMPolicy:
+    return TypeAdapter(LLMPolicy).validate_python(
+        {key.removeprefix("sampling."): value for key, value in policy.entries.items() if key.startswith("sampling.")}
+    )

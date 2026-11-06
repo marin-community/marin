@@ -8,12 +8,13 @@ from rolloutengine.models import GradedRollout, Rollout
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.runtime.resources import inline_resource
+from taskforge.llm.policy import LLMPolicy
 
 from forge.effects.context import Context
 from forge.effects.events import Event, Resolved
 from forge.effects.log import EventLog, JsonlSink, Record
 from forge.model.controls import Candidate
-from forge.model.llm import Completion, Message, Sampling, ToolSchema
+from forge.model.llm import Completion, Message, Role, ToolSchema
 from forge.resources.clock import Clock, Now, now
 from forge.resources.env import (
     CommandResult,
@@ -53,9 +54,9 @@ async def test_reload_reexecutes_environment_but_reuses_inference_clock_and_ids(
     env = FakeEnv("image", script, note)
     client = FakeInference((Completion("answer"),))
     event = InferenceRequest(
-        (Message("user", "solve"),),
+        (Message(Role.USER, "solve"),),
         (ToolSchema("shell", "Run command", {"type": "object", "required": ("command",)}),),
-        Sampling(temperature=1),
+        LLMPolicy(temperature=1),
     )
     sink = JsonlSink(str(tmp_path / "events.jsonl"))
     ctx = Context(log=EventLog(sink=sink))

@@ -11,7 +11,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from lib.forge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import EnvironmentRequirements, TaskResource
+from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource
 
 from forge.arms import decided, validated
@@ -21,18 +21,15 @@ from forge.effects.issues import Hold, Restart
 from forge.effects.log import EventLog
 from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport
-from forge.harness.web import FakeWeb
 from forge.lowering import machine_backend, requirements
-from forge.model import serialization as wire
-from forge.model.controls import Candidate, Control, ControlKind, RewardBand
-from forge.model.llm import Completion, Message, ToolCall
+from forge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
+from forge.model.llm import Completion, Message, Role, ToolCall
 from forge.model.proposal import (
     REQUIRED_HEADINGS,
     Environment,
     Grounding,
     ProposalHeader,
     ResearchNeed,
-    SolverMachine,
     SourceKind,
     SourceRef,
     TaskProposal,
@@ -40,6 +37,7 @@ from forge.model.proposal import (
     render,
 )
 from forge.model.review import (
+    VALIDATION_RESULT,
     Accept,
     AdversaryFinding,
     AdversaryResult,
@@ -51,10 +49,11 @@ from forge.model.review import (
     Incomplete,
     Modify,
     Reject,
+    Retry,
     TrialResult,
     ValidationResult,
 )
-from forge.model.workpiece import Conversation, Submission, Terminal, Workpiece
+from forge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from forge.policy import Policy, load_policy
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.bundle import Resources
@@ -65,6 +64,7 @@ from forge.resources.inference import FakeInference, InferenceRequest, complete
 from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from forge.resources.sandbox.factories import MachineHost
 from forge.resources.sandbox.images import GRADER_BASE_IMAGE
+from forge.resources.web import FakeWeb
 from forge.stages.author import author
 from forge.stages.exits import Decided, Triaged, TriageRejected, Validated
 from forge.stages.review import review
@@ -79,7 +79,6 @@ def workpiece() -> Workpiece:
         "sum",
         SourceRef(SourceKind.CAPABILITY, "arithmetic", "v1"),
         Environment.REASONING,
-        SolverMachine.NONE,
         Verification.CODE,
         (),
         Grounding.UNVERIFIED,
@@ -112,7 +111,7 @@ def config(harness: RecordingHarness) -> ForgeConfig:
         {"author": {}},
         lambda submission: (),
         default_review,
-        BandRules(0.25, 0.75, frozenset({BandOutcome.IN_BAND})),
+        BandRules(0.25, 0.75, frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_EASY})),
         Budget(2, 2),
         {},
     )
@@ -147,7 +146,7 @@ async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: W
         }
     )
     submission = replace(workpiece.submission, task=task)
-    saved = Conversation((Message("user", "Continue with feedback"),), ())
+    saved = Conversation((Message(Role.USER, "Continue with feedback"),), ())
     harness = RecordingHarness(Submitted(submission, saved))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
@@ -155,10 +154,15 @@ async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: W
     await ctx.drain()
     assert result == harness.result
     assert harness.session == saved
-    assert harness.files[PurePosixPath("/workspace/notes")] == b"revision"
-    assert wire.TASK_SPEC.validate_json(harness.files[PurePosixPath("/workspace/task.json")]) == task
-    assert wire.CONTROLS.validate_json(harness.files[PurePosixPath("/workspace/controls.json")]) == submission.controls
-    assert harness.files[PurePosixPath("/workspace/proposal.json")] == render(workpiece.proposal).encode()
+    assert isinstance(bundle.envs, Environments)
+    assert bundle.envs.created[0].files[PurePosixPath("/workspace/notes")] == b"revision"
+    assert TaskSpec.model_validate_json(bundle.envs.created[0].files[PurePosixPath("/workspace/task.json")]) == task
+    assert (
+        CONTROLS.validate_json(bundle.envs.created[0].files[PurePosixPath("/workspace/controls.json")])
+        == submission.controls
+    )
+    assert isinstance(bundle.envs, Environments)
+    assert bundle.envs.created[0].files[PurePosixPath("/workspace/proposal.json")] == render(workpiece.proposal).encode()
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
 
 
@@ -176,7 +180,8 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     assert harness.session.messages[-1].content == config(harness).policy.prompt("author.user").render(
         proposal=render(workpiece.proposal)
     )
-    assert harness.files[PurePosixPath("/workspace/notes")] == b"sum"
+    assert isinstance(bundle.envs, Environments)
+    assert bundle.envs.created[0].files[PurePosixPath("/workspace/notes")] == b"sum"
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
 
 
@@ -200,7 +205,7 @@ async def test_author_reference_describes_valid_wire_values_and_supported_enviro
     task["context"]["events"][0]["type"] = "invalid_event_type"
     with pytest.raises(ValidationError):
         task_schema.validate(task)
-    control = json.loads(wire.CONTROL.dump_json(workpiece.submission.controls[0]))
+    control = json.loads(CONTROL.dump_json(workpiece.submission.controls[0]))
     control_schema = Draft202012Validator(schemas["Control"])
     control_schema.validate(control)
     del control["candidate"]
@@ -255,7 +260,9 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     assert harness.client is adversary_client
     assert finding.grade is not None and finding.grade.reward == float(confirmed)
     assert finding.met is confirmed
-    assert isinstance(default_review(evidence, setup.band), Modify if confirmed else Accept)
+    assert isinstance(
+        default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Modify if confirmed else Accept
+    )
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
     assert bundle.envs.requested[0].docker_image == GRADER_BASE_IMAGE
 
@@ -265,7 +272,7 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     [
         (None, True, True, Accept),
         (None, False, True, Modify),
-        (Cause.MODEL_TIMEOUT, False, True, Incomplete),
+        (Cause.AGENT_TIMEOUT, False, True, Retry),
         (None, False, False, Incomplete),
         (Cause.BUDGET_EXHAUSTED, True, True, Reject),
     ],
@@ -321,7 +328,7 @@ async def test_adversary_environment_hold_is_incomplete_evidence(
     await ctx.drain()
     assert evidence.adversary == (AdversaryResult("finder", False, (), (f"{kind.__name__}: {message}",)),)
     assert len(evidence.solver) == 3 and len(evidence.controls) == 2
-    decision = default_review(evidence, setup.band)
+    decision = default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget)
     assert isinstance(decision, Incomplete)
     assert decision.reasons == (f"finder: {kind.__name__}: {message}",)
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
@@ -340,7 +347,7 @@ async def test_invalid_grader_checks_request_task_repair(workpiece: Workpiece) -
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     assert all(control.cause is Cause.GRADER_INVALID_CHECKS for control in evidence.controls)
-    decision = default_review(evidence, setup.band)
+    decision = default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget)
     assert isinstance(decision, Modify)
     assert any("grader_invalid_checks" in finding for finding in decision.findings)
 
@@ -359,9 +366,9 @@ async def test_adversary_stop_reason_survives_review_and_serialization(workpiece
     ctx = Context(log=EventLog())
     evidence = (await validate(ctx, workpiece, setup, resources(ctx))).result
     await ctx.drain()
-    restored = wire.WORKPIECE.validate_json(wire.WORKPIECE.dump_json(workpiece.with_(evidence=(evidence,))))
+    restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(evidence,))))
     assert restored.evidence[0].adversary[0].reasons == (f"{reason} after 0 turns without report",)
-    decision = default_review(restored.evidence[0], setup.band)
+    decision = default_review(restored, setup.band, setup.budget)
     assert isinstance(decision, Incomplete)
     assert f"finder: {reason} after 0 turns without report" in decision.reasons
 
@@ -371,15 +378,18 @@ async def test_adversary_stop_reason_survives_review_and_serialization(workpiece
 async def test_triage_repairs_sections_only_when_budget_allows(workpiece: Workpiece, repair_budget: int) -> None:
     inference = FakeInference((Completion(render(workpiece.proposal)),))
     ctx = Context(log=EventLog())
-    bundle = resources(ctx, inference)
+    bundle = replace(resources(ctx), role_inference={"author": inference})
     damaged = workpiece.with_(proposal=replace(workpiece.proposal, body="## Task\nToo short"))
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     setup = config(harness)
-    setup = replace(setup, policy=setup.policy.overlaid({"budget.max_triage_repairs": repair_budget}))
+    setup = replace(
+        setup, policy=setup.policy.overlaid({"budget.max_triage_repairs": repair_budget, "sampling.temperature": 0.25})
+    )
     result = await triage(ctx, damaged, setup, bundle)
     await ctx.drain()
     if repair_budget:
         assert isinstance(result, Triaged) and result.proposal.header == workpiece.proposal.header
+        assert inference.requests[0].sampling.temperature == 0.25
     else:
         assert isinstance(result, TriageRejected) and result.reasons
     assert len(inference.requests) == repair_budget
@@ -407,7 +417,7 @@ async def test_one_hardening_attempt_accepts_or_reverts(workpiece: Workpiece, re
     # An earlier unrelated modification already consumed one round of the shared budget.
     current = workpiece.with_(
         round=1,
-        session=Conversation((Message("system", "author"),), ()),
+        session=Conversation((Message(Role.SYSTEM, "author"),), ()),
         evidence=(evidence,),
         decisions=(Modify(("fix initial controls",)),),
     )
@@ -429,7 +439,7 @@ async def test_one_hardening_attempt_accepts_or_reverts(workpiece: Workpiece, re
     current = pending.with_(submission=updated, evidence=(*pending.evidence, revised))
     second = await review(ctx, current, setup, bundle)
     final = decided(current, second, budget=setup.budget, policy=setup.policy)
-    restored = wire.WORKPIECE.validate_json(wire.WORKPIECE.dump_json(final))
+    restored = WORKPIECE.validate_json(WORKPIECE.dump_json(final))
     assert restored.terminal is Terminal.ACCEPTED and restored.round == 2
     assert isinstance(second.decision, Accept)
     assert sum(isinstance(item, Modify) for item in restored.decisions) == 2
@@ -446,8 +456,15 @@ async def test_one_hardening_attempt_accepts_or_reverts(workpiece: Workpiece, re
 
 def test_too_easy_does_not_create_an_extra_modification_budget(workpiece: Workpiece) -> None:
     setup = config(RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ()))))
-    current = workpiece.with_(round=setup.budget.max_modify_rounds)
-    decision = Decided(Modify(("make harder",), placement=BandOutcome.TOO_EASY))
+    assert workpiece.submission is not None
+    evidence = ValidationResult(
+        workpiece.submission.digest,
+        (TrialResult(0, GradeResult(Outcome.GRADED, 1)),),
+        (ControlResult(0, GradeResult(Outcome.GRADED, 1), True),),
+        (),
+    )
+    current = workpiece.with_(round=setup.budget.max_modify_rounds, evidence=(evidence,))
+    decision = Decided(default_review(current, setup.band, setup.budget))
     final = decided(current, decision, budget=setup.budget, policy=setup.policy)
     assert final.terminal is Terminal.ACCEPTED and final.round == current.round
     assert final.submission == workpiece.submission and final.too_easy_baseline is None
@@ -467,7 +484,9 @@ async def test_validate_returns_lowering_failure_without_starting_trials(workpie
     result = (await validate(ctx, workpiece, config(harness), resources(ctx))).result
     assert result.lowering_error is not None
     assert not result.solver and not result.controls
-    assert isinstance(default_review(result, config(harness).band), Incomplete)
+    assert isinstance(
+        default_review(workpiece.with_(evidence=(result,)), config(harness).band, config(harness).budget), Incomplete
+    )
 
 
 @pytest.mark.parametrize(
@@ -507,8 +526,8 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
     else:
         result = (await validate(ctx, workpiece, setup, bundle)).result
         assert all(control.cause is cause for control in result.controls)
-        decision = default_review(result, setup.band)
-        assert isinstance(decision, Incomplete if cause is Cause.NO_GRADE else Modify)
+        decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+        assert isinstance(decision, Retry if cause is Cause.NO_GRADE else Modify)
         if cause is Cause.GRADER_TIMEOUT:
             assert isinstance(decision, Modify) and any("grader_timeout" in finding for finding in decision.findings)
     await ctx.drain()
@@ -534,15 +553,17 @@ async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Wor
         tools={"finder": {}},
     )
     ctx = Context(log=EventLog())
-    await adversary_result(ctx, workpiece, setup, resources(ctx), rollout_spec(task), "finder")
+    bundle = resources(ctx)
+    await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(task), "finder")
     await ctx.drain()
     assert harness.session is not None
     prompt = harness.session.messages[-1].content
     assert "memory limit: 8192 MiB" in harness.session.messages[0].content
     assert len(prompt) < 10000 and "content_base64" not in prompt
     assert f'"bytes":{len(payload)}' in prompt and '"role":"resources.all"' in prompt
-    assert harness.files[PurePosixPath("/workspace/input.bin")] == payload
-    assert wire.TASK_SPEC.validate_json(harness.files[PurePosixPath("/workspace/task.json")]) == task
+    assert isinstance(bundle.envs, Environments)
+    assert bundle.envs.created[0].files[PurePosixPath("/workspace/input.bin")] == payload
+    assert TaskSpec.model_validate_json(bundle.envs.created[0].files[PurePosixPath("/workspace/task.json")]) == task
 
 
 @pytest.mark.asyncio
@@ -562,8 +583,10 @@ async def test_validate_summary_hydrates_full_evidence_before_author_resumes(wor
         (ControlResult(0, grade, True),),
         (AdversaryResult("finder", True, (finding,)),),
     )
-    session = Conversation((Message("assistant", "", (ToolCall("v1", "validate", "{}"),)),), ())
-    resumed = validated(workpiece.with_(session=session), Validated(evidence), tool=True, output_chars=3000)
+    session = Conversation((Message(Role.ASSISTANT, "", (ToolCall("v1", "validate", "{}"),)),), ())
+    resumed = validated(
+        workpiece.with_(session=session), Validated(evidence), tool=True, workdir="/workspace", output_chars=3000
+    )
     assert resumed.session is not None
     message = resumed.session.messages[-1]
     assert message.tool_call_id == "v1" and len(message.content) <= 3000
@@ -571,10 +594,12 @@ async def test_validate_summary_hydrates_full_evidence_before_author_resumes(wor
     assert "content_base64" not in message.content and "/workspace/.validation/0.json" in message.content
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     ctx = Context(log=EventLog())
-    await author(ctx, resumed, config(harness), resources(ctx))
+    bundle = resources(ctx)
+    await author(ctx, resumed, config(harness), bundle)
     await ctx.drain()
-    saved = harness.files[PurePosixPath("/workspace/.validation/0.json")]
-    assert wire.VALIDATION_RESULT.validate_json(saved) == evidence
+    assert isinstance(bundle.envs, Environments)
+    saved = bundle.envs.created[0].files[PurePosixPath("/workspace/.validation/0.json")]
+    assert VALIDATION_RESULT.validate_json(saved) == evidence
 
 
 @pytest.mark.parametrize("claim", [False, True])
@@ -594,4 +619,21 @@ async def test_control_and_claim_preemption_restarts_validation(workpiece: Workp
             await claim_result(ctx, spec, AdversaryClaim("wrong", control.candidate, control.expected))
         else:
             await control_result(ctx, spec, 0, control)
+    await ctx.drain()
+
+
+@pytest.mark.asyncio
+async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    evidence = ValidationResult(workpiece.submission.digest, (), (), ())
+    current = workpiece.with_(too_easy_baseline=workpiece.submission, evidence=(evidence,))
+    expected = Modify(("Custom reviewer requires another change",))
+
+    def custom_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Modify:
+        assert workpiece is current
+        return expected
+
+    setup = replace(config(RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))), review=custom_review)
+    ctx = Context(log=EventLog())
+    assert (await review(ctx, current, setup, resources(ctx))).decision is expected
     await ctx.drain()
