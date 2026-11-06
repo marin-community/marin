@@ -45,6 +45,7 @@ def main() -> None:
         prefill_context_parallel_size=args.pcp,
         speculative_config=speculative,
         disable_log_stats=False,
+        kernel_config={"moe_backend": "triton"},
     )
     sample = SamplingParams(temperature=0, max_tokens=1, logprobs=128, ignore_eos=True, detokenize=False)
     records = []

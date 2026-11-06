@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import draccus
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from levanter.checkpoint import save_checkpoint
@@ -50,6 +51,15 @@ def prepare(output: Path, source_revision: str) -> None:
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     with jax.set_mesh(mesh):
         model = Transformer.init(config, key=jax.random.PRNGKey(42))
+        # Identity initialization would hide a lost convolution history.
+        for get_weight in (
+            lambda value: value.stacked_blocks.stacked.attn.sconv_k.weight,
+            lambda value: value.stacked_blocks.stacked.sconv_attn.weight,
+            lambda value: value.stacked_blocks.stacked.sconv_mlp.weight,
+        ):
+            weight = get_weight(model)
+            taps = jnp.asarray([1.0, 0.125, -0.0625, 0.03125])[None, :, None]
+            model = eqx.tree_at(get_weight, model, jnp.broadcast_to(taps, weight.shape))
         pending = jnp.broadcast_to(jnp.asarray([0.2, -0.3, 0.1, 0.0]), (4, 4))
         save_checkpoint(
             {"params": model, "pending_qb_betas": pending}, step=0, checkpoint_path=checkpoint, is_temporary=False
