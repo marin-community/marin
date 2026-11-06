@@ -27,7 +27,7 @@ from rolloutengine.models import TaskRolloutSpec
 WORKSPACE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
 
 
-def task_machine_requirement(task: TaskSpec) -> str | None:
+def task_machine_reason(task: TaskSpec) -> str | None:
     """Why ``task`` runs only with a task machine, or ``None`` when it runs without one.
 
     Tool providers run on the host, so they do not need a machine. A workspace answer needs one only
@@ -85,5 +85,5 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
             resource.mtime_ns is not None for resource in resources
         ):
             raise NotImplementedError("The built-in filesystem cannot preserve resource timestamps")
-    if spec.task_machine is None and (requirement := task_machine_requirement(task)) is not None:
-        raise ValueError(requirement)
+    if spec.task_machine is None and (reason := task_machine_reason(task)) is not None:
+        raise ValueError(reason)
