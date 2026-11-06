@@ -3,25 +3,26 @@
 
 import json
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 import yaml
+from marin.execution.artifact import RECORD_FILENAME
 from marin.execution.lazy import OUT, ArtifactStep, apply, resolve
 from marin.rl.skyrl import SkyRLRun
 from rigging.timing import Timestamp
-from taskcompendium.convert.answers import answer_task
-from taskcompendium.models import Source
-from taskcompendium.pipeline.models import RawRow
-from verifyit.spec import ExactSpec
 
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training.inventory import loop_publication, publish_loop_result
-from experiments.post_training.inventory.publication_test_support import ReportTransport, result_record
+from experiments.post_training import test_snowball_rl_gate as gate_tests
+from experiments.post_training.inventory import loop_publication
+from experiments.post_training.inventory.publication_test_support import result_record
+
+pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
+recorded_runs = gate_tests.recorded_runs
+publication_transport = gate_tests.publication_transport
 
 
 def _json(path, value):
@@ -46,76 +47,39 @@ def _gate_result(output, verdict, interpretation):
 
 
 @pytest.mark.parametrize("mode", ["legacy", "snowball"])
-def test_publication_retry_reuses_completed_training(tmp_path, monkeypatch, mode):
+def test_publication_retry_reuses_completed_training(tmp_path, monkeypatch, mode, recorded_runs, publication_transport):
     result = result_record()
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    transport = ReportTransport()
-    monkeypatch.setattr(publish_loop_result, "marina_request", transport)
+    transport = publication_transport
     training_calls = []
-    panel = tmp_path / "panel"
-    template = answer_task(
-        RawRow("template", Source(dataset="fixture", revision="1", row="template", importer_revision="1"), {}),
-        prompt="Reply yes.",
-        spec=ExactSpec(expected=("yes",)),
+    original = presets.PRESETS["learning-medium"]
+    preset = replace(
+        original, updates=2, measured=(1, 2), evaluations=(replace(original.evaluations[0], file="validation"),)
     )
-    identifiers = [f"task-{index}" for index in range(100)]
-    panel.mkdir()
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {presets.TASK_SPEC_COLUMN: template.model_copy(update={"id": item}).model_dump_json()}
-                for item in identifiers
-            ]
-        ),
-        panel / "full_validation.parquet",
-    )
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {
-                    "task_id": item,
-                    "family": "small" if index == 0 else "large",
-                    "aaii_category": "coding",
-                    "agentic": False,
-                }
-                for index, item in enumerate(identifiers)
-            ]
-        ),
-        panel / presets.TASK_MANIFEST_FILENAME,
-    )
+    monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {preset.name: preset})
     start = 1794000000000
     job = SimpleNamespace(started_at=Timestamp.from_ms(start), finished_at=Timestamp.from_ms(start + 3600000))
-    client = SimpleNamespace(job_status=lambda job_id: job)
-    monkeypatch.setattr(loop_publication, "open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.setattr(
+        loop_publication,
+        "open_iris_client",
+        lambda **kwargs: nullcontext(SimpleNamespace(job_status=lambda job_id: job)),
+    )
 
     def write_native(output, attempt="native-1", kind="full"):
+        record_path = output / RECORD_FILENAME
+        saved = record_path.read_bytes() if record_path.exists() else None
+        assert recorded_runs(preset, "test/training", initial_score=0) == output
+        if saved is not None:
+            record_path.write_bytes(saved)
         export = output / "exports"
-        source = {
-            "kind": "directory",
-            "uri": str(panel),
-            "relative_path": "full_validation.parquet",
-            "identity": "panel@2026.11.06",
-        }
-        launch = {
-            "run": {"id": "native-run", "attempt_id": attempt},
-            "inputs": {
-                "model": {"identity": "initializer@2026.11.06"},
-                "train_data": [{"identity": "training@2026.11.06"}],
-                "validation_data": [source],
-                "evaluation_data": {"full_panel": [source]},
-            },
-            "skyrl": {
-                "trainer": {"max_steps": 2},
-                "generator": {"eval_n_samples_per_prompt": 1},
-                "data": {"expected_eval_rows": None} if kind == "full" else {},
-            },
-        }
+        launch = json.loads((output / "resolved-launch.yaml").read_text())["config"]
+        launch["run"] = {"id": "native-run", "attempt_id": attempt}
+        launch["inputs"]["evaluation_data"]["full_panel"] = launch["inputs"]["validation_data"]
+        launch["skyrl"]["data"] = {"expected_eval_rows": None, "val_data": launch["inputs"]["validation_data"]}
         destination = output / "terminal.json"
         if kind == "native-failed":
             destination.unlink(missing_ok=True)
             launch["artifacts"] = {"attempts_root": str(output / "attempts")}
             destination = output / "attempts" / f"{attempt}.json"
-        (output / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": launch}))
         _json(
             destination,
             {
@@ -127,78 +91,49 @@ def test_publication_retry_reuses_completed_training(tmp_path, monkeypatch, mode
                 },
             },
         )
+        resolved = json.loads(json.dumps(launch))
+        resolved["skyrl"]["data"]["val_data"] = ["/native/evaluation.parquet"]
+        (output / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": resolved}))
         _json(export / "tracking.json", {"wandb_url": f"https://wandb.example/team/project/runs/{attempt}"})
         for step, windows in ((1, 2), (2, 3)):
-            _json(
-                export / f"metrics/step-{step:06d}.json",
-                {
-                    "step": step,
-                    "attempt_id": attempt,
-                    "trainer/global_step": step,
-                    "timing/step_wall/unaccounted": 0,
-                    "policy/policy_update_steps": windows,
-                    "policy/policy_loss": 0.1,
-                    "policy/raw_grad_norm": 1,
-                },
-            )
+            path = export / f"metrics/step-{step:06d}.json"
+            _json(path, json.loads(path.read_text()) | {"attempt_id": attempt, "policy/policy_update_steps": windows})
         _json(
             export / "metrics/step-000003.json",
-            {
+            json.loads((export / "metrics/step-000002.json").read_text())
+            | {
                 "step": 3,
-                "attempt_id": "old-attempt",
                 "trainer/global_step": 3,
-                "timing/step_wall/unaccounted": 0,
+                "attempt_id": "old-attempt",
                 "policy/policy_update_steps": 999,
-                "policy/policy_loss": 0.1,
-                "policy/raw_grad_norm": 1,
             },
         )
         for step in (0, 2):
+            dump = export / f"dumped_evals/global_step_{step}_evals/panel.jsonl"
             count = int(kind) if kind in ("99", "98") else 100
-            rows = [
-                {
-                    "task_id": item,
-                    "response_token_ids": [1],
-                    "verification": {
-                        "status": "verified",
-                        "score": float(index == 0) if step == 0 else 0.5,
-                        "score_min": 0,
-                        "score_max": 1,
-                    },
-                }
-                for index, item in enumerate(identifiers[:count])
-            ]
+            rows = [json.loads(line) for line in dump.read_text().splitlines()][:count]
+            if step == 0:
+                for index, row in enumerate(rows):
+                    row["verification"]["score"] = float(index == 0)
             if kind == "foreign" and step == 2:
                 rows[-1]["task_id"] = "foreign-task"
-            dump = export / f"dumped_evals/global_step_{step}_evals/panel.jsonl"
-            dump.parent.mkdir(parents=True, exist_ok=True)
             if kind == "missing" and step == 0:
-                if dump.exists():
-                    dump.unlink()
+                dump.unlink()
             else:
                 dump.write_text("".join(json.dumps(row) + "\n" for row in rows))
-            metric = export / f"metrics/step-{step:06d}.json"
-            previous = json.loads(metric.read_text()) if metric.exists() else {"step": step}
+            path = export / f"metrics/step-{step:06d}.json"
             _json(
-                metric,
-                previous
+                path,
+                json.loads(path.read_text())
                 | {
                     "attempt_id": "old-attempt" if kind == "stale" and step == 0 else attempt,
                     "eval/all/num_attempted": len(rows),
                     "eval/all/num_scored": len(rows),
                 },
             )
-        other = export / "full_panel/dumped_evals/global_step_2_evals/panel.jsonl"
-        other.parent.mkdir(parents=True, exist_ok=True)
-        other.write_text(
-            json.dumps(
-                {
-                    "task_id": identifiers[0],
-                    "verification": {"status": "verified", "score": 1, "score_min": 0, "score_max": 1},
-                }
-            )
-            + "\n"
-        )
+        decoy = export / "full_panel/dumped_evals/global_step_2_evals/panel.jsonl"
+        decoy.parent.mkdir(parents=True, exist_ok=True)
+        decoy.write_text(json.dumps(rows[0] | {"verification": rows[0]["verification"] | {"score": 1}}) + "\n")
 
     def train(config):
         output = Path(config["output"])
