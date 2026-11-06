@@ -70,6 +70,8 @@ from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
+from marin.evaluation.records import DEFAULT_EVALUATION_CONCURRENCY, JudgeIdentity, scoring_settings
+
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
@@ -97,19 +99,13 @@ class ModelIdentity(RunModel):
     serving: dict[str, str]
 
 
-class JudgeIdentity(RunModel):
-    deployment: str = Field(min_length=1)
-    models: dict[str, str]
-    default_model: str | None = None
-
-
 class EvaluationRunConfig(RunModel):
     model: ModelIdentity
     max_tokens: int = Field(gt=0)
     generation_extra_body: dict[str, Any] = Field(default_factory=dict)
     chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
     thinking_off_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
-    concurrency: int = Field(default=64, gt=0)
+    concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
     limits: RolloutLimits
     source_limit: int | None = Field(default=None, gt=0)
     seed: int | None = None
@@ -601,9 +597,13 @@ async def run_evaluation(
             for root, protocol, manifest in corpora
         ],
     }
-    identity = canonical_sha256(run)
+    identity = canonical_sha256({**run, "config": scoring_settings(run["config"])})
     previous = ReadView(output).read_blob(RUN_OBJECT)
-    if previous is not None and canonical_sha256(json.loads(previous)) != identity:
+    previous_run = json.loads(previous) if previous is not None else None
+    if (
+        previous_run is not None
+        and canonical_sha256({**previous_run, "config": scoring_settings(previous_run["config"])}) != identity
+    ):
         raise ValueError("Resume requires the identical model, corpora, protocol, selection and run settings")
     with DataStore.open(output) as store:
         EvaluationStore(store)

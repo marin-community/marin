@@ -201,8 +201,8 @@ _CHECKPOINT_BENCHMARKS = {
 _CHECKPOINT_SOURCES = checkpoint_sources()
 for benchmark, name in _CHECKPOINT_BENCHMARKS.items():
     EVALS[name] = CuratedDefinition(
-        name,
-        tuple(
+        name=name,
+        sources=tuple(
             source.name
             for source in _CHECKPOINT_SOURCES
             if source.config is not None and source.config.protocol.benchmark == benchmark
@@ -210,9 +210,9 @@ for benchmark, name in _CHECKPOINT_BENCHMARKS.items():
     )
 EVALS.update(
     {
-        "nupa": CuratedDefinition("nupa", ("evalchemy-nupa5k-loose",), seed=20222943, max_tokens=256),
-        "mrcr-32k": CuratedDefinition("mrcr-32k", ("evalchemy-mrcr-32k",), seed=42, max_tokens=4096),
-        "mrcr-65k": CuratedDefinition("mrcr-65k", ("evalchemy-mrcr-65k",), seed=42, max_tokens=4096),
+        "nupa": CuratedDefinition(name="nupa", sources=("evalchemy-nupa5k-loose",), seed=20222943, max_tokens=256),
+        "mrcr-32k": CuratedDefinition(name="mrcr-32k", sources=("evalchemy-mrcr-32k",), seed=42, max_tokens=4096),
+        "mrcr-65k": CuratedDefinition(name="mrcr-65k", sources=("evalchemy-mrcr-65k",), seed=42, max_tokens=4096),
     }
 )
 EVALS.update(

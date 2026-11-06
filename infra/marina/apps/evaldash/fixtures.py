@@ -43,6 +43,7 @@ from marin.evaluation.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
     CuratedRef,
+    CuratedSettings,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -1116,7 +1117,7 @@ def build_curated_fixtures(dest: str) -> list[str]:
             evaluation=EvalRef(
                 name=name,
                 mechanism="curated",
-                curated=CuratedRef(datasets=(dataset,), settings_json='{"source_limit":null}'),
+                curated=CuratedRef(datasets=(dataset,), settings=CuratedSettings()),
             ),
             status=RunStatus.SUCCEEDED,
             results_path=root,

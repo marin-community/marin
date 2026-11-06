@@ -18,10 +18,18 @@ from verifyit.spec import Constraint, JudgeSpec, parse_spec
 
 def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
     # Scorers load only the dependencies of the selected dataset's environment.
-    if scorer == "checkpoint_generation":
-        from .checkpoint_generation import grade_checkpoint_generation
+    if scorer == "gsm8k_cot":
+        from .math import grade_gsm8k_cot
 
-        return grade_checkpoint_generation(config["profile"], config["document"], response)
+        return grade_gsm8k_cot(config["document"], response)
+    if scorer == "minerva_math":
+        from .math import grade_minerva_completion
+
+        return grade_minerva_completion(config["document"], response)
+    if scorer == "bbh_cot":
+        from .choices import grade_bbh_cot
+
+        return grade_bbh_cot(config["document"], response)
     if scorer == "boxed_math":
         from .math import grade_boxed_math
 

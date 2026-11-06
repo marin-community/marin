@@ -28,13 +28,14 @@ from finestore.eval import (
 from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
-from marin.evaluation.curated import CuratedExecutor, CuratedRunSettings
+from marin.evaluation.curated import CuratedExecutor
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
     CuratedRef,
+    CuratedSettings,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -48,7 +49,7 @@ from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt
 from marin.rollouts.evaluation_results import logical_samples
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection
-from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, Sampling, TrialPolicy
+from taskcompendium.evaluation.spec import EvaluationProtocol, LikelihoodMetric, Metric, Sampling, TrialPolicy
 
 from experiments.evaluation.policy_finalization import PolicyJudge
 
@@ -65,7 +66,7 @@ def raw_run(tmp_path):
         eval=EvalRef(
             name="colors",
             mechanism="curated",
-            curated=CuratedRef(datasets=("source",), settings_json='{"source_limit":null}'),
+            curated=CuratedRef(datasets=("source",), settings=CuratedSettings()),
         ),
         hardware=HardwareRef(platform="gpu", accelerator="H100x1", region_or_cluster="test"),
         provenance=Provenance(git_sha="revision", launch_host="test"),
@@ -85,8 +86,17 @@ def write_observations(
     protocol = EvaluationProtocol(
         benchmark="colors",
         version="1",
-        operation="chat_generation",
-        sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=16, stop=(), chat_template_kwargs={}),
+        operation="continuation_likelihood" if summary == "perplexity" else "chat_generation",
+        sampling=(
+            None
+            if summary == "perplexity"
+            else Sampling(temperature=0, top_p=None, top_k=None, max_tokens=16, stop=(), chat_template_kwargs={})
+        ),
+        likelihood_metrics=(
+            tuple(LikelihoodMetric(name=name, normalization="raw", scoring="log_likelihood") for name in metrics)
+            if summary == "perplexity"
+            else ()
+        ),
         trials=TrialPolicy(count=1, seed=0),
         metrics=tuple(Metric(name=name, kind=metric_kind, higher_is_better=True) for name in metrics),
         primary_metric=metrics[0],
@@ -296,10 +306,10 @@ def test_native_summary_reuses_historical_scores_in_panel_comparison_and_history
         ),
         (
             "perplexity",
-            "perplexity,none",
+            "ppl",
             [
-                (0, 0, "finished", "graded", {"perplexity,none": -2.0}, {}),
-                (1, 0, "finished", "graded", {"perplexity,none": -4.0}, {}),
+                (0, 0, "finished", "graded", {"ppl": -2.0}, {}),
+                (1, 0, "finished", "graded", {"ppl": -4.0}, {}),
             ],
             math.exp(3),
         ),
@@ -400,7 +410,7 @@ def test_policy_finalization_uses_the_same_scored_trial_coverage_as_evaldash(raw
         ],
     )
     model = ModelConfig(name="judge", location="test/judge", revision="pin", tokenizer_revision="pin")
-    source = CuratedExecutor(("dataset",), CuratedRunSettings(model, None, None, None, None))
+    source = CuratedExecutor(("dataset",), model, CuratedSettings())
     executor = PolicyJudge(source, model, AcceleratorChoice(platform=Platform.GPU, gpu_type="H100"), 0)
     session = SimpleNamespace(jobs=(), wait_until_ready=lambda **_kwargs: None)
     monkeypatch.setattr("experiments.evaluation.policy_finalization.inference_config_for_model", lambda *_a, **_k: None)

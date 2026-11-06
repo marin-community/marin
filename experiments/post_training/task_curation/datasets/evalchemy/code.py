@@ -3,6 +3,7 @@
 
 """Pinned Python benchmark declarations."""
 
+from dataclasses import replace
 from functools import partial
 
 from taskcompendium.evaluation.spec import (
@@ -16,7 +17,14 @@ from taskcompendium.evaluation.spec import (
     TrialPolicy,
 )
 from taskcompendium.importers.evalchemy.assets.code_protocol import HUMANEVAL_REQUEST_STOPS
-from taskcompendium.importers.evalchemy.code import CODE_REVISION, convert_python, python_item, read_crux, read_mbpp
+from taskcompendium.importers.evalchemy.code import (
+    CODE_REVISION,
+    convert_python,
+    python_item,
+    read_crux,
+    read_humaneval_fewshot,
+    read_mbpp,
+)
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -129,4 +137,32 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             1600,
             2048,
         ),
+    ]
+
+
+def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
+    human = next(source for source in sources() if source.name == "evalchemy-humaneval")
+    dataset = human.config
+    assert dataset is not None and isinstance(dataset.recipe.source, HfSource)
+    return [
+        replace(
+            human,
+            info=replace(human.info, id="Checkpoint:humaneval-10shot", title="humaneval-10shot"),
+            config=replace(
+                dataset,
+                recipe=replace(
+                    dataset.recipe,
+                    name="checkpoint-humaneval-10shot",
+                    version="2026.11.05.3-" + dataset.recipe.version,
+                    source=replace(dataset.recipe.source, read=read_humaneval_fewshot),
+                ),
+                protocol=dataset.protocol.model_copy(
+                    update={
+                        "benchmark": "humaneval-10shot",
+                        "num_fewshot": 10,
+                        "version": "2026.11.05.3",
+                    }
+                ),
+            ),
+        )
     ]

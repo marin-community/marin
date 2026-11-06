@@ -199,7 +199,9 @@ snapshots and execution settings. Raw evidence retains named metrics, weights,
 extractions, token likelihoods, and eligibility decisions. Infrastructure
 failures remain unscored; they do not become synthetic zero scores.
 
-Repeat the same command and output root to resume. Completed logical attempts,
+Repeat the same command and output root to resume. Request concurrency may change
+without invalidating completed observations; model, source, selection and scoring
+settings must remain identical. Completed logical attempts,
 including zero grades, are skipped. Infrastructure failures retry with the same
 row, trial, and seed and a new physical retry index. A completed model response
 is reused if only grading failed. Model failures make a fresh request. The CLI
@@ -243,7 +245,9 @@ population and supplies group labels. FinanceBench uses means. SimpleQA and
 SimpleQAMini use classification summaries.
 
 The shared evaluation CLI and checkpoint menus now select these curated corpora.
-Their source graphs finish before inference starts. Native generation menus publish
+Corpus artifacts are explicit dependencies that finish before inference starts;
+executors receive their resolved roots. Catalog publication remains in the curation
+workflow. Native generation menus publish
 raw and chat variants separately; no runtime task registry is loaded.
 
 Evaldash imports raw FineStore stores, selects one latest finished retry per logical

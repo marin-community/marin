@@ -13,7 +13,6 @@ in these two modules alone.
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -240,7 +239,7 @@ def _mechanism_coverage(record: EvalRunRecord, n_scored: int | None) -> Coverage
 def _item_cap(record: EvalRunRecord) -> int | None:
     """The per-run item cap the launcher declared, if any."""
     if record.evaluation.curated is not None:
-        return json.loads(record.evaluation.curated.settings_json)["source_limit"]
+        return record.evaluation.curated.settings.source_limit
     if record.evaluation.evalchemy is not None:
         return record.evaluation.evalchemy.max_eval_instances
     if record.evaluation.harbor is not None:

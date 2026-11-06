@@ -8,7 +8,7 @@ from dataclasses import replace
 from taskcompendium.evaluation.spec import LikelihoodNormalization
 from taskcompendium.importers.evaluation_harness import HarnessTemplate
 
-from experiments.post_training.task_curation.datasets.evalchemy.likelihood import choice_source
+from experiments.post_training.task_curation.datasets.evalchemy.protocols import choice_source
 from experiments.post_training.task_curation.evaluation import EvalDataset
 from experiments.post_training.task_curation.source import RlDataSource
 

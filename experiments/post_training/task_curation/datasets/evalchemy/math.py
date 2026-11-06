@@ -9,12 +9,19 @@ from functools import partial
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, OperationKind, Sampling, SummaryKind, TrialPolicy
 from taskcompendium.importers.evalchemy.grader import scorer_revision
-from taskcompendium.importers.evalchemy.math import boxed_math_task, convert_amc, convert_olympiad
+from taskcompendium.importers.evalchemy.math import (
+    boxed_math_task,
+    convert_amc,
+    convert_olympiad,
+    gsm8k_cot_template,
+    minerva_template,
+)
 from taskcompendium.importers.evalchemy.scorers.math import CHAT_REQUEST_STOPS
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.datasets.evalchemy.environments import MATH_GRADER, MATH_JUDGE_GRADER
+from experiments.post_training.task_curation.datasets.evalchemy.protocols import fewshot_generation_source
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -25,6 +32,65 @@ AIME24_SHA256 = "2dfe4f134aee7989cd9978218ca914b3c3db4685ea06d841560ec1391ba0a40
 OLYMPIAD_SHA256 = "bcafaabc0128adfeef69c830d1682254428887d4e1b96b5b1b03fb5d3818f958"
 AIME25_SHA256 = "9affac318c4dd399482a67226936e229f954628567c7d7b7ee8f1360c15d6f7c"
 AMC23_SHA256 = "02ae54425741562778916b5fa8f6ff07749689cfcd7a53e65e1d88a89e5065f9"
+MATH_REVISION = "21a5633873b6a120296cce3e2df9d5550074f4a3"
+
+
+def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
+    result = [
+        fewshot_generation_source(
+            "gsm8k_cot",
+            "gsm8k_cot",
+            HfSource(
+                "openai/gsm8k",
+                "740312add88f781978c0658806c59bc2815b9866",
+                ("main/test-00000-of-00001.parquet",),
+                SourceFormat.PARQUET,
+            ),
+            1319,
+            gsm8k_cot_template(),
+            ("exact_match,strict-match", "exact_match,flexible-extract"),
+            Sampling(
+                temperature=0,
+                top_p=None,
+                top_k=None,
+                max_tokens=None,
+                stop=("Q:", "</s>", "<|im_end|>"),
+                chat_template_kwargs={},
+            ),
+            "gsm8k_cot",
+            MATH_GRADER,
+        )
+    ]
+    for subject, population in (
+        ("algebra", 1187),
+        ("counting_and_probability", 474),
+        ("geometry", 479),
+        ("intermediate_algebra", 903),
+        ("number_theory", 540),
+        ("prealgebra", 871),
+        ("precalculus", 546),
+    ):
+        result.append(
+            fewshot_generation_source(
+                "minerva_math-" + subject,
+                "minerva_math",
+                HfSource(
+                    "EleutherAI/hendrycks_math",
+                    MATH_REVISION,
+                    (subject + "/test-00000-of-00001.parquet",),
+                    SourceFormat.PARQUET,
+                ),
+                population,
+                minerva_template(subject),
+                ("exact_match,none", "math_verify,none"),
+                Sampling(
+                    temperature=0, top_p=None, top_k=None, max_tokens=None, stop=("Problem:",), chat_template_kwargs={}
+                ),
+                "minerva_math",
+                MATH_GRADER,
+            )
+        )
+    return result
 
 
 def bundled_source(directory: str, filename: str, sha256: str) -> UrlSource:
