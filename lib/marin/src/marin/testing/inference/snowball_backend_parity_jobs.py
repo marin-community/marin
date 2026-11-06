@@ -352,7 +352,7 @@ def _vllm_spec(pipeline_parallel_size: int) -> ModelSpec:
     )
 
 
-def _vllm_backend(attention_backend: str) -> VllmBackend:
+def _vllm_backend(attention_backend: str, extra_args: tuple[str, ...] = ()) -> VllmBackend:
     return VllmBackend(
         VllmEngineConfig(
             launcher=VllmLauncherType.CUDA,
@@ -370,6 +370,7 @@ def _vllm_backend(attention_backend: str) -> VllmBackend:
                 # Same-rank repeatability compares fresh recomputes. A cache miss
                 # followed by a prefix-cache hit exercises two different paths.
                 "--no-enable-prefix-caching",
+                *extra_args,
             ),
         ),
     )
@@ -519,6 +520,8 @@ def _request_vllm_prompt_logprobs(
         response.raise_for_status()
         (choice,) = response.json()["choices"]
         assert choice["prompt_token_ids"] == list(case.prompt_token_ids)
+        # TODO: after the first generator run, check in a trimmed real response as a unit-test fixture for
+        # case_reference_from_prompt_logprobs; its tests use a synthetic response shape today.
         return case_reference_from_prompt_logprobs(case.id, case.prompt_token_ids, choice["prompt_logprobs"])
     except Exception as error:
         error.add_note(context)
@@ -534,7 +537,9 @@ def write_vllm_position_reference(output_uri: str, attention_backend: str) -> No
     """
     prompt_fixture = read_prompt_fixture(read_representative_goldens())
     spec = _vllm_spec(1)
-    backend = _vllm_backend(attention_backend)
+    # The fork's default (vllm/config/model.py at the pinned commit) is already raw_logprobs, and its docs say
+    # prompt log-probs skip sampling processors in every mode; pin it so a default change cannot alter the file.
+    backend = _vllm_backend(attention_backend, ("--logprobs-mode", "raw_logprobs"))
     cases: dict[str, CasePositionReference] = {}
     with iris_vllm_launch(pipeline_parallel_size=1, tensor_parallel_size=1, data_parallel_size=GPU_COUNT) as launch:
         assert launch.is_leader
