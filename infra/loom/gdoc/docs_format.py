@@ -349,6 +349,27 @@ def _code_paragraph_requests(start: int, text: str, last_in_block: bool, tab_id:
     return requests
 
 
+def _code_paragraph(element: dict) -> bool:
+    """Whether the element is a code line: a shaded paragraph, as _code_paragraph_requests writes one."""
+    shading = element.get("paragraph", {}).get("paragraphStyle", {}).get("shading", {})
+    return "color" in shading.get("backgroundColor", {})
+
+
+def code_block_spacing_requests(body: list[dict], start: int, end: int, tab_id: str) -> list[dict]:
+    """Requests that give each code line from start to end no space below, except the last line of a block, which
+    gets CODE_BLOCK_SPACE_BELOW_PT. replace_section keeps unchanged lines and writes only changed ones, so a line it
+    inserts or appends cannot tell from what it writes whether the doc continues the block after it."""
+    requests = []
+    for element, after in zip(body, [*body[1:], None], strict=True):
+        if not _code_paragraph(element) or not start <= element["startIndex"] < end:
+            continue
+        want = 0 if after is not None and _code_paragraph(after) else CODE_BLOCK_SPACE_BELOW_PT
+        if element["paragraph"]["paragraphStyle"].get("spaceBelow", {}).get("magnitude", 0) != want:
+            style = {"spaceBelow": _points(want)}
+            requests.append(_paragraph_style(element["startIndex"], element["endIndex"], style, tab_id))
+    return requests
+
+
 def group_requests(blocks: list[Block], at: int, tab_id: str) -> list[dict]:
     """Requests that insert text blocks (no tables or diagrams) as new paragraphs at `at`, a paragraph start."""
     text = "".join(block.text + "\n" for block in blocks)
@@ -1004,8 +1025,19 @@ def replace_section(
             requests += write_requests(doc_id, found.id, list(edit.blocks), edit.at, diagrams)
         else:
             requests += edit
-    if requests:
-        batch_update(api, document, requests)
+    if not requests:
+        return
+    batch_update(api, document, requests)
+    has_code = any(block.kind is BlockKind.CODE for block in blocks) or any(_code_paragraph(e) for e in content)
+    if not has_code:
+        return
+    # Where kept and written code lines meet, only the doc after the edit shows where each block ends.
+    document = read_document(api, doc_id)
+    found = find_tab(document, tab)
+    start, end, _ = section_bounds(found.body, heading)
+    spacing = code_block_spacing_requests(found.body, start, end, found.id)
+    if spacing:
+        batch_update(api, document, spacing)
 
 
 def tab_text(tab: Tab) -> str:

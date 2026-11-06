@@ -4,12 +4,14 @@
 import struct
 
 from infra.loom.gdoc.docs_format import (
+    CODE_SHADING,
     PAGE_WIDTH_PT,
     Block,
     BlockKind,
     Tab,
     WriteBlocks,
     append_markdown,
+    code_block_spacing_requests,
     find_tab,
     group_requests,
     image_size_pt,
@@ -156,6 +158,42 @@ def body(*paragraphs: tuple[str, str]) -> list[dict]:
         elements.append(paragraph_element(at, text, style))
         at += len(text)
     return elements
+
+
+def code_lines(*lines: tuple[str, float | None]) -> list[dict]:
+    """Paragraphs from index 1: a code line for a space below in points, or a normal paragraph for None."""
+    elements, at = [], 1
+    for text, space_below in lines:
+        element = paragraph_element(at, text)
+        if space_below is not None:
+            element["paragraph"]["paragraphStyle"].update(
+                shading=CODE_SHADING, spaceBelow={"magnitude": space_below, "unit": "PT"}
+            )
+        elements.append(element)
+        at += len(text)
+    return elements
+
+
+def spacing_changes(elements: list[dict]) -> list[tuple[int, float]]:
+    requests = code_block_spacing_requests(elements, 0, elements[-1]["endIndex"], "t.0")
+    return [
+        (
+            r["updateParagraphStyle"]["range"]["startIndex"],
+            r["updateParagraphStyle"]["paragraphStyle"]["spaceBelow"]["magnitude"],
+        )
+        for r in requests
+    ]
+
+
+def test_code_block_spacing_moves_the_space_to_the_line_that_ends_the_block_after_a_partial_rewrite():
+    # Regression: replace-section writes only changed lines, and each written run spaced its own last line.
+    inserted_inside = code_lines(("a\n", 0), ("x\n", 8), ("c\n", 8), ("after\n", None))
+    assert spacing_changes(inserted_inside) == [(3, 0)]
+    appended = code_lines(("a\n", 0), ("b\n", 8), ("c\n", 8), ("after\n", None))
+    assert spacing_changes(appended) == [(3, 0)]
+    last_line_deleted = code_lines(("a\n", 0), ("b\n", 0), ("after\n", None))
+    assert spacing_changes(last_line_deleted) == [(3, 8)]
+    assert spacing_changes(code_lines(("a\n", 0), ("b\n", 8), ("after\n", None))) == []
 
 
 def test_section_bounds_stop_at_the_next_heading_of_the_same_level():
