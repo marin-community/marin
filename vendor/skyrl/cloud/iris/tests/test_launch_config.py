@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import fsspec
 import yaml
 from omegaconf import OmegaConf
 from rigging.provenance import launch_provenance
@@ -33,6 +34,7 @@ from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.entrypoints import main_base
+from skyrl_train.io import io
 from skyrl_train.utils.tracking import Tracking
 
 
@@ -361,10 +363,19 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
     assert seen[0].model_source_uri is None
 
 
-def test_task_materializes_the_forwarded_launch_document(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("storage", ["local", "s3"])
+def test_task_materializes_the_forwarded_launch_document(tmp_path: Path, monkeypatch, storage) -> None:
     destination = tmp_path / "launch.yaml"
     raw = _raw_config()
-    raw["artifacts"]["export_root"] = str(tmp_path / "exports")
+    export_root = str(tmp_path / "exports")
+    if storage == "s3":
+        export_root = "s3://tracker-test/exports"
+        filesystem = fsspec.filesystem("memory")
+        resolve = io.filesystem_and_path
+        monkeypatch.setattr(
+            io, "filesystem_and_path", lambda uri: (filesystem, uri) if uri.startswith("s3://") else resolve(uri)
+        )
+    raw["artifacts"]["export_root"] = export_root
     contents = yaml.safe_dump(raw).encode()
 
     path = materialize_launch_config(
@@ -378,6 +389,7 @@ def test_task_materializes_the_forwarded_launch_document(tmp_path: Path, monkeyp
     initialized = {}
     run = SimpleNamespace(
         id="issued-id",
+        url="https://wandb.example/team/project/runs/issued-id",
         define_metric=lambda *args, **kwargs: None,
         log=lambda **kwargs: None,
         finish=lambda **kwargs: None,
@@ -392,6 +404,7 @@ def test_task_materializes_the_forwarded_launch_document(tmp_path: Path, monkeyp
     monkeypatch.setenv("IRIS_TASK_ID", "/tests/training/0:3")
 
     def training(config):
+        io.write_bytes_atomic(f"{export_root}/metrics/step-000008.json", b'{"step":8}')
         with Tracking("project", "name", ["files", "wandb"], config) as tracker:
             tracker.start(resumed_step=None)
             tracker.log({"loss": 0.25}, step=0)
@@ -404,7 +417,8 @@ def test_task_materializes_the_forwarded_launch_document(tmp_path: Path, monkeyp
         "source_commit": launch_provenance().base_commit,
         "iris_job_id": "/tests/training",
     }
-    assert json.loads((tmp_path / "exports/metrics/step-000000.json").read_text()) == {
+    assert not io.exists(f"{export_root}/metrics/step-000008.json")
+    assert json.loads(io.read_bytes(f"{export_root}/metrics/step-000000.json")) == {
         "step": 0,
         "attempt_id": raw["run"]["attempt_id"],
         "loss": 0.25,
