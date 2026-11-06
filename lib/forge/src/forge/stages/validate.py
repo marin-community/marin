@@ -77,10 +77,14 @@ async def adversary_result(
                 ),
                 tuple(tool.schema for tool in tools.values()),
             )
-            exit = await config.adversaries[name].run(ctx, session, env, resources.inference, tools)
-            if not isinstance(exit, Returned) or exit.tool != "report" or not isinstance(exit.payload, AdversaryReport):
+            outcome = await config.adversaries[name].run(ctx, session, env, resources.inference, tools)
+            if (
+                not isinstance(outcome, Returned)
+                or outcome.tool != "report"
+                or not isinstance(outcome.payload, AdversaryReport)
+            ):
                 return AdversaryResult(name, False, ())
-            report = exit.payload
+            report = outcome.payload
             grades = await asyncio.gather(
                 *(asyncio.ensure_future(ctx.emit(GradeCandidate(spec, candidate))) for candidate in report.candidates)
             )

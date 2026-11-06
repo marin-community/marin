@@ -3,16 +3,16 @@
 
 # Source: Taskforge integration 9807c5cfb3, stage20_triage/checks.py.
 
-"""Deterministic proposal checks, what triage's preflight decides on (``preflight.preflight``).
+"""Deterministic proposal checks used by ``forge.stages.triage``.
 
-The checks read what ``stage10_proposal.model.parse`` leaves open: the header's validity is
+The checks read what ``forge.model.proposal.parse`` leaves open: the header's validity is
 ``parse``'s job and holds for every proposal that reaches triage. ``required_sections`` is FATAL;
 ``grader_matches_verification``, ``research_has_purpose`` and ``resources_in_build_plan`` are ADVISORY.
 
 Each check reports PASS (the property holds), FAIL (it does not), or SKIP (the property does not
 apply to this proposal, such as a body check on a null proposal or a resource check on a proposal
-with no resources). SKIP never counts as PASS. A FATAL failure rejects the proposal; an ADVISORY
-failure is recorded on the verdict and decides nothing.
+with no resources). SKIP never counts as PASS. A FATAL failure requires repair or rejection;
+an ADVISORY failure is emitted as a Note and decides nothing.
 
 Every check carries a comment recording the false positives and false negatives it is expected to
 have, so a reader knows how far to trust a FAIL. Grounded proposals (``Grounding.GROUNDED``) run

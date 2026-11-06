@@ -2,7 +2,6 @@
   "band.low": 0.25,
   "band.high": 0.75,
   "solver.k": 3,
-  "solver.max_retries": 2,
   "adversary.roster": [],
   "adversary.k": 1,
   "adversary.submissions": 8,

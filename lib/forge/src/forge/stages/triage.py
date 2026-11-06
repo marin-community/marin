@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic proposal preflight with one recorded format-repair attempt."""
+"""Deterministic preflight with at most one repair, disabled by a zero repair budget."""
 
 from forge.config import ForgeConfig
 from forge.effects.context import Context
@@ -31,6 +31,8 @@ async def triage(
         reasons = problems(proposal)
         if not reasons:
             return Triaged(proposal)
+        if config.policy.setting("budget.max_triage_repairs", int) < 1:
+            return TriageRejected(reasons)
         completion = await ctx.emit(
             InferenceRequest(
                 (

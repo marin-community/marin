@@ -6,6 +6,7 @@ from functools import partial
 from pathlib import PurePosixPath
 
 import pytest
+from lib.forge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskResource
@@ -15,7 +16,7 @@ from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
 from forge.effects.issues import Hold, Restart
 from forge.effects.log import EventLog
-from forge.harness.protocol import Returned, StopReason, Stopped, Submitted
+from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from forge.harness.tools.adversary import AdversaryReport
 from forge.harness.web import FakeWeb
 from forge.lowering import requirements
@@ -59,12 +60,11 @@ from forge.resources.ids import Ids
 from forge.resources.inference import FakeInference, InferenceRequest, complete
 from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from forge.stages.author import author
-from forge.stages.exits import Decided, Triaged
+from forge.stages.exits import Decided, Triaged, TriageRejected
 from forge.stages.review import review
 from forge.stages.rules import default_review
 from forge.stages.triage import triage
 from forge.stages.validate import validate
-from lib.forge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
 
 
 @pytest.fixture
@@ -240,19 +240,25 @@ async def test_review_prioritizes_incomplete_evidence_over_task_defects(
     assert isinstance(result, Decided) and isinstance(result.decision, decision)
 
 
+@pytest.mark.parametrize("repair_budget", [0, 1])
 @pytest.mark.asyncio
-async def test_triage_repairs_sections_with_one_recorded_inference(workpiece: Workpiece) -> None:
+async def test_triage_repairs_sections_only_when_budget_allows(workpiece: Workpiece, repair_budget: int) -> None:
     inference = FakeInference((Completion(render(workpiece.proposal)),))
     ctx = Context(log=EventLog())
     bundle = resources(ctx, inference)
     damaged = workpiece.with_(proposal=replace(workpiece.proposal, body="## Task\nToo short"))
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
-    result = await triage(ctx, damaged, config(harness), bundle)
+    setup = config(harness)
+    setup = replace(setup, policy=setup.policy.overlaid({"budget.max_triage_repairs": repair_budget}))
+    result = await triage(ctx, damaged, setup, bundle)
     await ctx.drain()
-    assert isinstance(result, Triaged) and result.proposal.header == workpiece.proposal.header
-    assert len(inference.requests) == 1
-    assert isinstance(await triage(ctx, workpiece, config(harness), bundle), Triaged)
-    assert len(inference.requests) == 1
+    if repair_budget:
+        assert isinstance(result, Triaged) and result.proposal.header == workpiece.proposal.header
+    else:
+        assert isinstance(result, TriageRejected) and result.reasons
+    assert len(inference.requests) == repair_budget
+    assert isinstance(await triage(ctx, workpiece, setup, bundle), Triaged)
+    assert len(inference.requests) == repair_budget
     await ctx.drain()
 
 
