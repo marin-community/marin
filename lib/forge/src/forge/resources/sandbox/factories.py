@@ -16,19 +16,11 @@ SANDBOX_SCHEDULING_TIMEOUT = 600
 
 
 class MachineHost(StrEnum):
-    LAPTOP = "laptop"
     IRIS = "iris"
 
 
 def container_backend(where: MachineHost) -> Backend:
-    return Backend.GVISOR if where is MachineHost.IRIS else Backend.DOCKER
-
-
-def local_factory() -> MachineFactory:
-    # bubblewrap is an optional Linux-only dependency.
-    from shellbox.backends.local.machine import LocalMachineFactory, SystemDirectories  # noqa: PLC0415
-
-    return LocalMachineFactory(system_directories=SystemDirectories.COPY_ON_WRITE)
+    return Backend.GVISOR
 
 
 def shellsim_factory() -> MachineFactory:

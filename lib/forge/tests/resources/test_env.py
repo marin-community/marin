@@ -31,7 +31,7 @@ from forge.resources.env import (
     run_command,
     write_file,
 )
-from forge.resources.sandbox.factories import local_factory, shellsim_factory
+from forge.resources.sandbox.factories import shellsim_factory
 
 COMMAND = "printf changed > /workspace/output; printf hello; printf err >&2; exit 7"
 OUTPUT = PurePosixPath("/workspace/output")
@@ -88,7 +88,6 @@ class Notes:
     params=[
         "fake",
         "shellbox-memory",
-        pytest.param("local", marks=pytest.mark.cluster),
         "shellsim",
     ]
 )
@@ -106,12 +105,10 @@ async def create_env(request: pytest.FixtureRequest) -> AsyncIterator[Callable[[
                 env = ShellboxEnv(machine, "test-image", Notes(), owned)
             case _:
                 try:
-                    factory = local_factory() if request.param == "local" else shellsim_factory()
+                    factory = shellsim_factory()
                 except ImportError:
                     pytest.skip("Optional sandbox dependency is not installed")
-                semantics = (
-                    CommandSemantics.LINUX_PROCESS if request.param == "local" else CommandSemantics.SHELL_SIMULATOR
-                )
+                semantics = CommandSemantics.SHELL_SIMULATOR
                 requirements = EnvironmentRequirements(command_semantics=semantics, package_spec=PackageSpec())
                 env = await ShellboxEnvFactory(factory, machine_runtime(backend=request.param), 5, Notes()).create(
                     requirements

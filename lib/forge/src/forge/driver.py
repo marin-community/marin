@@ -24,10 +24,11 @@ from forge.checkpoint import CheckpointSink
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
 from forge.effects.log import EventLog, JsonlSink, Status, fold
+from forge.model.proposal import TaskProposal
 from forge.model.review import Incomplete
 from forge.model.serialization import TASK_PROPOSAL, WORKPIECE
 from forge.model.workpiece import Terminal, Workpiece
-from forge.policy import load_policy, parse_overlay, resolution_lines
+from forge.policy import Policy, load_policy, parse_overlay, resolution_lines
 from forge.wiring import endpoint_source, prompt_limit, runtime
 
 
@@ -89,10 +90,27 @@ def recover(workdir: Path, destination: str) -> Status | None:
     return status
 
 
+def run_policy(path: str) -> tuple[Policy, Policy]:
+    declared = load_policy(Path(__file__).parent / "policy" / "defaults")
+    with open_url(path, "rt") as source:
+        return declared, declared.overlaid(parse_overlay(source.read()))
+
+
+def eligible(proposal: TaskProposal, policy: Policy) -> bool:
+    environment = proposal.header.environment.value
+    if environment in policy.setting("proposals.environments", tuple):
+        return True
+    print(f"SKIP {proposal.header.id}: environment={environment}", flush=True)
+    return False
+
+
 async def one(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
+    declared, policy = run_policy(args.policy)
+    if not eligible(proposal, policy):
+        return
     identity = proposal_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
@@ -111,9 +129,6 @@ async def one(args: argparse.Namespace) -> None:
     log = EventLog(sink=checkpoints, replay_from=previous)
     try:
         async with checkpoints.running():
-            declared = load_policy(Path(__file__).parent / "policy" / "defaults")
-            with open_url(args.policy, "rt") as source:
-                policy = declared.overlaid(parse_overlay(source.read()))
             print("\n".join(resolution_lines(declared, policy)), flush=True)
             print(
                 f"POLICY max_prompt_tokens author.model={policy.setting('author.model', str)} "
@@ -149,6 +164,8 @@ async def run(args: argparse.Namespace) -> None:
     proposals = iter(inputs(args.proposals, args.ranks)[args.shard_index :: args.shard_count])
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
     failures: list[str] = []
+    _, policy = run_policy(args.policy)
+    skipped = completed = submitted = 0
     try:
         exhausted = False
         while active or not exhausted:
@@ -157,6 +174,11 @@ async def run(args: argparse.Namespace) -> None:
                 if path is None:
                     exhausted = True
                     break
+                with open_url(path, "rt") as source:
+                    proposal = TASK_PROPOSAL.validate_json(source.read())
+                if not eligible(proposal, policy):
+                    skipped += 1
+                    continue
                 command = [
                     sys.executable,
                     "-u",
@@ -175,11 +197,13 @@ async def run(args: argparse.Namespace) -> None:
                     args.work_dir,
                 ]
                 process = subprocess.Popen(command)
+                submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
             if active:
                 done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     path, _ = active.pop(task)
+                    completed += 1
                     if task.result() != 0:
                         failures.append(path)
     finally:
@@ -187,6 +211,7 @@ async def run(args: argparse.Namespace) -> None:
             if process.poll() is None:
                 process.terminate()
         await asyncio.gather(*active, return_exceptions=True)
+    print(f"SUMMARY submitted={submitted} completed={completed} failed={len(failures)} skipped={skipped}", flush=True)
     if failures:
         raise RuntimeError(f"{len(failures)} workpieces failed: {failures}")
 

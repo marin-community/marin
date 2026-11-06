@@ -18,7 +18,6 @@ from iris.cluster.client import get_job_info
 from iris.cluster.types import JobName
 from pydantic import TypeAdapter
 from rolloutengine.models import ModelRequest, ModelTurn
-from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, TaskResource
@@ -57,7 +56,6 @@ from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from forge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
     MachineHost,
-    local_factory,
     shellsim_factory,
 )
 from forge.stages.rules import default_review
@@ -118,7 +116,7 @@ class Environments(EnvFactory):
 
     @override
     async def create(self, requirements: EnvironmentRequirements) -> Env:
-        requirements = host_requirements(requirements, self.factories)
+        requirements = host_requirements(requirements)
         runtime = machine_runtime(self.settings.task_machine, requirements, self.settings.host)
         factory = self.factories[machine_backend(requirements, self.settings.host).value]
         cleanup = self.settings.limits.cleanup_timeout
@@ -255,20 +253,13 @@ async def runtime(
     }
     # The wrapper owns both busy retries and empty-pool waits under one deadline.
     provider_fields.update(max_attempts=1, hold_timeout=0)
-    host = MachineHost(policy.setting("runtime.host", str))
-    # Source: acceptance-measure taskforge/sandbox/factories.py; driver.py controller-url env.
-    container: MachineFactory
-    if host == MachineHost.IRIS:
-        job = get_job_info()
-        controller = os.environ.get("IRIS_CONTROLLER_URL") or (job.controller_address if job else None)
-        if not controller:
-            raise ValueError("Iris sandboxes require a controller URL or an Iris job context")
-        container = IrisMachineFactory(controller_url=controller, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)
-    else:
-        container = DockerMachineFactory()
+    MachineHost(policy.setting("runtime.host", str))
+    job = get_job_info()
+    controller = os.environ.get("IRIS_CONTROLLER_URL") or (job.controller_address if job else None)
+    if not controller:
+        raise ValueError("Iris sandboxes require a controller URL or an Iris job context")
+    container = IrisMachineFactory(controller_url=controller, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)
     factories: dict[str, MachineFactory] = {container.backend.value: container, "shellsim": shellsim_factory()}
-    if host == MachineHost.LAPTOP:
-        factories["local"] = local_factory()
     headers = {"x-api-key": parallel_api_key}
     async with AsyncExitStack() as owned:
         clients: dict[str, CompletionBackend] = {}

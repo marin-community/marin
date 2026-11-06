@@ -58,7 +58,6 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.delenv("IRIS_CONTROLLER_URL", raising=False)
     monkeypatch.setattr(wiring, "get_job_info", lambda: SimpleNamespace(controller_address="http://controller"))
-    monkeypatch.setattr(wiring, "local_factory", unexpected)
     monkeypatch.setattr(subprocess, "Popen", unexpected)
     monkeypatch.setattr(httpx.AsyncClient, "send", unexpected)
     policy = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults").overlaid({"runtime.host": "iris"})
