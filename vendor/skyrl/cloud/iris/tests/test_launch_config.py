@@ -18,6 +18,8 @@ from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_ca
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import source_row_task
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
+from tokenizers import Tokenizer, models
+from transformers import PreTrainedTokenizerFast
 
 from cloud.iris import task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
@@ -534,15 +536,16 @@ def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, mon
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
 
     def download(model_id, *, revision, destination, allow_patterns):
-        (destination / "tokenizer.json").write_text(json.dumps({"model": model_id, "revision": revision}))
-        (destination / "tokenizer_config.json").write_text("{}")
+        tokenizer = Tokenizer(models.WordLevel({"[UNK]": 0, model_id: 1, str(revision): 2}, unk_token="[UNK]"))
+        PreTrainedTokenizerFast(tokenizer_object=tokenizer, unk_token="[UNK]").save_pretrained(destination)
 
     monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
     tokenizer = task_runtime.prepare_policy_tokenizer(task_runtime._runtime_namespace(config))
 
-    assert json.loads((Path(tokenizer.local_path) / "tokenizer.json").read_text()) == {
-        "model": "org/tokenizer",
-        "revision": revision,
+    assert json.loads((Path(tokenizer.local_path) / "tokenizer.json").read_text())["model"]["vocab"] == {
+        "[UNK]": 0,
+        "org/tokenizer": 1,
+        revision: 2,
     }
 
 
