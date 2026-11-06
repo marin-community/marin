@@ -521,6 +521,7 @@ PRESETS = MappingProxyType(
                     Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
                     Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
                     Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
+                    Metric("policy/mismatch/staleness0/kl_k3", False),
                 ),
                 reported=_ASYNC_SPEED_REPORTS,
                 gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),

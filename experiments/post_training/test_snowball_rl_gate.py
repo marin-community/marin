@@ -474,6 +474,7 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
         ),
         ("speed-long", {"metrics": {"policy/mismatch/pooled/kl_k3": 100}}, {}, "pass", "regression", set(), None),
+        ("speed-long", {"metrics": {"policy/mismatch/staleness0/kl_k3": 100}}, {}, "fail", "regression", set(), None),
         ("learning-medium", BROKEN, {}, "fail", "regression", BROKEN_FAILS, None),
         ("speed-medium", {"fixed": False}, {}, "fail", "regression", {"fixed_reply_tokens"}, None),
         ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None),
@@ -537,6 +538,7 @@ def test_rescore_reports_candidate_and_control_contracts(
             "speed/update_seconds",
             "async/performance/loss_tokens_per_configured_policy_gpu_second",
             "async/performance/response_tokens_per_configured_inference_gpu_second",
+            "policy/mismatch/staleness0/kl_k3",
         }
         assert any(row["metric"] == "policy/mismatch/pooled/kl_k3" for row in report["reported"])
     assert not fault.get("missing_receipt") or report["reason"] == f"no launch receipt at {source}"
