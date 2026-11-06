@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+# resources.inference.ContextExceeded is a harness context-limit outcome, not an effect
+# retry or hold: the same full conversation cannot succeed on another provider attempt.
+
+
 class Transient(Exception):
     """Retry this effect inside its executor."""
 

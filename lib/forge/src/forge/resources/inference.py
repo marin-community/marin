@@ -18,6 +18,10 @@ from forge.model.serialization import TOOL_SCHEMA
 from forge.resources.execution import Notify, retry_effect
 
 
+class ContextExceeded(Exception):
+    """The provider rejected the conversation because its context window is full."""
+
+
 @dataclass(frozen=True, slots=True)
 class InferenceRequest(Event[Completion]):
     result_type: ClassVar[object] = Completion
@@ -85,6 +89,8 @@ class GlmInference(InferenceClient):
         except ModelUnavailable as error:
             raise Restart("GLM transport exhausted its retry or hold budget", _retries(error.attempts)) from error
         except ModelRequestRejected as error:
+            if error.status == 400 and "maximum context length" in error.body.lower():
+                raise ContextExceeded(error.body[:500]) from error
             decision = Transient if error.status in RETRYABLE_STATUSES else Hold
             detail = f": {error.body[:500]}" if decision is Hold else ""
             raise decision(
@@ -103,7 +109,7 @@ class GlmInference(InferenceClient):
 
 class FakeInference(InferenceClient):
     def __init__(
-        self, completions: Sequence[Completion | Transient | Restart | Hold], *, identity: str = "fake"
+        self, completions: Sequence[Completion | Transient | Restart | Hold | ContextExceeded], *, identity: str = "fake"
     ) -> None:
         self.script = tuple(completions)
         self.requests: list[InferenceRequest] = []
@@ -120,7 +126,7 @@ class FakeInference(InferenceClient):
         if index >= len(self.script):
             raise RuntimeError("Fake inference script exhausted")
         result = self.script[index]
-        if isinstance(result, Transient | Restart | Hold):
+        if isinstance(result, Transient | Restart | Hold | ContextExceeded):
             raise result
         return result
 

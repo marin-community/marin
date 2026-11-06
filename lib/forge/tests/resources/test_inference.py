@@ -15,7 +15,14 @@ from taskforge.llm.policy import LLMPolicy
 from forge.effects.events import Event, Retrying
 from forge.effects.issues import Hold, Restart
 from forge.model.llm import Completion, Message, Sampling, ToolCall, ToolSchema
-from forge.resources.inference import CompletionBackend, FakeInference, GlmInference, InferenceRequest, complete
+from forge.resources.inference import (
+    CompletionBackend,
+    ContextExceeded,
+    FakeInference,
+    GlmInference,
+    InferenceRequest,
+    complete,
+)
 
 
 class Backend(CompletionBackend):
@@ -158,3 +165,22 @@ async def test_executor_publishes_provider_retries_after_success_without_another
     assert result.retries == ("retryable_status:503",)
     assert retries.events == [Retrying(event, 1, "retryable_status:503")]
     assert len(backend.calls) == 1
+
+
+async def test_provider_context_limit_exits_without_retry() -> None:
+    body = "This model's maximum context length is 262144 tokens. " + "x" * 500
+    rejection = ModelRequestRejected(400, body, ())
+    backend = Backend((rejection, provider_completion()))
+    retries = Retries()
+    with pytest.raises(ContextExceeded) as caught:
+        await complete(request(), GlmInference(backend, "provider-config"), notify=retries)
+    assert str(caught.value) == body[:500]
+    assert caught.value.__cause__ is rejection
+    assert len(backend.calls) == 1 and not retries.events
+
+
+async def test_fake_inference_preserves_context_limit_type() -> None:
+    error = ContextExceeded("full context")
+    with pytest.raises(ContextExceeded) as caught:
+        await FakeInference((error,)).complete(request())
+    assert caught.value is error
