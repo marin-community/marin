@@ -1169,10 +1169,7 @@ def test_control_panel_rescore_preserves_recorded_protocol(recorded_runs, tmp_pa
             target = broken
             for key in fields[:-1]:
                 target = target[int(key) if key.isdecimal() else key]
-            if value is ...:
-                del target[fields[-1]]
-            else:
-                target[fields[-1]] = value
+            target[fields[-1]] = value
         dump = first / "exports/dumped_evals/eval_only/panel.jsonl"
         original_dump = dump.read_bytes()
         if fault == "incomplete":
@@ -1203,7 +1200,10 @@ def test_control_panel_rescore_preserves_recorded_protocol(recorded_runs, tmp_pa
             ],
         )
         assert refused.exit_code == 2, (refused.output, refused.exception)
-        assert str(pin.runs - 1) in refused.output and "kept HF weights" in refused.output
+        assert (
+            presets.control_name(pin.preset, pin.main_commit, pin.runs - 1) in refused.output
+            and "kept HF weights" in refused.output
+        )
         _json(originals[-1] / "retained-hf/config.json", {})
     assert all((root / filename).read_bytes() == content for (root, filename), content in original_bytes.items())
 
@@ -1224,10 +1224,19 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
             for i in range(910)
             for attempt in range(8)
         ]
-        recorded_runs(
+        pass_source = recorded_runs(
             snowball_pass_rates.PRESET, summary.deps[0].name, fingerprint=summary.deps[0].fingerprint(), answers=answers
         )
         run(summary)
+        dump = pass_source / "exports/dumped_evals/eval_only/panel.jsonl"
+        full_dump = dump.read_bytes()
+        try:
+            dump.write_text("".join(json.dumps(answer) + "\n" for answer in answers if answer["task_id"] != "task-0"))
+            with pytest.raises(RuntimeError) as caught:
+                run(replace(summary, name=summary.name + "/missing-task"))
+            assert "every panel task" in str(caught.value.__cause__)
+        finally:
+            dump.write_bytes(full_dump)
         rates = pq.read_table(Path(summary.path()) / "pass_rates.parquet").to_pylist()
         assert {row["task_id"]: (row["passed"], row["samples"]) for row in rates} == {
             f"task-{i}": ((0, 4, 8)[i % 3], 7 if i == 1 else 8) for i in range(910)

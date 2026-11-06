@@ -213,14 +213,11 @@ def setting_leaves(setting: Setting) -> tuple[Setting, ...]:
 
 
 def read_text(path: str | StoragePath) -> str:
-    fs, key = filesystem_for(str(path))
-    with fs.open(key, "rt") as stream:
-        return stream.read()
+    return StoragePath(str(path)).read_text()
 
 
 def exists(path: str | StoragePath) -> bool:
-    fs, key = filesystem_for(str(path))
-    return fs.exists(key)
+    return StoragePath(str(path)).exists()
 
 
 class PanelEvaluator:

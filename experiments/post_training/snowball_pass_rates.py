@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.cli import rl_build_options
+from marin.rl.skyrl import read_skyrl_launch_config
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
@@ -28,7 +29,15 @@ def _write_pass_rates(run_output: str, output: str) -> Artifact:
     tasks = defaultdict(list)
     for row in scoring.panel_scores(EVALUATION, run_output).to_pylist():
         tasks[row["item"]].append(row)
-    if any(len(group) != EVALUATION.answers or not any(row["scored"] for row in group) for group in tasks.values()):
+    launch = read_skyrl_launch_config(run_output)
+    expected_tasks = 0
+    for source in scoring.recorded_sources(launch, EVALUATION.name):
+        name, _, version = source["identity"].partition(":")[0].rpartition("@")
+        selection = ArtifactStep.adopt(name, version, source["uri"])
+        expected_tasks += presets.evaluation_answer_count(EVALUATION, selection) // EVALUATION.answers
+    if len(tasks) != expected_tasks or any(
+        len(group) != EVALUATION.answers or not any(row["scored"] for row in group) for group in tasks.values()
+    ):
         raise ValueError("pass rates require eight attempted answers and a scored answer for every panel task")
     table = pa.Table.from_pylist(
         [
