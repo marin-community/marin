@@ -209,12 +209,59 @@ def freeze(output: str, commit: str) -> dict[str, Any]:
     return manifest
 
 
+def audit_reuse() -> dict[str, Any]:
+    """Test the 60 unchanged tasks' v3 grades against frozen v2 raw outputs."""
+    cohort = load_cohort()
+    prior = _source_responses()
+    models, _ = load_panel()
+    summaries: Counter[str] = Counter()
+    for model in models:
+        prefix = (
+            V3_ROOT.replace("v3/snapshots/reference-path-review-1/", "v2/calibration/openrouter-first-wave-v1/")
+            + f"attempts/{_model_path(model)}/"
+        )
+        old, _ = _read(prefix + "results.jsonl")
+        by_id = {row["task_id"]: row for row in old}
+        recovery_uri = prefix + "rate-limit-recovery1.jsonl"
+        fs, path = fsspec.core.url_to_fs(recovery_uri)
+        if fs.exists(path):
+            recovered, _ = _read(recovery_uri)
+            by_id.update({row["task_id"]: row for row in recovered})
+        for row in cohort.rows:
+            if row["task_id"] not in cohort.reusable_ids:
+                continue
+            summary = prior[(model.model, row["v2_task_id"])]
+            if summary["missing_infrastructure"] or not summary["route_verified"]:
+                summaries["must_retry_infrastructure"] += 1
+                continue
+            task = TaskSpec.model_validate(row["task"])
+            raw = by_id[row["v2_task_id"]]
+            if raw["frozen_task_digest"] != row["v2_task_digest"]:
+                raise ValueError("Reused raw digest mismatch")
+            score, status = _score(task, raw)
+            summaries[f"new:{status}:{score}"] += 1
+            if summary["score"] != score:
+                summaries["changed_grade_without_new_generation"] += 1
+    if (
+        sum(value for key, value in summaries.items() if key.startswith("new:")) + summaries["must_retry_infrastructure"]
+        != 60 * 12
+    ):
+        raise ValueError("Uncovered reused task/model pair")
+    return dict(summaries)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default=SNAPSHOT)
-    parser.add_argument("--code-commit", required=True)
+    parser.add_argument("--code-commit")
+    parser.add_argument("--audit-reuse", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(freeze(args.output, args.code_commit), sort_keys=True, indent=2))
+    if args.audit_reuse:
+        print(json.dumps(audit_reuse(), sort_keys=True, indent=2))
+    else:
+        if not args.code_commit:
+            parser.error("--code-commit required for freezing a snapshot")
+        print(json.dumps(freeze(args.output, args.code_commit), sort_keys=True, indent=2))
 
 
 if __name__ == "__main__":
