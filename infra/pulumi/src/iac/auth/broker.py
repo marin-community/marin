@@ -72,6 +72,7 @@ class GrantBroker(pulumi.ComponentResource):
         expected_paths = {f"{TOKEN_DIRECTORY}/{secret}/token" for secret in args.token_secret_names}
         configured_paths = [
             args.policy["broker_token_file"],
+            args.policy["openfga"]["token_file"],
             *(binding["token_file"] for binding in args.policy["storage"]),
         ]
         if args.policy["loom"] is not None:
@@ -223,6 +224,10 @@ class GrantBroker(pulumi.ComponentResource):
                 "egress": [
                     {"to": [{"pod_selector": {"match_labels": APP_LABELS}}], "ports": [{"port": 8200}]},
                     *([{"to": [client_peer], "ports": [{"port": 8443}]}] if args.policy["loom"] is not None else []),
+                    {
+                        "to": [{"pod_selector": {"match_labels": {"app.kubernetes.io/name": "openfga"}}}],
+                        "ports": [{"port": 8443}],
+                    },
                     dns_egress(args.dns_cidrs),
                     *(
                         [

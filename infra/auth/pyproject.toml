@@ -3,7 +3,7 @@ name = "marin-auth"
 version = "0.0.0"
 description = "Shared Marin grant exchange backed by OpenBao."
 requires-python = ">=3.12,<3.14"
-dependencies = ["marin-rigging", "uvicorn>=0.23.0", "cedarpy==4.12.2"]
+dependencies = ["marin-rigging", "uvicorn>=0.23.0"]
 
 [tool.uv]
 package = false

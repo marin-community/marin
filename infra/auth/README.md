@@ -1,7 +1,8 @@
 # Marin auth management service
 
-`marin-auth` deploys a durable OpenBao Raft cluster in a dedicated management
-namespace. It owns no training resources. Three replicas use separate retained
+`marin-auth` deploys OpenBao, OpenFGA, and the Marin credential service in a dedicated management
+namespace. OpenFGA stores standing relationships in external PostgreSQL; the
+credential service retains the runtime grant ledger. It owns no training resources. The three OpenBao replicas use separate retained
 PVCs, verified TLS, pod anti-affinity, a disruption budget, and restricted
 service accounts. The public ingress exposes exactly the identity discovery and
 JWKS endpoints. The API remains a ClusterIP service.
@@ -181,7 +182,7 @@ there is no generated identity or in-memory ledger fallback.
 | `broker_https_egress_cidrs` | HTTPS egress destinations for public OpenBao discovery/JWKS |
 | `broker_policy` | Object with exactly the seven fields below |
 
-`broker_policy` supplies `broker_token_file`, `subjects`, `cedar`, `storage`
+`broker_policy` supplies `broker_token_file`, `subjects`, `openfga`, `storage`
 and `max_token_ttl`, plus explicit `loom` (`null` or a configured Loom binding)
 and `signing_key_version` (the reviewed Transit key version);
 their exact schema is
@@ -193,13 +194,14 @@ When `loom` is enabled, its `observer_token_file` must also correspond to a
 listed external Secret mount containing a native Loom operator token. The
 observer rejects OpenBao credentials before making a request to Loom.
 `subjects` maps authenticated OpenBao entity UUIDs to stable principals.
-`cedar` contains `schema_document`, `policies` and trusted `entities`. The
-runtime validates this bundle with the Cedar engine and derives principal
-authority and its policy revision from it. `storage` binds each named,
-predeclared CoreWeave subject and its complete provider permissions to a
-separate token file. The runtime derives Cedar provider entities from those
-bindings; provider capabilities are not declared again in the Cedar entity
-list.
+`openfga` contains `api_url`, `store_id`, `model_id`, `token_file`, and trusted
+`principals` (`principal`, `owner`, `max_ttl`, `delegation_depth`). The stack
+sets `api_url` to its TLS Check gateway. The store and immutable model IDs must
+come from operator publication, not a caller token. Mount a separate OpenFGA
+API token alongside the other external token files. Standing group membership
+and action/resource relationships live in OpenFGA, not in the broker ConfigMap.
+Each storage binding still declares its complete native permissions and separate
+OpenBao identity token; permission to issue that identity is checked in OpenFGA.
 
 The auth stack exports `coreweave_identities`, keyed by storage binding name,
 with only `subject` and `permissions`. It excludes token-file references and
@@ -224,9 +226,9 @@ The broker is a restricted, single-replica StatefulSet. Its PVC and ledger
 survive a process restart; do not scale it above one or share this SQLite file
 across broker processes. Configuration changes update a pod-template hash and
 trigger a singleton `RollingUpdate`: Kubernetes stops the old process before
-starting its replacement on the same PVC. Every edit to the standing Cedar
-bundle changes its global revision, including an unrelated policy or principal
-addition, schema change, provider mapping or principal-limit edit. A rollout
+starting its replacement on the same PVC. Changing the pinned OpenFGA model ID,
+provider mappings, or principal limits changes the revision. Standing relationship
+changes are checked live and do not themselves change the revision. A rollout
 with a new bundle invalidates **all existing grants**. The lifecycle reconciler
 permanently revokes every tracked run's old grant and archives its Loom session,
 even when that run's permissions would still be allowed. Rolling the bundle
@@ -313,40 +315,47 @@ or a live WIF exchange.
 
 ## Shared grants and Loom
 
-Standing policy is written in Cedar. The authoritative
-[schema](policy/schema.json) defines the action space and the resource type for
-each action; [example.cedar](policy/example.cedar) and
-[example-entities.json](policy/example-entities.json) show the policy and trusted
-principal data. The broker uses the official Rust Cedar engine through the
-third-party `cedarpy` binding, pinned in the auth package. Cedar is confined to
-this service; application clients call the shared decision API.
+Standing authorization lives in OpenFGA. The native [model](policy/model.json)
+defines nested groups and action-scoped resource ancestry. The reviewed
+[relationships](policy/relationships.json) include a team nested in
+`marin-research`; [principals](policy/principals.json) record ownership, lifetime,
+and delegation limits. OpenBao supplies verified identity and signing. The
+Marin service checks the active grant and asks OpenFGA for the standing decision;
+Loom enforces its launch profile and repository locally.
 
-```cedar
-permit (
-    principal in Marin::Group::"research",
-    action == Marin::Action::"iris.job.submit",
-    resource in Marin::Namespace::"/analysis/"
-);
+For example, these relationships give a researcher transitive Iris access:
+
+```text
+principal:example-researcher member group:marin-team
+group:marin-team#member member group:marin-research
+group:marin-research#member accessor scope:iris/job.submit//analysis/
 ```
 
-The current schema names these actions:
+A scope object contains the service, action, and canonical resource path. Thus
+`scope:iris/job.submit//analysis/` and `scope:loom/session.create//analysis/`
+are different objects. The double slash separates the action from an absolute
+resource path. The adapter's action space is `loom.session.create`,
+`iris.job.submit`, `finelog.logs.query`, `finelog.logs.ingest`,
+`marina.app.read`, `marina.app.release`, and `cw_s3.credentials.issue`.
+Unknown actions and malformed resources deny access. These declarations do not
+migrate Iris, Finelog, or Marina handlers; Loom is the first integrated service.
 
-| Action | Resource type |
-| --- | --- |
-| `loom.session.create` | `LoomProfile` |
-| `iris.job.submit` | `Namespace` |
-| `finelog.logs.query`, `finelog.logs.ingest` | `Cluster` |
-| `marina.app.read`, `marina.app.release` | `App` |
-| `cw_s3.credentials.issue` | `CWIdentity` |
+The adapter derives resource parents from canonical server-selected paths and
+supplies only those parent edges as contextual tuples. Callers cannot provide
+groups, accessors, blocks, or arbitrary contextual tuples. OpenFGA resolves
+standing memberships and accessors from its database. A `blocked` relationship
+also excludes descendants, even if another ancestor permits access.
+Each Check pins the model ID and requests `HIGHER_CONSISTENCY`, bypassing the
+permission-result cache. Transport failures, redirects and malformed decisions
+return HTTP 503 and cannot grant access. A temporary OpenFGA outage does not
+permanently revoke a live grant; lifecycle reconciliation retries instead. No positive decision cache is added in the broker.
 
-Schemas and policies validate at startup. Unknown actions, malformed resources,
-and every Cedar evaluation error deny access. Principals, groups, ownership and
-delegation limits come from trusted deployment entities. Resource ancestry is
-constructed from canonical paths on the server; callers cannot supply parent
-entities, privileged attributes or request context. One content hash versions
-the entire bundle, including provider mappings and principal limits. Any bundle
-edit invalidates every old grant, with the mass revocation and session archival
-described in the rollout procedure above.
+The production OpenFGA component uses external PostgreSQL and a TLS gateway
+exposing only POST `/stores/STORE-ID/check`. The full HTTP and gRPC APIs bind to
+pod loopback. Operators publish models and reconcile standing tuples through
+Kubernetes port-forwarding; the broker has neither Kubernetes credentials nor
+an exposed write route. OpenFGA's experimental built-in API access controls are
+not required by this deployment.
 
 A runtime grant is a bounded record approved by that standing policy. For
 example, an approved bundle can contain:
@@ -369,15 +378,16 @@ Encoded paths, traversal, wildcard actions and ambiguous paths are rejected.
 The same `Permission` type describes runtime ceilings and the CoreWeave policy
 compiler's input. It is a capability description, not a second standing-policy
 language. Only complete approved native mappings can be issued for storage;
-an unrepresentable narrower prefix is rejected. A Cedar decision on a prefix
+an unrepresentable narrower prefix is rejected. An OpenFGA decision on a prefix
 node is not a proof about every descendant of that node.
 
-Pulumi publishes Cedar schema, policies and entities, trusted OpenBao principal mappings,
-and provider mappings. `POST /v1/grants` authenticates its bearer as an OpenBao
+Pulumi deploys OpenFGA and publishes the pinned store/model references, trusted
+OpenBao principal mappings and provider mappings. The operator reconciles
+reviewed standing relationships using the native OpenFGA API. `POST /v1/grants` authenticates its bearer as an OpenBao
 identity and writes the approved runtime grant to SQLite. Owner comes from
 trusted principal data. A child grant can reduce actions, prefixes, lifetime and
 delegation depth and must still pass current policy. Live checks require the
-entire ancestor chain to remain active. They evaluate Cedar using the original
+entire ancestor chain to remain active. They query OpenFGA using the original
 granting principal and enforce the current actor's grant ceiling separately;
 an attribution owner does not confer that owner's permissions.
 
@@ -393,7 +403,7 @@ broker credential or signing key. Applications check
 issuer, signature, audience, token type, format version and acting principal.
 For an operation, the receiving handler constructs its action and resource and
 calls `POST /v1/authorize` with the presented bearer. The broker checks token
-bounds, live grant state, current Cedar policy and revision. A successful
+bounds, live grant state, current OpenFGA permissions and revision. A successful
 decision returns matching grant/actor/owner metadata; it grants no authority to
 other operations. Iris, Finelog and Marina have schema entries but do not yet
 enforce these grants in their existing handlers.
@@ -431,11 +441,12 @@ independent ledgers is unsupported.
 A fatal background-task or ledger failure makes `/healthz` return 503,
 allowing Kubernetes probes to restart the broker.
 
-Storage issuance requires a separate Cedar permit on the complete `CWIdentity`,
-whose attributes are derived from its audited provider mapping. Its native
-permissions must also fit the live grant. OpenBao and CoreWeave retain their
-own ACL and S3 enforcement. Arbitrary Cedar policies are not translated into
-cloud IAM; the adapter issues only predeclared, representable capabilities.
+Storage issuance requires an OpenFGA permit on the complete configured provider
+identity, such as `principal:service:grafana accessor
+scope:cw_s3/credentials.issue/diagnostics` for the `diagnostics` binding. Its native permissions must also fit the live grant. OpenBao and
+CoreWeave retain their own ACL and S3 enforcement. Relationship rules are not
+compiled into cloud IAM; the adapter issues only predeclared, representable
+provider capabilities.
 
 Current restricted Loom profiles have no CoreWeave storage tool and cannot run
 an arbitrary shell helper or attach an unreviewed MCP. The adapter establishes
@@ -471,16 +482,16 @@ docker run --rm --network none --read-only marin-auth:staging \
 Publish only a reviewed image, then set its registry digest as `broker_image`.
 The Docker build installs the `marin-auth` closure from the repository lock.
 
-Run the repeatable local proof with an installed OpenBao executable and a Loom
-checkout containing its scripted ACP fixture:
+Run the repeatable local proof with OpenBao, OpenFGA, Loom and its sibling
+Tapestry executable, plus the matching Loom checkout containing its scripted ACP fixture:
 
 ```bash
 uv run --package marin-auth --group test python -m infra.auth.prove \
-  --bao /path/to/bao --loom /path/to/loom --loom-source /path/to/loom-checkout
+  --bao /path/to/bao --openfga /path/to/openfga --loom /path/to/loom --loom-source /path/to/loom-checkout
 ```
 
 The proof initializes a temporary non-dev, TLS-enabled Raft server and a private
-Loom home, then cleans up both. It exercises actual OpenBao authentication,
+Loom home plus an authenticated temporary OpenFGA engine, then cleans up all three. It exercises actual OpenBao authentication,
 Transit signing, OIDC issuance, key rotation, grant denials and revocation, plus
 a real Loom session using a scripted ACP process. It makes no CoreWeave calls.
 Its one-share initialization is confined to disposable test storage and is not
@@ -516,9 +527,63 @@ Take and restore a staging snapshot before relying on this service. PVC
 retention is not a backup. Protect the namespace and StatefulSet from accidental
 Pulumi deletion; removing them requires a reviewed recovery or retirement plan.
 
-StatefulSet updates use `OnDelete`: config and image changes do not silently
+OpenBao StatefulSet updates use `OnDelete`: config and image changes do not silently
 restart sealed replicas. During an approved upgrade, replace and unseal one
 replica at a time, verify quorum and readiness, then continue. Renew externally
 managed certificates before expiry and restart or reload replicas through that
 same reviewed procedure. Never disable TLS verification to bypass a failed
 renewal or Raft join.
+
+## OpenFGA publication
+
+Provide these additional stack inputs: `openfga_image`, `openfga_proxy_image`
+(both pinned by digest), `openfga_store_id`, `openfga_database_secret`
+(key `uri`, a PostgreSQL URI with verified TLS), `openfga_token_secret`
+(key `token`), `openfga_tls_secret` (`tls.crt`, `tls.key`), and
+`openfga_database_cidrs` (only the database destinations on port 5432).
+Secret values are provisioned outside Pulumi and never enter its arguments or
+state. PostgreSQL needs independent backups and restoration checks.
+
+For initial bootstrap, deploy without a broker using the reserved placeholder
+`00000000000000000000000000` as `openfga_store_id` on the Check gateway. Port-forward the OpenFGA pod's loopback HTTP port 8080,
+publish the model and relationships below, then configure the returned actual
+store/model IDs in `openfga_store_id` and `broker_policy.openfga.store_id` /
+`broker_policy.openfga.model_id`, then enable the broker. The Service exposes
+only the TLS Check gateway; the operator full API remains bound to pod loopback.
+
+```bash
+uv run python -m infra.auth.fga_operator \
+  --url http://127.0.0.1:18080 --token-file /private/openfga.token \
+  --name marin-staging --relationships infra/auth/policy/relationships.json
+```
+
+The operator returns only store/model IDs and the model hash. For later standing
+relationship updates, replace `--name` with `--store-id ID --model-id ID`.
+This command authoritatively reconciles all tuples in its dedicated store;
+review the complete relationship file before applying it. It does not modify
+runtime grant records. Publish a new model to a new store and drain old grants
+before switching model references.
+
+## Bounded CoreWeave proof
+
+[trial/](trial/Pulumi.yaml) runs the real OpenFGA, TLS/Raft OpenBao, broker, and
+native Loom session proof as one bounded Kubernetes Job in `marin-auth-trial`
+on `marin_US-WEST-04A`. It has no mounted service-account token or production
+credentials, denies pod ingress and egress, requests no GPU, and uses only
+scratch storage. Its OpenFGA memory datastore and single-node scratch Raft
+storage are for the synthetic proof, not a production deployment.
+The proof exercises transitive `marin-team` -> `marin-research` membership,
+combined Loom/Iris grants, out-of-scope and blocked descendants, live group
+removal against an existing JWT, credential expiry, key rotation, and Loom
+completion revocation. Iris submission is an authorization check; no Iris job
+is submitted. The scripted ACP agent obtains a native OpenBao storage identity;
+CoreWeave S3/WIF enforcement still requires the separate live storage procedure.
+
+Build the production image with `infra/auth/Dockerfile`. Build the proof image
+with `trial/Dockerfile`, passing `AUTH_IMAGE` and named BuildKit contexts
+`proof-tools` (reviewed `bao`, `openfga`, `loom`, and matching `tapestry` binaries) and `loom-source`
+(the matching Loom checkout). Run it locally without network first. Publish
+and pin its digest before `pulumi preview` and `pulumi up` in `trial/`.
+Set the trial's `kubernetes_context` and `image` config explicitly. Save the Job's
+JSON evidence, then destroy the trial stack after inspection. The Job has a
+10-minute deadline and finished pods expire after 24 hours.

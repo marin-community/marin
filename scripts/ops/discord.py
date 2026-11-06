@@ -29,7 +29,7 @@ import subprocess
 import sys
 import urllib.request
 
-CHANNELS = ("internal-discuss", "code-review")
+CHANNELS = ("internal-discuss", "code-review", "gcs-egress")
 GCLOUD_SECRET_PREFIX = "marin-discord-webhook-"
 
 log = logging.getLogger(__name__)

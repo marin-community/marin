@@ -14,6 +14,7 @@ from iac.auth.broker import (
     coreweave_identity_metadata,
 )
 from iac.auth.openbao import OpenBao, OpenBaoArgs
+from iac.auth.openfga import OpenFGA, OpenFGAArgs
 
 
 def main() -> None:
@@ -45,13 +46,30 @@ def main() -> None:
     pulumi.export("issuer", service.issuer)
     pulumi.export("private_api_address", service.api_address)
     pulumi.export("namespace", config.require("namespace"))
+    fga = OpenFGA(
+        "openfga",
+        OpenFGAArgs(
+            namespace=namespace,
+            image=config.require("openfga_image"),
+            proxy_image=config.require("openfga_proxy_image"),
+            database_secret=config.require("openfga_database_secret"),
+            token_secret=config.require("openfga_token_secret"),
+            tls_secret=config.require("openfga_tls_secret"),
+            store_id=config.require("openfga_store_id"),
+            dns_cidrs=tuple(config.require_object("dns_cidrs")),
+            database_cidrs=tuple(config.require_object("openfga_database_cidrs")),
+        ),
+        k8s_provider=provider,
+        opts=pulumi.ResourceOptions(depends_on=[service]),
+    )
+    pulumi.export("authorization_api_address", fga.address)
     broker_image = config.get("broker_image")
     if broker_image:
         policy = config.require_object("broker_policy")
         expected_fields = {
             "broker_token_file",
             "subjects",
-            "cedar",
+            "openfga",
             "storage",
             "max_token_ttl",
             "loom",
@@ -60,6 +78,9 @@ def main() -> None:
         if set(policy) != expected_fields:
             raise ValueError(f"broker_policy must contain exactly {sorted(expected_fields)}")
         pulumi.export("coreweave_identities", coreweave_identity_metadata(policy["storage"]))
+        if policy["openfga"]["store_id"] != config.require("openfga_store_id"):
+            raise ValueError("The broker and OpenFGA gateway must use the same store")
+        policy["openfga"]["api_url"] = fga.address
         policy.update(
             bao_address=service.api_address,
             ca_bundle=f"{TOKEN_DIRECTORY}/ca/ca.crt",
@@ -84,7 +105,7 @@ def main() -> None:
                 https_egress_cidrs=tuple(config.require_object("broker_https_egress_cidrs")),
             ),
             k8s_provider=provider,
-            opts=pulumi.ResourceOptions(depends_on=[service]),
+            opts=pulumi.ResourceOptions(depends_on=[service, fga]),
         )
         pulumi.export("grant_api_address", broker.address)
     public_keys = config.get_object("grant_public_keys")

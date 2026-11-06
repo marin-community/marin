@@ -10,6 +10,7 @@ import pulumi_kubernetes as k8s
 import pytest
 from iac.auth.broker import GrantBroker, GrantBrokerArgs
 from iac.auth.openbao import OpenBao, OpenBaoArgs
+from iac.auth.openfga import OpenFGA, OpenFGAArgs
 
 
 @pulumi.runtime.test
@@ -91,7 +92,7 @@ def broker_args():
         "broker_token_file": "/var/run/marin-auth/broker-token/token",
         "signing_key_version": 1,
         "subjects": {"entity-id": "human:alice"},
-        "cedar": {"schema_document": {}, "policies": "permit(principal, action, resource);", "entities": []},
+        "openfga": {"token_file": "/var/run/marin-auth/fga-token/token"},
         "storage": [
             {
                 "name": "checkpoint-reader",
@@ -115,7 +116,7 @@ def broker_args():
         storage_class="block",
         storage_size="1Gi",
         policy=policy,
-        token_secret_names=("broker-token", "loom-token", "storage-token"),
+        token_secret_names=("broker-token", "loom-token", "storage-token", "fga-token"),
         listener_tls_secret="broker-tls",
         ca_secret="combined-trust-bundle",
         client_namespace="sessions",
@@ -206,3 +207,47 @@ def test_grant_broker_rejects_reusing_credentials_across_trust_boundaries(record
             replace(broker_args, token_secret_names=secrets),
             k8s_provider=k8s.Provider("test", kubeconfig="", context="test"),
         )
+
+
+@pulumi.runtime.test
+def test_openfga_exposes_check_gateway_and_keeps_model_and_tuple_apis_on_loopback(recording_mocks):
+    mocks = recording_mocks
+    pulumi.runtime.set_mocks(mocks, project="marin-auth", stack="test", preview=False)
+    cluster = OpenFGA(
+        "openfga",
+        OpenFGAArgs(
+            namespace="management",
+            image="openfga/openfga@sha256:" + "a" * 64,
+            proxy_image="nginxinc/nginx-unprivileged@sha256:" + "b" * 64,
+            database_secret="postgres-connection",
+            token_secret="fga-token",
+            tls_secret="fga-tls",
+            store_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            dns_cidrs=("10.16.0.10/32",),
+            database_cidrs=("10.0.0.8/32",),
+        ),
+        k8s_provider=k8s.Provider("fga-test", kubeconfig="", context="test"),
+    )
+
+    def check(_value):
+        resources = {resource.typ: resource.inputs for resource in mocks.resources}
+        assert "kubernetes:core/v1:Secret" not in resources
+        pod = resources["kubernetes:apps/v1:Deployment"]["spec"]["template"]["spec"]
+        assert pod["automountServiceAccountToken"] is False
+        server, gateway = pod["containers"]
+        assert {"--http-addr=127.0.0.1:8080", "--grpc-addr=127.0.0.1:8081", "--authn-method=preshared"} <= set(
+            server["args"]
+        )
+        assert server["env"][-1]["valueFrom"]["secretKeyRef"] == {"key": "token", "name": "fga-token"}
+        assert gateway["ports"] == [{"containerPort": 8443, "name": "https"}]
+        exposed = resources["kubernetes:core/v1:Service"]["spec"]["ports"]
+        assert exposed == [{"name": "https", "port": 8443, "targetPort": "https"}]
+        network = resources["kubernetes:networking.k8s.io/v1:NetworkPolicy"]["spec"]
+        assert network["ingress"] == [
+            {
+                "from": [{"podSelector": {"matchLabels": {"app.kubernetes.io/name": "marin-auth"}}}],
+                "ports": [{"port": 8443}],
+            }
+        ]
+
+    return pulumi.Output.all(cluster.deployment.spec, cluster.network_policy.spec, cluster.address).apply(check)

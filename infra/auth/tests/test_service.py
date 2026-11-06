@@ -6,7 +6,6 @@ import json as json_module
 import sqlite3
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import httpx
 import jwt
@@ -98,8 +97,7 @@ class Environment:
 
 
 @pytest.fixture
-def environment(tmp_path, monkeypatch):
-    policy = Path(__file__).resolve().parents[1] / "policy"
+def environment(tmp_path, monkeypatch, openfga_http):
     config = service.ServiceConfig.model_validate(
         {
             "bao_address": "http://127.0.0.1:18200",
@@ -109,14 +107,11 @@ def environment(tmp_path, monkeypatch):
             "signing_key_version": 1,
             "database": tmp_path / "grants.db",
             "subjects": {"grafana": "service:grafana"},
-            "cedar": {
-                "schema_document": json_module.loads((policy / "schema.json").read_text()),
-                "policies": (
-                    (policy / "example.cedar")
-                    .read_text()
-                    .replace('resource == Marin::CWIdentity::"diagnostics"', "resource")
-                ),
-                "entities": json_module.loads((policy / "example-entities.json").read_text()),
+            "openfga": {
+                **{key: value for key, value in openfga_http.items() if key != "state"},
+                "principals": [
+                    {"principal": "service:grafana", "owner": "service:grafana", "max_ttl": 3600, "delegation_depth": 1}
+                ],
             },
             "storage": [
                 {
@@ -220,6 +215,29 @@ def test_service_registers_credential_intent_and_forwards_only_the_shared_launch
         assert launched.status_code == 201 and launched.json()["run_id"] == "run-one"
         delivery = [request for request in environment.loom.requests if request[0].endswith("/api/runs/create")]
         assert len(delivery) == 1 and delivery[0][2] == launch_headers
+
+
+def test_openfga_outage_denies_requests_without_permanently_revoking_live_grants(environment, openfga_http):
+    with TestClient(environment.app) as client:
+        grant_id = create_grant(client)
+        headers = exchange(client, grant_id, "loom")
+        check = {"audience": "loom", "action": "session.create", "resource": "/diagnostics/"}
+        assert client.post("/v1/authorize", headers=headers, json=check).status_code == 200
+        grant = environment.authority.store.active(grant_id)
+        launcher = LoomLauncher(
+            environment.config.database.parent / "outage-observer.db",
+            base_url="https://loom.example",
+            observer_tokens=service.LoomObserverTokenProvider(environment.config.loom.observer_token_file),
+            grants=environment.authority,
+            session=environment.loom,
+        )
+        launcher.observe(grant, "diagnostics")
+        openfga_http["state"]["status"] = 503
+        assert client.post("/v1/authorize", headers=headers, json=check).status_code == 503
+        launcher.reconcile()
+        openfga_http["state"]["status"] = 200
+        assert client.post("/v1/authorize", headers=headers, json=check).status_code == 200
+        assert environment.authority.store.active(grant_id).id == grant_id
 
 
 @pytest.mark.asyncio

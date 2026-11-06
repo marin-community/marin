@@ -31,8 +31,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from infra.auth.cedar import CedarPolicy, ProviderIdentity
 from infra.auth.loom import LoomLauncher
+from infra.auth.openfga import ACTIONS, AuthorizationUnavailable, OpenFGAPolicy, ProviderIdentity
 
 
 class PermissionConfig(BaseModel):
@@ -45,11 +45,21 @@ class PermissionConfig(BaseModel):
         return Permission(self.service, self.actions, self.resource)
 
 
-class CedarConfig(BaseModel):
+class PrincipalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_document: dict
-    policies: str
-    entities: list[dict]
+    principal: str
+    owner: str
+    max_ttl: int
+    delegation_depth: int
+
+
+class OpenFGAConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_url: str
+    store_id: str
+    model_id: str
+    token_file: Path
+    principals: tuple[PrincipalConfig, ...]
 
 
 class StorageConfig(BaseModel):
@@ -107,14 +117,14 @@ class ServiceConfig(BaseModel):
     signing_key_version: int
     database: Path
     subjects: dict[str, str]
-    cedar: CedarConfig
+    openfga: OpenFGAConfig
     storage: tuple[StorageConfig, ...]
     max_token_ttl: int
     loom: LoomConfig | None
 
     @model_validator(mode="after")
     def separate_workload_credentials(self) -> Self:
-        paths = [self.broker_token_file, *(binding.token_file for binding in self.storage)]
+        paths = [self.broker_token_file, self.openfga.token_file, *(binding.token_file for binding in self.storage)]
         if self.loom is not None:
             paths.append(self.loom.observer_token_file)
         resolved = [path.resolve() for path in paths]
@@ -128,16 +138,19 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
     storage_permissions = {
         binding.name: tuple(permission.permission() for permission in binding.permissions) for binding in config.storage
     }
-    policy = CedarPolicy(
-        config.cedar.schema_document,
-        config.cedar.policies,
-        config.cedar.entities,
-        [ProviderIdentity(binding.name, storage_permissions[binding.name]) for binding in config.storage],
+    policy = OpenFGAPolicy(
+        api_url=config.openfga.api_url,
+        store_id=config.openfga.store_id,
+        model_id=config.openfga.model_id,
+        token_file=config.openfga.token_file,
+        principals=[p.model_dump() for p in config.openfga.principals],
+        providers=[ProviderIdentity(binding.name, storage_permissions[binding.name]) for binding in config.storage],
+        ca_bundle=config.ca_bundle,
     )
     store = GrantStore(config.database, policy.authorities, policy)
     broker = OpenBaoClient(config.bao_address, config.broker_token_file, ca_bundle=config.ca_bundle)
     signer = OpenBaoTransitSigner(broker, issuer=config.issuer, key_version=config.signing_key_version)
-    audiences = frozenset(identifier.split(".", 1)[0] for identifier in config.cedar.schema_document["Marin"]["actions"])
+    audiences = frozenset(service for service, _action in ACTIONS)
     verifier = OpenBaoTransitVerifier(signer, audiences=audiences)
     authority = GrantAuthService(
         store,
@@ -161,7 +174,12 @@ def create_service(config: ServiceConfig) -> tuple[Starlette, GrantAuthService]:
         )
         for binding in config.storage
     }
+
+    async def authorization_unavailable(_request: Request, _error: Exception) -> JSONResponse:
+        return JSONResponse({"error": "Standing authorization is unavailable"}, status_code=503)
+
     app = create_app(authority)
+    app.add_exception_handler(AuthorizationUnavailable, authorization_unavailable)
     serving = False
     reconciler: asyncio.Task[None] | None = None
     session = requests.Session()

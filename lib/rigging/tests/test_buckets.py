@@ -19,6 +19,7 @@ from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, load_cluster_config, use_data_config
 from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.s3_compat import polars_s3_storage_options
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import secret_file_contents, secret_file_environment
 
@@ -215,6 +216,72 @@ def test_routed_coreweave_refreshes_credentials_from_rotated_token(config, tmp_p
     monkeypatch.setitem(fsspec.config.conf, "s3", {})
     r2_fs, r2_path = filesystem_for("s3://marin-na/")
     assert r2_fs.ls(r2_path, detail=False, refresh=True) == ["marin-na/r2-key"]
+
+
+def test_polars_federation_never_falls_back_to_broader_static_keys(config, tmp_path, monkeypatch):
+    token_file = tmp_path / "grant.jwt"
+    token_file.write_text("scoped-oidc")
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", CW_OIDC_URI)
+    monkeypatch.setenv("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "broader-static-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "broader-static-secret")
+    with pytest.raises(ValueError, match="refreshable CoreWeave"):
+        polars_s3_storage_options("s3://marin-cw/data/run.parquet")
+    assert polars_s3_storage_options("s3://marin-na/data/run.parquet") == {
+        "aws_access_key_id": "r2-key",
+        "aws_secret_access_key": "r2-secret",
+    }
+
+
+def test_polars_options_carry_each_declared_stores_keys(config):
+    """Polars gets the same per-store resolution as the routed filesystems; anything it
+    cannot route — undeclared buckets, non-S3 URLs — returns ``{}`` so the client's own
+    environment chain stays in charge.
+    """
+    assert polars_s3_storage_options("s3://marin-cw/data/run.parquet") == {
+        "aws_access_key_id": "cw-key",
+        "aws_secret_access_key": "cw-secret",
+    }
+    assert polars_s3_storage_options("s3://marin-na/data/run.parquet") == {
+        "aws_access_key_id": "r2-key",
+        "aws_secret_access_key": "r2-secret",
+    }
+    assert polars_s3_storage_options("s3://not-a-marin-bucket/run.parquet") == {}
+    assert polars_s3_storage_options("gs://marin-us-central1/run.parquet") == {}
+    assert polars_s3_storage_options("/tmp/run.parquet") == {}
+
+
+def test_polars_options_resolve_file_delivered_pod_credentials(config, tmp_path, monkeypatch):
+    """Iris task pods deliver submitted storage keys as named files under
+    ``RIGGING_SECRETS_DIR`` with no storage environment variables.
+    """
+    secrets_dir = tmp_path / "application-secrets"
+    secrets_dir.mkdir()
+    values = {"CW_KEY_ID": "mounted-id", "CW_KEY_SECRET": "mounted-secret"}
+    for name, content in secret_file_contents(values).items():
+        (secrets_dir / name).write_text(content)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(secrets_dir))
+    for name in ("CW_KEY_ID", "CW_KEY_SECRET", "AWS_SHARED_CREDENTIALS_FILE"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert polars_s3_storage_options("s3://marin-cw/data/run.parquet") == {
+        "aws_access_key_id": "mounted-id",
+        "aws_secret_access_key": "mounted-secret",
+    }
+
+
+def test_polars_options_defer_to_the_ambient_chain_without_credentials(config, monkeypatch):
+    for name in (
+        "CW_KEY_ID",
+        "CW_KEY_SECRET",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SHARED_CREDENTIALS_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", "/no-such-iris-secrets-dir")
+
+    assert polars_s3_storage_options("s3://marin-cw/data/run.parquet") == {}
 
 
 def test_gcs_is_not_an_s3_backend(config):

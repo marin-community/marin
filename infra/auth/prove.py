@@ -32,6 +32,7 @@ from rigging.grant_auth import ACCESS_TOKEN_TYPE, JWT_TOKEN_TYPE, TOKEN_EXCHANGE
 from rigging.openbao import OpenBaoClient, OpenBaoTransitSigner
 
 from infra.auth.bootstrap import OperatorClient, configure
+from infra.auth.proof_fga import configure_proof, isolated_openfga
 from infra.auth.prove_loom import isolated_loom, run_loom_proof
 from infra.auth.service import ServiceConfig, create_service
 
@@ -163,11 +164,15 @@ def _serve(app, port: int):
             raise RuntimeError("The local grant service did not shut down")
 
 
-def prove(executable: Path, *, loom_executable: Path | None = None, loom_source: Path | None = None) -> dict:
+def prove(
+    executable: Path, *, openfga_executable: Path, loom_executable: Path | None = None, loom_source: Path | None = None
+) -> dict:
     """Return evidence without exposing credentials or initialization secrets."""
     with tempfile.TemporaryDirectory(prefix="marin-auth-proof-") as scratch:
         directory = Path(scratch)
         with _openbao(executable, directory) as (operator, certificate), ExitStack() as resources:
+            fga = resources.enter_context(isolated_openfga(openfga_executable, directory))
+            fga_config = configure_proof(fga)
             issuer = operator.address + "/v1/identity/oidc"
             configure(operator, issuer)
             operator.request("POST", "sys/auth/proof", {"type": "userpass"})
@@ -215,36 +220,7 @@ def prove(executable: Path, *, loom_executable: Path | None = None, loom_source:
                     "signing_key_version": 1,
                     "database": directory / "grants.db",
                     "subjects": {subject: "launcher", other_subject: "other-session"},
-                    "cedar": {
-                        "schema_document": json.loads((Path(__file__).parent / "policy/schema.json").read_text()),
-                        "policies": (
-                            """
-permit(principal == Marin::Principal::"launcher",
-       action == Marin::Action::"loom.session.create",
-       resource == Marin::LoomProfile::"/auth-proof/");
-permit(principal == Marin::Principal::"launcher",
-       action == Marin::Action::"iris.job.submit",
-       resource in Marin::Namespace::"/proof/");
-forbid(principal, action == Marin::Action::"iris.job.submit",
-       resource in Marin::Namespace::"/proof/private/");
-permit(principal == Marin::Principal::"launcher",
-       action == Marin::Action::"cw_s3.credentials.issue",
-       resource == Marin::CWIdentity::"diagnostics") when { resource.read_only };
-"""
-                        ),
-                        "entities": [
-                            {
-                                "uid": {"type": "Marin::Principal", "id": "launcher"},
-                                "attrs": {"owner": "proof-owner", "max_ttl": 3600, "delegation_depth": 2},
-                                "parents": [],
-                            },
-                            {
-                                "uid": {"type": "Marin::Principal", "id": "other-session"},
-                                "attrs": {"owner": "other-owner", "max_ttl": 3600, "delegation_depth": 0},
-                                "parents": [],
-                            },
-                        ],
-                    },
+                    "openfga": fga_config,
                     "storage": [
                         {
                             "name": "diagnostics",
@@ -285,7 +261,7 @@ permit(principal == Marin::Principal::"launcher",
                 assert response.json()["owner"] == "proof-owner"
                 revision = client.get("/healthz").json()["policy_revision"]
                 assert response.json()["policy_revision"] == revision
-                evidence["authorization"] = {"engine": "Cedar", "grant_version": 1, "policy_revision": revision}
+                evidence["authorization"] = {"engine": "OpenFGA", "grant_version": 1, "policy_revision": revision}
                 evidence["checks"].append("authenticated identity + policy-owned owner + durable bundled grant")
 
                 widened = [{**storage_permission, "actions": ["s3:GetObject", "s3:PutObject"]}]
@@ -349,7 +325,31 @@ permit(principal == Marin::Principal::"launcher",
                         == 403
                     )
                 evidence["checks"].append(
-                    "Cedar HTTP decisions: cross-session, audience, namespace and explicit-forbid denials"
+                    "OpenFGA HTTP decisions: cross-session, audience, namespace and explicit-forbid denials"
+                )
+                membership = {"user": "group:marin-team#member", "relation": "member", "object": "group:marin-research"}
+                fga.write(fga_config["store_id"], fga_config["model_id"], writes=[], deletes=[membership])
+                assert (
+                    client.post(
+                        "/v1/authorize",
+                        headers={"Authorization": f"Bearer {iris}"},
+                        json={"audience": "iris", "action": "job.submit", "resource": "/proof/job"},
+                    ).status_code
+                    == 403
+                )
+                fga.write(fga_config["store_id"], fga_config["model_id"], writes=[membership], deletes=[])
+                assert (
+                    client.post(
+                        "/v1/authorize",
+                        headers={"Authorization": f"Bearer {iris}"},
+                        json={"audience": "iris", "action": "job.submit", "resource": "/proof/job"},
+                    ).status_code
+                    == 200
+                )
+                assert client.get("/healthz").json()["policy_revision"] == revision
+                evidence["checks"].append(
+                    "nested marin-team -> marin-research membership; group removal denies an existing JWT "
+                    "without changing the model revision"
                 )
                 native_grant = exchange(caller, "cw_s3").json()["access_token"]
                 response = client.post(
@@ -441,12 +441,23 @@ permit(principal == Marin::Principal::"launcher",
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bao", type=Path, required=True)
+    parser.add_argument("--openfga", type=Path, required=True)
     parser.add_argument("--loom", type=Path)
     parser.add_argument("--loom-source", type=Path)
     args = parser.parse_args()
     if bool(args.loom) != bool(args.loom_source):
         parser.error("--loom and --loom-source must be supplied together")
-    print(json.dumps(prove(args.bao.resolve(), loom_executable=args.loom, loom_source=args.loom_source), indent=2))
+    print(
+        json.dumps(
+            prove(
+                args.bao.resolve(),
+                openfga_executable=args.openfga.resolve(),
+                loom_executable=args.loom,
+                loom_source=args.loom_source,
+            ),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

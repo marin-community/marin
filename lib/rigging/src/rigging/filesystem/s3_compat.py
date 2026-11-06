@@ -305,6 +305,32 @@ def s3_credentials(store: StoreType) -> tuple[str, str] | None:
     return None
 
 
+def polars_s3_storage_options(url: str) -> dict[str, str]:
+    """Return the declared store's credentials as Polars scan storage options.
+
+    Polars' Rust object-store client authenticates only from its environment
+    and the options passed to the scan, while Iris task pods deliver submitted
+    storage keys as files, so scans must supply the pair explicitly here.
+    Undeclared buckets, non-S3 URLs, and stores without available credentials
+    yield ``{}``, leaving the ambient chain in charge.
+    """
+    if not url.startswith("s3://"):
+        return {}
+    spec = data_buckets().get(urlparse(url).netloc)
+    if spec is None or spec.store not in (StoreType.R2, StoreType.COREWEAVE):
+        return {}
+    if spec.store is StoreType.COREWEAVE and coreweave_federation() is not None:
+        raise ValueError(
+            "Polars scans do not yet support refreshable CoreWeave credentials; "
+            "use a federation-aware filesystem instead of static storage options"
+        )
+    credentials = s3_credentials(spec.store)
+    if credentials is None:
+        return {}
+    key, secret = credentials
+    return {"aws_access_key_id": key, "aws_secret_access_key": secret}
+
+
 def s3_endpoint(store: StoreType) -> str:
     """The endpoint URL for *store*: its config's override variable if set, else the configured
     default.
