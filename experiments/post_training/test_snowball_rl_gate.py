@@ -649,7 +649,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         expected = (
             algorithm | {"trainer.policy.optimizer_config.lr": "1e-6"},
             None,
-            "users/test/initializer@2026.10.27",
+            f"{init.name}@{init.version}",
             [pytest.approx(0.295)],
         )
     else:
