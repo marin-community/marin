@@ -146,21 +146,11 @@ const environment = {
   INFERENCEX_SOURCE_REPOS: source.repository,
 };
 if (!environment.DATABASE_WRITE_URL) {
-  for (const key of [
-    'DATABASE_USER',
-    'DATABASE_PASSWORD',
-    'DATABASE_NAME',
-    'DATABASE_SOCKET_DIR',
-  ]) {
+  for (const key of ['PGHOST', 'PGUSER', 'PGPASSWORD', 'PGDATABASE']) {
     if (!environment[key]) throw new Error(`${key} is required`);
   }
-  const url = new URL('postgresql://localhost/');
-  url.username = environment.DATABASE_USER;
-  url.password = environment.DATABASE_PASSWORD;
-  url.pathname = `/${environment.DATABASE_NAME}`;
-  environment.DATABASE_WRITE_URL = url.href;
+  environment.DATABASE_WRITE_URL = 'postgresql:///';
 }
-delete environment.DATABASE_PASSWORD;
 const child = spawnSync('bun', ['packages/db/src/ingest-ci-run.ts'], {
   cwd: '/source',
   env: environment,

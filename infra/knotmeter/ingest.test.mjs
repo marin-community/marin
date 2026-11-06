@@ -15,7 +15,7 @@ async function recoveredPoint(t, conclusion, {
   interrupted = false, changedHead = false, profile = 'h100', concurrency = 8,
   wrongGpuCount = false, replacedHost = false, shortWindow = false,
 } = {}) {
-  const directory = mkdtempSync(join(tmpdir(), 'inferencex-admission-'));
+  const directory = mkdtempSync(join(tmpdir(), 'knotmeter-admission-'));
   const artifacts = join(directory, 'artifacts');
   const admitted = join(directory, 'admitted.json');
   const source = {

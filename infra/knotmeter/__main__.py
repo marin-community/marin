@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Package pinned InferenceX-app as an internal, read-only Cloud Run dashboard."""
+"""Deploy Knotmeter with pinned InferenceX-app and reader-only Cloud SQL."""
 
 import hashlib
 import json
@@ -14,7 +14,7 @@ from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
-SERVICE = "marin-inferencex"
+SERVICE = "marin-knotmeter"
 ROOT = Path(__file__).resolve().parent
 
 
@@ -30,12 +30,12 @@ def main() -> CloudRunService:
     invalidate = gcp.secretmanager.Secret(
         "invalidate-secret",
         project=PROJECT,
-        secret_id="marin-inferencex-invalidate-secret",
+        secret_id="marin-knotmeter-invalidate-secret",
         replication=gcp.secretmanager.SecretReplicationArgs(auto=gcp.secretmanager.SecretReplicationAutoArgs()),
         opts=pulumi.ResourceOptions(provider=provider),
     )
     service = CloudRunService(
-        "inferencex",
+        "knotmeter",
         CloudRunServiceArgs(
             project=PROJECT,
             region=REGION,
@@ -48,9 +48,9 @@ def main() -> CloudRunService:
             startup_cpu_boost=True,
             cloudsql_instances=(connection_name,),
             env={
-                "DATABASE_USER": "inferencex_reader",
-                "DATABASE_NAME": "inferencex",
-                "DATABASE_SOCKET_DIR": connection_name.apply(lambda name: f"/cloudsql/{name}"),
+                "PGUSER": "knotmeter_reader",
+                "PGDATABASE": "knotmeter",
+                "PGHOST": connection_name.apply(lambda name: f"/cloudsql/{name}"),
                 "DATABASE_DRIVER": "postgres",
                 "DATABASE_SSL": "false",
                 "INFERENCEX_SOURCE_REPOS": "marin-community/marin",
@@ -58,8 +58,8 @@ def main() -> CloudRunService:
                 "NEXT_PUBLIC_SITE_URL": settings["site_url"],
             },
             secrets=(
-                SecretEnv(name="DATABASE_PASSWORD", secret="cloudsql-inferencex-reader-password"),
-                SecretEnv(name="INVALIDATE_SECRET", secret="marin-inferencex-invalidate-secret", wait_for=(invalidate,)),
+                SecretEnv(name="PGPASSWORD", secret="cloudsql-knotmeter-reader-password"),
+                SecretEnv(name="INVALIDATE_SECRET", secret="marin-knotmeter-invalidate-secret", wait_for=(invalidate,)),
             ),
         ),
         gcp_provider=provider,
@@ -69,7 +69,7 @@ def main() -> CloudRunService:
     pulumi.export("connection_name", connection_name)
     pulumi.export("site_url", settings["site_url"])
     gcp.cloudrun.DomainMapping(
-        "inferencex-domain",
+        "knotmeter-domain",
         name=domain,
         location=REGION,
         metadata=gcp.cloudrun.DomainMappingMetadataArgs(namespace=PROJECT),
@@ -77,7 +77,7 @@ def main() -> CloudRunService:
         opts=pulumi.ResourceOptions(provider=provider, ignore_changes=["metadata", "spec", "statuses"]),
     )
     cloudflare.DnsRecord(
-        "inferencex-dns",
+        "knotmeter-dns",
         zone_id=config.require("dns_zone_id"),
         name=domain,
         type="CNAME",

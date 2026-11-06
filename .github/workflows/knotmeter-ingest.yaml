@@ -1,4 +1,4 @@
-name: Marin - Performance Import
+name: Marin - Knotmeter Import
 
 on:
   workflow_run:
@@ -12,7 +12,7 @@ on:
         required: true
 
 concurrency:
-  group: inferencex-import
+  group: knotmeter-import
   cancel-in-progress: false
 
 permissions:
@@ -24,7 +24,7 @@ jobs:
   import:
     if: >-
       github.repository == 'marin-community/marin' &&
-      vars.INFERENCEX_INGEST_ENABLED == 'true' &&
+      vars.KNOTMETER_INGEST_ENABLED == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.head_repository.full_name == github.repository &&
         github.event.workflow_run.head_branch == github.event.repository.default_branch))
@@ -34,7 +34,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GITHUB_TOKEN: ${{ github.token }}
       COLLECTOR_RUN: ${{ inputs.collector_run_id || github.event.workflow_run.id }}
-      INGEST_IMAGE: ${{ vars.INFERENCEX_INGEST_IMAGE }}
+      INGEST_IMAGE: ${{ vars.KNOTMETER_INGEST_IMAGE }}
       INSTANCE: hai-gcp-models:us-central1:marin-metadata
     steps:
       - uses: actions/checkout@v7
@@ -42,7 +42,7 @@ jobs:
         id: bundle
         run: |
           set -euo pipefail
-          [[ "$INGEST_IMAGE" == us-central1-docker.pkg.dev/hai-gcp-models/marin-inferencex/*@sha256:* ]]
+          [[ "$INGEST_IMAGE" == us-central1-docker.pkg.dev/hai-gcp-models/marin-knotmeter/*@sha256:* ]]
           # An early collection can legitimately have no validated points yet.
           count=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COLLECTOR_RUN/artifacts" \
             --jq '[.artifacts[] | select(.name | startswith("agentx-results-"))] | length')
@@ -89,26 +89,26 @@ jobs:
         env:
           ARTIFACTS: ${{ steps.bundle.outputs.path }}
           IAP_ID_TOKEN: ${{ steps.auth.outputs.id_token }}
-          DATABASE_USER: inferencex_writer
-          DATABASE_NAME: inferencex
+          PGUSER: knotmeter_writer
+          PGDATABASE: knotmeter
           DATABASE_DRIVER: postgres
           DATABASE_SSL: 'false'
           DASHBOARD_URL: https://knotmeter.oa.dev
         run: |
           set -euo pipefail
-          DATABASE_PASSWORD="$(gcloud secrets versions access latest --secret=cloudsql-inferencex-writer-password --project=hai-gcp-models)"
-          INVALIDATE_SECRET="$(gcloud secrets versions access latest --secret=marin-inferencex-invalidate-secret --project=hai-gcp-models)"
-          export DATABASE_PASSWORD INVALIDATE_SECRET
-          echo "::add-mask::$DATABASE_PASSWORD"
+          PGPASSWORD="$(gcloud secrets versions access latest --secret=cloudsql-knotmeter-writer-password --project=hai-gcp-models)"
+          INVALIDATE_SECRET="$(gcloud secrets versions access latest --secret=marin-knotmeter-invalidate-secret --project=hai-gcp-models)"
+          export PGPASSWORD INVALIDATE_SECRET
+          echo "::add-mask::$PGPASSWORD"
           echo "::add-mask::$INVALIDATE_SECRET"
-          export DATABASE_SOCKET_DIR="$RUNNER_TEMP/cloudsql/$INSTANCE"
+          export PGHOST="$RUNNER_TEMP/cloudsql/$INSTANCE"
           gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
           docker pull "$INGEST_IMAGE"
           docker run --rm --network host \
             --mount "type=bind,src=$ARTIFACTS,dst=/artifacts,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/cloudsql,dst=$RUNNER_TEMP/cloudsql" \
-            -e GITHUB_TOKEN -e DATABASE_USER -e DATABASE_PASSWORD -e DATABASE_NAME \
-            -e DATABASE_SOCKET_DIR -e DATABASE_DRIVER -e DATABASE_SSL \
+            -e GITHUB_TOKEN -e PGUSER -e PGPASSWORD -e PGDATABASE \
+            -e PGHOST -e DATABASE_DRIVER -e DATABASE_SSL \
             -e DASHBOARD_URL -e INVALIDATE_SECRET -e IAP_ID_TOKEN "$INGEST_IMAGE" /artifacts
       - name: Close the proxy
         if: always()

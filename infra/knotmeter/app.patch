@@ -1,60 +1,8 @@
-diff --git a/.env.example b/.env.example
-index 9fcc227f..4bec5943 100644
---- a/.env.example
-+++ b/.env.example
-@@ -53,6 +53,11 @@
- # DATABASE_DRIVER=neon
- # DATABASE_SSL=true
- # CACHE_NAMESPACE=
-+# Cloud SQL Unix socket directory; the postgres driver uses it as its host.
-+# DATABASE_SOCKET_DIR=
-+# Internal deployment origin and Snowball landing view (set at build time).
-+# NEXT_PUBLIC_SITE_URL=
-+# NEXT_PUBLIC_MARIN_PERFORMANCE=
- # BLOB_CACHE_PREFIX=
- # BLOB_READ_WRITE_TOKEN=
- # GITHUB_TOKEN=
-diff --git a/docs/deployment-configuration.md b/docs/deployment-configuration.md
-index 2a8e24da..1ba5d780 100644
---- a/docs/deployment-configuration.md
-+++ b/docs/deployment-configuration.md
-@@ -1,5 +1,13 @@
- # Deployment Configuration
- 
-+The internal Marin build sets `NEXT_PUBLIC_SITE_URL` to its IAP-protected origin
-+and `NEXT_PUBLIC_MARIN_PERFORMANCE=1` to open on Snowball AgentX performance.
-+`DATABASE_SOCKET_DIR` selects a Cloud SQL Unix socket directory for the postgres
-+driver, including admin commands; keep `DATABASE_SSL=false` on that local connector
-+path. Give the web process only `DATABASE_READONLY_URL` and run ingestion separately
-+with `DATABASE_WRITE_URL`. Point details and the trace-server-metrics API expose
-+the stored runtime build (`image`) and serving-recipe fingerprint.
-+
- Operational values (benchmark source repositories, target sites, Deployment Protection
- bypass) are read from the environment, GitHub repository variables, or secrets. There
- are no defaults: a required value that is unset fails the script or workflow step that
-diff --git a/packages/app/cypress.config.ts b/packages/app/cypress.config.ts
-index 24aa0753..9d645b72 100644
---- a/packages/app/cypress.config.ts
-+++ b/packages/app/cypress.config.ts
-@@ -34,7 +34,12 @@ export default defineConfig({
-       on(
-         'file:preprocessor',
-         createBundler({
--          define: { 'process.env.NODE_ENV': '"test"' },
-+          define: {
-+            'process.env.NODE_ENV': '"test"',
-+            'process.env.NEXT_PUBLIC_SITE_URL': JSON.stringify(
-+              process.env.NEXT_PUBLIC_SITE_URL ?? '',
-+            ),
-+          },
-           alias: { '@': path.resolve(__dirname, 'src') },
-         }),
-       );
 diff --git a/packages/app/next.config.ts b/packages/app/next.config.ts
-index cd1d35a6..678cecea 100644
+index cd1d35a..0a7faba 100644
 --- a/packages/app/next.config.ts
 +++ b/packages/app/next.config.ts
-@@ -1,16 +1,28 @@
+@@ -1,16 +1,26 @@
  import { withPostHogConfig } from '@posthog/nextjs-config';
  import type { NextConfig } from 'next';
 +import path from 'node:path';
@@ -71,20 +19,18 @@ index cd1d35a6..678cecea 100644
    serverExternalPackages: ['shiki'],
    redirects() {
      return Promise.resolve([
-+      ...(process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1'
-+        ? ['', '/zh'].flatMap((prefix) =>
-+            ['', '/inference'].map((route) => ({
-+              source: `${prefix}${route}` || '/',
-+              destination: `${prefix}/inference/marin-snowball-v011?i_seq=agentic-traces&i_prec=bf16&i_metric=y_outputTputPerGpu&i_pctl=p90`,
-+              permanent: false,
-+            })),
-+          )
-+        : []),
++      ...['', '/zh'].flatMap((prefix) =>
++        ['', '/inference'].map((route) => ({
++          source: `${prefix}${route}` || '/',
++          destination: `${prefix}/inference/marin-snowball-v011?i_seq=agentic-traces&i_prec=bf16&i_metric=y_outputTputPerGpu&i_pctl=p90`,
++          permanent: false,
++        })),
++      ),
        ...INFERENCE_MODEL_ALIAS_REDIRECTS,
        ...VIDEO_ALIAS_REDIRECTS,
        {
 diff --git a/packages/app/src/app/(dashboard)/inference/[model]/page.tsx b/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
-index d797752d..6df51a17 100644
+index d797752..6df51a1 100644
 --- a/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
 +++ b/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
 @@ -52,6 +52,11 @@ export default async function InferenceModelPage({ params }: Props) {
@@ -99,8 +45,21 @@ index d797752d..6df51a17 100644
        <InferenceChartDisplay />
      </InferenceProvider>
    );
+diff --git a/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx b/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx
+index a9c567e..a370692 100644
+--- a/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx
++++ b/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx
+@@ -12,7 +12,7 @@ export async function generateMetadata({
+ }): Promise<Metadata> {
+   const { id } = await params;
+   return {
+-    title: 'Agentic trace detail | InferenceX',
++    title: 'Agentic trace detail | Knotmeter',
+     description: `Inspect request timelines, server metrics, aggregates, and logs for Agentic benchmark point #${id}.`,
+     alternates: enAlternates(`/inference/agentic/${id}`),
+     robots: { index: false },
 diff --git a/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx b/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
-index 091e729f..4e887bcc 100644
+index 091e729..4e887bc 100644
 --- a/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
 +++ b/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
 @@ -56,6 +56,11 @@ export default async function ZhInferenceModelPage({ params }: Props) {
@@ -115,8 +74,21 @@ index 091e729f..4e887bcc 100644
          <InferenceChartDisplay />
        </InferenceProvider>
      </>
+diff --git a/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx b/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx
+index a40ad29..92a3b29 100644
+--- a/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx
++++ b/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx
+@@ -12,7 +12,7 @@ export async function generateMetadata({
+ }): Promise<Metadata> {
+   const { id } = await params;
+   return {
+-    title: 'Agentic trace 详情 | InferenceX',
++    title: 'Agentic trace 详情 | Knotmeter',
+     description: `查看 Agentic 基准测试数据点 #${id} 的请求时间线、服务器指标、聚合数据与日志。`,
+     alternates: zhAlternates(`/inference/agentic/${id}`),
+     openGraph: { locale: ZH_OG_LOCALE },
 diff --git a/packages/app/src/components/inference/agentic-point/phase-slice.test.ts b/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
-index ffa80dc9..00a24b88 100644
+index ffa80dc..00a24b8 100644
 --- a/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
 +++ b/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
 @@ -207,6 +207,28 @@ describe('sliceTimelineByPhase', () => {
@@ -149,7 +121,7 @@ index ffa80dc9..00a24b88 100644
      const data: RequestChartData = {
        version: 1,
 diff --git a/packages/app/src/components/inference/agentic-point/phase-slice.ts b/packages/app/src/components/inference/agentic-point/phase-slice.ts
-index 39b5484d..fb4c28b7 100644
+index 39b5484..fb4c28b 100644
 --- a/packages/app/src/components/inference/agentic-point/phase-slice.ts
 +++ b/packages/app/src/components/inference/agentic-point/phase-slice.ts
 @@ -26,7 +26,7 @@ export function timelineHasWarmup(timeline: RequestPhaseData | null | undefined)
@@ -213,7 +185,7 @@ index 39b5484d..fb4c28b7 100644
      phase === 'warmup' ? request.start < boundaryOff : request.start >= boundaryOff;
    const shift = phase === 'profiling' ? boundaryOff : 0;
 diff --git a/packages/app/src/components/inference/agentic-point/point-summary.test.ts b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
-index a3bbce47..94b290c3 100644
+index a3bbce4..94b290c 100644
 --- a/packages/app/src/components/inference/agentic-point/point-summary.test.ts
 +++ b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
 @@ -32,6 +32,7 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
@@ -241,7 +213,7 @@ index a3bbce47..94b290c3 100644
      const html = renderToStaticMarkup(
        createElement(PointSummary, {
 diff --git a/packages/app/src/components/inference/agentic-point/point-summary.tsx b/packages/app/src/components/inference/agentic-point/point-summary.tsx
-index 89789260..19db34c5 100644
+index 8978926..19db34c 100644
 --- a/packages/app/src/components/inference/agentic-point/point-summary.tsx
 +++ b/packages/app/src/components/inference/agentic-point/point-summary.tsx
 @@ -24,6 +24,8 @@ export const POINT_SUMMARY_STRINGS = {
@@ -277,8 +249,74 @@ index 89789260..19db34c5 100644
          <MetaLine label={t.offloadType} value={offloadDisplay(meta, locale)} />
          {offloadBackend && <MetaLine label={t.offloadBackend} value={offloadBackend} />}
          {transferEngine && <MetaLine label={t.transferEngine} value={transferEngine} />}
+diff --git a/packages/app/src/components/inference/ui/ChartDisplay.tsx b/packages/app/src/components/inference/ui/ChartDisplay.tsx
+index ca8ba5e..3ffbb22 100644
+--- a/packages/app/src/components/inference/ui/ChartDisplay.tsx
++++ b/packages/app/src/components/inference/ui/ChartDisplay.tsx
+@@ -135,7 +135,7 @@ const STRINGS = {
+     chart: 'Chart',
+     table: 'Table',
+     sourceUnofficial: 'Source: UNOFFICIAL',
+-    sourceOfficial: 'Source: SemiAnalysis InferenceX™',
++    sourceOfficial: 'Source: Knotmeter (Marin)',
+     revenuePrices: (input: string, cached: string | null, output: string) =>
+       cached === null
+         ? `Input $${input}/M tok · Output $${output}/M tok`
+@@ -166,7 +166,7 @@ const STRINGS = {
+     chart: '图表',
+     table: '表格',
+     sourceUnofficial: '来源：非官方',
+-    sourceOfficial: '来源：SemiAnalysis InferenceX™',
++    sourceOfficial: '来源：Knotmeter (Marin)',
+     revenuePrices: (input: string, cached: string | null, output: string) =>
+       cached === null
+         ? `输入 $${input}/百万 token · 输出 $${output}/百万 token`
+@@ -957,7 +957,7 @@ export default function ChartDisplay({ embedded = false }: { embedded?: boolean
+                       hideImageExport={getViewMode(graphIndex) === 'table'}
+                       setIsLegendExpanded={setIsLegendExpanded}
+                       hideLegendOnExport={showLineLabels}
+-                      exportFileName={`InferenceX_${selectedModel}_${graph.chartDefinition.chartType}`}
++                      exportFileName={`Knotmeter_${selectedModel}_${graph.chartDefinition.chartType}`}
+                       onExportMp4={
+                         replayAvailable
+                           ? () => replayHandlesRef.current[graphIndex]?.open()
+@@ -1016,7 +1016,7 @@ export default function ChartDisplay({ embedded = false }: { embedded?: boolean
+                           knownIssueCsvNote(issue, getDisplayLabel(getHardwareConfig(issue.hwKey))),
+                         );
+                         exportToCsv(
+-                          `InferenceX_${selectedModel}_${graph.chartDefinition.chartType}`,
++                          `Knotmeter_${selectedModel}_${graph.chartDefinition.chartType}`,
+                           headers,
+                           rows,
+                           issueNotes,
+@@ -1117,9 +1117,9 @@ export default function ChartDisplay({ embedded = false }: { embedded?: boolean
+                             source={
+                               isUnofficialRun
+                                 ? locale === 'zh'
+-                                  ? 'SemiAnalysis InferenceX™ + 非官方 overlays'
+-                                  : 'SemiAnalysis InferenceX™ + UNOFFICIAL overlays'
+-                                : 'SemiAnalysis InferenceX™'
++                                  ? 'Knotmeter (Marin) + 非官方 overlays'
++                                  : 'Knotmeter (Marin) + UNOFFICIAL overlays'
++                                : 'Knotmeter (Marin)'
+                             }
+                             costBasis={
+                               usesTokenSalePricing(selectedYAxisMetric) && tokenRevenuePricing
+diff --git a/packages/app/src/components/inference/ui/ComparisonChangelog.tsx b/packages/app/src/components/inference/ui/ComparisonChangelog.tsx
+index 36b77f6..04d1509 100644
+--- a/packages/app/src/components/inference/ui/ComparisonChangelog.tsx
++++ b/packages/app/src/components/inference/ui/ComparisonChangelog.tsx
+@@ -74,7 +74,7 @@ function renderRunLinks(locale: Locale, headRef?: string, runUrl?: string) {
+     <>
+       {headRef && (
+         <a
+-          href={`https://github.com/SemiAnalysisAI/InferenceX/commit/${headRef}`}
++          href={`https://github.com/marin-community/marin/commit/${headRef}`}
+           target="_blank"
+           rel="noopener noreferrer"
+           className="text-sm hover:underline text-foreground underline"
 diff --git a/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx b/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx
-index b2e386fc..9fda6e90 100644
+index b2e386f..9fda6e9 100644
 --- a/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx
 +++ b/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx
 @@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
@@ -299,8 +337,21 @@ index b2e386fc..9fda6e90 100644
    const arch = getModelArchitecture(model);
    const label = getModelLabel(model);
    const text =
+diff --git a/packages/app/src/components/inference/ui/WorkflowInfoDisplay.tsx b/packages/app/src/components/inference/ui/WorkflowInfoDisplay.tsx
+index 9a21e1f..49986c5 100644
+--- a/packages/app/src/components/inference/ui/WorkflowInfoDisplay.tsx
++++ b/packages/app/src/components/inference/ui/WorkflowInfoDisplay.tsx
+@@ -260,7 +260,7 @@ export default function WorkflowInfoDisplay() {
+                   ))}
+                   {changelog.entries[0]?.head_ref && (
+                     <a
+-                      href={`https://github.com/SemiAnalysisAI/InferenceX/commit/${changelog.entries[0].head_ref}`}
++                      href={`https://github.com/marin-community/marin/commit/${changelog.entries[0].head_ref}`}
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       className="text-xs hover:underline text-foreground underline"
 diff --git a/packages/app/src/hooks/api/use-trace-server-metrics.ts b/packages/app/src/hooks/api/use-trace-server-metrics.ts
-index 2605cfb4..a4b2c851 100644
+index 2605cfb..a4b2c85 100644
 --- a/packages/app/src/hooks/api/use-trace-server-metrics.ts
 +++ b/packages/app/src/hooks/api/use-trace-server-metrics.ts
 @@ -32,6 +32,7 @@ export interface PointMeta {
@@ -312,7 +363,7 @@ index 2605cfb4..a4b2c851 100644
    offload_mode: string | null;
    kv_offloading: string | null;
 diff --git a/packages/app/src/lib/api/api-documentation-base.ts b/packages/app/src/lib/api/api-documentation-base.ts
-index ce70f221..fa937c3c 100644
+index ce70f22..fa937c3 100644
 --- a/packages/app/src/lib/api/api-documentation-base.ts
 +++ b/packages/app/src/lib/api/api-documentation-base.ts
 @@ -1,6 +1,6 @@
@@ -325,7 +376,7 @@ index ce70f221..fa937c3c 100644
  export const SUPPORTED_BENCHMARK_MODELS = Object.freeze(
    Object.keys(DISPLAY_MODEL_TO_DB).toSorted(),
 diff --git a/packages/app/src/lib/api/api-documentation.ts b/packages/app/src/lib/api/api-documentation.ts
-index a75f8802..1b5b4993 100644
+index a75f880..580bc8e 100644
 --- a/packages/app/src/lib/api/api-documentation.ts
 +++ b/packages/app/src/lib/api/api-documentation.ts
 @@ -2,6 +2,7 @@ import {
@@ -364,23 +415,62 @@ index a75f8802..1b5b4993 100644
              },
            },
            startNs: integerSchema,
+@@ -3018,17 +3020,17 @@ export const apiOperations: readonly ApiOperation[] = [
+ ];
+ 
+ const overview = {
+-  title: text('InferenceX API reference', 'InferenceX API 参考文档'),
+-  eyebrow: text('Public data API', '公开数据 API'),
++  title: text('Knotmeter API reference', 'Knotmeter API 参考文档'),
++  eyebrow: text('Data API', '数据 API'),
+   description: text(
+-    'Read benchmark, provenance, dataset, CollectiveX, and diagnostic data from the same sources that power InferenceX.',
+-    '从 InferenceX 使用的同一组数据源中，读取基准测试数据、溯源信息、数据集、CollectiveX 数据和诊断数据。',
++    'Read benchmark, provenance, dataset, CollectiveX, and diagnostic data used by Knotmeter.',
++    '从 Knotmeter 使用的数据源中，读取基准测试数据、溯源信息、数据集、CollectiveX 数据和诊断数据。',
+   ),
+   auth: {
+     title: text('Authentication', '身份验证'),
+     description: text(
+-      'Published read endpoints do not require authentication.',
+-      '已发布的只读端点不需要身份验证。',
++      'The hosted service requires IAP authentication, including read endpoints.',
++      '托管服务的所有端点（包括只读端点）都需要 IAP 身份验证。',
+     ),
+   },
+   format: {
+@@ -3293,14 +3295,14 @@ export function buildOpenApiDocument(serverUrl: string = API_BASE_URL): OpenApiD
+   return {
+     openapi: OPENAPI_VERSION,
+     info: {
+-      title: 'InferenceX Data API',
++      title: 'Knotmeter Data API',
+       version: API_DOCUMENT_VERSION,
+       description: `${overview.description.en}\n\n${overview.conventions.find((item) => item.id === 'client-attribution')!.description.en}`,
+       'x-description-zh': `${overview.description.zh}\n\n${overview.conventions.find((item) => item.id === 'client-attribution')!.description.zh}`,
+     },
+-    servers: [{ url: normalizedServerUrl, description: 'InferenceX production API' }],
++    servers: [{ url: normalizedServerUrl, description: 'Knotmeter API' }],
+     externalDocs: {
+-      description: 'InferenceX API reference',
++      description: 'Knotmeter API reference',
+       url: `${normalizedServerUrl}/api`,
+     },
+     tags: apiDocumentationGroups.map((group) => ({
 diff --git a/packages/app/src/lib/api/api-route-catalog.ts b/packages/app/src/lib/api/api-route-catalog.ts
-index 0956a0d6..b0c629a4 100644
+index 0956a0d..ec059cb 100644
 --- a/packages/app/src/lib/api/api-route-catalog.ts
 +++ b/packages/app/src/lib/api/api-route-catalog.ts
-@@ -1629,7 +1629,10 @@ export const apiContractSourceDigests = [
+@@ -1629,7 +1629,7 @@ export const apiContractSourceDigests = [
      // Reviewed for the MiniMax-M3.1-Flash addition (InferenceX#4426): one new DB
      // key, `minimaxm31flash`, with its own display name and release date. The
      // AgentX cookbook documents the model; no endpoint or parameter shape changes.
 -    sourceSha256: '63a8ca335fccef8db1e93205db10456d75f2f8d4f100f89b160e6c1c574d62d4',
-+    // Marin Hero step144000 adds a distinct BF16 AgentX model. The generated
-+    // model-name enum includes it; the AgentX cookbook records both Marin keys.
-+    // Existing route parameters, response shapes and translations still apply.
 +    sourceSha256: '12fd739c92c9f8250276f4eefd3203d504dd07a50cb30419604899d70d8d0799',
      reviewArea: {
        en: 'Published benchmark and TCO model names, aliases, and parameter enums.',
        zh: '已发布基准与 TCO 模型名称、别名和参数枚举。',
-@@ -1769,7 +1772,7 @@ export const apiContractSourceDigests = [
+@@ -1769,7 +1769,7 @@ export const apiContractSourceDigests = [
    },
    {
      source: '../db/src/queries/trace-server-metrics.ts',
@@ -390,7 +480,7 @@ index 0956a0d6..b0c629a4 100644
        en: 'Trace server metric metadata, time-series groups, source labels, and units.',
        zh: '跟踪服务器指标元数据、时间序列分组、来源标签和单位。',
 diff --git a/packages/app/src/lib/calculator/cache-reuse-link.test.ts b/packages/app/src/lib/calculator/cache-reuse-link.test.ts
-index 2bb8f1e1..243938b7 100644
+index 2bb8f1e..243938b 100644
 --- a/packages/app/src/lib/calculator/cache-reuse-link.test.ts
 +++ b/packages/app/src/lib/calculator/cache-reuse-link.test.ts
 @@ -24,6 +24,7 @@ const point: PointMeta = {
@@ -402,7 +492,7 @@ index 2bb8f1e1..243938b7 100644
    offload_mode: 'on',
    kv_offloading: 'dram',
 diff --git a/packages/app/src/lib/catalog/data-mappings.test.ts b/packages/app/src/lib/catalog/data-mappings.test.ts
-index 46be7d22..459f84d6 100644
+index 46be7d2..459f84d 100644
 --- a/packages/app/src/lib/catalog/data-mappings.test.ts
 +++ b/packages/app/src/lib/catalog/data-mappings.test.ts
 @@ -369,9 +369,13 @@ describe('getModelLabel', () => {
@@ -422,7 +512,7 @@ index 46be7d22..459f84d6 100644
          continue;
        }
 diff --git a/packages/app/src/lib/catalog/data-mappings.ts b/packages/app/src/lib/catalog/data-mappings.ts
-index 72b251b2..dae4489a 100644
+index 72b251b..dae4489 100644
 --- a/packages/app/src/lib/catalog/data-mappings.ts
 +++ b/packages/app/src/lib/catalog/data-mappings.ts
 @@ -3,6 +3,8 @@ import { DISPLAY_MODEL_TO_DB } from '@semianalysisai/inferencex-constants/models
@@ -452,7 +542,7 @@ index 72b251b2..dae4489a 100644
      label: 'Muse Spark Open 816B',
      prefix: 'musespark',
 diff --git a/packages/app/src/lib/catalog/model-architectures.test.ts b/packages/app/src/lib/catalog/model-architectures.test.ts
-index 496db699..65be9cb0 100644
+index 496db69..65be9cb 100644
 --- a/packages/app/src/lib/catalog/model-architectures.test.ts
 +++ b/packages/app/src/lib/catalog/model-architectures.test.ts
 @@ -22,9 +22,9 @@ import {
@@ -467,8 +557,48 @@ index 496db699..65be9cb0 100644
    });
  
    it('anchors each model to its weights publication, not its first sweep', () => {
+diff --git a/packages/app/src/lib/compare/compare-agentx.test.ts b/packages/app/src/lib/compare/compare-agentx.test.ts
+index 96fc177..c595143 100644
+--- a/packages/app/src/lib/compare/compare-agentx.test.ts
++++ b/packages/app/src/lib/compare/compare-agentx.test.ts
+@@ -13,6 +13,18 @@ import { Model } from '../catalog/data-mappings';
+ import { overviewScenariosForModel } from '../overview/overview-data';
+ 
+ describe('AgentX comparison links', () => {
++  it.each(['marin-snowball-v011', 'marin-hero-step144000'])(
++    'opens saved agentic measurements for %s',
++    (slug) => {
++      const model = COMPARE_MODEL_SLUGS.find((entry) => entry.slug === slug)!;
++      expect(comparisonScenarioForModel(model).sequence).toBe('agentic-traces');
++      expect(comparisonPairHref('en', `${slug}-gb200-vs-h100`, model)).toBe(
++        `/compare/${slug}-gb200-vs-h100/agentic`,
++      );
++      expect(agentxDashboardHref('en', model)).toBe(`/inference/${slug}`);
++    },
++  );
++
+   it('keeps the featured AgentX models in the editorial order', () => {
+     expect(FEATURED_AGENTX_MODELS.map((model) => model.slug)).toEqual([
+       'kimi-k3',
+diff --git a/packages/app/src/lib/compare/compare-agentx.ts b/packages/app/src/lib/compare/compare-agentx.ts
+index 9c1fb2a..13b4cfd 100644
+--- a/packages/app/src/lib/compare/compare-agentx.ts
++++ b/packages/app/src/lib/compare/compare-agentx.ts
+@@ -15,7 +15,11 @@ const FEATURED_AGENTX_MODEL_SLUGS = [
+ 
+ const AGENTX_NEW_MODEL_SLUGS: readonly (typeof FEATURED_AGENTX_MODEL_SLUGS)[number][] = [];
+ 
+-const AGENTX_ONLY_MODEL_SLUGS: readonly string[] = ['minimax-m31-flash'];
++const AGENTX_ONLY_MODEL_SLUGS: readonly string[] = [
++  'minimax-m31-flash',
++  'marin-snowball-v011',
++  'marin-hero-step144000',
++];
+ 
+ const AGENTX_SCENARIO_MODEL_SET = new Set<string>([
+   ...FEATURED_AGENTX_MODEL_SLUGS,
 diff --git a/packages/app/src/lib/compare/compare-slug.test.ts b/packages/app/src/lib/compare/compare-slug.test.ts
-index 11ca8deb..12855f95 100644
+index 11ca8de..12855f9 100644
 --- a/packages/app/src/lib/compare/compare-slug.test.ts
 +++ b/packages/app/src/lib/compare/compare-slug.test.ts
 @@ -262,6 +262,8 @@ describe('compareModelDisplayLabel', () => {
@@ -481,7 +611,7 @@ index 11ca8deb..12855f95 100644
      'deepseek-v4': 'DeepSeek V4 Pro',
      'deepseek-v41-flash': 'DeepSeek V4.1 Flash',
 diff --git a/packages/app/src/lib/compare/compare-slug.ts b/packages/app/src/lib/compare/compare-slug.ts
-index 53f33b6d..c464e339 100644
+index 53f33b6..c464e33 100644
 --- a/packages/app/src/lib/compare/compare-slug.ts
 +++ b/packages/app/src/lib/compare/compare-slug.ts
 @@ -11,6 +11,20 @@ export interface CompareModelSlug {
@@ -506,7 +636,7 @@ index 53f33b6d..c464e339 100644
      slug: 'muse-spark-open',
      displayName: 'Muse-Spark-Open',
 diff --git a/packages/app/src/lib/compare/compare-ssr.ts b/packages/app/src/lib/compare/compare-ssr.ts
-index 84f77f61..dd0ee6eb 100644
+index 84f77f6..dd0ee6e 100644
 --- a/packages/app/src/lib/compare/compare-ssr.ts
 +++ b/packages/app/src/lib/compare/compare-ssr.ts
 @@ -27,6 +27,8 @@ import { getHardwareConfig, getGpuSpecs } from '@/lib/catalog/constants';
@@ -519,7 +649,7 @@ index 84f77f61..dd0ee6eb 100644
    'Llama-3.3-70B-Instruct-FP8',
    'Llama-3.1-70B-Instruct-FP8-KV',
 diff --git a/packages/app/src/lib/live-seo/rankings.test.ts b/packages/app/src/lib/live-seo/rankings.test.ts
-index 6247ac33..dd4ca5cb 100644
+index 6247ac3..dd4ca5c 100644
 --- a/packages/app/src/lib/live-seo/rankings.test.ts
 +++ b/packages/app/src/lib/live-seo/rankings.test.ts
 @@ -57,7 +57,6 @@ describe('rankings registry', () => {
@@ -531,7 +661,7 @@ index 6247ac33..dd4ca5cb 100644
  
    it('has unique, well-formed slugs', () => {
 diff --git a/packages/app/src/lib/live-seo/run-pages.test.ts b/packages/app/src/lib/live-seo/run-pages.test.ts
-index fbb69bb7..6a32c9b9 100644
+index fbb69bb..6a32c9b 100644
 --- a/packages/app/src/lib/live-seo/run-pages.test.ts
 +++ b/packages/app/src/lib/live-seo/run-pages.test.ts
 @@ -24,7 +24,6 @@ describe('run pages registry', () => {
@@ -542,8 +672,73 @@ index fbb69bb7..6a32c9b9 100644
    });
  
    it('has unique, well-formed slugs', () => {
+diff --git a/packages/app/src/lib/routing/tab-meta-zh.ts b/packages/app/src/lib/routing/tab-meta-zh.ts
+index 206b78b..bf80f11 100644
+--- a/packages/app/src/lib/routing/tab-meta-zh.ts
++++ b/packages/app/src/lib/routing/tab-meta-zh.ts
+@@ -1,6 +1,6 @@
+ import type { Metadata } from 'next';
+ 
+-import { AUTHOR_NAME, SITE_NAME, SITE_URL } from '@semianalysisai/inferencex-constants';
++import { SITE_NAME, SITE_URL } from '@semianalysisai/inferencex-constants';
+ import { ZH_OG_LOCALE, zhAlternates, zhPath } from '@/lib/i18n/i18n';
+ import type { ModelRoute, ModelRouteTab } from '@/lib/routing/model-routes';
+ import {
+@@ -184,7 +184,6 @@ export const NAV_LABELS_ZH: Record<HeaderNavHref, string> = {
+   '/about': '关于',
+ };
+ 
+-const TITLE_SUFFIX = `${SITE_NAME} by ${AUTHOR_NAME}`;
+ 
+ export const MODEL_TAB_META_ZH: Record<
+   ModelRouteTab,
+@@ -244,7 +243,7 @@ export function modelTabMetadataZh(
+       locale: ZH_OG_LOCALE,
+     },
+     twitter: {
+-      title: `${title} | ${TITLE_SUFFIX}`,
++      title: `${title} | ${SITE_NAME}`,
+       description,
+     },
+   };
+@@ -265,7 +264,7 @@ export function tabMetadataZh(tab: DashboardRouteKey): Metadata {
+       locale: ZH_OG_LOCALE,
+     },
+     twitter: {
+-      title: `${meta.title} | ${TITLE_SUFFIX}`,
++      title: `${meta.title} | ${SITE_NAME}`,
+       description: meta.description,
+     },
+   };
+diff --git a/packages/app/src/lib/routing/tab-meta.ts b/packages/app/src/lib/routing/tab-meta.ts
+index e8323be..8398717 100644
+--- a/packages/app/src/lib/routing/tab-meta.ts
++++ b/packages/app/src/lib/routing/tab-meta.ts
+@@ -1,6 +1,6 @@
+ import type { Metadata } from 'next';
+ 
+-import { AUTHOR_NAME, SITE_NAME, SITE_URL } from '@semianalysisai/inferencex-constants';
++import { SITE_NAME, SITE_URL } from '@semianalysisai/inferencex-constants';
+ import {
+   getDashboardRoute,
+   isDashboardRouteKey,
+@@ -117,13 +117,12 @@ export const TAB_META: Record<DashboardRouteKey, { title: string; description: s
+   },
+ };
+ 
+-const TITLE_SUFFIX = `${SITE_NAME} by ${AUTHOR_NAME}`;
+ 
+ export const isValidTab = isDashboardRouteKey;
+ 
+ export function getTabTitle(tab: string): string {
+   const meta = isDashboardRouteKey(tab) ? TAB_META[tab] : undefined;
+-  return meta ? `${meta.title} | ${TITLE_SUFFIX}` : TITLE_SUFFIX;
++  return meta ? `${meta.title} | ${SITE_NAME}` : SITE_NAME;
+ }
+ 
+ export const MODEL_TAB_META: Record<
 diff --git a/packages/constants/src/models.ts b/packages/constants/src/models.ts
-index 6d8b60fb..74a94460 100644
+index 6d8b60f..74a9446 100644
 --- a/packages/constants/src/models.ts
 +++ b/packages/constants/src/models.ts
 @@ -7,6 +7,8 @@
@@ -566,66 +761,31 @@ index 6d8b60fb..74a94460 100644
    // InferenceX benchmark — recorded so the "cannot predate its own weights"
    // invariant above is checkable by eye at review time.
 diff --git a/packages/constants/src/seo.ts b/packages/constants/src/seo.ts
-index c4088fbd..32c5e853 100644
+index c4088fb..1e0047a 100644
 --- a/packages/constants/src/seo.ts
 +++ b/packages/constants/src/seo.ts
-@@ -1,5 +1,5 @@
- export const SITE_NAME = 'InferenceX';
+@@ -1,15 +1,15 @@
+-export const SITE_NAME = 'InferenceX';
 -export const SITE_URL = 'https://inferencex.semianalysis.com';
++export const SITE_NAME = 'Knotmeter';
 +export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://inferencex.semianalysis.com';
  export const AUTHOR_NAME = 'SemiAnalysis';
  export const AUTHOR_URL = 'https://semianalysis.com';
  export const AUTHOR_HANDLE = '@SemiAnalysis_';
-diff --git a/packages/db/src/connection.ts b/packages/db/src/connection.ts
-index f643ab83..6934b7da 100644
---- a/packages/db/src/connection.ts
-+++ b/packages/db/src/connection.ts
-@@ -72,13 +72,23 @@ function wrapPostgres(sql: postgres.Sql): DbClient {
+-export const SITE_TITLE = `${SITE_NAME} by ${AUTHOR_NAME} — Agentic Inference Benchmark`;
++export const SITE_TITLE = `${SITE_NAME} — Marin inference performance`;
+ export const DESCRIPTION =
+   'InferenceX is an open-source agentic inference benchmark. It compares the AgentX long-context, multi-turn coding scenario with fixed-sequence serving on NVIDIA, AMD, and other accelerators.';
+ export const SUPPORTERS_LINE = 'Supported by OpenAI, Microsoft & the PyTorch Foundation.';
+ export const OG_IMAGE = `${SITE_URL}/og-image.png`;
  
- const g = globalThis as unknown as { __dbClients?: Map<string, DbClient> };
- 
--function makeDbClient(connection: DatabaseConnectionResolution): DbClient {
-+function makeDbClient(
-+  connection: DatabaseConnectionResolution,
-+  socketDirectory?: string,
-+): DbClient {
-   return connection.driver === 'neon'
-     ? (neon(connection.url) as DbClient)
--    : wrapPostgres(postgres(connection.url, { max: 5, ssl: connection.ssl }));
-+    : wrapPostgres(
-+        postgres(connection.url, {
-+          max: 5,
-+          ssl: connection.ssl,
-+          ...(socketDirectory ? { host: socketDirectory } : {}),
-+        }),
-+      );
- }
- 
- export interface DatabaseClientOverrides {
-+  socketDirectory?: string;
-   url?: string;
-   driver?: DatabaseDriver;
-   ssl?: DatabaseSsl;
-@@ -91,14 +101,15 @@ function memoizedClient(envVar: string, overrides: DatabaseClientOverrides = {})
-     driver: overrides.driver ?? process.env.DATABASE_DRIVER,
-     ssl: overrides.ssl ?? process.env.DATABASE_SSL,
-   });
-+  const socketDirectory = overrides.socketDirectory ?? process.env.DATABASE_SOCKET_DIR;
-   const key =
-     connection.driver === 'neon'
-       ? `neon\0${connection.url}`
--      : `postgres\0${connection.ssl}\0${connection.url}`;
-+      : `postgres\0${connection.ssl}\0${connection.url}\0${socketDirectory ?? ''}`;
-   g.__dbClients ??= new Map();
-   const cached = g.__dbClients.get(key);
-   if (cached) return cached;
--  const client = makeDbClient(connection);
-+  const client = makeDbClient(connection, socketDirectory);
-   g.__dbClients.set(key, client);
-   return client;
- }
+-export const SITE_TITLE_ZH = `${SITE_NAME} by ${AUTHOR_NAME} — 智能体推理基准测试`;
++export const SITE_TITLE_ZH = `${SITE_NAME} — Marin 推理性能`;
+ export const DESCRIPTION_ZH =
+   'InferenceX 是开源智能体推理基准测试平台，对比 AgentX 长上下文多轮编码场景与固定序列服务在 NVIDIA、AMD 等加速器上的性能。';
+ export const SUPPORTERS_LINE_ZH = '获得 OpenAI、Microsoft 与 PyTorch 基金会的支持。';
 diff --git a/packages/db/src/etl/benchmark-ingest-upsert.test.ts b/packages/db/src/etl/benchmark-ingest-upsert.test.ts
-index 12c5a9db..d37e302d 100644
+index 12c5a9d..d37e302 100644
 --- a/packages/db/src/etl/benchmark-ingest-upsert.test.ts
 +++ b/packages/db/src/etl/benchmark-ingest-upsert.test.ts
 @@ -75,3 +75,56 @@ describe('bulkIngestBenchmarkRows — power_audit on conflict', () => {
@@ -686,7 +846,7 @@ index 12c5a9db..d37e302d 100644
 +  });
 +});
 diff --git a/packages/db/src/etl/benchmark-ingest.ts b/packages/db/src/etl/benchmark-ingest.ts
-index 0d12ce36..3c68dd5d 100644
+index 0d12ce3..3c68dd5 100644
 --- a/packages/db/src/etl/benchmark-ingest.ts
 +++ b/packages/db/src/etl/benchmark-ingest.ts
 @@ -107,12 +107,17 @@ export async function bulkIngestBenchmarkRows(
@@ -713,7 +873,7 @@ index 0d12ce36..3c68dd5d 100644
        image = excluded.image,
        workers = excluded.workers,
 diff --git a/packages/db/src/etl/normalizers.test.ts b/packages/db/src/etl/normalizers.test.ts
-index eb07bae5..17ad89e4 100644
+index eb07bae..17ad89e 100644
 --- a/packages/db/src/etl/normalizers.test.ts
 +++ b/packages/db/src/etl/normalizers.test.ts
 @@ -14,6 +14,16 @@ import {
@@ -734,7 +894,7 @@ index eb07bae5..17ad89e4 100644
    it.each([
      { infmax_model_prefix: 'musespark' },
 diff --git a/packages/db/src/etl/normalizers.ts b/packages/db/src/etl/normalizers.ts
-index 552759e1..bb26350f 100644
+index 552759e..bb26350 100644
 --- a/packages/db/src/etl/normalizers.ts
 +++ b/packages/db/src/etl/normalizers.ts
 @@ -33,6 +33,8 @@ function resolvePrefixToKey(prefix: string): string | null {
@@ -747,9 +907,10 @@ index 552759e1..bb26350f 100644
    'nvidia/DeepSeek-R1-0528-FP4-v2': 'dsr1',
    'nvidia/DeepSeek-R1-0528-FP4': 'dsr1',
 diff --git a/packages/db/src/etl/workflow-run.test.ts b/packages/db/src/etl/workflow-run.test.ts
+index ed633fe..6f7d961 100644
 --- a/packages/db/src/etl/workflow-run.test.ts
 +++ b/packages/db/src/etl/workflow-run.test.ts
-@@ -4,7 +4,7 @@
+@@ -4,7 +4,7 @@ import { createWorkflowRunServices } from './workflow-run';
  
  const RUN_ID = 12_345_678_901;
  
@@ -758,7 +919,7 @@ diff --git a/packages/db/src/etl/workflow-run.test.ts b/packages/db/src/etl/work
    return Response.json({
      name: 'Run Sweep',
      status: 'completed',
-@@ -15,7 +15,7 @@
+@@ -15,7 +15,7 @@ function runResponse(repo: string): Response {
      head_sha: '0123456789abcdef0123456789abcdef01234567',
      head_branch: 'sweep-updates',
      head_commit: { message: 'Add sweep' },
@@ -767,7 +928,7 @@ diff --git a/packages/db/src/etl/workflow-run.test.ts b/packages/db/src/etl/work
      pull_requests: [{ number: 12 }],
      repository: { html_url: `https://github.com/${repo}` },
    });
-@@ -34,6 +34,23 @@
+@@ -34,6 +34,23 @@ afterEach(() => {
  });
  
  describe('fetchGithubRun', () => {
@@ -791,21 +952,8 @@ diff --git a/packages/db/src/etl/workflow-run.test.ts b/packages/db/src/etl/work
    it('searches the primary and then the legacy repository by default', async () => {
      vi.stubEnv('INFERENCEX_SOURCE_REPOS', undefined);
      const fetchMock = stubFetch(
-diff --git a/packages/db/src/etl/db-utils.ts b/packages/db/src/etl/db-utils.ts
---- a/packages/db/src/etl/db-utils.ts
-+++ b/packages/db/src/etl/db-utils.ts
-@@ -19,7 +19,9 @@
-     driver: 'postgres',
-     ssl: noSsl ? false : process.env.DATABASE_SSL,
-   });
-+  const socketDirectory = process.env.DATABASE_SOCKET_DIR;
-   return postgres(connection.url, {
-+    ...(socketDirectory ? { host: socketDirectory } : {}),
-     ...pgOpts,
-     ssl: connection.ssl,
-   });
 diff --git a/packages/db/src/etl/workflow-run.ts b/packages/db/src/etl/workflow-run.ts
-index d4f3195e..17d0b9c1 100644
+index d4f3195..17d0b9c 100644
 --- a/packages/db/src/etl/workflow-run.ts
 +++ b/packages/db/src/etl/workflow-run.ts
 @@ -35,24 +35,28 @@ export function createWorkflowRunServices(
@@ -870,7 +1018,7 @@ index d4f3195e..17d0b9c1 100644
      }
    }
 diff --git a/packages/db/src/ingest-ci-run.ts b/packages/db/src/ingest-ci-run.ts
-index 50130cb5..1e761150 100644
+index 50130cb..d972667 100644
 --- a/packages/db/src/ingest-ci-run.ts
 +++ b/packages/db/src/ingest-ci-run.ts
 @@ -296,7 +296,10 @@ async function main(): Promise<void> {
@@ -886,7 +1034,7 @@ index 50130cb5..1e761150 100644
    const triggerRunId = parseInt(triggerRunIdStr, 10);
    const triggerGhInfo = reusedIngestMetadata ? await fetchGithubRun(triggerRunId) : null;
 diff --git a/packages/db/src/queries/trace-server-metrics.test.ts b/packages/db/src/queries/trace-server-metrics.test.ts
-index bbbffb19..be3118fc 100644
+index bbbffb1..be3118f 100644
 --- a/packages/db/src/queries/trace-server-metrics.test.ts
 +++ b/packages/db/src/queries/trace-server-metrics.test.ts
 @@ -56,6 +56,7 @@ function metaRow(overrides: Record<string, unknown> = {}) {
@@ -906,7 +1054,7 @@ index bbbffb19..be3118fc 100644
      expect(calls).toHaveLength(1);
      expect(calls[0]).not.toContain('server_metrics_json_gz as blob');
 diff --git a/packages/db/src/queries/trace-server-metrics.ts b/packages/db/src/queries/trace-server-metrics.ts
-index 66dfa5cb..8e12a6c1 100644
+index 66dfa5c..8e12a6c 100644
 --- a/packages/db/src/queries/trace-server-metrics.ts
 +++ b/packages/db/src/queries/trace-server-metrics.ts
 @@ -31,7 +31,7 @@ export type {
@@ -942,90 +1090,3 @@ index 66dfa5cb..8e12a6c1 100644
        br.conc, br.offload_mode, br.isl, br.osl, br.benchmark_type,
        br.date::text,
        case when wr.html_url is not null then wr.html_url || '/attempts/' || wr.run_attempt else null end as run_url,
-diff --git a/packages/skills/skills/inferencex-api/SKILL.md b/packages/skills/skills/inferencex-api/SKILL.md
-index 9cf16f39..7631a4f8 100644
---- a/packages/skills/skills/inferencex-api/SKILL.md
-+++ b/packages/skills/skills/inferencex-api/SKILL.md
-@@ -5,6 +5,9 @@ description: 'Legacy inferencex-api entry and shared workflow guide. Use when ex
- 
- # InferenceX API
- 
-+For the internal Marin deployment, use its configured origin and the existing
-+Snowball AgentX APIs described in [Marin performance](references/dashboard-views.md#marin-snowball-performance-deployment).
-+
- For DWDP prefill runs, `metrics.prefill_dwdp_size` is the number of ranks per
- weight-sharing group, `prefill_tp` stays 1, and `prefill_num_workers` counts
- groups. Do not interpret the group width as TP or EP. Sibling rows expose the
-diff --git a/packages/skills/skills/inferencex-api/integrity.json b/packages/skills/skills/inferencex-api/integrity.json
-index 45c4d764..77f7a334 100644
---- a/packages/skills/skills/inferencex-api/integrity.json
-+++ b/packages/skills/skills/inferencex-api/integrity.json
-@@ -2,14 +2,14 @@
-   "schema_version": 1,
-   "package_version": "1.2.0",
-   "files": {
--    "SKILL.md": "f8d9113c23503efa7d910298e3373660a2460943ad8505a07a806ab2da6031cd",
-+    "SKILL.md": "cc634f8ee363482f7c32ec33cde3df5e1663ac66d4c2bf79dfbdc166ea823fbb",
-     "references/agentic-interactivity.md": "663596c3e29296bbd7e7db6fac05362e3befe5d84652600da88470b47d18b959",
--    "references/agentx.md": "b2bb42d84f1df69f354ddd5f897fff50c42d61fa0ee1274fe754276116ed2735",
-+    "references/agentx.md": "e128cb57a3f05fccb7180c28a134cfa506aa0ef21a1a3c90201b5466ba370aa7",
-     "references/chart-templates.md": "aed6854627142019a4a5df4a2d07523b1a64e5814dd2bbdcc74ee18beb083912",
-     "references/cli-contract.md": "4f070877eeefffad2860c58f79f68432fbe27aa21fc578a1c696f0309a3d7d7b",
-     "references/cli.md": "11e1183f7ed70d669019e8435ac16a6a9f873de027507b8850a9943f6659bfd9",
-     "references/collectivex.md": "f79cf8e2779a9289ab69f79f4a4b338e0b9a5f76a3750a3e969f33a744e726a1",
--    "references/dashboard-views.md": "7696cdaa152e839067c29b91d4e305b6995d4c7f23f4bf569b2b046d3e55da22",
-+    "references/dashboard-views.md": "554404d27ff83c3dd76901ffe086a27a10797c49cb79df72ef80210196125505",
-     "references/offline-exports.md": "95aa565dcd4c9e592159baa560a9a58217bc61e395de1c6daf0576795c7f4ec9",
-     "references/pareto.md": "1b4d2d163f982e3f2d97addce310789eae9c1e5badd82dd7501708c9e0385027",
-     "references/powerx.md": "5af5527d54a7e6191a5769080c122638b333b1ceb59e19fdee7df662a5cd3c8f",
-diff --git a/packages/skills/skills/inferencex-api/references/agentx.md b/packages/skills/skills/inferencex-api/references/agentx.md
-index ab5e0658..322598cb 100644
---- a/packages/skills/skills/inferencex-api/references/agentx.md
-+++ b/packages/skills/skills/inferencex-api/references/agentx.md
-@@ -67,6 +67,15 @@ drafter, which the API reports as spec method `mtp`. Use
- `model=MiniMax-M3.1-Flash` for benchmark reads and the inference view API, with
- `sequence=agentic-traces` for the latter. Its rows never fall back to `MiniMax-M3`.
- 
-+Marin private builds add `Marin-Snowball-67B-A2B-v0.1.1` (`snowball011`, eight H100s)
-+and `Marin-Hero-535B-step144000` (`hero144k`, sixteen GB200s across four hosts).
-+Use the display model for benchmark and inference-view reads, with
-+`sequence=agentic-traces`; keep the returned raw key when joining point details.
-+These BF16 measurements use a 262,144-token performance window and do not measure
-+answer quality. Calibration loads extend the existing curve as append-only runs.
-+Disable Optimal Only to inspect every load, and select an original GitHub run
-+to inspect an individual repeat. Retain each point's run URL and recipe fingerprint.
-+
- Installed raw recipes use `scripts/capture-response.mjs`, which applies the shared
- request-header helper for version attribution. Set `INFERENCEX_TELEMETRY=0` or
- `DO_NOT_TRACK=1` to omit attribution; use `INFERENCEX_TRAFFIC=validation` for demos
-diff --git a/packages/skills/skills/inferencex-api/references/dashboard-views.md b/packages/skills/skills/inferencex-api/references/dashboard-views.md
-index 411cc8c5..d7814f7e 100644
---- a/packages/skills/skills/inferencex-api/references/dashboard-views.md
-+++ b/packages/skills/skills/inferencex-api/references/dashboard-views.md
-@@ -525,3 +525,26 @@ and retain any advertised-context qualification alongside the configured length.
- For causal encoder-decoder models preserve separate prefill and decode active
- counts when supplied. Conditional-memory and auxiliary-module accounting is
- model-specific; retain the registry's accompanying features and source link.
-+
-+## Marin Snowball performance deployment
-+
-+This internal deployment uses the same read APIs and transforms as InferenceX.
-+Its build supplies `NEXT_PUBLIC_SITE_URL`; resolve API paths against that origin.
-+IAP protects the web service and its APIs. The web database role has SELECT only.
-+
-+The landing URL selects `/inference/marin-snowball-v011` with
-+`i_seq=agentic-traces&i_prec=bf16&i_metric=y_outputTputPerGpu&i_pctl=p90`.
-+Use `/api/v1/benchmarks?model=Marin-Snowball-67B-A2B-v0.1.1` for raw points and
-+the existing inference/history views for the matching displayed projection.
-+Device selection uses the existing hardware controls. Select a point to inspect
-+its concurrency, request timeline and GitHub source run; sibling navigation
-+selects the other measured concurrency points. Missing measurements stay absent.
-+Per-point distributions preserve the first profiling request at the stage boundary.
-+Report the selected stage and its request count; the stored timeline also includes
-+warmup records, while throughput and latency summaries use upstream profiling aggregates.
-+
-+The benchmark artifact manifest records the fixed model/tokenizer and corpus
-+revisions, harness, vLLM wheel/source, serving recipe, actual Iris attempt and
-+GPU topology. A different model checkpoint starts a separate comparison series.
-+Cloud Run activation and benchmark collection are managed in Marin's
-+`infra/inferencex/` and `experiments/evaluation/agentx/` runbooks.

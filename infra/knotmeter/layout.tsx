@@ -3,7 +3,7 @@ import './globals.css';
 
 import type { Metadata } from 'next';
 import { DM_Sans } from 'next/font/google';
-import { SITE_TITLE, SITE_URL } from '@semianalysisai/inferencex-constants';
+import { SITE_NAME, SITE_TITLE, SITE_URL } from '@semianalysisai/inferencex-constants';
 import { ThemeProvider } from '@/components/ui/theme-provider';
 import { QueryProvider } from '@/providers/query-provider';
 import { PostHogProvider } from '@/providers/posthog-provider';
@@ -30,6 +30,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               enableSystem
               disableTransitionOnChange
             >
+              <header className="px-4 py-3 border-b">
+                <a href="/" className="font-semibold">{SITE_NAME}</a>
+              </header>
               {children}
             </ThemeProvider>
           </QueryProvider>

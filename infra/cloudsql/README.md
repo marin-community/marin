@@ -1,7 +1,7 @@
 # cloudsql
 
 A shared Cloud SQL for PostgreSQL instance, `marin-metadata`, for Marin's internal metadata:
-Grafana's state (`grafana`), eval run records (`evals`) and performance results (`inferencex`). It also
+Grafana's state (`grafana`), eval run records (`evals`) and performance results (`knotmeter`). It also
 declares `marin-eval-metadata`, a GCS bucket for eval run records.
 
 The instance has a public IP with no authorized networks, so nothing dials it directly.
@@ -36,10 +36,10 @@ identity can decrypt.
 `marin-eval-metadata` bucket. Outputs: `connection_name` (the `project:region:instance`
 connector target), `public_ip`, and `eval_bucket`.
 
-The performance dashboard adds the `inferencex` database and
-`cloudsql-inferencex-reader-password` / `cloudsql-inferencex-writer-password` secret shells.
+The performance dashboard adds the `knotmeter` database and
+`cloudsql-knotmeter-reader-password` / `cloudsql-knotmeter-writer-password` secret shells.
 Its restricted SQL roles, migration ownership and activation order are documented in
-[`../inferencex/README.md`](../inferencex/README.md). Do not grant the web reader the elevated
+[`../knotmeter/README.md`](../knotmeter/README.md). Do not grant the web reader the elevated
 membership of a default Cloud SQL native user.
 
 ## Users and passwords (out-of-band)

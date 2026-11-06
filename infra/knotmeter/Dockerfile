@@ -7,10 +7,10 @@ COPY settings.json /package/settings.json
 RUN git init && git remote add origin https://github.com/SemiAnalysisAI/InferenceX-app.git && \
     git fetch --depth=1 origin "$(node -p 'require("/package/settings.json").app_source')" && \
     git checkout --detach FETCH_HEAD
-COPY app.patch /package/app.patch
-RUN git apply /package/app.patch
 ENV CI=1 CYPRESS_INSTALL_BINARY=0 NEXT_TELEMETRY_DISABLED=1
 RUN bun install --frozen-lockfile
+COPY app.patch /package/app.patch
+RUN git apply /package/app.patch
 
 FROM source AS ingest
 COPY ingest.mjs ingest.test.mjs /package/
@@ -18,8 +18,8 @@ RUN node --test /package/ingest.test.mjs
 ENTRYPOINT ["bun", "/package/ingest.mjs"]
 
 FROM source AS build
-COPY build.mjs internal.mjs internal-layout.tsx /package/
-RUN node /package/internal.mjs && node /package/build.mjs
+COPY build.mjs layout.tsx /package/
+RUN node /package/build.mjs
 
 FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 WORKDIR /app
