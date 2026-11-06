@@ -70,8 +70,7 @@ def task_manifest(root: StoragePath) -> dict[str, dict]:
 
 
 def paths(pattern: StoragePath) -> list[StoragePath]:
-    fs, key = filesystem_for(str(pattern))
-    return [StoragePath(fs.unstrip_protocol(path)) for path in sorted(fs.glob(key))]
+    return sorted(pattern.glob(), key=str)
 
 
 def _evaluation_answers(dump_root: StoragePath) -> list[tuple[int, StoragePath, dict]]:

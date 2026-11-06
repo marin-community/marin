@@ -574,15 +574,11 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
                 self.finished = 0
             return snapshot
 
-    services = []
-
     class RecordedGenerateExp(TinyGenerateExp):
         def create_inference_engine_client(self, *, operation):
-            service = InferenceEngineClient(
+            return InferenceEngineClient(
                 [RecordedInferenceEngine(self.tokenizer, index) for index in range(2)], self.tokenizer, self.cfg
             )
-            services.append(service)
-            return service
 
         def get_trajectory_runner(self, config, tokenizer, inference_engine_client):
             return TaskRolloutWorkerSpec.from_config(

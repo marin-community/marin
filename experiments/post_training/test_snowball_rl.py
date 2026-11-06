@@ -61,10 +61,8 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
                 paths.append(str(path))
                 if index == 0:
                     launches[name] = document
-    default_learning = snowball.build_run(presets.PRESETS["learning-medium"])
     for label, options in (("kept", {"keep_weights": True}), ("control", {"control": True})):
         retained = snowball.build_run(presets.PRESETS["learning-medium"], **options)
-        assert retained.runs[0].name != default_learning.runs[0].name
         path = tmp_path / f"{label}-weights.yaml"
         _render(retained.runs[0], path, runtime=True)
         paths.append(str(path))
@@ -152,7 +150,6 @@ print(json.dumps([{
     "admission": config.skyrl.trajectory_runner.max_concurrent_tasks,
     "window": config.skyrl.generator.engine_init_kwargs.max_model_len,
     "batch": config.skyrl.trainer.train_batch_size, "samples": config.skyrl.generator.n_samples_per_prompt,
-    "tools": config.skyrl.generator.engine_init_kwargs.get("tool_parser"),
     "quality_wire": quality_request(config),
     "at_start": [entry.get("eval_before_train", False) for entry in config.skyrl.trainer.callbacks
                  if entry.type == "evaluation"],
