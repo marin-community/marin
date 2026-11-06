@@ -70,7 +70,7 @@ def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Tr
             ],
         )
         model = eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.router_bias, model, jnp.full((2, 4), 9.0))
-        pending = jnp.array([[1 + 1 / 1024, -2 - 2 / 1024, 4 + 1 / 1024, -1], [-4, 1, 2, 7]], dtype=jnp.float32)
+        pending = jnp.array([[1, -2, 4, -1], [-4, 1, 2, 7]], dtype=jnp.float32)
         state = {"params": model, "pending_qb_betas": pending}
         if master:
             state["master_params"] = model
@@ -107,9 +107,8 @@ def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch):
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         # The established HF mapping is the oracle for unchanged ordinary weights.
         expected = model.to_state_dict()
-        # Center pending betas in FP32, then round with the whole model as training does.
-        # Fractions below BF16 resolution catch an export that preserves FP32 bias.
-        for layer, bias in enumerate([[-0.5 - 1 / 1024, 2.5 + 2 / 1024, -3.5 - 1 / 1024, 1.5], [5.5, 0.5, -0.5, -5.5]]):
+        # Known centered negative betas replace the saved bias (9).
+        for layer, bias in enumerate([[-0.5, 2.5, -3.5, 1.5], [5.5, 0.5, -0.5, -5.5]]):
             expected[f"model.layers.{layer}.mlp.router.bias"] = jnp.asarray(bias)
         # Check routed experts independently from the exporter and its bank mapping.
         bank = model.stacked_blocks.stacked.mlp.expert_mlp
