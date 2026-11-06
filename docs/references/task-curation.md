@@ -135,8 +135,8 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin \
 `--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
 The implementation is
 [`inventory.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py).
-It depends on the recipe's admitted source artifacts and a pinned heldout
-Parquet. Selection reads only `final/*.parquet` from training sources whose
+It depends on the recipe's admitted source artifacts and a list of pinned heldout
+inputs. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
@@ -154,11 +154,12 @@ this small recipe selects 100 calendar tasks from two admitted sources:
     "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
   },
   "family_limits": {"calendar": 100},
-  "heldout": {
+  "heldout": [{
     "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
     "version": "2026.10.23.1",
-    "rows": 910
-  },
+    "rows": 910,
+    "format": "historical"
+  }],
   "validation_per_family": 20,
   "seed": 20261023
 }
@@ -209,6 +210,80 @@ environment from an admitted task in their matching training component; their
 private grader resources and command stay attached to each task. The historical
 structural heldout tasks use the shared closure converter. SkyRL chooses rollout
 limits, harnesses and verifier backends when it loads these canonical tasks.
+
+### Independent test panels
+
+Build the checked-in panel recipe from its completed converted corpus:
+
+```bash
+uv run --package marin-core --extra cpu python -m experiments.post_training.task_curation.driver \
+  --corpus s3://marin-us-east-02a/marin/rl-data/campaigns/snowball-test-panel-inputs/2026.11.04/corpus.json \
+  --test-panel experiments/post_training/task_curation/recipes/snowball-test-panel.json --run
+```
+
+Each named part declares a catalog source ID, converted population, format,
+required tags, family, AAII category, license and selection count. The corpus
+pins its source roots and manifest hashes. Formats are `evaluation` for a
+verified Evalchemy corpus and `normalized` for evaluation-only curation output.
+Normalized populations count converted tasks; rejections stay in the source ledger.
+The recipe lists the immutable training files and development panel separately.
+
+The producer skips overlap by task ID, canonical full conversation or the
+whitespace-normalized final user statement, when present. It records overlap
+counts before seeded sampling. Tasks must carry the `eval` tag and use an
+in-process or package grader. Image graders and judge services are refused.
+Part order assigns cross-part duplicates to the first part that selects them.
+Fast-subset counts are explicit for each family.
+
+Every task is answered in chat form without benchmark trials or examples.
+MMLU-Pro uses its declared zero-shot context; MBPP+ uses its public problem and
+tests in one code-writing request. Canonical benchmark protocols and graders
+remain attached to their sources.
+
+The artifact contains `full_validation.parquet`, `validation.parquet`,
+`task_manifest.parquet` and `summary.json`. The manifest records family, category,
+agentic flag, grader kind, recipe part, source, license and nullable difficulty.
+After qualification and eight-answer initializer evaluation, publish a distinct
+recipe version with `pass_rates`. Each measured row carries `task_id`,
+`task_digest` (the canonical SHA256 of the complete chat-adapted TaskSpec),
+`model_revision`, `attempted`, `samples`, `passed` and `mean_score`. Every selected
+task needs eight attempts, a scored answer and a matching digest; additional
+measured tasks are allowed. Difficulty is one minus mean score. Adding a part
+requires measurements for its tasks, while matching existing measurements remain
+usable.
+
+The immutable measurement producer aggregates saved native scores and records
+run, model, panel and file hashes in its audit receipt. The Agents part stays in
+the final recipe only when its measured initializer pass rate is 5%–95%,
+inclusive. Otherwise edit the recipe's parts and fast counts and record the gap.
+Qualification is a separate evaluation with at least 99% scored and zero grading
+exceptions.
+
+### Rebuild the pinned Snowball training releases
+
+`recipes/snowball-100k.json` names `2026.11.04.1`: 100,000 tasks, including
+16,970 Eurus coding tasks, with local graders. The versioned
+`recipes/snowball-100k-2026.11.04.json` names `2026.11.04`, whose coding quota
+includes 10,317 Eurus tasks and 6,653 Glaive judged tasks. Both use the same
+admitted corpus and development panel. Selection recipes can add `exclusions`
+for evaluation files; those tasks are excluded from training while the published
+development panel stays fixed. The existing releases precede test-panel
+qualification, so a training recipe that adds the test-panel exclusion gets a new
+immutable version.
+
+To reproduce either recipe, run the driver inside Iris with `--corpus`
+`s3://marin-us-east-02a/marin/rl-data/inputs/snowball-admitted-030/2026.11.04/corpus.json`
+and `--selection` pointing to that recipe. Use a separate `--artifact-root` for
+an independent rebuild. `snowball-100k@2026.11.04` was published by the
+selection code at commit `a3ab540e18` on main `8d78991477`. Its admitted
+population is the complete output of the FULL curation campaign
+`snowball-100k-full-2026.10.24.3`, upgraded to TaskSpec 0.30 by validating each
+row with the new defaults. Admission decisions, source recipes, quotas and seed
+are fixed. This schema migration is a release operation: its per-source
+provenance and removed-default counts are in
+`s3://marin-us-east-02a/marin/users/atqamar/rlci-e9/2026.11.04/data-comparison-d2.json`.
+Rebuilds consume those immutable upgraded inputs through the ordinary selection
+path; they need no schema-migration curation mode.
 
 ## Dataset-owned invocation
 
