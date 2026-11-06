@@ -33,7 +33,6 @@ from forge.model.llm import Completion, Message, Sampling, ToolCall, Usage
 from forge.model.serialization import TASK_SPEC
 from forge.model.workpiece import Conversation, Submission
 from forge.policy.defaults import DEFAULT_POLICY
-from forge.wiring import build_config
 from forge.resources.env import (
     CommandResult,
     FakeCommand,
@@ -48,6 +47,7 @@ from forge.resources.env import (
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.inference import FakeInference
 from forge.resources.sandbox.factories import MachineHost
+from forge.wiring import build_config
 
 pytestmark = pytest.mark.asyncio
 
@@ -258,22 +258,6 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     assert resource_bytes(report.payload.candidates[0].files[0]) == b"candidate"
 
 
-async def test_cached_prompt_tokens_are_not_counted_twice() -> None:
-    ctx = Context(log=EventLog())
-    env = environment(ctx)
-    client = FakeInference((
-        Completion("", call("shell", {"command": "task"}, "1").tool_calls, usage=Usage(prompt_tokens=61242, cached_tokens=60096)),
-        call("shell", {"command": "controls"}, "2"),
-        call("submit", {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"}, "3"),
-    ))
-    result = await AgenticHarness(Limits(None, 100000), Sampling(), "continue", 20000).run(
-        ctx, Conversation((), ()), env, client, {"shell": ShellTool(), "submit": SubmitTool(accept)})
-    await ctx.drain()
-    assert isinstance(result, Submitted)
-    assert len(client.requests) == 3
-    assert not any(message.role == "user" for message in result.session.messages)
-
-
 async def test_web_and_error_results_are_capped_before_the_next_inference() -> None:
     log = EventLog()
     ctx = Context(log=log)
@@ -341,11 +325,16 @@ async def test_model_window_and_output_allowance_determine_context_exit(output_t
     policy = DEFAULT_POLICY.overlaid({"sampling.max_tokens": output_tokens})
     harness = build_config(policy, "S", {}).author
     budget = 262144 - output_tokens
-    client = FakeInference(tuple(
-        Completion("", call("shell", {"command": "task"}, str(tokens)).tool_calls,
-                   usage=Usage(prompt_tokens=tokens, cached_tokens=tokens - 1000))
-        for tokens in (budget - 1, budget)
-    ))
+    client = FakeInference(
+        tuple(
+            Completion(
+                "",
+                call("shell", {"command": "task"}, str(tokens)).tool_calls,
+                usage=Usage(prompt_tokens=tokens, cached_tokens=tokens - 1000),
+            )
+            for tokens in (budget - 1, budget)
+        )
+    )
     ctx = Context(log=EventLog())
     result = await harness.run(ctx, Conversation((), ()), environment(ctx), client, {"shell": ShellTool()})
     await ctx.drain()

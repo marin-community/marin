@@ -177,10 +177,7 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         {key.removeprefix("sampling."): value for key, value in policy.entries.items() if key.startswith("sampling.")}
     )
     author = AgenticHarness(
-        Limits(
-            policy.setting("author.max_turns", int),
-            prompt_limit(policy),
-        ),
+        Limits(policy.setting("author.max_turns", int), prompt_limit(policy)),
         sampling,
         policy.prompt("author.nudge").template,
         policy.setting("tools.output_chars", int),
@@ -232,8 +229,11 @@ async def runtime(
     policy: Policy, arm: str, source: EndpointSource, parallel_api_key: str
 ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
     provider = TypeAdapter(LLMProviderConfig).validate_python(
-        {key.removeprefix("provider."): value for key, value in policy.entries.items()
-         if key.startswith("provider.") and key != "provider.context_tokens"}
+        {
+            key.removeprefix("provider."): value
+            for key, value in policy.entries.items()
+            if key.startswith("provider.") and key != "provider.context_tokens"
+        }
     )
     print(f"GLM {type(source).__name__} resolved {source.current().base_url}", flush=True)
     host = MachineHost(policy.setting("runtime.host", str))
