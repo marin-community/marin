@@ -11,6 +11,7 @@ For the fixed-input Snowball development loop, follow the
 [loop playbook](../../../docs/tutorials/snowball-rl-loop.md), including runtime admission,
 baseline changes, terminal reporting and publication recovery. A failed publication does not
 authorize rerunning training.
+For a Snowball RL preset run through `snowball_rl`, including train-long, use `run-snowball-rl` instead.
 
 ## Define the experiment
 
