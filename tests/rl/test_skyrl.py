@@ -407,6 +407,31 @@ def test_skyrl_inference_backend_renders_runtime_config_and_rejects_recipe_confl
         dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe))
 
 
+@pytest.mark.parametrize(
+    ("colocate_all", "gpus_per_node", "num_engines", "data_parallel_size"),
+    [(True, 4, 2, 1), (False, 8, 4, 3)],
+    ids=["colocated", "disaggregated-dp"],
+)
+def test_skyrl_topology_rejects_multiprocessing_layouts_that_require_ray(
+    colocate_all: bool, gpus_per_node: int, num_engines: int, data_parallel_size: int
+) -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=colocate_all,
+        policy_num_gpus_per_node=gpus_per_node,
+        num_inference_engines=num_engines,
+        inference_engine_tensor_parallel_size=2,
+        inference_engine_data_parallel_size=data_parallel_size,
+    )
+    topology = SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=gpus_per_node, gpu_variant="GB200", role_plan=plan)
+
+    with pytest.raises(ValueError):
+        dataclasses.replace(
+            topology,
+            role_plan=dataclasses.replace(plan, inference_engine_backend=InferenceEngineBackend.MULTIPROCESSING),
+        )
+
+
 def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles() -> None:
     plan = dataclasses.replace(
         _role_plan(),

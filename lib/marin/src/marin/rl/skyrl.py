@@ -170,6 +170,10 @@ class SkyRLTopology:
             raise ValueError("SkyRL policy_num_gpus_per_node exceeds the GPUs on one allocated node")
         if plan.colocate_all and not plan.colocate_policy_ref:
             raise ValueError("colocate_all requires a shared policy/reference footprint")
+        if plan.inference_engine_backend is InferenceEngineBackend.MULTIPROCESSING and (
+            plan.colocate_all or plan.inference_engine_data_parallel_size != 1
+        ):
+            raise ValueError("SkyRL multiprocessing inference requires non-colocated DP=1 engines")
         if plan.reference_num_nodes is not None and plan.reference_num_nodes <= 0:
             raise ValueError("SkyRL reference_num_nodes must be positive")
 

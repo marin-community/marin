@@ -143,8 +143,8 @@ engine ranks = engine slice * data parallel
 `SkyRLRolePlan.inference_engine_backend` renders the runtime setting
 `generator.inference_engine_mp_backend`. `MULTIPROCESSING` selects vLLM's multiprocessing executor
 for non-colocated TP-by-PP groups larger than one GPU; single-GPU groups use the runtime's `uni`
-executor. Recipes cannot override the role plan's backend. Both choices retain node-local engines
-in Marin's role plan.
+executor. Marin requires non-colocated DP=1 engines for `MULTIPROCESSING`. Recipes cannot override
+the role plan's backend. Both choices retain node-local engines in Marin's role plan.
 
 For disaggregated roles, one engine's ranks must fit within one node. For colocated roles, each
 TP-by-PP slice must fit within and divide a policy node; DP replicas occupy separate slices. Expert
