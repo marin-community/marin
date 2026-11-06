@@ -446,6 +446,10 @@ task_attempts_table = Table(
     Column("pod_uid", String, nullable=False, server_default=""),
     Column("node_name", String, nullable=False, server_default=""),
     Column("terminal_reason", String, nullable=False, server_default=""),
+    # The worker's region when the attempt was assigned. Pruning a worker deletes
+    # its attributes, so this is the durable record. NULL when the worker
+    # advertises no region or the attempt has no local worker.
+    Column("region", String),
     PrimaryKeyConstraint("task_id", "attempt_id"),
     Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),
     Index(

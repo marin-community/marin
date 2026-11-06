@@ -49,11 +49,12 @@ from iris.cluster.controller.schema import (
     task_attempts_table,
     tasks_table,
     user_budgets_table,
+    worker_attributes_table,
     workers_table,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
-from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, AttemptUid, JobName, WorkerId
+from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, AttemptUid, JobName, WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import timestamp_from_proto
 
@@ -565,11 +566,22 @@ def insert_attempt(
     single ``task_attempts`` insert chokepoint, so the ``NOT NULL UNIQUE``
     column is always populated. The minted value is returned to the caller.
 
+    The worker's region is copied onto the row, so it survives the worker being
+    pruned.
+
     A UNIQUE-index collision on ``attempt_uid`` (astronomically unlikely with
     64 bits of entropy) re-mints and retries rather than aborting the
     transition. SQLite rolls back only the failed statement, so retrying the
     INSERT within the same ``tx`` is safe.
     """
+    region = (
+        select(worker_attributes_table.c.str_value)
+        .where(
+            worker_attributes_table.c.worker_id == worker_id,
+            worker_attributes_table.c.key == WellKnownAttribute.REGION,
+        )
+        .scalar_subquery()
+    )
     for _ in range(_ATTEMPT_UID_MINT_ATTEMPTS):
         attempt_uid = AttemptUid(secrets.token_hex(8))
         try:
@@ -581,6 +593,7 @@ def insert_attempt(
                     state=state,
                     created_at_ms=created_at_ms,
                     attempt_uid=attempt_uid,
+                    region=region,
                 )
             )
             return attempt_uid
