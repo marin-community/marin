@@ -231,8 +231,8 @@ steps since the last checkpoint and fails again on retry. A rehearsal at a new c
 with `--eval-every`.
 
 Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
-and a pristine checkout. Fork creation requires fetched main; subsequent launches
-use the same SHA recorded on the child, even if main advances.
+and a pristine checkout. Fork creation requires the approved launch commit, checked out and reachable from
+`origin/hero-lce-log65536sq`; subsequent launches use the same SHA recorded on the child, even if the branch advances.
 
 For checkpoint `step-N`, the first replayed update logs `global_step=N`. Find the
 parent row with `global_step=N-1` and use its actual W&B `_step` in
@@ -246,7 +246,7 @@ Do not inherit parent results for the replayed updates.
 Create the child tracker once, outside training retry loops:
 
 ```bash
-experiments/grug/moe_hero_ep/trigger_hero.sh fork-wandb
+experiments/grug/moe_hero_ep/trigger_hero.sh fork-wandb <launch-commit>
 ```
 
 After preflight and confirmation that the old coordinator is terminal, submit:

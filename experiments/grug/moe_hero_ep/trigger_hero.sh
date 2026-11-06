@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-if [[ $# -ne 1 || ( "$1" != fork-wandb && "$1" != launch ) ]]; then
-  echo "Usage: $0 {fork-wandb|launch}" >&2
+if [[ !( $# -eq 2 && "$1" == fork-wandb ) && !( $# -eq 1 && "$1" == launch ) ]]; then
+  echo "Usage: $0 {fork-wandb <launch-commit>|launch}" >&2
   exit 2
 fi
 mode=$1
@@ -20,6 +20,7 @@ WANDB_FORK_FROM='hero-ctx65k-step372k?_step=390250'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
+LAUNCH_BRANCH=hero-lce-log65536sq
 
 if [[ "$RUN_ID $HANDOFF_CHECKPOINT $WANDB_FORK_FROM" == *REPLACE_BEFORE_DEPLOYMENT* ]]; then
   echo "Handoff is not finalized: replace the run ID, checkpoint, and W&B fork point." >&2
@@ -38,10 +39,15 @@ fi
 
 launch_commit=$(git rev-parse HEAD)
 if [[ "$mode" == fork-wandb ]]; then
-  git fetch --quiet origin main
-  main_commit=$(git rev-parse FETCH_HEAD)
-  if [[ "$launch_commit" != "$main_commit" ]]; then
-    echo "Check out the fetched origin/main commit ${main_commit} before creating the fork." >&2
+  # This run launches from a branch. A commit cannot name its own SHA, so the operator names the approved commit,
+  # the fork records it, and launch verifies that record.
+  if [[ "$launch_commit" != "$2" ]]; then
+    echo "Check out the approved launch commit $2 (full SHA) before creating the fork." >&2
+    exit 1
+  fi
+  git fetch --quiet origin "$LAUNCH_BRANCH"
+  if ! git merge-base --is-ancestor "$launch_commit" FETCH_HEAD; then
+    echo "Launch commit ${launch_commit} is not on origin/${LAUNCH_BRANCH}." >&2
     exit 1
   fi
 fi
