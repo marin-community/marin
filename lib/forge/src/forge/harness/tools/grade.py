@@ -3,7 +3,6 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import override
 
@@ -14,12 +13,13 @@ from taskcompendium.runtime.resources import inline_resource
 from forge.effects.context import Context
 from forge.harness.protocol import ToolResult
 from forge.harness.tools.base import ValidatedTool
+from forge.harness.tools.files import read_tool_file
 from forge.lowering import LoweringSettings, check_candidates, lower_with_settings
 from forge.model.content_hash import pretty_json
 from forge.model.controls import Candidate
 from forge.model.serialization import TASK_SPEC
 from forge.model.verdict import grader_checks
-from forge.resources.env import Env, ReadFile
+from forge.resources.env import Env
 from forge.resources.grading import GradeCandidate
 
 
@@ -30,9 +30,7 @@ class CandidateArgs:
 
 
 async def read_candidate(ctx: Context, args: CandidateArgs) -> Candidate:
-    files = tuple(
-        [inline_resource(path.lstrip("/"), await ctx.emit(ReadFile(PurePosixPath(path)))) for path in args.files]
-    )
+    files = tuple([inline_resource(path.lstrip("/"), await read_tool_file(ctx, path)) for path in args.files])
     return Candidate(args.reply, files)
 
 
@@ -51,7 +49,7 @@ class GradeTool(ValidatedTool[CandidateArgs]):
     @override
     async def run(self, ctx: Context, args: CandidateArgs, env: Env) -> ToolResult:
         try:
-            task = TASK_SPEC.validate_json(await ctx.emit(ReadFile(PurePosixPath(self.task_path))))
+            task = TASK_SPEC.validate_json(await read_tool_file(ctx, self.task_path))
             candidate = await read_candidate(ctx, args)
             check_candidates(task, (candidate,))
             spec = lower_with_settings(task, self.settings, self.factories)

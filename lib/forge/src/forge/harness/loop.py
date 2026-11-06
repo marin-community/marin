@@ -7,6 +7,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
+from pathlib import PurePosixPath
 from typing import override
 
 from forge.effects.context import Context
@@ -24,10 +25,11 @@ from forge.harness.protocol import (
     Tool,
     ToolResult,
 )
+from forge.model.content_hash import canonical_digest
 from forge.model.llm import FinishReason, Message, Sampling
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation
-from forge.resources.env import Env
+from forge.resources.env import Env, WriteFile
 from forge.resources.inference import ContextExceeded, InferenceClient, InferenceRequest, complete
 
 
@@ -93,8 +95,14 @@ class AgenticHarness(Harness):
                         return Stopped(StopReason.FINISHED, session)
                     content = outcome.content
                     if len(content) > self.output_chars:
-                        marker = "\n[output truncated]"
-                        content = content[: max(0, self.output_chars - len(marker))] + marker[: self.output_chars]
+                        path = PurePosixPath(".tool-output") / f"{canonical_digest((call.id, content))}.txt"
+                        data = content.encode()
+                        await ctx.emit(WriteFile(path, data))
+                        marker = (
+                            f"\n[Full output saved to {path}: {len(content)} characters, {len(data)} bytes. "
+                            "Use read_file with offset and limit to read slices.]"
+                        )
+                        content = content[: self.output_chars] + marker
                     # Estimate only appended text; the provider counted the prior prompt and reply.
                     prompt_tokens += (len(content) + 3) // 4
                     await ctx.emit(ToolReturned(call.id, call.name, content))

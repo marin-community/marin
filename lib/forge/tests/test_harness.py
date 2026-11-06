@@ -4,6 +4,7 @@
 import json
 from functools import partial
 from pathlib import Path, PurePosixPath
+from tarfile import AbsoluteLinkError, TarInfo
 
 import httpx
 import pytest
@@ -251,7 +252,7 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     assert resource_bytes(report.payload.findings[0].candidate.files[0]) == b"candidate"
 
 
-async def test_web_and_error_results_are_capped_before_the_next_inference() -> None:
+async def test_web_and_error_results_are_saved_before_the_next_inference() -> None:
     log = EventLog()
     ctx = Context(log=log)
     web = FakeWeb({"query": "s" * 10000}, {"https://example.org": "f" * 10000})
@@ -264,10 +265,11 @@ async def test_web_and_error_results_are_capped_before_the_next_inference() -> N
         call("unknown" * 100, {}, "3").tool_calls[0],
     )
     client = FakeInference((Completion("", calls), call("finish", {"reason": "done"}, "4")))
+    env = environment(ctx)
     result = await AgenticHarness(262144, Sampling(), "continue", 80).run(
         ctx,
         Conversation((), ()),
-        environment(ctx),
+        env,
         client,
         {"web_search": WebSearchTool(), "web_fetch": WebFetchTool(), "finish": FinishTool()},
     )
@@ -275,12 +277,21 @@ async def test_web_and_error_results_are_capped_before_the_next_inference() -> N
     assert isinstance(result, Stopped)
     outputs = [message for message in client.requests[1].messages if message.role == "tool"]
     assert [message.tool_call_id for message in outputs] == ["1", "2", "3"]
-    assert all(len(message.content) == 80 and message.content.endswith("[output truncated]") for message in outputs)
-    assert all(len(record.event.content) <= 80 for record in log.records if isinstance(record.event, ToolReturned))
+    originals = ("s" * 10000, "f" * 10000, "Unknown tool: " + "unknown" * 100)
+    assert len(env.files) == 3
+    for message, original in zip(outputs, originals, strict=True):
+        assert message.content.startswith(original[:80] + "\n[Full output saved to ")
+        saved = next(path for path, data in env.files.items() if data.decode() == original)
+        assert str(saved) in message.content
+        assert f"{len(original)} characters" in message.content
+        sliced = await ReadFileTool()(ctx, {"path": str(saved), "offset": 80, "limit": 60}, env)
+        assert sliced == ToolResult(original[80:140])
+    await ctx.drain()
 
 
-@pytest.mark.parametrize("kind", ["read", "grade-task", "grade-candidate", "submit", "validate"])
-async def test_missing_paths_are_tool_feedback(kind: str) -> None:
+@pytest.mark.parametrize("failure", ["missing", "directory", "archive"])
+@pytest.mark.parametrize("kind", ["read", "grade-task", "grade-candidate", "submit", "validate", "report"])
+async def test_invalid_read_paths_are_tool_feedback(kind: str, failure: str) -> None:
     ctx = Context(log=EventLog())
     env = environment(ctx)
     await ctx.emit(RunCommand("task", 30))
@@ -289,13 +300,20 @@ async def test_missing_paths_are_tool_feedback(kind: str) -> None:
         try:
             return await resource.read(event.path)
         except KeyError as error:
+            if failure == "directory":
+                raise IsADirectoryError(str(event.path)) from error
+            if failure == "archive":
+                info = TarInfo("./dev/fd")
+                info.linkname = "/proc/self/fd"
+                raise AbsoluteLinkError(info) from error
             raise FileNotFoundError(str(event.path)) from error
 
     ctx.handle(ReadFile, read_missing, uses=(env,))
     settings = LoweringSettings(MachineHost.LAPTOP, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
-    missing = "cand/release_notes.py" if kind == "grade-candidate" else "/workspace/controls.json"
+    missing = "cand/release_notes.py" if kind in {"grade-candidate", "report"} else "/workspace/controls.json"
     tools: dict[str, Tool[object]] = {
         "read": ReadFileTool(),
+        "report": ReportTool(arithmetic_task()),
         "grade-task": GradeTool(missing, {}, settings),
         "grade-candidate": GradeTool("/workspace/task.json", {}, settings),
         "submit": SubmitTool(accept),
@@ -303,6 +321,15 @@ async def test_missing_paths_are_tool_feedback(kind: str) -> None:
     }
     arguments: dict[str, dict[str, object]] = {
         "read": {"path": missing},
+        "report": {
+            "findings": [
+                {
+                    "claim": "wrong answer",
+                    "candidate": {"reply": "9", "files": [missing]},
+                    "expected": {"status": "graded", "reward_min": 1.0, "reward_max": 1.0},
+                }
+            ]
+        },
         "grade-task": {"reply": "12"},
         "grade-candidate": {"reply": "12", "files": [missing]},
         "submit": {"task_path": "/workspace/task.json", "controls_path": missing},
@@ -311,6 +338,10 @@ async def test_missing_paths_are_tool_feedback(kind: str) -> None:
     result = await tools[kind](ctx, arguments[kind], env)
     await ctx.drain()
     assert isinstance(result, ToolResult) and missing in result.content
+    if failure == "directory":
+        assert "is a directory" in result.content
+    if failure == "archive":
+        assert "archive extraction failed" in result.content
 
 
 @pytest.mark.parametrize("context_tokens", [262144, 131072])
@@ -465,7 +496,7 @@ async def test_next_prompt_counts_reply_tokens_and_appended_tool_text(completion
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
     assert len(client.requests) == 1
-    assert len(result.session.messages[-1].content) == output_chars
+    assert result.session.messages[-1].content.startswith("x" * output_chars + "\n[Full output saved to ")
 
 
 async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() -> None:
@@ -523,3 +554,30 @@ async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_
     await ctx.drain()
     assert isinstance(corrected, ToolResult)
     assert json.loads(corrected.content)["grader_checks"] == [{"name": "A", "passed": False, "weight": 1}]
+
+
+async def test_large_shell_output_is_saved_and_replayed_without_inference(tmp_path: Path) -> None:
+    sink = JsonlSink(str(tmp_path / "outputs.jsonl"))
+    ctx = Context(log=EventLog(sink=sink))
+    env = environment(ctx)
+    harness = AgenticHarness(262144, Sampling(), "continue", 8)
+    initial = Conversation((), ())
+    tools = {"shell": ShellTool(), "finish": FinishTool()}
+    client = FakeInference(
+        (call("shell", {"command": "task"}, "../../escape"), call("finish", {"reason": "done"}, "done"))
+    )
+    result = await harness.run(ctx, initial, env, client, tools)
+    await ctx.drain()
+    saved = [(path, data) for path, data in env.files.items() if path.parent == PurePosixPath(".tool-output")]
+    assert len(saved) == 1
+    path, data = saved[0]
+    assert json.loads(data)["stdout"] == "task ready"
+    assert str(path) in client.requests[1].messages[-1].content
+    assert ".." not in path.parts
+    replay = Context(log=EventLog(replay_from=await sink.read()))
+    replay_env = environment(replay)
+    replay_client = FakeInference(())
+    assert await harness.run(replay, initial, replay_env, replay_client, tools) == result
+    await replay.drain()
+    assert not replay_client.requests
+    assert replay_env.files == env.files

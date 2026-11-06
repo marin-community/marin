@@ -3,16 +3,16 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 from typing import override
 
 from forge.effects.context import Context
 from forge.harness.protocol import SubmitRequest, ToolResult
 from forge.harness.tools.base import ValidatedTool
+from forge.harness.tools.files import read_tool_file
 from forge.lowering import check_candidates
 from forge.model.serialization import CONTROLS, TASK_SPEC
 from forge.model.workpiece import Submission
-from forge.resources.env import Env, ReadFile
+from forge.resources.env import Env
 
 type Gate = Callable[[Submission], tuple[str, ...]]
 
@@ -21,8 +21,8 @@ async def read_submission(
     ctx: Context, task_path: str, controls_path: str, notes: str, gate: Gate
 ) -> Submission | ToolResult:
     try:
-        task = TASK_SPEC.validate_json(await ctx.emit(ReadFile(PurePosixPath(task_path))))
-        controls = CONTROLS.validate_json(await ctx.emit(ReadFile(PurePosixPath(controls_path))))
+        task = TASK_SPEC.validate_json(await read_tool_file(ctx, task_path))
+        controls = CONTROLS.validate_json(await read_tool_file(ctx, controls_path))
         check_candidates(task, tuple(control.candidate for control in controls))
     except (ValueError, FileNotFoundError, KeyError) as error:
         return ToolResult(f"Invalid draft: {error}")
