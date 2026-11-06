@@ -5,7 +5,11 @@ the caller, as one whole change. Follow the repository's `AGENTS.md`, the
 instructions that scope each changed path, `TESTING.md` when tests change, and
 the `review-pr` skill in holistic mode. Read beyond the diff: base classes,
 callers, sibling modules, skipped-marker tests, and open pull requests on the
-same paths.
+same paths. Follow the skill's bounded search of relevant source, stacked,
+and prior maintainer reviews. Synthesize and cite reusable themes, then apply
+them across the current architecture and contracts within this review.
+Validate structural findings with consequences, concrete replacements, and
+evidence; exercise safe real boundaries where fake adapters can hide drift.
 
 The session is read-only except for creating or replacing the original
 holistic overview comment and, on re-review, optionally creating one new
