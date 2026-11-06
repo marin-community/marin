@@ -62,9 +62,12 @@ session on `doc` once it exists.
 
 ## Reviews and edits
 
-- A person comments by selecting text in `doc` and submitting a review. Loom
-  delivers the review to you as a message that gives each comment with the
-  revision and the text it quotes.
+- A person comments by selecting text in `doc`. Loom sends you each comment as
+  soon as the person writes it, as a review of its own, or several comments
+  together when the person submits a review. The message gives each comment
+  with the revision and the text it quotes. A review stops the turn you are in.
+- After you answer a review, continue the work that it stopped, unless the
+  review changes that work.
 - Answer all the comments of a review in one reply in this session, in order,
   each after the text it quotes. A comment that tells you to change the doc
   approves that change: make it, and say what you changed. For a question or a
