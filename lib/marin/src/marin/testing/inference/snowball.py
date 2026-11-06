@@ -3,6 +3,8 @@
 
 """Snowball model identity and representative inference goldens."""
 
+import dataclasses
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +13,7 @@ import numpy as np
 from rigging.filesystem.storage_path import StoragePath
 
 from marin.testing.inference.backend_parity import TokenScore
+from marin.testing.inference.snowball_position_parity import PositionReference, parse_position_reference
 
 BATCH_SIZE = 8
 TOP_K = 25
@@ -23,10 +26,19 @@ _RESOURCES = Path(__file__).parent / "resources"
 _REPRESENTATIVE_GOLDEN_PATH = _RESOURCES / "june_tpu_67b_a2b_step_42150_representative_eval_golden.json"
 # The exact checkpoint snapshot was reproduced on two H100 nodes with JAX 0.11.1 and CUTLASS DSL 4.6.2.
 _CHECKPOINT_GOLDEN_PATH = _RESOURCES / "june_tpu_67b_a2b_step_42150_current_fa4_golden.json"
-_PROMPT_FIXTURE_SHA256 = "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8"
+PROMPT_FIXTURE_SHA256 = "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8"
 _PROMPT_FIXTURE_URL = (
     "https://storage.googleapis.com/marin-public/test-data/vllm/e2e/representative-eval-prompts/"
-    f"{_PROMPT_FIXTURE_SHA256}.json"
+    f"{PROMPT_FIXTURE_SHA256}.json"
+)
+# vLLM's per-position prompt log-probs for the representative prompts, content-addressed like the prompt
+# fixture and read over HTTPS without credentials. The June golden above came from the native Grug checkpoint
+# forward, not from vLLM, so it is not this reference.
+# TODO: the owner stages the file written by tests/cluster/vllm/generate_snowball_position_reference.py at
+# VLLM_POSITION_REFERENCE_PREFIX/<sha256>.json and pins its sha256 here. Empty means not staged yet.
+VLLM_POSITION_REFERENCE_SHA256 = ""
+VLLM_POSITION_REFERENCE_PREFIX = (
+    "https://storage.googleapis.com/marin-public/test-data/vllm/e2e/representative-eval-position-logprobs"
 )
 
 
@@ -136,6 +148,21 @@ def read_prompt_fixture(
     )
 
 
+def vllm_position_reference_url() -> str:
+    if not VLLM_POSITION_REFERENCE_SHA256:
+        raise RuntimeError("The vLLM position reference is not staged; VLLM_POSITION_REFERENCE_SHA256 is empty")
+    return f"{VLLM_POSITION_REFERENCE_PREFIX}/{VLLM_POSITION_REFERENCE_SHA256}.json"
+
+
+def read_vllm_position_reference() -> PositionReference:
+    """Read the pinned vLLM per-position reference and check its bytes against the pinned sha256."""
+    payload = StoragePath(vllm_position_reference_url()).read_bytes()
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != VLLM_POSITION_REFERENCE_SHA256:
+        raise ValueError(f"vLLM position reference sha256 {actual}, pinned {VLLM_POSITION_REFERENCE_SHA256}")
+    return parse_position_reference(json.loads(payload))
+
+
 def _prompt_batches(cases: tuple[RepresentativeCase, ...]) -> tuple[PromptBatch, ...]:
     batches = []
     remaining_cases = cases
@@ -157,6 +184,43 @@ def _prompt_batches(cases: tuple[RepresentativeCase, ...]) -> tuple[PromptBatch,
 
     if remaining_cases:
         raise ValueError(f"Prompts exceed {PROMPT_BUCKET_MAX_TOKENS[-1]} tokens")
+    return tuple(batches)
+
+
+@dataclass(frozen=True)
+class ScoringBatch:
+    """A full ``BATCH_SIZE`` batch whose first ``num_real`` rows are distinct cases; the rest repeat one as filler.
+
+    Filler rows are never scored, but their tokens are valid for MoE dispatch. That is harmless when dispatch is
+    dropless; under a lower capacity factor, as in the ablation's capacity-off arm, they add to expert load.
+    """
+
+    batch: PromptBatch
+    num_real: int
+
+    @property
+    def real_cases(self) -> tuple[RepresentativeCase, ...]:
+        return self.batch.cases[: self.num_real]
+
+
+def scoring_batches(
+    cases: tuple[RepresentativeCase, ...], *, max_tokens: int | None, buckets: tuple[int, ...]
+) -> tuple[ScoringBatch, ...]:
+    """Crop each case to its first ``max_tokens`` tokens (``None`` keeps it whole), sort by length, and group into
+    batches padded to the smallest bucket that fits; a short last batch repeats its first case."""
+    cropped = sorted(
+        (dataclasses.replace(case, prompt_token_ids=case.prompt_token_ids[:max_tokens]) for case in cases),
+        key=lambda case: (len(case.prompt_token_ids), case.id),
+    )
+    batches = []
+    for start in range(0, len(cropped), BATCH_SIZE):
+        real = tuple(cropped[start : start + BATCH_SIZE])
+        longest = max(len(case.prompt_token_ids) for case in real)
+        padded = next((bucket for bucket in sorted(buckets) if bucket >= longest), None)
+        if padded is None:
+            raise ValueError(f"No bucket in {buckets} fits a {longest}-token prompt")
+        filler = (real[0],) * (BATCH_SIZE - len(real))
+        batches.append(ScoringBatch(PromptBatch(max_tokens=padded, cases=real + filler), num_real=len(real)))
     return tuple(batches)
 
 
