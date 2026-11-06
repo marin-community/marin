@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+
 import pytest
-from tokenizers import AddedToken
 
 from skyrl_train.inference_engines.base import InferenceEngineInput
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
@@ -22,12 +22,13 @@ class _LlamaStyleTokenizer:
     """Ends turns with a special token that is not ``eos_token_id``."""
 
     eos_token_id = END_OF_TEXT
-    added_tokens_decoder = {
-        token: AddedToken(VOCABULARY[token], special=True) for token in (END_OF_TURN, TOOL_CALL_END, END_OF_TEXT)
-    }
 
     def decode(self, token_ids, skip_special_tokens):
         return "".join(VOCABULARY[token] for token in token_ids)
+
+    def encode(self, text, add_special_tokens):
+        token_ids = [token for token, piece in VOCABULARY.items() if piece == text]
+        return token_ids or [PLAN, PLAN]
 
 
 class _InferenceClient:

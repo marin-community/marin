@@ -141,11 +141,16 @@ def _ends_turn(tokenizer, response_ids: list[int], finish_reason: str) -> bool:
     """Whether the response ends with the EOS or a chat template's turn terminator."""
     if not response_ids or finish_reason == "length":
         return False
-    last = response_ids[-1]
-    if last == tokenizer.eos_token_id:
-        return True
-    added = tokenizer.added_tokens_decoder.get(last)
-    return added is not None and added.content in TURN_END_MARKERS
+    return response_ids[-1] in _turn_end_tokens(tokenizer)
+
+
+def _turn_end_tokens(tokenizer: PreTrainedTokenizerBase) -> set[int]:
+    tokens = {tokenizer.eos_token_id}
+    for marker in TURN_END_MARKERS:
+        token_ids = tokenizer.encode(marker, add_special_tokens=False)
+        if len(token_ids) == 1:
+            tokens.add(token_ids[0])
+    return tokens
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
