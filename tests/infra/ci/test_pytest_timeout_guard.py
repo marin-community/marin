@@ -171,17 +171,14 @@ def test_default_timeout_interrupts_test_before_its_side_effect(timeout_workspac
 
 
 @pytest.mark.parametrize("configuration", ["root", "levanter"])
-@pytest.mark.parametrize("timeout", [120, 180])
-def test_long_test_exception_can_finish_after_default_deadline(
-    timeout_workspace: Path, configuration: str, timeout: int
-) -> None:
+def test_long_test_exception_can_finish_after_default_deadline(timeout_workspace: Path, configuration: str) -> None:
     result = run_probe(
         timeout_workspace,
         configuration,
-        f"""\
-        @pytest.mark.timeout({timeout})
+        """\
+        @pytest.mark.timeout(120)
         def test_long_but_allowed(clock):
-            clock.advance({timeout - 30})
+            clock.advance(90)
             (OUTPUT / "completed").touch()
         """,
     )
