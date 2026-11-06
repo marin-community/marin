@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import click
+import httpx
 import openai
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
@@ -174,12 +175,22 @@ def solver_factory(backend: Backend) -> MachineFactory:
     raise ValueError(f"No solver machines on {backend}")
 
 
-def chat_model(endpoint: GlmEndpoint, *, model: str, reasoning_effort: str, cache_key: str | None) -> ChatModel:
+def chat_model(
+    endpoint: GlmEndpoint,
+    *,
+    model: str,
+    reasoning_effort: str,
+    cache_key: str | None,
+    http_client: httpx.AsyncClient | None = None,
+) -> ChatModel:
     """A chat model on ``endpoint``. GLM sets an effort, and DeepSeek thinks unless the effort is ``NO_REASONING``.
 
-    A ``cache_key`` lets the relay reuse the prompt prefix of one conversation.
+    A ``cache_key`` lets the relay reuse the prompt prefix of one conversation. An ``http_client`` replaces the
+    OpenAI client's own, for example one on a ``GlmBatchTransport``.
     """
-    client = openai.AsyncOpenAI(base_url=endpoint.base_url, api_key=endpoint.token, timeout=1800, max_retries=5)
+    client = openai.AsyncOpenAI(
+        base_url=endpoint.base_url, api_key=endpoint.token, timeout=1800, max_retries=5, http_client=http_client
+    )
     if model == DEEPSEEK_MODEL:
         template: dict[str, object] = {"thinking": reasoning_effort != NO_REASONING}
     else:

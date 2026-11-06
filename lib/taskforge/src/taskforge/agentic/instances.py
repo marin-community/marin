@@ -12,12 +12,13 @@ import shlex
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol
 
 from pydantic import ValidationError
 from shellbox.machine import Command, MachineFactory, MachineSpec, PackageSpec
 from taskcompendium.models import TaskSpec
 
-from taskforge.agentic.tools import MAX_FILE_BYTES, WORKDIR, AcceptedTask, program_command
+from taskforge.agentic.tools import MAX_FILE_BYTES, WORKDIR, program_command
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,22 @@ SNAPSHOT_PATH = "/tmp/workspace.tgz"
 INSTANCE_DIR = ".instances"
 
 
+class BuiltTask(Protocol):
+    """A task with the build program that wrote it and the workspace that the program reads, for example an
+    ``AcceptedTask`` or a ``Draft``."""
+
+    @property
+    def task(self) -> TaskSpec: ...
+
+    @property
+    def program(self) -> str: ...
+
+    @property
+    def workspace(self) -> bytes: ...
+
+
 async def task_instances(
-    accepted: AcceptedTask, task_ids: Sequence[str], factory: MachineFactory, *, timeout: float
+    accepted: BuiltTask, task_ids: Sequence[str], factory: MachineFactory, *, timeout: float
 ) -> list[TaskSpec]:
     """The task that the program of ``accepted`` writes for each of ``task_ids``.
 

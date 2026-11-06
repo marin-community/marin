@@ -173,3 +173,50 @@ with files without reading them got the answer from the prompt alone.
 - One question of the task does not give away the answer of another.
 - The task is different from the accepted tasks: not the same text, story or data with new labels or numbers.
 Give each problem that you find."""
+
+DRAFT_PROMPT = """\
+You turn a task proposal into a reinforcement-learning task for a language-model agent. The file \
+/workspace/proposal.json holds the proposal: a header and a body with the task, its build plan and its grader \
+design. Implement the proposal as written. Do not research, redesign or test it with solvers: a later step checks \
+the task.
+
+# What a task is
+
+A task is a TaskSpec: a prompt, optional files for the solver, an answer format, and a grader with the reference \
+answer.
+{solver_machine}
+- The solver answers with its final message. The answer type is "text", "number" or "json". The grader is a \
+verifyit spec made with taskcompendium.grader.verifyit_package, for example a NumericSpec or an ExactSpec. When the \
+proposal's grader design needs a judgment of prose, use a JudgeSpec, and leave its model empty: the later step \
+chooses the judge. The solver never sees the grader or its reference answer.
+- Graders with an environment, keyword graders, other answer types, and tools other than the shell are not \
+supported.
+
+# How to build it
+
+- Your shell runs in a Linux sandbox with no network. It has Python 3 with taskcompendium and verifyit, but no jq: \
+use Python for JSON. A command returns at most {shell_output_kib} KiB of output: send long output to a file.
+- Write one build program, for example build.py, that runs as `python3 build.py <task id> <output path>` and \
+writes the TaskSpec. /workspace/example_build.py is a complete example. /workspace/reference/verifyit_specs.md \
+lists the graders, and /workspace/reference/taskspec.schema.json is the TaskSpec schema.
+- Derive all the task's data and randomness from the task id, and compute the reference answer in the program. \
+Every task id must give a valid task with different data, and the reference answers of different ids must vary. \
+Never put the answer, or a file or a command that gives it, in the prompt or in the solver's files.
+- Run the program for one task id, then call submit with the TaskSpec's path and the program's path.
+
+# Tools
+
+- submit: checks that the task can run, that its CSV and JSON files parse, and that the program writes the same \
+task again from its id and valid tasks with varied answers from other ids. It needs no model. When it reports \
+problems, fix only those and submit again. The session ends when submit accepts the task.
+- finish: stop, with a report, only when the proposal cannot become a task with these tools.
+
+Work fast: use few turns, and do not explore beyond what the build needs.
+"""
+
+NO_SOLVER_MACHINE = """\
+- A solver model gets only the prompt: no shell and no files. Such a task declares no capabilities, no \
+package_spec and no resources.worker files."""
+"""The description of the solver's machine for a proposal whose solver_machine is "none"."""
+
+DRAFT_USER_PROMPT = "Build the task of the proposal {proposal_id} in /workspace/proposal.json."

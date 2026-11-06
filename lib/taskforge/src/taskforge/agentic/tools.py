@@ -44,6 +44,7 @@ from rolloutengine.models import (
     ModelTurn,
     Rollout,
     RolloutInterrupted,
+    RolloutLimits,
     TaskRolloutSpec,
     TokenUsage,
     TraceMode,
@@ -63,6 +64,7 @@ from taskcompendium.models import (
     grades_with_judge,
 )
 from taskcompendium.runtime.resources import resource_bytes
+from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import IfevalSpec, spec_from_table
 
 from taskforge.agentic.config import AgenticConfig
@@ -519,7 +521,7 @@ class ToolSession:
         if any(_task_digest(accepted.task) == key for accepted in self.tools.accepted):
             raise ToolError("This task is already accepted")
         problems = _unsupported(task, self.tools.solver_engine, self.config)
-        problems += _malformed_files(task)
+        problems += malformed_files(task)
         if problems:
             return _result({"accepted": False, "problems": problems})
         evidence = self.tools.evidence[key]
@@ -597,64 +599,13 @@ class ToolSession:
         return sum(isinstance(outcome, GradedRollout) and _passed(outcome.grade) for outcome in outcomes)
 
     async def _program_problems(self, program: str, task: TaskSpec) -> list[str]:
-        """Why ``program`` is not the build program of ``task``: it must write ``task`` again from its id, and from
-        other ids, runnable tasks whose reference answers vary."""
-        try:
-            again = await self._build(program, task.id)
-            variants = [await self._build(program, f"{task.id}{VARIANT_SUFFIX}{k}") for k in range(VARIANTS)]
-        except ToolError as error:
-            return [str(error)]
-        if _task_digest(again) != _task_digest(task):
-            return [f"{program} with the task id {task.id!r} writes another TaskSpec than the submitted one"]
-        for k, variant in enumerate(variants):
-            # task_instances keeps only the tasks that have the id that the program gets.
-            if variant.id != (expected := f"{task.id}{VARIANT_SUFFIX}{k}"):
-                return [f"{program} with the task id {expected!r} writes a task with the id {variant.id!r}"]
-        if any(content_digest(variant) == content_digest(task) for variant in variants):
-            return [f"{program} writes the same task for another task id; derive the task's data from the id"]
-        answers = Counter(_reference(variant) for variant in variants)
-        answer, count = answers.most_common(1)[0]
-        if count > MAX_ANSWER_SHARE * VARIANTS:
-            return [
-                f"{count} of {VARIANTS} tasks that {program} writes for other ids have the same reference answer "
-                f"(grader {answer}), so a policy that guesses it passes too often. Draw the data so that the answers "
-                "vary."
-            ]
-        return [
-            f"With the task id {variant.id!r}, {program} writes a task with a problem: {problem}"
-            for variant in variants
-            for problem in _unsupported(variant, self.tools.solver_engine, self.config) + _malformed_files(variant)
-        ][:REVIEW_ANSWERS]
+        def problems(variant: TaskSpec) -> list[str]:
+            return _unsupported(variant, self.tools.solver_engine, self.config) + malformed_files(variant)
 
-    async def _build(self, program: str, task_id: str) -> TaskSpec:
-        output = f"{SUBMIT_DIR}/{task_id}.json"
-        command = (*program_command(program), task_id, output)
-        result = await self.machine.run(
-            Command(
-                ("sh", "-c", f"mkdir -p {SUBMIT_DIR} && {shlex.join(command)}"),
-                cwd=str(WORKDIR),
-                timeout=PROGRAM_TIMEOUT,
-            )
-        )
-        if result.exit_code != 0:
-            stderr = result.stderr.decode(errors="replace")
-            raise ToolError(f"`{shlex.join(command)}` failed with exit code {result.exit_code}: {_clip(stderr)}")
-        return await self._load(output)
+        return await program_problems(self.machine, program, task, problems, self.config.command_timeout)
 
     async def _snapshot(self) -> bytes:
-        listing = await self.machine.run(Command(("ls", "-A1", str(WORKDIR))))
-        entries = [name for name in listing.stdout.decode().splitlines() if name not in SNAPSHOT_EXCLUDES]
-        result = await self.machine.run(
-            Command(("tar", "-czf", "-", *entries), cwd=str(WORKDIR), output_limit_bytes=MAX_FILE_BYTES)
-        )
-        if result.stdout_truncated:
-            raise ToolError(
-                f"The workspace is larger than {MAX_FILE_BYTES} bytes as a gzipped tar; delete the files that the "
-                "build program does not read"
-            )
-        if result.exit_code != 0:
-            raise ToolError(f"The workspace snapshot failed: {_clip(result.stderr.decode(errors='replace'))}")
-        return result.stdout
+        return await workspace_snapshot(self.machine)
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
         # The budget must hold the whole review, so that a review never stops after its blind solve.
@@ -730,14 +681,7 @@ class ToolSession:
         setattr(self.tools.spend, name, used + count)
 
     async def _read(self, path: str) -> bytes:
-        path = _absolute(path)
-        command = Command(("cat", path), timeout=self.config.command_timeout, output_limit_bytes=MAX_FILE_BYTES)
-        result = await self.machine.run(command)
-        if result.exit_code != 0:
-            raise ToolError(f"Cannot read {path}: {_clip(result.stderr.decode(errors='replace'))}")
-        if result.stdout_truncated:
-            raise ToolError(f"{path} is larger than {MAX_FILE_BYTES} bytes")
-        return result.stdout
+        return await read_file(self.machine, path, self.config.command_timeout)
 
     async def _write(self, path: str, data: bytes) -> None:
         with tempfile.TemporaryDirectory(prefix="taskforge-agentic-") as directory:
@@ -746,27 +690,10 @@ class ToolSession:
             await self.machine.upload(source, _absolute(path))
 
     async def _load(self, path: str) -> TaskSpec:
-        """The TaskSpec at ``path``, refused at once when no grade or rollout may run on it: its id cannot name its
-        output directory, or its machine would get what the review cannot see."""
-        try:
-            task = TaskSpec.model_validate_json(await self._read(path))
-        except ValidationError as error:
-            raise ToolError(f"{path} is not a valid TaskSpec: {_clip(str(error))}") from error
-        if FILE_SAFE_ID.match(task.id) is None or len(task.id) > MAX_ID_CHARS:
-            raise ToolError(
-                f"The task id {_clip(task.id, limit=200)!r} must be at most {MAX_ID_CHARS} letters, digits, dots, "
-                "dashes and underscores, starting with a letter or a digit"
-            )
+        task = await read_task(self.machine, path, self.config.command_timeout)
         key = _task_digest(task)
         if any(accepted.task.id == task.id and _task_digest(accepted.task) != key for accepted in self.tools.accepted):
             raise ToolError(f"An accepted task already has the id {task.id!r}: give this task another id")
-        # The engine resolves ${NAME} in an environment variable from the host, which holds the driver's keys, and
-        # setup commands can rewrite the files after they are installed. The review sees neither.
-        requirements = task.environment_requirements
-        if requirements.environment_variables:
-            raise ToolError("Tasks cannot set environment_variables: put what the solver needs in the prompt or files")
-        if requirements.setup_commands:
-            raise ToolError("Tasks cannot have setup_commands: put the solver's files in resources.worker")
         return task
 
 
@@ -882,18 +809,59 @@ def needs_machine(task: TaskSpec) -> bool:
 
 
 def _solver_spec(task: TaskSpec, config: AgenticConfig) -> TaskRolloutSpec:
+    return solver_spec(task, config.solver_factory.backend, config.solver_limits)
+
+
+def solver_spec(
+    task: TaskSpec, backend: str, limits: RolloutLimits, judge: JudgeConnection | None = None
+) -> TaskRolloutSpec:
+    """A solver attempt of ``task`` on a machine of ``backend``, when the task needs one."""
     return TaskRolloutSpec(
         task=task,
         harness=SOLVER_HARNESS,
-        task_machine=machine_runtime(config.solver_factory.backend) if needs_machine(task) else None,
+        task_machine=machine_runtime(backend) if needs_machine(task) else None,
         verifier_machine=None,
-        limits=config.solver_limits,
+        limits=limits,
         trace=TraceMode.MESSAGES,
+        judge_connection=judge if grades_with_judge(task.grader) else None,
     )
+
+
+GraderRule = Callable[[VerifyitGrader], list[str]]
+"""The problems of a verifyit grader without an environment that a kind of session refuses."""
+
+
+def in_process_grader_problems(grader: VerifyitGrader) -> list[str]:
+    """The rule of the agentic tools, which grade on the host with no model: no judge and no keyword grader."""
+    if grades_with_judge(grader):
+        return ["Judge graders are not supported"]
+    return keyword_grader_problems(grader)
+
+
+def keyword_grader_problems(grader: VerifyitGrader) -> list[str]:
+    if not _grades_keywords(grader):
+        return []
+    return [
+        "Keyword graders are not supported: a correct paraphrase fails and an answer that only repeats the words "
+        "passes. Ask for a value that a NumericSpec or an ExactSpec can grade"
+    ]
 
 
 def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -> list[str]:
     """What keeps the agent's tools from running ``task``, which ``rollout`` and ``submit`` refuse."""
+    semantics = COMMAND_SEMANTICS[config.solver_factory.backend]
+    return unsupported(task, engine, _solver_spec(task, config), semantics, in_process_grader_problems)
+
+
+def unsupported(
+    task: TaskSpec,
+    engine: RolloutEngine,
+    spec: TaskRolloutSpec,
+    semantics: CommandSemantics,
+    grader_rule: GraderRule,
+) -> list[str]:
+    """What keeps ``engine`` from running ``spec`` of ``task`` on machines with ``semantics``, with the grader
+    problems of ``grader_rule``. ``engine.check`` runs last, only when nothing else is wrong."""
     problems = []
     if task.answer_type not in ANSWER_TYPES:
         problems.append(f"The answer type must be one of {sorted(ANSWER_TYPES)}, not {task.answer_type}")
@@ -902,17 +870,10 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
         problems.append("The grader must be a verifyit grader without an environment")
     else:
         try:
-            if grades_with_judge(grader):
-                problems.append("Judge graders are not supported")
-            elif _grades_keywords(grader):
-                problems.append(
-                    "Keyword graders are not supported: a correct paraphrase fails and an answer that only repeats "
-                    "the words passes. Ask for a value that a NumericSpec or an ExactSpec can grade"
-                )
+            problems += grader_rule(grader)
         except (TypeError, ValueError) as error:
             problems.append(f"The grader is invalid: {error}")
     requirements = task.environment_requirements
-    semantics = COMMAND_SEMANTICS[config.solver_factory.backend]
     if needs_machine(task) and requirements.command_semantics != semantics:
         problems.append(f"A task with a shell or files must use command_semantics {semantics}")
     if task.resources.all:
@@ -924,10 +885,116 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
         problems.append("Tools other than the shell are not supported")
     if not problems:
         try:
-            engine.check(_solver_spec(task, config))
+            engine.check(spec)
         except (ValueError, NotImplementedError) as error:
             problems.append(f"The rollout engine rejects the task: {error}")
     return problems
+
+
+async def read_file(machine: Machine, path: str, timeout: float) -> bytes:
+    """The file at ``path`` in the workspace of ``machine``. A missing or too large file is a ``ToolError``."""
+    path = _absolute(path)
+    result = await machine.run(Command(("cat", path), timeout=timeout, output_limit_bytes=MAX_FILE_BYTES))
+    if result.exit_code != 0:
+        raise ToolError(f"Cannot read {path}: {_clip(result.stderr.decode(errors='replace'))}")
+    if result.stdout_truncated:
+        raise ToolError(f"{path} is larger than {MAX_FILE_BYTES} bytes")
+    return result.stdout
+
+
+async def read_task(machine: Machine, path: str, timeout: float) -> TaskSpec:
+    """The TaskSpec at ``path``, refused at once when no grade or rollout may run on it: its id cannot name its
+    output directory, or its machine would get what the review cannot see."""
+    try:
+        task = TaskSpec.model_validate_json(await read_file(machine, path, timeout))
+    except ValidationError as error:
+        raise ToolError(f"{path} is not a valid TaskSpec: {_clip(str(error))}") from error
+    if FILE_SAFE_ID.match(task.id) is None or len(task.id) > MAX_ID_CHARS:
+        raise ToolError(
+            f"The task id {_clip(task.id, limit=200)!r} must be at most {MAX_ID_CHARS} letters, digits, dots, "
+            "dashes and underscores, starting with a letter or a digit"
+        )
+    # The engine resolves ${NAME} in an environment variable from the host, which holds the driver's keys, and
+    # setup commands can rewrite the files after they are installed. The review sees neither.
+    requirements = task.environment_requirements
+    if requirements.environment_variables:
+        raise ToolError("Tasks cannot set environment_variables: put what the solver needs in the prompt or files")
+    if requirements.setup_commands:
+        raise ToolError("Tasks cannot have setup_commands: put the solver's files in resources.worker")
+    return task
+
+
+async def build_task(machine: Machine, program: str, task_id: str, timeout: float) -> TaskSpec:
+    """The task that ``program`` writes in the workspace of ``machine`` for ``task_id``."""
+    output = f"{SUBMIT_DIR}/{task_id}.json"
+    command = (*program_command(program), task_id, output)
+    result = await machine.run(
+        Command(
+            ("sh", "-c", f"mkdir -p {SUBMIT_DIR} && {shlex.join(command)}"),
+            cwd=str(WORKDIR),
+            timeout=PROGRAM_TIMEOUT,
+        )
+    )
+    if result.exit_code != 0:
+        stderr = result.stderr.decode(errors="replace")
+        raise ToolError(f"`{shlex.join(command)}` failed with exit code {result.exit_code}: {_clip(stderr)}")
+    return await read_task(machine, output, timeout)
+
+
+async def program_problems(
+    machine: Machine,
+    program: str,
+    task: TaskSpec,
+    task_problems: Callable[[TaskSpec], list[str]],
+    timeout: float,
+) -> list[str]:
+    """Why ``program`` is not the build program of ``task``: it must write ``task`` again from its id, and from
+    other ids, tasks without ``task_problems`` whose reference answers vary."""
+    try:
+        again = await build_task(machine, program, task.id, timeout)
+        variants = [
+            await build_task(machine, program, f"{task.id}{VARIANT_SUFFIX}{k}", timeout) for k in range(VARIANTS)
+        ]
+    except ToolError as error:
+        return [str(error)]
+    if _task_digest(again) != _task_digest(task):
+        return [f"{program} with the task id {task.id!r} writes another TaskSpec than the submitted one"]
+    for k, variant in enumerate(variants):
+        # task_instances keeps only the tasks that have the id that the program gets.
+        if variant.id != (expected := f"{task.id}{VARIANT_SUFFIX}{k}"):
+            return [f"{program} with the task id {expected!r} writes a task with the id {variant.id!r}"]
+    if any(content_digest(variant) == content_digest(task) for variant in variants):
+        return [f"{program} writes the same task for another task id; derive the task's data from the id"]
+    answers = Counter(_reference(variant) for variant in variants)
+    answer, count = answers.most_common(1)[0]
+    if count > MAX_ANSWER_SHARE * VARIANTS:
+        return [
+            f"{count} of {VARIANTS} tasks that {program} writes for other ids have the same reference answer "
+            f"(grader {answer}), so a policy that guesses it passes too often. Draw the data so that the answers "
+            "vary."
+        ]
+    return [
+        f"With the task id {variant.id!r}, {program} writes a task with a problem: {problem}"
+        for variant in variants
+        for problem in task_problems(variant)
+    ][:REVIEW_ANSWERS]
+
+
+async def workspace_snapshot(machine: Machine) -> bytes:
+    """A gzipped tar of the workspace of ``machine``, without the transcripts and the tasks of ``submit``."""
+    listing = await machine.run(Command(("ls", "-A1", str(WORKDIR))))
+    entries = [name for name in listing.stdout.decode().splitlines() if name not in SNAPSHOT_EXCLUDES]
+    result = await machine.run(
+        Command(("tar", "-czf", "-", *entries), cwd=str(WORKDIR), output_limit_bytes=MAX_FILE_BYTES)
+    )
+    if result.stdout_truncated:
+        raise ToolError(
+            f"The workspace is larger than {MAX_FILE_BYTES} bytes as a gzipped tar; delete the files that the "
+            "build program does not read"
+        )
+    if result.exit_code != 0:
+        raise ToolError(f"The workspace snapshot failed: {_clip(result.stderr.decode(errors='replace'))}")
+    return result.stdout
 
 
 def _grades_keywords(grader: VerifyitGrader) -> bool:
@@ -946,7 +1013,7 @@ def _neighbors(answer: str) -> list[str]:
     return [str(value + unit), str(value - unit)]
 
 
-def _malformed_files(task: TaskSpec) -> list[str]:
+def malformed_files(task: TaskSpec) -> list[str]:
     """The solver's CSV and JSON files that do not parse, for example a CSV field with an unquoted comma."""
     problems = []
     for resource in task.resources.worker:
