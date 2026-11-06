@@ -47,30 +47,8 @@ def _native(script, paths):
     return json.loads(result.stdout.splitlines()[-1])
 
 
-@pytest.fixture
-def selection(tmp_path, monkeypatch):
-    monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
-    monkeypatch.setenv(presets.JUDGE_KEY, "fixture")
-    root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
-    root.mkdir(parents=True)
-    (root / "summary.json").write_text(
-        json.dumps(
-            {
-                "recipe": {"heldout": {"version": "2026.10.23.1", "rows": 910}},
-                "validation_rows": 100,
-                "full_validation_rows": 910,
-                "grader_kind_counts": {"train": {"remote_judge": 1}},
-            }
-        )
-    )
-    return ArtifactStep.adopt("tests/candidate", "2026.10.26", str(root))
-
-
-@pytest.fixture(autouse=True)
-def source_provenance(monkeypatch):
-    monkeypatch.setattr(
-        snowball, "_provenance", lambda **kwargs: Provenance("tree-one", "commit-one", False, "branch", "test")
-    )
+pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
+pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
 
 
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
@@ -286,6 +264,13 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     original = run(long)
     run(long, "trainer.policy.megatron_config.ddp_config.overlap_grad_reduce=true")
     assert run(long).fingerprint() == original.fingerprint()
+    with monkeypatch.context() as preflight:
+        # The requirement preflight reads control r0; test_snowball_rl_gate.py covers it with recorded controls.
+        preflight.setattr(snowball.snowball_rl_gate, "check_requirements", lambda *args, **kwargs: None)
+        first = snowball.build_run(learning, requirements=("panel-910/mean>=0",))
+        second = snowball.build_run(learning, requirements=("panel-910/mean>=0.1",))
+    assert first.runs[0].name == second.runs[0].name == name()
+    assert first.gate.name != second.gate.name
     original_name = name()
     monkeypatch.setattr(
         snowball, "_provenance", lambda **kwargs: Provenance("tree-two", "commit-one", False, "branch", "test")

@@ -62,7 +62,82 @@ Repeat the original `--init` when continuing a run with custom initial weights.
 Use `--replicates N` for 1–5 copies of a short or medium preset, sharing a seed. Controls use
 `--control --replicates N` from a clean checkout and fixed default inputs, with the
 commit in their shared artifact names. Data-medium uses learning-medium's control.
-Calibration and comparison verdicts are pending.
+
+## Compare with controls
+
+Short and medium presets write `gate_report.json` and `gate_report.md`. Status shows
+`pass`, `fail` or `invalid`, a change label and the report path. Train-long has no
+verdict; a crashed run reports `fail` with its Iris job ID.
+
+The gate reads exact runs pinned in `snowball_rl_gate.CONTROLS`. Refresh a pin after
+its replicates finish. Pins with the same preset revision pool deviations from each
+pin's own mean.
+
+Guards compare candidate and control replicate means, signed so positive means better.
+Tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, with `k` guards
+and calibrated run-to-run spread `sd`. Each run reduces update time to its median;
+other metrics use their mean. A guard fails below negative tolerance. Guards and declared
+reported metrics determine `improves`, `trade-off`, `regression` or `no change`.
+Declared reported metrics use `k=1`. Other breakdown rows use a separate `k` equal
+to each table’s row count; they do not determine the label, and a row whose controls
+never vary reports its change as unavailable.
+
+Add repeatable requirements to a gated candidate with `--require 'KEY<=NUMBER'`,
+`--require 'KEY>=NUMBER'`, `--require 'KEY<=control'` or `--require 'KEY>=control'`.
+For example, `--require 'policy/mismatch/staleness0/log_ratio_abs_max<=0'` requires
+zero mismatch on every replicate; `--require 'panel-910/aaii_category/coding/mean>=control'`
+adds a calibrated guard. Numeric bounds produce per-replicate invariants. Relative
+bounds count with the preset guards; zero control spread requires a numeric bound.
+Launch preflight computes control r0's comparison values and refuses any key outside
+them, such as a mistyped panel slice. Candidate keys must exist at scoring.
+Train-long and control collection refuse requirements. Python callers pass the same
+strings as `build_run(requirements=(...))`. Requirements change the report identity;
+training names and configs stay fixed. Re-scoring appends `--require` to any recorded
+requirements, so completed runs can receive new constraints on CPU.
+
+The Breakdown tables show overall results, agentic results when the panel has both
+agentic and other tasks, family, AAII category,
+difficulty, category × difficulty, family × difficulty and training reward per source.
+Each populated mean slice includes its scored task count, initializer normalized score,
+control mean and replicate range, candidate mean, signed difference, tolerance and change.
+Guard keys appear once; one-answer panels report neither mixed nor all-wrong fractions.
+Speed-medium also reports learner and engine tokens per configured GPU-second.
+Learning/data-medium reports rejected groups, length stops and reply-length spread;
+training reward per source uses keys recorded by every control. Telemetry detail rows
+do not determine the change label. Initializer values average candidate replicates;
+task counts are unavailable when their scored-task counts differ.
+
+Every planned batch/update must finish, losses and gradients must be finite, panel
+coverage must reach 99%, grader infrastructure failures must be at most 1%, and speed
+replies must have the fixed length. Mismatched pins, preset revisions or panel IDs,
+missing receipts/provenance/guards, missing mismatch tokens or zero control variation
+give `invalid` with a reason.
+
+The report bounds overlapping failure counts: upper ≤ 1% passes; lower > 1% fails.
+A candidate straddling 1% is `invalid` if every other check passes, otherwise `fail`.
+An ambiguous control is `invalid`. Both bounds remain in the report.
+
+For another initializer, the report includes update-0 score and final-minus-initial
+score in their own Breakdown table. Their comparisons are unavailable when controls have
+no update-0 evaluation.
+
+Re-score saved runs on CPU:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl_gate \
+  --preset learning-medium --candidate RUN_NAME[@VERSION]
+uv run python -m experiments.post_training.snowball_rl_gate \
+  --preset speed-medium --leave-out r0
+```
+
+Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
+Host status lists changed RL paths, including uncommitted edits, against the control
+commit, or explains missing git metadata. This list does not affect the verdict.
+
+`snowball_pass_rates` answers each panel task eight times at temperature 1. Its artifact
+pins the initializer revision and records task IDs, passed answers, scored samples and
+mean normalized scores, excluding grading errors. Reports join easy (> 0.7), learnable (0.1–0.7) and hard
+(< 0.1) pass-rate bands for reporting only. Refresh when the initializer revision changes.
 
 ## Tasks and evaluation
 
@@ -74,6 +149,8 @@ the admitted FULL corpus and immutable recipe versions. The manifest provides
 task IDs, family, AAII category, agentic flag and grader kind.
 
 `PanelEvaluator` supplies native evaluation callbacks, sampling settings and versioned validation data sources.
+
+Reports join evaluation answers to the run's task manifest by TaskSpec ID and keep attempts and weight steps separate. Verifier scores are normalized by their declared bounds. The equal-family mean first averages each task's scored answers, then tasks within a family, then families. Scored coverage is reported separately.
 
 Learning/data medium evaluates all 910 tasks at the end; `--init` adds
 update 0. Train-long evaluates the fixed 100-task panel before training and every 10 updates.
@@ -104,7 +181,7 @@ data-short. Each run forwards its required keys through Iris.
 
 | gap | implication and follow-up |
 |---|---|
-| remote judge | Every preset except speed-short depends on Together: the training selection contains 6,653 Glaive tasks, and data-short also configures a remote judge session. Judge retries can extend update time. The no-judge `snowball-100k@2026.11.04.1` selection is planned for the test-panel control refresh. |
+| remote judge | Every preset except speed-short depends on Together: the training selection contains 6,653 Glaive tasks, and data-short also configures a remote judge session. Judge retries can extend update time. |
 | layout-p40-only; no-async-speed-gate | medium gates cover the 40-GPU synchronous layout; add an asynchronous speed gate |
 | AAII coverage; no-agentic-tasks | current tasks cover only part of AAII; add missing task families and agentic tasks |
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |

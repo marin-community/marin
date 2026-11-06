@@ -22,6 +22,7 @@ from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, 
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     MISSING_CONFIG_VALUE,
     RESOLVED_LAUNCH_FILENAME,
@@ -535,7 +536,7 @@ TRAIN_LONG_RECIPES = MappingProxyType(
 
 def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate: int, *, control: bool) -> str:
     if control:
-        return f"{RUN_PREFIX}/control/{preset.name}-{provenance.base_commit}-r{replicate}"
+        return control_name(preset.name, provenance.base_commit, replicate)
     name = f"{RUN_PREFIX}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if preset.focus != Focus.TRAIN:
         name += f"-r{replicate}"
@@ -727,3 +728,100 @@ def published_artifact(value: str) -> ArtifactStep:
             kind = SkyRLRun if record.result_type.endswith(".SkyRLRun") else LevanterCheckpoint
             return ArtifactStep.adopt(name, version, record.source or root, kind=kind, config=record.config)
     raise click.BadParameter(f"no published artifact record for {name}@{version}")
+
+
+def control_name(preset: str, commit: str, replicate: int) -> str:
+    return f"{RUN_PREFIX}/control/{preset}-{commit}-r{replicate}"
+
+
+def run_command(*, help_text: str | None = None):
+    def decorate(function):
+        options = (
+            click.option(
+                "--preset",
+                "preset_name",
+                required=True,
+                type=click.Choice(sorted(PRESETS)),
+                help="Experiment to run; the table above says which preset fits a change.",
+            ),
+            click.option(
+                "--set",
+                "settings",
+                multiple=True,
+                metavar="KEY=VALUE",
+                help="Change one key of the composed SkyRL config: a dotted key and a YAML value, for example "
+                "trainer.algorithm.advantage_estimator=grpo. Use +KEY=VALUE for a key the base config lacks. "
+                "Repeatable. Keys the preset owns (placement, data, evaluation, measurement) are refused with the "
+                "reason; data presets accept none. Code changes need no flag: the run name includes the source "
+                "tree hash.",
+            ),
+            click.option(
+                "--require",
+                "requirements",
+                multiple=True,
+                metavar="KEY<=|>=BOUND",
+                help="Add a condition the gate checks on a metric key; the examples above show two. With a "
+                "number, every candidate replicate must meet the bound. With control, the candidate mean must not "
+                "be worse than the controls' beyond tolerance. Repeatable; gated presets only, not with --control. "
+                "A training metric the controls never recorded is refused before launch.",
+            ),
+            click.option(
+                "--tasks",
+                "tasks_name",
+                metavar="NAME@VERSION",
+                help="Curated task selection to train on, at an immutable version. Required by data-short and "
+                "data-medium, whose selection must hold out the same panel as the default; train-long defaults "
+                "to the pinned snowball-100k.",
+            ),
+            click.option(
+                "--init",
+                "init_name",
+                metavar="NAME@VERSION",
+                help="Initial weights: a published model artifact, or a finished train-long run (its HF export). "
+                "learning-medium and train-long only. The initial weights are evaluated too, so the report shows "
+                "the gain.",
+            ),
+            click.option(
+                "--resume-from",
+                "resume_name",
+                metavar="NAME[@VERSION]",
+                help="Continue an earlier train-long run's checkpoints and optimizer state under a new run name. "
+                "train-long only.",
+            ),
+            click.option(
+                "--layout",
+                "layout_name",
+                type=click.Choice(sorted(TRAIN_LONG_RECIPES)),
+                help="train-long GPU layout: l112 (default; 64 trainer + 48 engine H100 on cw-rno2a, the "
+                "production recipe) or p40 (32 + 8 H100 on cw-us-east-02a, learning-medium's batch shape).",
+            ),
+            click.option(
+                "--eval",
+                "evaluations",
+                multiple=True,
+                type=click.Choice(sorted(EVALUATIONS)),
+                help="Add an evaluation to train-long, which already runs panel-100 before training and every 10 "
+                "updates. Repeatable.",
+            ),
+            click.option(
+                "--replicates",
+                type=click.IntRange(1, 5),
+                default=1,
+                show_default=True,
+                help="Identical copies of a short or medium preset, sharing one seed. The gate compares their "
+                "mean with the controls; more copies narrow the tolerance. Not for train-long.",
+            ),
+            click.option(
+                "--control",
+                is_flag=True,
+                help="Run the preset's control replicates from a clean checkout with only its pinned default "
+                "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require and "
+                "data-medium, which uses learning-medium's controls.",
+            ),
+        )
+        command = rl_build_options(function)
+        for option in reversed(options):
+            command = option(command)
+        return click.command(help=help_text)(command)
+
+    return decorate

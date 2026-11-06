@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a Snowball RL experiment from a preset.
+"""Run a Snowball RL experiment from a preset; gated presets compare the run with pinned controls.
 
-Choose the preset by what the change can affect. Each entry gives what the preset runs, its
-cost, what it measures and the changes it is for:
+Every preset except train-long is gated: it reports PASS, FAIL or INVALID against control runs of
+the same preset, with a change label. Choose the preset by what the change can affect. Each entry
+gives what the preset runs, its cost, what it measures and the changes it is for:
 
 \b
   speed-short      vLLM engine only: one pass of 512 prompts x 4 replies of 4,096 tokens;
@@ -24,18 +25,21 @@ cost, what it measures and the changes it is for:
                    selection. For a new task selection that passed data-short.
   train-long       the async production loop with checkpoints, panel-100 every 10 updates and
                    an HF export; 112 H100, or 40 with --layout p40. For release training and
-                   for models that later runs load with --init.
+                   for models that later runs load with --init. No verdict.
 
 An engine change runs speed-short, then speed-medium. A trainer kernel, parallelism or numerics
 change runs speed-medium, then learning-medium. A new task selection runs data-short, then
-data-medium. Without --run the command prints the plan and the status block; --run submits
-it. --version dev satisfies the launcher; Snowball steps use PRESET_REVISION. Guide:
-docs/recipes/snowball-rl.md.
+data-medium. --require adds a condition of your own, such as a mismatch bound on a speed run or
+a per-category score on a learning run. Without --run the command prints the plan and the status
+block, including the verdict of a finished gated run; --run submits it. --version dev satisfies
+the launcher; Snowball steps use PRESET_REVISION. Guide: docs/recipes/snowball-rl.md.
 
 \b
 Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
   --preset speed-medium --version dev --run
   --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo --version dev --run
+  --preset speed-medium --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
+  --preset learning-medium --require 'panel-910/aaii_category/coding/mean>=control' --version dev --run
   --preset data-short --tasks my-selection@2026.11.02 --version dev --run
   --preset train-long --layout p40 --set trainer.max_steps=100 --version dev --run
 """
@@ -56,7 +60,6 @@ from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_status import get_status_path
-from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     BEST_CHECKPOINT_CALLBACK,
     IRIS_HUB_CLUSTER_CONFIG,
@@ -77,8 +80,9 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
-from rigging.provenance import Provenance
+from rigging.provenance import Provenance, git_output
 
+from experiments.post_training import snowball_rl_gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
@@ -90,7 +94,9 @@ RUN_TIMEOUT_HOURS = 72
 
 
 def training_config(
-    preset: presets.Preset, settings: tuple[presets.Setting, ...] = (), evaluations: tuple[presets.Evaluation, ...] = ()
+    preset: presets.Preset,
+    settings: tuple[presets.Setting, ...] = (),
+    evaluations: tuple[presets.Evaluation, ...] = (),
 ) -> dict:
     recipe = preset.recipe
     plan = recipe.layout.role_plan
@@ -188,6 +194,7 @@ def training_config(
 @dataclass(frozen=True)
 class SnowballRun:
     runs: tuple[ArtifactStep[SkyRLRun], ...]
+    gate: ArtifactStep[snowball_rl_gate.GateReport] | None = None
 
 
 def _model_input(init: ArtifactStep | None) -> SkyRLModelSource:
@@ -341,8 +348,10 @@ def build_run(
     evaluations: tuple[str, ...] = (),
     replicates: int = 1,
     control: bool = False,
+    requirements: tuple[str, ...] = (),
 ) -> SnowballRun:
-    """Construct the run steps of a Snowball experiment, one per replicate."""
+    """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
+    snowball_rl_gate.check_requirements(preset, requirements, control=control)
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
@@ -432,7 +441,25 @@ def build_run(
             checkpoint_root=checkpoint_root,
         )
         runs.append(run)
-    return SnowballRun(tuple(runs))
+    gate = (
+        snowball_rl_gate.gate_step(
+            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements)
+        )
+        if preset.name in snowball_rl_gate.CONTROLS and not control
+        else None
+    )
+    return SnowballRun(tuple(runs), gate)
+
+
+def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str]] | None, str | None]:
+    if not (presets.REPO_ROOT / ".git").exists():
+        return None, "git metadata is unavailable on this host"
+    try:
+        output = git_output(["diff", "--no-renames", "--name-status", "-z", ref, "--", *paths], cwd=presets.REPO_ROOT)
+    except (RuntimeError, FileNotFoundError) as error:
+        return None, str(error)
+    fields = output.split("\0")[:-1] if output else []
+    return [{"path": path, "status": status} for status, path in zip(fields[::2], fields[1::2], strict=True)], None
 
 
 def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
@@ -473,6 +500,26 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
                 "output": path,
             }
         )
+    verdict = {}
+    if run.gate is not None:
+        path = (
+            StoragePath(run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster)))
+            / snowball_rl_gate.GATE_REPORT_FILENAME
+        )
+        if presets.exists(path):
+            report = snowball_rl_gate.GateReport.model_validate_json(presets.read_text(path))
+            verdict = {"report": str(path), **report.model_dump(mode="json", include={"verdict", "label", "reason"})}
+            changes, reason = _changed_paths(
+                report.control.main_commit,
+                ("experiments/post_training", "lib/marin/src/marin/rl", "lib/taskcompendium", "vendor/skyrl"),
+            )
+            verdict["rl_path_changes_since_control"] = changes
+            if reason:
+                verdict["rl_path_changes_reason"] = reason
+        else:
+            crashed = next((row for row in rows if str(row["state"]).lower() in ("failed", "killed")), None)
+            if crashed is not None:
+                verdict = {"verdict": "fail", "reason": "run crashed", "iris_job_id": crashed["iris_job_id"]}
     click.echo(
         yaml.safe_dump(
             {
@@ -495,82 +542,14 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
                 "reported_metrics": [{**asdict(metric), "window": metric.window.value} for metric in preset.reported],
                 "gaps": [gap.value for gap in preset.gaps],
                 "runs": rows,
+                **verdict,
             },
             sort_keys=False,
         )
     )
 
 
-@click.command(help=__doc__)
-@click.option(
-    "--preset",
-    "preset_name",
-    required=True,
-    type=click.Choice(sorted(presets.PRESETS)),
-    help="Experiment to run; the table above says which preset fits a change.",
-)
-@click.option(
-    "--set",
-    "settings",
-    multiple=True,
-    metavar="KEY=VALUE",
-    help="Change one key of the composed SkyRL config: a dotted key and a YAML value, for example "
-    "trainer.algorithm.advantage_estimator=grpo. Use +KEY=VALUE for a key the base config lacks. "
-    "Repeatable. Keys the preset owns (placement, data, evaluation, measurement) are refused with the "
-    "reason; data presets accept none. Code changes need no flag: the run name includes the source tree hash.",
-)
-@click.option(
-    "--tasks",
-    "tasks_name",
-    metavar="NAME@VERSION",
-    help="Curated task selection to train on, at an immutable version. Required by data-short and "
-    "data-medium, whose selection must hold out the same panel as the default; train-long defaults to "
-    "the pinned snowball-100k.",
-)
-@click.option(
-    "--init",
-    "init_name",
-    metavar="NAME@VERSION",
-    help="Initial weights: a published model artifact, or a finished train-long run (its HF export). "
-    "learning-medium and train-long only. The initial weights are evaluated too, so the report shows the gain.",
-)
-@click.option(
-    "--resume-from",
-    "resume_name",
-    metavar="NAME[@VERSION]",
-    help="Continue an earlier train-long run's checkpoints and optimizer state under a new run name. "
-    "train-long only.",
-)
-@click.option(
-    "--layout",
-    "layout_name",
-    type=click.Choice(sorted(presets.TRAIN_LONG_RECIPES)),
-    help="train-long GPU layout: l112 (default; 64 trainer + 48 engine H100 on cw-rno2a, the production "
-    "recipe) or p40 (32 + 8 H100 on cw-us-east-02a, learning-medium's batch shape).",
-)
-@click.option(
-    "--eval",
-    "evaluations",
-    multiple=True,
-    type=click.Choice(sorted(presets.EVALUATIONS)),
-    help="Add an evaluation to train-long, which already runs panel-100 before training and every 10 updates. "
-    "Repeatable.",
-)
-@click.option(
-    "--replicates",
-    type=click.IntRange(1, 5),
-    default=1,
-    show_default=True,
-    help="Identical copies of a short or medium preset, sharing one seed. Not for train-long.",
-)
-@click.option(
-    "--control",
-    is_flag=True,
-    help="Run the preset's control replicates from a clean checkout with only its pinned default inputs. "
-    "Only for pinning new controls; refuses --set, --tasks, --init, --eval and data-medium, which uses "
-    "learning-medium's controls.",
-)
-@rl_build_options
+@presets.run_command(help_text=__doc__)
 def main(
     preset_name: str,
     settings: tuple[str, ...],
@@ -581,42 +560,42 @@ def main(
     evaluations: tuple[str, ...],
     replicates: int,
     control: bool,
+    requirements: tuple[str, ...],
 ) -> tuple[ArtifactStep, ...]:
     if init_name and "@" not in init_name:
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
     preset = presets.PRESETS[preset_name]
     layout = presets.LAYOUTS[layout_name] if layout_name else None
-    run = build_run(
-        preset,
-        settings=tuple(presets.parse_setting(setting) for setting in settings),
-        tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
-        init=presets.published_artifact(init_name) if init_name else None,
-        resume_from=presets.published_artifact(resume_name) if resume_name else None,
-        layout=layout,
-        evaluations=evaluations,
-        replicates=replicates,
-        control=control,
-    )
+    try:
+        run = build_run(
+            preset,
+            settings=tuple(presets.parse_setting(setting) for setting in settings),
+            tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
+            init=presets.published_artifact(init_name) if init_name else None,
+            resume_from=presets.published_artifact(resume_name) if resume_name else None,
+            layout=layout,
+            evaluations=evaluations,
+            replicates=replicates,
+            control=control,
+            requirements=requirements,
+        )
+    except snowball_rl_gate.InvalidComparison as error:
+        click.echo(json.dumps({"preset": preset_name, "verdict": "invalid", "reason": str(error)}))
+        raise click.exceptions.Exit(2) from error
     if resume_name and (presets.REPO_ROOT / ".git").exists():
         source_tree = presets.run_tree_hash(resume_name)
-        changes = subprocess.run(
-            ["git", "diff", "--name-only", source_tree, "--", "vendor/skyrl", "lib/marin/src/marin/rl"],
-            cwd=presets.REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if changes.returncode != 0:
+        changes, reason = _changed_paths(source_tree, ("vendor/skyrl", "lib/marin/src/marin/rl"))
+        if reason is not None:
             click.echo(
-                f"Cannot compare this checkout with resume source tree {source_tree}: {changes.stderr.strip()}; "
+                f"Cannot compare this checkout with resume source tree {source_tree}: {reason}; "
                 "verify optimizer and checkpoint compatibility before continuing."
             )
-        elif changes.stdout.strip():
+        elif changes:
             click.echo(
                 "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
             )
     _print_status(run, preset)
-    return run.runs
+    return (*run.runs, *((run.gate,) if run.gate else ()))
 
 
 if __name__ == "__main__":
