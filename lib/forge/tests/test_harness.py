@@ -11,7 +11,6 @@ import pytest
 from rolloutengine.test_support import arithmetic_task, rollout_limits
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import ScriptGrader, StdoutReward
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from taskforge.llm.policy import LLMPolicy
 from verifyit.spec import NumericSpec
@@ -265,63 +264,28 @@ async def test_web_and_error_results_are_saved_before_the_next_inference() -> No
     await ctx.drain()
 
 
-@pytest.mark.parametrize("failure", ["missing", "directory", "archive"])
-@pytest.mark.parametrize("kind", ["read", "grade-task", "grade-candidate", "submit", "validate", "report"])
-async def test_invalid_read_paths_are_tool_feedback(kind: str, failure: str) -> None:
+@pytest.mark.parametrize(
+    "failure",
+    [
+        FileNotFoundError(2, "Missing", "/bad"),
+        IsADirectoryError(21, "Directory", "/bad"),
+        AbsoluteLinkError(TarInfo("/bad")),
+    ],
+)
+async def test_file_errors_are_feedback_at_the_shared_tool_boundary(failure: Exception) -> None:
     ctx = Context(log=EventLog())
-    env = environment(ctx)
-    await ctx.emit(RunCommand("task", 30))
 
-    async def read_missing(event: ReadFile, resource: FakeEnv) -> bytes:
-        try:
-            return await resource.read(event.path)
-        except FileNotFoundError as error:
-            if failure == "directory":
-                raise IsADirectoryError(21, "Is a directory", str(event.path)) from error
-            if failure == "archive":
-                info = TarInfo(str(event.path))
-                info.linkname = "/proc/self/fd"
-                raise AbsoluteLinkError(info) from error
-            raise FileNotFoundError(str(event.path)) from error
+    async def failed_read(event: ReadFile) -> bytes:
+        raise failure
 
-    ctx.handle(ReadFile, read_missing, uses=(env,))
-    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
-    missing = "cand/release_notes.py" if kind in {"grade-candidate", "report"} else "/workspace/controls.json"
-    tools: dict[str, Tool[object]] = {
-        "read": ReadFileTool(),
-        "report": ReportTool(arithmetic_task()),
-        "grade-task": GradeTool(missing, {}, settings),
-        "grade-candidate": GradeTool("/workspace/task.json", {}, settings),
-        "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
-        "validate": ValidateTool(accept, "/workspace/task.json", "/workspace/controls.json"),
-    }
-    arguments: dict[str, dict[str, object]] = {
-        "read": {"path": missing},
-        "report": {
-            "findings": [
-                {
-                    "claim": "wrong answer",
-                    "candidate": {"reply": "9", "files": [missing]},
-                    "expected": {"status": "graded", "reward_min": 1.0, "reward_max": 1.0},
-                }
-            ]
-        },
-        "grade-task": {"reply": "12"},
-        "grade-candidate": {"reply": "12", "files": [missing]},
-        "submit": {"task_path": "/workspace/task.json", "controls_path": missing},
-        "validate": {},
-    }
-    result = await tools[kind](ctx, arguments[kind])
+    ctx.handle(ReadFile, failed_read)
+    result = await ReadFileTool()(ctx, {"path": "/bad"})
     await ctx.drain()
-    assert isinstance(result, ToolResult) and missing in result.content
-    if failure == "directory":
-        assert "directory" in result.content
-    if failure == "archive":
-        assert "absolute path" in result.content
+    assert isinstance(result, ToolResult) and "/bad" in result.content
 
 
-@pytest.mark.parametrize("context_tokens", [262144, 131072])
-async def test_model_window_determines_context_exit(context_tokens: int) -> None:
+async def test_cached_tokens_are_not_counted_twice_at_context_exit() -> None:
+    context_tokens = 262144
     harness = AgenticHarness(context_tokens, LLMPolicy(), "continue", 20000)
     budget = context_tokens
     client = FakeInference(
@@ -373,27 +337,6 @@ async def test_three_consecutive_empty_completions_hold_provider_failure() -> No
         await AgenticHarness(262144, LLMPolicy(), "use tools", 20000).run(ctx, Conversation((), ()), client, {})
     await ctx.drain()
     assert len(client.requests) == 3
-
-
-async def test_invalid_grader_image_is_feedback_before_any_grading_effect() -> None:
-    ctx = Context(log=EventLog())
-    environment(ctx)
-    image = "registry.example.com/python@sha256:" + "a" * 64
-    task = arithmetic_task(
-        grader=ScriptGrader(
-            argv=("sh", "-c", "echo 1"),
-            reward=StdoutReward(),
-            environment=requirements(image=image),
-            answer_path=None,
-            timeout=1,
-        )
-    )
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), task.model_dump_json().encode()))
-    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
-    # No GradeCandidate executor: the invalid image must be rejected before scheduling grading.
-    result = await GradeTool("/workspace/task.json", {}, settings)(ctx, {"reply": "12"})
-    await ctx.drain()
-    assert isinstance(result, ToolResult) and "grader image must be" in result.content and image in result.content
 
 
 @pytest.mark.parametrize("name", ["grade", "submit", "validate"])

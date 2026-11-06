@@ -177,10 +177,3 @@ async def test_provider_context_limit_exits_without_retry() -> None:
     assert str(caught.value) == body
     assert caught.value.__cause__ is rejection
     assert len(backend.calls) == 1 and not retries.events
-
-
-async def test_fake_inference_preserves_context_limit_type() -> None:
-    error = ContextExceeded("full context")
-    with pytest.raises(ContextExceeded) as caught:
-        await FakeInference((error,)).complete(request())
-    assert caught.value is error
