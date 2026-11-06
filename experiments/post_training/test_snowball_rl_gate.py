@@ -8,7 +8,7 @@ import math
 import runpy
 import shutil
 import sys
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,259 +28,24 @@ from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
-from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.timing import Timestamp
 from scipy.stats import t
-from taskcompendium.grading_result import Outcome
 
-from experiments.post_training import snowball_pass_rates
+from experiments.post_training import snowball_pass_rates, snowball_rl_publication
 from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
+from experiments.post_training.inventory import loop_result
+from experiments.post_training.snowball_rl_test_fixtures import answer as _answer
+from experiments.post_training.snowball_rl_test_fixtures import write_json as _json
 
 pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
 pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
-
-
-def _json(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value))
-
-
-def _answer(task, score, *, low=0, high=1, status="verified", tokens=1, error=None):
-    verification = {"status": status, "score": score, "score_min": low, "score_max": high}
-    return {"task_id": task, "response_token_ids": [1] * tokens, "exception_type": error, "verification": verification}
-
-
-@pytest.fixture
-def recorded_runs(selection, tmp_path, monkeypatch):
-    monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    panel = Path(presets.default_selection().path())
-    tasks = [
-        {
-            "task_id": f"task-{i}",
-            "family": ("large", "small")[i == 0],
-            "aaii_category": ("coding", "format")[i == 0],
-            "agentic": False,
-        }
-        for i in range(910)
-    ]
-    pq.write_table(pa.Table.from_pylist(tasks), panel / presets.TASK_MANIFEST_FILENAME)
-    test_panel = Path(presets.selection_artifact(presets.EVALUATIONS["test_panel"].source).path())
-    full_tasks = [{**tasks[0 if i == 0 else 1], "task_id": f"task-{i}"} for i in range(1500)]
-    pq.write_table(pa.Table.from_pylist(full_tasks), test_panel / presets.TASK_MANIFEST_FILENAME)
-    rates = tmp_path / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION / "pass_rates.parquet"
-    rates.parent.mkdir(parents=True)
-    revision = presets.MODEL_REVISION
-    rows = [
-        {
-            "task_id": f"task-{i}",
-            "model_revision": revision,
-            "passed": (0, 4, 8)[i % 3],
-            "samples": 8,
-            "mean_score": (0.05, 0.5, 0.95)[i % 3],
-        }
-        for i in range(910)
-    ]
-    pq.write_table(pa.Table.from_pylist(rows), rates)
-    panel_rates = tmp_path / "test-panel-rates" / scoring.PASS_RATES_FILENAME
-    panel_rates.parent.mkdir()
-    pq.write_table(
-        pa.Table.from_pylist([{**rows[i % len(rows)], "task_id": f"task-{i}"} for i in range(1500)]), panel_rates
-    )
-
-    def write(
-        preset,
-        name,
-        *,
-        speed=100.0,
-        score=0.5,
-        metrics=None,
-        unscored=0,
-        duplicate_task=False,
-        drop_task=False,
-        provenance=None,
-        argv=(),
-        initial_score=None,
-        omit_step=None,
-        version=presets.PRESET_REVISION,
-        record_version=None,
-        fixed=True,
-        mixed=128,
-        fingerprint="",
-        answers=None,
-        missing_receipt=False,
-        unresolved_receipt=False,
-        first_panel_task="task-0",
-        quality_unscored=0,
-        quality_metrics=None,
-        initial_unscored=0,
-        first_answer_task="task-0",
-        panel_identity="",
-    ):
-        preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
-        root = tmp_path / name / version
-        result = SkyRLRun(
-            path=str(root),
-            hf_model_uri=None,
-            global_step=preset.updates,
-            tokenizer_uri="tests/tokenizer",
-            tokenizer_revision="test-revision",
-            checkpoint_root=str(root / "checkpoints"),
-            draft_checkpoint_root=None,
-            terminal_manifest_uri=str(root / "terminal.json"),
-            iris_job_id="/tests/native-run",
-        )
-        record = ArtifactRecord(
-            name=name,
-            version=record_version or version,
-            fingerprint=fingerprint,
-            result_type=result_type_name(SkyRLRun),
-            result=result.result_payload(),
-        )
-        _json(root / RECORD_FILENAME, record.model_dump(mode="json"))
-        commit = gate.CONTROLS.get(preset.name, gate.CONTROLS["learning-medium"])[0].main_commit
-        source = {"tree_hash": "native-tree", "base_commit": commit, "dirty": False, "command_line": list(argv)}
-        result = {"state": "succeeded", "iris_job_id": "/tests/native-run", "provenance": source | (provenance or {})}
-        if not (missing_receipt or unresolved_receipt):
-            _json(root / "terminal.json", {"config": {}, "result": result})
-        (root / ".executor_status").write_text("SUCCESS")
-        for step in (0,) if preset.recipe.layout.role_plan.generate_only else range(1, preset.updates + 1):
-            row = {f"generate/outcome/{outcome}": 0.0 for outcome in (*Outcome, "rollout_failure")}
-            row |= {"step": step, "trainer/global_step": step}
-            if not preset.recipe.layout.role_plan.generate_only:
-                row["timing/step_wall/unaccounted"] = 0.0
-            row |= {metric.key: 0.0 for metric in preset.reported if metric.key.startswith("timing/step_wall/")}
-            row |= {
-                "attempt_id": "recorded-attempt",
-                "generate/outcome/graded": 512.0,
-                "loss/policy_loss": 0.01,
-                "policy/raw_grad_norm": 1.0,
-                "policy/mismatch/staleness0/kl_k3": speed / 1000,
-                "policy/mismatch/pooled/kl_k3": speed / 1000,
-                "policy/mismatch/staleness0/selected_tokens": 1000,
-                "async/performance/loss_tokens_per_configured_policy_gpu_second": speed,
-                "async/performance/response_tokens_per_configured_inference_gpu_second": 4 * speed,
-                "generate/min_num_tokens": 4096 if fixed else 12,
-                "generate/max_num_tokens": 4096,
-                "generate/tokens_per_second_per_gpu": speed,
-                "vllm/median_generation_throughput": 100.0,
-                "startup/init_weight_sync_state": speed / 10,
-                "timing/step_wall/group_admission": speed,
-                "timing/step_wall/evaluation": 700,
-                "timing/step_wall/checkpoint_work": 900,
-            }
-            if preset.recipe.layout.role_plan.generate_only:
-                row["generate/wall_seconds"] = 1.0
-            if step != omit_step:
-                _json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
-        launch = {"skyrl": {"trainer": {"seed": presets.SEED}}, "inputs": {"validation_data": [], "evaluation_data": {}}}
-        if unresolved_receipt:
-            launch |= {
-                "artifacts": {"attempts_root": str(root / "attempts")},
-                "run": {"attempt_id": "missing"},
-                "iris": {"job_name": "lookup-missing-job"},
-            }
-
-            @contextmanager
-            def endpoint(**kwargs):
-                yield SimpleNamespace(url="http://iris.test", credentials=None)
-
-            @contextmanager
-            def rpc(*args):
-                yield SimpleNamespace(list_jobs=lambda request: controller_pb2.Controller.ListJobsResponse())
-
-            monkeypatch.setattr(adapter, "connect_controller", endpoint)
-            monkeypatch.setattr(adapter, "rpc_client", rpc)
-        if initial_score is None and any(evaluation.at_start for evaluation in preset.evaluations):
-            initial_score = 0.3
-        sessions = {-1 if preset.updates == 0 else preset.updates: score}
-        sessions |= {0: initial_score} if initial_score is not None else {}
-        for index, evaluation in enumerate(preset.evaluations):
-            task_options = [argv[index + 1] for index, value in enumerate(argv[:-1]) if value == "--tasks"]
-            default = presets.default_selection()
-            selected = evaluation.tasks(
-                presets.selection_artifact(task_options[-1]) if task_options else default, default
-            )
-            run_panel = Path(selected.path())
-            if first_panel_task != "task-0":
-                original = pq.read_table(run_panel / presets.TASK_MANIFEST_FILENAME).to_pylist()
-                run_panel = root / f"heldout-{evaluation.name}"
-                run_panel.mkdir()
-                manifest = [
-                    {**row, "task_id": first_panel_task} if row["task_id"] == "task-0" else row for row in original
-                ]
-                pq.write_table(pa.Table.from_pylist(manifest), run_panel / presets.TASK_MANIFEST_FILENAME)
-            count = evaluation.sample or presets.selection_summary(selected)[f"{evaluation.file}_rows"]
-            identifiers = [
-                f"train-task-{i}" if evaluation.file == "train" else f"task-{i}" if i else first_panel_task
-                for i in range(count)
-            ]
-            binding = selected
-            if evaluation.sample is not None:
-                binding = presets.sampled_tasks_step(
-                    selected, evaluation.file, evaluation.sample, presets.SEED, local_only=evaluation.local_only
-                )
-            descriptor = {
-                "uri": str(run_panel),
-                "relative_path": f"{evaluation.file}.parquet",
-                "kind": "directory",
-                "identity": f"{binding.name}@{binding.version}",
-                "local_path": str(run_panel),
-            }
-            if panel_identity is None:
-                descriptor.pop("identity")
-            elif panel_identity:
-                descriptor["identity"] = panel_identity
-            if index:
-                launch["inputs"]["evaluation_data"][evaluation.name] = [descriptor]
-            else:
-                launch["inputs"]["validation_data"] = [descriptor]
-            for step, average in sessions.items():
-                failed_answers = initial_unscored if step == 0 else quality_unscored if index else unscored
-                rows = answers or [
-                    _answer(
-                        first_answer_task if i == 0 and evaluation.file != "train" else identifier,
-                        (float(i < mixed and attempt == 0) if evaluation.file == "train" else average),
-                        tokens=(preset.recipe.fixed_reply_tokens or 1) if fixed and index == 0 else 1,
-                        error="GraderUnavailable" if i < failed_answers else None,
-                    )
-                    for i, identifier in enumerate(identifiers[: len(identifiers) - drop_task])
-                    for attempt in range(evaluation.answers)
-                ]
-                session = "eval_only" if step == -1 else f"global_step_{step}_evals"
-                export = root / "exports" / evaluation.name if index else root / "exports"
-                path = export / "dumped_evals" / session / "panel.jsonl"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                rows = rows[:1] * duplicate_task + rows
-                path.write_text("".join(json.dumps(row) + "\n" for row in rows))
-                if evaluation.file != "train":
-                    metric_step = 0 if step == -1 else step
-                    metric_path = root / f"exports/metrics/step-{metric_step:06d}.json"
-                    if metric_step != omit_step:
-                        outcome_prefix = f"eval/{evaluation.name}/all/outcome/" if index else "eval/all/outcome/"
-                        counts = {outcome_prefix + outcome: 0 for outcome in (*Outcome, "rollout_failure")}
-                        failures = sum(bool(row.get("exception_type")) for row in rows)
-                        counts.update(
-                            {outcome_prefix + "graded": len(rows) - failures, outcome_prefix + "unavailable": failures}
-                        )
-                        previous = json.loads(metric_path.read_text()) if metric_path.exists() else {}
-                        updated = previous | counts | (quality_metrics or {})
-                        for key, value in (quality_metrics or {}).items():
-                            if value is None:
-                                del updated[key]
-                        _json(metric_path, updated)
-        if not missing_receipt:
-            _json(root / "resolved-launch.yaml", {"config": launch})
-        return root
-
-    return write
 
 
 def _native_launches(steps, tmp_path, native_json):
@@ -313,6 +78,9 @@ def _record_launch(root, config, compiled):
             target = Path(urlsplit(destination["uri"]).path)
             if not target.exists():
                 shutil.copytree(Path(urlsplit(source["uri"]).path), target)
+    for metric in (root / "exports/metrics").glob("step-*.json"):
+        values = json.loads(metric.read_text())
+        _json(metric, values | {"attempt_id": compiled["run"]["attempt_id"]})
     record = json.loads((root / RECORD_FILENAME).read_text())
     record["config"] = asdict(config)
     _json(root / RECORD_FILENAME, record)
@@ -345,7 +113,7 @@ def rescore(preset, *args):
 def status(preset, argv):
     result = CliRunner().invoke(snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, *argv])
     assert result.exit_code == 0, (result.output, result.exception)
-    return yaml.safe_load(result.output.split("StepSpec(", 1)[0])
+    return yaml.safe_load("preset:" + result.output.split("preset:", 1)[1].split("StepSpec(", 1)[0])
 
 
 def test_calibrate_pools_deviations_within_pins():
@@ -1210,7 +978,9 @@ def test_control_panel_rescore_preserves_recorded_protocol(recorded_runs, tmp_pa
 
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])
-def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset, monkeypatch, native_json):
+def test_built_gate_and_rescore_share_inputs_and_status(
+    recorded_runs, tmp_path, preset, monkeypatch, native_json, publication_transport
+):
     monkeypatch.setenv("WANDB_ENTITY", "planned-team")
     controls(recorded_runs, preset)
     if preset == "learning-medium":
@@ -1303,13 +1073,24 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         fingerprint=built.runs[0].fingerprint(),
         metrics=timers,
     )
+    inputs = built.gate.build_config(StepContext.for_fingerprint(built.gate.runtime_args, built.gate.deps))["inputs"]
+    built = replace(built, gate=gate.gate_step(presets.PRESETS[preset], built.runs, inputs=inputs))
     report = run(built.gate)[0].model_dump(mode="json", exclude={"path"})
     timer_rows = {row["metric"]: row for row in report["reported"] if row["metric"] in timers}
     assert {key: row["run"] for key, row in timer_rows.items()} == timers
     assert all(row["control"] is None and row["change"] == "unavailable" for row in timer_rows.values())
     markdown = (Path(built.gate.path()) / gate.GATE_REPORT_FILENAME).with_suffix(".md").read_text()
     assert all(key in markdown for key in timers)
+    publication_transport.fail_readback = True
     assert rescore(preset, "--candidate", built.runs[0].name)["run"] == report["run"]
+    summaries = {path: path.read_bytes() for path in tmp_path.rglob("loop-result.json") if "/result/" in str(path)}
+    assert len(summaries) == len(publication_transport.rows) == 1
+    assert not list(tmp_path.rglob("publication.json"))
+    assert rescore(preset, "--candidate", built.runs[0].name)["run"] == report["run"]
+    assert all(path.read_bytes() == content for path, content in summaries.items())
+    assert len(publication_transport.rows) == 1
+    receipts = list(tmp_path.rglob("publication.json"))
+    assert len(receipts) == 1 and json.loads(receipts[0].read_text())["verified"]
     settings = {key: json.loads(value) for key, _, value in (item.partition("=") for item in report["run"]["settings"])}
     gains = [row["run"] for row in report["reported"] if row["metric"] == "test_panel/mean/gain"]
     assert (settings, report["run"]["tasks"], report["run"]["init"], gains) == expected
@@ -1321,16 +1102,22 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     _json(source / "exports/tracking.json", {"wandb_url": "https://wandb.example/team/project/runs/actual-id"})
     _json(source / "exports/metrics/step-000026.json", {"step": 26, "startup/load_checkpoints": 3.0})
     _json(source / "exports/metrics/step-000028.json", {"step": 28, "trainer/global_step": 28})
+    run(snowball_rl_publication.publication_step(built.runs[0], gate=built.gate))
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "host-default"))
     printed = status(preset, argv)
+    assert printed["runs"][0]["rl_progress_url"].startswith("https://applets.marina.oa.dev/")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     assert printed["runs"][0]["wandb_url"] == "https://wandb.example/team/project/runs/actual-id"
     assert printed["runs"][0]["latest_completed_update"] == 25
     receipt = json.loads((source / "terminal.json").read_text())
     linked_receipt = receipt | {
-        "config": {
-            "run": {"id": "run / id?x=1&y=2"},
-            "runtime": {"training_type": "sync"},
-            "iris": {"wandb_entity": "receipt-team"},
-        }
+        "config": (
+            receipt["config"]
+            | {
+                "runtime": {"training_type": "sync"},
+                "iris": {"wandb_entity": "receipt-team"},
+            }
+        )
     }
     _json(source / "terminal.json", linked_receipt)
     started, finished = 1793840000000, 1793840060000
@@ -1339,23 +1126,24 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     )
     client = MagicMock(spec=IrisClient)
     client.job_status.return_value = native_job
-    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.setattr(presets, "iris_client", lambda: nullcontext(client))
     linked = status(preset, argv)["runs"][0]
     assert linked["wandb_entity"] == "receipt-team"
     links = linked["grafana_links"]
     query = parse_qs(urlsplit(links["run"]).query)
-    assert query["var-run"] == ["run / id?x=1&y=2"]
+    assert query["var-run"] == [f"{built.runs[0].name}-{presets.PRESET_REVISION}"]
     assert query["from"] == [str(started)] and query["to"] == [str(finished)]
     client.job_status.side_effect = ConnectError(Code.NOT_FOUND, "archived native job")
     assert "grafana_links" not in status(preset, argv)["runs"][0]
     client.job_status.side_effect = ConnectionError("controller unavailable")
     assert status(preset, argv)["verdict"] == report["verdict"]
     client.job_status.side_effect = None
-    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: (_ for _ in ()).throw(ConnectionError("offline")))
+    monkeypatch.setattr(presets, "iris_client", lambda: (_ for _ in ()).throw(ConnectionError("offline")))
     assert "grafana_links" not in status(preset, argv)["runs"][0]
-    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.setattr(presets, "iris_client", lambda: nullcontext(client))
     native_job.started_at = None
     assert "grafana_links" not in status(preset, argv)["runs"][0]
+    native_job.started_at = Timestamp.from_ms(started)
     _json(source / "terminal.json", receipt)
     for step in (26, 28):
         (source / f"exports/metrics/step-{step:06d}.json").unlink()
@@ -1371,6 +1159,22 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     receipt["result"]["provenance"]["command_line"] += ["--baseline", baseline]
     _json(source / "terminal.json", receipt)
     recovered = rescore(preset, "--candidate", built.runs[0].name)
+    if preset == "learning-medium":
+        original_read = gate.read_skyrl_launch_receipt
+        source_reads = []
+
+        def publication_receipt(path):
+            if str(path) == str(source):
+                source_reads.append(path)
+                if len(source_reads) == 3:
+                    raise OSError("publication receipt storage unavailable")
+            return original_read(path)
+
+        with monkeypatch.context() as unavailable_receipt:
+            unavailable_receipt.setattr(gate, "read_skyrl_launch_receipt", publication_receipt)
+            saved = rescore(preset, "--candidate", built.runs[0].name)
+        assert len(source_reads) == 3
+        assert saved["report"] == recovered["report"] and saved["verdict"] == recovered["verdict"]
     assert recovered["run"]["baselines"] == [baseline] and recovered["vs_baseline"]
     assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
     if preset == "learning-medium":
@@ -1395,6 +1199,53 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         "run crashed",
         "/tests/native-run",
     )
+    if preset == "learning-medium":
+        native_step = built.runs[0]
+        _json(tmp_path / "initializer/hf/config.json", {})
+        _json(tmp_path / "initializer/hf/tokenizer_config.json", {})
+        monkeypatch.setattr(adapter, "skyrl_temporary_run_path", lambda output_path, ttl_days: str(source / "temporary"))
+        native_config = native_step.build_config(
+            StepContext.for_run(str(source), str(tmp_path), runtime_args=native_step.runtime_args, deps=native_step.deps)
+        )
+        (source / RECORD_FILENAME).unlink()
+        (source / ".executor_status").write_text("FAILED")
+        failure = RuntimeError("first native attempt failed after optimizer work")
+
+        def failed_native(config):
+            launch["run"] = {"id": config.run_id, "attempt_id": config.attempt_id}
+            launch["artifacts"] = {"attempts_root": config.output.attempts_root}
+            _json(source / "resolved-launch.yaml", {"config": launch})
+            _json(
+                Path(config.output.attempts_root) / f"{config.attempt_id}.json",
+                {"config": launch, "result": terminal["result"] | {"state": "failed"}},
+            )
+            for path in (source / "exports/metrics").glob("step-*.json"):
+                _json(path, json.loads(path.read_text()) | {"attempt_id": config.attempt_id})
+            _json(source / "exports/tracking.json", {"wandb_url": "https://wandb.ai/team/project/runs/failed-current"})
+            raise failure
+
+        monkeypatch.setattr(loop_result, "run_skyrl", failed_native)
+        with pytest.raises(RuntimeError) as caught:
+            native_step.run(native_config)
+        assert caught.value is failure
+        raw = source / "exports/attempts" / native_config.attempt_id / loop_result.RESULT_FILENAME
+        attempt = json.loads(raw.read_text())
+        assert attempt["status"] == "failed" and attempt["config_fingerprint"] == native_step.fingerprint()
+        saved = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
+        failed_gate = rescore(preset, "--candidate", native_step.name)
+        published = [
+            row
+            for row in publication_transport.rows.values()
+            if row["attempt_id"].startswith(native_config.attempt_id + "-gate-")
+        ]
+        assert len(published) == 1
+        assert (published[0]["status"], published[0]["verdict"], published[0]["config_fingerprint"]) == (
+            "failed",
+            failed_gate["verdict"],
+            native_step.fingerprint(),
+        )
+        assert not (source / RECORD_FILENAME).exists()
+        assert all(path.read_bytes() == content for path, content in saved.items())
 
 
 @pytest.mark.parametrize("preset", ["speed-long", "speed-medium"])
@@ -1435,28 +1286,82 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("parent-early", 3),
         ("no-wait", 0),
         ("child", 0),
+        ("learning-child", 0),
+        ("train-child", 0),
         ("control", 0),
+        ("learning-control", 0),
         ("generate", 0),
     ],
 )
-def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
+def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
+    recorded_runs, monkeypatch, case, expected, publication_transport, tmp_path
+):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setenv("WANDB_ENTITY", "submission-team")
-    preset_name = "speed-short" if case == "generate" else "speed-medium"
-    controls(recorded_runs, preset_name)
-    preset = presets.PRESETS[preset_name]
-    built = snowball.build_run(preset, control=case == "control")
-    source = recorded_runs(
-        preset,
-        built.runs[0].name,
-        speed=150 if case in {"fail", "no-wait"} else 101,
-        fingerprint=built.runs[0].fingerprint(),
+    preset_name = (
+        "learning-medium"
+        if case in {"learning-child", "learning-control"}
+        else "train-long" if case == "train-child" else "speed-short" if case == "generate" else "speed-medium"
     )
+    if case != "train-child":
+        controls(recorded_runs, preset_name)
+    else:
+        monkeypatch.setattr(
+            presets,
+            "artifact_prefix",
+            lambda cluster: str(tmp_path if cluster == presets.P40.cluster else tmp_path / "reno"),
+        )
+    preset = presets.PRESETS[preset_name]
+    replicates = 2 if case == "learning-child" else 1
+    built = snowball.build_run(
+        preset,
+        control=case in {"control", "learning-control"},
+        replicates=replicates,
+        layout=presets.P40 if case == "train-child" else None,
+    )
+    sources = [
+        recorded_runs(
+            preset,
+            step.name,
+            speed=150 if case in {"fail", "no-wait"} else 101,
+            fingerprint=step.fingerprint(),
+            initial_score=0.2 if case in {"learning-child", "train-child", "learning-control"} else None,
+        )
+        for step in built.runs
+    ]
+    source = sources[0]
+    if case == "train-child":
+        monkeypatch.setattr(adapter, "skyrl_temporary_run_path", lambda output_path, ttl_days: str(source / "temporary"))
+        step = built.runs[0]
+        config = step.build_config(
+            StepContext.for_run(str(source), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+        )
+
+        def completed_native(config):
+            terminal = json.loads((source / "terminal.json").read_text())
+            authored = yaml.safe_load(config.launch_config_yaml)
+            terminal["config"]["run"] = authored["run"] | {"id": config.run_id, "attempt_id": config.attempt_id}
+            terminal["config"]["inputs"]["model"] = authored["inputs"]["model"]
+            terminal["config"]["artifacts"] = authored["artifacts"]
+            _json(source / "terminal.json", terminal)
+            _json(source / "resolved-launch.yaml", {"config": terminal["config"]})
+            for path in (source / "exports/metrics").glob("step-*.json"):
+                _json(path, json.loads(path.read_text()) | {"attempt_id": config.attempt_id})
+            _json(
+                source / "exports/tracking.json",
+                {"attempt_id": config.attempt_id, "wandb_url": "https://wandb.ai/team/project/runs/train-current"},
+            )
+            return SkyRLRun.raw_load(str(source))
+
+        monkeypatch.setattr(loop_result, "run_skyrl", completed_native)
+        step.run(config)
+    if built.gate is not None:
+        built = replace(built, gate=gate.gate_step(preset, built.runs, inputs=gate.GateInputs()))
     if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
         _json(source / "terminal.json", receipt)
-    if case not in {"missing", "control"}:
+    if built.gate is not None and case not in {"missing", "control"}:
         run(built.gate)
     if case == "parent-early":
         shutil.rmtree(source)
@@ -1466,29 +1371,138 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     client.submit.return_value.job_id = job
     final = JobState.FAILED if case == "parent-early" else JobState.SUCCEEDED
     client.job.return_value.wait.return_value = SimpleNamespace(state=final)
+    client.job_status.return_value = SimpleNamespace(
+        state=JobState.SUCCEEDED,
+        started_at=Timestamp.from_ms(1794000000000),
+        finished_at=Timestamp.from_ms(1794003600000),
+    )
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
-    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.setattr(presets, "iris_client", lambda: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    if case == "child":
+    if case in {"child", "learning-child", "train-child", "learning-control"}:
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
     arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
     if case != "no-wait":
         arguments.append("--wait")
-    if case == "control":
+    if case in {"control", "learning-control"}:
         arguments.append("--control")
+    if case == "learning-child":
+        arguments.extend(("--replicates", "2"))
+    if case == "train-child":
+        arguments.extend(("--layout", "p40"))
     try:
         result = CliRunner().invoke(snowball.main, arguments)
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    waited = [] if case in {"no-wait", "child"} else [(job,)]
+    waited = [] if case in {"no-wait", "child", "learning-child", "train-child", "learning-control"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
     assert all(call.kwargs["poll_interval"] == 60 for call in client.job.return_value.wait.call_args_list)
-    if case != "child":
+    if case not in {"child", "learning-child", "train-child", "learning-control"}:
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
     if case in {"pass", "fail", "invalid"}:
         assert "# speed-medium" in result.output
+    if case == "learning-control":
+        assert not publication_transport.rows
+    if case == "learning-child":
+        snapshot = status(preset_name, ["--replicates", "2"])
+        assert all(row["rl_progress_url"].startswith("https://applets.marina.oa.dev/") for row in snapshot["runs"])
+        first_group = set(publication_transport.rows)
+        assert len(first_group) == 2
+        assert all(publication_transport.rows[key]["verdict"] == snapshot["verdict"] for key in first_group)
+        earlier = {path: path.read_bytes() for path in Path(source).parent.parent.rglob("loop-result.json")}
+        recorded_runs(
+            preset,
+            built.runs[1].name,
+            score=0.495,
+            initial_score=0.2,
+            fingerprint=built.runs[1].fingerprint(),
+            attempt_id="second-attempt",
+        )
+        pending = status(preset_name, ["--replicates", "2"])
+        assert "report" not in pending and "verdict" not in pending
+        assert all("rl_progress_url" not in row for row in pending["runs"])
+        try:
+            repeated = CliRunner().invoke(snowball.main, arguments)
+        finally:
+            set_job_info(None)
+        assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+        assert len(publication_transport.rows) == 4 and len(set(publication_transport.rows) - first_group) == 2
+        assert all(path.read_bytes() == content for path, content in earlier.items())
+        refreshed = status(preset_name, ["--replicates", "2"])
+        assert refreshed["report"] != snapshot["report"]
+        assert all(
+            publication_transport.rows[key]["verdict"] == refreshed["verdict"]
+            for key in set(publication_transport.rows) - first_group
+        )
+        assert any(
+            attempt.startswith("second-attempt-gate-") for _, attempt in set(publication_transport.rows) - first_group
+        )
+        recorded_runs(
+            preset,
+            built.runs[1].name,
+            score=0.1,
+            initial_score=0.2,
+            attempt_id="publication-failure",
+            fingerprint=built.runs[1].fingerprint(),
+        )
+        publication_transport.fail_readback = True
+        try:
+            unavailable = CliRunner().invoke(snowball.main, arguments)
+        finally:
+            set_job_info(None)
+        assert unavailable.exit_code == 0, (unavailable.output, unavailable.exception)
+        failed_group = status(preset_name, ["--replicates", "2"])
+        assert failed_group["verdict"] == "fail"
+        monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+        client.submit.side_effect = None
+        waited_failure = CliRunner().invoke(snowball.main, arguments)
+        assert waited_failure.exit_code == 1, (waited_failure.output, waited_failure.exception)
+    if case == "train-child":
+        snapshot = status(preset_name, ["--layout", "p40"])
+        assert "verdict" not in snapshot and snapshot["runs"][0]["rl_progress_url"].startswith(
+            "https://applets.marina.oa.dev/"
+        )
+        assert len(publication_transport.rows) == 1
+        record = next(iter(publication_transport.rows.values()))
+        assert record["verdict"] is None and record["status"] == "succeeded"
+        assert record["baseline"]["attempted"] == record["final"]["attempted"] == 100
+        assert record["layout"] == "p40" and record["wandb_url"].endswith("/train-current")
+        initial = source / "exports/dumped_evals/global_step_0_evals"
+        resumed = source / "exports/dumped_evals/global_step_10_evals"
+        initial.rename(resumed)
+        for path in (source / "exports/metrics").glob("step-*.json"):
+            if json.loads(path.read_text())["step"] <= 10:
+                path.unlink()
+        checkpoint = Path(config.output.checkpoint_root, "latest_ckpt_global_step.txt")
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_text("10")
+        (checkpoint.parent / "global_step_10").mkdir()
+        resume_source = presets.published_artifact(f"{step.name}@{step.version}")
+        resumed_run = snowball.build_run(preset, layout=presets.P40, resume_from=resume_source)
+        resumed_step = resumed_run.runs[0]
+        resumed_source = recorded_runs(
+            preset, resumed_step.name, fingerprint=resumed_step.fingerprint(), attempt_id="resumed-at-10"
+        )
+        shutil.rmtree(resumed_source / "exports/dumped_evals/global_step_0_evals")
+        resumed_arguments = [*arguments, "--resume-from", f"{step.name}@{step.version}"]
+        try:
+            repeated = CliRunner().invoke(snowball.main, resumed_arguments)
+        finally:
+            set_job_info(None)
+        assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+        assert len(publication_transport.rows) == 1
+        raw = resumed_source / "exports/attempts/resumed-at-10/loop-result.json"
+        assert json.loads(raw.read_text())["status"] == "succeeded"
+        resumed_status = status(preset_name, ["--layout", "p40", "--resume-from", f"{step.name}@{step.version}"])
+        assert resumed_status["runs"][0]["state"] == "succeeded"
+        assert "rl_progress_url" not in resumed_status["runs"][0]
+        # A cached receipt for the original source belongs to its earlier native attempt.
+        step.run(replace(config, attempt_id="another-native-attempt"))
+        stale_link = status(preset_name, ["--layout", "p40"])
+        assert stale_link["runs"][0]["state"] == "succeeded"
+        assert "rl_progress_url" not in stale_link["runs"][0]
     if case == "generate":
         snapshot = status(preset_name, [])
         assert snapshot["runs"][0]["latest_completed_update"] == 0

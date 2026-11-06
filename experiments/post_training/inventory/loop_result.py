@@ -5,19 +5,30 @@
 
 import hashlib
 import json
+import logging
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import yaml
-from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, run_skyrl
+from iris.cluster.types import JobName
+from marin.rl.skyrl import TRACKING_FILENAME, SkyRLRun, SkyRLRunConfig, run_skyrl
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+
+from experiments.post_training import snowball_rl_presets as presets
 
 FIXED_PANEL_DECLARED_SHA256 = "33af492d1d1cbe0602effd0b0f5154c87d6e733b8d9e8b48178be7030f3e0426"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 RESULT_FILENAME = "loop-result.json"
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SnowballAttempt:
+    config_fingerprint: str
+    layout: str
 
 
 @dataclass(frozen=True)
@@ -25,6 +36,7 @@ class LoopRunConfig:
     skyrl: SkyRLRunConfig
     label: str
     expected_steps: int
+    snowball: SnowballAttempt | None = None
 
 
 def _bounded_text(uri: StoragePath, limit: int = MAX_EVIDENCE_BYTES) -> str | None:
@@ -71,6 +83,42 @@ def _evaluation_result(metrics: dict[str, Any] | None, issues: list[str]) -> dic
         issues.append(f"Evaluation reward unavailable; attempted={attempted}, scored={scored}. No zero was substituted.")
         return None
     return {"reward": reward, "attempted": int(attempted), "scored": int(scored)}
+
+
+def _write_result(
+    config: LoopRunConfig,
+    started: datetime,
+    *,
+    status: str,
+    optimizer_steps: int | None,
+    values: dict[str, Any],
+    destination: StoragePath | None = None,
+) -> dict[str, Any]:
+    skyrl = config.skyrl
+    now = datetime.now(UTC)
+    provenance = Provenance.capture()
+    config_hash = hashlib.sha256(skyrl.launch_config_yaml.encode()).hexdigest()
+    source_revision = f"launcher base={provenance.base_commit or 'unknown'} tree={provenance.tree_hash or 'unknown'}"
+    source_revision += f"; launch SHA256={config_hash}"
+    result = {
+        "run_id": skyrl.run_id,
+        "attempt_id": skyrl.attempt_id,
+        "label": config.label,
+        "run_date": started.isoformat().replace("+00:00", "Z"),
+        "date_basis": "launch_started",
+        "started_at": started.isoformat().replace("+00:00", "Z"),
+        "completed_at": now.isoformat().replace("+00:00", "Z"),
+        "elapsed_seconds": (now - started).total_seconds(),
+        "timing_scope": "loop_launcher_to_terminal",
+        "status": status,
+        "optimizer_steps": optimizer_steps,
+        "source_revision": source_revision,
+        **values,
+    }
+    destination = destination or StoragePath(skyrl.output.export_root) / RESULT_FILENAME
+    destination.parent.mkdirs()
+    destination.write_text(json.dumps(result, allow_nan=False, indent=2))
+    return result
 
 
 def _persist_result(config: LoopRunConfig, started: datetime, native_succeeded: bool) -> dict[str, Any]:
@@ -142,78 +190,159 @@ def _persist_result(config: LoopRunConfig, started: datetime, native_succeeded: 
         issues.append("Baseline and final scoring must both cover the complete declared evaluation cohort.")
     if not native_succeeded:
         issues.append("Native training launcher failed; available observations do not override that failure.")
-    now = datetime.now(UTC)
-    provenance = Provenance.capture()
-    config_hash = hashlib.sha256(skyrl.launch_config_yaml.encode()).hexdigest()
     inputs = launch["inputs"]
-    source_revision = f"launcher base={provenance.base_commit or 'unknown'} tree={provenance.tree_hash or 'unknown'}"
-    source_revision += f"; launch SHA256={config_hash}"
-    result = {
-        "run_id": skyrl.run_id,
-        "attempt_id": skyrl.attempt_id,
-        "label": config.label,
-        "run_date": started.isoformat().replace("+00:00", "Z"),
-        "date_basis": "launch_started",
-        "started_at": started.isoformat().replace("+00:00", "Z"),
-        "completed_at": now.isoformat().replace("+00:00", "Z"),
-        "elapsed_seconds": (now - started).total_seconds(),
-        "timing_scope": "loop_launcher_to_terminal",
-        "status": (
-            "succeeded"
-            if native_succeeded
-            and steps_complete
-            and checkpoint == config.expected_steps
-            and full_coverage
-            and not issues
-            else "failed"
-        ),
-        "optimizer_steps": len(valid_steps),
-        "source_revision": source_revision,
-        "data_identity": "; ".join(item["identity"] for item in inputs["train_data"]),
-        "initializer_identity": skyrl.model.identity,
-        "evaluation": {
-            "name": "snowball-fixed-development",
-            "version": "; ".join(item["identity"] for item in inputs["validation_data"]),
-            "task_count": expected_count,
-            "task_set_sha256": None,
-            "protocol_sha256": None,
+    status = (
+        "succeeded"
+        if native_succeeded and steps_complete and checkpoint == config.expected_steps and full_coverage and not issues
+        else "failed"
+    )
+    return _write_result(
+        config,
+        started,
+        status=status,
+        optimizer_steps=len(valid_steps),
+        values={
+            "data_identity": "; ".join(item["identity"] for item in inputs["train_data"]),
+            "initializer_identity": skyrl.model.identity,
+            "evaluation": {
+                "name": "snowball-fixed-development",
+                "version": "; ".join(item["identity"] for item in inputs["validation_data"]),
+                "task_count": expected_count,
+                "task_set_sha256": None,
+                "protocol_sha256": None,
+            },
+            "baseline": baseline,
+            "final": final,
+            "artifact_uri": skyrl.output.terminal_manifest_uri,
+            "gpu_hours": None,
+            "wandb_url": None if observations is None else observations.get("wandb_url"),
+            "evidence": [
+                *issues,
+                "Launcher configuration and input identities are declarations, not full loaded-runtime attestations; "
+                "runtime task-set and protocol identity remain unknown/unranked.",
+                f"Declared reference fixed100 task-content digest: {FIXED_PANEL_DECLARED_SHA256}; "
+                "this record does not attest actual runtime membership.",
+                "Elapsed time includes the blocking launcher; allocated GPU-hours "
+                "and cancelled generation work are unknown.",
+                "Optimizer evidence uses callback metrics, native terminal success and checkpoint marker; "
+                "no independent per-token accounting is claimed.",
+            ],
         },
-        "baseline": baseline,
-        "final": final,
-        "artifact_uri": skyrl.output.terminal_manifest_uri,
-        "gpu_hours": None,
-        "wandb_url": None if observations is None else observations.get("wandb_url"),
-        "evidence": [
-            *issues,
-            "Launcher configuration and input identities are declarations, not full loaded-runtime attestations; "
-            "runtime task-set and protocol identity remain unknown/unranked.",
-            f"Declared reference fixed100 task-content digest: {FIXED_PANEL_DECLARED_SHA256}; "
-            "this record does not attest actual runtime membership.",
-            "Elapsed time includes the blocking launcher; allocated GPU-hours "
-            "and cancelled generation work are unknown.",
-            "Optimizer evidence uses callback metrics, native terminal success and checkpoint marker; "
-            "no independent per-token accounting is claimed.",
-        ],
-    }
-    export.mkdirs()
-    (export / RESULT_FILENAME).write_text(json.dumps(result, allow_nan=False, indent=2))
-    return result
+    )
+
+
+def _persist_snowball_result(
+    config: LoopRunConfig,
+    started: datetime,
+    native: SkyRLRun | None,
+    issues: list[str],
+) -> dict[str, Any]:
+    skyrl = config.skyrl
+    metadata = config.snowball
+    assert metadata is not None
+    export = StoragePath(skyrl.output.export_root)
+    tracking = _json_observation(export / TRACKING_FILENAME, issues)
+    wandb_url = (
+        tracking.get("wandb_url") if tracking is not None and tracking.get("attempt_id") == skyrl.attempt_id else None
+    )
+    if wandb_url is None:
+        issues.append("W&B tracking is not attributable to this native attempt.")
+    attempt = _json_observation(StoragePath(skyrl.output.attempts_root) / f"{skyrl.attempt_id}.json", issues)
+    job = native.iris_job_id if native is not None else None
+    if attempt is not None:
+        recorded = attempt.get("config", {}).get("run", {})
+        if (recorded.get("id"), recorded.get("attempt_id")) == (skyrl.run_id, skyrl.attempt_id):
+            job = attempt.get("result", {}).get("iris_job_id") or job
+        else:
+            issues.append("Native attempt receipt identity does not match this launch.")
+    applied = []
+    for path in sorted((export / "metrics/step-*.json").glob(), key=str):
+        row = _json_observation(path, issues)
+        if row is None or row.get("attempt_id") != skyrl.attempt_id:
+            continue
+        step = row.get("step", 0)
+        if (
+            not 0 < step <= config.expected_steps
+            or row.get("trainer/global_step") != step
+            or "timing/step_wall/unaccounted" not in row
+        ):
+            continue
+        count = row.get("policy/policy_update_steps")
+        values = [row.get(key) for key in ("policy/policy_loss", "policy/raw_grad_norm")]
+        if (
+            type(count) in (int, float)
+            and math.isfinite(count)
+            and count >= 0
+            and int(count) == count
+            and all(type(value) in (int, float) and math.isfinite(value) for value in values)
+        ):
+            applied.append(int(count))
+    if len(applied) != config.expected_steps:
+        issues.append("Applied optimizer-window evidence is incomplete for this attempt.")
+    interval = {"elapsed_seconds": 0.0, "timing_scope": "native_job_start_to_finish"}
+    try:
+        with presets.iris_client() as client:
+            status = client.job_status(JobName.from_wire(job))
+        if status.started_at is None or status.finished_at is None:
+            raise ValueError(f"Native timing is unavailable for {job}")
+        start, finish = status.started_at.epoch_seconds(), status.finished_at.epoch_seconds()
+        if finish < start:
+            raise ValueError(f"Native completion precedes its start: {job}")
+        interval.update(
+            run_date=datetime.fromtimestamp(start, UTC).isoformat(),
+            started_at=datetime.fromtimestamp(start, UTC).isoformat(),
+            completed_at=datetime.fromtimestamp(finish, UTC).isoformat(),
+            elapsed_seconds=finish - start,
+        )
+    except Exception as error:
+        issues.append(f"Native job timing: {error}")
+    launch = yaml.safe_load(skyrl.launch_config_yaml)
+    return _write_result(
+        config,
+        started,
+        status="succeeded" if native is not None else "failed",
+        optimizer_steps=sum(applied),
+        destination=export / "attempts" / skyrl.attempt_id / RESULT_FILENAME,
+        values={
+            "config_fingerprint": metadata.config_fingerprint,
+            "layout": metadata.layout,
+            "iris_job_id": job,
+            "wandb_url": wandb_url,
+            "data_identity": "; ".join(item["identity"] for item in launch["inputs"]["train_data"]),
+            "initializer_identity": skyrl.model.identity,
+            **interval,
+            "evidence": [*issues, "Panel phases and quality verdict are evaluated independently of native execution."],
+        },
+    )
 
 
 def run_loop(config: LoopRunConfig) -> SkyRLRun:
-    """Run training and persist its terminal summary before independent publication."""
+    """Run native training and persist its attempt record."""
     started = datetime.now(UTC)
+    issues = []
+
+    def persist(native: SkyRLRun | None) -> dict[str, Any]:
+        if config.snowball is not None:
+            return _persist_snowball_result(config, started, native, issues)
+        return _persist_result(config, started, native_succeeded=native is not None)
+
     try:
         run = run_skyrl(config.skyrl)
     except Exception as training_error:
         try:
-            _persist_result(config, started, native_succeeded=False)
+            persist(None)
         except Exception as recording_error:
             raise ExceptionGroup(
                 "Training and terminal-summary persistence failed", [training_error, recording_error]
             ) from None
         raise
-    summary = _persist_result(config, started, native_succeeded=True)
-    if summary["status"] != "succeeded":
+    try:
+        summary = persist(run)
+    except Exception:
+        if config.snowball is None:
+            raise
+        logger.warning("Native run completed; attempt record write failed", exc_info=True)
+        return run
+    if config.snowball is None and summary["status"] != "succeeded":
         raise RuntimeError("Training completed but loop evidence is incomplete; see exports/loop-result.json")
     return run

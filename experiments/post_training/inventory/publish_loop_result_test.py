@@ -150,3 +150,17 @@ def test_publication_without_deployment_client_reports_missing_dependency(monkey
     monkeypatch.setitem(sys.modules, "marina.client", None)
     with pytest.raises(RuntimeError, match="requires the Marina client"):
         publication.publish_result(result)
+
+
+def test_verdict_record_without_phases_remains_publishable(monkeypatch, result, api_result):
+    result.update(verdict="invalid", baseline=None, final=None)
+    api_result.update(result, partial_coverage=True)
+    transport = ReportTransport([api_result])
+    monkeypatch.setattr(publication, "marina_request", transport)
+    assert publication.publish_result(result)["verified"]
+
+
+def test_verdict_final_score_requires_positive_elapsed_time(monkeypatch, result):
+    result.update(verdict="invalid", elapsed_seconds=0)
+    with pytest.raises(ValidationError, match="positive elapsed time"):
+        publication.publish_result(result)

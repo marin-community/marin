@@ -37,6 +37,12 @@ comparison fields. A runtime evaluation protocol hash is distinct from a declare
 source protocol; absent runtime identity remains null. Names do not define a
 comparison group. Use `wandb_url` for an exact W&B run link when recorded.
 
+Snowball records carry their native execution status separately from an optional gate verdict.
+They declare a minimum scored fraction (0.99); actual coverage remains visible, and comparison
+eligibility uses that threshold. The gain uses the same run's update-0 panel evaluation.
+Records without a verdict retain complete-scoring validation. Campaign and series identify the
+preset revision and preset, with the exact W&B URL when recorded.
+
 ## Validate and release
 
 From the repository root:

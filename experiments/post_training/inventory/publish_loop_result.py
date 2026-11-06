@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import click
 from marin.rl.evaluation_identity import validate_evaluation_identity
@@ -72,6 +72,8 @@ class RunSummary(BaseModel):
     elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)]
     timing_scope: Identity
     status: Literal["succeeded", "failed", "running"]
+    verdict: Literal["pass", "fail", "invalid"] | None = None
+    min_scored_fraction: Annotated[FiniteFloat, Field(gt=0, le=1)] = 1.0
     optimizer_steps: Count
     source_revision: Identity
     data_identity: Identity
@@ -95,14 +97,20 @@ class RunSummary(BaseModel):
     def valid_outcome(self):
         if self.status != "running" and self.completed_at is None:
             raise ValueError("Terminal attempts require a completion timestamp")
-        if self.final is not None and (self.baseline is None or self.elapsed_seconds <= 0):
+        if self.final is not None and (self.elapsed_seconds <= 0 or (self.verdict is None and self.baseline is None)):
             raise ValueError("A final measurement requires a baseline and positive elapsed time")
         for phase in (self.baseline, self.final):
             if phase is not None and phase.attempted > self.evaluation.task_count:
                 raise ValueError("Attempted count exceeds the fixed evaluation cohort")
-        if self.status == "succeeded" and any(
-            phase is None or phase.attempted != self.evaluation.task_count or phase.scored != self.evaluation.task_count
-            for phase in (self.baseline, self.final)
+        if (
+            self.verdict is None
+            and self.status == "succeeded"
+            and any(
+                phase is None
+                or phase.attempted != self.evaluation.task_count
+                or phase.scored != self.evaluation.task_count
+                for phase in (self.baseline, self.final)
+            )
         ):
             raise ValueError("Successful attempts require complete baseline and final scoring")
         return self
@@ -173,7 +181,11 @@ def publish_result(record: dict[str, Any], service_url: str = DEFAULT_MARINA_URL
         "attempt_id": summary.attempt_id,
         "inserted": inserted["row_count"] == 1,
         "verified": True,
-        "url": details["authenticated_url"],
+        "url": (
+            details["authenticated_url"]
+            + "#run="
+            + quote(json.dumps([summary.run_id, summary.attempt_id], separators=(",", ":")), safe="")
+        ),
     }
 
 

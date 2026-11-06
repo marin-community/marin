@@ -193,6 +193,10 @@ Learning-medium and data-medium score the same greedy test panel at update 0 and
 The run’s own update-0 dump supplies its publication baseline; the pass-rate artifact supplies
 initializer statistics by slice. `--baseline` compares separate completed runs in the gate report.
 
+Published trained-panel runs expose `rl_progress_url` in status.
+Retry the gate command, or the original train-long command, to complete a failed publication.
+Each native attempt keeps an attempt record; see the recipe's [publication rules](../../../docs/recipes/snowball-rl.md#dashboard-publication).
+
 ## Record the experiment
 
 One experiment is one change under test, with every run and preset used to judge it. It has one

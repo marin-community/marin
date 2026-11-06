@@ -21,7 +21,10 @@ table. Its exit code is 0 for PASS or completed train-long/control collection,
 1 for FAIL, 2 for INVALID and 3 when submission, the coordinator or missing evidence prevents a verdict. Successful ungated runs also exit 0. Submission without `--wait` returns 0 when accepted.
 The status lists the latest completed update and the W&B URL when the tracker has
 saved one. Set `WANDB_ENTITY` before submission to choose the W&B team; an unset
-value uses `marin-community`. Runs use the `marin-snowball-rl` project. The team changes neither run identity nor pinned configuration. Grafana run and preset-panel links appear when the native job start time is available; active jobs link through the present time.
+value uses `marin-community`. Runs use the `marin-snowball-rl` project.
+
+The W&B team changes neither run identity nor pinned configuration. Grafana run and preset-panel links
+appear when the native job start time is available; active jobs link through the present time.
 
 | preset | allocation | workload | measurement |
 |---|---|---|---|
@@ -41,6 +44,21 @@ speed-medium, learning-medium and data-medium use staleness 0. East uses sockets
 Speed-long uses the asynchronous 40-H100 recipe without evaluation, checkpoints or
 export. It guards throughput and staleness-0 k3 mismatch, and reports phase timings, grading/setup
 timers, staleness summaries and selected-token counts by staleness bucket.
+
+## Dashboard publication
+
+Completed learning-medium, data-medium and train-long candidates publish one `rl_progress` record per replicate.
+The status row includes `rl_progress_url` after publication is verified. Gated records keep the group
+verdict; train-long has no quality verdict. Each uses its own update-0 baseline and keeps the native result.
+Gated records below 99% scored coverage cannot rank. Train-long publishes only with full baseline and final coverage. Speed presets and data-short keep their results in the gate report.
+For gated presets, re-run the standalone gate command to retry publication after a service failure;
+the saved verdict remains available. For train-long, repeat the original command to reuse its completed
+native run and retry publication. A resumed train-long run with no update-0 baseline keeps its native
+result and attempt record without a dashboard row.
+Every native attempt keeps `exports/attempts/<attempt_id>/loop-result.json` under its output,
+including failed attempts. This records native status, preset, layout, configuration fingerprint and
+available Iris/W&B identity. Runtime task-content and protocol hashes remain unknown, so these records
+remain unranked.
 
 ## Change one input
 

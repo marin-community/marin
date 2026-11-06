@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import math
 import re
 import statistics
@@ -53,8 +54,11 @@ from tabulate import tabulate
 from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_publication
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
+
+logger = logging.getLogger(__name__)
 
 GATE_REVISION = "2026.11.06"
 GATE_REPORT_FILENAME = "gate_report.json"
@@ -1119,7 +1123,15 @@ def _gate_artifact(
             raise click.BadParameter(str(error), param_hint="--baseline") from error
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
     name += "-base-" + fingerprint_hash(canonical_json(inputs.baselines)) if inputs.baselines else ""
-    name += "-panels-" + fingerprint_hash(canonical_json(evidence))
+    attempts = [
+        receipt_evidence(
+            candidate.path(presets.artifact_prefix(preset.recipe.layout.cluster))
+            if isinstance(candidate, ArtifactStep)
+            else candidate
+        )
+        for candidate in candidates
+    ]
+    name += "-evidence-" + fingerprint_hash(canonical_json((evidence, attempts)))
     return apply(
         name,
         _write_gate,
@@ -1147,7 +1159,8 @@ def gate_step(
 def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
     try:
         receipt = read_skyrl_launch_receipt(path)
-    except SkyRLReceiptLookupError:
+    except SkyRLReceiptLookupError as error:
+        logger.warning("Could not recover recorded command options for %s: %s", path, error)
         return None, GateInputs()
     argv = (receipt.result.provenance or {}).get("command_line", []) if receipt else []
     command = presets.run_command()(lambda **kwargs: ())
@@ -1265,6 +1278,20 @@ def main(
         parse_requirement(text)
     step = _gate_artifact(f"{namespace}/gate-n1-{pins[0].main_commit}", preset, (source,), inputs, index)
     report = run(step)[0]
+    if leave_out is None and presets.published(preset):
+        try:
+            receipt = read_skyrl_launch_receipt(source)
+            if receipt is not None and receipt.config.get("run", {}).get("attempt_id"):
+                native = apply(
+                    name,
+                    Artifact,
+                    version=version if separator else presets.PRESET_REVISION,
+                    pin=source,
+                    path=source,
+                )
+                run(snowball_rl_publication.publication_step(native, gate=step))
+        except Exception as error:
+            logger.warning("Gate report is saved at %s; publication failed and can be retried: %s", report.path, error)
     payload = {
         "report": str(StoragePath(report.path) / GATE_REPORT_FILENAME),
         **report.model_dump(mode="json", exclude={"path"}),

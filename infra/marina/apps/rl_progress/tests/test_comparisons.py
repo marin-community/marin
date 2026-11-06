@@ -30,6 +30,25 @@ def test_partial_baseline_is_not_a_trusted_gain_and_names_do_not_change_cohort()
     assert partial["trusted_gain_eligible"] is False
     assert partial["comparison_key"] == complete["comparison_key"]
 
+    run.update(verdict="fail", min_scored_fraction=0.99)
+    qualified = comparison_fields(run)
+    assert qualified["partial_coverage"] and qualified["trusted_gain_eligible"]
+    assert qualified["gain_per_hour"] == pytest.approx(0.2)
+    assert qualified["comparison_key"] == complete["comparison_key"]
+    run["baseline"]["scored"] = 98
+    assert not comparison_fields(run)["trusted_gain_eligible"]
+    run.update(baseline=None, final=None, verdict="invalid")
+    missing = comparison_fields(run)
+    assert missing["gain_per_hour"] is None and missing["partial_coverage"]
+    assert not missing["trusted_gain_eligible"] and not missing["pareto_eligible"]
+    run.update(
+        baseline={"reward": 0.2, "attempted": 100, "scored": 100},
+        final={"reward": 0.4, "attempted": 100, "scored": 100},
+        elapsed_seconds=0,
+    )
+    untimed = comparison_fields(run)
+    assert untimed["gain_per_hour"] is None and not untimed["pareto_eligible"]
+
 
 def test_changed_membership_cannot_become_rankable_under_an_old_digest():
     task_ids = ["first", "second"]
