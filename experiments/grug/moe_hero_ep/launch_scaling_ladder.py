@@ -168,7 +168,7 @@ def _hero_flops_baseline(
     return FlopsBaseline(context_phases[-1].end_step, flops_baseline_total)
 
 
-LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
+LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 1}  # STOP TEST ONLY
 # Each rung uses the rack count that holds its batch. d6144 uses the shared hero recipe. Narrower
 # rungs use `_small_model` with the same routing geometry.
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
@@ -367,6 +367,7 @@ def build_ladder_run(
     )
     schedule_extension = HERO_SCHEDULE_EXTENSION if hero else None
     stop_step = num_steps + schedule_extension.steps if schedule_extension is not None else num_steps
+    stop_step = 390261  # STOP TEST ONLY: 10 steps past the handoff, not a multiple of the eval interval.
     optimizer = dataclasses.replace(
         optimizer, gate_router_weight_decay=gate_router_weight_decay, schedule_extension=schedule_extension
     )
@@ -409,6 +410,10 @@ def build_ladder_run(
             ttl_days=RESUME_CHECKPOINT_TTL_DAYS,
             temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX if size == "d6144" else None,
         )
+        # STOP TEST ONLY: keep every write under a disposable prefix.
+        permanent_checkpoint_path = "s3://marin-us-east-08a/tmp/ttl=1d/eval-oom-20261105/stop/checkpoints"
+        temporary_checkpoint_path = "s3://marin-us-east-08a/tmp/ttl=1d/eval-oom-20261105/stop/temp"
+        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path]
         if initialize_from_checkpoint is not None:
             load_checkpoint_path.append(initialize_from_checkpoint)
         trainer = hero_trainer_config(
