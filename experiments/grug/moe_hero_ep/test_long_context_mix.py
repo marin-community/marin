@@ -53,6 +53,11 @@ def _fingerprint_config(step):
     return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
 
+def _training_components(config):
+    weights = config.data.train_weights[0][1]
+    return [config.data.components[name] for name, weight in weights.items() if weight > 0]
+
+
 @pytest.fixture
 def zephyr_context(tmp_path):
     client = LocalClient()
@@ -163,6 +168,53 @@ def test_read_length_tokens(fake_store):
     assert read_length_tokens(str(fake_store.stats_path)) == TOKENS
 
 
+def _set_hero_seq_len(monkeypatch, seq_len):
+    monkeypatch.setattr(
+        launch_scaling_ladder,
+        "HERO_MODEL_CONFIG",
+        dataclasses.replace(launch_scaling_ladder.HERO_MODEL_CONFIG, max_seq_len=seq_len),
+    )
+
+
+def test_hero_past_the_threshold_starts_the_store_where_its_context_history_ends(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 262_144)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+
+    step = build_ladder_run(run_id="test-long-context-on", size="d6144", version="dev")
+    config = _fingerprint_config(step)
+
+    phases = launch_scaling_ladder.HERO_CONTEXT_PHASES
+    assert config.data.mixture_start_step == phases[-1].end_step
+    assert all(isinstance(component, LengthSkewDatasetComponent) for component in _training_components(config))
+
+
+@pytest.mark.parametrize(
+    ("seq_len", "history"),
+    [
+        (4096, ()),
+        (
+            65536,
+            (HarrierContextPhase(end_step=257_553, seq_len=4096), HarrierContextPhase(end_step=372_000, seq_len=16384)),
+        ),
+    ],
+)
+def test_hero_contexts_up_to_the_threshold_read_harrier(monkeypatch, seq_len, history):
+    _set_hero_seq_len(monkeypatch, seq_len)
+
+    config = _fingerprint_config(
+        build_ladder_run(
+            run_id="test-harrier",
+            size="d6144",
+            context_phases=history,
+            flops_baseline_total=2e24 if history else None,
+            version="dev",
+        )
+    )
+
+    assert config.data.mixture_start_step is None
+    assert not any(isinstance(component, LengthSkewDatasetComponent) for component in config.data.components.values())
+
+
 def _training_data(data: LmDataConfig) -> LmDataConfig:
     """Drop the held-out components, which train at zero weight and leave the mixture's sources unchanged."""
     ((stage, weights),) = data.train_weights
@@ -199,37 +251,6 @@ def test_hero_and_diagnostics_select_the_same_data():
     assert _training_data(hero.data) == _training_data(diagnostic.data)
     assert hero.trainer.trainer.seed == diagnostic.trainer.trainer.seed
     assert hero.trainer.data_seed == diagnostic.trainer.data_seed
-
-
-@pytest.mark.parametrize(
-    ("seq_len", "history"),
-    [
-        (4096, ()),
-        (
-            65536,
-            (HarrierContextPhase(end_step=257_553, seq_len=4096), HarrierContextPhase(end_step=372_000, seq_len=16384)),
-        ),
-    ],
-)
-def test_hero_contexts_up_to_the_threshold_read_harrier(monkeypatch, seq_len, history):
-    monkeypatch.setattr(
-        launch_scaling_ladder,
-        "HERO_MODEL_CONFIG",
-        dataclasses.replace(launch_scaling_ladder.HERO_MODEL_CONFIG, max_seq_len=seq_len),
-    )
-
-    config = _fingerprint_config(
-        build_ladder_run(
-            run_id="test-harrier",
-            size="d6144",
-            context_phases=history,
-            flops_baseline_total=2e24 if history else None,
-            version="dev",
-        )
-    )
-
-    assert config.data.mixture_start_step is None
-    assert not any(isinstance(component, LengthSkewDatasetComponent) for component in config.data.components.values())
 
 
 def test_diagnostic_arms_select_the_same_data_on_any_rack_count():
