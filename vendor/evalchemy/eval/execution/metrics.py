@@ -11,6 +11,7 @@ from eval.execution.grading import MeanMetrics, TrialMetrics
 from eval.contracts.aggregation import outcome_report
 from eval.contracts.eval_spec import ReducerSpec
 from eval.execution.paired import PairedConditions
+from eval.chat_benchmarks.PDBThink.report import report_metrics
 
 
 class SourceMetrics:
@@ -33,10 +34,13 @@ class SourceMetrics:
         self.report_outcomes = defaultdict(list) if policy.name == "outcome_report" else None
         self.report_population = ()
         self.report_metadata = {}
+        self.pdbthink_rows = [] if policy.name == "pdbthink" else None
 
     def add(self, result: ItemResult) -> None:
         if self.policy.selected_trial is not None and (result.spec.trial or 0) != self.policy.selected_trial:
             return
+        if self.pdbthink_rows is not None:
+            self.pdbthink_rows.append(result.grade.reducer_inputs["pdbthink_row"])
         self.repeated |= result.spec.trial is not None
         if self.paired is not None:
             self.paired.add(result)
@@ -62,6 +66,8 @@ class SourceMetrics:
             self.pass_at_k.add(result)
 
     def finish(self, task: str) -> dict:
+        if self.pdbthink_rows is not None:
+            return {"results": {task: report_metrics(self.pdbthink_rows)}}
         metrics = self.means.finish()
         count = len(self.examples)
         if self.policy.name == "rounded_split_mean":
