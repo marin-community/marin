@@ -135,7 +135,7 @@ covers trajectory assembly before payload storage. `timing/score_centering_colla
 measures driver collation. Concurrent stage sums can overlap training and cannot
 establish added cycle time.
 
-The [Grug cost study](https://github.com/marin-community/marin-logbooks/issues/13)
+The [periodic Grug cost study](https://github.com/marin-community/marin-logbooks/issues/29)
 and [packed CP5 qualification](https://wandb.ai/marin-community/score-centering-cp-packing/artifacts/qualification/packed-cp5-qualification-01a16b97/v0)
 retain measurements and their methods. The
 [dated Snowball report](https://github.com/yonromai/marin/blob/14dae4c5e21179fd1b664e97ae6104b21837d6cd/docs/reports/score-centering-tim.md)
