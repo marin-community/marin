@@ -1,180 +1,123 @@
 # Harbor evaluation
 
-Marin runs Harbor benchmarks through the shared evaluation launcher. The launcher starts the model
-server and, when requested, a second shared judge server; gives Harbor their Iris capability URLs; and normalizes completed trials into v2
-`EvalRunRecord`/`EvalSample` artifacts, and tears inference down after the selected evaluations
-finish.
+Marin's evaluation launcher starts the model, runs Harbor and saves results in FineStore.
+It stops inference when the batch ends. The candidate is the model under evaluation.
+An optional judge model is shared across the batch.
+Iris runs the evaluator worker. Shellbox runs task commands and graders.
 
-Harbor provides containerized agent benchmarks such as Terminal-Bench, SWE-bench Verified, AIME,
-GAIA, BFCL, and Aider. Trials can run in Daytona or another Harbor-supported sandbox environment.
-See [Running Evaluations with Marin](tutorials/run-lm-evals.md) for the model and suite command
-matrix. This page documents Harbor-specific configuration and output behavior.
+Harbor supports `local` (bubblewrap, the default), `daytona`, `qemu` and `shellsim`.
+See [Running Evaluations with Marin](tutorials/run-lm-evals.md) to choose a model and suite.
+Preflight checks the policy and model settings before allocating evaluation resources.
 
-The Marin driver records the model's original location in Harbor's `agents[0].model_name`,
-with a `hosted_vllm/` provider prefix, and puts the live serving name in `model_alias`.
-Agents route requests through `model_alias`; results and trial resume identity use `model_name`.
-SOTOPIA uses the original location, without the provider prefix, to match the comparison cohort.
+Before launching:
 
-Harbor uses the OpenAI SDK for inference. In Terminus agent kwargs, set
-`llm_backend="openai"` and supply an OpenAI-compatible `api_base` for providers
-other than OpenAI. Set `model_info.max_input_tokens` and
-`model_info.max_output_tokens` for context and output limits. Optional
-`input_cost_per_token` and `output_cost_per_token` fields specify USD per token.
-Harbor does not look up limits or prices in a model registry. Agent CLI-reported
-costs and built-in prices for Cursor models remain available. Otherwise,
-CLI-agent cost estimates remain unset when `model_info` omits prices.
-
-For a proxy without `/tokenize`, set the Terminus agent kwarg
-`tokenizer_encoding` to the tiktoken encoding selected for local estimates,
-such as `cl100k_base`. This is required for model names tiktoken cannot identify,
-including Claude and Gemini names. These estimates do not reproduce the
-provider's private tokenizer; use a server token-count endpoint for exact counts.
-
-LiteLLM is excluded from installation in the workspace and standalone evaluation
-environments, including as a transitive dependency. Mini-SWE uses Harbor's OpenAI
-model adapter. The recording proxy translates Anthropic Messages and OpenAI
-Responses tool histories to the configured Chat Completions endpoint. It retains
-token IDs and log probabilities when the serving backend returns them.
-
-Aider, SWE-agent, OpenHands, and OpenHands SDK installation is blocked because
-those harnesses require LiteLLM. Use Mini-SWE or Terminus instead. NeMo's
-LiteLLM backend is also unavailable; use its OpenAI backend with a compatible
-endpoint.
+- Local execution needs prepared images and working bubblewrap namespaces. Shellbox
+  also needs a writable part of the worker's cgroup v2 tree to contain task processes.
+  Launcher preflight cannot check that permission on a remote worker.
+- BixBench and BFCL standalone Pi policies need prepared Pi images. Changed benchmark
+  policies need a new approved cohort version. See [verified cohorts](https://github.com/marin-community/marin/blob/main/eval_policy/README.md).
+  Historical tasks that install Pi at runtime fail preflight.
+- Codex and Claude Code fail Marin preflight because the model relay does not support
+  their required protocols.
+- Use a new results root if the old root has no recorded evaluator identity.
 
 ## Run a benchmark
 
-Use a model and evaluation name from `experiments/evaluation/models.py` and
+Choose a model and eval from `experiments/evaluation/models.py` and
 `experiments/evaluation/evals.py`:
 
 ```bash
-# Inspect placement, task limit, and record destination.
 uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b \
-  --evals tb2-lite \
-  --dry-run
+  --model qwen3-8b --evals tb2-lite --dry-run
 
-# Serve once and run two Terminal-Bench tasks in Daytona.
 uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b \
-  --evals tb2-lite
+  --model qwen3-8b --evals tb2-lite
 ```
 
-The `agentic` suite expands to the standard Harbor presets:
+`tb2-lite` runs two Terminal-Bench tasks in Daytona. `--evals agentic` selects the
+standard Harbor suite. `--limit N` caps tasks. Policy trial repetitions still apply.
+`--no-wait` returns after submission.
+
+Use `--harbor-config` for a policy outside the catalog:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
-  --evals agentic
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2 --dry-run
 ```
 
-Use `--limit N` to cap the number of trials and `--no-wait` to return after submission.
+Remove `--dry-run` to submit. Repeat `--harbor-config` to add policies.
+You can also select catalog entries with `--evals` in the same command.
 
-For a Harbor verifier that uses the OpenAI API, add a hosted judge to the same launch:
+To serve a judge in the same batch:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b \
-  --platform gpu \
-  --judge-model qwen3.5-122b-a10b-fp8 \
-  --judge-accelerator H100x8 \
+  --model qwen3-8b --platform gpu \
+  --judge-model qwen3.5-122b-a10b-fp8 --judge-accelerator H100x8 \
   --harbor-config experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml \
-  --federated_cluster cw-rno2a \
-  --limit 2
+  --federated_cluster cw-rno2a --limit 2
 ```
 
-The launcher keeps one judge session alive and shares it across every evaluation in the batch. It
-overrides only the verifier's `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `MODEL_NAME`; the evaluated
-agent continues to use the candidate endpoint. Candidate and judge placement must resolve to the
-same cluster or region. The durable run record pins the judge model configuration and hardware.
+Run the candidate and judge in the same cluster or region. The run record stores both
+model configurations and their hardware. The candidate keeps its own endpoint.
+The hosted judge replaces the judge credentials and model names set by the policy.
 
-Launch a Harbor `JobConfig` without adding it to the catalog:
+To resume, use the recorded Marin checkout and the original model, policy, task limit
+and judge settings. The launcher records evaluator identity from the launch's source-tree
+hash. To resume the AIME example:
 
 ```bash
-# Validate policy, model overlay, and placement without opening Iris.
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
   --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
-  --limit 2 \
-  --dry-run
-
-# Serve the model and run the checked-in policy with a two-task cap.
-uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
-  --limit 2
+  --limit 2 --resume-results-path "$RESULTS_ROOT"
 ```
 
-`--harbor-config` is repeatable and additive with `--evals`. All selected built-in and supplied
-Harbor policies pass schema and placeholder effective-job validation before the launcher
-opens an Iris client.
+Set `RESULTS_ROOT` to the prior run's `{records_prefix}/{run_id}/results/` directory.
+Wait for all earlier drivers using that root to exit. Two live drivers must never share
+a results root. Add `--retry-unscored-harbor-trials` to retry known unscored outcomes
+while preserving scored outcomes and unknown errors.
 
-To resume one Harbor evaluation, pass its object-store results root with `--resume-results-path`
-and the original model, policy, runtime, task limit, and hosted judge settings. Marin rejects the
-resume unless the root's saved model-bound identity matches those inputs. Wait for the original
-Iris group and any earlier retry to end first: two live Harbor drivers must never share a results
-root. Add `--retry-unscored-harbor-trials` to retry known unscored trials while preserving scored
-outcomes and unknown errors.
+## Maintained execution types
 
-## Credentials
+Set `environment.type` in the Harbor policy:
 
-Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.
-They use `DAYTONA_API_KEY` from the launch environment when present, then fall back to the approved
-Google Secret Manager version. `DAYTONA_API_KEY` is the only supported environment override.
-
-The generic launcher resolves declared references immediately before Iris submission. The isolated
-Harbor subprocess receives the Daytona key without inheriting the orchestrator's other credentials.
-Do not put resolved credentials in model YAMLs, runner configs, or evaluation artifacts.
-
-## Sandbox environment isolation
-
-Keep provider credentials in the harness process. An actor sandbox should receive
-only its image's configuration, backend runtime defaults and explicitly declared
-task or command variables. Treat task definitions, images, build contexts and
-explicit mounts as trusted inputs: they can deliberately supply credentials.
-An explicit task environment declaration such as `API_KEY = "${HOST_KEY}"`
-resolves against the harness environment and grants that access. A `${HOST_KEY}`
-reference appearing only in a Compose file does not request host forwarding.
-Below, persistent variables are explicit `persistent_env` / `--ae` settings;
-Harbor infrastructure values name images, resource limits and log mount paths.
-
-| Backend | Environment and configuration supplied by the launcher |
+| Type | Requirements and limits |
 | --- | --- |
-| Shellbox local / bubblewrap | Fixed `PATH`, `HOME`, `LANG`, optional hash seed and explicit task/command variables. Task variables take effect inside bubblewrap and reach it through a private inherited descriptor, keeping values out of host process listings. Private `/etc` copies allowlisted runtime files; host startup files, password hashes, private keys, `/opt` contents and sysfs are hidden. Shared program directories and explicit mounts remain trusted inputs. |
-| Shellbox Docker / local gVisor | Image configuration and explicit task/command variables; no host directory mounts or implicit forwarding of host variables in Shellbox. Docker client configuration, including automatic proxy settings, remains an operator-controlled input. `runsc` changes the execution boundary, not credential policy. |
-| Shellbox Daytona | Image/snapshot configuration and explicit task/command variables. The Daytona client keeps its API credentials in the harness; creation forwards only `MachineSpec.env`. |
-| Shellbox Iris | The `SANDBOX` profile excludes parent environment inheritance, workspace bundles, cluster secrets, task tokens, shared caches and service-account tokens. Kubernetes service links are disabled. `secret_env` is an explicit exception for trusted graders and must never be used for actors. |
-| Shellbox QEMU | Image configuration and explicit task/command variables reach the guest over its serial protocol. The QEMU host process uses host runtime settings; these do not become guest variables. No host filesystem is shared with the guest. |
-| Shellbox ShellSim | Simulator defaults and explicit task/command variables in a private virtual filesystem. |
-| Harbor Docker Compose | Explicit task/persistent variables and Harbor infrastructure values. The local Docker client receives only allowlisted connection, login-path and OS runtime variables from the host. Other host variables are unavailable for Compose interpolation. |
-| Harbor Daytona / Modal Compose | Explicit task/persistent variables and Harbor infrastructure values. Compose references alone do not copy host variables into the remote sandbox. |
+| `local` | Needs prepared Linux images pinned by digest and delegated cgroups. Denies external networking. Supports prepared Compose groups. Shares the worker's kernel. |
+| `daytona` | Needs backend credentials and an explicit target. Uses a task registry image or Daytona's Dockerfile build service. Rejects Compose tasks. Guest images need Python 3 and `setsid`. |
+| `qemu` | Shellbox QEMU image. No shared host filesystem. |
+| `shellsim` | Shellbox simulated filesystem and command execution. |
 
-Iris's legacy `CONTAINER_PROFILE_GVISOR` retains cluster credentials and is for
-trusted workloads. Model-controlled work must use `CONTAINER_PROFILE_SANDBOX`.
-See the [Iris profile reference](https://github.com/marin-community/marin/blob/main/lib/iris/docs/container-profiles.md)
-and the [Shellbox backend reference](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md).
+Removed provider names and custom environment import paths fail validation.
+Agent import paths load trusted harness code. Harbor cannot select Shellbox's Docker backend.
 
-These contracts describe repository launch paths. They do not certify deployed
-images, existing snapshots, provider-side injected settings or Docker daemon
-configuration. Keep those inputs free of credentials. Local bubblewrap is for
-trusted commands; its `ALLOW` network policy shares the host network. Local
-Docker/gVisor bridge networking can also reach host or cloud metadata services.
-Use denied networking when unnecessary, or Iris's filtered sandbox egress for
-model-controlled workloads on production infrastructure.
+Daytona accepts `network_policy` (`mode` and optional `value`), `ttl_minutes` and
+`create_timeout`. Snapshot names, automatic snapshots, forced rebuilds and policy-level
+target overrides are unsupported. Set the target before launching:
 
-## Endpoint lifecycle
+```bash
+export DAYTONA_TARGET=us
+```
 
-Harbor receives a candidate `RunningModel` whose base URL is an Iris link endpoint. A hosted judge
-uses a separate capability URL injected into the verifier environment. The inference runner
-chooses the opaque endpoint name, registers either the direct server or broker proxy with Iris, and
-mints the capability URL. Daytona never receives a worker address.
+The host entry point reads `DAYTONA_API_KEY`, `DAYTONA_API_URL` and `DAYTONA_TARGET`
+once. The API URL defaults to `https://app.daytona.io/api`. Missing credentials or target
+fail before allocation. SDK `.env` files, JWT credentials and other connection overrides
+are not read.
 
-Each inference session chooses an opaque endpoint name. Iris endpoint leases remove abandoned
-registrations, and a retried task attempt atomically replaces its own same-name registration.
+The launcher does not change a policy's provider. Remove unsupported settings from the
+policy and prepare any missing task images before launching. Harbor rejects `--no-delete` and
+`environment.delete=false` before allocation.
 
 ## Policies and datasets
 
-Harbor policy belongs in YAML. This example uses a Hugging Face repository whose root contains
-Harbor task directories:
+Catalog policies live under `experiments/evaluation/configs/harbor/`.
+Each filename matches its `EVALS` key. Suite membership, model selection, hardware, task limits
+and secret references belong in `experiments/evaluation/evals.py`.
+
+For a Hugging Face repository containing Harbor task directories:
 
 ```yaml
 n_concurrent_trials: 4
@@ -184,117 +127,308 @@ agents:
   - name: terminus-2
 datasets:
   - name: hf://DCAgent2/terminal_bench_2
-    ref: main
+    ref: "<dataset-commit-sha>"
 ```
 
-Use `datasets[].name`, not `datasets[].path`, for `hf://org/repository`. Harbor loads the repository's
-task directories during preflight to count tasks and on the submitted worker to run them. The
-repository must already contain Harbor tasks; Parquet rows are not converted. A Harbor registry source
-uses its native selector, such as `name: aime` plus `version: "1.0"`. A local source uses a relative path:
+Replace `<dataset-commit-sha>` with the source revision. Use `datasets[].name` for `hf://`
+sources. Harbor checks access and counts tasks during preflight, then loads the source
+again on the worker. Pin the revision.
+A moving ref can change between those calls. Gated sources need `HF_TOKEN`. Parquet rows are not converted
+into Harbor task directories.
+
+A registry source uses its native selector, such as `name: aime` and `version: "1.0"`.
+A local source uses `datasets[].path`, relative to the policy. The directory must stay
+inside the Marin workspace and be included in the Iris source bundle. Absolute, missing and
+outside-workspace paths fail preflight.
+
+## Offline execution through Shellbox
+
+Select `local` for prepared tasks and private container groups:
 
 ```yaml
+n_concurrent_trials: 4
 environment:
-  type: daytona
+  type: local
 agents:
   - name: terminus-2
 datasets:
-  - path: tasks
+  - path: prepared-tasks
 ```
 
-Local paths resolve against the directory containing the policy. The resulting directory must remain
-inside the Marin workspace and must be included in the Iris workspace bundle. The launcher stores its
-workspace-relative path so the submitted worker resolves it under the unpacked workspace. Absolute,
-outside-workspace, and missing local directories fail before Iris submission. Harbor checks Hugging Face
-repository access during preflight and loads the snapshot again on the worker. Gated repositories need
-`HF_TOKEN` in the launch environment; Marin forwards it to the isolated worker. A moving ref such as
-`main` can resolve to different commits between preflight and execution.
+Place the policy beside `prepared-tasks` in the workspace. Submit it with
+`--harbor-config path/to/policy.yaml` through the shared launcher.
 
-Every catalog policy lives under `experiments/evaluation/configs/harbor/` and shares its filename
-with its `EVALS` key. Keep suite membership, runtime task caps, model and hardware selection, and
-secret source declarations in `experiments/evaluation/evals.py`.
+Install `bubblewrap`, `umoci` and `skopeo` on the trusted evaluator host. For Iris jobs,
+put these tools in `iris-task` and rebuild the worker's task image.
+The host must permit namespaces and cgroup v2 process containment. See the
+[Shellbox setup instructions](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md#local-backend).
 
-## Ownership boundary
+Each task must set `allow_internet = false`. Pin images with an immutable `@sha256:` digest.
+For a single-container task, set the image and absolute workdir in `task.toml`:
 
-Harbor lives in `vendor/harbor` as an independent uv project with its own lockfile. It uses editable
-local Rigging and FineStore sources. Marin has no Harbor dependency; its launcher invokes Harbor
-through an isolated subprocess CLI for two calls:
+```toml
+[environment]
+allow_internet = false
+docker_image = "registry.example/main@sha256:<64-hex-digest>"
+workdir = "/app"
+```
 
-1. Preflight parses YAML or JSON with Harbor's Pydantic models, rejects unsupported launch shapes,
-   validates a placeholder model/endpoint overlay, loads the dataset through Harbor to count tasks,
-   and emits opaque deterministic policy JSON plus Marin-owned metadata.
-2. Execution reparses the opaque policy, applies the real endpoint, served model, output directory,
-   workspace-local dataset path when applicable, model kwargs, and task limit, then validates the
-   complete typed job before calling Harbor. Hugging Face and registry selectors stay intact.
+Compose tasks provide `environment/shellbox-images.json`:
 
-Runtime values do not change the source-policy digest. Policy kwargs override model-catalog kwargs;
-the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
-For a Harbor target or simulated user agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
-versions supplied by the policy or model configuration. Preflight includes this pin in the saved
-policy and the saved policy's digest; execution applies the same pin. Pi evaluations install
-version `0.87.0` without resolving npm's `latest` tag.
-Temporary policy and overlay files are owner-readable and removed after each isolated call.
+```json
+{
+  "main": {"image": "registry.example/main@sha256:<64-hex-digest>", "workdir": "/app"},
+  "tau3-runtime": {
+    "image": "registry.example/runtime@sha256:<64-hex-digest>",
+    "workdir": "/app",
+    "agent_logs": "publish"
+  }
+}
+```
 
-The runtime uses `vendor/harbor/uv.lock`. Its runtime descriptor records the upstream
-revision from `UPSTREAM.toml`, the lock digest, and a digest of the packaged source and local Marin
-libraries. The upstream revision identifies the import base; execution always uses the vendored
-source. Published September cohort labels remain validated against their original runtimes and
-cannot label new vendored runs. Reproduce historical runs from their recorded Marin checkout.
-The vendored package evaluates prebuilt task datasets; dataset generators are omitted.
-See the [vendor maintenance guide](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md)
-for dependency updates and direct evaluation CLI commands.
+Build images on a trusted host. Include the task dependencies, verifier dependencies and
+terminal tools. Terminus needs Bash and tmux. Model relays and timed readiness probes
+need Python 3. Runtime downloads fail with networking denied. Images must use
+root (`USER 0`, `USER 0:0`, or no `USER`).
 
-### Trial error taxonomy
+The importer accepts one Compose file with `main` and prepared sidecars, commands,
+environment values, exposed TCP ports, readiness probes and `main` dependencies on started
+or healthy services. It rejects unknown fields, host mounts, published host ports, host
+networking and dependencies between sidecars. MCP URLs must name a declared service and port.
 
-Preflight snapshots Harbor's infrastructure, agent, passthrough, and undecided error categories from
-the selected Harbor runtime in the isolated environment. Marin uses that snapshot to classify trial results and records
-the Harbor commit SHA in `record.json`. Undecided errors are known to Harbor but have no default scoring
-policy; Marin leaves them ungraded and counts them against the completion gate. Names absent from all
-four categories fail the run as an infrastructure failure, so taxonomy changes cannot silently alter
-scoring or completion coverage.
+Containers share a private loopback network. Each has its own filesystem and PID namespace.
+External traffic, including DNS, is denied. Sidecars keep their image's ENTRYPOINT/CMD
+unless Compose overrides them. The evaluator does not build images or start nested containers.
+A sidecar exit closes the whole local task, including the agent. Grading cannot continue
+inside that task.
+
+The prepared local path supports host-side agents, image-provided Pi and Pi/ACP, and Tau3's
+user relay. Other installed agents and arbitrary agent imports are rejected on this path.
+
+For a reviewed Tau3 task:
+
+```bash
+uv run python -m experiments.evaluation.images.tau3.build \
+  --task prepared-tasks/tau3-airline-0
+```
+
+The helper reuses the pinned Pi/ACP main image. It builds a runtime image with the task's
+server and `task_config.json`, then writes `shellbox-images.json`. Set
+`allow_internet = false` in `task.toml` and save the prepared snapshot as a Marin artifact.
+See the [image recipe](https://github.com/marin-community/marin/tree/main/experiments/evaluation/images/tau3)
+for registry setup.
+
+To check Tau3 grading, use a prepared task with a natural-language assertion and a policy
+that declares candidate and judge endpoints:
+
+```bash
+uv run --isolated --project vendor/harbor --frozen --extra runtime \
+  python vendor/harbor/tests/local_tau3_smoke.py local-tau3.json \
+  --api-key-env GLM_BULK_TOKEN
+```
+
+The smoke test requires a score and assertion results. A score of zero is valid.
+Infrastructure failures fail the test.
+
+Standalone Pi tasks, including single-container tasks, must declare a digest-pinned
+`main` image with Pi installed in `environment/shellbox-images.json`.
+For Daytona, `task.toml`'s `environment.docker_image` must match it. Pi setup writes
+configuration without installing Node or npm packages. If you set `kwargs.version`,
+setup checks it against the installed binary. On local execution, the manifest selects
+the image. A `docker_image` in `task.toml`, if present, must match. This requirement applies
+to the BixBench and BFCL Pi campaign policies and the one-task onboarding ablation.
+
+ACP Pi images need `node`, `pi`, `pi-acp`, and
+`/opt/harbor-acp-venv/bin/python` with `agent-client-protocol`. The companion pins are
+`@earendil-works/pi-coding-agent@0.80.5` and `pi-acp@0.0.33`. ACP bridges also need
+`acpx@0.12.0`. Tau3's simulated-user relay needs `mcp==1.25.0` under `python3`.
+
+For Tau3, supply `--judge-model`. That model serves the simulated user and verifier.
+The candidate keeps its own endpoint. The Pi/ACP candidate receives domain tools.
+The benchmark relay controls user turns and checks runtime status after each turn.
+Runtime MCP failures are infrastructure errors. Candidate process failures keep their
+agent classification.
+
+A sidecar declaring `agent_logs: "publish"` has its logs copied into the actor's agent-log
+directory after the agent phase, before verification. This supports Tau3's verifier.
+There is no shared writable volume. Actor writes do not flow back to the sidecar.
+
+### Local factory settings
+
+The adapter accepts `bwrap`, `umoci`, `image_cache`, `cgroup_parent` and `ttl`.
+`registry_authfile` and `signature_policy` configure host-side image acquisition and are
+never mounted in guests. An explicit `cgroup_parent` overrides discovery.
+
+Command timeout or cancellation kills that command and its descendants. Task files,
+services from earlier successful commands and runtime peers remain available.
+Trial cancellation reclaims the whole task. Terminus interrupts its foreground tmux job
+on deadline and closes tmux at teardown. Full command cleanup or task teardown also stops
+deliberately detached work.
+
+Shellbox attempts numeric CPU and memory limits independently and warns when a controller
+cannot enforce one. Process containment remains mandatory. Harbor rejects `ignore`
+resource policies. Adjust task values or overrides:
+
+```yaml
+environment:
+  type: local
+  override_cpus: 2
+  override_memory_mb: 4096
+  kwargs:
+    ttl: 3600
+```
+
+Disk quotas, GPU allocation and TPU allocation are unsupported. To run the policy directly
+on a configured Linux worker:
+
+```bash
+uv run --isolated --project vendor/harbor --frozen --extra runtime \
+  harbor run --config local-policy.yaml
+```
+
+For offline use, export an image with Skopeo as an OCI layout tagged `image` at
+`<image_cache>/sha256-<platform-manifest-digest>`. Use that digest in the task declaration.
+Shellbox verifies the manifest, configuration and layers. Explicit signature policies still
+require registry verification.
+
+## Credentials
+
+Daytona catalog entries use `DAYTONA_API_KEY` from the launch environment, then fall
+back to the approved Google Secret Manager version. The launcher resolves declared secret
+references before submission. The Harbor subprocess receives backend credentials, HF access
+and storage credentials for result uploads.
+
+Harbor is a trusted host process. `uv --isolated` isolates dependencies.
+It does not restrict the process's filesystem or network access. Keep secrets out of policy
+files, serialized configuration, images and artifacts. Harbor's `--env-file` configures
+the harness. Task templates still need explicitly supplied inputs.
+
+Direct Harbor callers pass host authentication through `HostCapabilities` and template
+inputs through a separate `guest_environment` mapping. Entry points read host settings
+once. Templates resolve only against the supplied map, which defaults to
+empty. Storage, controller and provider credential keys and known secret values are
+rejected before entering guests. Keep production credentials out of task definitions,
+images and explicit inputs too.
+
+## Sandbox environment isolation
+
+Host-side agents such as Terminus call the candidate endpoint from Harbor. Installed
+agents use a loopback relay with a dummy `EMPTY` key. Provider credentials stay on
+the host. Candidate and judge credentials are separate.
+
+| Relay | Port | Access |
+| --- | --- | --- |
+| Candidate | 8788 | Installed candidate agents on local and Daytona backends. |
+| Judge | 8787 | Available during verification. Tau3 and Sotopia also use it during execution. |
+
+Both relays support `POST /v1/chat/completions`, `POST /v1/responses` and `POST /tokenize`.
+Each relay calls one fixed upstream model. It rejects redirects, limits request and response
+sizes, and returns sanitized provider error codes. Responses supports non-streaming text,
+output limits and reasoning options. Tools, stored responses and stateful continuations are unsupported.
+Streaming chat is buffered: the guest receives SSE frames after the complete response
+arrives. Codex and Claude Code need routes or features outside this contract.
+
+`judge_access: verifier` opens the judge relay only during grading. Before opening it,
+local execution stops remaining agent command groups. Ordinary grading preserves services
+from successful commands. A grader needing both a live agent service and private judge
+access needs separate isolation. Daytona cannot confirm that every detached candidate
+process has stopped before grading.
+
+`judge_access: runtime` keeps the judge available during execution. Marin selects it for
+Tau3 and Sotopia. Direct callers must request it. Every peer sharing the task network can
+reach that relay, including the candidate. Tool filtering does not provide network isolation.
+
+Local bubblewrap shares the worker's kernel. Use isolated workers. These contracts do not
+certify deployed images or provider-injected settings. See the
+[Shellbox backend reference](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md)
+for backend-specific isolation limits.
+
+## Endpoint lifecycle
+
+Marin registers each served model under a unique Iris endpoint name. It gives Harbor a
+URL that grants access to that model. Expiring leases remove abandoned registrations.
+A retry replaces its same-name registration. Saved job and trial JSON redacts these
+credential-bearing URLs. Resume supplies new URLs.
+
+`agents[0].model_name` stores the original model location with a `hosted_vllm/` prefix.
+`model_alias` routes requests to the served model. SOTOPIA uses
+the original location without that prefix for cohort matching. Moving an endpoint or
+changing its alias does not change the recorded model identity.
 
 ## Agent context limits
 
-The agent's `model_info.max_input_tokens` comes from the model's resolved `serve.max_model_len` and its
-`model_info.max_output_tokens` from `generation.max_gen_toks`, so the agent compacts against the
-window the server actually offers. With `auto_overrides`, explicit context limits are clamped to the
-checkpoint's native window before Harbor preflight; the batch retains that resolved serving configuration.
-A Terminus-2 policy also receives the resolved output limit as `llm_call_kwargs.max_tokens`, which applies
-the budget to ordinary chat-completion requests. An explicit lower request limit in the policy wins; a
-request limit above `model_info.max_output_tokens` fails preflight.
-A policy may state a lower limit to keep headroom under that window, and the lower limit wins:
-`grug-opencode-id.yaml` asks for 64512 input tokens against a
-model serving 65536. A policy limit above the served one fails preflight, before Iris opens, with
-both values named. A limit neither the model nor the policy states falls back to Harbor's own
-default, 32768 input and 8192 output tokens. `--dry-run` prints the resolved pair per Harbor eval
-and `record.json` keeps it under `eval.harbor`.
+Marin derives `model_info.max_input_tokens` from resolved `serve.max_model_len` and
+`max_output_tokens` from `generation.max_gen_toks`. A lower policy limit wins.
+A policy limit above the serving limit fails preflight. `auto_overrides` clamps model settings to
+the checkpoint's native window first. If neither model nor policy states limits, Harbor
+defaults to 32,768 input and 8,192 output tokens. `--dry-run` prints the resolved limits.
+`record.json` stores them under `eval.harbor`.
 
-Installed harnesses must enforce these limits themselves. Harbor's native Mini-SWE
-adapter consumes `model_info` for the Mini-SWE 2.1.0 harness with hosted vLLM. The input limit
-denotes the total context, including the reply. It requires the serving endpoint's
-`/tokenize` route, counts the rendered prompt with tools and the generation prefix,
-and caps the reply to the remaining context and the configured output limit.
-Context exhaustion uses Mini-SWE's native limit handler so Harbor can verify the
-existing patch. No Marin agent subclass is required.
-
-Sotopia uses `harbor.agents.installed.sotopia:SotopiaAgent`, packaged with its
-episode runner in Harbor. Judge API failures and exhausted missing-grade retries
-become `VerifierRuntimeError`. Sotopia's native generation still does not enforce
+Terminus-2 receives the output limit as `llm_call_kwargs.max_tokens`. Lower explicit request
+limits win. Higher ones fail preflight. Mini-SWE 2.1.0 uses `/tokenize` to count the full
+rendered prompt, including tools, and leaves room for the reply within the total context.
+When context runs out, Mini-SWE stops and Harbor can grade the existing work.
+Installed harnesses must enforce their limits. Sotopia generation does not yet enforce
 `model_info` context limits.
+
+For Terminus, use `llm_backend="openai"` and an OpenAI-compatible `api_base`. For proxies
+without `/tokenize`, set `tokenizer_encoding`, such as `cl100k_base`, when tiktoken cannot
+identify the model. These are estimates. Exact counts require the serving tokenizer.
+Optional `input_cost_per_token` and `output_cost_per_token` are USD per token. Harbor does
+not look up limits or prices in a model registry.
+
+LiteLLM is excluded from workspace and standalone evaluation environments. Aider, SWE-agent,
+OpenHands and OpenHands SDK installation is blocked. Preinstalled Aider is also blocked.
+Copilot CLI is unsupported because it needs GitHub authentication without a guest relay.
+Use Mini-SWE, Terminus, or NeMo's OpenAI backend with a compatible endpoint.
 
 ## Results
 
-Each Harbor evaluation writes:
+Each evaluation writes `record.json` under `{records_prefix}/{run_id}/` and a FineStore
+archive under its `results/` directory. The archive contains original Harbor job and trial
+artifacts plus normalized `samples`, `steps` and `rollouts_v1` tables. Evaldash reads samples.
+Verifier rewards use `Grading(method="harbor:verifier")`. Samples link trajectories through
+`trajectory_uri`.
 
-- `{records_prefix}/{run_id}/record.json`
-- a FineStore archive under `{records_prefix}/{run_id}/results/`, including normalized `samples`
-  and `steps` tables plus the evaluator-neutral `rollouts_v1` conversation table
-- Harbor-native job metadata, trial results, and trajectories preserved as FineStore objects
+Harbor saves each attempt's result, available trajectory and a record of whether the
+trajectory exists in one transaction. Completion waits for environment cleanup, service
+shutdown and required artifact writes. Missing required evidence leaves the attempt
+incomplete and retryable. At finalization, Harbor selects the final attempt for each trial.
+An incomplete selected attempt prevents sealing, which marks the archive complete.
+A later successful retry can complete the run. Resume can recover matching finalized
+Harbor files and rebuild derived tables. It keeps the original artifacts from every
+attempt. Only selected final attempts contribute normalized rows.
 
-Harbor writes each verifier-scored trial as it finishes, then adds surviving ungraded attempts and
-job metadata before sealing the archive. Every final trial becomes an agentic `EvalSample`. The
-verifier reward is stored as `Grading(method="harbor:verifier")`, and the trajectory is referenced
-by `trajectory_uri`. Marin derives the `rollouts_v1` table from `steps`, normalizing each trajectory's
-participants and ordered message, reasoning, tool-call, and observation parts. Evaldash reads the
-normalized sample table directly. `record.json` stores the
-deterministic source-policy digest and any Marin runtime task cap. A source policy's own `n_tasks`
-remains part of the policy digest.
+Tau3 ACP trials keep raw ACPX exports at `agent/bridge-trajectory.json`. They do not
+produce ATIF `agent/trajectory.json`, derived steps or rollouts. Their scored samples record
+that expected absence explicitly.
+
+### Trial error taxonomy
+
+Preflight captures the selected Harbor runtime's error categories. Agent failures are
+scoreable model outcomes. Passthrough failures need a verifier result to be scored.
+Infrastructure and undecided failures remain unscored. Relay loss, runtime-log collection
+failure and teardown failure are retryable infrastructure errors. Unknown error names fail
+the evaluation. Marin requires the scored fraction to meet `min_completion_rate` (default
+0.9), independently of the archive's evidence requirements for sealing.
+
+## Ownership boundary
+
+`vendor/harbor` is an independent uv project with its own lockfile and editable Rigging and
+FineStore dependencies. Marin invokes its isolated CLI for preflight and execution.
+Preflight returns policy JSON and benchmark metadata. Execution applies live model routes,
+output paths, model kwargs and the runtime task limit. Policy kwargs override model-catalog
+kwargs. Explicit runtime fields override both. Runtime overlays do not change the source-policy
+digest. Policy `n_tasks` remains part of it.
+
+Reproduce runs from their recorded Marin checkout, dataset revisions and policy. Cache and
+resume identity include the launch's tracked Marin source-tree hash. Changes to that tree
+invalidate reuse. A missing source-tree hash prevents reuse. The runtime lock is
+`vendor/harbor/uv.lock`. See the [vendor guide](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md)
+for direct CLI use and maintenance.
+
+Verified cohort labels fix parsed benchmark policies. To approve a changed policy, add
+a new cohort version and its source digests as described in the
+[cohort guide](https://github.com/marin-community/marin/blob/main/eval_policy/README.md).
+Harbor runtime identity comes from the recorded Marin artifact checkout. A shared cohort
+label alone does not establish identical runtime behavior across checkouts.

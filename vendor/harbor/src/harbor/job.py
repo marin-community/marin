@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime
@@ -25,6 +26,7 @@ from rich.progress import (
 )
 
 from harbor.metrics.base import BaseMetric
+from harbor.host_capabilities import HostCapabilities
 from harbor.metrics.factory import MetricFactory
 from harbor.metrics.mean import Mean
 from harbor.models.benchmark import (
@@ -136,6 +138,8 @@ class Job:
         _metrics: dict[str, list[BaseMetric]] | None = None,
         _task_download_results: dict[TaskIdType, TaskDownloadResult] | None = None,
         _benchmark_metadata: tuple[BenchmarkMetadata, ...] = (),
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
     ):
         """Deprecated. Use ``await Job.create(config)`` instead."""
         if _task_configs is None or _metrics is None:
@@ -145,6 +149,8 @@ class Job:
             )
 
         self.config = config
+        self.host_capabilities = host_capabilities
+        self.guest_environment = dict(guest_environment)
         if config.archive is not None and any(
             str(root).startswith(("s3://", "s3a://"))
             for root in (config.jobs_dir, config.archive.root)
@@ -201,6 +207,8 @@ class Job:
             for index, trial_config in enumerate(self._trial_configs)
         }
         self._trial_queue = TrialQueue(
+            host_capabilities=self.host_capabilities,
+            guest_environment=self.guest_environment,
             n_concurrent=self.config.n_concurrent_trials,
             retry_config=self.config.retry,
             release_trial_payloads_in_memory=(
@@ -213,11 +221,17 @@ class Job:
         self._trial_queue.add_hook(TrialEvent.END, self._on_trial_completed)
 
     @classmethod
-    async def create(cls, config: JobConfig) -> "Job":
+    async def create(
+        cls,
+        config: JobConfig,
+        *,
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
+    ) -> "Job":
+        EnvironmentFactory.validate_config(config.environment)
         task_configs, benchmark_metadata = await cls._resolve_task_configs_and_metadata(
             config
         )
-        EnvironmentFactory.validate_resource_policies(config.environment)
         metrics = await cls._resolve_metrics(config, task_configs)
 
         task_download_results = await cls._cache_tasks(task_configs)
@@ -228,6 +242,8 @@ class Job:
             _metrics=metrics,
             _task_download_results=task_download_results,
             _benchmark_metadata=benchmark_metadata,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
         )
 
     def __len__(self):
@@ -390,12 +406,9 @@ class Job:
     ) -> tuple[TrialConfig, TrialResult] | None:
         """Load one on-disk trial's ``(config, result)`` for a resume.
 
-        Returns ``None`` for entries that are not trial dirs, whose
-        ``result.json`` is missing (an interrupted trial), or whose on-disk
-        result is *resume-retryable* (a CancelledError / SandboxBuildFailedError
-        result — see :func:`harbor_config.errors.is_resume_retryable`); the dir is removed
-        so the trial is re-planned and RE-RUN on this resume instead of kept as a
-        terminal result. Runs under a thread pool during the resume scan, so it
+        Returns ``None`` for non-trial directories, missing results, unconfirmed
+        teardown, and retryable failures. Incomplete trial directories are removed
+        before replanning their attempts. Runs under a thread pool during the resume scan, so it
         must not mutate shared ``Job`` state (rmtree is disk I/O, not shared
         state).
         """
@@ -641,7 +654,9 @@ class Job:
                     "SOTOPIA correction requires one agent and one dataset per job"
                 )
             if config.sotopia_cohort is None:
-                raise ValueError("SOTOPIA correction requires an explicit sotopia_cohort")
+                raise ValueError(
+                    "SOTOPIA correction requires an explicit sotopia_cohort"
+                )
             metadata = [sotopia_benchmark_metadata(item) for item in metadata]
         return task_configs, tuple(metadata)
 
@@ -710,7 +725,8 @@ class Job:
     def _is_resume_retryable_result(trial_result: TrialResult) -> bool:
         """True if this on-disk trial result should be RE-RUN on a fresh resume.
 
-        The canonical retryable set lives in the shared
+        Results without confirmed teardown and final timestamps are incomplete
+        regardless of their score or exception type. Confirmed results use the shared
         :func:`harbor_config.errors.is_resume_retryable` taxonomy. Kept separate
         from :meth:`_is_cancelled_result`, which drives cancelled-specific
         progress bookkeeping (``n_cancelled_trials``); this predicate is only
@@ -722,6 +738,8 @@ class Job:
         :data:`_BAD_REQUEST_MAX_TOKENS_ZERO_SIGNAL`) — those predate
         :class:`ContextManagementInfrastructureError` but are the same failure.
         """
+        if trial_result.completion is None or trial_result.finished_at is None:
+            return True
         info = trial_result.exception_info
         if info is None:
             return False
@@ -1088,8 +1106,8 @@ class Job:
         try:
             with bind_telemetry(telemetry):
                 result = await self._run_job()
-                # Finalization adds existing resume results and only the ungraded
-                # attempts that survived into the completed job result.
+                # Rebuild canonical archive rows from the selected final results,
+                # including resumed trials; native retry attempts stay preserved.
                 if archive is not None:
                     await archive.finalize(result.trial_results)
                     await asyncio.to_thread(archive.seal)
