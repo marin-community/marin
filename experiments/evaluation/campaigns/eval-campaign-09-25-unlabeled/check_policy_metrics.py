@@ -21,7 +21,7 @@ def main() -> None:
     contract = runpy.run_path(str(CAMPAIGN / "policy_metric_map.py"))
     expected = contract["POLICY_METRICS_2026_10_16"]
     mechanism = contract["PolicyMechanism"]
-    curated = {path.stem: path for path in (CAMPAIGN / "curated-configs").glob("*.yaml")}
+    curated = {path.stem: path for path in (CAMPAIGN / "evalchemy-configs").glob("*.yaml")}
     harbor = {path.stem: path for path in (CAMPAIGN / "harbor-configs").glob("*.yaml")}
     if set(expected) != curated.keys() | harbor.keys():
         raise ValueError("Campaign configurations differ from the publication metric contract")
