@@ -438,7 +438,6 @@ _ASYNC_SPEED_REPORTS = (
         Metric(f"policy/mismatch/pooled/{statistic}", False)
         for statistic in ("kl_k3", "log_ratio_abs_mean", "log_ratio_abs_p99", "log_ratio_abs_p999")
     ),
-    Metric("policy/mismatch/staleness0/kl_k3", False),
     *(
         Metric(f"policy/mismatch/{bucket}/selected_tokens", bucket == "staleness0")
         for bucket in ("staleness0", "staleness1", "staleness2", "staleness3", "staleness4-7", "staleness8+")

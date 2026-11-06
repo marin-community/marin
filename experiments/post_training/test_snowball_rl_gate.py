@@ -9,6 +9,7 @@ import runpy
 import shutil
 import sys
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -937,22 +938,32 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     )
 
 
-def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch):
+@pytest.mark.parametrize("preset", ["speed-long", "speed-medium"])
+def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, preset):
+    if preset == "speed-medium":
+        monkeypatch.setitem(
+            gate.CONTROLS,
+            preset,
+            tuple(replace(pin, revision="2026.10.27") for pin in gate.CONTROLS[preset]),
+        )
     client = MagicMock(spec=IrisClient)
     client.submit.side_effect = AssertionError("an unpinned candidate submitted a coordinator")
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     for command, arguments in (
-        (snowball.main, ["--preset", "speed-long", "--version", presets.PRESET_REVISION, "--run", "--wait"]),
-        (gate.main, ["--preset", "speed-long", "--candidate", "tests/unpinned"]),
+        (snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, "--run", "--wait"]),
+        (gate.main, ["--preset", preset, "--candidate", "tests/unpinned"]),
     ):
         refused = CliRunner().invoke(command, arguments)
         assert refused.exit_code == 2, (refused.output, refused.exception)
         payload = json.loads(refused.output)
-        assert payload["preset"] == "speed-long" and payload["verdict"] == "invalid"
+        assert payload["preset"] == preset and payload["verdict"] == "invalid"
         assert payload["reason"].endswith(
-            "python -m experiments.post_training.snowball_rl --preset speed-long "
+            f"python -m experiments.post_training.snowball_rl --preset {preset} "
             f"--version {presets.PRESET_REVISION} --control --replicates 4 --run"
         )
+        assert presets.PRESET_REVISION in payload["reason"]
+        if preset == "speed-medium":
+            assert "2026.10.27" in payload["reason"]
 
 
 @pytest.mark.parametrize(
