@@ -300,8 +300,9 @@ by the statistics:
 uv run python -m experiments.grug.moe_hero_ep.harrier_long_context_mix
 ```
 
-`HERO_USES_LONG_CONTEXT_MIX` in `launch_scaling_ladder.py` selects the mix for the hero. The Harrier skip-to-window
-replay cannot carry over, since the virtual sources have different token counts across phases. Instead
+`launch_scaling_ladder.py` selects the mix for a hero whose context length exceeds `LONG_CONTEXT_THRESHOLD`. The
+Harrier skip-to-window replay cannot carry over, since the virtual sources have different token counts across phases.
+Instead
 `LmDataConfig.mixture_start_step` makes the step at the end of `HERO_CONTEXT_PHASES` read the mixture's first
 sequence, so each bucket starts at the beginning of its shuffled order. Without it, a run with no history would read
 at `step * batch`, a position that depends on the rack count and that is 18T tokens in for the hero. A restore at a
