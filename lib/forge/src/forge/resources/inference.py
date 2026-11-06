@@ -9,12 +9,11 @@ from typing import ClassVar, Protocol, override
 
 from taskforge.llm.client import RETRYABLE_STATUSES, Attempt, AttemptOutcome, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.client import Completion as ProviderCompletion
-from taskforge.llm.policy import LLMPolicy, ReasoningEffort
+from taskforge.llm.policy import LLMPolicy
 
-from forge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, canonical_digest
+from forge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest
 from forge.effects.issues import Hold, Restart, Transient
-from forge.model.llm import Completion, FinishReason, Message, Sampling, ToolCall, ToolSchema, Usage
-from forge.model.serialization import TOOL_SCHEMA
+from forge.model.llm import TOOL_SCHEMA, Completion, FinishReason, Message, ToolCall, ToolSchema, Usage
 from forge.resources.execution import Notify, retry_effect
 
 
@@ -27,7 +26,7 @@ class InferenceRequest(Event[Completion]):
     result_type: ClassVar[object] = Completion
     messages: tuple[Message, ...]
     tools: tuple[ToolSchema, ...]
-    sampling: Sampling
+    sampling: LLMPolicy
 
 
 class InferenceClient(Protocol):
@@ -71,14 +70,11 @@ class GlmInference(InferenceClient):
 
     @override
     def fingerprint(self) -> Fingerprint:
-        return Fingerprint("inference", canonical_digest((self.client.model, self.provider_digest)), ReplayPolicy.CACHE)
+        return Fingerprint("inference", digest((self.client.model, self.provider_digest)), ReplayPolicy.CACHE)
 
     @override
     async def complete(self, request: InferenceRequest) -> Completion:
-        sampling = request.sampling
-        settings = {key: value for key, value in asdict(sampling).items() if value is not None}
-        settings["reasoning_effort"] = ReasoningEffort(sampling.reasoning_effort)
-        policy = LLMPolicy(**settings)
+        policy = request.sampling
         fields: dict[str, object] = {
             "tools": [
                 {"type": "function", "function": TOOL_SCHEMA.dump_python(tool, mode="json")} for tool in request.tools

@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 
-from forge.effects.events import StageCompleted, canonical_digest, event_digest
+from forge.effects.events import StageCompleted, digest, event_digest
 
 
 def test_event_digest_canonicalizes_mapping_order_and_distinguishes_content_and_type() -> None:
@@ -21,8 +21,8 @@ def test_event_digest_canonicalizes_mapping_order_and_distinguishes_content_and_
 
 
 def test_binary_digest_distinguishes_bytes_from_text_and_marker_shaped_mappings() -> None:
-    assert canonical_digest(b"\xff") != canonical_digest("/w==")
-    assert canonical_digest(b"\xff") != canonical_digest({"__forge_bytes__": "/w=="})
+    assert digest(b"\xff") != digest("/w==")
+    assert digest(b"\xff") != digest({"__forge_bytes__": "/w=="})
 
 
 def test_stage_event_snapshots_refs_before_the_caller_reuses_the_mapping() -> None:

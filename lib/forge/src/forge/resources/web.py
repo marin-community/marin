@@ -9,7 +9,7 @@ from typing import ClassVar, Protocol, override
 
 import httpx
 
-from forge.effects.events import Event, Fingerprint, ReplayPolicy, canonical_digest
+from forge.effects.events import Event, Fingerprint, ReplayPolicy, digest
 from forge.effects.issues import Hold, Transient
 from forge.resources.execution import Notify, retry_effect
 
@@ -40,7 +40,7 @@ class ParallelWeb(WebClient):
 
     @override
     def fingerprint(self) -> Fingerprint:
-        return Fingerprint("web", canonical_digest(str(self.client.base_url)), ReplayPolicy.CACHE)
+        return Fingerprint("web", digest(str(self.client.base_url)), ReplayPolicy.CACHE)
 
     async def _post(self, path: str, body: Mapping[str, object]) -> str:
         try:

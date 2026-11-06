@@ -9,7 +9,7 @@ from types import MappingProxyType
 from forge.config import Edge, Transitions
 from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from forge.harness.tools.validate import ValidateRequest
-from forge.model.llm import Message, ToolCall
+from forge.model.llm import Message, Role, ToolCall
 from forge.model.review import Accept, BandOutcome, Budget, Incomplete, Modify, Reject, RejectKind, Retry
 from forge.model.stage import Exit, Stage
 from forge.model.workpiece import Conversation, Terminal, Workpiece
@@ -36,15 +36,13 @@ def pending_validate(session: Conversation) -> ToolCall | None:
     return next((call for call in calls if call.name == "validate" and call.id not in answered), None)
 
 
-def validated(
-    wp: Workpiece, result: Exit, *, tool: bool, workdir: str = "/workspace", output_chars: int = 20000
-) -> Workpiece:
+def validated(wp: Workpiece, result: Exit, *, tool: bool, workdir: str, output_chars: int) -> Workpiece:
     if not isinstance(result, Validated):
         raise ValueError("Validation edge requires Validated")
     session = wp.session
     if tool and session is not None and (call := pending_validate(session)) is not None:
         content = validation_summary(result.result, validation_path(workdir, len(wp.evidence)), output_chars)
-        message = Message("tool", content, tool_call_id=call.id)
+        message = Message(Role.TOOL, content, tool_call_id=call.id)
         session = Conversation((*session.messages, message), session.tool_schemas)
     return wp.with_(evidence=(*wp.evidence, result.result), session=session)
 
@@ -57,12 +55,6 @@ def decided(wp: Workpiece, result: Exit, *, budget: Budget, policy: Policy) -> W
     if not isinstance(result, Decided):
         raise ValueError("Review edge requires Decided")
     decision = result.decision
-    if (
-        isinstance(decision, Modify)
-        and decision.placement is BandOutcome.TOO_EASY
-        and wp.round >= budget.max_modify_rounds
-    ):
-        decision = Accept(BandOutcome.TOO_EASY, ("accepted_with: too_easy", "Shared modification budget exhausted"))
     wp = wp.with_(decisions=(*wp.decisions, decision))
     match decision:
         case Accept():
@@ -85,14 +77,13 @@ def decided(wp: Workpiece, result: Exit, *, budget: Budget, policy: Policy) -> W
             prompt = policy.prompt("author.revision").render(kind="review", detail="\n".join(findings))
             return wp.with_(
                 round=wp.round + 1,
-                session=Conversation((*system, Message("user", prompt)), previous.tool_schemas),
+                session=Conversation((*system, Message(Role.USER, prompt)), previous.tool_schemas),
                 too_easy_baseline=(
                     wp.submission if decision.placement is BandOutcome.TOO_EASY else wp.too_easy_baseline
                 ),
             )
         case Retry():
-            retries = sum(isinstance(item, Retry) for item in wp.decisions)
-            return wp.with_(terminal=Terminal.HELD if retries > budget.max_validation_retries else None)
+            return wp
         case Incomplete():
             return wp.with_(terminal=Terminal.HELD)
 

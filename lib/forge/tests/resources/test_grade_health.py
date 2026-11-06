@@ -48,8 +48,9 @@ def test_only_measured_full_timeout_is_task_defect(elapsed: float | None) -> Non
         failure=GradingFailure.TIMEOUT,
         diagnostics={"grader_elapsed_seconds": elapsed, "grader_timeout_seconds": 600},
     )
+    assert grade_cause(result) is Cause.GRADER_TIMEOUT  # Classification is pure; executors guard timing.
     if elapsed == 600:
-        assert grade_cause(result) is Cause.GRADER_TIMEOUT
+        check_timeout(result)
     else:
         with pytest.raises(Restart):
-            grade_cause(result)
+            check_timeout(result)

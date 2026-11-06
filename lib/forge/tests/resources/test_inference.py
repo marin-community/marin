@@ -14,7 +14,7 @@ from taskforge.llm.policy import LLMPolicy
 
 from forge.effects.events import Event, Retrying
 from forge.effects.issues import Hold, Restart
-from forge.model.llm import Completion, Message, Sampling, ToolCall, ToolSchema
+from forge.model.llm import Completion, Message, Role, ToolCall, ToolSchema
 from forge.resources.inference import (
     CompletionBackend,
     ContextExceeded,
@@ -73,11 +73,11 @@ def provider_completion(attempts: tuple[Attempt, ...] = ()) -> ProviderCompletio
 def request() -> InferenceRequest:
     return InferenceRequest(
         (
-            Message("assistant", "prefix", (ToolCall("previous", "shell", "{}"),), reasoning="thought"),
-            Message("tool", "result", tool_call_id="previous"),
+            Message(Role.ASSISTANT, "prefix", (ToolCall("previous", "shell", "{}"),), reasoning="thought"),
+            Message(Role.TOOL, "result", tool_call_id="previous"),
         ),
         (ToolSchema("shell", "Run command", {"type": "object"}),),
-        Sampling(max_tokens=100),
+        LLMPolicy(max_tokens=100),
     )
 
 

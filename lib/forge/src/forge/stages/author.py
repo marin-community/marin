@@ -12,13 +12,11 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from forge.config import ForgeConfig
 from forge.effects.context import Context
-from forge.harness.classify import host_failure
-from forge.harness.events import ToolReturned
-from forge.harness.tools.shell import ShellArgs
 from forge.lowering import host_requirements, lowering_settings, requirements
-from forge.model import serialization as wire
-from forge.model.llm import Message
+from forge.model.controls import CONTROL, CONTROLS
+from forge.model.llm import Message, Role
 from forge.model.proposal import render
+from forge.model.review import VALIDATION_RESULT
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation, Workpiece
 from forge.policy import Policy
@@ -31,7 +29,7 @@ from forge.stages.summary import validation_path
 def system_prompt(policy: Policy) -> str:
     """Render the author reference from the current task and control schemas."""
     reference = json.dumps(
-        {"TaskSpec": TaskSpec.model_json_schema(), "Control": wire.CONTROL.json_schema()},
+        {"TaskSpec": TaskSpec.model_json_schema(), "Control": CONTROL.json_schema()},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -64,8 +62,8 @@ def sandbox_limits(policy: Policy) -> str:
     limits = lowering_settings(policy).task_machine.limits
     return (
         f"Sandbox memory limit: {limits.memory_mb} MiB; CPU request: {limits.cpus}. "
-        f"The shell tool defaults to {ShellArgs(command='').timeout:g} seconds per command; "
-        "set its timeout argument explicitly for longer commands. "
+        f"The shell tool defaults to {policy.setting('solver.command_timeout', float):g} seconds per command; "
+        f"Its maximum timeout is {policy.setting('solver.tool_timeout', float):g} seconds. "
         f"Solver commands default to {policy.setting('solver.command_timeout', float):g} seconds. "
         "The grader command uses the task's declared grader timeout."
     )
@@ -76,7 +74,6 @@ def install_env(ctx: Context, env: Env) -> None:
     ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
     ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
     ctx.handle(WriteFile, partial(write_file, notify=ctx.emit), uses=(env,))
-    ctx.observe(ToolReturned, host_failure)
 
 
 async def hydrate(ctx: Context, files: tuple[TaskResource, ...], root: str = "/") -> None:
@@ -102,22 +99,20 @@ async def author(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resour
             if submission is not None:
                 await hydrate(ctx, (*submission.task.resources.all, *submission.task.resources.worker))
                 await hydrate(ctx, submission.task.resources.verifier, "/tests")
-                await ctx.emit(WriteFile(workdir / "task.json", wire.TASK_SPEC.dump_json(submission.task)))
-                await ctx.emit(WriteFile(workdir / "controls.json", wire.CONTROLS.dump_json(submission.controls)))
+                await ctx.emit(WriteFile(workdir / "task.json", submission.task.model_dump_json().encode()))
+                await ctx.emit(WriteFile(workdir / "controls.json", CONTROLS.dump_json(submission.controls)))
             proposal = render(workpiece.proposal)
             for index, evidence in enumerate(workpiece.evidence):
-                await ctx.emit(
-                    WriteFile(validation_path(str(workdir), index), wire.VALIDATION_RESULT.dump_json(evidence))
-                )
+                await ctx.emit(WriteFile(validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence)))
             await ctx.emit(WriteFile(workdir / "proposal.json", proposal.encode()))
             tools = config.tools["author"]
             session = workpiece.session or Conversation(
                 (
-                    Message("system", system_prompt(policy)),
-                    Message("user", policy.prompt("author.user").render(proposal=proposal)),
+                    Message(Role.SYSTEM, system_prompt(policy)),
+                    Message(Role.USER, policy.prompt("author.user").render(proposal=proposal)),
                 ),
                 tuple(tool.schema for tool in tools.values()),
             )
-            return await config.author.run(ctx, session, env, resources.inference_for("author"), tools)
+            return await config.author.run(ctx, session, resources.inference_for("author"), tools)
     finally:
         await env.close()

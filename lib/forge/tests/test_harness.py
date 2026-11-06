@@ -13,6 +13,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import ScriptGrader, StdoutReward
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskforge.llm.policy import LLMPolicy
 from verifyit.spec import NumericSpec
 
 from forge.effects.context import Context
@@ -37,9 +38,8 @@ from forge.harness.tools.submit import SubmitTool
 from forge.harness.tools.validate import ValidateRequest, ValidateTool
 from forge.harness.tools.web import WebFetchTool, WebSearchTool
 from forge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
-from forge.model.controls import Candidate, Control, ControlKind, RewardBand
-from forge.model.llm import Completion, Message, Sampling, ToolCall, Usage
-from forge.model.serialization import CONTROLS, TASK_SPEC
+from forge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
+from forge.model.llm import Completion, Message, Role, ToolCall, Usage
 from forge.model.workpiece import Conversation, Submission
 from forge.resources.env import (
     CommandResult,
@@ -65,7 +65,7 @@ def accept(submission: Submission) -> tuple[str, ...]:
 
 
 def environment(ctx: Context) -> FakeEnv:
-    task = TASK_SPEC.dump_json(arithmetic_task())
+    task = arithmetic_task().model_dump_json().encode()
     scripts = {
         "task": FakeCommand(
             CommandResult(0, "task ready", "", 0.1, False), {PurePosixPath("/workspace/task.json"): task}
@@ -99,12 +99,12 @@ async def test_shell_submit_session_and_persisted_replay_spend_no_inference(tmp_
     sink = JsonlSink(str(tmp_path / "session.jsonl"))
     ctx = Context(log=EventLog(sink=sink))
     env = environment(ctx)
-    harness = AgenticHarness(262144, Sampling(), "continue", 20000)
+    harness = AgenticHarness(262144, LLMPolicy(), "continue", 20000)
     tools = {
         "shell": ShellTool(30, 120),
         "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
     }
-    initial = Conversation((Message("user", "build"),), ())
+    initial = Conversation((Message(Role.USER, "build"),), ())
     result = await harness.run(ctx, initial, FakeInference(script), tools)
     await ctx.drain()
     assert isinstance(result, Submitted)
@@ -130,7 +130,7 @@ async def test_argument_and_unknown_tool_errors_return_to_model_before_finish() 
     ctx = Context(log=EventLog())
     client = FakeInference(script)
     environment(ctx)
-    result = await AgenticHarness(262144, Sampling(), "continue", 20000).run(
+    result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
         ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "finish": FinishTool()}
     )
     await ctx.drain()
@@ -150,7 +150,7 @@ async def test_submit_gate_feedback_and_validate_capture_current_draft() -> None
     result = await tool(ctx, {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"})
     assert isinstance(result, ToolResult) and result.content == "Missing negative controls"
     client = FakeInference((call("validate", {}, "validate-1"),))
-    outcome = await AgenticHarness(262144, Sampling(), "continue", 20000).run(
+    outcome = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
         ctx,
         Conversation((), ()),
         client,
@@ -206,7 +206,7 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     await ctx.emit(RunCommand("task", 30))
     first = await tool(ctx, {"reply": "12"})
     changed = arithmetic_task(grader=verifyit_package(NumericSpec("7", tolerance_abs=0, tolerance_rel=0)).grader)
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(changed)))
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), changed.model_dump_json().encode()))
     second = await tool(ctx, {"reply": "12"})
     assert isinstance(first, ToolResult) and json.loads(first.content)["reward"] == 1
     assert isinstance(second, ToolResult) and json.loads(second.content)["reward"] == 0
@@ -243,7 +243,7 @@ async def test_web_and_error_results_are_saved_before_the_next_inference() -> No
     )
     client = FakeInference((Completion("", calls), call("finish", {"reason": "done"}, "4")))
     env = environment(ctx)
-    result = await AgenticHarness(262144, Sampling(), "continue", 80).run(
+    result = await AgenticHarness(262144, LLMPolicy(), "continue", 80).run(
         ctx,
         Conversation((), ()),
         client,
@@ -322,7 +322,7 @@ async def test_invalid_read_paths_are_tool_feedback(kind: str, failure: str) -> 
 
 @pytest.mark.parametrize("context_tokens", [262144, 131072])
 async def test_model_window_determines_context_exit(context_tokens: int) -> None:
-    harness = AgenticHarness(context_tokens, Sampling(), "continue", 20000)
+    harness = AgenticHarness(context_tokens, LLMPolicy(), "continue", 20000)
     budget = context_tokens
     client = FakeInference(
         tuple(
@@ -355,13 +355,13 @@ async def test_text_and_isolated_empty_stops_keep_nudging_until_explicit_finish(
     client = FakeInference(script)
     ctx = Context(log=EventLog())
     environment(ctx)
-    result = await AgenticHarness(262144, Sampling(), "use tools", 20000).run(
+    result = await AgenticHarness(262144, LLMPolicy(), "use tools", 20000).run(
         ctx, Conversation((), ()), client, {"finish": FinishTool()}
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.FINISHED
     assert len(client.requests) == len(script)
-    assert all(request.messages[-1] == Message("user", "use tools") for request in client.requests[1:])
+    assert all(request.messages[-1] == Message(Role.USER, "use tools") for request in client.requests[1:])
     assert result.session.messages[-1].tool_calls[0].id == "finish"
 
 
@@ -370,7 +370,7 @@ async def test_three_consecutive_empty_completions_hold_provider_failure() -> No
     ctx = Context(log=EventLog())
     with pytest.raises(Hold, match="provider returned 3 empty completions"):
         environment(ctx)
-        await AgenticHarness(262144, Sampling(), "use tools", 20000).run(ctx, Conversation((), ()), client, {})
+        await AgenticHarness(262144, LLMPolicy(), "use tools", 20000).run(ctx, Conversation((), ()), client, {})
     await ctx.drain()
     assert len(client.requests) == 3
 
@@ -388,7 +388,7 @@ async def test_invalid_grader_image_is_feedback_before_any_grading_effect() -> N
             timeout=1,
         )
     )
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(task)))
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), task.model_dump_json().encode()))
     settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     # No GradeCandidate executor: the invalid image must be rejected before scheduling grading.
     result = await GradeTool("/workspace/task.json", {}, settings)(ctx, {"reply": "12"})
@@ -428,8 +428,8 @@ async def test_provider_context_overflow_preserves_the_last_completed_conversati
     )
     ctx = Context(log=EventLog())
     environment(ctx)
-    result = await AgenticHarness(262144, Sampling(), "use tools", 20000).run(
-        ctx, Conversation((Message("user", "build"),), ()), client, {"shell": ShellTool(30, 120)}
+    result = await AgenticHarness(262144, LLMPolicy(), "use tools", 20000).run(
+        ctx, Conversation((Message(Role.USER, "build"),), ()), client, {"shell": ShellTool(30, 120)}
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
@@ -456,7 +456,7 @@ async def test_next_prompt_counts_reply_tokens_and_appended_tool_text(completion
         )
     )
     environment(ctx)
-    result = await AgenticHarness(100, Sampling(), "use tools", output_chars).run(
+    result = await AgenticHarness(100, LLMPolicy(), "use tools", output_chars).run(
         ctx, Conversation((), ()), client, {"web_search": WebSearchTool()}
     )
     await ctx.drain()
@@ -485,7 +485,7 @@ async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() ->
     assert not finding.expected.met_by(GradeResult(Outcome.GRADED, 0))
     # The adversary can edit its scratch task file, but cannot change the bound task's machine requirement.
     edited = arithmetic_task(environment_requirements=requirements(image=None))
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(edited)))
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), edited.model_dump_json().encode()))
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"9"))
     rejected = await tool(ctx, {"findings": [{**claim, "candidate": {"reply": "9", "files": ["/workspace/answer"]}}]})
     empty = await tool(ctx, {"findings": []})
@@ -524,7 +524,7 @@ async def test_large_shell_output_is_saved_and_replayed_without_inference(tmp_pa
     sink = JsonlSink(str(tmp_path / "outputs.jsonl"))
     ctx = Context(log=EventLog(sink=sink))
     env = environment(ctx)
-    harness = AgenticHarness(262144, Sampling(), "continue", 8)
+    harness = AgenticHarness(262144, LLMPolicy(), "continue", 8)
     initial = Conversation((), ())
     tools = {"shell": ShellTool(30, 120), "finish": FinishTool()}
     client = FakeInference(
@@ -610,7 +610,7 @@ async def test_mixed_validate_turn_answers_every_call_before_retry() -> None:
         "validate": ValidateTool(accept, "/workspace/task.json", "/workspace/controls.json"),
         "shell": ShellTool(30, 120),
     }
-    result = await AgenticHarness(262144, Sampling(), "continue", 20000).run(ctx, Conversation((), ()), client, tools)
+    result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(ctx, Conversation((), ()), client, tools)
     await ctx.drain()
     assert any(isinstance(record.event, RunCommand) and record.event.timeout == 120 for record in log.records)
     assert isinstance(result, Returned)

@@ -10,6 +10,8 @@ from functools import partial
 from pathlib import PurePosixPath
 from typing import override
 
+from taskforge.llm.policy import LLMPolicy
+
 from forge.effects.context import Context
 from forge.effects.issues import Hold
 from forge.harness.events import ToolInvoked, ToolReturned
@@ -25,8 +27,8 @@ from forge.harness.protocol import (
     Tool,
     ToolResult,
 )
-from forge.model.content_hash import canonical_digest
-from forge.model.llm import FinishReason, Message, Sampling
+from forge.model.content_hash import digest
+from forge.model.llm import FinishReason, Message, Role
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation
 from forge.resources.env import WriteFile
@@ -39,7 +41,7 @@ MAX_EMPTY_COMPLETIONS = 3
 @dataclass(frozen=True, slots=True)
 class AgenticHarness(Harness):
     max_prompt_tokens: int
-    sampling: Sampling
+    sampling: LLMPolicy
     nudge: str
     output_chars: int
 
@@ -76,7 +78,7 @@ class AgenticHarness(Harness):
                 session = Conversation(
                     (
                         *session.messages,
-                        Message("assistant", result.content, result.tool_calls, reasoning=result.reasoning),
+                        Message(Role.ASSISTANT, result.content, result.tool_calls, reasoning=result.reasoning),
                     ),
                     schemas,
                 )
@@ -104,7 +106,7 @@ class AgenticHarness(Harness):
                         return Stopped(StopReason.FINISHED, session, outcome.reason, turns)
                     content = outcome.content
                     if len(content) > self.output_chars:
-                        path = PurePosixPath(".tool-output") / f"{canonical_digest((call.id, content))}.txt"
+                        path = PurePosixPath(".tool-output") / f"{digest((call.id, content))}.txt"
                         data = content.encode()
                         await ctx.emit(WriteFile(path, data))
                         marker = (
@@ -115,7 +117,9 @@ class AgenticHarness(Harness):
                     # Estimate only appended text; the provider counted the prior prompt and reply.
                     prompt_tokens += (len(content) + 3) // 4
                     await ctx.emit(ToolReturned(call.id, call.name, content))
-                    session = Conversation((*session.messages, Message("tool", content, tool_call_id=call.id)), schemas)
+                    session = Conversation(
+                        (*session.messages, Message(Role.TOOL, content, tool_call_id=call.id)), schemas
+                    )
                 if not result.tool_calls and result.finish_reason == FinishReason.STOP:
                     prompt_tokens += (len(self.nudge) + 3) // 4
-                    session = Conversation((*session.messages, Message("user", self.nudge)), schemas)
+                    session = Conversation((*session.messages, Message(Role.USER, self.nudge)), schemas)

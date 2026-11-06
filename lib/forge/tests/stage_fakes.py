@@ -4,7 +4,6 @@
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 from typing import override
 
 from rolloutengine.models import (
@@ -25,7 +24,7 @@ from forge.effects.issues import Hold, Restart
 from forge.harness.protocol import Harness, Tool
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation
-from forge.resources.env import Env, EnvFactory, FakeEnv
+from forge.resources.env import EnvFactory, FakeEnv
 from forge.resources.inference import InferenceClient
 from forge.resources.rollouts import Engine
 
@@ -48,16 +47,13 @@ class RecordingHarness(Harness):
         self.result = result
         self.session: Conversation | None = None
         self.client: InferenceClient | None = None
-        self.files: Mapping[PurePosixPath, bytes] = {}
 
     @override
     async def run(
-        self, ctx: Context, session: Conversation, env: Env, client: InferenceClient, tools: Mapping[str, Tool[object]]
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
         self.session = session
         self.client = client
-        assert isinstance(env, FakeEnv)
-        self.files = dict(env.files)
         if isinstance(self.result, (Restart, Hold, ExceptionGroup)):
             raise self.result
         return self.result

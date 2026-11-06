@@ -19,12 +19,9 @@ from forge.effects.events import Resolved
 from forge.effects.issues import Hold
 from forge.model.review import Cause
 from forge.model.verdict import grader_checks
-from forge.resources.grade_health import check_timeout
 
 TASK_DEFECTS = frozenset(
     {
-        Cause.TASK_SETUP,
-        Cause.SUBMISSION_UNSUPPORTED,
         Cause.GRADER_MISSING_REWARD,
         Cause.GRADER_EMPTY_REWARD,
         Cause.GRADER_INVALID_REWARD,
@@ -38,7 +35,6 @@ TASK_DEFECTS = frozenset(
 
 
 def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | None:
-    check_timeout(grade, task)
     try:
         grader_checks(grade)
     except ValueError:
@@ -76,7 +72,7 @@ def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
     return grade_cause(result.grade, task)
 
 
-async def host_failure(event: Resolved[object]) -> None:
+async def grader_infra_unavailable(event: Resolved[object]) -> None:
     value = event.value
     grade = value.grade if isinstance(value, GradedRollout) else value
     if isinstance(grade, GradeResult) and grade_cause(grade) is Cause.GRADER_INFRA:

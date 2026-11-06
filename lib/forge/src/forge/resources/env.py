@@ -18,7 +18,7 @@ from shellbox.machine import DEFAULT_WORKDIR, Command, ExitReason, FileReader, M
 from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 
-from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, canonical_digest
+from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, digest
 from forge.effects.issues import Hold, Restart, Transient
 from forge.resources.execution import Notify, exec_machine_lost, exec_setup_failed, retry_effect
 
@@ -82,7 +82,7 @@ def _stable(result: CommandResult) -> tuple[str, ...]:
 
 class _RecordedEnv(Env):
     def __init__(self, image: str, notify: Notify) -> None:
-        self.digest = canonical_digest((image,))
+        self.digest = digest((image,))
         self.notify = notify
         self.closed = False
 
@@ -91,10 +91,10 @@ class _RecordedEnv(Env):
         return Fingerprint("env", self.digest, ReplayPolicy.REEXECUTE)
 
     def _record_command(self, cmd: str, timeout: float, result: CommandResult) -> None:
-        self.digest = canonical_digest((self.digest, "command", cmd, float(timeout), *_stable(result)))
+        self.digest = digest((self.digest, "command", cmd, float(timeout), *_stable(result)))
 
     def _record_write(self, path: PurePosixPath, data: bytes) -> None:
-        self.digest = canonical_digest((self.digest, "write", str(path), canonical_digest(data)))
+        self.digest = digest((self.digest, "write", str(path), digest(data)))
 
     @override
     async def restore(self, events: Sequence[Mutation]) -> None:
@@ -247,7 +247,7 @@ class ShellboxEnvFactory(EnvFactory):
             raise
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
-        image = canonical_digest((requirements, self.runtime))
+        image = digest((requirements, self.runtime))
         return ShellboxEnv(machine, image, self.notify, owned, requirements.working_directory or DEFAULT_WORKDIR)
 
 

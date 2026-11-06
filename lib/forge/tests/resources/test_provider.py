@@ -117,11 +117,8 @@ async def test_endpoint_request_body_has_no_client_output_allowance(monkeypatch:
     assert all("max_tokens" not in body for body in bodies)
 
 
-def test_trial_timeouts_outlast_declared_provider_window(capsys: pytest.CaptureFixture[str]) -> None:
+def test_trial_timeouts_outlast_declared_provider_window() -> None:
     policy = load_policy(Path(__file__).parents[2] / "src/forge/policy/defaults")
     resolved = provider_policy(policy)
     assert resolved.setting("solver.turn_timeout", float) == 4200
     assert resolved.setting("solver.attempt_timeout", float) == 8400
-    output = capsys.readouterr().out
-    assert "provider.unavailable_wait declared=3600.0 resolved=3600.0" in output
-    assert "solver.turn_timeout declared=1800.0 resolved=4200.0" in output

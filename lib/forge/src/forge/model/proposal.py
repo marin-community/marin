@@ -17,12 +17,12 @@ import re
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Annotated, Literal, get_args
+from typing import Annotated
 
-from pydantic import ConfigDict, Field, StringConstraints, with_config
+from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, model_validator, with_config
 from verifyit.json_objects import unique_object
 
-from forge.model.content_hash import pretty_json, sha256_hex
+from forge.model.content_hash import digest, pretty_json
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -54,21 +54,6 @@ class Environment(StrEnum):
     CONTAINER = "container"
 
 
-class SolverMachine(StrEnum):
-    """The machine a reasoning or shellsim proposal's solver works on; a container proposal has its own image.
-
-    No machine at all (the solver reads the instructions and answers in the conversation, with no tools
-    and no files; legal only for a reasoning proposal), ShellSim, CPython 3.12 with its standard library
-    on Taskforge's grader-base image, or CPython 3.12 with PyPI packages the build lists. Package-only
-    Linux process requirements are unsupported by Forge's Iris runtime.
-    """
-
-    NONE = "none"
-    SHELLSIM = "shellsim"
-    CPYTHON = "cpython"
-    PACKAGES = "packages"
-
-
 class Verification(StrEnum):
     """How the private evaluator grades.
 
@@ -79,9 +64,7 @@ class Verification(StrEnum):
     decision model compares the answer with the reference answer against a rubric, only where fields cannot
     capture the answer, and its fooling cases must earn no credit. ``llm_as_judge``: a model judge
     for deliverables whose prose is the product. ``composite``: a weighted list of the other kinds
-    (``CompositePart``). ``composite`` is reserved: documents that carry it parse, but it is not offered to
-    proposers (``OFFERED_VERIFICATIONS``) until a composite grader type exists, since a TaskSpec holds one
-    grader.
+    (``CompositePart``). Composite documents parse, but lowering requires a single supported grader.
     """
 
     ANSWER_IN_BOX = "answer_in_box"
@@ -90,12 +73,6 @@ class Verification(StrEnum):
     LLM_AS_JUDGE = "llm_as_judge"
     COMPOSITE = "composite"
 
-
-OfferedVerification = Literal[
-    Verification.DECISION_MODEL, Verification.ANSWER_IN_BOX, Verification.CODE, Verification.LLM_AS_JUDGE
-]
-"""The kinds a proposer may choose: every kind but the reserved ``composite``."""
-OFFERED_VERIFICATIONS: tuple[Verification, ...] = get_args(OfferedVerification)
 
 COMPOSITE_MIN_PARTS = 2
 COMPOSITE_WEIGHT_TOLERANCE = 1e-6
@@ -170,7 +147,6 @@ class ProposalHeader:
     id: Text
     source: SourceRef
     environment: Environment
-    solver_machine: SolverMachine | None
     verification: Verification
     composite: tuple[CompositePart, ...]
     grounding: Grounding
@@ -181,6 +157,12 @@ class ProposalHeader:
     resources: tuple[Text, ...]
     null_reason: Text | None
 
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_header(cls, value: object) -> object:
+        """Existing input catalogs carry solver_machine; environment is now the sole choice."""
+        return {k: v for k, v in value.items() if k != "solver_machine"} if isinstance(value, dict) else value
+
 
 @with_config(ConfigDict(extra="forbid"))
 @dataclass(frozen=True, slots=True)
@@ -190,12 +172,7 @@ class TaskProposal:
 
     @property
     def digest(self) -> str:
-        return sha256_hex(render(self).encode())
-
-
-def source_text(ref: SourceRef) -> str:
-    """The canonical JSON of a source reference."""
-    return pretty_json(ref)
+        return digest(replace(self, body=_canonical_body(self.body)))
 
 
 def render(p: TaskProposal) -> str:
@@ -211,16 +188,10 @@ def _canonical_body(body: str) -> str:
 def parse(text: str) -> TaskProposal:
     """Parse and validate a proposal document; raise ``ProposalFormatError`` naming the bad field."""
     try:
-        # The file boundary imports these model definitions to build its adapter.
-        from forge.model.serialization import TASK_PROPOSAL  # noqa: PLC0415
-
         proposal = TASK_PROPOSAL.validate_python(json.loads(text, object_pairs_hook=unique_object))
     except ValueError as error:
         raise ProposalFormatError(str(error)) from error
     header, body = proposal.header, proposal.body
-    violation = solver_machine_violation(header.environment, header.solver_machine)
-    if violation is not None:
-        raise ProposalFormatError(f"solver_machine: {violation}")
     check_composite(header)
     _check_build(header)
     if header.null_reason is None:
@@ -318,26 +289,6 @@ def _check_research(header: ProposalHeader, body: str) -> None:
             raise ProposalFormatError(f"body: research[{index}] is never cited as research[{index}]")
 
 
-def solver_machine_violation(environment: Environment, machine: SolverMachine | None) -> str | None:
-    """Why ``machine`` cannot be the solver machine of an ``environment`` proposal, or ``None`` when it can.
-
-    A container proposal declares no machine (``None``), any other declares one, and only a reasoning
-    proposal may declare ``SolverMachine.NONE``.
-    """
-    if environment is Environment.CONTAINER:
-        if machine is not None:
-            return f"a container proposal runs in its own image and declares null, got {str(machine)!r}"
-        return None
-    if machine is None:
-        return f"a {environment} proposal declares one of {[str(m) for m in SolverMachine]}, got null"
-    if machine is SolverMachine.NONE and environment is not Environment.REASONING:
-        return (
-            f"only a reasoning proposal may declare {SolverMachine.NONE}; a {environment} "
-            f"proposal declares one of {[str(m) for m in SolverMachine if m is not SolverMachine.NONE]}"
-        )
-    return None
-
-
 def _check_build(header: ProposalHeader) -> None:
     names = [item.name for item in header.build]
     repeated = sorted({name for name in names if names.count(name) > 1})
@@ -346,3 +297,6 @@ def _check_build(header: ProposalHeader) -> None:
     escaping = [r for r in header.resources if PurePosixPath(r).is_absolute() or ".." in PurePosixPath(r).parts]
     if escaping:
         raise ProposalFormatError(f"resources: must be relative paths inside the build root: {escaping}")
+
+
+TASK_PROPOSAL = TypeAdapter(TaskProposal)

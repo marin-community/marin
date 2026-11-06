@@ -14,7 +14,7 @@ from forge.model.content_hash import (
     MAPPING_TAG as MAPPING_TAG,
 )
 from forge.model.content_hash import (
-    canonical_digest as canonical_digest,
+    digest as digest,
 )
 from forge.model.content_hash import (
     json_value as json_value,
@@ -56,7 +56,7 @@ EVENT_TYPES: dict[str, type[Event[object]]] = {}
 
 
 def event_digest(event: Event[object]) -> str:
-    return canonical_digest((f"{type(event).__module__}.{type(event).__qualname__}", event))
+    return digest((f"{type(event).__module__}.{type(event).__qualname__}", event))
 
 
 @dataclass(frozen=True, slots=True)
