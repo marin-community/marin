@@ -84,13 +84,12 @@ from marin.inference.vllm_server import (
     VllmType,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
+from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
-
-from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 @pytest.mark.parametrize(

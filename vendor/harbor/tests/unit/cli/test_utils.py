@@ -1,11 +1,73 @@
 import json
 import logging
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
-from harbor.cli.utils import load_mcp_servers, parse_kwargs, parse_tpu_spec
+from harbor.cli.utils import (
+    cli_host_capabilities,
+    load_mcp_servers,
+    parse_kwargs,
+    parse_tpu_spec,
+)
+from harbor.environments import model_relay
+from harbor.environments.model_relay import ModelRelay
 from harbor.models.task.config import TpuSpec
+from shellbox.http_service import HttpRequest
+from harbor.models.trial.config import AgentConfig
+
+
+async def test_cli_relays_bind_explicit_credentials_to_each_endpoint(monkeypatch):
+    source = {"OPENAI_API_KEY": "candidate-secret", "TOGETHER_API_KEY": "judge-secret"}
+    host = cli_host_capabilities(
+        source,
+        environment_kwargs={"model_endpoint": "https://judge.invalid/v1"},
+        verifier_environment={"TOGETHER_API_KEY": "${TOGETHER_API_KEY}"},
+        agents=(
+            AgentConfig(
+                name="terminus-2",
+                kwargs={"api_base": "https://candidate.invalid/v1"},
+                env={"OPENAI_API_KEY": "${OPENAI_API_KEY}"},
+            ),
+            AgentConfig(
+                name="terminus-2",
+                kwargs={"api_base": "https://unauthenticated.invalid/v1"},
+            ),
+        ),
+    )
+    source.update(OPENAI_API_KEY="rotated-candidate", TOGETHER_API_KEY="rotated-judge")
+    observed = {}
+
+    def provider(request):
+        observed[str(request.url)] = request.headers["authorization"]
+        return httpx.Response(200, json={"choices": []})
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        model_relay.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(provider), **kwargs
+        ),
+    )
+    for endpoint in (
+        "https://judge.invalid/v1",
+        "https://candidate.invalid/v1",
+        "https://unauthenticated.invalid/v1",
+    ):
+        relay = ModelRelay.from_endpoint(
+            endpoint, "model", authentication=host.model_authentication
+        )
+        response = await relay.handle(
+            HttpRequest("POST", "/v1/chat/completions", b'{"messages": []}')
+        )
+        assert response.status == 200
+    assert observed == {
+        "https://judge.invalid/v1/chat/completions": "Bearer judge-secret",
+        "https://candidate.invalid/v1/chat/completions": "Bearer candidate-secret",
+        "https://unauthenticated.invalid/v1/chat/completions": "Bearer EMPTY",
+    }
 
 
 class TestParseKwargs:

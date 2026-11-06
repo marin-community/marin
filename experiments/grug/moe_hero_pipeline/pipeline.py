@@ -46,6 +46,7 @@ from experiments.grug.moe_hero_ep.model import (
     Transformer,
     _batch_reshard,
     _embedding_gather,
+    _global_query_scale,
     _init_weight,
     _seq_axis,
 )
@@ -188,6 +189,7 @@ class GrugMoePipelineStage(eqx.Module):
         # Metadata contains global key positions; shard its query dimension like the residual.
         bounds_spec = P(BATCH_AXES, _seq_axis(get_abstract_mesh()))
         long_bounds, short_bounds, valid = (reshard(value, bounds_spec) for value in (long_bounds, short_bounds, valid))
+        global_query_scale = _global_query_scale(cfg, long_bounds, valid)
         block_metrics = []
         for local_index, block in enumerate(self.blocks):
             layer_index = self.start_layer + local_index
@@ -198,6 +200,7 @@ class GrugMoePipelineStage(eqx.Module):
                 layer_mask,
                 disable_rope=is_long,
                 is_global=is_long,
+                global_query_scale=global_query_scale,
             )
             block_metrics.append(metrics)
 
