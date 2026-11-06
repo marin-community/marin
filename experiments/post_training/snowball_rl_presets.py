@@ -267,11 +267,7 @@ class PanelEvaluator:
             eval_sampling_params={
                 "temperature": 0.0 if evaluation.answers == 1 else 1.0,
                 "top_p": 1.0,
-                "logprobs": (
-                    None
-                    if evaluation.answers == 1 or config["trainer"]["algorithm"]["off_policy_correction"] == "tis"
-                    else 0
-                ),
+                "logprobs": None,
                 "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
             },
         )

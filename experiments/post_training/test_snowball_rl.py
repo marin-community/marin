@@ -131,6 +131,7 @@ from cloud.iris.launch_config import load_launch_config
 from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
 from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
+from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 configs = [load_launch_config(path) for path in sys.argv[1:]]
 
@@ -154,7 +155,9 @@ def selection_results(config):
     return results
 
 async def check_panel_request(config):
-    sampling = OmegaConf.to_container(config.skyrl.generator.eval_sampling_params, resolve=True)
+    sampling = get_sampling_params_for_backend(
+        config.skyrl.generator.backend, config.skyrl.generator.eval_sampling_params
+    )
     training = OmegaConf.to_container(config.skyrl.generator.sampling_params, resolve=True)
     class Endpoint:
         model_name = "fixture"
@@ -244,8 +247,8 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
         StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
     expected = {
-        "speed-short": "0ce6f43c",
-        "data-short": "d8aa7882",
+        "speed-short": "50cb2e8d",
+        "data-short": "9f2a81ed",
         "speed-medium": "6c7c633e",
         "learning-medium": "bda7a3a8",
     }
