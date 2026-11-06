@@ -3,7 +3,7 @@ FROM python:3.12-slim AS build
 ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /bin/uv
 # The workspace lives at /app: rigging resolves the repo-root config/ directory by walking up
 # from the working directory to the workspace pyproject, so the process runs from here.
 WORKDIR /app
@@ -22,6 +22,7 @@ COPY lib/rigging/pyproject.toml lib/rigging/
 COPY lib/finestore/pyproject.toml lib/finestore/
 COPY lib/finelog/pyproject.toml lib/finelog/
 COPY lib/shellbox/pyproject.toml lib/shellbox/
+COPY lib/rolloutengine/pyproject.toml lib/rolloutengine/
 COPY lib/taskcompendium/pyproject.toml lib/taskcompendium/
 COPY lib/verifyit/pyproject.toml lib/verifyit/
 COPY infra/marina/pyproject.toml infra/marina/
@@ -49,6 +50,7 @@ COPY lib/levanter/src lib/levanter/src
 COPY lib/marin/src lib/marin/src
 COPY lib/zephyr/src lib/zephyr/src
 COPY lib/shellbox/src lib/shellbox/src
+COPY lib/rolloutengine/src lib/rolloutengine/src
 COPY lib/taskcompendium/src lib/taskcompendium/src
 COPY lib/verifyit/src lib/verifyit/src
 COPY infra/marina/src infra/marina/src

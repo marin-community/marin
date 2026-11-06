@@ -15,7 +15,13 @@ from cloud.iris.export_hf_checkpoint import (
 )
 from cloud.iris.launch_config import validate_iris_allocation
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import HFModelSaveCallback
+from skyrl_train.config.utils import get_default_config
+from skyrl_train.hf_export import read_hf_export_request
+from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.hf_export_schema import HFExportRequest
+from marinskyrl.checkpoint_paths import selected_export_step
 
 
 def _training_config():
@@ -185,3 +191,94 @@ def test_nested_export_reads_cluster_config_relative_to_parent_launch(tmp_path: 
     _run_export(spec, command)
 
     assert json.loads(output.read_text())["platform"]["coreweave"]["kube_context"] == "export-cluster"
+
+
+def test_export_selection_distinguishes_best_saved_step_from_latest(tmp_path: Path) -> None:
+    (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
+    assert selected_export_step(str(tmp_path), "best", 20) == 15
+    assert selected_export_step(str(tmp_path), "latest", 20) == 20
+
+
+def test_export_selection_does_not_substitute_training_for_best_initializer(tmp_path: Path) -> None:
+    (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 0, "model_format": "hf"}))
+    with pytest.raises(ValueError, match="initial HF model"):
+        selected_export_step(str(tmp_path), "best", 20)
+
+
+@pytest.mark.parametrize(("selection", "expected_step"), [("best", 15), ("latest", 20)])
+def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, selection, expected_step) -> None:
+    config = get_default_config()
+    config.trainer.ckpt_path = str(tmp_path / "checkpoints")
+    config.trainer.export_path = str(tmp_path / "exports")
+    config.trainer.hf_export_checkpoint = selection
+    config.trainer.export_hf_artifact = True
+    config.trainer.policy.model.path = "org/policy"
+    root = Path(config.trainer.ckpt_path)
+    for step in (15, 20):
+        checkpoint = root / f"global_step_{step}"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / "trainer_state.pt").write_bytes(b"complete")
+    (root / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = config
+    trainer.global_step = 20
+    trainer.all_timings = {}
+    trainer.handle_hf_export()
+    selected = root / f"global_step_{expected_step}"
+    request = read_hf_export_request(str(selected))
+    assert request is not None
+    assert request.step == expected_step
+    assert request.checkpoint_path == str(selected)
+    assert request.model_path == "org/policy"
+    other_step = 20 if expected_step == 15 else 15
+    assert read_hf_export_request(str(root / f"global_step_{other_step}")) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("best_metadata", "expected_error"),
+    [
+        (None, FileNotFoundError),
+        ({"step": 0, "model_format": "hf"}, ValueError),
+        ({"step": 15, "model_format": "native"}, None),
+    ],
+)
+async def test_best_export_waits_until_train_end(tmp_path: Path, best_metadata, expected_error) -> None:
+    config = get_default_config()
+    config.trainer.ckpt_path = str(tmp_path)
+    config.trainer.export_path = str(tmp_path / "exports")
+    config.trainer.hf_export_checkpoint = "best"
+    config.trainer.policy.model.path = "org/policy"
+    if best_metadata is not None:
+        (tmp_path / "best_checkpoint.json").write_text(json.dumps(best_metadata))
+        if best_metadata["model_format"] == "native":
+            checkpoint = tmp_path / "global_step_15"
+            checkpoint.mkdir()
+            (checkpoint / "trainer_state.pt").write_bytes(b"complete")
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = config
+    trainer.global_step = 10
+    trainer.all_timings = {}
+    trainer.all_metrics = {}
+    trainer.num_steps_per_epoch = 20
+    trainer.total_training_steps = 20
+    trainer.eval_dataset = None
+    trainer.colocate_all = False
+    trainer._control = TrainerControl()
+    trainer.callback_handler = CallbackHandler([HFModelSaveCallback(save_steps=10)])
+    state = TrainerState(global_step=10, epoch=0, total_steps=20, num_steps_per_epoch=20)
+
+    await trainer._run_step_end_callbacks(state)
+
+    assert not list(tmp_path.glob("global_step_*/hf_export_request.json"))
+    if expected_error is not None:
+        with pytest.raises(expected_error):
+            await trainer._finalize_training(completed_step=20, epoch=0)
+        assert not list(tmp_path.glob("global_step_*/hf_export_request.json"))
+        return
+
+    await trainer._finalize_training(completed_step=20, epoch=0)
+    request = read_hf_export_request(str(tmp_path / "global_step_15"))
+    assert request is not None
+    assert request.step == 15
+    assert request.checkpoint_path == str(tmp_path / "global_step_15")

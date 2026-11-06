@@ -4,13 +4,16 @@
 //! paths, local cache membership, and legacy layout translation are private to
 //! the implementations of [`ObjectStore`].
 
+mod admission;
 mod cached;
+mod diagnostics;
 mod legacy;
 mod local_file;
 mod provider;
 mod remote;
 
-pub use cached::CachedObjectStore;
+pub use admission::QueryCacheAdmission;
+pub use cached::{CachePins, CachedObjectStore};
 pub use legacy::LegacyObjectStore;
 pub use provider::is_remote_object_store;
 pub use remote::{build_remote_object_store, RemoteObjectStore};
@@ -57,6 +60,13 @@ pub struct ObjectVersion {
 pub struct ObjectReference {
     pub id: ObjectId,
     pub version: ObjectVersion,
+}
+
+/// A cached file or the backing object's scan location.
+#[derive(Clone)]
+pub enum ScanSource {
+    Local(PathBuf),
+    Remote(String),
 }
 
 /// Result of a best-effort batch deletion.
@@ -190,6 +200,30 @@ pub trait ObjectStore: Send + Sync {
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError>;
 
+    /// Read an immutable object's byte range without materializing the object.
+    /// Cached stores serve resident bytes locally and forward misses directly.
+    async fn read_range(
+        &self,
+        reference: &ObjectReference,
+        range: std::ops::Range<u64>,
+    ) -> Result<Option<bytes::Bytes>, StatsError>;
+
+    /// Read several ranges, allowing providers to coalesce adjacent requests.
+    async fn read_ranges(
+        &self,
+        reference: &ObjectReference,
+        ranges: &[std::ops::Range<u64>],
+    ) -> Result<Option<Vec<bytes::Bytes>>, StatsError> {
+        let mut bytes = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            let Some(part) = self.read_range(reference, range.clone()).await? else {
+                return Ok(None);
+            };
+            bytes.push(part);
+        }
+        Ok(Some(bytes))
+    }
+
     /// Whether one exact immutable object exists without reading its contents.
     async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
         let prefix = ObjectPrefix::table(id.table_name(), id.relative_key())?;
@@ -248,9 +282,18 @@ pub trait ObjectStore: Send + Sync {
         Ok(None)
     }
 
-    /// Begin materializing `reference` into the local cache without waiting
-    /// for it. A store without a cache does nothing.
-    fn warm(&self, _reference: &ObjectReference) {}
+    /// Keep a cached file readable until the supplied pin set is dropped.
+    async fn pin_cached_path(
+        &self,
+        reference: &ObjectReference,
+        _pins: &CachePins,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        self.cached_path(reference).await
+    }
+
+    /// Consider an optional fill after a query cache miss. Reuse history and
+    /// the query's shared budget decide whether a cached store admits it.
+    fn warm_query(&self, _reference: &ObjectReference, _query: &QueryCacheAdmission) {}
 
     /// Conditionally replace a mutable pointer object. Stores whose objects
     /// are all immutable reject this.

@@ -12,6 +12,7 @@ from pathlib import Path
 import pulumi
 import pytest
 import yaml
+from pulumi.output import Unknown
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
@@ -55,6 +56,17 @@ class RecordingMocks(Mocks):
             outputs["email"] = f"{args.args['accountId']}@example.iam.gserviceaccount.com"
             outputs["uniqueId"] = "99887766554433221100"
         return outputs, []
+
+
+class SkippedPreviewBuildMocks(RecordingMocks):
+    """docker-build reports the bare tag as its ref when a preview skips the build."""
+
+    def new_resource(self, args: MockResourceArgs):
+        resource_id, outputs = super().new_resource(args)
+        if args.typ == "docker-build:index:Image":
+            outputs["ref"] = outputs["tags"][0]
+            del outputs["digest"]
+        return resource_id, outputs
 
 
 def deployment_config() -> DeploymentConfig:
@@ -526,6 +538,19 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
 
 
 @pulumi.runtime.test
+def test_preview_without_a_built_image_leaves_the_vm_image_unknown():
+    # Regression: with the Loom commit unchanged, preview raised on the bare tag.
+    mocks = SkippedPreviewBuildMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=True)
+    infrastructure = create_infrastructure(deployment_config())
+
+    def check(_: object) -> None:
+        assert isinstance(by_name(mocks, "loom").inputs["metadata"]["loom-image"], Unknown)
+
+    return infrastructure.activation.id.apply(check)
+
+
+@pulumi.runtime.test
 def test_profiles_and_workloads_render_to_vm_metadata():
     mocks = RecordingMocks()
     pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
@@ -567,6 +592,37 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
         assert mapping["service_account"] == "marin-grafana@example.iam.gserviceaccount.com"
         assert mapping["subject"] == "99887766554433221100"
         assert mapping["profiles"] == ["ops"]
+
+    return infrastructure.instance.id.apply(check)
+
+
+@pulumi.runtime.test
+def test_profiles_sharing_a_secret_adopt_it_once():
+    base = deployment_config()
+    shared = (
+        ProfileConfig.parse(
+            name,
+            {
+                "agent": "codex",
+                "env": {"CLAUDE_CODE_OAUTH_TOKEN": {"secretRef": f"projects/example/secrets/claude/{version}"}},
+            },
+        )
+        for name, version in (("review", "versions/latest"), ("pm", "versions/2"))
+    )
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
+    infrastructure = create_infrastructure(replace(base, profiles=(*base.profiles, *shared)))
+
+    def check(_: object) -> None:
+        adopted = sorted(
+            (resource.inputs["secretId"], resource.resource_id)
+            for resource in mocks.resources
+            if resource.typ == "gcp:secretmanager/secret:Secret" and resource.name != "loom-dotenv"
+        )
+        assert adopted == [
+            ("claude", "projects/example/secrets/claude"),
+            ("ops-kubeconfig", "projects/example/secrets/ops-kubeconfig"),
+        ]
 
     return infrastructure.instance.id.apply(check)
 

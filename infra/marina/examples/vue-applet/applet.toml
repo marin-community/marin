@@ -1,3 +1,0 @@
-title = "Vue counter"
-description = "A small Vue applet built with Vite."
-build_command = "npm ci && npm run build"

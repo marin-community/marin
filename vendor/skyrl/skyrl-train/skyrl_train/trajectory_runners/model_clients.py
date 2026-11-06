@@ -3,13 +3,21 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
 
 import numpy as np
+from transformers import PreTrainedTokenizerBase
+from rolloutengine.models import RolloutContractError
 
-from skyrl_gym.envs.nemotron_ultra.answer_extraction import REASONING_DELIMITERS, final_answer_text
+from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
+from verifyit.reasoning_markup import (
+    REASONING_DELIMITERS,
+    ReasoningViolation,
+    first_reasoning_violation,
+    reasoning_span_violation,
+)
 
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
@@ -17,6 +25,7 @@ from skyrl_train.inference_engines.base import (
     ChatContinuation,
     InferenceEngineInput,
     InferenceEngineOutput,
+    request_id_for_session,
 )
 from skyrl_train.inference_engines.chat_continuation import (
     CHAT_TOKENIZE_FIELDS,
@@ -29,6 +38,7 @@ from skyrl_train.inference_engines.chat_template import (
     template_error_from_exception,
 )
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
+from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
 from skyrl_train.inference_engines.response_topk import select_chat_response_topk
 from skyrl_train.trajectory_runners.types import TokenProvenance
 from skyrl_train.trajectory_runners.routed_experts import normalize_routed_experts
@@ -41,11 +51,17 @@ _OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
 _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 
+REASONING_VIOLATIONS_KEY = "reasoning_violations"
+REASONING_VIOLATION_TOKENS_KEY = "reasoning_violation_tokens"
+
+
 class ModelClientOutput(InferenceEngineOutput):
     """Normalized model output with explicit token provenance."""
 
     token_provenance: TokenProvenance
     generation_token_budgets: NotRequired[list[int | None]]
+    reasoning_violations: NotRequired[list[ReasoningViolation | None]]
+    reasoning_violation_tokens: NotRequired[list[int | None]]
 
 
 class ModelClient(Protocol):
@@ -76,6 +92,28 @@ class GenerationBudgetExceededError(ContextLengthExceededError):
         super().__init__(category="context_overflow", request_id=None, status_code=None)
 
 
+def _generation_token_budget(
+    request: InferenceEngineInput, prompt_ids: list[int], requested_tokens: list[int]
+) -> int | None:
+    """Return the tightest output cap, or None when uncapped.
+
+    Raise GenerationBudgetExceededError if the prompt exceeds its cap or fills the context.
+    """
+    max_prompt_length = request.get("max_prompt_length")
+    if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
+        raise GenerationBudgetExceededError(prompt_ids)
+    sampling = request.get("sampling_params") or {}
+    configured = [int(sampling[key]) for key in _OUTPUT_LIMIT_KEYS if sampling.get(key) is not None]
+    configured.extend(requested_tokens)
+    max_context_length = request.get("max_context_length")
+    if max_context_length is not None:
+        remaining = max_context_length - len(prompt_ids)
+        if remaining <= 0:
+            raise GenerationBudgetExceededError(prompt_ids)
+        configured.append(remaining)
+    return min(configured) if configured else None
+
+
 @dataclass(frozen=True)
 class _ChatResult:
     prompt_ids: list[int]
@@ -89,6 +127,8 @@ class _ChatResult:
     generation_token_budget: int | None
     routed_experts: np.ndarray | None = None
     policy_steps: list[int] | None = None
+    reasoning_violation: ReasoningViolation | None = None
+    reasoning_violation_token: int | None = None
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -114,6 +154,9 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
         token_provenance=TokenProvenance.ENGINE,
         generation_token_budgets=[result.generation_token_budget for result in results],
     )
+    if any(result.reasoning_violation is not None for result in results):
+        output[REASONING_VIOLATIONS_KEY] = [result.reasoning_violation for result in results]
+        output[REASONING_VIOLATION_TOKENS_KEY] = [result.reasoning_violation_token for result in results]
     if all(rows is not None for rows in selected_indices):
         output["student_topk_indices"] = selected_indices
         output["behavior_topk_logprobs"] = selected_scores
@@ -174,6 +217,37 @@ async def _render_chat_prompt(
     return messages, prompt_ids
 
 
+def _reasoning_marker_tokens(tokenizer: PreTrainedTokenizerBase) -> dict[int, str]:
+    markers = {}
+    for pair in REASONING_DELIMITERS:
+        for marker in pair:
+            token_ids = tokenizer.encode(marker, add_special_tokens=False)
+            if len(token_ids) == 1:
+                markers[token_ids[0]] = marker
+    return markers
+
+
+def _reasoning_violation(
+    tokenizer: PreTrainedTokenizerBase, response_ids: Sequence[int], decoded: str, stop_reason: str
+) -> tuple[ReasoningViolation | None, int | None]:
+    """Classify a reply's reasoning span and locate the token where it goes wrong.
+
+    An unclosed span is located at the last token. The token is ``None`` when the one-token markers are
+    well formed, i.e. the violation is in literal marker text.
+    """
+    violation = reasoning_span_violation(decoded, stop_reason)
+    if violation is None:
+        return None, None
+    markers = _reasoning_marker_tokens(tokenizer)
+    positions = [index for index, token in enumerate(response_ids) if token in markers]
+    error = first_reasoning_violation([markers[response_ids[index]] for index in positions], stop_reason)
+    if error is None:
+        return violation, None
+    if error.marker_index is None:
+        return violation, len(response_ids) - 1
+    return violation, positions[error.marker_index]
+
+
 class DirectModelClient:
     """Delegate model requests to the colocated inference-engine client."""
 
@@ -185,6 +259,48 @@ class DirectModelClient:
             return await self._generate_chat(request)
         output = await self._client.generate(request)
         return ModelClientOutput(**output, token_provenance=TokenProvenance.ENGINE)
+
+    async def _generate_assistant_prefix(
+        self, request: InferenceEngineInput, messages: list[dict[str, Any]], options: dict[str, Any], session_id: str
+    ) -> _ChatResult:
+        prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
+        sampling = dict(request.get("sampling_params") or {})
+        requested_tokens = [
+            int(options[key])
+            for key in ("max_completion_tokens", "max_output_tokens")
+            if options.get(key) is not None
+        ]
+        token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
+        if token_budget is not None:
+            sampling["max_tokens"] = token_budget
+        sampling.pop("max_generate_length", None)
+        sampling.update(skip_special_tokens=False, include_stop_str_in_output=True)
+        # Raw completions retain delimiters and bypass chat tool/reasoning parsers.
+        output = await self._client.generate(
+            {
+                "prompts": None,
+                "prompt_token_ids": [prompt_ids],
+                "session_ids": [session_id],
+                "sampling_params": sampling,
+            }
+        )
+        if output.get("prompt_ids") != [prompt_ids]:
+            raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
+        text = output["responses"][0]
+        message = (output.get("assistant_messages") or [{"role": "assistant", "content": text}])[0]
+        return _ChatResult(
+            prompt_ids,
+            output["response_ids"][0],
+            None if output.get("response_logprobs") is None else output["response_logprobs"][0],
+            None if output.get("student_topk_indices") is None else output["student_topk_indices"][0],
+            None if output.get("behavior_topk_logprobs") is None else output["behavior_topk_logprobs"][0],
+            text,
+            output["stop_reasons"][0],
+            message,
+            token_budget,
+            (output.get("routed_experts") or [None])[0],
+            (output.get("response_policy_steps") or [None])[0],
+        )
 
     @staticmethod
     def _chat_options(options: dict[str, Any], sampling_params: dict[str, Any]) -> dict[str, Any]:
@@ -220,6 +336,10 @@ class DirectModelClient:
         requested_top_k = requested_top_k if isinstance(requested_top_k, int) and requested_top_k > 0 else None
 
         async def generate_one(messages, row_options, session_id, continuation):
+            if row_options.get("extra_body", {}).get("continue_final_message") is True:
+                if continuation is not None:
+                    raise ValueError("An initial assistant prefix cannot reuse a sampled chat continuation")
+                return await self._generate_assistant_prefix(request, messages, row_options, session_id)
             chat_options = self._chat_options(row_options, sampling_params)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {
@@ -233,16 +353,15 @@ class DirectModelClient:
             }
             with rollout_phase("tokenize"):
                 messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
-            max_prompt_length = request.get("max_prompt_length")
-            if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
-                raise GenerationBudgetExceededError(prompt_ids)
-            max_context_length = request.get("max_context_length")
-            if max_context_length is not None:
-                remaining_tokens = max_context_length - len(prompt_ids)
-                if remaining_tokens <= 0:
-                    raise GenerationBudgetExceededError(prompt_ids)
-                requested_tokens = chat_options.get("max_completion_tokens", remaining_tokens)
-                chat_options["max_completion_tokens"] = min(int(requested_tokens), remaining_tokens)
+            requested_tokens = (
+                [] if chat_options.get("max_completion_tokens") is None else [int(chat_options["max_completion_tokens"])]
+            )
+            token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
+            if token_budget is not None:
+                # Preserve chat's explicit-null handling when context supplies a budget.
+                chat_options["max_completion_tokens"] = min(
+                    int(chat_options.get("max_completion_tokens", token_budget)), token_budget
+                )
 
             body = {
                 "model": self._client.model_name,
@@ -261,7 +380,7 @@ class DirectModelClient:
                 # vLLM may include the sampled token outside the natural top K.
                 body["top_logprobs"] = requested_top_k + 1
                 body["return_tokens_as_token_ids"] = True
-            request_id = uuid4().hex
+            request_id = uuid4().hex if session_id is None else request_id_for_session(session_id)
             headers = {"x-request-id": request_id}
             if session_id is not None:
                 headers[SESSION_ID_HEADER] = str(session_id)
@@ -322,6 +441,9 @@ class DirectModelClient:
             ):
                 # A tool parser can replace the backend's output-budget stop reason.
                 stop_reason = "length"
+            reasoning_violation, reasoning_violation_token = _reasoning_violation(
+                tokenizer, response_ids, decoded, stop_reason
+            )
             return _ChatResult(
                 prompt_ids,
                 response_ids,
@@ -334,6 +456,8 @@ class DirectModelClient:
                 token_budget,
                 _choice_routed_experts(choice, prompt_ids, response_ids),
                 choice.get(CHOICE_POLICY_STEPS_KEY),
+                reasoning_violation,
+                reasoning_violation_token,
             )
 
         results = await asyncio.gather(

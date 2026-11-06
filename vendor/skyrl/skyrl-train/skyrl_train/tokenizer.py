@@ -3,6 +3,8 @@
 from omegaconf import DictConfig
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+from skyrl_train.inference_engines.chat_template import get_custom_chat_template
+
 
 def create_tokenizer(
     model_path: str,
@@ -28,9 +30,13 @@ def create_tokenizer(
 def tokenizer_from_config(config: DictConfig, padding_side: str = "left") -> PreTrainedTokenizerBase:
     """Create the policy tokenizer that a training config names."""
     model = config.trainer.policy.model
-    return create_tokenizer(
+    tokenizer = create_tokenizer(
         model_path=model.tokenizer_path,
         disable_fast_tokenizer=config.trainer.disable_fast_tokenizer,
         padding_side=padding_side,
         revision=model.get("tokenizer_revision"),
     )
+    template = get_custom_chat_template(config.generator.chat_template)
+    if template is not None:
+        tokenizer.chat_template = template
+    return tokenizer

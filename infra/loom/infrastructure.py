@@ -10,7 +10,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -78,7 +78,15 @@ def _artifact_image_path(project: str, region: str) -> str:
     return f"{region}-docker.pkg.dev/{project}/{ARTIFACT_REPOSITORY_ID}/{ARTIFACT_IMAGE_NAME}"
 
 
+def _release_image_tag(project: str, region: str) -> str:
+    return f"{_artifact_image_path(project, region)}:latest"
+
+
 def _validated_image_reference(value: str, project: str, region: str) -> str:
+    # pull=True makes docker-build rebuild the image on every update. A preview that
+    # skips that build reports the bare tag; the digest exists only after `up` pushes.
+    if pulumi.runtime.is_dry_run() and value == _release_image_tag(project, region):
+        return cast(str, pulumi.UNKNOWN)
     image_path = re.escape(_artifact_image_path(project, region))
     if not re.fullmatch(rf"{image_path}(?::[^@]+)?@sha256:[0-9a-f]{{64}}", value):
         raise ValueError("Docker did not produce the expected Loom image digest")
@@ -879,6 +887,9 @@ def _enable_apis(project: str) -> list[gcp.projects.Service]:
     services = (
         "artifactregistry.googleapis.com",
         "compute.googleapis.com",
+        # Google Doc sessions read and edit docs and their comments; see profiles/gdoc.
+        "docs.googleapis.com",
+        "drive.googleapis.com",
         "iam.googleapis.com",
         "iamcredentials.googleapis.com",
         "secretmanager.googleapis.com",
@@ -971,6 +982,34 @@ def _create_root_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]
     )
 
 
+def _adopt_profile_secrets(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> None:
+    """Manage each Secret Manager secret that a profile environment references.
+
+    An operator creates the secret and uploads its value before a profile references it, so
+    Pulumi imports the existing secret and never holds a version. Removing the last reference
+    leaves the secret and its versions in place.
+    """
+    secret_ids = {
+        environment.secret_ref.split("/")[3]
+        for profile in config.profiles
+        for environment in profile.env
+        if isinstance(environment, ProfileSecretConfig)
+    }
+    for secret_id in sorted(secret_ids):
+        # Declare no labels or annotations so operator-set ones, such as a token's expiry, persist.
+        gcp.secretmanager.Secret(
+            f"loom-profile-secret-{secret_id}",
+            project=config.project,
+            secret_id=secret_id,
+            replication={"auto": {}},
+            opts=pulumi.ResourceOptions(
+                depends_on=apis,
+                import_=f"projects/{config.project}/secrets/{secret_id}",
+                retain_on_delete=True,
+            ),
+        )
+
+
 @dataclass(frozen=True)
 class ImageResources:
     image: docker_build.Image
@@ -1003,13 +1042,16 @@ def _create_image(
         description="Loom deployment images",
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
-    image_tag = f"{_artifact_image_path(config.project, config.region)}:latest"
+    image_tag = _release_image_tag(config.project, config.region)
     image = docker_build.Image(
         "loom-release-image",
         context=docker_build.BuildContextArgs(location=_resolved_build_context(config)),
         build_args={"CARGO_PROFILE": "release"},
         labels={"org.opencontainers.image.source": REPOSITORY_URL},
         platforms=[docker_build.Platform.LINUX_AMD64],
+        # Resolve base image tags against the registry so a workstation's stale local
+        # base image cannot carry an outdated trust store into the release.
+        pull=True,
         tags=[image_tag],
         build_on_preview=True,
         push=True,
@@ -1260,6 +1302,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         replication={"auto": {}},
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
+    _adopt_profile_secrets(config, apis)
     instance = _create_instance(
         config,
         vm_account,

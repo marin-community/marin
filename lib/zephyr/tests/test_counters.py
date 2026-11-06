@@ -13,7 +13,7 @@ from zephyr.coordinator import ZephyrCoordinator, ZephyrExecutionResult, _Pipeli
 from zephyr.counters import ScopedCounters
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.stage_io import ZephyrTaskResources
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var
+from zephyr.worker_context import Aggregation, CounterEntry, CounterKey, CounterSnapshot, _worker_ctx_var
 
 _COUNTER_TASK_RESOURCES = ZephyrTaskResources(cpu=1, memory=1)
 
@@ -112,7 +112,6 @@ def test_zephyr_execution_result_empty():
 
 
 def test_stage_scoped_counters():
-    """Stage-scoped counters carry stage=<name> on the entry, not a key prefix."""
     worker = _worker()
     token = _worker_ctx_var.set(worker)
     try:
@@ -130,19 +129,32 @@ def test_stage_scoped_counters():
 
 
 def test_stage_scope_isolated_from_pipeline():
-    """Stage and pipeline counters with the same name are stored under the same key but different stage."""
+    """A stage counter and a pipeline counter with the same name keep separate values."""
     worker = _worker()
     token = _worker_ctx_var.set(worker)
     try:
         counters.pipeline.update_counter("metric", 1)
-        # pipeline counter is stored with stage=None; updating via stage("stg")
-        # would share the same key "metric" so we use a different name here
-        counters.stage("stg").update_counter("stg_metric", 2)
+        counters.stage("stg").update_counter("metric", 2)
 
         assert counters.pipeline.get_counters() == {"metric": 1}
-        assert counters.stage("stg").get_counters() == {"stg_metric": 2}
+        assert counters.stage("stg").get_counters() == {"metric": 2}
     finally:
         _worker_ctx_var.reset(token)
+
+
+def test_coordinator_reports_same_name_stage_counter_under_its_stage():
+    worker = _worker()
+    token = _worker_ctx_var.set(worker)
+    try:
+        counters.pipeline.update_counter("metric", 1)
+        counters.stage("stg").update_counter("metric", 2)
+    finally:
+        _worker_ctx_var.reset(token)
+
+    coord = _make_coordinator([worker.get_counter_snapshot()])
+
+    assert coord.get_counters(stage="stg") == {"metric": 2}
+    assert coord.get_counters() == {"metric": 3}
 
 
 def test_current_stage_uses_worker_stage_name():
@@ -178,8 +190,8 @@ def test_aggregation_sum_default():
     """Counters with no aggregation hint are summed."""
     coord = _make_coordinator(
         [
-            CounterSnapshot(counters={"a": CounterEntry(10)}, generation=1),
-            CounterSnapshot(counters={"a": CounterEntry(20)}, generation=2),
+            CounterSnapshot(counters={CounterKey(None, "a"): CounterEntry(10)}, generation=1),
+            CounterSnapshot(counters={CounterKey(None, "a"): CounterEntry(20)}, generation=2),
         ]
     )
     assert coord.get_counters() == {"a": 30}
@@ -188,9 +200,9 @@ def test_aggregation_sum_default():
 def test_aggregation_max():
     coord = _make_coordinator(
         [
-            CounterSnapshot(counters={"peak": CounterEntry(100, Aggregation.MAX)}, generation=1),
-            CounterSnapshot(counters={"peak": CounterEntry(200, Aggregation.MAX)}, generation=2),
-            CounterSnapshot(counters={"peak": CounterEntry(50, Aggregation.MAX)}, generation=3),
+            CounterSnapshot(counters={CounterKey(None, "peak"): CounterEntry(100, Aggregation.MAX)}, generation=1),
+            CounterSnapshot(counters={CounterKey(None, "peak"): CounterEntry(200, Aggregation.MAX)}, generation=2),
+            CounterSnapshot(counters={CounterKey(None, "peak"): CounterEntry(50, Aggregation.MAX)}, generation=3),
         ]
     )
     assert coord.get_counters() == {"peak": 200}
@@ -199,9 +211,9 @@ def test_aggregation_max():
 def test_aggregation_min():
     coord = _make_coordinator(
         [
-            CounterSnapshot(counters={"latency": CounterEntry(300, Aggregation.MIN)}, generation=1),
-            CounterSnapshot(counters={"latency": CounterEntry(100, Aggregation.MIN)}, generation=2),
-            CounterSnapshot(counters={"latency": CounterEntry(200, Aggregation.MIN)}, generation=3),
+            CounterSnapshot(counters={CounterKey(None, "latency"): CounterEntry(300, Aggregation.MIN)}, generation=1),
+            CounterSnapshot(counters={CounterKey(None, "latency"): CounterEntry(100, Aggregation.MIN)}, generation=2),
+            CounterSnapshot(counters={CounterKey(None, "latency"): CounterEntry(200, Aggregation.MIN)}, generation=3),
         ]
     )
     assert coord.get_counters() == {"latency": 100}
@@ -210,9 +222,9 @@ def test_aggregation_min():
 def test_aggregation_average():
     coord = _make_coordinator(
         [
-            CounterSnapshot(counters={"cpu_pct": CounterEntry(80, Aggregation.AVERAGE)}, generation=1),
-            CounterSnapshot(counters={"cpu_pct": CounterEntry(60, Aggregation.AVERAGE)}, generation=2),
-            CounterSnapshot(counters={"cpu_pct": CounterEntry(40, Aggregation.AVERAGE)}, generation=3),
+            CounterSnapshot(counters={CounterKey(None, "cpu_pct"): CounterEntry(80, Aggregation.AVERAGE)}, generation=1),
+            CounterSnapshot(counters={CounterKey(None, "cpu_pct"): CounterEntry(60, Aggregation.AVERAGE)}, generation=2),
+            CounterSnapshot(counters={CounterKey(None, "cpu_pct"): CounterEntry(40, Aggregation.AVERAGE)}, generation=3),
         ]
     )
     assert coord.get_counters() == {"cpu_pct": 60}
@@ -228,8 +240,12 @@ def test_aggregation_average_weighted_by_observation_count():
     """
     coord = _make_coordinator(
         [
-            CounterSnapshot(counters={"cpu_pct": CounterEntry(90, Aggregation.AVERAGE, count=99)}, generation=1),
-            CounterSnapshot(counters={"cpu_pct": CounterEntry(40, Aggregation.AVERAGE, count=1)}, generation=2),
+            CounterSnapshot(
+                counters={CounterKey(None, "cpu_pct"): CounterEntry(90, Aggregation.AVERAGE, count=99)}, generation=1
+            ),
+            CounterSnapshot(
+                counters={CounterKey(None, "cpu_pct"): CounterEntry(40, Aggregation.AVERAGE, count=1)}, generation=2
+            ),
         ]
     )
     # (90*99 + 40*1) / 100; an unweighted mean of the two entry values gives 65.
@@ -241,11 +257,17 @@ def test_aggregation_mixed():
     coord = _make_coordinator(
         [
             CounterSnapshot(
-                counters={"total": CounterEntry(10), "peak": CounterEntry(100, Aggregation.MAX)},
+                counters={
+                    CounterKey(None, "total"): CounterEntry(10),
+                    CounterKey(None, "peak"): CounterEntry(100, Aggregation.MAX),
+                },
                 generation=1,
             ),
             CounterSnapshot(
-                counters={"total": CounterEntry(20), "peak": CounterEntry(50, Aggregation.MAX)},
+                counters={
+                    CounterKey(None, "total"): CounterEntry(20),
+                    CounterKey(None, "peak"): CounterEntry(50, Aggregation.MAX),
+                },
                 generation=2,
             ),
         ]
@@ -265,17 +287,26 @@ def test_counters_combine_completed_and_in_flight():
     coord = _make_coordinator(
         completed=[
             CounterSnapshot(
-                counters={"docs": CounterEntry(10), "cpu": CounterEntry(90, Aggregation.AVERAGE, count=3)},
+                counters={
+                    CounterKey(None, "docs"): CounterEntry(10),
+                    CounterKey(None, "cpu"): CounterEntry(90, Aggregation.AVERAGE, count=3),
+                },
                 generation=1,
             ),
             CounterSnapshot(
-                counters={"docs": CounterEntry(20), "cpu": CounterEntry(30, Aggregation.AVERAGE, count=1)},
+                counters={
+                    CounterKey(None, "docs"): CounterEntry(20),
+                    CounterKey(None, "cpu"): CounterEntry(30, Aggregation.AVERAGE, count=1),
+                },
                 generation=2,
             ),
         ],
         inflight=[
             CounterSnapshot(
-                counters={"docs": CounterEntry(5), "cpu": CounterEntry(50, Aggregation.AVERAGE, count=4)},
+                counters={
+                    CounterKey(None, "docs"): CounterEntry(5),
+                    CounterKey(None, "cpu"): CounterEntry(50, Aggregation.AVERAGE, count=4),
+                },
                 generation=7,
             ),
         ],
@@ -296,8 +327,8 @@ def test_aggregation_conflict_drops_counter_and_warns(caplog):
     """
     coord = _make_coordinator(
         [
-            CounterSnapshot(counters={"x": CounterEntry(1, Aggregation.MAX)}, generation=1),
-            CounterSnapshot(counters={"x": CounterEntry(2, Aggregation.MIN)}, generation=2),
+            CounterSnapshot(counters={CounterKey(None, "x"): CounterEntry(1, Aggregation.MAX)}, generation=1),
+            CounterSnapshot(counters={CounterKey(None, "x"): CounterEntry(2, Aggregation.MIN)}, generation=2),
         ]
     )
     with caplog.at_level(logging.WARNING):
@@ -318,8 +349,8 @@ def test_coordinator_stage_filter():
         [
             CounterSnapshot(
                 counters={
-                    "errors": CounterEntry(5, stage=None),
-                    "tokens": CounterEntry(100, stage="tokenize"),
+                    CounterKey(None, "errors"): CounterEntry(5),
+                    CounterKey("tokenize", "tokens"): CounterEntry(100),
                 },
                 generation=1,
             ),
@@ -334,8 +365,8 @@ def test_coordinator_stage_filter_aggregates_same_name_across_stages():
     """get_counters() (no filter) aggregates same-name counters from different stages."""
     coord = _make_coordinator(
         [
-            CounterSnapshot(counters={"errors": CounterEntry(3, stage=None)}, generation=1),
-            CounterSnapshot(counters={"errors": CounterEntry(7, stage="tokenize")}, generation=2),
+            CounterSnapshot(counters={CounterKey(None, "errors"): CounterEntry(3)}, generation=1),
+            CounterSnapshot(counters={CounterKey("tokenize", "errors"): CounterEntry(7)}, generation=2),
         ]
     )
     assert coord.get_counters() == {"errors": 10}
@@ -349,8 +380,8 @@ def test_coordinator_stage_filter_splits_same_name_across_stages():
     """
     coord = _make_coordinator(
         [
-            CounterSnapshot(counters={"zephyr/item_count": CounterEntry(10, stage="stage0")}, generation=1),
-            CounterSnapshot(counters={"zephyr/item_count": CounterEntry(7, stage="stage1")}, generation=2),
+            CounterSnapshot(counters={CounterKey("stage0", "zephyr/item_count"): CounterEntry(10)}, generation=1),
+            CounterSnapshot(counters={CounterKey("stage1", "zephyr/item_count"): CounterEntry(7)}, generation=2),
         ]
     )
     assert coord.get_counters(stage="stage0") == {"zephyr/item_count": 10}
@@ -459,8 +490,8 @@ def test_publish_telemetry_exports_aggregated_counter_snapshots_as_gauges(monkey
     """The coordinator publishes the execution-level aggregate snapshot."""
     coord = _make_coordinator(
         [
-            CounterSnapshot(counters={"records/in": CounterEntry(10)}, generation=1),
-            CounterSnapshot(counters={"records/in": CounterEntry(5)}, generation=2),
+            CounterSnapshot(counters={CounterKey(None, "records/in"): CounterEntry(10)}, generation=1),
+            CounterSnapshot(counters={CounterKey(None, "records/in"): CounterEntry(5)}, generation=2),
         ]
     )
 

@@ -16,12 +16,13 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.models import NoGrader
+from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     GenerationLimitReached,
+    ContextWindowExceeded,
     GradedRollout,
     GradedRolloutInterrupted,
     ModelRequest,
@@ -33,6 +34,7 @@ from rolloutengine.models import (
     TaskRolloutSpec,
 )
 from rolloutengine.engine import RolloutEngine
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
@@ -60,6 +62,9 @@ from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propaga
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
+    ContextLengthExceededError,
+    REASONING_VIOLATION_TOKENS_KEY,
+    REASONING_VIOLATIONS_KEY,
     DirectModelClient,
     GenerationBudgetExceededError,
     ModelClient,
@@ -70,7 +75,12 @@ from skyrl_train.rollouts.task_projections import (
     WholeTaskProjection,
     logprobs_requested,
 )
-from skyrl_train.rollouts.training_record import TrainingRollout, training_rollout
+from skyrl_train.rollouts.training_record import (
+    REASONING_VIOLATION_TOKEN_METADATA_KEY,
+    TrainingRollout,
+    reject_malformed_reasoning,
+    training_rollout,
+)
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
@@ -171,8 +181,8 @@ async def _model_turn(
                     max_prompt_length=max_prompt_length,
                 )
             output = await client.generate(model_input)
-    except GenerationBudgetExceededError as limit:
-        raise GenerationLimitReached(limit.prompt_token_ids) from limit
+    except GenerationBudgetExceededError as error:
+        raise GenerationLimitReached(error.prompt_token_ids) from error
     if output["token_provenance"] != TokenProvenance.ENGINE:
         raise RolloutContractError("The canonical rollout engine requires exact model tokens")
     logprobs = output.get("response_logprobs")
@@ -204,7 +214,9 @@ async def _model_turn(
                 if output.get(name) is not None
             },
             "generation_token_budget": (output.get("generation_token_budgets") or [None])[0],
+            REASONING_VIOLATION_TOKEN_METADATA_KEY: (output.get(REASONING_VIOLATION_TOKENS_KEY) or [None])[0],
         },
+        reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
     )
 
 
@@ -269,6 +281,9 @@ def _failed_rollout(
         diagnostics["cause_error_type"] = type(error).__name__
     elif isinstance(error, TaskMachineError):
         exception_type = "TaskMachineError"
+    elif isinstance(error, ContextWindowExceeded):
+        exception_type = "ContextLengthExceededError"
+        diagnostics["error_category"] = "context_overflow"
     elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
         exception_type = VERIFIER_RUNTIME_ERROR
         diagnostics.setdefault("cause_error_type", type(error).__name__)
@@ -363,7 +378,6 @@ class TaskRolloutWorker:
                 harbor.concurrent_trials if concurrent_harbor_tasks is None else concurrent_harbor_tasks
             )
         )
-        self.harbor_eval_slots = nullcontext() if harbor is None else asyncio.Semaphore(harbor.concurrent_trials)
         self.error_handling = ErrorHandlingConfig.from_mapping(trajectory_runner_cfg.get("error_handling", {}))
         self.projection = replace(
             projection,
@@ -399,7 +413,12 @@ class TaskRolloutWorker:
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
-        if is_shell_harness(lowered.harness):
+        if lowered.harness == ASSISTANT_PREFIX_HARNESS and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
+            # The assistant-prefix transport records no reasoning violation, so rejection would never fire.
+            raise ValueError("Assistant-prefix tasks cannot reject malformed reasoning spans")
+        if lowered.harness == ASSISTANT_PREFIX_HARNESS:
+            harnesses[lowered.harness] = AssistantPrefixHarness()
+        elif is_shell_harness(lowered.harness):
             harnesses[lowered.harness] = shell_harness(lowered.harness)
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
@@ -461,24 +480,26 @@ class TaskRolloutWorker:
             session_id = session_ids[index]
 
             async def model(request):
-                return await _model_turn(
-                    self.model_client,
-                    request,
-                    sampling_params=sampling,
-                    max_context_length=max_context_length,
-                    max_prompt_length=max_input_length,
-                    chat_template_kwargs=self.chat_template_kwargs,
-                    session_id=session_id,
-                )
+                try:
+                    return await _model_turn(
+                        self.model_client,
+                        request,
+                        sampling_params=sampling,
+                        max_context_length=max_context_length,
+                        max_prompt_length=max_input_length,
+                        chat_template_kwargs=self.chat_template_kwargs,
+                        session_id=session_id,
+                    )
+                except (GenerationLimitReached, ContextLengthExceededError) as error:
+                    if lowered.harness != SKYRL_AGENT_HARNESS:
+                        raise
+                    raise ContextWindowExceeded(
+                        f"This request exceeds the maximum context length of {max_context_length} tokens. "
+                        "Compact the conversation and retry."
+                    ) from error
 
             engine = engines[index]
-            harbor_slots = (
-                nullcontext()
-                if harbor is None
-                else self.harbor_eval_slots
-                if phase == "eval"
-                else self.harbor_task_slots
-            )
+            harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
             retries = 0
             while True:
                 try:
@@ -486,6 +507,9 @@ class TaskRolloutWorker:
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
+                if task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
+                    # Before group grading, so a malformed rollout never enters a GenRM comparison.
+                    result = reject_malformed_reasoning(result)
                 if (
                     isinstance(task.grader, NoGrader)
                     and result.grade.status == Outcome.UNAVAILABLE
@@ -627,11 +651,19 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
+            from harbor.host_capabilities import DAYTONA_API_URL, DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
             settings = InstalledAgentSettings.model_validate(
                 OmegaConf.to_container(self.harbor_config.installed_agent, resolve=True)
+            )
+            assert harbor is not None
+            daytona_options = harbor.environment.kwargs
+            daytona_connection = DaytonaConnection(
+                api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
+                api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
+                target=os.environ.get("DAYTONA_TARGET"),
             )
             installed_agents = InstalledAgentRuntime(
                 settings,
@@ -639,6 +671,11 @@ class TaskRolloutWorkerSpec:
                     inference.model_name, generation_context_limit(runner_config), inference.tokenize, tokenizer
                 ),
                 int(runner_config.sampling_params.max_generate_length),
+                daytona_connection=daytona_connection,
+                eval_daytona_connection=replace(
+                    daytona_connection,
+                    api_key=os.environ.get(daytona_options.get("eval_api_key_env") or "DAYTONA_API_KEY"),
+                ),
             )
         factories = task_machine_factories(self.config.environment.task_sessions)
         if harbor is not None:

@@ -7,12 +7,14 @@ import gc
 import importlib.metadata
 import itertools
 import logging
+import math
 import os
 import time
 from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import NamedTuple
 
 import equinox as eqx
 import jax
@@ -29,7 +31,7 @@ from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
-from jaxtyping import PRNGKeyArray
+from jaxtyping import PRNGKeyArray, PyTree
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data.dataset import AsyncDataset
@@ -39,6 +41,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
+from levanter.grug.attention import AttentionMask, fa4_cute_segment_bounds
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
     MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
@@ -47,7 +50,7 @@ from levanter.grug.grug_moe import (
     MOE_VALID_ASSIGNMENTS_METRIC,
     MoeImplementation,
 )
-from levanter.grug.sharding import compact_grug_mesh
+from levanter.grug.sharding import _axis_names, compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -72,6 +75,7 @@ from experiments.grug.moe_hero_ep.model import (
     Transformer,
     apply_qb_betas,
 )
+from experiments.grug.preemption import GracefulPreemption
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -95,6 +99,10 @@ HERO_EP_RUNTIME_ENV = {
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
+# Logged on every step, unlike the watch's grad/norm/total, which logs every watch interval.
+GRAD_NORM_METRIC = "train/grad_norm"
+# 1.0 on steps where the global-norm clip rescaled the gradient; absent when clipping is off.
+GRAD_CLIPPED_METRIC = "train/grad_clipped"
 DEFAULT_SLOP_FACTOR = 85
 # With the carry offload, host memory offloading (below) lets rematerialization count the offloaded
 # carry as host memory. Rematerialization and the scheduler both work within
@@ -307,6 +315,7 @@ class GrugTrainerConfig:
     gc_interval: int | None = None
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
+    max_grad_norm: float | None = None
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
@@ -321,7 +330,7 @@ class GrugTrainerConfig:
     # restarts at step 0.
     save_checkpoints: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # Grug builds its own compact (replica_dcn, data, expert, context, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
@@ -332,6 +341,9 @@ class GrugTrainerConfig:
     replica_axis_size: int | None = None
     # Sequence shards route independently; routing statistics and loss include this axis.
     context_axis_size: int = 1
+    # Deal rows to batch shards by attention cost (`balance_attention_rows`). Off by default: it was
+    # measured to pay off at 65K, gained only 0.4% at 16K on one rack, and its full-batch gather crosses racks.
+    balance_attention_rows: bool = False
     sharding_dump_path: str | None = None
 
     def __post_init__(self):
@@ -479,7 +491,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -493,20 +505,57 @@ def build_train_loader(
     )
 
 
-def _reshard_tree_to_mesh(tree, mesh: Mesh):
-    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
+def expert_collapsed_eval_mesh(train_mesh: Mesh) -> Mesh:
+    """Return ``train_mesh`` with its ``expert`` axis folded into ``data``, for the dropless eval.
 
-    The train and eval meshes name the same axes (only the ``expert``/``data`` sizes differ), so a
-    leaf's PartitionSpec is valid on both; ``jax.device_put`` performs the cross-mesh transfer. The
-    model's own ``reshard`` calls fix the exact layout inside the forward, so any valid placement on
-    the target mesh suffices here. Non-array leaves pass through.
+    Every device keeps its training ``context`` group, and its eval ``data`` group is its training
+    ``(data, expert)`` group, so eval collectives need no NCCL communicator that training lacks.
     """
+    names = train_mesh.axis_names
+    if names[names.index("data") + 1] != "expert":
+        raise ValueError(f"expert must follow data in the training mesh, got {names}")
+    shape = dict(train_mesh.shape)
+    shape["data"] *= shape["expert"]
+    shape["expert"] = 1
+    devices = train_mesh.devices.reshape(tuple(shape[name] for name in names))
+    return Mesh(devices, names, axis_types=train_mesh.axis_types)
+
+
+def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
+    """Rename a training PartitionSpec for ``expert_collapsed_eval_mesh(train_mesh)``.
+
+    At training ``data`` size one, ``expert`` becomes the eval ``data`` axis and training ``data``
+    drops out, so every device keeps the shard it already holds. Otherwise the spec is unchanged:
+    a leaf sharded on ``expert`` without ``data`` lands replicated and the move transfers it.
+    """
+    if train_mesh.shape["data"] != 1:
+        return spec
+
+    def rename(entry):
+        renamed = tuple("data" if name == "expert" else name for name in _axis_names(entry) if name != "data")
+        if not renamed:
+            return None
+        return renamed if len(renamed) > 1 else renamed[0]
+
+    return P(*(rename(entry) for entry in spec))
+
+
+def _move_tree_to_eval_mesh(tree, train_mesh: Mesh):
+    """Move each array leaf from ``train_mesh`` onto ``expert_collapsed_eval_mesh(train_mesh)``.
+
+    The move must not need a collective when training ``data`` has size one. A collective here runs
+    on a communicator training does not hold, and that communicator's NCCL buffers stay outside the
+    allocator pool for the life of the process, taking room the next train step's arena needs. The
+    model's own ``reshard`` calls fix the layout inside the forward, so any valid placement on the
+    eval mesh suffices. Non-array leaves pass through.
+    """
+    eval_mesh = expert_collapsed_eval_mesh(train_mesh)
 
     def move(leaf):
         if not isinstance(leaf, jax.Array):
             return leaf
         spec = leaf.sharding.spec if isinstance(leaf.sharding, NamedSharding) else P()
-        return jax.device_put(leaf, NamedSharding(mesh, spec))
+        return jax.device_put(leaf, NamedSharding(eval_mesh, _expert_folded_spec(spec, train_mesh)))
 
     return jax.tree.map(move, tree)
 
@@ -578,7 +627,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -811,6 +860,58 @@ def _drop_metrics(
     }
 
 
+def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
+    """Permute the global batch's rows so every batch shard gets a similar share of attention work.
+
+    With packed documents a row's attention cost (query-key pairs inside a document, padding excluded)
+    varies several-fold, and every layer waits for the busiest shard at its next collective. The loss is a
+    mean over all tokens and the router statistics are global sums, so every token still enters the
+    objective; only which assignments exceed expert capacity can change. Expert capacity drops a shard's
+    later tokens first, so rows keep their loaded order within a shard rather than a cost order. A full
+    receiver keeps earlier senders' tokens first, so the deal starts at the costliest row's loaded shard
+    rather than shard 0. Both spread drops over rows of all costs only because the loader shuffles rows
+    within a batch.
+    Batches without segment ids, or with one row per shard, are returned as is.
+    """
+    segment_ids = batch.attn_mask.segment_ids
+    if segment_ids is None:
+        return batch
+    mesh = jax.sharding.get_abstract_mesh()
+    shards = math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
+    rows, seq_len = batch.tokens.shape
+    if rows % shards:
+        raise ValueError(f"{rows} batch rows do not divide over {shards} batch shards")
+    # A shard's work is then its one row's, wherever that row goes.
+    if rows == shards:
+        return batch
+    q_segment_ids = segment_ids[0]
+    document_start, valid = fa4_cute_segment_bounds(
+        AttentionMask(is_causal=True, segment_ids=(q_segment_ids, q_segment_ids)),
+        batch_size=rows,
+        seq_len=seq_len,
+        sliding_window=None,
+    )
+    pairs = jnp.where(valid, jnp.arange(seq_len) - document_start + 1, 0)
+    cost = jax.sharding.reshard(jnp.sum(pairs.astype(jnp.float32), axis=1), P())
+    order = jnp.argsort(-cost, stable=True)
+    deal_round, deal_index = np.divmod(np.arange(rows), shards)
+    shard = np.where(deal_round % 2 == 0, deal_index, shards - 1 - deal_index)
+    rows_by_shard = order[np.argsort(shard, stable=True)].reshape(shards, rows // shards)
+    rows_by_shard = jnp.roll(rows_by_shard, order[0] // (rows // shards), axis=0)
+    source_row = jnp.sort(rows_by_shard, axis=1).reshape(rows)
+
+    def permute(x: jax.Array) -> jax.Array:
+        gathered = jax.sharding.reshard(x, P())[source_row]
+        return jax.sharding.reshard(gathered, jax.typeof(x).sharding.spec)
+
+    # The model reads only the q segment ids, so gather them once and reuse them for kv.
+    return GrugLmExample(
+        tokens=permute(batch.tokens),
+        loss_weight=permute(batch.loss_weight),
+        attn_mask=batch.attn_mask.with_segment_ids(permute(q_segment_ids)),
+    )
+
+
 def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
@@ -840,7 +941,9 @@ def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float
     )
 
 
-def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
+def _make_diagnostic_watch_step(
+    mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig, balance_rows: bool = False
+):
     watch_targets = (
         tuple(t.strip() for t in watch_config.watch_targets.split(","))
         if isinstance(watch_config.watch_targets, str)
@@ -855,9 +958,28 @@ def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_c
     @jax.jit
     def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
         params = apply_qb_betas(params, pending_qb_betas)
+        if balance_rows:
+            batch = balance_attention_rows(batch)
         return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
 
     return diagnostic_watch_step
+
+
+class ClippedGradients(NamedTuple):
+    grads: PyTree
+    pre_clip_norm: jax.Array
+    clipped: jax.Array
+
+
+def clip_by_total_norm(grads: PyTree, max_norm: float) -> ClippedGradients:
+    """Rescale ``grads`` to global L2 norm ``max_norm`` when their norm exceeds it.
+
+    At or below ``max_norm`` every leaf is multiplied by exactly 1, so the gradients pass through bitwise.
+    """
+    norm = optax.global_norm(grads)
+    clipped = norm > max_norm
+    scale = jnp.where(clipped, max_norm / norm, 1.0)
+    return ClippedGradients(jax.tree.map(lambda g: g * scale.astype(g.dtype), grads), norm, clipped)
 
 
 def _make_train_step(
@@ -866,9 +988,11 @@ def _make_train_step(
     *,
     z_loss_weight: float,
     ema_beta: float | None,
+    max_grad_norm: float | None = None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
+    balance_rows: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -890,8 +1014,20 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        if balance_rows:
+            # Moves rows between batch shards; see `balance_attention_rows` for its effect on the loss.
+            batch = balance_attention_rows(batch)
         (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
+        # The watch below reads the unclipped gradients, so grad/norm/* keep their pre-clip meaning.
+        raw_grads = grads
+        if max_grad_norm is None:
+            metrics[GRAD_NORM_METRIC] = optax.global_norm(grads)
+        else:
+            clip = clip_by_total_norm(grads, max_grad_norm)
+            grads = clip.grads
+            metrics[GRAD_NORM_METRIC] = clip.pre_clip_norm
+            metrics[GRAD_CLIPPED_METRIC] = clip.clipped.astype(jnp.float32)
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
             if state.master_params is None:
@@ -928,7 +1064,7 @@ def _make_train_step(
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
                 params=qb_params,
-                grads=grads,
+                grads=raw_grads,
                 updates=updates,
                 opt_state=opt_state_in,
                 model_tree_type=type(state.params),
@@ -976,6 +1112,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             trainer.mp,
             z_loss_weight=config.trainer.z_loss_weight,
             watch_config=watch_config,
+            balance_rows=config.trainer.balance_attention_rows,
         )
         inline_watch_config = None
     train_step = _make_train_step(
@@ -984,8 +1121,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=inline_watch_config,
+        max_grad_norm=config.trainer.max_grad_norm,
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
+        balance_rows=config.trainer.balance_attention_rows,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1097,12 +1236,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
             # into `data`), which the local backend requires. FSDP runs already have expert=1.
             if dropless:
-                dropless_eval_mesh = compact_grug_mesh(
-                    expert_axis_size=1,
-                    replica_axis_size=mesh.shape["replica_dcn"],
-                    model_axis_size=mesh.shape["model"],
-                    context_axis_size=mesh.shape["context"],
-                )
+                dropless_eval_mesh = expert_collapsed_eval_mesh(mesh)
                 # Build under the eval mesh so every constant the evaluator captures at construction
                 # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
                 # rather than the ambient train mesh; otherwise those leak a train-mesh aval into the
@@ -1202,10 +1336,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
-                    # the expert axis lands replicated, and the copy is much larger than the
-                    # train-mesh params. The train step needs almost the whole device budget for
-                    # its temporary buffer, thus this copy must die before the next step.
+                    # `model` must stay a local. In a multi-process run the move copies each leaf,
+                    # also when the leaf stays on its devices. The copy adds to the train-mesh
+                    # params, and the train step needs almost the whole device budget for its
+                    # temporary buffer, thus this copy must die before the next step.
                     with (
                         callbacks.progress_event_scope(
                             step.emit_event,
@@ -1214,7 +1348,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         ),
                         set_mesh(_mesh),
                     ):
-                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        model = _move_tree_to_eval_mesh(step.model, mesh)
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
@@ -1248,6 +1382,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         gc_start_step = current_step + GC_WARMUP_STEPS
 
         # Main optimization loop.
+        preemption = GracefulPreemption()
+        preemption.install()
+        preempted = False
         try:
             while current_step < stop_step:
                 iteration_start = time.perf_counter()
@@ -1300,6 +1437,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
+                    levanter.tracker.log(
+                        {key: metrics[key] for key in (GRAD_NORM_METRIC, GRAD_CLIPPED_METRIC) if key in metrics},
+                        step=step,
+                    )
                     if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
                             metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],
@@ -1335,26 +1476,30 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step=step,
                 )
 
+                preempted = preemption.should_stop(int(state.step))
+                if preempted:
+                    break
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
             )
             raise
         else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if not preempted:
+                state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
                 with callbacks.progress_event_scope(
                     state_callbacks.emit_event,
                     callbacks.ProgressEvent.CHECKPOINT_STARTED,
                     callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                 ):
-                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
-                    checkpointer.wait_until_finished()
+                    checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
         finally:
+            preemption.restore()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+    preemption.exit_if_preempted()
 
 
 def run_grug(config: GrugRunConfig) -> None:

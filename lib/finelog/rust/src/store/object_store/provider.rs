@@ -109,6 +109,10 @@ impl Provider {
     /// URL or filesystem path used to scan the same physical object.
     pub(super) fn scan_url(&self, id: &ObjectId) -> String {
         let path = self.object_path(id);
+        self.scan_path(&path)
+    }
+
+    pub(super) fn scan_path(&self, path: &OsPath) -> String {
         match self.base_url() {
             Some(base) => format!("{base}/{path}"),
             None => self
@@ -150,6 +154,34 @@ impl Provider {
             },
             bytes,
         }))
+    }
+
+    pub(super) async fn read_range(
+        &self,
+        path: OsPath,
+        range: std::ops::Range<u64>,
+    ) -> Result<Option<bytes::Bytes>, StatsError> {
+        match self.backend.get_range(&path, range).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(error) => Err(StatsError::Internal(format!(
+                "read object range {path}: {error}"
+            ))),
+        }
+    }
+
+    pub(super) async fn read_ranges(
+        &self,
+        path: OsPath,
+        ranges: &[std::ops::Range<u64>],
+    ) -> Result<Option<Vec<bytes::Bytes>>, StatsError> {
+        match self.backend.get_ranges(&path, ranges).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(error) => Err(StatsError::Internal(format!(
+                "read object ranges {path}: {error}"
+            ))),
+        }
     }
 
     /// Swap the pointer at `path` from `expected` to `bytes`.
