@@ -17,14 +17,18 @@ function svg(tag, attrs = {}, text) {
 }
 const identity = (run) => JSON.stringify([run.run_id, run.attempt_id]);
 const fixed = (run) => run.run_id.includes('snowball-inventory-batch-fixed');
-const arm = (run) => run.label.match(/\b([A-D]\d+)\b/)?.[1] ?? run.label;
+const arm = (run) => run.series ?? run.label.match(/\b([A-D]\d+)\b/)?.[1] ?? run.label;
 const color = (run) => colors[arm(run)[0]] ?? '#6d6a60';
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const hours = (run) => run.elapsed_seconds / 3600;
-const gain = (run) => run.final && run.baseline ? (run.final.reward - run.baseline.reward) / hours(run) : null;
+const gain = (run) => run.final && run.baseline && hours(run) > 0 ? (run.final.reward - run.baseline.reward) / hours(run) : null;
 const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
 function visibleRuns() {
-  return runs.filter((run) => $('campaign').value === 'all' || fixed(run) === ($('campaign').value === 'fixed'));
+  return runs.filter((run) => $('campaign').value === 'all' || (run.campaign ? run.campaign === $('campaign').value : fixed(run) === ($('campaign').value === 'fixed')));
+}
+function coverageLabel(run) {
+  if (run.partial_coverage) return run.trusted_gain_eligible ? 'Incomplete · eligible at declared coverage threshold' : 'Incomplete · excluded';
+  return run.provisional ? 'Provisional · unranked' : 'Complete';
 }
 function route(run) { return '#run=' + encodeURIComponent(identity(run)); }
 function selectedFromHash() {
@@ -66,7 +70,7 @@ function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, lab
   for (const point of points) {
     const { run, phase } = point;
     const link = svg('a', { href: route(run), class: 'dot', tabindex: '0', 'aria-label': `View ${run.label}: ${yLabel.toLowerCase()} ${number(point.y)}${phase === 'baseline' ? ' (baseline)' : ''}, ${number(hours(run), 2)} elapsed hours` });
-    link.append(svg('title', {}, `${run.label}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${number(point.y)}\n${run.partial_coverage ? 'Incomplete evaluation; excluded' : run.provisional ? 'Provisional; unranked' : 'Complete evaluation'}\nClick for run details`));
+    link.append(svg('title', {}, `${run.label}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${number(point.y)}\n${coverageLabel(run)}\nClick for run details`));
     link.append(svg('circle', { cx: px(point.x), cy: py(point.y), r: phase === 'baseline' ? 5 : 6, fill: phase === 'baseline' || run.partial_coverage ? 'var(--panel)' : color(run), stroke: color(run), 'stroke-width': id === 'pareto' && frontier.has(identity(run)) ? 4 : 2, 'stroke-dasharray': run.partial_coverage ? '2 2' : 'none' }));
     root.append(link);
     if (labelDots && phase === 'final') root.append(svg('text', { x: px(point.x) + 10, y: py(point.y) - 10, class: 'dot-label' }, arm(run)));
@@ -80,7 +84,7 @@ function addField(list, title, value) {
 function showDetails(run) {
   $('detail-title').textContent = run.label;
   const body = $('detail-body'); body.replaceChildren();
-  const warning = run.partial_coverage ? 'Incomplete evaluation: this attempt is excluded from comparison. Training completion and evaluation validity are separate.' : run.provisional ? 'Descriptive result. Runtime evaluation protocol is unknown, so this run is unranked.' : 'Complete comparison metadata.';
+  const warning = run.partial_coverage ? (run.trusted_gain_eligible ? 'Incomplete evaluation meets the declared coverage threshold for comparison.' : 'Incomplete evaluation: this attempt is excluded from comparison. Training completion and evaluation validity are separate.') : run.provisional ? 'Descriptive result. Runtime evaluation protocol is unknown, so this run is unranked.' : 'Complete comparison metadata.';
   body.append(element('p', warning, { class: run.partial_coverage ? 'warning' : 'note' }));
   const links = element('div', null, { class: 'links' });
   const explicitWandb = run.wandb_url ?? run.links?.wandb;
@@ -93,8 +97,9 @@ function showDetails(run) {
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Campaign', fixed(run) ? 'Fixed runtime' : 'Earlier runtime'], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
+    ['Campaign', run.campaign ?? (fixed(run) ? 'Fixed runtime' : 'Earlier runtime')], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
     ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
+    ['Verdict', run.verdict], ['Required scored fraction', run.min_scored_fraction ?? 1],
     ['Reward', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`],
     ['Coverage', `Baseline ${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0}; final ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
@@ -122,7 +127,7 @@ function render() {
   chart('pareto', selected, hours, (run) => run.final?.reward, 'Elapsed hours', 'Final reward', { labelDots: true });
   chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
   chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
-  chart('gain', selected.filter((run) => !run.partial_coverage), (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
+  chart('gain', selected.filter((run) => run.trusted_gain_eligible), (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
   $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each verified comparison group.' : 'These points are descriptive. No verified frontier is drawn because the runtime evaluation protocol is not recorded.';
   $('legend').replaceChildren(...[...new Set(selected.map(arm))].map((name) => {
     const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${colors[name[0]]}` }), document.createTextNode(name)); return item;
@@ -130,7 +135,7 @@ function render() {
   $('attempts').replaceChildren(...[...selected].sort((a, b) => Date.parse(b.run_date) - Date.parse(a.run_date)).map((run) => {
     const tr = element('tr');
     const name = element('td'), button = element('button', run.label); button.onclick = () => { location.hash = route(run); followHash(); }; name.append(button);
-    tr.append(name, element('td', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`), element('td', `${number(hours(run), 2)} h`), element('td', run.optimizer_steps), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.partial_coverage ? 'Incomplete · excluded' : run.provisional ? 'Provisional · unranked' : 'Complete'));
+    tr.append(name, element('td', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`), element('td', `${number(hours(run), 2)} h`), element('td', run.optimizer_steps), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', coverageLabel(run)));
     return tr;
   }));
 }
@@ -140,7 +145,10 @@ async function refresh() {
     const response = await fetch('./api/runs');
     if (!response.ok) throw new Error(`Could not load runs (${response.status}).`);
     const data = await response.json(); runs = data.runs;
-    if (!runs.some(fixed)) $('campaign').value = 'all';
+    for (const campaign of new Set(runs.map((run) => run.campaign).filter(Boolean))) {
+      if (![...$('campaign').options].some((option) => option.value === campaign)) $('campaign').append(element('option', campaign, { value: campaign }));
+    }
+    if ($('campaign').value === 'fixed' && !runs.some(fixed)) $('campaign').value = 'all';
     render(); followHash();
   } catch (error) { $('error').textContent = error.message; $('error').hidden = false; }
   finally { $('refresh').disabled = false; }

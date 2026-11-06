@@ -103,6 +103,25 @@ def test_incomplete_success_rejected_before_io_but_failed_attempt_remains_visibl
     assert receipt["verified"]
     assert next(iter(transport.rows.values()))["baseline"]["scored"] == 99
 
+    for scored, verdict in ((99, "pass"), (98, "fail"), (None, "invalid")):
+        record = copy.deepcopy(result)
+        record.update(status="succeeded", verdict=verdict, min_scored_fraction=0.99, attempt_id=f"coverage-{scored}")
+        if scored is None:
+            record.update(baseline=None, final=None)
+        else:
+            record["baseline"]["scored"] = record["final"]["scored"] = scored
+        transport.api_runs.append(
+            record
+            | {
+                "partial_coverage": True,
+                "comparison_key": None,
+                "provisional": True,
+                "pareto_eligible": False,
+            }
+        )
+        assert publication.publish_result(record)["verified"]
+        assert transport.rows[(record["run_id"], record["attempt_id"])] == record
+
 
 def test_nonfinite_measurement_never_reaches_publication(monkeypatch, result):
     transport = ReportTransport()

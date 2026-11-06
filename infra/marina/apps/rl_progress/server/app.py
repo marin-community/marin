@@ -36,16 +36,31 @@ def comparison_fields(run: dict) -> dict:
 
     baseline_full = complete(run.get("baseline"))
     final_full = complete(run.get("final"))
+
+    def eligible(result):
+        return (
+            result is not None
+            and expected is not None
+            and expected > 0
+            and result["scored"] / expected >= run.get("min_scored_fraction", 1.0)
+        )
+
+    baseline = run.get("baseline")
     final = run.get("final")
-    gain = None if final is None else (final["reward"] - run["baseline"]["reward"]) / (run["elapsed_seconds"] / 3600)
-    pareto = key is not None and run["status"] == "succeeded" and final_full
+    baseline_eligible, final_eligible = eligible(baseline), eligible(final)
+    gain = (
+        (final["reward"] - baseline["reward"]) / (run["elapsed_seconds"] / 3600)
+        if baseline is not None and final is not None and run["elapsed_seconds"] > 0
+        else None
+    )
+    pareto = key is not None and run["status"] == "succeeded" and final_eligible and run["elapsed_seconds"] > 0
     return {
         "comparison_key": key,
         "expected_membership_count": expected,
         "gain_per_hour": gain,
         "partial_coverage": not (baseline_full and final_full),
-        "provisional": key is None or not (baseline_full and final_full),
-        "trusted_gain_eligible": pareto and baseline_full,
+        "provisional": key is None or not (baseline_eligible and final_eligible),
+        "trusted_gain_eligible": pareto and baseline_eligible and gain is not None,
         "pareto_eligible": pareto,
     }
 
