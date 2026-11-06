@@ -8,6 +8,7 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -209,6 +210,16 @@ def main() -> None:
             "model": args.model,
             "jax": jax.__version__,
             "devices": str(jax.devices()),
+            "device_kind": sorted({device.device_kind for device in jax.devices()}),
+            "node": os.environ.get("IRIS_NODE_NAME"),
+            "bundle_id": os.environ.get("IRIS_BUNDLE_ID"),
+            "process_count": jax.process_count(),
+            "precision": {
+                "weights": "bfloat16",
+                "hidden": "bfloat16",
+                "lm_projection_output": "float32" if args.model == "hero" else "bfloat16",
+                "log_softmax": "float32",
+            },
             "case_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
             "rows": [
                 {
