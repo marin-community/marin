@@ -253,7 +253,7 @@ def _headings(body: str) -> list[str]:
 def body_sections(body: str) -> dict[str, str]:
     """Map each level-two heading in ``body`` to the text under it, up to the next level-two heading.
 
-    Uses the same fence-aware boundaries as ``parse``; a repeated heading's sections are joined.
+    Headings inside fenced code blocks are ignored; a repeated heading's sections are joined.
     """
     lines = body.split("\n")
     headings = _heading_lines(lines)
