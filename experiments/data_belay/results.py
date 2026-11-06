@@ -23,10 +23,10 @@ def run_metrics(run_id: str) -> dict[str, float]:
     run = wandb.Api().run(f"{WANDB_PATH}/{run_id}")
     if run.state != "finished":
         raise ValueError(f"run {run_id} is {run.state}, not finished")
-    missing = [key for key in GROUP_METRICS.values() if key not in run.summary]
+    missing = [key for keys in GROUP_METRICS.values() for key in keys if key not in run.summary]
     if missing:
         raise ValueError(f"run {run_id} has no {missing}")
-    return {group: float(run.summary[key]) for group, key in GROUP_METRICS.items()}
+    return {group: sum(float(run.summary[k]) for k in keys) / len(keys) for group, keys in GROUP_METRICS.items()}
 
 
 def arm_metrics(run_ids: list[str]) -> dict[str, list[float]]:

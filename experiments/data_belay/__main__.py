@@ -201,13 +201,13 @@ def report(rung: str, candidate: str, seeds: str, against: str | None, control_s
     treatment = arm_metrics([treatment_run_id(rung, candidate, s) for s in seed_list])
     verdict, deltas = judge(baseline, treatment, HARM_LIMITS)
     click.echo(f"{candidate} against {baseline_name} at {rung}: {verdict}")
-    click.echo(f"| group | {baseline_name} BPB | {candidate} BPB | Δ | 95% interval | harm limit |")
-    click.echo("|---|---:|---:|---:|---|---:|")
+    click.echo(f"| group | {baseline_name} BPB | {candidate} BPB | Δ | 95% interval | harm limit | call |")
+    click.echo("|---|---:|---:|---:|---|---:|---|")
     for d in deltas:
         b, t = baseline[d.group], treatment[d.group]
         click.echo(
             f"| {d.group} | {sum(b) / len(b):.4f} | {sum(t) / len(t):.4f} | {d.delta:+.2%} | "
-            f"[{d.low:+.2%}, {d.high:+.2%}] | {d.harm_limit:.1%} |"
+            f"[{d.low:+.2%}, {d.high:+.2%}] | {d.harm_limit:.1%} | {d.call} |"
         )
 
 

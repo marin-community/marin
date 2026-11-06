@@ -4,12 +4,15 @@
 """The Data Belay verdict: per-group BPB change of a treatment against the shared control, over seeds.
 
 For each metric group, ``Δ`` is the treatment's mean BPB over the control's mean BPB, minus 1 (negative is better),
-with a Welch t interval over the seeds of both arms. The verdict:
+with a Welch t interval over the seeds of both arms. Each group gets a call:
 
-* ``hurts``: some group's interval lies wholly above its harm limit.
-* ``helps``: some group's interval lies wholly below 0, and no group's interval reaches its harm limit.
-* ``neutral``: every group's interval lies within plus or minus its harm limit, and none lies wholly below 0.
-* ``inconclusive``: anything else; more seeds narrow the intervals.
+* ``better``: the interval lies wholly below 0.
+* ``worse``: the interval lies wholly above the group's harm limit.
+* ``neutral``: the interval lies within plus or minus the harm limit.
+* ``unresolved``: anything else; more seeds narrow the interval.
+
+The verdict is ``hurts`` when some group is worse, ``helps`` when some group is better and every other group is
+better or neutral, ``neutral`` when every group is neutral, and ``inconclusive`` otherwise.
 """
 
 import dataclasses
@@ -19,18 +22,37 @@ from enum import StrEnum
 
 from scipy import stats
 
-# W&B summary key of each metric group's macro BPB.
+# Each group's BPB is the mean of these W&B summary keys.
 GROUP_METRICS = {
-    "paloma": "eval/paloma/macro_bpb",
-    "uncheatable": "eval/uncheatable_eval/macro_bpb",
-    "knowledge": "eval/eval_policy/knowledge/macro_bpb",
-    "commonsense": "eval/eval_policy/commonsense/macro_bpb",
-    "math": "eval/eval_policy/math/macro_bpb",
-    "code": "eval/eval_policy/code/macro_bpb",
+    "paloma": ("eval/paloma/macro_bpb",),
+    "uncheatable": ("eval/uncheatable_eval/macro_bpb",),
+    "knowledge": tuple(f"eval/eval_policy/knowledge/{task}/bpb" for task in ("mmlu_pro", "trivia_qa", "truthful_qa")),
+    # BoolQ is logged but left out: its one-token yes/no answer measures the model's prior for "yes", whose BPB
+    # varied 10.7% between control seeds at d512 (PIQA and WinoGrande: 0.6%).
+    "commonsense": tuple(f"eval/eval_policy/commonsense/{task}/bpb" for task in ("piqa", "winogrande")),
+    "math": tuple(f"eval/eval_policy/math/{task}/bpb" for task in ("gsm8k", "math500")),
+    "code": tuple(f"eval/eval_policy/code/{task}/bpb" for task in ("humaneval_plus", "mbpp_plus", "cruxeval_o")),
 }
 CONFIDENCE = 0.95
-# Relative BPB increase past which a group counts as harmed. Set from the control's seed spread (gate 5).
-HARM_LIMITS = {group: 0.01 for group in GROUP_METRICS}
+# Relative BPB increase past which a group counts as harmed: 1%, or 2.5 seed SDs where the seeds vary more, so that
+# 3 treatment seeds against 4 control seeds can call a group neutral. The SDs are from the d512 control, seeds 0-3
+# (dbelay-d512-control-s0..s3): Paloma 0.45%, Uncheatable 0.54%, knowledge 0.92%, commonsense 0.40%, math 1.06%,
+# code 1.22%.
+HARM_LIMITS = {
+    "paloma": 0.011,
+    "uncheatable": 0.013,
+    "knowledge": 0.023,
+    "commonsense": 0.010,
+    "math": 0.027,
+    "code": 0.030,
+}
+
+
+class GroupCall(StrEnum):
+    BETTER = "better"
+    WORSE = "worse"
+    NEUTRAL = "neutral"
+    UNRESOLVED = "unresolved"
 
 
 class Verdict(StrEnum):
@@ -49,12 +71,14 @@ class GroupDelta:
     harm_limit: float
 
     @property
-    def improves(self) -> bool:
-        return self.high < 0
-
-    @property
-    def harms(self) -> bool:
-        return self.low > self.harm_limit
+    def call(self) -> GroupCall:
+        if self.high < 0:
+            return GroupCall.BETTER
+        if self.low > self.harm_limit:
+            return GroupCall.WORSE
+        if -self.harm_limit < self.low and self.high < self.harm_limit:
+            return GroupCall.NEUTRAL
+        return GroupCall.UNRESOLVED
 
 
 def group_delta(group: str, control: Sequence[float], treatment: Sequence[float], harm_limit: float) -> GroupDelta:
@@ -77,12 +101,12 @@ def group_delta(group: str, control: Sequence[float], treatment: Sequence[float]
 
 
 def verdict(deltas: Sequence[GroupDelta]) -> Verdict:
-    if any(d.harms for d in deltas):
+    calls = [d.call for d in deltas]
+    if GroupCall.WORSE in calls:
         return Verdict.HURTS
-    within_limits = all(d.high < d.harm_limit for d in deltas)
-    if within_limits and any(d.improves for d in deltas):
+    if GroupCall.BETTER in calls and all(c in (GroupCall.BETTER, GroupCall.NEUTRAL) for c in calls):
         return Verdict.HELPS
-    if all(-d.harm_limit < d.low and d.high < d.harm_limit for d in deltas):
+    if all(c is GroupCall.NEUTRAL for c in calls):
         return Verdict.NEUTRAL
     return Verdict.INCONCLUSIVE
 
