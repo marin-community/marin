@@ -195,6 +195,8 @@ class ScheduleExtension:
     def __post_init__(self):
         if self.steps <= 0:
             raise ValueError(f"steps must be positive, got {self.steps}")
+        if self.final_lr_ratio < 0:
+            raise ValueError(f"final_lr_ratio must not be negative, got {self.final_lr_ratio}")
 
 
 @OptimizerConfig.register_subclass("grug_moe_hero_ep_muonh_v1")
