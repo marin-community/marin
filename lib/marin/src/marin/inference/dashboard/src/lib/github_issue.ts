@@ -49,9 +49,7 @@ export function issueDraft(
   }
 
   if (transcript === null) {
-    const url = urlFor(issueBody(setup, OMITTED_CONVERSATION))
-    if (url.length > maxUrlLength) throw new Error('Issue metadata alone exceeds the GitHub URL limit')
-    return { url, fullTranscript: null }
+    return { url: withinLimit(urlFor(issueBody(setup, OMITTED_CONVERSATION)), maxUrlLength), fullTranscript: null }
   }
 
   const fullUrl = urlFor(issueBody(setup, conversationSection(transcript, false)))
@@ -67,9 +65,12 @@ export function issueDraft(
     if (truncatedUrl(mid).length <= maxUrlLength) low = mid
     else high = mid - 1
   }
-  const url = truncatedUrl(low)
+  return { url: withinLimit(truncatedUrl(low), maxUrlLength), fullTranscript: transcript }
+}
+
+function withinLimit(url: string, maxUrlLength: number): string {
   if (url.length > maxUrlLength) throw new Error('Issue metadata alone exceeds the GitHub URL limit')
-  return { url, fullTranscript: transcript }
+  return url
 }
 
 function issueTitle(conversation: Conversation, includeConversation: boolean): string {
