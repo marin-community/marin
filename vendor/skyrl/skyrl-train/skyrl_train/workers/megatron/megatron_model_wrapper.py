@@ -76,7 +76,6 @@ class MegatronForwardMicroBatch:
     ftpo_chosen_mask: torch.Tensor | None = None
     probe_row_indices: Optional[torch.Tensor] = None
     score_topk_indices: Optional[torch.Tensor] = None
-    score_probe_positions: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -505,7 +504,6 @@ class MegatronModelWrapper:
                 data.num_actions,
                 packed_seq_params,
                 data.score_topk_indices,
-                data.score_probe_positions,
             )
             result = {"scores": response.scores}
             if response.selected_logprobs is not None:
