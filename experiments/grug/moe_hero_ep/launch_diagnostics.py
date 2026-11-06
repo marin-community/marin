@@ -585,7 +585,7 @@ def build_diagnostic_run(
     "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
+    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to the hero configuration.",
 )
 @click.option(
     "--log-scaling-n-floor",
