@@ -215,7 +215,7 @@ async def test_driver_persists_programming_failure_then_reraises(
     monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
     source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
     source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
-    overlay.write_text("{}")
+    overlay.write_text('{"proposals.environments": ["container"]}')
     args = Namespace(
         proposals=str(source),
         policy=str(overlay),
@@ -266,7 +266,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
     source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
     source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
-    overlay.write_text("{}")
+    overlay.write_text('{"proposals.environments": ["container"]}')
     args = Namespace(
         proposals=str(source),
         policy=str(overlay),
@@ -340,3 +340,40 @@ async def test_stage_restart_stops_after_three_attempts_with_cause(
     assert "fake machine died" in str(result.decisions[-1])
     for attempt in (1, 2, 3):
         assert f"attempt {attempt} of 3" in caplog.text
+
+
+@pytest.mark.parametrize("command", ["one", "run"])
+async def test_container_filter_skips_before_runtime_or_subprocess(
+    proposal: TaskProposal,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
+    source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
+    overlay.write_text("{}")
+    args = Namespace(
+        proposals=str(source),
+        policy=str(overlay),
+        arm="S",
+        output=str(tmp_path / "out"),
+        work_dir=str(tmp_path / "work"),
+        concurrency=2,
+        shard_index=0,
+        shard_count=1,
+        ranks=(),
+    )
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        pytest.fail("Filtered proposal must not start runtime or subprocess")
+
+    monkeypatch.setattr(driver, "runtime", unexpected)
+    monkeypatch.setattr(driver.subprocess, "Popen", unexpected)
+    await (driver.one(args) if command == "one" else driver.run(args))
+    output = capsys.readouterr().out
+    assert f"SKIP {proposal.header.id}: environment=container" in output
+    if command == "run":
+        assert "SUMMARY submitted=0 completed=0 failed=0 skipped=1" in output
+    assert not (tmp_path / "work").exists()
+    assert not (tmp_path / "out").exists()

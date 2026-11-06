@@ -220,7 +220,7 @@ async def test_web_transport_and_replay_cache_http_results() -> None:
 async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -> None:
     ctx = Context(log=EventLog())
     env = environment(ctx)
-    settings = LoweringSettings(MachineHost.LAPTOP, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     grading = GradingResource(rollout_engine({}, command_timeout=1), "fixture")
     ctx.resource(grading, grading.fingerprint)
     ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grading,))
@@ -309,7 +309,7 @@ async def test_invalid_read_paths_are_tool_feedback(kind: str, failure: str) -> 
             raise FileNotFoundError(str(event.path)) from error
 
     ctx.handle(ReadFile, read_missing, uses=(env,))
-    settings = LoweringSettings(MachineHost.LAPTOP, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     missing = "cand/release_notes.py" if kind in {"grade-candidate", "report"} else "/workspace/controls.json"
     tools: dict[str, Tool[object]] = {
         "read": ReadFileTool(),
@@ -540,7 +540,7 @@ async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_
         return GradeResult(Outcome.GRADED, 1, detail={"checks": {"A": False}})
 
     ctx.handle(GradeCandidate, invalid_checks)
-    settings = LoweringSettings(MachineHost.LAPTOP, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     tool = GradeTool("/workspace/task.json", {}, settings)
     result = await tool(ctx, {"reply": "12"}, env)
     assert isinstance(result, ToolResult) and "checks must be a list of" in result.content

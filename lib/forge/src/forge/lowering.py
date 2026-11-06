@@ -13,11 +13,8 @@ a spec that survives a JSON round trip.
 A ``TaskSpec`` holds the semantic task only. How it runs (machine backend,
 limits, user, deadlines, harness) is the ``TaskRolloutSpec`` RolloutEngine executes, and
 ``lower`` alone builds one, choosing each machine's backend for the host. A
-lowered spec is therefore bound to the host whose factories it names, and its
-task may name the software differently from the ``TaskSpec``: on a host with
-the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``. A package
-machine always lowers onto the local backend, so on a host without one ``check``
-rejects it (``host_requirements``).
+lowered spec names Iris containers or ShellSim machines. Linux process requirements without
+an image are unsupported.
 
 Every Taskforge spec names ``TOOL_HARNESS``, RolloutEngine's shell harness, and every Taskforge engine
 comes from ``rollout_engine``, which registers that harness with its command timeout: the timeout of one
@@ -29,8 +26,6 @@ Only ``lower`` builds a ``TaskRolloutSpec``, so moving it is a single-site chang
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import PurePosixPath
-from typing import Protocol, runtime_checkable
 
 from pydantic import JsonValue
 from rolloutengine.engine import RolloutEngine
@@ -88,22 +83,6 @@ FILESYSTEM_CAPABILITY = "filesystem"
 SHELLSIM_CPYTHON = PackageSpec(pypi_packages=())
 """ShellSim's CPython 3.13 and no PyPI packages; a bare ``PackageSpec()`` would have no ``python3``."""
 
-LOCAL_CPYTHON = PackageSpec(pypi_packages=())
-"""``GRADER_BASE_IMAGE``'s software on the local backend: a uv-managed CPython 3.12 and no PyPI packages."""
-LOCAL_READ_ONLY = "read_only"
-"""shellbox's ``SystemDirectories.READ_ONLY``, the local factory's default mode for system directories."""
-LOCAL_COPY_ON_WRITE = "copy_on_write"
-"""shellbox's ``SystemDirectories.COPY_ON_WRITE``, a local factory's writable system-directory mode."""
-LOCAL_UNWRITABLE_ROOTS: Mapping[str, tuple[str, ...]] = {
-    LOCAL_READ_ONLY: ("/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/sys", "/usr"),
-    LOCAL_COPY_ON_WRITE: ("/sys",),
-}
-"""The host directories a local machine cannot write, by its factory's system-directory mode.
-
-A machine that must write under one of them keeps its image (``host_requirements``).
-"""
-
-
 type Reward = StdoutReward | ExitCodeReward | FileReward
 
 ANSWER_PATH = "/app/answer.txt"
@@ -160,9 +139,8 @@ def requirements(
     ``image`` is a digest-pinned registry reference (an ``ImageBuilder`` output), whose commands
     run as Linux processes, or ``None`` for ShellSim's simulated shell and built-in filesystem with
     the catalog's CPython (``SHELLSIM_CPYTHON``). ``packages`` instead names PyPI requirements
-    (``"numpy"``, ``"pandas==2.2.3"``) for a machine without an image: Linux processes with CPython
-    3.12 and those packages, installed from wheels when the machine starts, with no image to build.
-    Such a machine runs on the local backend only (``host_requirements``). ``setup`` commands run with
+    (``"numpy"``, ``"pandas==2.2.3"``) for image-free Linux processes. These declarations remain
+    readable but cannot run on Iris until an image is supplied. ``setup`` commands run with
     ``sh -c`` as user ``0`` under the machine's startup timeout; a builder that
     needs a readiness check puts a wait loop there. Agent-visible files go to
     ``assemble(files=)``.
@@ -332,9 +310,9 @@ def script_grader(
 ) -> GraderPackage:
     """A grader command run in a separate verifier machine built from ``environment``.
 
-    ``environment`` names a digest-pinned image (``grader_environment``) or, on Iris, a packages
-    lock that RolloutEngine builds on its local backend. The verifier machine receives ``files``
-    under ``/tests``, the task's agent-visible files at ``/``, the captured ``output_paths`` at
+    ``environment`` names a digest-pinned Iris image (``grader_environment``) or ShellSim.
+    The verifier machine receives ``files`` under ``/tests``, the task's agent-visible files at ``/``,
+    the captured ``output_paths`` at
     their own absolute paths, the conversation as JSON chat messages at
     ``/tests/conversation.json``, and the extracted answer at ``answer_path``, which is ``None``
     for a file or workspace-state answer. ``collect`` commands run as root in the task machine and
@@ -524,7 +502,7 @@ def lower(
         raise ValueError("A task machine is given exactly when the task has the shell capability")
     if (verifier_machine is None) != (grading_environment(task) is None):
         raise ValueError("A verifier machine is given exactly when the task's grader has an environment")
-    task = _hosted_task(task, factories)
+    task = _hosted_task(task)
     grading = grading_environment(task)
     spec = TaskRolloutSpec(
         task=task,
@@ -562,86 +540,31 @@ def machine_runtime(
 
 
 def machine_backend(requirements: EnvironmentRequirements, host: MachineHost) -> Backend:
-    """The host's container backend for an image, the local backend for Linux processes without one
-    (a packages lock or a package spec), else ShellSim."""
+    """Choose Iris for images and ShellSim for simulated commands."""
     if requirements.docker_image is not None:
         return container_backend(host)
     if requirements.command_semantics == CommandSemantics.LINUX_PROCESS:
-        return Backend.LOCAL
+        raise ValueError("Linux process requirements need a container image on Iris")
     return Backend.SHELLSIM
 
 
-@runtime_checkable
-class SystemDirectoriesFactory(Protocol):
-    """A machine factory that says how its machines see the host's system directories, as the local one does."""
-
-    system_directories: str
-
-
-def host_requirements(
-    requirements: EnvironmentRequirements, factories: Mapping[str, MachineFactory], writes: Sequence[str] = ()
-) -> EnvironmentRequirements:
-    """``requirements`` as a host with ``factories`` runs them.
-
-    With a local factory, a machine on ``GRADER_BASE_IMAGE`` runs ``LOCAL_CPYTHON`` on the local
-    backend, unless one of the absolute paths in ``writes`` (everything staged or written on the
-    machine) falls under ``LOCAL_UNWRITABLE_ROOTS`` for the factory's ``system_directories``, in which
-    case it keeps the image on the host's container backend, as it does without a local factory. A
-    copy-on-write factory, the one Taskforge builds on Iris, leaves only ``/sys`` out, so a task shipping
-    files to ``/usr`` runs locally; a factory that does not state
-    its mode is taken as read-only, shellbox's default. A package machine (``requirements(packages=...)``)
-    runs on the local backend only, its packages installed into a uv venv at machine start; on a
-    host without a local factory, ``RolloutEngine.check`` rejects it as an unknown factory. Every
-    other requirement is unchanged.
-    """
+def host_requirements(requirements: EnvironmentRequirements) -> EnvironmentRequirements:
+    """Normalize the working directory without changing the requested software."""
     if requirements.command_semantics is not None and not requirements.working_directory:
-        requirements = requirements.model_copy(update={"working_directory": DEFAULT_WORKDIR})
-    local = factories.get(Backend.LOCAL.value)
-    if requirements.docker_image != GRADER_BASE_IMAGE or local is None:
-        return requirements
-    mode = local.system_directories if isinstance(local, SystemDirectoriesFactory) else LOCAL_READ_ONLY
-    if any(_under(path, LOCAL_UNWRITABLE_ROOTS[mode]) for path in writes):
-        return requirements
-    return requirements.model_copy(update={"docker_image": None, "package_spec": LOCAL_CPYTHON})
-
-
-def _under(path: str, roots: Sequence[str]) -> bool:
-    parts = PurePosixPath(path).parts
-    return any(parts[: len(PurePosixPath(root).parts)] == PurePosixPath(root).parts for root in roots)
+        return requirements.model_copy(update={"working_directory": DEFAULT_WORKDIR})
+    return requirements
 
 
 def _agent_visible(task: TaskSpec) -> tuple[TaskResource, ...]:
     return (*task.resources.all, *task.resources.worker)
 
 
-def _hosted_task(task: TaskSpec, factories: Mapping[str, MachineFactory]) -> TaskSpec:
-    """``task`` with its task machine's and its grader's requirements as ``host_requirements`` gives them.
-
-    A machine's writes are every path something is staged at or written to on it: the task machine gets
-    the agent-visible files, its working directory and the output paths; the verifier also gets the
-    private resources, the captured outputs and, for a script grader, its working directory, its artifacts and
-    the extracted answer at its ``answer_path``.
-    """
-    requirements = task.environment_requirements
-    visible_writes = [f"/{resource.path}" for resource in _agent_visible(task)]
-    task_writes = [*visible_writes, *task.output_paths]
-    if requirements.working_directory is not None:
-        task_writes.append(requirements.working_directory)
-    update: dict[str, object] = {"environment_requirements": host_requirements(requirements, factories, task_writes)}
+def _hosted_task(task: TaskSpec) -> TaskSpec:
+    """Normalize task and grader working directories."""
+    update: dict[str, object] = {"environment_requirements": host_requirements(task.environment_requirements)}
     grading = grading_environment(task)
     if grading is not None:
-        grader_writes = [
-            *(f"{GRADER_RESOURCE_ROOT}/{resource.path}" for resource in task.resources.verifier),
-            *visible_writes,
-            *task.output_paths,
-        ]
-        if isinstance(task.grader, ScriptGrader):
-            grader_writes += [task.grader.cwd, *(artifact.target for artifact in task.grader.artifacts)]
-            if task.grader.answer_path is not None:
-                grader_writes.append(task.grader.answer_path)
-        update["grader"] = task.grader.model_copy(
-            update={"environment": host_requirements(grading, factories, grader_writes)}
-        )
+        update["grader"] = task.grader.model_copy(update={"environment": host_requirements(grading)})
     return task.model_copy(update=update)
 
 
@@ -682,7 +605,7 @@ def lower_with_settings(
 ) -> TaskRolloutSpec:
     """Lower with shared budgets and only the machines the task requires."""
     grader = grading_environment(task)
-    if "local" not in factories and grader is not None and grader.docker_image not in (None, GRADER_BASE_IMAGE):
+    if grader is not None and grader.docker_image not in (None, GRADER_BASE_IMAGE):
         raise ValueError(f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}")
     return lower(
         task,

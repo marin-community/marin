@@ -59,8 +59,8 @@ class SolverMachine(StrEnum):
 
     No machine at all (the solver reads the instructions and answers in the conversation, with no tools
     and no files; legal only for a reasoning proposal), ShellSim, CPython 3.12 with its standard library
-    on Taskforge's grader-base image, or CPython 3.12 with PyPI packages the build lists, which runs only
-    on a host with the local backend.
+    on Taskforge's grader-base image, or CPython 3.12 with PyPI packages the build lists. Package-only
+    Linux process requirements are unsupported by Forge's Iris runtime.
     """
 
     NONE = "none"

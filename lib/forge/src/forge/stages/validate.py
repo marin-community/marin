@@ -89,9 +89,7 @@ async def run_adversary(
         )
     )
     files = (*spec.task.resources.all, *spec.task.resources.worker)
-    env = await resources.envs.create(
-        host_requirements(requested, resources.factories, tuple(f"/{file.path}" for file in files))
-    )
+    env = await resources.envs.create(host_requirements(requested))
     try:
         async with ctx.scope(f"adversary:{name}"):
             install_env(ctx, env)

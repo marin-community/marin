@@ -21,6 +21,7 @@ from forge.lowering import (
     lower,
     lower_with_settings,
     machine,
+    machine_backend,
     requirements,
     script_grader,
 )
@@ -34,14 +35,14 @@ class AvailableFactory(MachineFactory):
 
     @override
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
-        """Both container hosts support this fixture; no machine is started by lowering."""
+        """The Iris container backend supports this fixture; lowering starts no machine."""
 
     @override
     async def create(self, spec: MachineSpec) -> Machine:
         raise AssertionError("Lowering must not create a machine")
 
 
-@pytest.mark.parametrize("host,backend", [(MachineHost.LAPTOP, Backend.DOCKER), (MachineHost.IRIS, Backend.GVISOR)])
+@pytest.mark.parametrize("host,backend", [(MachineHost.IRIS, Backend.GVISOR)])
 def test_lowering_binds_an_image_task_to_its_host_and_survives_engine_wire_format(
     host: MachineHost, backend: Backend
 ) -> None:
@@ -80,15 +81,14 @@ def test_lowering_binds_an_image_task_to_its_host_and_survives_engine_wire_forma
 
 
 @pytest.mark.parametrize(
-    "image,local",
+    "image",
     [
-        (None, False),
-        (GRADER_BASE_IMAGE, False),
-        ("registry.example.com/python@sha256:" + "a" * 64, False),
-        ("registry.example.com/python@sha256:" + "a" * 64, True),
+        None,
+        GRADER_BASE_IMAGE,
+        "registry.example.com/python@sha256:" + "a" * 64,
     ],
 )
-def test_grader_image_precheck_respects_available_host_factories(image: str | None, local: bool) -> None:
+def test_grader_image_precheck_respects_available_host_factories(image: str | None) -> None:
     task = arithmetic_task(
         grader=script_grader(
             ("sh", "-c", "echo 1"), StdoutReward(), environment=requirements(image=image), answer_path=None, timeout=1
@@ -96,9 +96,7 @@ def test_grader_image_precheck_respects_available_host_factories(image: str | No
     )
     settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     factories = {backend.value: AvailableFactory(backend) for backend in (Backend.GVISOR, Backend.SHELLSIM)}
-    if local:
-        factories[Backend.LOCAL.value] = AvailableFactory(Backend.LOCAL)
-    if image not in (None, GRADER_BASE_IMAGE) and not local:
+    if image not in (None, GRADER_BASE_IMAGE):
         with pytest.raises(ValueError, match="grader image must be") as raised:
             lower_with_settings(task, settings, factories)
         assert image in str(raised.value) and GRADER_BASE_IMAGE in str(raised.value)
@@ -131,7 +129,12 @@ def test_missing_workdir_resolves_before_machine_creation(directory: str | None)
     declared = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_BASE_IMAGE, working_directory=directory
     )
-    resolved = host_requirements(declared, {})
+    resolved = host_requirements(declared)
     assert resolved.working_directory == (directory or "/workspace")
     assert _machine_spec(resolved, machine_runtime(backend="gvisor")).workdir == (directory or "/workspace")
     assert _machine_spec(declared, machine_runtime(backend="gvisor")).workdir == (directory or "/workspace")
+
+
+def test_image_free_linux_process_is_rejected_before_starting_a_machine() -> None:
+    with pytest.raises(ValueError, match="need a container image on Iris"):
+        machine_backend(requirements(image=None, packages=("numpy",)), MachineHost.IRIS)

@@ -79,9 +79,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resour
         packages=policy.setting("author.packages", tuple),
         workdir=str(workdir),
     )
-    env = await resources.envs.create(
-        host_requirements(requested, resources.factories, tuple(f"/{f.path}" for f in files))
-    )
+    env = await resources.envs.create(host_requirements(requested))
     try:
         async with ctx.scope("author"):
             install_env(ctx, env)
