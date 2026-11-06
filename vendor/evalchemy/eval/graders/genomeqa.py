@@ -9,7 +9,11 @@ from eval.contracts.eval_spec import EvalSpec, Grade
 from eval.graders.answer_extraction import final_response_text
 
 _ANSWER_HEADING = "### Answer"
-_ANSWER = re.compile(r"\bAnswer\s*:\s*\**\s*\[?([A-Za-z])\]?(?![A-Za-z])", re.IGNORECASE)
+_ANSWER = re.compile(
+    r"\bAnswer\s*:\s*\**\s*\[?"
+    r"([A-Za-z](?![A-Za-z])(?:\]?\**\s*(?:or|and|/|,)\s*\**\[?[A-Za-z](?![A-Za-z]))*)\]?",
+    re.IGNORECASE,
+)
 _LETTER = re.compile(r"(?<![A-Za-z])([A-Z])(?![A-Za-z])")
 
 
@@ -37,7 +41,7 @@ def genomeqa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     has_heading = _ANSWER_HEADING in selected
     if has_heading:
         selected = selected.rsplit(_ANSWER_HEADING, 1)[1]
-    explicit = {letter.upper() for letter in _ANSWER.findall(selected)}
+    explicit = {letter for declaration in _ANSWER.findall(selected) for letter in _LETTER.findall(declaration.upper())}
     candidates = explicit if explicit else set(_LETTER.findall(selected)) if has_heading else set()
     answer = ""
     if failure is None:

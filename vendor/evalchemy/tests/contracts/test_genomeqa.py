@@ -54,6 +54,11 @@ def question(options="ABCD"):
         ("I considered B, but cannot tell.", "AB", 0, "missing_answer"),
         ("### Answer\nAnswer: B\nAnswer: A", "AB", 0, "conflicting_answers"),
         ("Answer: B\nAnswer: A", "AB", 0, "conflicting_answers"),
+        ("### Answer\nAnswer: B or C", "ABCD", 0, "conflicting_answers"),
+        ("### Answer\nAnswer: B and C", "ABCD", 0, "conflicting_answers"),
+        ("Answer: B/C", "ABCD", 0, "conflicting_answers"),
+        ("Answer: B, C", "ABCD", 0, "conflicting_answers"),
+        ("Answer: B because C lacks the motif.", "ABCD", 1, None),
         ("### Answer\nAnswer: C", "AB", 0, "invalid_option"),
         ("### Answer\nAnswer: A\n### Answer\nAnswer: B", "AB", 1, None),
     ],
@@ -116,12 +121,22 @@ def test_source_preserves_full_population_and_request_identity(synthetic_files):
 
 
 @pytest.mark.parametrize(
-    "generation,cap", [({"temperature": 0}, 16384), ({"top_p": 1}, 16384), ({}, 8192), ({}, 32768)]
+    "generation,cap,error",
+    [
+        ({"temperature": 0}, 16384, "requires temperature=0.7"),
+        ({"top_p": 1}, 16384, "requires top_p=0.95"),
+        ({}, 8192, "requires a shared 16384-token generation cap"),
+        ({}, 32768, "requires a shared 16384-token generation cap"),
+    ],
 )
-def test_source_rejects_model_protocol_overrides_before_loading(synthetic_files, generation, cap):
+def test_source_rejects_model_protocol_overrides(synthetic_files, generation, cap, error):
     source = genomeqa_source.GenomeQABenchmark()
-    with pytest.raises(ValueError):
-        list(source.iter_specs(SourceOptions("GenomeQA", source.SOURCE, generation=generation, max_tokens=cap)))
+    options = SourceOptions(
+        "GenomeQA", source.SOURCE, generation=generation, max_tokens=cap,
+        context_length=32768, prompt_token_count=lambda _: 100,
+    )
+    with pytest.raises(ValueError, match=error):
+        list(source.iter_specs(options))
 
 
 def test_long_prompt_is_rejected_without_sequence_truncation(synthetic_files):

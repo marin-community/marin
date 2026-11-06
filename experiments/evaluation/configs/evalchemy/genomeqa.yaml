@@ -5,6 +5,7 @@ task_options:
     task_alias: genomeqa
     generation: true
 apply_chat_template: true
+chat_tokenizer_backend: huggingface
 batch_size: 1
 seed: 42
 max_tokens: 16384
