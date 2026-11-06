@@ -46,6 +46,7 @@ from marina.preview import install_preview_sources
 from marina.releases import (
     RELEASE_METADATA,
     ReleaseSource,
+    StaleMainError,
     clean_frontend_build,
     release_source,
     require_current_main,
@@ -62,6 +63,10 @@ DEFAULT_APPS_DIR = Path(__file__).resolve().parents[2] / "apps"
 # Where `marina dev` reads app data: one directory per app, mirroring the production bucket.
 DEFAULT_DATA_ROOT = Path(__file__).resolve().parents[2] / ".data"
 DEFAULT_PORT = 8080
+
+
+class StaleMainReleaseError(click.ClickException):
+    exit_code = os.EX_TEMPFAIL
 
 
 class _AppletValidationCheck(StrEnum):
@@ -355,6 +360,8 @@ def release(
         if guarded and source is not None and require_current_main(app_dir) != source.commit:
             raise RuntimeError("The checkout changed while building; retry the release.")
         result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version, mode=mode)
+    except StaleMainError as error:
+        raise StaleMainReleaseError(str(error)) from error
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode(errors="replace").strip() if isinstance(error.stderr, bytes) else error.stderr
         raise click.ClickException(detail or str(error)) from error

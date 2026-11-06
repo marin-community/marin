@@ -142,9 +142,12 @@ accidentally select another application. A declared UUID must match the upload
 target, including direct API uploads. Source checks are client safeguards; server
 authentication and version checks still apply to direct uploads and older clients.
 
-Merging source does not release it. Changing shared browser components requires
-releasing the applications that consume them. Dataset loading is a separate
-operation; an application release must not scan storage or rebuild a catalog.
+Eligible maintained apps release after a push to `main` changes their source
+or declared shared browser components. The release policy is
+[`.github/marina-app-releases.toml`](../../.github/marina-app-releases.toml);
+apps requiring operator coordination can remain manual. Dataset loading is a
+separate operation; an application release must not scan storage or rebuild a
+catalog.
 
 ## Validate and preview
 
