@@ -6,6 +6,7 @@
 Only aggregates and task IDs are printed. Does not call any model or change a grade.
 """
 
+import argparse
 import json
 from collections import Counter, defaultdict
 from typing import Any
@@ -132,5 +133,55 @@ def audit() -> dict[str, Any]:
     }
 
 
+def inspect(task_ids: list[str]) -> dict[str, Any]:
+    """Report selected candidate/reference disagreements without printing raw trajectories."""
+    task_rows = {row["task_id"]: row["task"] for row in _rows(V2_ROOT + "taskspecs.jsonl")}
+    if set(task_ids) - set(task_rows):
+        raise ValueError("Unknown task ID")
+    models, _ = load_panel()
+    results: dict[str, Any] = {}
+    for task_id in task_ids:
+        task = task_rows[task_id]
+        expected = task["grader"]["parameters"].get("expected")
+        candidates = []
+        for model in models:
+            prefix = OUTPUT_ROOT + f"attempts/{_model_path(model)}/"
+            original = next(row for row in _rows(prefix + "results.jsonl") if row["task_id"] == task_id)
+            recovery_uri = prefix + "rate-limit-recovery1.jsonl"
+            fs, path = fsspec.core.url_to_fs(recovery_uri)
+            recovery = (
+                next((row for row in _rows(recovery_uri) if row["task_id"] == task_id), None)
+                if fs.exists(path)
+                else None
+            )
+            row = recovery or original
+            attempts = row.get("attempts", [])
+            if not attempts:
+                continue
+            attempt = attempts[-1]
+            conversations = (attempt.get("rollout") or {}).get("conversations") or []
+            assistants = [msg for conv in conversations for msg in conv["messages"] if msg["role"] == "assistant"]
+            text = (assistants[-1].get("content") or "") if assistants else ""
+            values = _candidate_values(text) if isinstance(text, str) else []
+            concise = []
+            for value in values:
+                if isinstance(value, dict) and set(value) == set(expected):
+                    concise.append(value)
+            candidates.append(
+                {
+                    "model": model.model,
+                    "score": row.get("trial", {}).get("correct"),
+                    "grade": (attempt.get("grade") or {}).get("status"),
+                    "candidate": concise[-1] if concise else None,
+                    "answer_prefix": text[:160] if not concise else None,
+                }
+            )
+        results[task_id] = {"expected": expected, "responses": candidates}
+    return results
+
+
 if __name__ == "__main__":
-    print(json.dumps(audit(), sort_keys=True, indent=2))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--inspect", nargs="*", default=[])
+    args = parser.parse_args()
+    print(json.dumps(inspect(args.inspect) if args.inspect else audit(), sort_keys=True, indent=2))
