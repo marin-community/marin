@@ -268,7 +268,10 @@ def write_draft(
 @click.option(
     "--transport", type=click.Choice([t.value for t in Transport]), default=Transport.BATCH.value, show_default=True
 )
-@click.option("--limit", type=click.IntRange(min=1), help="Draft only the first N accepted slots, for probes.")
+@click.option(
+    "--offset", type=click.IntRange(min=0), default=0, show_default=True, help="Skip the first N selected slots."
+)
+@click.option("--limit", type=click.IntRange(min=1), help="Draft only N accepted slots, for probes and ramps.")
 @click.option(
     "--stride",
     type=click.IntRange(min=1),
@@ -294,6 +297,7 @@ def main(
     output_root: str,
     relay_job: str,
     transport: str,
+    offset: int,
     limit: int | None,
     stride: int,
     workers: int,
@@ -310,7 +314,8 @@ def main(
     """Draft tasks from the accepted proposals with GLM, on a Zephyr pool."""
     configure_logging(logging.INFO)
     output = StoragePath(output_root) / run_name
-    slots = accepted_slots(StoragePath(proposals))[::stride][:limit]
+    selected = accepted_slots(StoragePath(proposals))[::stride][offset:]
+    slots = selected[:limit] if limit is not None else selected
     logger.info("%d accepted slots to draft into %s", len(slots), output)
     settings = RunSettings(
         proposals,
