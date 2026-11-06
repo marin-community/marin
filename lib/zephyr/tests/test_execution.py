@@ -20,7 +20,7 @@ import pytest
 import zephyr.coordinator as coordinator_module
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
-from fray.types import JobStatus, ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr import worker as worker_module
@@ -49,7 +49,6 @@ from zephyr.stage_io import (
     PickleDiskChunk,
     ShardTask,
     TaskResult,
-    ZephyrPoolLostError,
     ZephyrWorkerError,
     _ensure_picklable_exception,
 )
@@ -1433,7 +1432,7 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(coordinator):
 
     # Set up a mock worker group so _check_worker_group can query it.
     mock_group = MagicMock()
-    mock_group.status.return_value = JobStatus.RUNNING
+    mock_group.is_done.return_value = False
     coordinator._worker_group = mock_group
 
     # Two workers pull both tasks.
@@ -1466,7 +1465,7 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(coordinator):
     assert run.fatal_error is None
 
     # Worker job dies permanently (Iris exhausted retries).
-    mock_group.status.return_value = JobStatus.FAILED
+    mock_group.is_done.return_value = True
     coordinator._check_worker_group()
 
     # Coordinator should detect the deadlock and abort.
@@ -1607,34 +1606,6 @@ def test_shared_pool_start_retries_a_failed_coordinator(tmp_path):
         assert coordinator_starts[0] == 2
     finally:
         client.shutdown(wait=True)
-
-
-def test_execute_retries_a_lost_pool(local_client, tmp_path):
-    """A pipeline whose pool ended its own workers too early reruns on a fresh pool."""
-    original_run_pipeline = ZephyrCoordinator.run_pipeline
-    pipeline_runs = [0]
-
-    def losing_run_pipeline(self, *args, **kwargs):
-        pipeline_runs[0] += 1
-        if pipeline_runs[0] == 1:
-            raise ZephyrPoolLostError("Draining pool released its last worker with shards outstanding")
-        return original_run_pipeline(self, *args, **kwargs)
-
-    ctx = ZephyrContext(
-        client=local_client,
-        max_workers=1,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        max_execution_retries=2,
-        name=f"test-pool-lost-{uuid.uuid4().hex[:8]}",
-    )
-    ZephyrCoordinator.run_pipeline = losing_run_pipeline
-    try:
-        results = ctx.execute(Dataset.from_list([1, 2]).map(lambda x: x + 1)).results
-    finally:
-        ZephyrCoordinator.run_pipeline = original_run_pipeline
-    assert sorted(results) == [2, 3]
-    assert pipeline_runs[0] == 2
 
 
 def test_execute_does_not_retry_worker_errors(local_client, tmp_path):

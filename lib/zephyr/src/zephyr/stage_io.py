@@ -39,13 +39,6 @@ class ZephyrWorkerError(RuntimeError):
     """Raised when a worker encounters a fatal (non-transient) error."""
 
 
-class ZephyrPoolLostError(RuntimeError):
-    """Raised when a pool ended its own workers while work remained.
-
-    The work itself did not fail, so the driver retries the pipeline on a fresh pool.
-    """
-
-
 def _ensure_picklable_exception(error: BaseException) -> BaseException:
     """Return *error*, or a picklable stand-in if it cannot survive pickling.
 

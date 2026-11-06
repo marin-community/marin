@@ -25,7 +25,6 @@ from fray.actor import ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
-from fray.types import JobStatus as WorkerJobStatus
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging import telemetry
@@ -60,7 +59,6 @@ from zephyr.stage_io import (
     ShardTask,
     StageRunner,
     TaskResult,
-    ZephyrPoolLostError,
     ZephyrTaskResources,
     ZephyrWorkerError,
     _ensure_picklable_exception,
@@ -395,7 +393,7 @@ class ZephyrCoordinator:
         # Set when the coordinator as a whole can no longer make progress
         # (worker job permanently dead, maintenance loop crash). Fails all
         # active executions and rejects new ones.
-        self._pool_error: ZephyrWorkerError | ZephyrPoolLostError | None = None
+        self._pool_error: str | None = None
         # Rotates which execution pull_task scans first, for cross-pipeline fairness.
         self._pull_offset: int = 0
         # Worker management state (workers self-register via register_worker)
@@ -556,7 +554,7 @@ class ZephyrCoordinator:
                 if sys.is_finalizing():
                     return
                 logger.exception("Coordinator loop crashed, aborting pipeline")
-                self.abort(ZephyrWorkerError("Coordinator loop crashed unexpectedly"))
+                self.abort("Coordinator loop crashed unexpectedly")
                 return
 
             self._shutdown_event.wait(timeout=0.5)
@@ -576,21 +574,11 @@ class ZephyrCoordinator:
             if not outstanding:
                 return
         try:
-            status = self._worker_group.status()
-            if not WorkerJobStatus.finished(status):
-                return
-            if self._drain_idle_workers and status is WorkerJobStatus.SUCCEEDED:
-                # Every worker exited cleanly, so this pool sent SHUTDOWN to its
-                # last worker while a shard was outstanding, for example to the
-                # replacement of a worker whose loss the heartbeat had not caught yet.
-                self.abort(ZephyrPoolLostError("Draining pool released its last worker with shards outstanding"))
-                return
-            self.abort(
-                ZephyrWorkerError(
+            if self._worker_group.is_done():
+                self.abort(
                     "Worker job terminated permanently (all retries exhausted). "
                     "Workers likely crashed (OOM or other fatal error)."
                 )
-            )
         except Exception:
             logger.debug("Failed to check worker group status", exc_info=True)
 
@@ -1170,7 +1158,7 @@ class ZephyrCoordinator:
 
     def _fatal_error_locked(self) -> str | None:
         if self._pool_error is not None:
-            return str(self._pool_error)
+            return self._pool_error
         return next((r.fatal_error for r in self._executions.values() if r.fatal_error), None)
 
     def get_fatal_error(self) -> str | None:
@@ -1178,20 +1166,19 @@ class ZephyrCoordinator:
         with self._lock:
             return self._fatal_error_locked()
 
-    def abort(self, error: ZephyrWorkerError | ZephyrPoolLostError) -> None:
+    def abort(self, reason: str) -> None:
         """Fail the coordinator pool: every active execution aborts immediately.
 
-        This applies when the worker job stops or the maintenance loop fails.
-        Executions raise ``error``'s type, which tells the driver whether a fresh
-        pool may retry them. New run_pipeline calls are rejected afterwards.
+        This applies when the worker job stops permanently or the maintenance
+        loop fails. New run_pipeline calls are rejected afterwards.
         """
         with self._lock:
             if self._pool_error is None:
-                logger.error("Coordinator aborted: %s", error)
-                self._pool_error = error
+                logger.error("Coordinator aborted: %s", reason)
+                self._pool_error = reason
             for run in self._executions.values():
                 if run.fatal_error is None:
-                    run.fatal_error = str(error)
+                    run.fatal_error = reason
                 run.stage_done.set()
 
     def _start_stage(
@@ -1217,10 +1204,9 @@ class ZephyrCoordinator:
 
         while True:
             with self._lock:
-                if self._pool_error is not None:
-                    raise type(self._pool_error)(str(self._pool_error))
-                if run.fatal_error:
-                    raise ZephyrWorkerError(run.fatal_error)
+                error = run.fatal_error or self._pool_error
+                if error:
+                    raise ZephyrWorkerError(error)
 
                 completed = run.completed_shards
                 total = run.total_shards
@@ -1292,7 +1278,7 @@ class ZephyrCoordinator:
                 # holds an endpoint whose pool the owner already tore down.
                 raise ZephyrWorkerError("Coordinator is shut down and cannot accept new pipelines")
             if self._pool_error is not None:
-                raise type(self._pool_error)(f"Coordinator pool failed: {self._pool_error}")
+                raise ZephyrWorkerError(f"Coordinator pool failed: {self._pool_error}")
             existing = self._executions.get(execution_id)
             if existing is not None:
                 run = existing
@@ -1650,7 +1636,7 @@ class ZephyrCoordinator:
                 return
 
             drained = ExponentialBackoff(initial=0.1, maximum=1.0).wait_until(
-                lambda: WorkerJobStatus.finished(group.status()), timeout=Duration.from_seconds(drain_timeout)
+                group.is_done, timeout=Duration.from_seconds(drain_timeout)
             )
             if drained:
                 return

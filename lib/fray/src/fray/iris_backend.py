@@ -638,10 +638,10 @@ class IrisActorGroup:
 
             time.sleep(backoff.next_interval())
 
-    def status(self) -> JobStatus:
-        """Return the actor job's state, mapped to Fray's lifecycle."""
+    def is_done(self) -> bool:
+        """Return True if the Iris worker job has permanently terminated."""
         client = self._get_client()
-        return map_iris_job_state(client.job_state(self._job_id))
+        return is_job_finished(client.job_state(self._job_id))
 
     def shutdown(self) -> None:
         """Terminate the actor job."""
