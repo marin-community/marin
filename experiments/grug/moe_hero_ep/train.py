@@ -1519,7 +1519,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     break
         except BaseException:
             logger.exception(
-                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+                "Fatal error in grug training loop; skipping pending final callbacks/checkpoint to preserve root cause"
             )
             raise
         else:

@@ -145,7 +145,8 @@ def build_diagnostic_run(
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
-    # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
+    # run stops at (a restore resumes mid-schedule, so a stop at the restored step trains nothing and one
+    # before it fails).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
     # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
