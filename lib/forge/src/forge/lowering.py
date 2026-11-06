@@ -289,7 +289,7 @@ def check(spec: TaskRolloutSpec, factories: Mapping[str, MachineFactory]) -> Non
 def reward_file(
     path: str, file_format: RewardFileFormat, key: str = "reward", pass_above: float | None = None
 ) -> FileReward:
-    """Read the score from one reward file the grader writes."""
+    """Configure a reward from one score file the grader writes."""
     return FileReward(files=(RewardFile(path=path, format=file_format, key=key),), pass_above=pass_above)
 
 
@@ -663,3 +663,17 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
         cleanup_timeout=policy.setting("solver.cleanup_timeout", float),
     )
     return LoweringSettings(MachineHost(policy.setting("runtime.host", str)), GRADING_MACHINE, GRADING_MACHINE, limits)
+
+
+def lower_with_settings(
+    task: TaskSpec, settings: LoweringSettings, factories: Mapping[str, MachineFactory]
+) -> TaskRolloutSpec:
+    """Lower with shared budgets and only the machines the task requires."""
+    return lower(
+        task,
+        host=settings.host,
+        task_machine=settings.task_machine if SHELL_CAPABILITY in task.environment_requirements.capabilities else None,
+        verifier_machine=settings.verifier_machine if grading_environment(task) is not None else None,
+        limits=settings.limits,
+        factories=factories,
+    )

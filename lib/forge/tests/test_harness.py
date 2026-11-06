@@ -7,7 +7,10 @@ from pathlib import Path, PurePosixPath
 
 import httpx
 import pytest
-from rolloutengine.test_support import arithmetic_task
+from rolloutengine.test_support import arithmetic_task, rollout_limits
+from taskcompendium.grader import verifyit_package
+from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import NumericSpec
 
 from forge.effects.context import Context
 from forge.effects.issues import Hold
@@ -15,13 +18,16 @@ from forge.effects.log import EventLog, JsonlSink
 from forge.harness.classify import host_failure
 from forge.harness.events import ToolReturned
 from forge.harness.loop import AgenticHarness, Limits
-from forge.harness.protocol import Returned, Stopped, StopReason, Submitted, ToolResult
+from forge.harness.protocol import Returned, ReturnRequest, Stopped, StopReason, Submitted, ToolResult
+from forge.harness.tools.adversary import AdversaryReport, ReportTool
 from forge.harness.tools.files import ReadFileTool, WriteFileTool
 from forge.harness.tools.finish import FinishTool
+from forge.harness.tools.grade import GradeTool
 from forge.harness.tools.shell import ShellTool
 from forge.harness.tools.submit import SubmitTool
 from forge.harness.tools.validate import ValidateRequest, ValidateTool
 from forge.harness.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
+from forge.lowering import GRADING_MACHINE, LoweringSettings, rollout_engine
 from forge.model.llm import Completion, Message, Sampling, ToolCall, Usage
 from forge.model.serialization import TASK_SPEC
 from forge.model.workpiece import Conversation, Submission
@@ -36,7 +42,9 @@ from forge.resources.env import (
     run_command,
     write_file,
 )
+from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.inference import FakeInference
+from forge.resources.sandbox.factories import MachineHost
 
 pytestmark = pytest.mark.asyncio
 
@@ -220,3 +228,28 @@ async def test_web_transport_and_replay_cache_http_results() -> None:
     ]
     assert json.loads(requests[0].content)["search_queries"] == ["query"]
     assert replay_web.requests == []
+
+
+async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -> None:
+    ctx = Context(log=EventLog())
+    env = environment(ctx)
+    settings = LoweringSettings(MachineHost.LAPTOP, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    grading = GradingResource(rollout_engine({}, command_timeout=1), "fixture")
+    ctx.resource(grading, grading.fingerprint)
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grading,))
+    tool = GradeTool("/workspace/task.json", {}, settings)
+    await ctx.emit(RunCommand("task", 30))
+    first = await tool(ctx, {"reply": "12"}, env)
+    changed = arithmetic_task(grader=verifyit_package(NumericSpec("7", tolerance_abs=0, tolerance_rel=0)).grader)
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(changed)))
+    second = await tool(ctx, {"reply": "12"}, env)
+    assert isinstance(first, ToolResult) and json.loads(first.content)["reward"] == 1
+    assert isinstance(second, ToolResult) and json.loads(second.content)["reward"] == 0
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"candidate"))
+    report = await ReportTool()(
+        ctx, {"findings": ["false reject"], "candidates": [{"reply": "12", "files": ["/workspace/answer"]}]}, env
+    )
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"changed"))
+    await ctx.drain()
+    assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
+    assert resource_bytes(report.payload.candidates[0].files[0]) == b"candidate"
