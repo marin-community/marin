@@ -123,7 +123,7 @@ def test_native_keyed_paged_prefill_and_next_decode_match_dense_and_preserve_cac
     )
     Vocab = hax.Axis("vocab", 48)
     mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
-    with jax.set_mesh(mesh), hax.axis_mapping({}):
+    with jax.default_matmul_precision("highest"), jax.set_mesh(mesh), hax.axis_mapping({}):
         named = LlamaLMHeadModel.init(Vocab, config, key=jax.random.PRNGKey(211))
         native = native_config.build(Vocab, key=jax.random.PRNGKey(223)).from_state_dict(named.to_state_dict())
         tokens = hax.named(jnp.array([5, 17, 29, 11, 7], dtype=jnp.int32), hax.Axis("position", 5))
@@ -150,8 +150,19 @@ def test_native_keyed_paged_prefill_and_next_decode_match_dense_and_preserve_cac
                 lambda model, cache: model.decode(chunk, cache, info, positions, key=forward_key)
             )(named, named_cache)
             expected = dense["position", hax.dslice(start, size)].array
-            np.testing.assert_allclose(native_out.array, expected, atol=1e-5, rtol=1e-4)
-            np.testing.assert_allclose(named_out.array, expected, atol=1e-5, rtol=1e-4)
+            native_values, named_values, dense_values = (
+                np.asarray(native_out.array),
+                np.asarray(named_out.array),
+                np.asarray(expected),
+            )
+            max_absolute_errors = {
+                "native_paged_vs_dense": float(np.max(np.abs(native_values - dense_values))),
+                "named_paged_vs_dense": float(np.max(np.abs(named_values - dense_values))),
+                "native_paged_vs_named_paged": float(np.max(np.abs(native_values - named_values))),
+            }
+            diagnostics = f"start={start}, size={size}, max_absolute_errors={max_absolute_errors}"
+            np.testing.assert_allclose(native_out.array, expected, atol=1e-5, rtol=1e-4, err_msg=diagnostics)
+            np.testing.assert_allclose(named_out.array, expected, atol=1e-5, rtol=1e-4, err_msg=diagnostics)
             for actual, reference in zip(native_cache, named_cache, strict=True):
                 np.testing.assert_allclose(actual.kv_pages.array, reference.kv_pages.array, atol=1e-5, rtol=1e-4)
             if start == 0:
