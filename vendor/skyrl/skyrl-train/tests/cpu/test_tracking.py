@@ -25,6 +25,14 @@ def test_tracker_saves_the_actual_wandb_link_and_metric_files(tmp_path, monkeypa
         SimpleNamespace(init=lambda **kwargs: run, Settings=lambda **kwargs: SimpleNamespace(**kwargs)),
     )
     monkeypatch.setenv("WANDB_API_KEY", "test-wandb-key")
-    config = OmegaConf.create({"trainer": {"export_path": str(tmp_path / "exports")}})
+    config = OmegaConf.create(
+        {
+            "trainer": {"export_path": str(tmp_path / "exports")},
+            "runtime": {"attempt_id": "current-attempt"},
+        }
+    )
     with Tracking("project", "name", ["files", "wandb"], config):
-        assert json.loads((tmp_path / "exports/tracking.json").read_text()) == {"wandb_url": url}
+        assert json.loads((tmp_path / "exports/tracking.json").read_text()) == {
+            "wandb_url": url,
+            "attempt_id": "current-attempt",
+        }
