@@ -245,6 +245,18 @@ def test_local_inference_owns_router_and_worker_lifetimes_with_separate_metrics(
             requests.get(url, timeout=1)
 
 
+def test_environment_routes_native_ranks_without_a_backend_or_second_topology_setting():
+    with VllmEnvironment(
+        InferenceModelConfig("fake", None, {}),
+        launcher=FakeVllmLauncher("serve"),
+        port=available_port("127.0.0.1"),
+        extra_args=["--data-parallel-size=4", "--data-parallel-size-local=2"],
+        router=VllmRouterConfig(),
+    ) as environment:
+        assert environment.server_url != environment.worker_server_url
+        _assert_native_rank_affinity(environment.server_url, 4)
+
+
 @pytest.mark.parametrize("load_balancer", ["--data-parallel-external-lb", "--data-parallel-hybrid-lb"])
 def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_global_ranks(load_balancer):
     with pytest.raises(ValueError, match="global internal DP load balancer"):
