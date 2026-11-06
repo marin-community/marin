@@ -30,6 +30,7 @@ TASK_DEFECTS = frozenset(
         Cause.GRADER_EMPTY_REWARD,
         Cause.GRADER_INVALID_REWARD,
         Cause.GRADER_INVALID_CHECKS,
+        Cause.GRADER_TIMEOUT,
         Cause.GRADER_REWARD_RANGE,
         Cause.INVALID_TASK,
         Cause.VERIFIER_SKIPPED,
@@ -99,5 +100,5 @@ def restart_cause(error: Restart) -> Cause:
 async def host_failure(event: Resolved[object]) -> None:
     value = event.value
     grade = value.grade if isinstance(value, GradedRollout) else value
-    if isinstance(grade, GradeResult) and grade_cause(grade) in (Cause.GRADER_INFRA, Cause.GRADER_TIMEOUT):
+    if isinstance(grade, GradeResult) and grade_cause(grade) is Cause.GRADER_INFRA:
         raise Hold(grade.error or "Grader infrastructure unavailable")

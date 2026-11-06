@@ -12,7 +12,7 @@ from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import Resolved
 from forge.effects.issues import Hold, Restart
-from forge.harness.protocol import Returned
+from forge.harness.protocol import Returned, Stopped
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from forge.lowering import host_requirements, lower_with_settings, lowering_settings, requirements
 from forge.model import serialization as wire
@@ -53,9 +53,17 @@ async def adversary_result(
     result = AdversaryResult(name, False, ())
     try:
         result = await run_adversary(ctx, workpiece, config, resources, spec, name)
-    except* (Hold, Restart):
-        pass
+    except* (Hold, Restart) as error:
+        result = AdversaryResult(name, False, (), failure_reasons(error))
     return result
+
+
+def failure_reasons(error: BaseException) -> tuple[str, ...]:
+    """Retain leaf diagnostics when observer scopes group infrastructure failures."""
+    if isinstance(error, BaseExceptionGroup):
+        return tuple(reason for child in error.exceptions for reason in failure_reasons(child))
+    reasons = (f"{type(error).__name__}: {error}",)
+    return reasons + (failure_reasons(error.__cause__) if error.__cause__ is not None else ())
 
 
 async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim) -> AdversaryFinding:
@@ -105,13 +113,18 @@ async def run_adversary(
                 ),
                 tuple(tool.schema for tool in tools.values()),
             )
-            outcome = await config.adversaries[name].run(ctx, session, env, resources.inference, tools)
+            outcome = await config.adversaries[name].run(ctx, session, env, resources.inference_for("adversary"), tools)
             if (
                 not isinstance(outcome, Returned)
                 or outcome.tool != "report"
                 or not isinstance(outcome.payload, AdversaryReport)
             ):
-                return AdversaryResult(name, False, ())
+                reason = (
+                    f"{outcome.reason} without report"
+                    if isinstance(outcome, Stopped)
+                    else f"Expected report, got {type(outcome).__name__}"
+                )
+                return AdversaryResult(name, False, (), (reason,))
             report = outcome.payload
             findings = await asyncio.gather(*(claim_result(ctx, spec, claim) for claim in report.findings))
             return AdversaryResult(name, True, tuple(findings))

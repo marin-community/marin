@@ -102,6 +102,6 @@ async def author(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resour
                 ),
                 tuple(tool.schema for tool in tools.values()),
             )
-            return await config.author.run(ctx, session, env, resources.inference, tools)
+            return await config.author.run(ctx, session, env, resources.inference_for("author"), tools)
     finally:
         await env.close()

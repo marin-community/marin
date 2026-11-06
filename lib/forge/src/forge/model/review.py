@@ -185,6 +185,7 @@ class AdversaryResult:
     name: str
     completed: bool
     findings: tuple[AdversaryFinding, ...]
+    reasons: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "findings", tuple(replace(finding) for finding in self.findings))

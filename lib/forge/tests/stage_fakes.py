@@ -47,6 +47,7 @@ class RecordingHarness(Harness):
     def __init__(self, result: Exit | Restart | Hold | ExceptionGroup) -> None:
         self.result = result
         self.session: Conversation | None = None
+        self.client: InferenceClient | None = None
         self.files: Mapping[PurePosixPath, bytes] = {}
 
     @override
@@ -54,6 +55,7 @@ class RecordingHarness(Harness):
         self, ctx: Context, session: Conversation, env: Env, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
         self.session = session
+        self.client = client
         assert isinstance(env, FakeEnv)
         self.files = dict(env.files)
         if isinstance(self.result, (Restart, Hold, ExceptionGroup)):

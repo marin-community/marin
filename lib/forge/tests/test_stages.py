@@ -164,11 +164,13 @@ async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: W
 async def test_author_new_session_and_failed_harness_close_environment(workpiece: Workpiece) -> None:
     harness = RecordingHarness(Restart("machine gone"))
     ctx = Context(log=EventLog())
-    bundle = resources(ctx)
+    author_client = FakeInference(())
+    bundle = replace(resources(ctx), role_inference={"author": author_client})
     with pytest.raises(Restart):
         await author(ctx, workpiece.with_(submission=None), config(harness), bundle)
     await ctx.drain()
     assert harness.session is not None
+    assert harness.client is author_client
     assert harness.session.messages[-1].content == config(harness).policy.prompt("author.user").render(
         proposal=render(workpiece.proposal)
     )
@@ -245,11 +247,13 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
         tools={"finder": {}},
     )
     ctx = Context(log=EventLog())
-    bundle = resources(ctx)
+    adversary_client = FakeInference(())
+    bundle = replace(resources(ctx), role_inference={"adversary": adversary_client})
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     finding = evidence.adversary[0].findings[0]
     assert evidence.adversary[0].completed and finding.candidate.reply == reply
+    assert harness.client is adversary_client
     assert finding.grade is not None and finding.grade.reward == float(confirmed)
     assert finding.met is confirmed
     assert isinstance(default_review(evidence, setup.band), Modify if confirmed else Accept)
@@ -285,9 +289,19 @@ async def test_review_prioritizes_incomplete_evidence_over_task_defects(
 
 
 @pytest.mark.parametrize("grouped", [False, True])
+@pytest.mark.parametrize(
+    "kind,message",
+    [
+        (Hold, "environment terminated: cpu_exhausted"),
+        (Hold, "provider returned 3 empty completions"),
+        (Restart, "model unavailable"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_adversary_environment_hold_is_incomplete_evidence(workpiece: Workpiece, grouped: bool) -> None:
-    failure = Hold("environment terminated: cpu_exhausted")
+async def test_adversary_environment_hold_is_incomplete_evidence(
+    workpiece: Workpiece, grouped: bool, kind: type[Hold] | type[Restart], message: str
+) -> None:
+    failure = kind(message)
     harness = RecordingHarness(ExceptionGroup("observer", [failure]) if grouped else failure)
     setup = config(harness)
     setup = replace(
@@ -300,9 +314,11 @@ async def test_adversary_environment_hold_is_incomplete_evidence(workpiece: Work
     bundle = resources(ctx)
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
-    assert evidence.adversary == (AdversaryResult("finder", False, ()),)
+    assert evidence.adversary == (AdversaryResult("finder", False, (), (f"{kind.__name__}: {message}",)),)
     assert len(evidence.solver) == 3 and len(evidence.controls) == 2
-    assert isinstance(default_review(evidence, setup.band), Incomplete)
+    decision = default_review(evidence, setup.band)
+    assert isinstance(decision, Incomplete)
+    assert decision.reasons == (f"finder: {kind.__name__}: {message}",)
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
 
 
@@ -322,6 +338,28 @@ async def test_invalid_grader_checks_request_task_repair(workpiece: Workpiece) -
     decision = default_review(evidence, setup.band)
     assert isinstance(decision, Modify)
     assert any("grader_invalid_checks" in finding for finding in decision.findings)
+
+
+@pytest.mark.parametrize("reason", [StopReason.CONTEXT_LIMIT, StopReason.FINISHED])
+@pytest.mark.asyncio
+async def test_adversary_stop_reason_survives_review_and_serialization(workpiece: Workpiece, reason: StopReason) -> None:
+    harness = RecordingHarness(Stopped(reason, Conversation((), ())))
+    setup = config(harness)
+    setup = replace(
+        setup,
+        policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
+        adversaries={"finder": harness},
+        tools={"finder": {}},
+    )
+    ctx = Context(log=EventLog())
+    evidence = (await validate(ctx, workpiece, setup, resources(ctx, restart=1))).result
+    await ctx.drain()
+    restored = wire.WORKPIECE.validate_json(wire.WORKPIECE.dump_json(workpiece.with_(evidence=(evidence,))))
+    assert restored.evidence[0].adversary[0].reasons == (f"{reason} without report",)
+    decision = default_review(restored.evidence[0], setup.band)
+    assert isinstance(decision, Incomplete)
+    assert f"finder: {reason} without report" in decision.reasons
+    assert "1 ungraded trial(s): model_unavailable" in decision.reasons
 
 
 @pytest.mark.parametrize("repair_budget", [0, 1])
@@ -361,24 +399,35 @@ async def test_validate_returns_lowering_failure_without_starting_trials(workpie
     assert isinstance(default_review(result, config(harness).band), Incomplete)
 
 
+@pytest.mark.parametrize(
+    "status,failure,cause",
+    [
+        (Outcome.INFRA_ERROR, GradingFailure.MISSING_REWARD, Cause.GRADER_MISSING_REWARD),
+        (Outcome.INFRA_ERROR, GradingFailure.TIMEOUT, Cause.GRADER_TIMEOUT),
+        (Outcome.UNAVAILABLE, None, Cause.NO_GRADE),
+        (Outcome.INFRA_ERROR, None, Cause.GRADER_INFRA),
+    ],
+)
 @pytest.mark.asyncio
-async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_defect(workpiece: Workpiece) -> None:
+async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_defect(
+    workpiece: Workpiece, status: Outcome, failure: GradingFailure | None, cause: Cause
+) -> None:
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     setup = config(harness)
-    for failure in (GradingFailure.MISSING_REWARD, GradingFailure.TIMEOUT, None):
-        ctx = Context(log=EventLog())
-        bundle = resources(ctx)
-        status = Outcome.UNAVAILABLE if failure is None else Outcome.INFRA_ERROR
-        grader = GradingResource(CandidateEngine(GradeResult(status, None, failure=failure)), "broken")
-        ctx.resource(grader, grader.fingerprint)
-        ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grader,))
-        if failure is GradingFailure.TIMEOUT:
-            with pytest.raises(ExceptionGroup) as caught:
-                await validate(ctx, workpiece, setup, bundle)
-            assert caught.value.subgroup(Hold) is not None
-        else:
-            result = (await validate(ctx, workpiece, setup, bundle)).result
-            cause = Cause.NO_GRADE if failure is None else Cause.GRADER_MISSING_REWARD
-            assert all(control.cause is cause for control in result.controls)
-            assert isinstance(default_review(result, setup.band), Incomplete if failure is None else Modify)
-        await ctx.drain()
+    ctx = Context(log=EventLog())
+    bundle = resources(ctx)
+    grader = GradingResource(CandidateEngine(GradeResult(status, None, failure=failure)), "broken")
+    ctx.resource(grader, grader.fingerprint)
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grader,))
+    if cause is Cause.GRADER_INFRA:
+        with pytest.raises(ExceptionGroup) as caught:
+            await validate(ctx, workpiece, setup, bundle)
+        assert caught.value.subgroup(Hold) is not None
+    else:
+        result = (await validate(ctx, workpiece, setup, bundle)).result
+        assert all(control.cause is cause for control in result.controls)
+        decision = default_review(result, setup.band)
+        assert isinstance(decision, Incomplete if cause is Cause.NO_GRADE else Modify)
+        if cause is Cause.GRADER_TIMEOUT:
+            assert isinstance(decision, Modify) and any("grader_timeout" in finding for finding in decision.findings)
+    await ctx.drain()

@@ -51,8 +51,14 @@ def default_review(result: ValidationResult, band: BandRules) -> Decision:
         for cause, count in sorted((cause, count) for cause, count in causes.items() if cause is not None)
         if cause not in TASK_DEFECTS and cause is not Cause.BUDGET_EXHAUSTED
     )
-    if unavailable or any(not trial.completed for trial in result.adversary):
-        return Incomplete(unavailable or ("Adversary search is incomplete",))
+    unavailable += tuple(
+        f"{trial.name}: {reason}"
+        for trial in result.adversary
+        if not trial.completed
+        for reason in trial.reasons or ("Adversary search is incomplete (reason unavailable)",)
+    )
+    if unavailable:
+        return Incomplete(unavailable)
     if causes[Cause.BUDGET_EXHAUSTED]:
         return Reject(RejectKind.BUDGET, ("An explicitly configured trial budget was exhausted",))
     findings = tuple(
