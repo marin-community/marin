@@ -369,12 +369,9 @@ the IaC fields. Custom script files must already exist on the Loom server.
 The `doc` profile ([instructions](profiles/doc/AGENTS.md)) runs a session whose
 record of the work is the branch artifact `doc`, with progress updates in the
 artifact `progress`. The agent writes both with the `loom` MCP artifact tools.
-The profile sets `docArtifact: doc`, so Loom opens the session on a Doc tab that
-shows `doc` once the agent writes it. A person comments by selecting text in the
-Doc tab: **Comment** sends the comment to the agent at once, and **Start a
-review** collects comments that **Submit review** sends together. When a person
-saves an edit to the doc's source, Loom sends the agent a message that starts
-with "A person edited the doc" when its turn ends.
+The profile sets `docArtifact: doc`. Loom's
+[session doc](https://github.com/marin-community/loom/blob/main/docs/artifacts.md#the-session-doc)
+describes the Doc tab, comments, and the message that a person's edit sends.
 
 ## claude.ai connector
 
