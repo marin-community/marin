@@ -26,4 +26,3 @@ async def test_retry_backoff_is_exponential_capped_and_stops_after_budget(monkey
         await execution.retry_effect(RunCommand("true", 1), fail, lambda _: None)
     assert attempts == 9
     assert delays == [1, 2, 4, 8, 16, 32, 60, 60]
-
