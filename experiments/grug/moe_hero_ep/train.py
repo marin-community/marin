@@ -1430,7 +1430,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
-        state_callbacks.add_hook(lambda step_info: _log_hbm_diag("after_step", int(step_info.step)), every=1)
+        state_callbacks.add_hook(lambda step_info: _log_hbm_diag("after_step", int(step_info.step)), every=20)
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_hooks: list[Callable[..., None]] = []
