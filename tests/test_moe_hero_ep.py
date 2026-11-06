@@ -22,6 +22,8 @@ import levanter.grug.attention._fa4_cute as fa4_cute
 import numpy as np
 import optax
 import pytest
+import tensorstore as ts
+from levanter.tensorstore_serialization import _create_ocdbt_spec
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
@@ -1817,3 +1819,62 @@ def test_restore_of_a_temporary_checkpoint_at_the_stop_step_promotes_it_and_runs
 
     assert visits
     assert _committed_checkpoints(extension_run.checkpoint_root)[5].metadata["is_temporary"] is False
+
+
+def _stored_router_bias(checkpoint):
+    return _stored_leaf(checkpoint, "params/stacked_blocks/stacked/mlp/router_bias")
+
+
+def _stored_leaf(checkpoint, leaf):
+    spec = _create_ocdbt_spec(str(checkpoint), leaf)
+    return np.asarray(ts.open(spec, open=True, read=True).result().read().result())
+
+
+@pytest.mark.timeout(240)
+def test_frozen_router_bias_holds_the_restored_leaf_through_a_retry(extension_run, monkeypatch):
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    logging.getLogger(_EXTENSION_LOGGER).addHandler(handler)
+
+    def bias_metrics():
+        records = [json.loads(line) for line in stream.getvalue().splitlines() if line.startswith("{")]
+        logged = [(r["step"], r["metrics"]) for r in records if r["event"] == "log"]
+        applied = {s: m["moe_bias/applied_norm"] for s, m in logged if "moe_bias/applied_norm" in m}
+        solver = {s: m["moe_bias/solver_norm"] for s, m in logged if "moe_bias/solver_norm" in m}
+        return applied, solver
+
+    root = extension_run.checkpoint_root
+    try:
+        extension_run.run(stop_step=2)
+        assert bias_metrics() == ({}, {})  # off by default: no extra metrics
+
+        stored = _stored_router_bias(root / "step-2")
+        own_pending = _stored_leaf(root / "step-2", "pending_qb_betas")
+        assert not np.allclose(-own_pending, stored)  # the checkpoint's own pending betas are a different value
+
+        monkeypatch.setenv(train.FROZEN_ROUTER_BIAS_ENV, "2")
+        stream.seek(0)
+        stream.truncate()
+        extension_run.run(stop_step=4)
+        applied, solver = bias_metrics()
+        assert sorted(applied) == [2, 3]
+        assert applied[2] == pytest.approx(float(np.linalg.norm(stored)), rel=1e-6)
+        assert applied[3] == pytest.approx(applied[2], rel=1e-6)
+        assert sorted(solver) == [2, 3] and solver[2] != pytest.approx(applied[2], rel=1e-3)
+        np.testing.assert_allclose(_stored_router_bias(root / "step-4"), stored, atol=1e-6)
+        np.testing.assert_allclose(_stored_leaf(root / "step-4", "pending_qb_betas"), -stored, atol=1e-6)
+
+        # A retry from a later save keeps the frozen value rather than re-reading the leaf.
+        stream.seek(0)
+        stream.truncate()
+        extension_run.run(stop_step=5)
+        applied, _ = bias_metrics()
+        assert sorted(applied) == [4]
+        assert applied[4] == pytest.approx(float(np.linalg.norm(stored)), rel=1e-6)
+        np.testing.assert_allclose(_stored_router_bias(root / "step-5"), stored, atol=1e-6)
+
+        monkeypatch.setenv(train.FROZEN_ROUTER_BIAS_ENV, "6")
+        with pytest.raises(ValueError, match="precedes the frozen bias"):
+            extension_run.run(stop_step=6)
+    finally:
+        logging.getLogger(_EXTENSION_LOGGER).removeHandler(handler)

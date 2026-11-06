@@ -107,6 +107,7 @@ HERO_EP_RUNTIME_ENV = {
 GRAD_NORM_METRIC = "train/grad_norm"
 # 1.0 on steps where the global-norm clip rescaled the gradient; absent when clipping is off.
 GRAD_CLIPPED_METRIC = "train/grad_clipped"
+FROZEN_ROUTER_BIAS_ENV = "HERO_FROZEN_ROUTER_BIAS"
 DEFAULT_SLOP_FACTOR = 85
 # With the carry offload, host memory offloading (below) lets rematerialization count the offloaded
 # carry as host memory. Rematerialization and the scheduler both work within
@@ -1004,6 +1005,33 @@ def clip_by_total_norm(grads: PyTree, max_norm: float) -> ClippedGradients:
     return ClippedGradients(jax.tree.map(lambda g: g * scale.astype(g.dtype), grads), norm, clipped)
 
 
+def _frozen_router_bias_step() -> int | None:
+    """DIAGNOSTIC: the step whose stored router bias HERO_FROZEN_ROUTER_BIAS holds for the whole run, or None."""
+    value = os.environ.get(FROZEN_ROUTER_BIAS_ENV)
+    return None if value is None else int(value)
+
+
+def _freeze_router_bias(state: GrugTrainState, restored_step: int, freeze_step: int) -> GrugTrainState:
+    """DIAGNOSTIC: hold the checkpoint's stored ``params.router_bias`` as the applied bias.
+
+    Only the restore at ``freeze_step`` sets it. A later restore keeps its checkpoint's pending betas, which are
+    the frozen value already, so a retry from a temporary save stays frozen.
+    """
+    if restored_step < freeze_step:
+        raise ValueError(f"Restored step {restored_step} precedes the frozen bias's step {freeze_step}")
+    if restored_step == freeze_step:
+        bias = state.params.stacked_blocks.stacked.mlp.router_bias
+        pending = jax.device_put((-bias).astype(state.pending_qb_betas.dtype), state.pending_qb_betas.sharding)
+        state = dataclasses.replace(state, pending_qb_betas=pending)
+    logger.info(
+        "FROZEN-BIAS restored_step=%d freeze_step=%d pending_norm=%.4f",
+        restored_step,
+        freeze_step,
+        float(jnp.linalg.norm(state.pending_qb_betas)),
+    )
+    return state
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -1015,6 +1043,7 @@ def _make_train_step(
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
     balance_rows: bool = False,
+    frozen_router_bias: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -1095,6 +1124,11 @@ def _make_train_step(
         if offload_opt_state:
             opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
 
+        if frozen_router_bias:
+            solved = -metrics["qb_beta_per_layer"]
+            solved = solved - jnp.mean(solved, axis=-1, keepdims=True)
+            metrics["moe_bias/applied_norm"] = jnp.linalg.norm(qb_params.stacked_blocks.stacked.mlp.router_bias)
+            metrics["moe_bias/solver_norm"] = jnp.linalg.norm(solved)
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
@@ -1102,7 +1136,7 @@ def _make_train_step(
             master_params=master_params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=state.pending_qb_betas if frozen_router_bias else metrics["qb_beta_per_layer"],
         )
 
         return next_state, metrics, watch_stats
@@ -1206,6 +1240,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             balance_rows=config.trainer.balance_attention_rows,
         )
         inline_watch_config = None
+    frozen_bias_step = _frozen_router_bias_step()
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
@@ -1216,6 +1251,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
         balance_rows=config.trainer.balance_attention_rows,
+        frozen_router_bias=frozen_bias_step is not None,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1352,6 +1388,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         stop_step = config.stop_step
         restored_step = int(state.step)
         _check_restored_step(restored_step, stop_step)
+        if frozen_bias_step is not None:
+            state = _freeze_router_bias(state, restored_step, frozen_bias_step)
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=stop_step)
