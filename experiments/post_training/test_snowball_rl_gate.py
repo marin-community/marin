@@ -1131,6 +1131,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(
     monkeypatch.setattr(presets, "iris_client", lambda: nullcontext(client))
     native_job.started_at = None
     assert "grafana_links" not in status(preset, argv)["runs"][0]
+    native_job.started_at = Timestamp.from_ms(started)
     _json(source / "terminal.json", receipt)
     for step in (26, 28):
         (source / f"exports/metrics/step-{step:06d}.json").unlink()
