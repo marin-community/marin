@@ -11,6 +11,7 @@ All probabilities and clipping decisions in the correction are detached.
 from __future__ import annotations
 
 import math
+from typing import NamedTuple
 
 import numpy as np
 import torch
@@ -23,6 +24,13 @@ TAIL_MASS_FLOOR = 1e-6
 PROBABILITY_MASS_TOLERANCE = 1e-4
 
 
+class ScoreCenteringTerms(NamedTuple):
+    """Additive loss and detached head coefficients before advantage scaling."""
+
+    loss: torch.Tensor
+    head_coefficients: torch.Tensor
+
+
 def ppo_tis_score_centering_correction(
     current_topk_logprobs: torch.Tensor,
     old_topk_logprobs: torch.Tensor,
@@ -33,8 +41,12 @@ def ppo_tis_score_centering_correction(
     tis_cap: float,
     eps_clip_low: float,
     eps_clip_high: float,
-) -> torch.Tensor:
-    """Return the per-token term to add before the PPO loss reduction.
+) -> ScoreCenteringTerms:
+    """Return the per-token loss and detached head coefficients before advantages.
+
+    On loss-eligible positions, the loss derivative with respect to head logprobs
+    is ``advantages[..., None] * head_coefficients``. Coefficients already
+    integrate TIS and PPO clipping. The caller owns policy weights and reduction.
 
     The head contains exact full-vocabulary logprobs for the same top-k token
     IDs under all three policies. Outside the head, q and o are modeled as
@@ -102,8 +114,9 @@ def ppo_tis_score_centering_correction(
     )
     tail_coefficient = behavior_over_p * tail_tis_weight * tail_ppo_ratio * tail_active
     residual = head_coefficient - tail_coefficient.unsqueeze(-1) * current_mass
-    correction = advantages * (residual.detach() * current).sum(dim=-1)
-    return correction.masked_fill(~loss_mask.to(torch.bool), 0)
+    coefficients = residual.detach()
+    correction = advantages * (coefficients * current).sum(dim=-1)
+    return ScoreCenteringTerms(correction.masked_fill(~loss_mask.to(torch.bool), 0), coefficients)
 
 
 def collate_score_centering(

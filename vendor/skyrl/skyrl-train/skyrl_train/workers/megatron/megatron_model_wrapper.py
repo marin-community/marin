@@ -76,6 +76,7 @@ class MegatronForwardMicroBatch:
     ftpo_chosen_mask: torch.Tensor | None = None
     probe_row_indices: Optional[torch.Tensor] = None
     score_topk_indices: Optional[torch.Tensor] = None
+    score_probe_positions: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -504,6 +505,7 @@ class MegatronModelWrapper:
                 data.num_actions,
                 packed_seq_params,
                 data.score_topk_indices,
+                data.score_probe_positions,
             )
             result = {"scores": response.scores}
             if response.selected_logprobs is not None:
@@ -686,7 +688,7 @@ class MegatronModelWrapper:
                     tis_cap=score_centering_tis_cap(self.cfg.trainer.algorithm),
                     eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
                     eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
-                )
+                ).loss
 
             structural = None
             if data.ftpo is not None and data.ftpo.weights is not None:
