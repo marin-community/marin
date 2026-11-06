@@ -11,6 +11,7 @@ from marin.testing.inference import snowball
 from marin.testing.inference.snowball_position_parity import (
     MAX_LOGPROB_ERROR,
     MAX_P99_LOGPROB_ERROR,
+    MAX_TARGET_LOGPROB_ERROR,
     PAST_WINDOW_GROUP,
     PositionReference,
     ReferenceMetadata,
@@ -70,7 +71,9 @@ def _reference(cases: dict[str, list[int]]) -> PositionReference:
     )
 
 
-def _matching_scores(reference: PositionReference, offset: float = 0.0) -> dict[str, ScoredPositions]:
+def _matching_scores(
+    reference: PositionReference, offset: float = 0.0, target_offset: float = 0.0
+) -> dict[str, ScoredPositions]:
     scored = {}
     for case in reference.cases:
         grid = reference_id_grid(case, reference.metadata.top_k)
@@ -79,11 +82,23 @@ def _matching_scores(reference: PositionReference, offset: float = 0.0) -> dict[
             measured[position, : len(values)] = np.asarray(values) + offset
         scored[case.id] = ScoredPositions(
             case_id=case.id,
-            target_logprobs=np.asarray(case.target_logprobs),
-            top1_token_ids=np.asarray([ids[0] for ids in case.top_token_ids], dtype=np.int32),
+            target_logprobs=np.asarray(case.target_logprobs) + target_offset,
             reference_logprobs=measured,
         )
     return scored
+
+
+def _attention(reference: PositionReference, implementation: str = "torch_order") -> dict[str, str]:
+    return {case.id: implementation for case in reference.cases}
+
+
+def _failure_kinds(failures: list[str]) -> list[str]:
+    """``code: p99 abs target log-prob diff ...`` -> ``p99 target``."""
+    kinds = []
+    for failure in failures:
+        words = failure.split(":", 1)[1].split()
+        kinds.append(" ".join([words[0], *(["target"] if "target" in words else [])]))
+    return kinds
 
 
 def test_prompt_logprobs_keep_target_and_prune_improbable_tokens():
@@ -127,45 +142,52 @@ def test_reference_must_match_the_prompt_token_ids():
         check_reference_matches_prompts(reference, {"other-case-01": [1, 7, 8]})
 
 
-def test_matching_scores_pass_and_report_every_group():
+def test_matching_scores_pass_and_report_every_group_with_its_attention():
     reference = _reference({"code-humaneval-01": [1, 7, 8, 9], "long-longbench-01": [1] + [7] * 9})
-    stats = compare_positions(reference, _matching_scores(reference), sliding_window=4)
+    attention = {"code-humaneval-01": "torch_order", "long-longbench-01": "gpu_fa4_cute"}
+    stats = compare_positions(reference, _matching_scores(reference), attention, sliding_window=4)
 
     assert set(stats) == {"code", "long", PAST_WINDOW_GROUP} == expected_groups(reference, sliding_window=4)
     # Entries 3..8 of the long case predict tokens 4..9, past the window of 4.
     assert stats[PAST_WINDOW_GROUP].positions == 6
-    assert stats["code"].max_abs_logprob_diff == 0.0
+    assert stats["code"].max_abs_logprob_diff == stats["code"].max_abs_target_logprob_diff == 0.0
     assert stats["code"].top1_agree == stats["code"].positions == 3
+    assert stats["code"].attention_positions == {"torch_order": 3}
+    assert stats["long"].attention_positions == {"gpu_fa4_cute": 9}
     assert logprob_failures(stats, expected_groups=expected_groups(reference, sliding_window=4)) == []
 
 
-def test_logprob_gate_bounds_p99_and_max_and_fails_closed():
+def test_logprob_gate_bounds_top_k_and_target_p99_and_max():
     reference = _reference({"code-humaneval-01": [1, 7, 8, 9]})
     groups = expected_groups(reference)
 
-    small = compare_positions(reference, _matching_scores(reference, offset=MAX_P99_LOGPROB_ERROR / 2))
-    assert logprob_failures(small, expected_groups=groups) == []
+    def kinds(offset: float = 0.0, target_offset: float = 0.0) -> list[str]:
+        scored = _matching_scores(reference, offset=offset, target_offset=target_offset)
+        stats = compare_positions(reference, scored, _attention(reference))
+        return _failure_kinds(logprob_failures(stats, expected_groups=groups))
 
-    shifted = compare_positions(reference, _matching_scores(reference, offset=1.0))
-    assert [
-        failure.split(":")[1].strip().split(" ")[0] for failure in logprob_failures(shifted, expected_groups=groups)
-    ] == ["p99"]
-
-    far = compare_positions(reference, _matching_scores(reference, offset=MAX_LOGPROB_ERROR + 0.5))
-    failures = logprob_failures(far, expected_groups=groups)
-    assert any("p99" in failure for failure in failures) and any("max" in failure for failure in failures)
-
-    assert logprob_failures(small, expected_groups={*groups, "math"}) == ["math: no compared tokens"]
+    half = MAX_P99_LOGPROB_ERROR / 2
+    assert kinds(offset=half, target_offset=half) == []
+    assert kinds(offset=1.0) == ["p99"]
+    assert kinds(target_offset=1.0) == ["p99 target"]
+    assert kinds(offset=MAX_LOGPROB_ERROR + 0.5) == ["p99", "max"]
+    assert kinds(target_offset=MAX_TARGET_LOGPROB_ERROR + 0.5) == ["p99 target", "max target"]
 
 
-def test_unmeasured_reference_tokens_fail():
+def test_gate_fails_closed_on_missing_groups_unmeasured_tokens_and_non_finite_targets():
     reference = _reference({"code-humaneval-01": [1, 7, 8]})
+    stats = compare_positions(reference, _matching_scores(reference), _attention(reference))
+    assert logprob_failures(stats, expected_groups={"code", "math"}) == ["math: no compared tokens"]
+
     scored = _matching_scores(reference)
     scored["code-humaneval-01"].reference_logprobs[0, 1] = np.nan
-
-    stats = compare_positions(reference, scored)
-    assert stats["code"].missing == 1
-    assert logprob_failures(stats, expected_groups={"code"}) == ["code: 1 reference tokens not measured"]
+    scored["code-humaneval-01"].target_logprobs[1] = np.nan
+    stats = compare_positions(reference, scored, _attention(reference))
+    assert (stats["code"].missing, stats["code"].target_not_finite) == (1, 1)
+    assert logprob_failures(stats, expected_groups={"code"}) == [
+        "code: 1 reference tokens not measured",
+        "code: 1 target log-probs not finite",
+    ]
 
 
 def test_top1_disagreement_inside_a_near_tie_is_counted_separately():
@@ -175,9 +197,10 @@ def test_top1_disagreement_inside_a_near_tie_is_counted_separately():
         metadata=METADATA, cases=(case_reference_from_prompt_logprobs("math-gsm8k-01", token_ids, entries),)
     )
     scored = _matching_scores(reference)
-    scored["math-gsm8k-01"].top1_token_ids[0] = 8
+    # The backend prefers vLLM's second token.
+    scored["math-gsm8k-01"].reference_logprobs[0, :2] = (math.log(0.44), math.log(0.46))
 
-    stats = compare_positions(reference, scored)["math"]
+    stats = compare_positions(reference, scored, _attention(reference))["math"]
     assert (stats.top1_agree, stats.top1_near_tie, stats.top1_disagree) == (0, 1, 0)
 
 

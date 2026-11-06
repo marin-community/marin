@@ -7,11 +7,12 @@ The reference holds, for every representative prompt, vLLM's prompt log-probs at
 the actual next token and vLLM's top-k tokens. Entry ``j`` of a case is the distribution over token ``j + 1``
 given tokens ``0..j``, so a prompt of ``T`` tokens has ``T - 1`` entries.
 
-A scored backend reports, per entry, the log-prob of the actual next token, its own top-1 token and its log-prob
-at exactly vLLM's top-k ids. Every vLLM top-k token with probability above ``MIN_PROB`` is compared, in nats,
-wherever it falls in the backend's own ranking. Groups are the prompt categories (the case id's first word) and
-``past_window``, every position past the sliding window. The gate bounds each group's p99 and max absolute
-difference; target-token differences and top-1 agreement are reported, not gated.
+A scored backend reports, per entry, the log-prob of the actual next token and its log-prob at exactly vLLM's
+top-k ids. Every vLLM top-k token with probability above ``MIN_PROB`` is compared, in nats, wherever it falls in the
+backend's own ranking, and so is every target token. Groups are the prompt categories (the case id's first word)
+and ``past_window``, every position past the sliding window; each group records the attention implementation its
+positions ran under. The gate bounds each group's p99 and max absolute difference over top-k tokens and over
+target tokens. Top-1 agreement (the backend's best of vLLM's top-k against vLLM's top-1) is reported, not gated.
 """
 
 import hashlib
@@ -31,9 +32,14 @@ MIN_STORED_TOKENS = 2
 NEAR_TIE = 0.1
 SLIDING_WINDOW = 2048
 PAST_WINDOW_GROUP = "past_window"
-# Thresholds of the identity recipe's pre-registered precision gate, in nats.
+# Provisional, in nats: the identity recipe's t310 precision probe, measured on Snowball v0.1 with its own prompts.
+# They must be re-set from an ablation on this check: the all-on settings run twice for the noise floor, then one
+# run per precision fix turned off (snowball_training_parity.TrainingForwardSettings). Every fix-off run must fail
+# the new limits. The target-token limits reuse the top-k ones until then.
 MAX_P99_LOGPROB_ERROR = 0.70
 MAX_LOGPROB_ERROR = 3.5
+MAX_P99_TARGET_LOGPROB_ERROR = MAX_P99_LOGPROB_ERROR
+MAX_TARGET_LOGPROB_ERROR = MAX_LOGPROB_ERROR
 
 
 @dataclass(frozen=True)
@@ -86,7 +92,6 @@ class ScoredPositions:
 
     case_id: str
     target_logprobs: np.ndarray
-    top1_token_ids: np.ndarray
     reference_logprobs: np.ndarray
 
 
@@ -103,6 +108,9 @@ class GroupStats:
     top1_agree: int
     top1_near_tie: int
     top1_disagree: int
+    target_not_finite: int
+    attention_positions: dict[str, int]
+    """Positions per attention implementation."""
 
 
 def token_ids_sha256(token_ids: Sequence[int]) -> str:
@@ -238,12 +246,15 @@ def quantile(values: Sequence[float], q: float) -> float:
 def compare_positions(
     reference: PositionReference,
     scored: Mapping[str, ScoredPositions],
+    attention_by_case: Mapping[str, str],
     *,
     sliding_window: int = SLIDING_WINDOW,
 ) -> dict[str, GroupStats]:
     """Per group: absolute log-prob differences over vLLM's top-k tokens above ``MIN_PROB``, target-token
-    differences, and top-1 agreement. A NaN backend score at a reference id counts as missing."""
-    if scored.keys() != {case.id for case in reference.cases}:
+    differences, and top-1 agreement. A NaN backend score at a reference id counts as missing; a non-finite
+    target score is counted separately. ``attention_by_case`` names the attention each case ran under."""
+    case_ids = {case.id for case in reference.cases}
+    if scored.keys() != case_ids or attention_by_case.keys() != case_ids:
         raise ValueError("The backend scored a different case set than the reference")
     floor = math.log(reference.metadata.min_prob)
     diffs: dict[str, list[float]] = defaultdict(list)
@@ -252,17 +263,18 @@ def compare_positions(
     for case in reference.cases:
         ours = scored[case.id]
         expected_shape = (case.num_entries,)
-        if ours.target_logprobs.shape != expected_shape or ours.top1_token_ids.shape != expected_shape:
+        if ours.target_logprobs.shape != expected_shape or ours.reference_logprobs.shape[0] != case.num_entries:
             raise ValueError(f"{case.id}: backend scores have the wrong number of entries")
-        if ours.reference_logprobs.shape[0] != case.num_entries:
-            raise ValueError(f"{case.id}: backend reference log-probs have the wrong number of entries")
         for position in range(case.num_entries):
             # Entry j predicts token j + 1.
             groups = [case_group(case.id)]
             if position + 1 >= sliding_window:
                 groups.append(PAST_WINDOW_GROUP)
-            ids, values = case.top_token_ids[position], case.top_logprobs[position]
-            if int(ours.top1_token_ids[position]) == ids[0]:
+            values = case.top_logprobs[position]
+            measured_row = ours.reference_logprobs[position, : len(values)]
+            if np.all(np.isnan(measured_row)):
+                outcome = "top1_disagree"
+            elif int(np.nanargmax(measured_row)) == 0:
                 outcome = "top1_agree"
             elif len(values) > 1 and values[0] - values[1] < NEAR_TIE:
                 outcome = "top1_near_tie"
@@ -277,13 +289,17 @@ def compare_positions(
                     missing += 1
                     continue
                 position_diffs.append(abs(measured - value))
-            target_diff = abs(float(ours.target_logprobs[position]) - case.target_logprobs[position])
+            target = float(ours.target_logprobs[position])
             for group in groups:
                 counts[group]["positions"] += 1
                 counts[group][outcome] += 1
                 counts[group]["missing"] += missing
+                counts[group][f"attention:{attention_by_case[case.id]}"] += 1
                 diffs[group].extend(position_diffs)
-                target_diffs[group].append(target_diff)
+                if math.isfinite(target):
+                    target_diffs[group].append(abs(target - case.target_logprobs[position]))
+                else:
+                    counts[group]["target_not_finite"] += 1
     return {
         group: GroupStats(
             positions=counts[group]["positions"],
@@ -297,6 +313,12 @@ def compare_positions(
             top1_agree=counts[group]["top1_agree"],
             top1_near_tie=counts[group]["top1_near_tie"],
             top1_disagree=counts[group]["top1_disagree"],
+            target_not_finite=counts[group]["target_not_finite"],
+            attention_positions={
+                key.removeprefix("attention:"): count
+                for key, count in sorted(counts[group].items())
+                if key.startswith("attention:")
+            },
         )
         for group in sorted(counts)
     }
@@ -308,8 +330,11 @@ def logprob_failures(
     expected_groups: Iterable[str],
     max_p99: float = MAX_P99_LOGPROB_ERROR,
     max_abs: float = MAX_LOGPROB_ERROR,
+    max_target_p99: float = MAX_P99_TARGET_LOGPROB_ERROR,
+    max_target_abs: float = MAX_TARGET_LOGPROB_ERROR,
 ) -> list[str]:
-    """Every gate failure; empty is a pass. Fail closed: a missing group, an unmeasured token or a NaN fails."""
+    """Every gate failure; empty is a pass. Fail closed: a missing group, an unmeasured token, a non-finite target
+    score or a NaN statistic fails."""
 
     def within(value: float, limit: float) -> bool:
         return value <= limit  # NaN fails
@@ -326,6 +351,16 @@ def logprob_failures(
             failures.append(f"{group}: p99 abs log-prob diff {group_stats.p99_abs_logprob_diff:.4f} > {max_p99}")
         if not within(group_stats.max_abs_logprob_diff, max_abs):
             failures.append(f"{group}: max abs log-prob diff {group_stats.max_abs_logprob_diff:.4f} > {max_abs}")
+        if group_stats.target_not_finite:
+            failures.append(f"{group}: {group_stats.target_not_finite} target log-probs not finite")
+        if not within(group_stats.p99_abs_target_logprob_diff, max_target_p99):
+            failures.append(
+                f"{group}: p99 abs target log-prob diff {group_stats.p99_abs_target_logprob_diff:.4f} > {max_target_p99}"
+            )
+        if not within(group_stats.max_abs_target_logprob_diff, max_target_abs):
+            failures.append(
+                f"{group}: max abs target log-prob diff {group_stats.max_abs_target_logprob_diff:.4f} > {max_target_abs}"
+            )
     return failures
 
 
