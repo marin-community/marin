@@ -608,17 +608,7 @@ class TaggedEvaluator(Generic[Ex, M]):
             state = self.accum_for_batch(model, state, batch, tags)
 
         micro_avg_loss = state.token_avg_loss.mean.item()
-        tag_avg_loss = state.loss_per_tag.mean
-        scored_tags = state.loss_per_tag.total > 0
-        macro_avg_loss = jnp.mean(tag_avg_loss, where=scored_tags).item()
-
-        if self.bytes_per_token is not None:
-            micro_bpb = state.bpb.mean.item()
-            tag_avg_bpb = state.bpb_per_tag.mean
-            macro_avg_bpb = jnp.mean(tag_avg_bpb, where=scored_tags).item()
-        else:
-            micro_bpb = None
-            macro_avg_bpb = None
+        micro_bpb = state.bpb.mean.item() if self.bytes_per_token is not None else None
 
         tag_macro_loss: dict[str, float] = {}
         tag_micro_loss: dict[str, float] = {}
@@ -629,6 +619,13 @@ class TaggedEvaluator(Generic[Ex, M]):
         total_tokens_per_tag_cpu = np.array(state.loss_per_tag.total)
         mean_bits_per_tag_cpu = np.array(state.bpb_per_tag.mean)
         total_bytes_per_tag_cpu = np.array(state.bpb_per_tag.total)
+
+        # A tag with no scored tokens has no loss. Keep it out of the macros and the logged series.
+        scored_tags = total_tokens_per_tag_cpu > 0
+        macro_avg_loss = float(np.mean(mean_loss_per_tag_cpu, where=scored_tags))
+        macro_avg_bpb = None
+        if self.bytes_per_token is not None:
+            macro_avg_bpb = float(np.mean(mean_bits_per_tag_cpu, where=scored_tags))
 
         for parent, children in self.hierarchy.items():
             mask = np.zeros(self.dataset.num_tags, dtype=bool)
@@ -643,6 +640,8 @@ class TaggedEvaluator(Generic[Ex, M]):
                 tag_micro_bpb[parent] = np.average(mean_bits_per_tag_cpu, weights=total_bytes_per_tag_cpu * mask)
 
         for tag, index in self.dataset.tag_to_index.items():
+            if not scored_tags[index]:
+                continue
             tag_micro_loss[tag] = float(mean_loss_per_tag_cpu[index])
             if self.bytes_per_token is not None:
                 tag_micro_bpb[tag] = float(mean_bits_per_tag_cpu[index])
