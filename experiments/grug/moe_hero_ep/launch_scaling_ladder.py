@@ -7,7 +7,8 @@ Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden
 hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
 Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
 and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
-rung predicts the d6144 hero. ``d6144`` is the hero itself.
+rung predicts the d6144 hero. ``d6144`` is the hero itself, which also moves to longer context, CP4 x EP16, the
+long-context mix and a schedule extension over its last phases.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
