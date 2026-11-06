@@ -421,8 +421,10 @@ def _validate_control_panel_steps(
 def _control_panel_runs(preset: presets.Preset, panel: str) -> SnowballRun:
     evaluation_preset = presets.rescore_preset(preset, panel)
     selection = presets.selection_artifact(panel)
-    pins = snowball_rl_gate.control_pins(preset.name)
     evaluation = evaluation_preset.evaluations[0]
+    if presets.selection_summary(selection)["grader_kind_counts"][evaluation.file].get(GraderKind.REMOTE_JUDGE, 0):
+        raise click.BadParameter("Snowball evaluation selections must contain no AI-judge-graded tasks")
+    pins = snowball_rl_gate.control_pins(preset.name)
     steps, protocols, names = [], [], []
     for pin in pins:
         original_preset = presets.PRESETS[pin.preset]

@@ -1181,6 +1181,9 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
             selected, requirements=("test_panel/mean>=control",), baselines=(f"{candidate}@{presets.PRESET_REVISION}",)
         )
         assert rescore(preset, "--leave-out", "r0")["verdict"] == "pass"
+        bounded = rescore(preset, "--leave-out", "r0", "--require", "test_panel/mean>=0.9")
+        assert bounded["verdict"] == "fail", bounded
+        assert any(row["name"] == "require/test_panel/mean" and not row["holds"] for row in bounded["invariants"])
         if preset == "learning-medium":
             data_candidate = "users/test/data-new-panel"
             recorded_runs(presets.PRESETS["data-medium"], data_candidate, score=0.495)
@@ -1188,7 +1191,19 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         first = receipts[0]
         terminal = json.loads((first / "terminal.json").read_text())
         for index, fault in enumerate(
-            ("model", "tokenizer", "control", "protocol", "file", "panel", "failed", "incomplete")
+            (
+                "model",
+                "tokenizer",
+                "control",
+                "missing_model",
+                "missing_tokenizer",
+                "missing_control",
+                "protocol",
+                "file",
+                "panel",
+                "failed",
+                "incomplete",
+            )
         ):
             broken = json.loads(json.dumps(terminal))
             broken["config"]["run"]["attempt_id"] = f"fault-{index}"
@@ -1198,6 +1213,12 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
                 broken["config"]["inputs"]["model"]["tokenizer_revision"] = "wrong"
             elif fault == "control":
                 broken["config"]["run"]["id"] = "another-control"
+            elif fault == "missing_model":
+                del broken["config"]["inputs"]["model"]
+            elif fault == "missing_tokenizer":
+                del broken["config"]["inputs"]["model"]["tokenizer_revision"]
+            elif fault == "missing_control":
+                del broken["config"]["run"]["id"]
             elif fault == "protocol":
                 broken["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 1
             elif fault == "file":
@@ -1239,6 +1260,28 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
             )
             assert refused.exit_code == 2, (refused.output, refused.exception)
             assert str(pin.runs - 1) in refused.output and "retained HF weights" in refused.output
+            _json(originals[-1] / "retained-hf/config.json", {})
+            summary_path = Path(presets.selection_artifact(new_panel).path()) / "summary.json"
+            summary = json.loads(summary_path.read_text())
+            summary["grader_kind_counts"]["full_validation"]["remote_judge"] = 1
+            _json(summary_path, summary)
+            judged = CliRunner().invoke(
+                snowball.main,
+                [
+                    "--preset",
+                    preset,
+                    "--version",
+                    presets.PRESET_REVISION,
+                    "--control",
+                    "--rescore-panel",
+                    new_panel,
+                    "--run",
+                ],
+            )
+            assert judged.exit_code == 2 and "no AI-judge-graded tasks" in judged.output, (
+                judged.output,
+                judged.exception,
+            )
         assert all((root / filename).read_bytes() == content for (root, filename), content in original_bytes.items())
         return
     monkeypatch.setenv("WANDB_ENTITY", "planned-team")

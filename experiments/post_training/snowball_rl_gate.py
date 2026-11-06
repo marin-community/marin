@@ -661,31 +661,31 @@ def _load_control(
         raise InvalidComparison(f"control {path} has no successful re-score for panel {evaluation.source}: {selected}")
     if rescored.config != read_skyrl_launch_config(selected):
         raise InvalidComparison(f"panel re-score receipt and resolved config differ: {selected}")
-    record = presets.artifact_record(path)
-    model = original.config["inputs"]["model"]
-    if not original_preset.recipe.layout.role_plan.generate_only:
-        model = {
-            "identity": f"{record.name}@{record.version}",
-            **{key: record.result[key] for key in ("tokenizer_uri", "tokenizer_revision")},
-            "uri": record.result["hf_model_uri"],
-        }
-    actual = rescored.config["inputs"]["model"]
-    if actual["identity"].partition(":")[0] != model["identity"].partition(":")[0] or any(
-        actual[key] != model[key] for key in ("uri", "tokenizer_uri", "tokenizer_revision")
-    ):
-        raise InvalidComparison(f"panel re-score model or tokenizer differs from control {path}: {selected}")
-    expected_name = presets.control_panel_name(record.name, record.version, evaluation.source)
-    if rescored.config["run"]["id"] != f"{expected_name}-{presets.PRESET_REVISION}":
-        raise InvalidComparison(f"panel re-score names another control or panel: {selected}")
-    evaluation_preset = presets.rescore_preset(preset, evaluation.source)
     try:
+        record = presets.artifact_record(path)
+        model = original.config["inputs"]["model"]
+        if not original_preset.recipe.layout.role_plan.generate_only:
+            model = {
+                "identity": f"{record.name}@{record.version}",
+                **{key: record.result[key] for key in ("tokenizer_uri", "tokenizer_revision")},
+                "uri": record.result["hf_model_uri"],
+            }
+        actual = rescored.config["inputs"]["model"]
+        if actual["identity"].partition(":")[0] != model["identity"].partition(":")[0] or any(
+            actual[key] != model[key] for key in ("uri", "tokenizer_uri", "tokenizer_revision")
+        ):
+            raise InvalidComparison(f"panel re-score model or tokenizer differs from control {path}: {selected}")
+        expected_name = presets.control_panel_name(record.name, record.version, evaluation.source)
+        if rescored.config["run"]["id"] != f"{expected_name}-{presets.PRESET_REVISION}":
+            raise InvalidComparison(f"panel re-score names another control or panel: {selected}")
+        evaluation_preset = presets.rescore_preset(preset, evaluation.source)
         protocol = presets.panel_settings(original_preset, original.config)
         if presets.panel_settings(evaluation_preset, rescored.config) != protocol:
             raise InvalidComparison(
                 f"panel re-score changes evaluation or engine settings for control {path}: {selected}"
             )
         panel = _load_run(selected, evaluation_preset, rates)
-    except (KeyError, ValueError) as error:
+    except (KeyError, TypeError, ValueError) as error:
         raise InvalidComparison(f"invalid panel re-score for control {path}: {selected}: {error}") from error
     prefix = evaluation.name + "/"
     native_prefix = (
@@ -722,9 +722,11 @@ def _load_comparison_run(
 ) -> RunData:
     for pin in control_pins(preset.name):
         if path in {_control_path(preset, pin, index) for index in range(pin.runs)}:
-            candidate = _load_control(path, pin, preset, rates, inputs, panel_paths=panel_paths)
+            candidate = _load_control(
+                path, pin, preset, rates, replace(inputs, requirements=()), panel_paths=panel_paths
+            )
             _check_control(candidate, pin)
-            return candidate
+            return _with_requirements(candidate, inputs.requirements)
     return _load_run(path, preset, rates, inputs)
 
 

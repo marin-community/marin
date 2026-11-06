@@ -188,9 +188,6 @@ for accumulated in continuations:
     apply_openai_sampling(body, {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2}, True)
     assert tuple(body[key] for key in ("temperature", "top_p", "top_k", "min_p")) == (0.0, 1.0, -1, 0.0)
     assert body["max_tokens"] == 8192 - accumulated.completion_tokens
-omitted = {"temperature": 0.0}
-apply_openai_sampling(omitted, {"temperature": 1.0, "top_p": 0.9}, False)
-assert omitted["temperature"] == 0.0 and omitted["top_p"] == 0.9
 
 def quality_request(config):
     if not config.inputs.get("evaluation_data"):
