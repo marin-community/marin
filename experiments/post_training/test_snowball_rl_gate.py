@@ -1071,7 +1071,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(
     assert all(key in markdown for key in timers)
     publication_transport.fail_readback = True
     assert rescore(preset, "--candidate", built.runs[0].name)["run"] == report["run"]
-    summaries = {path: path.read_bytes() for path in tmp_path.rglob("loop-result.json")}
+    summaries = {path: path.read_bytes() for path in tmp_path.rglob("loop-result.json") if "/result/" in str(path)}
     assert len(summaries) == len(publication_transport.rows) == 1
     assert not list(tmp_path.rglob("publication.json"))
     assert rescore(preset, "--candidate", built.runs[0].name)["run"] == report["run"]
@@ -1369,14 +1369,14 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         assert len(first_group) == 2
         assert all(publication_transport.rows[key]["verdict"] == snapshot["verdict"] for key in first_group)
         earlier = {path: path.read_bytes() for path in Path(source).parent.parent.rglob("loop-result.json")}
-        retried = sources[1]
-        for filename in ("terminal.json", "resolved-launch.yaml"):
-            path = retried / filename
-            value = json.loads(path.read_text())
-            value["config"]["run"]["attempt_id"] = "second-attempt"
-            _json(path, value)
-        for path in (retried / "exports/metrics").glob("step-*.json"):
-            _json(path, json.loads(path.read_text()) | {"attempt_id": "second-attempt"})
+        recorded_runs(
+            preset,
+            built.runs[1].name,
+            score=0.495,
+            initial_score=0.2,
+            fingerprint=built.runs[1].fingerprint(),
+            attempt_id="second-attempt",
+        )
         pending = status(preset_name, ["--replicates", "2"])
         assert "report" not in pending and "verdict" not in pending
         assert all("rl_progress_url" not in row for row in pending["runs"])
