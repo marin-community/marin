@@ -101,3 +101,25 @@ and 305 unique, structurally accepted TaskSpecs. Structural acceptance establish
 buildability and deterministic control validity only; it is not scientific review,
 rights approval, solver calibration, training approval, or release approval. The
 snapshot remains `internal_unreviewed_do_not_publish`.
+
+## GLM OpenAI-compatible solver calibration
+
+`calibrate_glm_v1.py` runs frozen TaskSpecs through RolloutEngine's generic
+OpenAI-compatible chat transport and the ShellSim shell/filesystem harness. The
+runner is deliberately provider-neutral: a later OpenRouter panel changes only
+the endpoint, API key, and model identifier. The frozen v2 calibration is at:
+
+```text
+s3://marin-us-east-02a/marin4sc/taskforge/task-library/
+  campaigns/biotasks/combined/v1/calibration/
+    glm-5.3-openai-shellsim-v2/snapshots/complete-1/
+```
+
+GLM-5.3 solved 182 of 305 tasks (59.7%). Of 291 trials that reached the grader,
+182 were correct, 49 returned valid but incorrect JSON, and 60 violated the
+required bare-JSON submission format. Fourteen trials ended before a grade: eight
+hit the per-turn generation limit, five exhausted the eight-turn interaction
+budget, and one exhausted ShellSim CPU after choosing an exponential algorithm.
+These are ordinary single-trial model results, not evidence that the fourteen
+TaskSpecs are structurally invalid. ShellSim results must remain separate from
+future gVisor or other execution-backend populations.

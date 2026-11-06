@@ -54,6 +54,7 @@ def main() -> None:
     compact = []
     sources: dict[str, list[dict[str, Any]]] = defaultdict(list)
     grade_statuses: Counter[str] = Counter()
+    ungraded_causes: Counter[str] = Counter()
     for row in results:
         trial = row["trial"]
         task_record = task_records[row["task_id"]]
@@ -62,7 +63,10 @@ def main() -> None:
         grade_status = "ungraded"
         if row["attempts"]:
             grade_status = row["attempts"][-1].get("grade", {}).get("status", "ungraded")
-        grade_statuses[grade_status] += 1
+        if trial["status"] == "graded":
+            grade_statuses[grade_status] += 1
+        else:
+            ungraded_causes[str(trial.get("cause", "unknown"))] += 1
         compact.append(
             {
                 "task_id": row["task_id"],
@@ -99,7 +103,8 @@ def main() -> None:
         "graded": graded,
         "ungraded": len(results) - graded,
         "graded_accuracy": correct / graded,
-        "grade_statuses": dict(sorted(grade_statuses.items())),
+        "graded_result_statuses": dict(sorted(grade_statuses.items())),
+        "ungraded_causes": dict(sorted(ungraded_causes.items())),
         "stop_reasons": dict(sorted(Counter(row["trial"]["stop_reason"] for row in results).items())),
         "tokens": {
             "input_total": sum(tokens_in),
