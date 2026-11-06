@@ -1312,8 +1312,9 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         assert refused.exit_code == 2, (refused.output, refused.exception)
         payload = json.loads(refused.output)
         assert payload["preset"] == preset and payload["verdict"] == "invalid"
+        control_preset = "learning-long" if preset == "data-long" else preset
         assert payload["reason"].endswith(
-            f"python -m experiments.post_training.snowball_rl --preset {'learning-long' if preset == 'data-long' else preset} "
+            f"python -m experiments.post_training.snowball_rl --preset {control_preset} "
             f"--version {presets.PRESET_REVISION} --control --replicates 4 --run"
         )
         assert presets.PRESET_REVISION in payload["reason"]
