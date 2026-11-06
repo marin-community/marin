@@ -33,6 +33,19 @@ def key():
     return jax.random.PRNGKey(42)
 
 
+@pytest.mark.parametrize(
+    "stage_weights",
+    [
+        {"present": 0.5, "missing": 0.5},
+        [(0, {"present": 1.0}), (10, {"present": 0.5, "missing": 0.5})],
+    ],
+    ids=["initial", "later-stage"],
+)
+def test_missing_weighted_source_raises_instead_of_dropping_its_samples(stage_weights):
+    with pytest.raises(ValueError, match="Weighted datasets are missing.*missing"):
+        MixtureDataset({"present": ListAsyncDataset([1, 2, 3])}, stage_weights, 10, key=key())
+
+
 @pytest.mark.asyncio
 async def test_integer_allocation_does_not_repeat_or_omit_examples():
     block_size = 64_000

@@ -132,6 +132,13 @@ def _stage_weights(
     return sorted(stages.items())
 
 
+def validation_components(ctx: StepContext, validation: Sequence[ArtifactStep[TokenizedCache]]) -> dict:
+    """Return the held-out components, by name, which train at zero weight."""
+    if ctx.is_fingerprint:
+        return {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
+    return {item.name: ctx.resolved(item).as_component() for item in validation}
+
+
 def harrier_mix_2026_08_18_data_config(
     *,
     ctx: StepContext,
@@ -167,10 +174,7 @@ def harrier_mix_2026_08_18_data_config(
         )
         for cell in available_tokens
     }
-    if ctx.is_fingerprint:
-        val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
-    else:
-        val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
+    val_components = validation_components(ctx, validation)
     collisions = components.keys() & val_components.keys()
     if collisions:
         raise ValueError(f"validation components collide with Harrier buckets: {sorted(collisions)}")

@@ -17,7 +17,7 @@ use crate::indices::cache::IndexCache;
 use crate::indices::exact::ExactSection;
 use crate::indices::format::{BundleHeader, SectionKind};
 use crate::indices::group_extrema::{GroupExtremaConfig, GroupExtremaSection};
-use crate::indices::input::{BundleInput, ObjectInputs};
+use crate::indices::input::{BundleInput, IndexReadScope, ObjectInputs};
 use crate::indices::trigram::ColumnIndex;
 use crate::indices::{write_index_artifacts, SegmentIndexConfig, TrigramCoverage};
 use crate::store::object_store::{ObjectReference, ObjectStore};
@@ -206,6 +206,61 @@ impl IndexRegistry {
     ) -> Option<(TrigramCoverage, Arc<ColumnIndex>)> {
         self.cache
             .get_trigram(&self.input(&opened.bundle_path), &opened.header, column)
+    }
+
+    pub(crate) async fn open_summary_async(
+        &self,
+        artifacts: &LocalArtifacts,
+        scope: &IndexReadScope,
+    ) -> Option<OpenedIndexSummary> {
+        let Some(bundle_path) = artifacts.bundle.clone() else {
+            scope
+                .stats
+                .missing_bundle
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        };
+        let source_id = uuid::Uuid::parse_str(artifacts.binding.segment_uuid.as_deref()?).ok()?;
+        let row_count = u64::try_from(artifacts.binding.row_count).ok()?;
+        let header = self
+            .cache
+            .get_header_async(&self.input(&bundle_path), source_id, row_count, scope)
+            .await?;
+        Some(OpenedIndexSummary {
+            bundle_path,
+            header,
+        })
+    }
+
+    pub(crate) async fn summary_trigram_async(
+        &self,
+        opened: &OpenedIndexSummary,
+        column: &str,
+        scope: &IndexReadScope,
+    ) -> Option<(TrigramCoverage, Arc<ColumnIndex>)> {
+        self.cache
+            .get_trigram_async(
+                &self.input(&opened.bundle_path),
+                &opened.header,
+                column,
+                scope,
+            )
+            .await
+    }
+
+    pub(crate) async fn summary_exact_async(
+        &self,
+        opened: &OpenedIndexSummary,
+        scope: &IndexReadScope,
+    ) -> Option<Arc<ExactSection>> {
+        self.cache
+            .get_exact_async(
+                &self.input(&opened.bundle_path),
+                &opened.header,
+                SectionKind::ExactPostings,
+                scope,
+            )
+            .await
     }
 
     /// The local covering-projection file `name` resolves to for the segment at
