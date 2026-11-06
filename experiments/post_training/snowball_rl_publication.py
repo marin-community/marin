@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -22,9 +21,6 @@ from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.inventory.loop_publication import LoopPublication, summary_publication
 from experiments.post_training.inventory.loop_result import RESULT_FILENAME
 from experiments.post_training.inventory.publish_loop_result import RunSummary
-
-if TYPE_CHECKING:
-    from experiments.post_training.snowball_rl_gate import GateReport
 
 
 def _snowball_record(path: str, native: tuple[str, str]) -> dict:
@@ -74,10 +70,12 @@ def _retain_snowball_summary(training_path: str, training_version: str, gate_pat
     if not presets.published(preset):
         raise ValueError("Snowball publication requires a trained panel run")
     evaluation = next(item for item in preset.evaluations if item.harness == presets.EvalHarness.PANEL)
-    default = presets.default_selection()
-    expected_tasks = (
-        presets.evaluation_answer_count(evaluation, evaluation.tasks(default, default)) // evaluation.answers
-    )
+    sources = scoring.recorded_sources(launch, evaluation.name)
+    expected_tasks = 0
+    for source in sources:
+        name, _, version = source["identity"].partition(":")[0].rpartition("@")
+        selection = ArtifactStep.adopt(name, version, source["uri"])
+        expected_tasks += presets.evaluation_answer_count(evaluation, selection) // evaluation.answers
     metrics = {}
     for path in scoring.paths(StoragePath(training_path) / "exports/metrics/step-*.json"):
         row = json.loads(presets.read_text(path))
@@ -108,9 +106,7 @@ def _retain_snowball_summary(training_path: str, training_version: str, gate_pat
         "min_scored_fraction": presets.MINIMUM_PANEL_COVERAGE if report is not None else 1.0,
         "evaluation": {
             "name": evaluation.name,
-            "version": "; ".join(
-                source["identity"].partition(":")[0] for source in scoring.recorded_sources(launch, evaluation.name)
-            ),
+            "version": "; ".join(source["identity"].partition(":")[0] for source in sources),
             "task_count": expected_tasks,
             "task_set_sha256": None,
             "protocol_sha256": None,
@@ -131,7 +127,7 @@ def _retain_snowball_summary(training_path: str, training_version: str, gate_pat
 
 
 def publication_step(
-    training: ArtifactStep[SkyRLRun] | ArtifactStep[Artifact], *, gate: ArtifactStep[GateReport] | None = None
+    training: ArtifactStep[SkyRLRun] | ArtifactStep[Artifact], *, gate: ArtifactStep | None = None
 ) -> ArtifactStep[LoopPublication]:
     """Publish the recorded attempt using its saved gate or train-long result."""
     name = gate.name if gate is not None else training.name

@@ -41,11 +41,9 @@ def result_record():
 class ReportTransport:
     def __init__(self):
         self.rows = {}
-        self.requests = []
         self.fail_readback = False
 
     def __call__(self, origin, method, path, *, json_body=None):
-        self.requests.append((origin, method, path))
         if path.startswith("/api/marina/applets/"):
             return {"authenticated_url": f"https://applets.marina.oa.dev/a/{publication.APPLET_ID}/"}
         if method == "POST":

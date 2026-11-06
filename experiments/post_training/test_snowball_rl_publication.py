@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Snowball publication consumes real raw attempt records at a fake native edge."""
-
 import json
 from contextlib import nullcontext
 from dataclasses import replace
@@ -68,6 +66,17 @@ def test_snowball_publication_retries_reuse_native_attempt_and_retained_summary(
             record_path.write_bytes(saved)
         launch = json.loads((output / "resolved-launch.yaml").read_text())["config"]
         launch["run"] = {"id": config.run_id, "attempt_id": config.attempt_id}
+        # Retain another versioned cohort; the current default's count is a decoy.
+        panel = output / "recorded-panel"
+        panel.mkdir(exist_ok=True)
+        default = presets.default_selection()
+        original_panel = preset.evaluations[0].tasks(default, default)
+        original_summary = presets.selection_summary(original_panel)
+        write_json(panel / "summary.json", original_summary | {"validation_rows": 120})
+        (panel / presets.TASK_MANIFEST_FILENAME).write_bytes(
+            (Path(original_panel.path()) / presets.TASK_MANIFEST_FILENAME).read_bytes()
+        )
+        launch["inputs"]["validation_data"][0].update(uri=str(panel), identity="test/recorded-panel@2")
         write_json(
             output / "terminal.json",
             {
@@ -225,7 +234,8 @@ def test_snowball_publication_retries_reuse_native_attempt_and_retained_summary(
     assert stored["baseline"] == {"reward": 0.01, "attempted": 100, "scored": 100}
     assert stored["final"] == {"reward": 0.5, "attempted": 100, "scored": 100}
     assert stored["wandb_url"].endswith("/native-1")
-    assert stored["evaluation"]["task_count"] == 100
+    assert stored["evaluation"]["task_count"] == 120
+    assert stored["evaluation"]["version"] == "test/recorded-panel@2"
     identities = {published.attempt_id}
     for index, kind in enumerate(("98", "missing", "stale", "foreign", "nonfinite"), 2):
         scenario["kind"] = kind

@@ -197,10 +197,10 @@ def test_snowball_attempt_record_keeps_native_status_and_current_attempt_identit
     monkeypatch.setattr(loop_result, "run_skyrl", train)
     if scenario == "write-failure":
 
-        def refuse(*args, **kwargs):
+        def refuse(self, content, **kwargs):
             raise OSError("attempt record write failed")
 
-        monkeypatch.setattr(loop_result, "_write_result", refuse)
+        monkeypatch.setattr(loop_result.StoragePath, "write_text", refuse)
         assert loop_result.run_loop(run_config).iris_job_id == "/tests/current-job"
         return
     if scenario == "failed":

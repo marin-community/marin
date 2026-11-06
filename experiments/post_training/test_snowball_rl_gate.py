@@ -1159,6 +1159,22 @@ def test_built_gate_and_rescore_share_inputs_and_status(
     receipt["result"]["provenance"]["command_line"] += ["--baseline", baseline]
     _json(source / "terminal.json", receipt)
     recovered = rescore(preset, "--candidate", built.runs[0].name)
+    if preset == "learning-medium":
+        original_read = gate.read_skyrl_launch_receipt
+        source_reads = []
+
+        def publication_receipt(path):
+            if str(path) == str(source):
+                source_reads.append(path)
+                if len(source_reads) == 3:
+                    raise OSError("publication receipt storage unavailable")
+            return original_read(path)
+
+        with monkeypatch.context() as unavailable_receipt:
+            unavailable_receipt.setattr(gate, "read_skyrl_launch_receipt", publication_receipt)
+            saved = rescore(preset, "--candidate", built.runs[0].name)
+        assert len(source_reads) == 3
+        assert saved["report"] == recovered["report"] and saved["verdict"] == recovered["verdict"]
     assert recovered["run"]["baselines"] == [baseline] and recovered["vs_baseline"]
     assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
     if preset == "learning-medium":
@@ -1273,6 +1289,7 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("learning-child", 0),
         ("train-child", 0),
         ("control", 0),
+        ("learning-control", 0),
         ("generate", 0),
     ],
 )
@@ -1283,7 +1300,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     monkeypatch.setenv("WANDB_ENTITY", "submission-team")
     preset_name = (
         "learning-medium"
-        if case == "learning-child"
+        if case in {"learning-child", "learning-control"}
         else "train-long" if case == "train-child" else "speed-short" if case == "generate" else "speed-medium"
     )
     if case != "train-child":
@@ -1297,7 +1314,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     preset = presets.PRESETS[preset_name]
     replicates = 2 if case == "learning-child" else 1
     built = snowball.build_run(
-        preset, control=case == "control", replicates=replicates, layout=presets.P40 if case == "train-child" else None
+        preset,
+        control=case in {"control", "learning-control"},
+        replicates=replicates,
+        layout=presets.P40 if case == "train-child" else None,
     )
     sources = [
         recorded_runs(
@@ -1305,7 +1325,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
             step.name,
             speed=150 if case in {"fail", "no-wait"} else 101,
             fingerprint=step.fingerprint(),
-            initial_score=0.2 if case in {"learning-child", "train-child"} else None,
+            initial_score=0.2 if case in {"learning-child", "train-child", "learning-control"} else None,
         )
         for step in built.runs
     ]
@@ -1319,7 +1339,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
 
         def completed_native(config):
             terminal = json.loads((source / "terminal.json").read_text())
-            terminal["config"]["run"] = {"id": config.run_id, "attempt_id": config.attempt_id}
+            authored = yaml.safe_load(config.launch_config_yaml)
+            terminal["config"]["run"] = authored["run"]
+            terminal["config"]["inputs"]["model"] = authored["inputs"]["model"]
+            terminal["config"]["artifacts"] = authored["artifacts"]
             _json(source / "terminal.json", terminal)
             _json(source / "resolved-launch.yaml", {"config": terminal["config"]})
             for path in (source / "exports/metrics").glob("step-*.json"):
@@ -1356,13 +1379,13 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(presets, "iris_client", lambda: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    if case in {"child", "learning-child", "train-child"}:
+    if case in {"child", "learning-child", "train-child", "learning-control"}:
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
     arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
     if case != "no-wait":
         arguments.append("--wait")
-    if case == "control":
+    if case in {"control", "learning-control"}:
         arguments.append("--control")
     if case == "learning-child":
         arguments.extend(("--replicates", "2"))
@@ -1373,13 +1396,15 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    waited = [] if case in {"no-wait", "child", "learning-child", "train-child"} else [(job,)]
+    waited = [] if case in {"no-wait", "child", "learning-child", "train-child", "learning-control"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
     assert all(call.kwargs["poll_interval"] == 60 for call in client.job.return_value.wait.call_args_list)
-    if case not in {"child", "learning-child", "train-child"}:
+    if case not in {"child", "learning-child", "train-child", "learning-control"}:
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
     if case in {"pass", "fail", "invalid"}:
         assert "# speed-medium" in result.output
+    if case == "learning-control":
+        assert not publication_transport.rows
     if case == "learning-child":
         snapshot = status(preset_name, ["--replicates", "2"])
         assert all(row["rl_progress_url"].startswith("https://applets.marina.oa.dev/") for row in snapshot["runs"])
@@ -1453,17 +1478,24 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         checkpoint = Path(config.output.checkpoint_root, "latest_ckpt_global_step.txt")
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         checkpoint.write_text("10")
-        resumed_config = replace(config, attempt_id="resumed-at-10")
-        step.run(resumed_config)
+        (checkpoint.parent / "global_step_10").mkdir()
+        resume_source = presets.published_artifact(f"{step.name}@{step.version}")
+        resumed_run = snowball.build_run(preset, layout=presets.P40, resume_from=resume_source)
+        resumed_step = resumed_run.runs[0]
+        resumed_source = recorded_runs(
+            preset, resumed_step.name, fingerprint=resumed_step.fingerprint(), attempt_id="resumed-at-10"
+        )
+        shutil.rmtree(resumed_source / "exports/dumped_evals/global_step_0_evals")
+        resumed_arguments = [*arguments, "--resume-from", f"{step.name}@{step.version}"]
         try:
-            repeated = CliRunner().invoke(snowball.main, arguments)
+            repeated = CliRunner().invoke(snowball.main, resumed_arguments)
         finally:
             set_job_info(None)
         assert repeated.exit_code == 0, (repeated.output, repeated.exception)
         assert len(publication_transport.rows) == 1
-        raw = source / "exports/attempts/resumed-at-10/loop-result.json"
+        raw = resumed_source / "exports/attempts/resumed-at-10/loop-result.json"
         assert json.loads(raw.read_text())["status"] == "succeeded"
-        resumed_status = status(preset_name, ["--layout", "p40"])
+        resumed_status = status(preset_name, ["--layout", "p40", "--resume-from", f"{step.name}@{step.version}"])
         assert resumed_status["runs"][0]["state"] == "succeeded"
         assert "rl_progress_url" not in resumed_status["runs"][0]
     if case == "generate":
