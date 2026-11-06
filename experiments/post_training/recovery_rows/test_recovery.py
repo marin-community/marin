@@ -104,6 +104,24 @@ def test_a_terminus_failure_is_labeled_with_the_parsers_error():
     assert [(r.style, r.error) for r in records] == [("invalid_json", "Invalid JSON")]
 
 
+def test_a_turn_whose_analysis_quotes_a_valid_response_still_gets_a_rejected_failure():
+    # Every rendering with the prose carries the quoted object, which the parser extracts and accepts.
+    quoted = json.dumps({"analysis": "a", "plan": "b", "commands": [{"keystrokes": "ls\n", "duration": 0.1}]})
+    data = TURN | {"analysis": f"Previous response: {quoted}", "plan": "Run ls."}
+    assert recovery.terminus_fields(json.dumps(data)) is not None
+    for style in sorted(recovery.TERMINUS_STYLES):
+        for seed in range(30):
+            text, _ = recovery.render_terminus_failure(data, style, random.Random(seed), None)
+            assert recovery.PARSER.parse_response(text).error, (style, seed, text)
+
+    messages = terminus_trajectory()
+    messages[3] = {"role": "assistant", "content": json.dumps(data, indent=2)}
+    out, records = recovery.inject(Harness.TERMINUS_2, messages, [Injection(1, (Failure("no_json", 13),))])
+    assert records == [recovery.InjectedFailure(1, "invalid_json", "fallback_invalid_json", "Invalid JSON")]
+    reply = next(m for m in out if m.get(INJECTED_KEY) and m["role"] == "user")
+    assert reply["content"].startswith("Previous response had parsing errors:\nERROR: Invalid JSON")
+
+
 def test_smaller_plans_shrink_one_attempt_at_a_time_then_drop_the_last_point():
     plan = [Injection(1, failures("a", "b")), Injection(3, failures("c", "d", "e"))]
     shapes = [[(i.turn, len(i.failures)) for i in step] for step in recovery.smaller_plans(plan)]

@@ -207,13 +207,18 @@ def terminus_variant(data: dict, style: str, variant: str, rng: random.Random) -
     return None if text is None else prose + "\n\n" + text
 
 
+def terminus_unquoted_plan(data: dict) -> str:
+    """The turn's JSON with the `plan` key unquoted, which the parser always rejects as invalid JSON."""
+    return json.dumps(data, indent=2).replace('"plan":', "plan:", 1)
+
+
 def terminus_base_failure(data: dict, style: str) -> str:
     """The style's fixed rendering, used when no seeded variant produces the style's error."""
     prose = f"{data.get('analysis', '')}\n\n{data.get('plan', '')}".strip()
     if style == "no_json":
         return prose
     if style == "invalid_json":
-        return prose + "\n\n" + json.dumps(data, indent=2).replace('"plan":', "plan:", 1)
+        return prose + "\n\n" + terminus_unquoted_plan(data)
     if style == "missing_fields":
         return prose + "\n\n" + json.dumps(data["commands"][0], indent=2)
     if style == "commands_not_array":
@@ -225,7 +230,7 @@ def render_terminus_failure(data: dict, style: str, rng: random.Random, previous
     """(text, variant) for a failure the parser rejects with `style`'s error and that differs from `previous`.
 
     Variants are tried in a seeded, weighted order, a few renders each. When none qualifies, the style's base rendering
-    is used (variant "base"), then the always-failing invalid_json base rendering, which may equal `previous`.
+    is used (variant "base"), then the broken JSON alone (variant "fallback_invalid_json"), which may equal `previous`.
     """
     weights = dict(TERMINUS_VARIANTS[style])
     while weights:
@@ -240,7 +245,11 @@ def render_terminus_failure(data: dict, style: str, rng: random.Random, previous
     text = terminus_base_failure(data, style)
     if PARSER.parse_response(text).error and text != previous:
         return text, "base"
-    return terminus_base_failure(data, "invalid_json"), "fallback_invalid_json"
+    # No prose here: the parser takes the first balanced object, so an analysis that quotes a valid response makes
+    # every rendering with prose parse clean.
+    text = terminus_unquoted_plan(data)
+    assert PARSER.parse_response(text).error, text
+    return text, "fallback_invalid_json"
 
 
 def eligible_turns(harness: Harness, messages: list[dict]) -> list[int]:
