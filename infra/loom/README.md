@@ -394,6 +394,34 @@ Outside Loom, the command uses a person's gcloud login, which needs Drive
 access (`gcloud auth login --enable-gdrive-access`). That login cannot sign
 diagram URLs, so it writes only text.
 
+## Doc sessions
+
+The `doc` profile ([instructions](profiles/doc/AGENTS.md)) is the Loom-native
+counterpart of the `gdoc` profile. The session's record of the work is the
+branch artifact `doc`, with progress updates in the artifact `progress`, and
+the agent writes both with the `loom` MCP artifact tools. Loom opens a `doc`
+session on its `doc` artifact once the agent writes it. A person comments by
+selecting text and submitting a review, which Loom delivers to the agent at
+once, or edits the source, which adds a revision.
+
+A person's edit reaches the agent through the `doc-edits` script watch
+([program](watches/doc_edits.py)). When Loom reports a `doc` session idle, and
+every 15 seconds, it compares the doc's revisions with the last one it looked
+at. It sends the session one message that starts with "A person edited the
+doc" for the revisions a person wrote; Loom records the agent's own writes as
+the agent's, so they never count. Register it from the root of the checkout:
+
+```bash
+loom watch add doc-edits --program "$PWD/infra/loom/watches/doc_edits.py" \
+  --capabilities observe,nudge
+loom watch update doc-edits --program "$PWD/infra/loom/watches/doc_edits.py"
+loom watch run doc-edits --dry-run
+loom watch enable doc-edits
+```
+
+The `update` makes Loom read the program's triggers, which `add` without
+`--every` does not.
+
 ## claude.ai connector
 
 The `connector.enabled` setting serves Loom's claude.ai connector, a Streamable
