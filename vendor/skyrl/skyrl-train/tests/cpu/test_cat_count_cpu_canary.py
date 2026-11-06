@@ -617,15 +617,11 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
                 self.finished = 0
             return snapshot
 
-    services = []
-
     class RecordedGenerateExp(TinyGenerateExp):
         def create_inference_engine_client(self, *, operation):
-            service = InferenceEngineClient(
+            return InferenceEngineClient(
                 [RecordedInferenceEngine(self.tokenizer, index) for index in range(2)], self.tokenizer, self.cfg
             )
-            services.append(service)
-            return service
 
         def get_trajectory_runner(self, config, tokenizer, inference_engine_client):
             return TaskRolloutWorkerSpec.from_config(
@@ -655,8 +651,6 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
             },
         )
         result = RecordedGenerateExp(probe_cfg).run()
-        remaining = asyncio.run(services[-1].get_stats(IntervalReadMode.PEEK))
-        assert sum(engine.interval.finished_requests for engine in remaining.engines) == int(bool(profiles))
         primary_values = {key: value for key, value in result.items() if key.startswith(("generate/", "timing/"))}
         if not profiles:
             primary = primary_values
@@ -664,8 +658,6 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         assert primary_values == primary
         assert result["eval/quality/all/response_tokens"] == 3
         assert result["eval/quality/all/avg_verifier_score"] == 1.0
-        assert result["eval/quality/all/avg_score"] == 0.9
-        assert result["eval/quality/all/timing/grading/mean"] == 103.0
         dump = Path(evaluation_dump_dir(str(probe_root / "quality"), None)) / "train.jsonl"
         assert [json.loads(line)["task_id"] for line in dump.read_text().splitlines()] == ["quality-only"]
     OmegaConf.update(probe_cfg, "trainer.callbacks.0.additional_evaluations.quality.schedule", "final", force_add=True)

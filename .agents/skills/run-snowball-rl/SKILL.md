@@ -19,7 +19,7 @@ belong to `launch-rl`; job inspection and logs belong to `use-iris`; object-stor
   run name contains the working tree's hash, so changed code gets a new run and never reuses an old
   result.
 - Selections must contain no AI-judge-graded tasks. The default training selection is
-  `snowball-100k@2026.11.04.1`. Set `WANDB_API_KEY` at submission; `WANDB_ENTITY` selects the W&B
+  `snowball-100k@SELECTION_VERSION`. Set `WANDB_API_KEY` at submission; `WANDB_ENTITY` selects the W&B
   team, falling back to `marin-community`.
 - Print the plan without `--run`:
 
@@ -91,14 +91,14 @@ you need and read under the run's `output` path:
 - `exports/dumped_evals/<session>/<data source>.jsonl`, where `<session>` is `global_step_<N>_evals`
   for an evaluation after update N, or `eval_only` for data-short. Each line is one answer with
   `task_id`, `input_prompt`, `output_response`, `score`, `stop_reason`, and `verification`.
-- learning-long and data-long run 100 asynchronous updates on 40 H100 (about four hours estimated). Their `fast_panel` runs at update 0 and every 25 updates and supplies the dashboard baseline/final reward. Their `test_panel` runs only at update 100 and supplies the verdict. An early stop does not produce that final panel; missing final evidence gives INVALID. data-long requires `--tasks`, refuses `--set`, and uses learning-long controls. Default candidates keep no checkpoint/export; controls and `--keep-weights` keep final HF weights for rescoring.
+- learning-long and data-long run 100 asynchronous updates on 40 H100 (about four hours estimated). Their `test_panel_100` runs at update 0 and every 25 updates and supplies the dashboard baseline/final reward. Their `test_panel` runs only at update 100 and supplies the verdict. An early stop does not produce that final panel; missing final evidence gives INVALID. data-long requires `--tasks`, refuses `--set`, and uses learning-long controls. Default candidates keep no checkpoint/export; controls and `--keep-weights` keep final HF weights for rescoring.
 - learning-medium and data-medium write the 1,500-task `test_panel` at update 0 and after update 25;
-  train-long writes the 100-task `fast_panel` at update 0 and every 10 updates.
+  train-long writes the 100-task `test_panel_100` at update 0 and every 10 updates.
 - speed-short's quality answers are under
   `exports/test_panel/dumped_evals/eval_only/<data source>.jsonl`; its primary throughput answers are
   forced to 4,096 tokens.
 - data-short writes four answers from the pinned SFT model to each of 256 tasks sampled from its
-  `--tasks` selection, in 10–15 minutes on 8 H100. `--tasks snowball-100k@2026.11.04.1` samples the
+  `--tasks` selection, in 10–15 minutes on 8 H100. `--tasks snowball-100k@SELECTION_VERSION` samples the
   default training tasks.
 
 Named panels use seeded greedy decoding and natural replies up to `EVAL_REPLY_TOKENS` (8,192).
@@ -127,7 +127,7 @@ window, or a panel slice. It refuses other keys before launch.
 
 ### Evaluation
 
-- The default evaluation artifact is `snowball-test-panel@2026.11.04.2`: 1,500 full tasks and a
+- The default evaluation artifact is `snowball-test-panel@2026.11.06.1`: 1,500 full tasks and a
   100-task fast subset, with source parts recorded in its recipe and manifest. learning-medium and
   data-medium use the full panel; train-long uses the fast subset.
   Its recipe pins the initializer pass-rate artifact used for difficulty and reference-score rows;
@@ -152,18 +152,15 @@ window, or a panel slice. It refuses other keys before launch.
     --keep-weights --version dev --run
   ```
 
-  Kept HF exports have no expiry and can initialize another learning or train-long run with `--init`.
-- Score every pinned control on a different heldout panel using its retained weights and recorded engine settings:
+- Score every pinned control on a different heldout panel:
 
   ```bash
   uv run python -m experiments.post_training.snowball_rl --preset learning-medium \
     --control --rescore-panel PANEL_NAME@VERSION --version dev --run --wait
   ```
 
-  This uses one 8-H100 evaluation job per replicate. Omit experiment overrides and `--replicates`.
-  Missing learning-control weights are refused before submission; speed-short uses its original initializer.
-  The CPU gate requires matching control/model/tokenizer/panel/file/protocol evidence and keeps the original
-  training and throughput measurements. Re-run it after scoring completes. Speed-medium and speed-long have no panel.
+  See the recipe's [binding rules](../../../docs/recipes/snowball-rl.md#change-one-input)
+  for kept weights and control panel re-scoring.
 - Re-score one finished replicate on CPU with added requirements or baselines, without GPU work:
 
   ```bash
@@ -197,18 +194,9 @@ Learning-medium and data-medium score the same greedy test panel at update 0 and
 The run’s own update-0 dump supplies its publication baseline; the pass-rate artifact supplies
 initializer statistics by slice. `--baseline` compares separate completed runs in the gate report.
 
-Completed learning-medium, data-medium and train-long candidates publish one `rl_progress` record per replicate.
-The status row includes `rl_progress_url` after publication is verified. Gated records keep the group
-verdict; train-long has no quality verdict. Each uses its own update-0 baseline and keeps the native result.
-Coverage below 99% cannot rank. Speed presets and data-short keep their results in the gate report.
-For gated presets, re-run the standalone gate command to retry publication after a service failure;
-the saved verdict remains available. For train-long, repeat the original command to reuse its completed
-native run and retry publication. A resumed train-long run with no update-0 baseline keeps its native
-result and raw record without a dashboard row.
-Every native attempt retains `exports/attempts/<attempt_id>/loop-result.json` under its output,
-including failed attempts. This records native status, preset, layout, configuration fingerprint and
-available Iris/W&B identity. Runtime task-content and protocol hashes remain unknown, so these records
-remain unranked.
+Published trained-panel runs expose `rl_progress_url` in status.
+Retry the gate command, or the original train-long command, to complete a failed publication.
+Each native attempt keeps an attempt record; see the recipe's [publication rules](../../../docs/recipes/snowball-rl.md#dashboard-publication).
 
 ## Record the experiment
 

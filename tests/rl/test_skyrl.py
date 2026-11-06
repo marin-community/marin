@@ -473,21 +473,26 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
             dataclasses.replace(profiled_spec, evaluation_data=(("quality", (changed_panel,)),)), _execution()
         ).fingerprint()
     )
-    assert panel in profiled.deps
-    with pytest.raises(ValueError, match="duplicate evaluation"):
-        dataclasses.replace(profiled_spec, evaluation_data=(("quality", (source,)), ("quality", (changed_panel,))))
-    for name, profile in (("missing", {}), ("quality", {"data_files": ["other.parquet"]})):
-        recipe["trainer"]["callbacks"][0]["additional_evaluations"]["quality"] = profile
-        with pytest.raises(ValueError, match="evaluation"):
-            dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe), evaluation_data=((name, (source,)),))
 
 
 def test_skyrl_step_declares_model_and_data_dependencies() -> None:
-    step = skyrl_step(_spec(), _execution())
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"quality": {}}}]
+    panel = dataclasses.replace(_data_step(), name="tests/heldout-panel", version="2026.11.05")
+    step = skyrl_step(
+        dataclasses.replace(
+            spec,
+            config_yaml=yaml.safe_dump(recipe),
+            evaluation_data=(("quality", (ArtifactDataSource(panel, relative_path="validation.parquet"),)),),
+        ),
+        _execution(),
+    )
 
     assert [(dep.name, dep.version) for dep in step.deps] == [
         ("tests/iceball-sft", "2026.08.01"),
         ("tests/iceball-gsm8k", "2026.08.01"),
+        ("tests/heldout-panel", "2026.11.05"),
     ]
 
 

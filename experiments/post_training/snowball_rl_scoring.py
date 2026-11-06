@@ -70,8 +70,7 @@ def task_manifest(root: StoragePath) -> dict[str, dict]:
 
 
 def paths(pattern: StoragePath) -> list[StoragePath]:
-    fs, key = filesystem_for(str(pattern))
-    return [StoragePath(fs.unstrip_protocol(path)) for path in sorted(fs.glob(key))]
+    return sorted(pattern.glob(), key=str)
 
 
 def _evaluation_answers(dump_root: StoragePath) -> list[tuple[int, StoragePath, dict]]:
@@ -91,15 +90,17 @@ def evaluation_answers(run_output: str) -> list[tuple[int, StoragePath, dict]]:
     return _evaluation_answers(StoragePath(run_output) / "exports/dumped_evals")
 
 
+def recorded_sources(launch: dict, name: str) -> list[dict]:
+    return launch["inputs"].get("evaluation_data", {}).get(name, launch["inputs"]["validation_data"])
+
+
 def panel_scores(
     evaluation: presets.Evaluation, run_output: str, answers: list[tuple[int, StoragePath, dict]] | None = None
 ) -> pa.Table:
     launch = read_skyrl_launch_config(run_output)
-    sources = launch["inputs"].get("evaluation_data", {}).get(evaluation.name)
-    if sources is not None:
+    sources = recorded_sources(launch, evaluation.name)
+    if evaluation.name in launch["inputs"].get("evaluation_data", {}):
         answers = _evaluation_answers(StoragePath(run_output) / "exports" / evaluation.name / "dumped_evals")
-    else:
-        sources = launch["inputs"]["validation_data"]
     manifest = {}
     for source in sources:
         manifest.update(task_manifest(StoragePath(source["uri"])))

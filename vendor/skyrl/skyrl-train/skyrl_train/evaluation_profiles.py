@@ -20,6 +20,20 @@ class EvaluationProfile:
             raise ValueError(f"unknown evaluation schedule: {self.schedule}")
 
 
+def named_evaluation_profiles(config: Mapping[str, Any], name: str) -> list[Mapping[str, Any]]:
+    return [
+        profile
+        for callback in config.get("trainer", {}).get("callbacks") or []
+        if callback.get("type") == "evaluation"
+        for profile_name, profile in (callback.get("additional_evaluations") or {}).items()
+        if profile_name == name
+    ]
+
+
+def named_evaluation_metrics(metrics: Mapping[str, float], name: str) -> dict[str, float]:
+    return {f"eval/{name}/{key.removeprefix('eval/')}": value for key, value in metrics.items()}
+
+
 def parse_evaluation_profiles(values: Mapping[str, Any] | None) -> dict[str, EvaluationProfile]:
     profiles = {name: EvaluationProfile(**parameters) for name, parameters in (values or {}).items()}
     if any(not name.isidentifier() for name in profiles):

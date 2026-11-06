@@ -67,7 +67,6 @@ class LocalRLRunner:
         self._train_data_sources = list(config.train_data)
         self._val_data_sources = list(config.val_data)
         self._evaluation_data = {}
-        self._evaluation_data_sources = {}
         self._processes: List[subprocess.Popen] = []
         self.rl_env_path: Path | None = None
 
@@ -137,11 +136,6 @@ class LocalRLRunner:
                     "config": config,
                     "train_data_sources": self._train_data_sources,
                     "val_data_sources": self._val_data_sources,
-                    **(
-                        {"evaluation_data_sources": self._evaluation_data_sources}
-                        if self._evaluation_data_sources
-                        else {}
-                    ),
                 }
             ),
             resolve=True,
@@ -151,7 +145,7 @@ class LocalRLRunner:
         with filesystem.open(path, "w") as destination:
             json.dump(record, destination, sort_keys=True)
 
-    def _resolve_data_inputs(self, data_kind: str, evaluation_data=None) -> None:
+    def _resolve_data_inputs(self, data_kind: str, evaluation_data: dict | None = None) -> None:
         for role, attribute in (("train", "train_data"), ("validation", "val_data")):
             values = getattr(self.config, attribute)
             if not values:
@@ -167,7 +161,6 @@ class LocalRLRunner:
         for name, values in (evaluation_data or {}).items():
             resolved = resolve_rl_train_data_with_sources(list(values), kind=data_kind)
             self._evaluation_data[name] = tuple(resolved.paths)
-            self._evaluation_data_sources[name] = list(resolved.sources)
 
     def run(self) -> int:
         """Execute the RL training job. Returns an exit code (0 for success)."""

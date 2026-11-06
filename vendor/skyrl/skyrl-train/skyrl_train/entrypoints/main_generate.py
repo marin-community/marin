@@ -13,7 +13,11 @@ from loguru import logger
 from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
 
-from skyrl_train.evaluation_profiles import evaluation_profile_config, parse_evaluation_profiles
+from skyrl_train.evaluation_profiles import (
+    named_evaluation_metrics,
+    evaluation_profile_config,
+    parse_evaluation_profiles,
+)
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import (
     BasePPOExp,
@@ -150,9 +154,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     val_set_name=name,
                     trajectory_sink=trajectory_sink,
                 )
-                results.update(
-                    {f"eval/{name}/{key.removeprefix('eval/')}": value for key, value in profile_results.items()}
-                )
+                results.update(named_evaluation_metrics(profile_results, name))
         finally:
             try:
                 await trajectory_runner.shutdown()

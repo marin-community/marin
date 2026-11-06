@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Type
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from skyrl_train.evaluation_profiles import parse_evaluation_profiles
+from skyrl_train.evaluation_profiles import named_evaluation_metrics, parse_evaluation_profiles
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
@@ -341,7 +341,7 @@ class EvaluationCallback(TrainerCallback):
                 profile=parameters,
                 evaluation_pool=pool,
             )
-            metrics.update({key.replace("eval/", f"eval/{name}/", 1): value for key, value in additional.items()})
+            metrics.update(named_evaluation_metrics(additional, name))
 
         async with asyncio.TaskGroup() as tasks:
             for name, parameters in self.additional_evaluations.items():

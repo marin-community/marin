@@ -23,19 +23,6 @@ The status lists the latest completed update and the W&B URL when the tracker ha
 saved one. Set `WANDB_ENTITY` before submission to choose the W&B team; an unset
 value uses `marin-community`. Runs use the `marin-snowball-rl` project.
 
-Completed learning-medium, data-medium, learning-long, data-long and train-long candidates publish one `rl_progress` record per replicate.
-The status row includes `rl_progress_url` after publication is verified. Gated records keep the group
-verdict; train-long has no quality verdict. Each uses its own update-0 baseline and keeps the native result.
-Coverage below 99% cannot rank. Speed presets and data-short keep their results in the gate report.
-For gated presets, re-run the standalone gate command to retry publication after a service failure;
-the saved verdict remains available. For train-long, repeat the original command to reuse its completed
-native run and retry publication. A resumed train-long run with no update-0 baseline keeps its native
-result and raw record without a dashboard row.
-Every native attempt retains `exports/attempts/<attempt_id>/loop-result.json` under its output,
-including failed attempts. This records native status, preset, layout, configuration fingerprint and
-available Iris/W&B identity. Runtime task-content and protocol hashes remain unknown, so these records
-remain unranked.
-
 The W&B team changes neither run identity nor pinned configuration. Grafana run and preset-panel links
 appear when the native job start time is available; active jobs link through the present time.
 
@@ -60,7 +47,22 @@ Speed-long uses the asynchronous 40-H100 recipe without evaluation, checkpoints 
 export. It guards throughput and staleness-0 k3 mismatch, and reports phase timings, grading/setup
 timers, staleness summaries and selected-token counts by staleness bucket.
 
-Long learning/data runs publish their own fast-panel update-0 and update-100 measurements. The full panel runs once at update 100, including when it is a periodic evaluation; it never runs before training or after an early stop. A completed run with no full-panel result is INVALID. Default candidates keep no checkpoint or export; controls and `--keep-weights` retain final HF weights for panel rescoring. Qualified long controls are required before candidate submission.
+Long learning/data runs publish their own fast-panel update-0 and update-100 measurements. The full panel runs once at update 100, including when it is a periodic evaluation; it never runs before training or after an early stop. A completed run with no full-panel result is INVALID. Default candidates keep no checkpoint or export; controls and `--keep-weights` keep final HF weights for panel rescoring. Qualified long controls are required before candidate submission.
+
+## Dashboard publication
+
+Completed learning-medium, data-medium, learning-long, data-long and train-long candidates publish one `rl_progress` record per replicate.
+The status row includes `rl_progress_url` after publication is verified. Gated records keep the group
+verdict; train-long has no quality verdict. Each uses its own update-0 baseline and keeps the native result.
+Gated records below 99% scored coverage cannot rank. Train-long publishes only with full baseline and final coverage. Speed presets and data-short keep their results in the gate report.
+For gated presets, re-run the standalone gate command to retry publication after a service failure;
+the saved verdict remains available. For train-long, repeat the original command to reuse its completed
+native run and retry publication. A resumed train-long run with no update-0 baseline keeps its native
+result and attempt record without a dashboard row.
+Every native attempt keeps `exports/attempts/<attempt_id>/loop-result.json` under its output,
+including failed attempts. This records native status, preset, layout, configuration fingerprint and
+available Iris/W&B identity. Runtime task-content and protocol hashes remain unknown, so these records
+remain unranked.
 
 ## Change one input
 
@@ -82,9 +84,11 @@ Data presets require `--tasks` and refuse recipe settings. Their immutable
 selection must name the same heldout input as the default selection.
 
 `--init NAME@VERSION` on learning-medium or train-long selects another model
-artifact or a retained HF export. Learning-medium and data-medium evaluate the initial weights by default.
-Learning-medium/data-medium controls retain their final HF weights automatically; candidates do so with
+artifact or a kept HF export. Learning-medium and data-medium evaluate the initial weights by default.
+Learning-medium/data-medium controls keep their final HF weights automatically; candidates do so with
 `--keep-weights`. Kept HF exports have no expiry and can initialize later runs with `--init`.
+They live under the run artifact's durable `exports/global_step_<N>/policy` path, outside the
+14-day temporary checkpoint root.
 To evaluate a different heldout panel, score every pinned control on its immutable version:
 
 ```bash
@@ -93,7 +97,7 @@ uv run python -m experiments.post_training.snowball_rl --preset learning-medium 
 ```
 
 This submits one 8-H100 evaluation job per control and uses its recorded evaluation and engine settings.
-Omit experiment overrides and `--replicates`. A learning control without retained weights is refused before
+Omit experiment overrides and `--replicates`. A learning control without kept weights is refused before
 submission. Speed-short uses its recorded initializer. The CPU gate joins only matching completed panel
 results; training and throughput measurements come from the original controls. Missing or mismatched
 control, model, tokenizer, panel, file or protocol evidence gives INVALID. Re-running the CPU gate after
@@ -202,7 +206,7 @@ Host status lists changed RL paths, including uncommitted edits, against the con
 commit, or explains missing git metadata. This list does not affect the verdict.
 
 The test-panel recipe pins its qualified eight-answer, temperature-1 initializer pass-rate
-artifact. Reports check its task IDs against the run's recorded panel, then join easy (> 0.7),
+artifact. Reports check its task IDs against the panel manifest, then join easy (> 0.7),
 learnable (0.1–0.7) and hard (< 0.1) bands and reference initializer scores for reporting only.
 Refresh that reference when the initializer revision changes. The standalone
 `snowball_pass_rates` command measures the 910-task development panel.
@@ -216,19 +220,20 @@ Create candidates through task curation's [final task selection](../references/t
 using admitted sources from a FULL campaign and immutable recipe versions. The manifest provides
 task IDs, family, AAII category, agentic flag and grader kind.
 
-The default evaluation artifact, `snowball-test-panel@2026.11.04.2`, contains 1,500 full
+The default evaluation artifact, `snowball-test-panel@2026.11.06.1`, contains 1,500 full
 tasks and a stratified 100-task fast subset. Its recipe records source parts and filters;
 its manifest records family, AAII category, agentic flag, grader kind, source, license and
 difficulty. It contains no tasks from the 910-task development panel. `PanelEvaluator`
 supplies native evaluation callbacks, sampling settings and versioned validation data sources.
 
 Named panels use one seeded greedy answer per task, with natural replies up to
-`EVAL_REPLY_TOKENS` (8,192). Training keeps its own sampling. Panel engines use
-batch-invariant arithmetic with prefix caching disabled, except speed-short: its quality
-pass keeps the throughput engine's arithmetic, attention backend and cache settings.
-Controls and candidates use that same policy.
+`EVAL_REPLY_TOKENS` (8,192). Training keeps its own sampling. Learning-medium, data-medium, learning-long, data-long and train-long use the deterministic engine profile: batch-invariant arithmetic,
+TRITON_ATTN with the pinned attention-helper hash, and prefix caching disabled.
+Speed-short, speed-medium, speed-long and data-short use the throughput profile:
+FLASH_ATTN, prefix caching enabled and batch invariance disabled. Speed-short's quality
+pass uses its throughput profile. Controls and candidates use the same profile.
 
-Reports join evaluation answers to the run's task manifest by TaskSpec ID and keep attempts and weight steps separate. An answer counts as scored only with successful verification and no exception or error treatment. Verifier scores are normalized by their declared bounds. The equal-family mean first averages each task's scored answers, then tasks within a family, then families. Scored coverage uses the tasks in the run's recorded inputs.
+Reports join evaluation answers to the run's task manifest by TaskSpec ID and keep attempts and weight steps separate. An answer counts as scored only with successful verification and no exception or error treatment. Verifier scores are normalized by their declared bounds. The equal-family mean first averages each task's scored answers, then tasks within a family, then families. Scored coverage uses the declared task count of the identity-bound panel version.
 
 Each update records `timing/grading/{mean,p50,p95,max}` and
 `timing/setup/{mean,p50,p95,max}` in seconds over its retained, scored TaskSpec answers.
@@ -239,7 +244,7 @@ The gate reports the mean of each statistic over the measured updates, so its p9
 the average of the update p95 values.
 
 Learning/data medium evaluates `test_panel` at update 0 and after update 25.
-Train-long evaluates `fast_panel` before training and every 10 updates.
+Train-long evaluates `test_panel_100` before training and every 10 updates.
 Speed-short measures throughput and its grading/setup timers before running the full
 `test_panel` in the same engine job. Quality answers and timers do not enter the primary
 throughput measurement. Its quality guard is `test_panel/family_mean`, with independent
