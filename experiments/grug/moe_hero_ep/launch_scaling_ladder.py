@@ -74,6 +74,7 @@ from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_ep.harrier_length_stats import harrier_length_statistics
 from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
     LONG_CONTEXT_TAG,
+    LONG_CONTEXT_THRESHOLD,
     harrier_long_context_data_config,
 )
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
@@ -148,9 +149,6 @@ HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (
 )
 # The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
 HERO_FLOPS_BASELINE_TOTAL: float | None = 2.7998053065367505e24
-# Train the hero on the long-context mix from the end of HERO_CONTEXT_PHASES instead of replaying the
-# Harrier history; see harrier_long_context_mix.py. The FLOPs baseline and context checks still use the history.
-HERO_USES_LONG_CONTEXT_MIX = True
 
 
 def _hero_flops_baseline(
@@ -277,9 +275,9 @@ def build_ladder_run(
     ``context_phases`` is the run's context history and ``flops_baseline_total`` its cumulative training
     FLOPs at the last switch. Each data bucket resumes at its next shuffle window (see
     ``LmDataConfig.prior_context_phases``), or at the start of the long-context mix from the end of the history
-    when ``HERO_USES_LONG_CONTEXT_MIX`` applies. ``None`` selects the checked-in history: ``HERO_CONTEXT_PHASES``
-    and ``HERO_FLOPS_BASELINE_TOTAL`` for d6144, and none for the narrow rungs, which train at their context
-    length from their start. Pass both to build another history.
+    when the hero's context length exceeds ``LONG_CONTEXT_THRESHOLD``. ``None`` selects the checked-in history:
+    ``HERO_CONTEXT_PHASES`` and ``HERO_FLOPS_BASELINE_TOTAL`` for d6144, and none for the narrow rungs, which train
+    at their context length from their start. Pass both to build another history.
 
     d6144 splits each sequence over the checked-in ``HERO_CONTEXT_AXIS_SIZE`` devices, with each rack's expert
     axis shrunk to ``HERO_RACK_GPUS // HERO_CONTEXT_AXIS_SIZE``, and balances rows when
@@ -294,8 +292,6 @@ def build_ladder_run(
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
     hero = size == "d6144"
-    use_long_context_mix = hero and HERO_USES_LONG_CONTEXT_MIX
-    length_statistics = harrier_length_statistics() if use_long_context_mix else None
     if context_phases is None:
         if flops_baseline_total is not None:
             raise ValueError("flops_baseline_total requires an explicit context_phases")
@@ -311,6 +307,10 @@ def build_ladder_run(
     if qk_mult_long_scale is not None:
         model = dataclasses.replace(model, qk_mult_long_scale=qk_mult_long_scale)
     seq_len = model.max_seq_len
+    # Past the threshold the hero reads the long-context mix from the end of its history instead of replaying
+    # the Harrier history; see harrier_long_context_mix.py. The FLOPs baseline and context checks still use it.
+    use_long_context_mix = hero and seq_len > LONG_CONTEXT_THRESHOLD
+    length_statistics = harrier_length_statistics() if use_long_context_mix else None
     flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len)
     validate_model_split(model, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size)
 

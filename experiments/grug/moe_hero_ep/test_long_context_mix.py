@@ -27,6 +27,7 @@ from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
     harrier_long_context_data_config,
     read_length_tokens,
 )
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HarrierContextPhase
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
 from experiments.grug.moe_hero_ep.train import build_train_dataset
@@ -189,13 +190,46 @@ def test_hero_and_diagnostics_select_the_same_data():
         )
     )
 
-    assert hero.data.mixture_start_step == start_step
+    # A literal: train.py rejects only a FLOPs baseline past the restore, so a dropped context phase would otherwise
+    # start the mix at the wrong step with no error.
+    assert hero.data.mixture_start_step == 390_251
     assert all(
         isinstance(component, LengthSkewDatasetComponent) for component in _training_data(hero.data).components.values()
     )
     assert _training_data(hero.data) == _training_data(diagnostic.data)
     assert hero.trainer.trainer.seed == diagnostic.trainer.trainer.seed
     assert hero.trainer.data_seed == diagnostic.trainer.data_seed
+
+
+@pytest.mark.parametrize(
+    ("seq_len", "history"),
+    [
+        (4096, ()),
+        (
+            65536,
+            (HarrierContextPhase(end_step=257_553, seq_len=4096), HarrierContextPhase(end_step=372_000, seq_len=16384)),
+        ),
+    ],
+)
+def test_hero_contexts_up_to_the_threshold_read_harrier(monkeypatch, seq_len, history):
+    monkeypatch.setattr(
+        launch_scaling_ladder,
+        "HERO_MODEL_CONFIG",
+        dataclasses.replace(launch_scaling_ladder.HERO_MODEL_CONFIG, max_seq_len=seq_len),
+    )
+
+    config = _fingerprint_config(
+        build_ladder_run(
+            run_id="test-harrier",
+            size="d6144",
+            context_phases=history,
+            flops_baseline_total=2e24 if history else None,
+            version="dev",
+        )
+    )
+
+    assert config.data.mixture_start_step is None
+    assert not any(isinstance(component, LengthSkewDatasetComponent) for component in config.data.components.values())
 
 
 def test_diagnostic_arms_select_the_same_data_on_any_rack_count():

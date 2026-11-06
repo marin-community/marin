@@ -261,8 +261,6 @@ def _set_hero_seq_len(monkeypatch, seq_len):
         "HERO_MODEL_CONFIG",
         dataclasses.replace(launch_scaling_ladder.HERO_MODEL_CONFIG, max_seq_len=seq_len),
     )
-    # Every context before 262K read the Harrier mix.
-    monkeypatch.setattr(launch_scaling_ladder, "HERO_USES_LONG_CONTEXT_MIX", False)
 
 
 def test_context_switch_preserves_optimizer(monkeypatch):
