@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from omegaconf import DictConfig
 
-from skyrl_train.utils.trainer_utils import consumed_stop_metrics
+from skyrl_train.batch_metrics import consumed_stop_metrics
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.dataset.preprocess import collate_response_token_channel, convert_prompts_responses_to_batch_tensors
 from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows

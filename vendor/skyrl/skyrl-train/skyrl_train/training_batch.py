@@ -13,6 +13,8 @@ from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
 from skyrl_train.dataset.replay_buffer import Experience
 from skyrl_train.ftpo import FTPOTargets
 from skyrl_train.distillation import distillation_input_from_tensors
+from marinskyrl.resource_locator import join_resource_path
+from skyrl_train.io import io as storage_io
 
 DictType = TypeVar("DictType")
 ROUTED_EXPERTS_KEY = "rollout_routed_experts"
@@ -270,12 +272,12 @@ class TensorBatch(dict, Generic[DictType]):
 
     def save(self, path: str):
         """Save the data to a pickle file"""
-        with open(path, "wb") as f:
+        with storage_io.open_file(str(path), "wb") as f:
             pickle.dump(self, f)
 
     def load(self, path: str):
         """Load the data from a pickle file"""
-        with open(path, "rb") as f:
+        with storage_io.open_file(str(path), "rb") as f:
             return pickle.load(f)
 
     @classmethod
@@ -559,3 +561,10 @@ class TrainingOutputBatch(TensorBatch[Dict[str, torch.Tensor]]):
     """Training output data"""
 
     pass
+
+
+def dump_training_batch(batch: TrainingInputBatch, export_path: str, file_name: str) -> None:
+    """Persist one training input under its local or object-store export root."""
+    directory = join_resource_path(export_path, "dumped_data")
+    storage_io.makedirs(directory, exist_ok=True)
+    batch.save(join_resource_path(directory, file_name + ".pkl"))
