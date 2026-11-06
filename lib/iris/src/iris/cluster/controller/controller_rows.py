@@ -225,13 +225,13 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     root_job_id=r.root_job_id,
                     root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
                     job_id=r.job_id.to_wire(),
+                    submitted_at_ms=r.submitted_at_ms.epoch_ms(),
                     parent_job_id=r.parent_job_id.to_wire() if r.parent_job_id is not None else None,
                     depth=r.depth,
                     name=r.name,
                     user_id=r.user_id,
                     submitting_user=r.submitting_user,
                     state=job_pb2.JobState.Name(r.state),
-                    submitted_at=r.submitted_at_ms.as_naive_utc(),
                     started_at=_dt(r.started_at_ms),
                     finished_at=_dt(r.finished_at_ms),
                     exit_code=r.exit_code,
@@ -242,7 +242,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
             )
     for chunk in batched(marked.submitted, _ID_CHUNK_SIZE):
         query = (
-            select(job_config_table, j.root_job_id, j.root_submitted_at_ms)
+            select(job_config_table, j.root_job_id, j.root_submitted_at_ms, j.submitted_at_ms)
             .join(jobs_table, j.job_id == c.job_id)
             .where(c.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)
         )
@@ -253,6 +253,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     root_job_id=r.root_job_id,
                     root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
                     job_id=r.job_id.to_wire(),
+                    submitted_at_ms=r.submitted_at_ms.epoch_ms(),
                     res_cpu_millicores=r.res_cpu_millicores,
                     res_memory_bytes=r.res_memory_bytes,
                     res_disk_bytes=r.res_disk_bytes,
@@ -270,7 +271,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
             )
     for chunk in batched(marked.attempts, _ID_CHUNK_SIZE):
         query = (
-            select(task_attempts_table, t.job_id, j.root_job_id, j.root_submitted_at_ms)
+            select(task_attempts_table, t.job_id, j.root_job_id, j.root_submitted_at_ms, j.submitted_at_ms)
             .join(tasks_table, t.task_id == a.task_id)
             .join(jobs_table, j.job_id == t.job_id)
             .where(tuple_(a.task_id, a.attempt_id).in_(chunk), j.cluster == LOCAL_CLUSTER)
@@ -283,6 +284,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     root_job_id=r.root_job_id,
                     root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
                     job_id=r.job_id.to_wire(),
+                    submitted_at_ms=r.submitted_at_ms.epoch_ms(),
                     task_id=r.task_id.to_wire(),
                     attempt_id=r.attempt_id,
                     attempt_uid=r.attempt_uid,

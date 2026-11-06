@@ -141,8 +141,8 @@ def test_attempt_rows_record_the_node_and_join_their_job(state):
 
     job = rows.jobs[-1]
     assert job.state == "JOB_STATE_SUCCEEDED"
-    assert {(a.cluster, a.root_job_id, a.root_submitted_at_ms, a.job_id) for a in rows.attempts} == {
-        (job.cluster, job.root_job_id, job.root_submitted_at_ms, job.job_id)
+    assert {(a.cluster, a.root_job_id, a.root_submitted_at_ms, a.job_id, a.submitted_at_ms) for a in rows.attempts} == {
+        (job.cluster, job.root_job_id, job.root_submitted_at_ms, job.job_id, job.submitted_at_ms)
     }
 
 
@@ -289,6 +289,26 @@ def test_failed_worker_attempt_keeps_its_worker_id(state):
     final = rows.attempts[-1]
     assert final.state == "TASK_STATE_WORKER_FAILED"
     assert final.worker_id == "w1"
+
+
+def test_a_replaced_child_gets_its_own_job_key(state):
+    # A live parent resubmits a finished child under the same name. The child
+    # inherits the parent's root key, so only its own submit time tells the runs apart.
+    worker = register_worker(state, "w1", "host1:8080", make_worker_metadata())
+    submit_job(state, "train", make_job_request("train"), timestamp_ms=1_000)
+    child = "/test-user/train/eval"
+    first = submit_job(state, child, make_job_request(child), timestamp_ms=2_000)
+    _run_on_node(state, first[0], worker, "")
+    transition_task(state, first[0].task_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+    rows = _attach(state, "marin")
+
+    with state._db.transaction() as cur:
+        assert ops.job.remove_finished(cur, JobName.from_string(child))
+    submit_job(state, child, make_job_request(child), timestamp_ms=3_000)
+
+    (config,) = rows.job_configs
+    assert (config.job_id, config.root_submitted_at_ms, config.submitted_at_ms) == (child, 1_000, 3_000)
+    assert {(j.job_id, j.submitted_at_ms) for j in rows.jobs} == {(child, 3_000)}
 
 
 _CLUSTER_CONFIGS = sorted((Path(__file__).parents[3] / "config").glob("*.yaml"))

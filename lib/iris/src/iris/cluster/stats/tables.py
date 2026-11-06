@@ -247,7 +247,8 @@ class IrisJob:
 
     Rows are appended, never replaced: the job's current state is its row with
     the latest ``(ts, seq)``. A job is identified by ``(cluster, root_job_id,
-    root_submitted_at_ms, job_id)``, because job ids are reused once a job ends.
+    root_submitted_at_ms, job_id, submitted_at_ms)``, because job ids are reused
+    once a job ends, and a live parent can resubmit a child under the same name.
     """
 
     key_column: ClassVar[str] = "root_job_id"
@@ -256,13 +257,13 @@ class IrisJob:
     root_job_id: str
     root_submitted_at_ms: int
     job_id: str
+    submitted_at_ms: int
     parent_job_id: str | None
     depth: int
     name: str
     user_id: str
     submitting_user: str
     state: str
-    submitted_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
     exit_code: int | None
@@ -284,6 +285,7 @@ class IrisJobConfig:
     root_job_id: str
     root_submitted_at_ms: int
     job_id: str
+    submitted_at_ms: int
     res_cpu_millicores: int
     res_memory_bytes: int
     res_disk_bytes: int
@@ -305,7 +307,7 @@ class IrisTaskAttempt:
 
     An attempt is identified by ``attempt_uid``. ``(task_id, attempt_id)`` joins
     ``iris.task`` and ``iris.task_event``; ``(cluster, root_job_id,
-    root_submitted_at_ms, job_id)`` joins ``iris.job``. ``node_name`` (Kubernetes)
+    root_submitted_at_ms, job_id, submitted_at_ms)`` joins ``iris.job``. ``node_name`` (Kubernetes)
     or ``worker_id`` (worker VMs) places the attempt on a machine.
     """
 
@@ -315,6 +317,7 @@ class IrisTaskAttempt:
     root_job_id: str
     root_submitted_at_ms: int
     job_id: str
+    submitted_at_ms: int
     task_id: str
     attempt_id: int
     attempt_uid: str

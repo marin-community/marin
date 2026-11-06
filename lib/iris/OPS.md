@@ -660,11 +660,14 @@ Namespaces:
   on a regional store, filter on `cluster = ''`; on the hub, on the cluster
   name.
 
-  Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id)`, because
-  job ids are reused after a job ends. `root_submitted_at_ms` is epoch
-  milliseconds; the other time columns are timestamps. An attempt is
-  `attempt_uid`, and it carries the job key plus `(task_id, attempt_id)` to join
-  `iris.task` and `iris.task_event`. `node_name` (Kubernetes) or `worker_id`
+  Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id,
+  submitted_at_ms)`, because job ids are reused after a job ends, and a live
+  parent can resubmit a finished child under the same name (the child keeps its
+  parent's `root_submitted_at_ms`; `submitted_at_ms` is its own submit time). All
+  three tables carry the job key. The two `_ms` columns are epoch milliseconds;
+  the other time columns are timestamps. An attempt is `attempt_uid`, and it
+  carries the job key plus `(task_id, attempt_id)` to join `iris.task` and
+  `iris.task_event`. `node_name` (Kubernetes) or `worker_id`
   (worker VMs) places an attempt on a machine. `iris.job_config` has one row per
   job, written at submit, with the requested resources (`res_device_json` holds
   the accelerator type and count). `iris.job.tags` is reserved for submit-time job
