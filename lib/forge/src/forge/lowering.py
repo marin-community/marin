@@ -69,6 +69,7 @@ from verifyit.candidate import IN_PROCESS_MODES
 from verifyit.spec import Spec, mode_of
 
 from forge.model.verdict import VERDICT_REWARD
+from forge.policy import Policy
 from forge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
     MachineHost,
@@ -639,3 +640,26 @@ def _reads_task_machine(grader: GraderPackage) -> bool:
 def _conversation(instruction: str, system: str | None = None) -> ConversationInput:
     system_events = () if system is None else (TextMessage(role="system", content=system),)
     return ConversationInput(events=(*system_events, TextMessage(role="user", content=instruction)))
+
+
+@dataclass(frozen=True, slots=True)
+class LoweringSettings:
+    host: MachineHost
+    task_machine: MachineSettings
+    verifier_machine: MachineSettings
+    limits: RolloutLimits
+
+
+def lowering_settings(policy: Policy) -> LoweringSettings:
+    """Share machine selection and attempt budgets between author grading and validation."""
+    limits = RolloutLimits(
+        max_turns=None,
+        max_total_tokens=None,
+        model_turn_timeout=policy.setting("solver.turn_timeout", float),
+        tool_turn_timeout=policy.setting("solver.tool_timeout", float),
+        total_turn_timeout=None,
+        attempt_timeout=policy.setting("solver.attempt_timeout", float),
+        verifier_timeout=SANDBOX_SCHEDULING_TIMEOUT + policy.setting("grader.timeout", float),
+        cleanup_timeout=policy.setting("solver.cleanup_timeout", float),
+    )
+    return LoweringSettings(MachineHost(policy.setting("runtime.host", str)), GRADING_MACHINE, GRADING_MACHINE, limits)

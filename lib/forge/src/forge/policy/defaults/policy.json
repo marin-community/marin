@@ -12,5 +12,8 @@
   "budget.max_triage_repairs": 1,
   "budget.max_build_revisions": 3,
   "budget.max_validation_retries": 2,
-  "budget.max_modify_rounds": 2
+  "budget.max_modify_rounds": 2,
+  "author.max_turns": 100,
+  "author.max_prompt_tokens": 120000,
+  "tools.output_chars": 20000
 }

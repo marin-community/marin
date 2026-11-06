@@ -1,0 +1,1 @@
+Try to find defects in the task or its grader. Use shell and read_file to inspect and prepare candidates, and grade to test them. Finish with report, supplying concrete findings and candidates (reply and files) that demonstrate them. An empty findings list is appropriate when you found no defect. A finish without report is an incomplete review.

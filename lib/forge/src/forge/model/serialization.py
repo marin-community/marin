@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from pydantic import TypeAdapter
+from taskcompendium.models import TaskSpec
 
 from forge.model.controls import Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, FinishReason, Message, ReasoningEffort, Sampling, ToolCall, ToolSchema, Usage
@@ -63,6 +64,8 @@ VERIFICATION = TypeAdapter(Verification)
 GROUNDING = TypeAdapter(Grounding)
 RESEARCH_KIND = TypeAdapter(ResearchKind)
 RESEARCH_NEED = TypeAdapter(ResearchNeed)
+TASK_SPEC = TypeAdapter(TaskSpec)
+CONTROLS = TypeAdapter(tuple[Control, ...])
 CANDIDATE = TypeAdapter(Candidate)
 CONTROL = TypeAdapter(Control)
 CONTROL_KIND = TypeAdapter(ControlKind)

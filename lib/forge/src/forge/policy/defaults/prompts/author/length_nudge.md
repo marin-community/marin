@@ -1,1 +1,0 @@
-Your reply was cut off at the {limit}-token output limit before it made a tool call, so nothing ran. Take a smaller step: reason briefly, then call one tool (read one part of a file, or edit one step), and continue from its result.
