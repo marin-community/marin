@@ -3,12 +3,10 @@
 """Tell a waiting gdoc session that a person changed its doc.
 
 Loom does not see a Google Doc, so the `gdoc-changes` watch (`infra/loom/watches/gdoc_changes.py`) polls the doc of
-each waiting session and sends the session a message when the doc or its comments change. The agent's own edits land
-while it works, so the watch compares the doc with how it was when the session began to wait, not with how it was
-when the agent last read it. A change by a person between the agent's last read and the watch's first look, which
-comes when Loom reports the session idle, is not reported.
+each waiting session and sends the session a message when the doc or its comments change. The first idle round records
+the comparison baseline. Edits before that round are not reported.
 
-The watch reads a doc every `FAST_CHECK` seconds after its session begins to wait or the doc changes, and half as
+The watch reads a doc every `FAST_CHECK` seconds after the first idle round or an observed change, and half as
 often for each `DECAY_STEP` without a change, down to every `SLOW_CHECK` seconds. It sends the message once the doc
 has stayed the same for `QUIET` seconds, so a person who is still typing gets one message when they stop.
 """
@@ -41,11 +39,11 @@ class Watched(NamedTuple):
     """What the watch remembers about one session between rounds."""
 
     doc_id: str
-    # The doc when the session began to wait, or None while the session works.
+    # The doc at the first observed idle round, or None while the session works.
     waiting_version: DocVersion | None = None
     # The doc at the previous look, to tell a change that holds from one still in progress.
     last_version: DocVersion | None = None
-    # When, in seconds since the epoch, the session began to wait or the doc last changed between two looks.
+    # When, in seconds since the epoch, the first idle look or last doc change was observed.
     changed_at: float | None = None
 
     def to_json(self) -> dict:
