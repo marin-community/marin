@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Grug's ``gpu_triton_flash`` attention: a Triton flash attention for causal self-attention.
 
-Written for AMD Instinct GPUs (ROCm), where Grug has no other fused kernel. Forward, dQ and dK/dV are separate
+Written for AMD Instinct GPUs (ROCm) to replace ``gpu_pallas_triton_flash``. Forward, dQ and dK/dV are separate
 Triton kernels in the FlashAttention-2 layout, launched through ``jax_triton``:
 
 - Every mask is reduced to one inclusive key lower bound per query, ``lb[b, q]``. A query ``q`` attends to keys
@@ -20,8 +20,9 @@ ID that reappears after a different ID starts a new document here, whereas ``ref
 two runs see each other. Query and key segment IDs must be equal (self-attention).
 
 The kernels are plain Triton rather than Pallas because JAX deprecates the Pallas Triton backend, and Mosaic GPU,
-its replacement, does not target AMD GPUs. On ROCm, ``jax_triton`` needs jaxlib 0.11.1 or newer: 0.11.0 never
-loads ``jax_rocm10_plugin``'s Triton launcher.
+its replacement, does not target AMD GPUs. On ROCm, ``jax_triton`` needs ``jax_rocm10_plugin`` 0.12.0 or newer:
+earlier plugins delete each compiled kernel file on its first launch without holding a lock, so a process that
+launches a new kernel on several GPUs at once fails or hangs.
 """
 
 import dataclasses
