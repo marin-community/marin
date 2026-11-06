@@ -10,6 +10,7 @@ BFC allocator, cuBLAS/cuDNN workspaces, loaded kernel modules, the CUDA context)
 """
 
 import logging
+import time
 from dataclasses import dataclass
 
 import jax
@@ -112,3 +113,53 @@ def log_device_memory_breakdown(tag: str) -> None:
             device.local_hardware_id,
             breakdown.describe(),
         )
+
+
+def _with_default_pool(device, action):
+    # GPU-only optional dependency; the module imports on CPU hosts.
+    from cuda.bindings import driver
+
+    _checked(driver.cuInit(0))
+    cu_device = _checked(driver.cuDeviceGet(device.local_hardware_id))
+    context = _checked(driver.cuDevicePrimaryCtxRetain(cu_device))
+    _checked(driver.cuCtxPushCurrent(context))
+    try:
+        pool = _checked(driver.cuDeviceGetDefaultMemPool(cu_device))
+        return action(driver, pool)
+    finally:
+        _checked(driver.cuCtxPopCurrent())
+        _checked(driver.cuDevicePrimaryCtxRelease(cu_device))
+
+
+def trim_default_pool(tag: str, keep_bytes: int = 0) -> None:
+    """DIAGNOSTIC: return the pool's free blocks to the device and log the effect and its cost."""
+    for device in jax.local_devices():
+        before = device_memory_breakdown(device)
+        start = time.monotonic()
+        _with_default_pool(device, lambda driver, pool: _checked(driver.cuMemPoolTrimTo(pool, keep_bytes)))
+        elapsed = time.monotonic() - start
+        after = device_memory_breakdown(device)
+        logger.info(
+            "POOLTRIM[%s] device=%d elapsed=%.4f reserved %.3f->%.3f free %.3f->%.3f used=%.3f GiB",
+            tag,
+            device.id,
+            elapsed,
+            before.pool_reserved / GIB,
+            after.pool_reserved / GIB,
+            before.free / GIB,
+            after.free / GIB,
+            after.pool_used / GIB,
+        )
+
+
+def set_release_threshold(tag: str, threshold_bytes: int) -> None:
+    """DIAGNOSTIC: lower the default pool's release threshold without touching the compile budget."""
+
+    def apply(driver, pool):
+        attr = driver.CUmemPool_attribute.CU_MEMPOOL_ATTR_RELEASE_THRESHOLD
+        _checked(driver.cuMemPoolSetAttribute(pool, attr, driver.cuuint64_t(threshold_bytes)))
+        return int(_checked(driver.cuMemPoolGetAttribute(pool, attr)))
+
+    for device in jax.local_devices():
+        value = _with_default_pool(device, apply)
+        logger.info("POOLTHRESH[%s] device=%d release_threshold=%.3f GiB", tag, device.id, value / GIB)
