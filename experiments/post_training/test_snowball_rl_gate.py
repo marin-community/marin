@@ -8,6 +8,7 @@ import math
 import runpy
 import sys
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -477,7 +478,7 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     assert "## Breakdown" in markdown and "### panel-910: aaii_category x difficulty" in markdown
 
 
-def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs):
+def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs, monkeypatch):
     for name in ("speed-short", "speed-medium", "learning-medium"):
         controls(recorded_runs, name)
     speed, learning = presets.PRESETS["speed-medium"], presets.PRESETS["learning-medium"]
@@ -498,6 +499,22 @@ def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs
     ):
         with pytest.raises(click.BadParameter):
             snowball.build_run(preset, requirements=(requirement,), **kwargs)
+
+    expired_revision = "2026.10.27"
+    monkeypatch.setitem(
+        gate.CONTROLS,
+        "speed-medium",
+        tuple(replace(pin, revision=expired_revision) for pin in gate.CONTROLS["speed-medium"]),
+    )
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: pytest.fail("unpinned GPU submission"))
+    for command, arguments in (
+        (snowball.main, ["--version", "dev", "--require", "speed/update_seconds<=120", "--run"]),
+        (gate.main, ["--candidate", "tests/unpinned"]),
+    ):
+        refused = CliRunner().invoke(command, ["--preset", "speed-medium", *arguments])
+        assert refused.exit_code == 2, (refused.output, refused.exception)
+        assert presets.PRESET_REVISION in refused.output and expired_revision in refused.output
+        assert f"--version {presets.PRESET_REVISION} --control --replicates 4 --run" in refused.output
 
 
 def test_requirements_enforce_each_replicate_and_calibrate_added_guards(recorded_runs):

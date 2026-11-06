@@ -566,18 +566,22 @@ def main(
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
     preset = presets.PRESETS[preset_name]
     layout = presets.LAYOUTS[layout_name] if layout_name else None
-    run = build_run(
-        preset,
-        settings=tuple(presets.parse_setting(setting) for setting in settings),
-        tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
-        init=presets.published_artifact(init_name) if init_name else None,
-        resume_from=presets.published_artifact(resume_name) if resume_name else None,
-        layout=layout,
-        evaluations=evaluations,
-        replicates=replicates,
-        control=control,
-        requirements=requirements,
-    )
+    try:
+        run = build_run(
+            preset,
+            settings=tuple(presets.parse_setting(setting) for setting in settings),
+            tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
+            init=presets.published_artifact(init_name) if init_name else None,
+            resume_from=presets.published_artifact(resume_name) if resume_name else None,
+            layout=layout,
+            evaluations=evaluations,
+            replicates=replicates,
+            control=control,
+            requirements=requirements,
+        )
+    except snowball_rl_gate.InvalidComparison as error:
+        click.echo(json.dumps({"preset": preset_name, "verdict": "invalid", "reason": str(error)}))
+        raise click.exceptions.Exit(2) from error
     if resume_name and (presets.REPO_ROOT / ".git").exists():
         source_tree = presets.run_tree_hash(resume_name)
         changes, reason = _changed_paths(source_tree, ("vendor/skyrl", "lib/marin/src/marin/rl"))
