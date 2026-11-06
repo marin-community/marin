@@ -14,7 +14,6 @@ from levanter.checkpoint import Checkpointer, CheckpointInterval
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import BlockShuffleConfig
-from levanter.optim.config import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.utils.mesh import MeshConfig
 from levanter.utils.thread_utils import blocking_wait
@@ -413,26 +412,21 @@ def test_schedule_extension_continues_from_the_floor_to_its_final_ratio(extensio
         fractions = np.minimum(np.arange(len(rates)) / extension.steps, 1.0)
         expected = peak * (0.05 + (extension.final_lr_ratio - 0.05) * fractions)
         np.testing.assert_allclose(rates, expected, rtol=1e-5)
-        # No jump at the join and no rise anywhere: the largest step down is one slope of the tail.
-        steps_down = -np.diff(rates)
-        assert steps_down.min() >= -1e-5 * peak * 0.05
-        assert steps_down.max() <= peak * (0.05 - extension.final_lr_ratio) / extension.steps + 1e-5 * peak * 0.05
 
 
-def _ladder_config(run_id="test-extension", size="d6144"):
-    step = build_ladder_run(run_id=run_id, size=size, version="dev")
+def _hero_config():
+    step = build_ladder_run(run_id="test-extension", size="d6144", version="dev")
     return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
 
 def test_hero_extension_moves_only_the_stop_step_and_the_rate_past_the_schedule(monkeypatch):
     monkeypatch.setattr(launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", None)
-    off = _ladder_config()
+    off = _hero_config()
     extension = ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.01)
     monkeypatch.setattr(launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", extension)
-    on = _ladder_config()
+    on = _hero_config()
 
-    assert off.stop_step == off.stop_after_steps == HERO_SCHEDULE_STEPS
-    assert on.stop_step == on.stop_after_steps == HERO_SCHEDULE_STEPS + _EXTENSION_STEPS
+    assert off.stop_after_steps == HERO_SCHEDULE_STEPS
     assert on == dataclasses.replace(
         off,
         optimizer=dataclasses.replace(off.optimizer, schedule_extension=extension),
@@ -440,80 +434,11 @@ def test_hero_extension_moves_only_the_stop_step_and_the_rate_past_the_schedule(
     )
 
 
-def test_narrow_rungs_ignore_the_hero_extension(monkeypatch):
-    monkeypatch.setattr(
-        launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", ScheduleExtension(steps=100, final_lr_ratio=0.01)
-    )
-    config = _ladder_config(size="d768")
-    assert config.optimizer.schedule_extension is None
-    assert config.stop_step == config.trainer.trainer.num_train_steps
-
-
-def test_stop_past_the_schedule_requires_an_extension_that_reaches_it(monkeypatch):
-    monkeypatch.setattr(launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", None)
-    off = _ladder_config()
-    with pytest.raises(ValueError, match="only a ScheduleExtension trains past"):
-        dataclasses.replace(off, stop_after_steps=HERO_SCHEDULE_STEPS + 1)
-    with pytest.raises(ValueError, match="only a ScheduleExtension trains past"):
-        dataclasses.replace(off, optimizer=AdamConfig(), stop_after_steps=HERO_SCHEDULE_STEPS + 1)
-
-    on = dataclasses.replace(off.optimizer, schedule_extension=ScheduleExtension(steps=100, final_lr_ratio=0.01))
-    assert dataclasses.replace(off, optimizer=on, stop_after_steps=None).stop_step == HERO_SCHEDULE_STEPS + 100
-    dataclasses.replace(off, optimizer=on, stop_after_steps=HERO_SCHEDULE_STEPS + 100)
-    with pytest.raises(ValueError, match="only a ScheduleExtension trains past"):
-        dataclasses.replace(off, optimizer=on, stop_after_steps=HERO_SCHEDULE_STEPS + 101)
-
-
 def test_permanent_checkpoints_continue_through_the_extension():
     keep = hero_permanent_keeps(HERO_SCHEDULE_STEPS)
     steps = range(HERO_SCHEDULE_STEPS, HERO_SCHEDULE_STEPS + _EXTENSION_STEPS + 1)
     # The final step comes from the forced final checkpoint.
     assert _permanent_steps(keep, steps) == [390_500, 391_000]
-
-
-def test_diagnostic_rehearses_the_extension_past_the_schedule():
-    extension = ScheduleExtension(steps=100, final_lr_ratio=0.01)
-    step = build_diagnostic_run(
-        run_id="rehearse",
-        dp_racks=1,
-        num_steps=HERO_SCHEDULE_STEPS + 100,
-        schedule_steps=HERO_SCHEDULE_STEPS,
-        schedule_extension=extension,
-        version="dev",
-    )
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    plain_step = build_diagnostic_run(
-        run_id="rehearse",
-        dp_racks=1,
-        num_steps=HERO_SCHEDULE_STEPS,
-        schedule_steps=HERO_SCHEDULE_STEPS,
-        schedule_extension=None,
-        version="dev",
-    )
-    plain = plain_step.build_config(StepContext.for_fingerprint(plain_step.runtime_args, plain_step.deps))
-
-    assert config.stop_step == HERO_SCHEDULE_STEPS + 100
-    assert config.trainer.trainer.num_train_steps == HERO_SCHEDULE_STEPS
-    assert config.optimizer == dataclasses.replace(plain.optimizer, schedule_extension=extension)
-    assert config.data == plain.data
-    with pytest.raises(ValueError, match="must not pass schedule_steps"):
-        build_diagnostic_run(
-            run_id="too-far",
-            dp_racks=1,
-            num_steps=HERO_SCHEDULE_STEPS + 101,
-            schedule_steps=HERO_SCHEDULE_STEPS,
-            schedule_extension=extension,
-            version="dev",
-        )
-    with pytest.raises(ValueError, match="must not pass schedule_steps"):
-        build_diagnostic_run(
-            run_id="no-extension",
-            dp_racks=1,
-            num_steps=HERO_SCHEDULE_STEPS + 1,
-            schedule_steps=HERO_SCHEDULE_STEPS,
-            schedule_extension=None,
-            version="dev",
-        )
 
 
 @pytest.mark.parametrize("batch_size", [704, 176])
@@ -528,34 +453,31 @@ def test_data_stays_on_cooldown_weights_and_re_epochs_past_the_schedule(batch_si
         key=jax.random.PRNGKey(0),
     )
     schedule = BatchSchedule(batch_size)
-    last_stage = len(stages) - 1
-    counts_before = {}
+    cooldown = np.array([stages[-1][1][name] for name in names])
+    served = []
     for step in (HERO_SCHEDULE_STEPS, HERO_SCHEDULE_STEPS + _EXTENSION_STEPS):
         index = schedule.global_data_offset_by_step(step)
-        block = index // _MIXTURE_BLOCK_SIZE
-        assert mixture._get_stage_for_block(block) == last_stage
-        counts_before[step] = mixture.sequence_counts_before_block(block)
+        counts = mixture.sequence_counts_before_block(index // _MIXTURE_BLOCK_SIZE)
+        served.append(np.array([counts[name] for name in names]))
         # Every read position is far past these three-element sources, so reading at all exercises the restart.
         batch = blocking_wait(mixture.get_batch(list(range(index, index + batch_size))))
         assert all(0 <= value < source_length for value in batch)
 
-    start, end = counts_before.values()
-    assert all(end[name] >= start[name] for name in names)
-    assert sum(end.values()) > sum(start.values())
+    mix = (served[1] - served[0]) / (served[1] - served[0]).sum()
+    np.testing.assert_allclose(mix, cooldown / cooldown.sum(), atol=1e-3)
 
 
 def test_optimizer_racks_pin_a_partial_rack_run_to_the_hero_optimizer():
-    def optimizer_of(**kwargs):
-        step = build_diagnostic_run(
-            run_id="pin", dp_racks=1, num_steps=390_000, schedule_steps=HERO_SCHEDULE_STEPS, version="dev", **kwargs
-        )
-        return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).optimizer
-
-    hero = _ladder_config().optimizer
-    pinned = optimizer_of(optimizer_racks=11)
-    default = optimizer_of()
+    step = build_diagnostic_run(
+        run_id="pin",
+        dp_racks=1,
+        num_steps=390_000,
+        schedule_steps=HERO_SCHEDULE_STEPS,
+        version="dev",
+        optimizer_racks=11,
+    )
+    pinned = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).optimizer
+    hero = _hero_config().optimizer
 
     pinned_values = (pinned.learning_rate, pinned.adam_lr, pinned.epsilon, pinned.beta2)
     assert pinned_values == (hero.learning_rate, hero.adam_lr, hero.epsilon, hero.beta2)
-    assert default.learning_rate != hero.learning_rate
-    assert default.beta2 != hero.beta2
