@@ -26,10 +26,12 @@ from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.models.llama_native_lm import NativeLlamaLmConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer_state import trainables_only
 from levanter.testing.helpers import arrays_only
+from levanter.utils.mesh import MeshConfig
 
 
 def _array_leaves(tree):
@@ -320,3 +322,53 @@ def test_train_lm_rejects_weights_only_init_with_trainer_initialize_from():
         )
         with pytest.raises(ValueError, match="trainer.initialize_from"):
             train_lm.main(config)
+
+
+@pytest.mark.tpu
+def test_native_train_lm_exports_local_hf_snapshot(tmp_path, local_gpt2_tokenizer_path):
+    examples = [
+        GrugLmExample.causal((jnp.arange(8, dtype=jnp.int32) + row) % 128) for row in range(2 * len(jax.devices()))
+    ]
+    data_config = LmDataConfig(
+        components={"direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
+        tokenizer=local_gpt2_tokenizer_path,
+    )
+    config = train_lm.TrainLmConfig(
+        data=data_config,
+        model=NativeLlamaLmConfig(
+            reference_checkpoint=str(tmp_path / "no-reference-checkpoint"),
+            hidden_dim=16,
+            intermediate_dim=24,
+            num_layers=1,
+            num_heads=4,
+            num_kv_heads=2,
+            max_seq_len=8,
+            gradient_checkpointing=False,
+        ),
+        hf_save_path=str(tmp_path / "hf"),
+        hf_save_steps=1,
+        trainer=train_lm.TrainerConfig(
+            id="native-export",
+            num_train_steps=2,
+            train_batch_size=len(jax.devices()),
+            per_device_parallelism=-1,
+            max_eval_batches=1,
+            tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "checkpoints")),
+            mesh=MeshConfig(param_mapping={}),
+            require_accelerator=False,
+            load_checkpoint=False,
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_dir=tmp_path / "logs",
+            log_jaxprs=False,
+            log_xla_hlo=False,
+        ),
+    )
+    train_lm.main(config)
+    _assert_training_recorded(str(tmp_path))
+    exported = tmp_path / "hf" / "native-export" / "step-1"
+    metadata = json.loads((exported / "config.json").read_text())
+    assert metadata["num_key_value_heads"] == 2
+    assert list(exported.glob("*.safetensors"))
+    tokenizer = AutoTokenizer.from_pretrained(str(exported), local_files_only=True)
+    assert len(tokenizer) == len(AutoTokenizer.from_pretrained(local_gpt2_tokenizer_path, local_files_only=True))

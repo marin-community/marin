@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
+from rigging.filesystem.storage_path import StoragePath
 
 import levanter
 import levanter.analysis
@@ -187,7 +188,6 @@ def main(config: TrainLmConfig):
             raise ValueError("llama_native requires an unchanged tokenizer")
         if any(
             (
-                config.hf_save_path,
                 config.hf_upload,
                 config.peft_save_path,
                 config.peft_hf_upload,
@@ -195,7 +195,11 @@ def main(config: TrainLmConfig):
                 config.merged_hf_upload,
             )
         ):
-            raise ValueError("llama_native HF export is not yet supported by this entrypoint")
+            raise ValueError("llama_native supports local full-model HF export without uploads or adapters")
+        if config.hf_save_path is not None:
+            if StoragePath(config.hf_save_path).is_remote:
+                raise ValueError("llama_native HF export requires a local save path")
+            config.model.validate_hf_export()
         if config.log_entropy or config.eval_harness is not None:
             raise ValueError("llama_native optional entropy/harness callbacks are not yet supported")
         config = dataclasses.replace(config, trainer=dataclasses.replace(config.trainer, use_explicit_mesh_axes=True))

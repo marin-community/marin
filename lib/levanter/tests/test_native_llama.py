@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 
 import equinox as eqx
 import haliax as hax
@@ -14,13 +15,15 @@ import optax
 from jax.sharding import AxisType, Mesh, PartitionSpec as P
 
 from levanter.layers.attention import AttentionBackend, AttentionMask
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
+from levanter.main.model_init import prepare_model_init_context
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.models.llama_native_lm import NativeLlamaLmConfig
 from levanter.models.llama_native import NativeLlamaSharding
 from levanter.checkpoint import CheckpointerConfig, discover_latest_checkpoint
 from levanter.data.dataset import ListAsyncDataset
 from levanter.eval import TaggedEvaluator
-from levanter.model_loading import load_levanter_checkpoint
+from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.loss import next_token_ids
 from levanter.trainer import ExplicitTrainingLayout, Trainer, TrainerConfig
 from levanter.tracker import NoopTracker, current_tracker
@@ -220,3 +223,56 @@ def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_st
         )
         assert loaded.Vocab.size == 32
         assert evaluator.evaluate(loaded).micro_avg_loss == after_loss
+
+
+def test_native_local_hf_shards_roundtrip_preserves_gqa_rope_weights_and_loss(tmp_path, local_gpt2_marin_tokenizer):
+    tokenizer = local_gpt2_marin_tokenizer
+    config = NativeLlamaLmConfig(
+        reference_checkpoint=str(tmp_path / "no-reference-checkpoint"),
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        max_seq_len=8,
+        rope=DefaultRotaryEmbeddingsConfig(theta=10000, factor=2),
+        gradient_checkpointing=False,
+    )
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh), hax.axis_mapping({}):
+        context = prepare_model_init_context(
+            config, tokenizer=tokenizer, initialize_from_hf=False, use_hf_model_config=False
+        )
+        assert context.converter is not None
+        model = config.build(hax.Axis("vocab", len(tokenizer)), key=jax.random.PRNGKey(12))
+        Batch, Pos = hax.Axis("batch", 1), config.max_Pos
+        tokens = hax.named(jnp.arange(Pos.size)[None, :], (Batch, Pos))
+        segments = hax.named(jnp.array([[0, 0, 0, 0, 1, 1, 1, 1]]), (Batch, Pos))
+        example = LmExample(
+            tokens,
+            hax.named(jnp.ones((1, Pos.size)).at[:, 3].set(0).at[:, -1].set(0), (Batch, Pos)),
+            AttentionMask.causal().with_segment_ids(segments),
+        )
+        loss = eqx.filter_jit(lambda m: m.compute_next_token_loss(example).scalar())
+        expected_loss = loss(model)
+        context.converter.save_pretrained(model, str(tmp_path), max_shard_size=65536)
+        loaded = load_hf_checkpoint(
+            config,
+            str(tmp_path),
+            axis_mapping={},
+            compute_axis_mapping={},
+            tokenizer=tokenizer,
+            compute_dtype=jnp.float32,
+        )
+        expected, actual = model.to_state_dict(), loaded.to_state_dict()
+        assert actual.keys() == expected.keys()
+        for name, value in expected.items():
+            np.testing.assert_array_equal(actual[name], value)
+        np.testing.assert_array_equal(loss(loaded), expected_loss)
+    metadata = json.loads((tmp_path / "config.json").read_text())
+    assert metadata["num_key_value_heads"] == 2
+    assert metadata["rope_scaling"]["factor"] == 2
+    index = json.loads((tmp_path / "model.safetensors.index.json").read_text())
+    assert set(index["weight_map"]) == set(expected)
+    assert len(set(index["weight_map"].values())) > 1
+    assert (tmp_path / "tokenizer.json").is_file()
