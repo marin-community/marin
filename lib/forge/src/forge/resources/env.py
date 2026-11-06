@@ -20,7 +20,7 @@ from taskcompendium.models import EnvironmentRequirements
 
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, canonical_digest
 from forge.effects.issues import Hold, Restart, Transient
-from forge.resources.execution import Notify, retry_effect
+from forge.resources.execution import Notify, retry_effect, websocket_setup_failed
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +141,8 @@ class ShellboxEnv(_RecordedEnv):
         except MachineTerminated as error:
             raise Hold(f"environment terminated: {error}") from error
         except (RuntimeError, SimulationError) as error:
+            if websocket_setup_failed(error):
+                raise Transient(str(error)) from error
             detail = str(error)
             if detail.startswith("ShellSim terminated: ") or detail == "Machine is closed":
                 raise Hold(f"environment terminated: {detail.removeprefix('ShellSim terminated: ')}") from error
@@ -211,6 +213,8 @@ class ShellboxEnvFactory(EnvFactory):
         except MachineTerminated as error:
             raise Hold(f"environment terminated: {error}") from error
         except RuntimeError as error:
+            if websocket_setup_failed(error):
+                raise Transient(str(error)) from error
             if str(error).startswith("ShellSim terminated: "):
                 raise Hold(f"environment terminated: {str(error).removeprefix('ShellSim terminated: ')}") from error
             raise

@@ -32,9 +32,10 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import NumericSpec
 
+from forge.effects.events import Event, Retrying
 from forge.effects.issues import Restart, Transient
 from forge.model.controls import Candidate
-from forge.resources.grading import GradeCandidate, GradingResource, candidate_turns
+from forge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
 from forge.resources.rollouts import Engine, RolloutResource, SolverRollout
 
 
@@ -132,3 +133,29 @@ async def test_grading_repeated_timeout_returns_the_second_grade() -> None:
     grader = GradingResource(engine, "config")
     assert await grader.grade(GradeCandidate(rollout_spec(arithmetic_task()), Candidate("12"))) == timeout
     assert len(engine.run_ids) == 2
+
+
+@pytest.mark.parametrize("failures", [1, 3])
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "Websocket setup failed (status 0): handshake refused",
+        "'NoneType' object has no attribute 'decode'",
+    ],
+)
+async def test_grading_retries_pre_command_websocket_setup_failures(failures: int, reason: str) -> None:
+    interrupted = RolloutInterrupted(Rollout("trial", (), "interrupted"), RolloutOperation.GRADE)
+    interrupted.__cause__ = RuntimeError(f"Iris exec failed: {reason}")
+    success = GradedRollout(Rollout("trial", (), "stop"), GradeResult(Outcome.GRADED, 1, "ok"))
+    engine = FakeEngine((*([interrupted] * failures), success))
+    events: list[Event[None]] = []
+    event = GradeCandidate(rollout_spec(arithmetic_task()), Candidate("12"))
+    resource = GradingResource(engine, "test")
+    if failures == 3:
+        with pytest.raises(Restart, match="exhausted its retry budget"):
+            await grade(event, resource, notify=events.append)
+    else:
+        assert (await grade(event, resource, notify=events.append)).reward == 1
+    assert len(engine.run_ids) == min(failures + 1, 3)
+    assert len(events) == min(failures, 2)
+    assert all(isinstance(record, Retrying) for record in events)

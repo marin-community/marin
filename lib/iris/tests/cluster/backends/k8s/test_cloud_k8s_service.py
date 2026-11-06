@@ -245,3 +245,41 @@ def test_from_kind_valid(kind: str, expected_resource: K8sResource):
 def test_from_kind_invalid():
     with pytest.raises(ValueError, match="Unknown kind: 'Bogus'"):
         K8sResource.from_kind("Bogus")
+
+
+def test_exec_preserves_websocket_construction_failure_reason(monkeypatch):
+    """Exercise the real 36.0.3 client masking bug without opening a socket."""
+    calls = []
+
+    def fail_handshake(*args, **kwargs):
+        calls.append(args)
+        raise RuntimeError("synthetic websocket handshake failure")
+
+    monkeypatch.setattr("kubernetes.stream.ws_client.WSClient", fail_handshake)
+    svc = CloudK8sService(namespace="iris")
+    monkeypatch.setattr(svc, "create_api_client", k8s_service.kubernetes.client.ApiClient)
+    with pytest.raises(
+        RuntimeError, match=r"Websocket setup failed \(status 0\): synthetic websocket handshake failure"
+    ) as raised:
+        svc.exec("task-pod", ["true"], container="task")
+    assert isinstance(raised.value.__cause__, k8s_service.ApiException)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status", [None, 403])
+def test_exec_does_not_reclassify_unrelated_attribute_errors(monkeypatch, status):
+    svc = _service_with_exec_stream(monkeypatch, _FakeExecStream(returncode=0))
+    error = AttributeError("'NoneType' object has no attribute 'decode'")
+
+    def broken_stream(*args, **kwargs):
+        if status is not None:
+            try:
+                raise k8s_service.ApiException(status=status, reason="forbidden")
+            except k8s_service.ApiException:
+                raise error from None
+        raise error
+
+    monkeypatch.setattr(k8s_service.kubernetes.stream, "stream", broken_stream)
+    with pytest.raises(AttributeError) as raised:
+        svc.exec("task-pod", ["true"])
+    assert raised.value is error

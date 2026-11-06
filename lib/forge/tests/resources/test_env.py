@@ -13,7 +13,7 @@ from shellbox.machine import Command, ExitReason, Machine, MachineTerminated, Pa
 from shellsim import SimulationError
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
-from forge.effects.events import Event, Note, Resolved
+from forge.effects.events import Event, Note, Resolved, Retrying
 from forge.effects.issues import Hold, Restart, Transient
 from forge.resources.env import (
     CommandResult,
@@ -253,3 +253,21 @@ async def test_relative_paths_use_environment_workdir(workdir: str) -> None:
     assert await env.read(PurePosixPath("release_notes.py")) == b"notes"
     await env.write(PurePosixPath("/absolute.py"), b"absolute")
     assert machine.files["/absolute.py"] == b"absolute"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "Websocket setup failed (status 0): handshake refused",
+        "'NoneType' object has no attribute 'decode'",
+    ],
+)
+async def test_websocket_setup_failure_retries_only_three_times(reason: str) -> None:
+    machine = MemoryMachine()
+    machine.failure = RuntimeError(f"Iris exec failed: {reason}")
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    events: list[Event[None]] = []
+    with pytest.raises(Restart, match="exhausted its retry budget"):
+        await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
+    assert machine.calls == 3
+    assert len(events) == 2 and all(isinstance(event, Retrying) for event in events)

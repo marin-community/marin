@@ -741,11 +741,24 @@ class CloudK8sService:
                     kwargs["container"] = container
 
                 with self.create_api_client() as exec_api_client:
-                    resp = kubernetes.stream.stream(
-                        kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
-                        _preload_content=False,
-                        **kwargs,
-                    )
+                    try:
+                        resp = kubernetes.stream.stream(
+                            kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
+                            _preload_content=False,
+                            **kwargs,
+                        )
+                    except AttributeError as error:
+                        # kubernetes 36.0.3 decodes a None ApiException body when websocket
+                        # construction fails, hiding its reason before any command is sent.
+                        cause = error.__context__
+                        if (
+                            str(error) != "'NoneType' object has no attribute 'decode'"
+                            or not isinstance(cause, ApiException)
+                            or cause.status != 0
+                            or cause.body is not None
+                        ):
+                            raise
+                        raise RuntimeError(f"Websocket setup failed (status 0): {cause.reason}") from cause
                     try:
                         resp.run_forever(timeout=effective_timeout)
                         stdout = resp.read_stdout(timeout=0) or ""
