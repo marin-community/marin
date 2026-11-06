@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""InferenceX deploy-target grants; activation belongs to the global IAM stack."""
+"""Knotmeter deploy-target grants; activation belongs to the global IAM stack."""
 
 from collections.abc import Mapping
 from dataclasses import replace
@@ -21,7 +21,7 @@ _REGION = "us-central1"
 
 def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> GcpIamGrantSet:
     """Reuse Marina's human viewers and give ingestion its scoped machine access."""
-    runtime = f"serviceAccount:marin-inferencex@{project}.iam.gserviceaccount.com"
+    runtime = f"serviceAccount:marin-knotmeter@{project}.iam.gserviceaccount.com"
     ingest = f"serviceAccount:github-iris@{project}.iam.gserviceaccount.com"
     deploy = f"serviceAccount:marin-cd-cloud-run-deploy@{project}.iam.gserviceaccount.com"
     marina_automation = {
@@ -39,22 +39,22 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
         project_grants=(GcpRoleGrant(role="roles/cloudsql.client", members=(runtime, ingest)),),
         secrets=(
             GcpSecretIam(
-                secret="cloudsql-inferencex-reader-password",
+                secret="cloudsql-knotmeter-reader-password",
                 grants=(GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime,)),),
             ),
             GcpSecretIam(
-                secret="cloudsql-inferencex-writer-password",
+                secret="cloudsql-knotmeter-writer-password",
                 grants=(GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(ingest,)),),
             ),
             GcpSecretIam(
-                secret="marin-inferencex-invalidate-secret",
+                secret="marin-knotmeter-invalidate-secret",
                 grants=(GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime, ingest)),),
             ),
         ),
         artifact_repositories=(
             GcpArtifactRepositoryIam(
                 location=_REGION,
-                repository="marin-inferencex",
+                repository="marin-knotmeter",
                 grants=(
                     GcpRoleGrant(role="roles/artifactregistry.writer", members=(deploy,)),
                     GcpRoleGrant(role="roles/artifactregistry.reader", members=(ingest,)),
@@ -64,7 +64,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
         cloud_run_iap=(
             GcpCloudRunIapIam(
                 location=_REGION,
-                service="marin-inferencex",
+                service="marin-knotmeter",
                 iap_grants=viewers,
                 service_grants=(GcpRoleGrant(role="roles/run.invoker", members=(iap_agent,)),),
             ),
