@@ -462,7 +462,8 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-_TRAIN_LOADER_BUFFER_SIZE = 512
+# Queued batches live in device memory, 4 MiB per device each at 262K. At 29 s/step, 64 batches is 31 minutes of data.
+_TRAIN_LOADER_BUFFER_SIZE = 64
 # On one GB200 tray, four-batch requests delivered the first data in 3.7s and sustained 3.4 batches/s.
 _TRAIN_LOADER_FETCH_BATCH_SIZE = 4
 
