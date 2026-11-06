@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum, StrEnum
 from pathlib import PurePath
+from types import MappingProxyType
 from typing import ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel
@@ -125,3 +126,6 @@ class StageCompleted(Event[None]):
     config_digest: str
     exit: str
     refs: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "refs", MappingProxyType(dict(self.refs)))

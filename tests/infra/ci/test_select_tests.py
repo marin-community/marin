@@ -104,6 +104,17 @@ def test_forge_source_change_selects_external_importers_and_its_dedicated_suite(
     assert "forge-unit" in selection.suites
 
 
+@pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
+def test_forge_source_change_runs_affected_forge_tests_locally_and_in_ci(
+    tmp_path: Path, select_tests: Callable[..., SelectionResult]
+) -> None:
+    write(tmp_path, "lib/forge/src/forge/__init__.py")
+    write(tmp_path, "lib/forge/src/forge/events.py", "class Event: pass\n")
+    write(tmp_path, "lib/forge/tests/test_events.py", "from forge.events import Event\n")
+    selection = select_tests(["lib/forge/src/forge/events.py"], tmp_path)
+    assert leg_paths(selection.matrix, "forge") == ["lib/forge/tests/test_events.py"]
+
+
 def test_selection_is_empty_when_nothing_depends_on_the_change(tmp_path: Path) -> None:
     _workspace(tmp_path)
     write(tmp_path, "lib/rigging/src/rigging/unused.py", "X = 1\n")

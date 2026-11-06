@@ -33,6 +33,7 @@ from pathlib import Path, PurePosixPath
 # Ordered list of workspace member short names.
 SCOPES: tuple[str, ...] = (
     "rigging",
+    "forge",
     "haliax",
     "iris",
     "fray",
@@ -61,7 +62,6 @@ class SourceRoot:
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
-    SourceRoot("lib/forge/src/forge", "lib/forge/src"),
     SourceRoot("lib/rolloutengine/src/rolloutengine", "lib/rolloutengine/src"),
     SourceRoot("lib/shellbox/src/shellbox", "lib/shellbox/src"),
     SourceRoot("lib/taskcompendium/src/taskcompendium", "lib/taskcompendium/src"),
@@ -88,6 +88,7 @@ BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
+    "forge": "marin-forge",
     "haliax": "marin-haliax",
     "iris": "marin-iris",
     "fray": "marin-fray",

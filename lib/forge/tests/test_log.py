@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -15,6 +14,8 @@ from forge.effects.issues import LogFailure
 from forge.effects.log import EventLog, JsonlSink, Record, Status, fold
 
 from .effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed
+
+pytestmark = pytest.mark.asyncio
 
 
 async def test_jsonl_reload_in_new_process_preserves_typed_results_and_replay_keys(tmp_path: Path) -> None:
@@ -32,21 +33,24 @@ async def test_jsonl_reload_in_new_process_preserves_typed_results_and_replay_ke
     resumed = EventLog(replay_from=loaded)
     assert resumed.lookup(Query({"a": "first", "z": "last"}), (fingerprint,)) == answer
     script = """
-import asyncio, sys
-from tests.effect_fakes import Answer, Query
-from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy
+import asyncio, importlib.util, sys
+from forge.effects.events import Fingerprint, ReplayPolicy
 from forge.effects.log import EventLog, JsonlSink
+spec = importlib.util.spec_from_file_location(sys.argv[2], sys.argv[3])
+assert spec is not None and spec.loader is not None
+fake = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = fake
+spec.loader.exec_module(fake)
 async def main():
     log = EventLog(replay_from=await JsonlSink(sys.argv[1]).read())
-    value = log.lookup(Query({"a":"first", "z":"last"}), (Fingerprint("fake", "digest", ReplayPolicy.CACHE),))
-    assert isinstance(value, Answer)
+    value = log.lookup(fake.Query({"a":"first", "z":"last"}), (Fingerprint("fake", "digest", ReplayPolicy.CACHE),))
+    assert isinstance(value, fake.Answer)
     assert value.data == bytes([0, 255])
     assert value.labels == {"__forge_bytes__": "this is text"}
 asyncio.run(main())
 """
     result = subprocess.run(
-        [sys.executable, "-c", script, str(path)],
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])},
+        [sys.executable, "-c", script, str(path), Query.__module__, str(Path(__file__).with_name("effect_fakes.py"))],
         capture_output=True,
         text=True,
         timeout=30,

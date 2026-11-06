@@ -13,6 +13,8 @@ from forge.effects.log import EventLog, Missing
 
 from .effect_fakes import FlakySink, Number
 
+pytestmark = pytest.mark.asyncio
+
 
 async def test_inner_handler_wins_and_all_observers_see_resolutions() -> None:
     log = EventLog()
