@@ -109,11 +109,14 @@ from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
 from omegaconf import OmegaConf
 from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
+from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 configs = [load_launch_config(path) for path in sys.argv[1:]]
 
 async def check_panel_request(config):
-    sampling = OmegaConf.to_container(config.skyrl.generator.eval_sampling_params, resolve=True)
+    sampling = get_sampling_params_for_backend(
+        config.skyrl.generator.backend, config.skyrl.generator.eval_sampling_params
+    )
     training = OmegaConf.to_container(config.skyrl.generator.sampling_params, resolve=True)
     class Endpoint:
         model_name = "fixture"
@@ -203,8 +206,8 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
         StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
     expected = {
-        "speed-short": "6fdc7a6d",
-        "data-short": "ca281169",
+        "speed-short": "343b2a19",
+        "data-short": "fa2a3705",
         "speed-medium": "22a2b760",
         "learning-medium": "4a0c6aac",
         "speed-long": "e81929f4",
