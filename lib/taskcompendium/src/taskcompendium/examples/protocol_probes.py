@@ -4,9 +4,8 @@
 """One minimal evaluation task per agent protocol.
 
 Each answer is a nonce derived from the task id, so a model cannot guess it without following the
-protocol: writing the answer file, running the shell tool, or fetching the declared page. On those
-probes the ordinary reward is the protocol result. The thinking probe asks for a bare token; it
-tests a launch that turns thinking off, whose response tokens show whether reasoning was emitted.
+protocol: writing the answer file, running the shell tool, or fetching the declared page, so the
+ordinary reward is the protocol result.
 """
 
 import hashlib
@@ -35,7 +34,6 @@ from taskcompendium.runtime.resources import inline_resource
 class ProtocolCheck(StrEnum):
     REQUIRED_FILE = "required_file"
     TOOL_EXECUTION = "tool_execution"
-    THINKING_DISABLED = "thinking_disabled"
     URL_LOADING = "url_loading"
 
 
@@ -46,12 +44,10 @@ ANSWER_PATH = f"{WORKDIR}/answer.txt"
 NONCE_FILE = "probe/nonce"
 PROBE_URL = "https://protocol-probe.invalid/token"
 FETCH_REQUIREMENT = "web"
-PROBE_TURNS = 4
-"""Model turns enough to call a tool, read its result and answer."""
 TASK_ENVIRONMENT = EnvironmentRequirements(
     command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem"), working_directory=WORKDIR
 )
-"""The file and tool probes run in a shell simulator; the thinking and URL probes need no machine."""
+"""The file and tool probes run in a shell simulator; the URL probe needs no machine."""
 COMMAND_TOOL = FunctionDefinition(
     name="run_command",
     description="Run a Bash command in the workspace and return its exit code and output.",
@@ -62,11 +58,6 @@ COMMAND_TOOL = FunctionDefinition(
         "additionalProperties": False,
     },
 )
-
-
-def locked_grader_environment(lock_url: str) -> EnvironmentRequirements:
-    """Grade the answer file in a process with the verifyit lock at ``lock_url``."""
-    return EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=lock_url)
 
 
 def probe_nonce(task_id: str) -> str:
@@ -135,11 +126,6 @@ def probe_tasks(*, grader_environment: EnvironmentRequirements, variants: int) -
                     interaction_tools=(COMMAND_TOOL,),
                     tool_bindings={COMMAND_TOOL.name: ShellToolBinding(command_parameter="command")},
                     resources=ResourceGroups(worker=(inline_resource(NONCE_FILE, probe_nonce(tool_id).encode()),)),
-                ),
-                _task(
-                    f"{ProtocolCheck.THINKING_DISABLED}-{index}",
-                    "Reply with only this token: {nonce}",
-                    EnvironmentRequirements(),
                 ),
                 _task(
                     url_id,
