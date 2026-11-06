@@ -1208,6 +1208,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(
             ("missing_tokenizer", "config.inputs.model.tokenizer_revision", ...),
             ("missing_control", "config.run.id", ...),
             ("malformed_identity", "config.inputs.model.identity", None),
+            ("malformed_panel", "config.inputs.validation_data.0.identity", None),
             ("protocol", "config.skyrl.generator.eval_sampling_params.temperature", 1),
             ("file", "config.inputs.validation_data.0.relative_path", "validation.parquet"),
             (

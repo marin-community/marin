@@ -457,9 +457,10 @@ def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) ->
         )
     expected = f"{binding.name}@{binding.version}"
     sources = launch["inputs"].get("evaluation_data", {}).get(evaluation.name, launch["inputs"]["validation_data"])
-    recorded = {source.get("identity", "").partition(":")[0] for source in sources}
-    if not recorded or "" in recorded or any("@" not in identity for identity in recorded):
+    identities = [source.get("identity") for source in sources]
+    if not identities or any(not isinstance(identity, str) or "@" not in identity for identity in identities):
         raise InvalidComparison(f"recorded panel version is missing; expected {panel}")
+    recorded = {identity.partition(":")[0] for identity in identities}
     if recorded != {expected}:
         raise InvalidComparison(
             f"recorded panel differs from preset: expected {panel} ({expected}); recorded {sorted(recorded)}"
@@ -612,7 +613,10 @@ def _control_panel_path(path: str, preset: presets.Preset) -> str | None:
     except FileNotFoundError:
         return path
     sources = launch["inputs"].get("evaluation_data", {}).get(evaluation.name, launch["inputs"]["validation_data"])
-    identities = {source.get("identity", "").partition(":")[0] for source in sources}
+    identities = [source.get("identity") for source in sources]
+    if any(not isinstance(identity, str) for identity in identities):
+        return path
+    identities = {identity.partition(":")[0] for identity in identities}
     default = presets.default_selection()
     expected = evaluation.tasks(default, default)
     if (
