@@ -371,6 +371,13 @@ def test_task_materializes_the_forwarded_launch_document(tmp_path: Path, monkeyp
     if storage == "s3":
         export_root = "s3://tracker-test/exports"
         filesystem = fsspec.filesystem("memory")
+        list_directory = filesystem.ls
+
+        def list_objects(path, detail=True, **kwargs):
+            entries = list_directory(path, detail=detail, **kwargs)
+            return entries if detail else [entry.removeprefix("s3://") for entry in entries]
+
+        monkeypatch.setattr(filesystem, "ls", list_objects)
         resolve = io.filesystem_and_path
         monkeypatch.setattr(
             io, "filesystem_and_path", lambda uri: (filesystem, uri) if uri.startswith("s3://") else resolve(uri)
