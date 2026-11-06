@@ -13,9 +13,9 @@ The control depends only on the rung and the seed, so every candidate reuses the
 
 ## Commands
 
-Caches and the Eval Policy manifest live under the `MARIN_PREFIX` that the training cluster (`cw-us-east-02a`) sets
-in its Iris config, so they sit beside the Track's base cache. Commands that load the tokenizer on your machine
-(`check`, `build-answer-bpb`, `prepare` without `--submit`) also need `MARIN_PREFIX` set to that prefix.
+Candidate caches live under the `MARIN_PREFIX` that the training cluster (`cw-us-east-02a`) sets in its Iris config,
+so they sit beside the Track's base cache. Commands that load the tokenizer on your machine (`check`, and `prepare`
+without `--submit`) also need `MARIN_PREFIX` set to that prefix.
 
 ```bash
 # 1. Intake: pin the head commit, check the license, estimate the size and epochs at each rung.
@@ -59,8 +59,10 @@ Every run logs, at its end:
 | Eval Policy code (HumanEval+, MBPP+, CRUXEval-O) | `eval/eval_policy/code/macro_bpb` |
 
 The Eval Policy groups are the BPB of the gold answer after the prompt, on the non-agentic benchmarks of the Marin
-Eval Policy (marin#10197): small ladder models score near chance on the benchmarks themselves. `uv run data-belay build-answer-bpb`
-writes these caches; GPQA is left out because its dataset is gated. The verdict averages each Eval Policy group's
+Eval Policy (marin#10197): small ladder models score near chance on the benchmarks themselves. The caches are
+validation steps in [`experiments/datasets/eval_policy_answer_bpb.py`](../datasets/eval_policy_answer_bpb.py), which
+the launcher adds with `--eval-policy-answer-bpb` and builds on first use. GPQA is left out because its dataset is
+gated. The verdict averages each Eval Policy group's
 task BPBs (`eval/eval_policy/<group>/<task>/bpb`) and leaves out BoolQ, which is logged: its one-token yes/no answer
 varied 10.7% between control seeds.
 

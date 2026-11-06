@@ -19,8 +19,6 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.belay.config import TRACKS, Track
 from experiments.belay.submit import track_command
-from experiments.data_belay.answer_bpb import ANSWER_BPB_PATH, build_answer_bpb
-from experiments.data_belay.answer_bpb import MANIFEST_NAME as ANSWER_BPB_MANIFEST
 from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
 from experiments.data_belay.judge import HARM_LIMITS, judge
 from experiments.data_belay.prepare import CACHE_PATH, PreparedCache, build_cache, plan_cache
@@ -157,19 +155,6 @@ def prepare(
     click.echo(f"cache: {cache.root} ({manifest.stats.total_tokens:,} tokens), runs named {cache.candidate}")
 
 
-@cli.command("build-answer-bpb")
-def build_answer_bpb_command() -> None:
-    """Write the Eval Policy gold-answer BPB caches and their manifest under the training cluster's prefix."""
-    logging.basicConfig(level=logging.INFO)
-    configure_coreweave_s3()
-    root = prefix_join(_training_prefix(), ANSWER_BPB_PATH)
-    for cache in build_answer_bpb(load_tokenizer(V16384_TOKENIZER), root):
-        click.echo(
-            f"{cache.name}: {cache.examples} examples, {cache.dropped} dropped, "
-            f"{cache.answer_tokens:,} answer tokens"
-        )
-
-
 @cli.command()
 @click.option("--rung", type=click.Choice(DATA_BELAY_RUNGS), required=True)
 @click.option("--seed", type=int, required=True)
@@ -182,11 +167,11 @@ def build_answer_bpb_command() -> None:
 @click.option("--submit", is_flag=True, help=f"Submit to {CLUSTER}; without it, print the command.")
 def train(rung: str, seed: int, mix_cache: str | None, num_steps: int | None, submit: bool) -> None:
     """Train one arm on the Belay `vanilla` Track: the control, or the base cache mixed with a prepared cache."""
-    configure_coreweave_s3()
-    flags = ["--eval-manifest", prefix_join(_training_prefix(), f"{ANSWER_BPB_PATH}/{ANSWER_BPB_MANIFEST}")]
+    flags = ["--eval-policy-answer-bpb"]
     if mix_cache is None:
         run_id = control_run_id(rung, seed)
     else:
+        configure_coreweave_s3()
         cache = PreparedCache.read(mix_cache)
         run_id = treatment_run_id(rung, cache.candidate, seed)
         flags += ["--mix-cache", cache.train_cache, "--mix-share", str(cache.share)]

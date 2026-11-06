@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gold-answer BPB on the non-agentic Eval Policy benchmarks (marin#10197), as packed validation caches.
+"""Gold-answer BPB on the non-agentic Eval Policy benchmarks (marin#10197), as validation steps.
 
-Small ladder models score near chance on these benchmarks, so the Data Belay measures how well a model predicts the
-gold answer after the question: each example is ``BOS prompt answer EOS``, and the loss weight is 1 only where the
-next token is an answer token. Examples are packed into 4,096-token sequences; the EOS between them starts a new
-attention segment, so an example never sees the one before it. Each task is one cache, tagged with its group, so a
-run logs the BPB of every task and the macro BPB of every group.
+Small models score near chance on these benchmarks, so this measures how well a model predicts the gold answer after
+the question: each example is ``BOS prompt answer EOS``, and the loss weight is 1 only where the next token is an
+answer token. Examples are packed into ``seq_len``-token rows; the EOS between them starts a new attention segment,
+so an example never sees the one before it. Each task is one cache, named ``eval_policy/<group>/<task>``, so a run
+logs the BPB of every task and the macro BPB of every group.
 
 GPQA is left out: its dataset is gated, and the cluster's Hugging Face token has no access.
 """
@@ -22,20 +22,24 @@ from enum import StrEnum
 
 import numpy as np
 from datasets import load_dataset
-from levanter.data.text.formats import PrebuiltCacheProcessor
+from fray.cluster import ResourceConfig
+from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text.formats import PrebuiltCacheProcessor, PrebuiltLmDatasetFormat
 from levanter.store.cache import CacheLedger, write_levanter_cache
-from levanter.tokenizers import MarinTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
+from marin.execution.remote import remote
 from marin.processing.tokenize.store_builder import write_stats_json
-from rigging.filesystem.storage_path import StoragePath, prefix_join
-
-from experiments.grug.fast_track.launch import SEQ_LEN, PrebuiltEvalComponent, PrebuiltEvalManifest
+from rigging.filesystem.storage_path import prefix_join
 
 logger = logging.getLogger(__name__)
 
-ANSWER_BPB_VERSION = "eval-policy-answer-bpb-v1"
-# Under the training cluster's MARIN_PREFIX.
-ANSWER_BPB_PATH = f"data_belay/eval/{ANSWER_BPB_VERSION}"
-MANIFEST_NAME = "manifest.json"
+# The step version for each tokenizer. The step names are the W&B metric names, so they cannot carry the tokenizer
+# the way Paloma's names do; a new tokenizer needs its own version here.
+ANSWER_BPB_VERSIONS = {"hero-bpe-v16384": "2026.11.06"}
+# Downloads and tokenizes one task; TriviaQA's rc.nocontext split is the largest download.
+BUILD_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="16g", disk="32g")
 # A fixed seeded sample of a larger task keeps one run's eval to a few minutes.
 MAX_EXAMPLES_PER_TASK = 2000
 SAMPLE_SEED = 0
@@ -221,6 +225,9 @@ TASKS = (
 )
 
 
+TASKS_BY_NAME = {task.name: task for task in TASKS}
+
+
 def task_component_name(task: AnswerTask) -> str:
     """Validation component name: the run logs the task's BPB and the macro BPB of its group and of all tasks."""
     return f"eval_policy/{task.group}/{task.name}"
@@ -283,37 +290,54 @@ def pack_examples(
 
 
 @dataclasses.dataclass(frozen=True)
-class TaskCache:
-    """One task's validation cache and its size."""
-
-    name: str
-    """Component name, from ``task_component_name``."""
-    cache_dir: str
-    """Component root; the cache itself is its ``validation`` split."""
-    examples: int
-    dropped: int
-    answer_tokens: int
+class AnswerBpbCacheConfig:
+    task: str
+    """The task's name in ``TASKS``."""
+    tokenizer: str
+    seq_len: int
+    output_path: str
 
 
-def build_task_cache(task: AnswerTask, tokenizer: MarinTokenizer, root: str) -> TaskCache:
-    examples = task_examples(task)
-    encoded = [encode_example(tokenizer, example) for example in examples]
-    kept = [e for e in encoded if len(e[0]) <= SEQ_LEN]
-    cache_dir = prefix_join(root, task.name)
-    split_dir = prefix_join(cache_dir, "validation")
+class AnswerBpbCache(Artifact):
+    """One task's packed cache: the component root, whose ``validation`` split holds the rows."""
+
+    def as_component(self) -> DatasetComponent:
+        """A validation component that scores each token with its loss weight."""
+        if self.record is None:
+            raise ValueError(f"{self.path}: answer-BPB cache has no record")
+        task = TASKS_BY_NAME[self.record.config["task"]]
+        fmt = PrebuiltLmDatasetFormat(input_ids_key=INPUT_IDS_KEY, loss_weights_key=LOSS_WEIGHTS_KEY)
+        return DatasetComponent(source=None, cache_dir=self.path, format=fmt, tags=[task_component_name(task)])
+
+
+def build_answer_bpb_cache(config: AnswerBpbCacheConfig) -> None:
+    task = TASKS_BY_NAME[config.task]
+    tokenizer = load_tokenizer(config.tokenizer)
+    encoded = [encode_example(tokenizer, example) for example in task_examples(task)]
+    kept = [e for e in encoded if len(e[0]) <= config.seq_len]
+    split_dir = prefix_join(config.output_path, "validation")
     processor = PrebuiltCacheProcessor(INPUT_IDS_KEY, LOSS_WEIGHTS_KEY)
-    write_levanter_cache(pack_examples(kept, SEQ_LEN, tokenizer.eos_token_id), split_dir, metadata=processor.metadata)
+    rows = pack_examples(kept, config.seq_len, tokenizer.eos_token_id)
+    write_levanter_cache(rows, split_dir, metadata=processor.metadata)
     write_stats_json(split_dir, CacheLedger.load(split_dir))
     answer_tokens = int(sum(sum(weights) for _, weights in kept))
     dropped = len(encoded) - len(kept)
     logger.info("%s: %d examples (%d dropped), %d answer tokens", task.name, len(kept), dropped, answer_tokens)
-    return TaskCache(task_component_name(task), cache_dir, len(kept), dropped, answer_tokens)
 
 
-def build_answer_bpb(tokenizer: MarinTokenizer, root: str) -> list[TaskCache]:
-    """Write every task's cache under ``root`` and a manifest that the launcher reads."""
-    caches = [build_task_cache(task, tokenizer, root) for task in TASKS]
-    components = tuple(PrebuiltEvalComponent(c.name, c.cache_dir) for c in caches)
-    manifest = PrebuiltEvalManifest(SEQ_LEN, INPUT_IDS_KEY, LOSS_WEIGHTS_KEY, components)
-    StoragePath(prefix_join(root, MANIFEST_NAME)).write_text(manifest.to_json())
-    return caches
+def eval_policy_answer_bpb_datasets(*, tokenizer: str, seq_len: int) -> dict[str, ArtifactStep[AnswerBpbCache]]:
+    """One validation step per task, keyed by its component name."""
+    if tokenizer not in ANSWER_BPB_VERSIONS:
+        raise ValueError(f"no answer-BPB cache version for tokenizer {tokenizer!r}; add one to ANSWER_BPB_VERSIONS")
+    run = remote(build_answer_bpb_cache, resources=BUILD_RESOURCES)
+    steps = {}
+    for task in TASKS:
+        name = task_component_name(task)
+        steps[name] = ArtifactStep(
+            name=name,
+            version=ANSWER_BPB_VERSIONS[tokenizer],
+            artifact_type=AnswerBpbCache,
+            run=run,
+            build_config=lambda ctx, task=task: AnswerBpbCacheConfig(task.name, tokenizer, seq_len, ctx.output_path),
+        )
+    return steps

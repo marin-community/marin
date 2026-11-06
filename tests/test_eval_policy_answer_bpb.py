@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from experiments.data_belay.answer_bpb import (
+from experiments.datasets.eval_policy_answer_bpb import (
     INPUT_IDS_KEY,
     LOSS_WEIGHTS_KEY,
     AnswerExample,

@@ -10,7 +10,6 @@ data-matches or compute-matches it (``--match``, default data), or sets ``--batc
 """
 
 import dataclasses
-import json
 import math
 import os
 import shlex
@@ -30,7 +29,7 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
-from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFormat
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
@@ -40,8 +39,9 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import temporary_checkpoint_base_path
-from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datasets.eval_policy_answer_bpb import eval_policy_answer_bpb_datasets
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
@@ -323,44 +323,6 @@ class TrainMix:
             raise ValueError(f"mix share must be in (0, 1], got {self.share}")
 
 
-@dataclasses.dataclass(frozen=True)
-class PrebuiltEvalComponent:
-    name: str
-    cache_dir: str
-    """Component root; the cache is its ``validation`` split."""
-
-
-@dataclasses.dataclass(frozen=True)
-class PrebuiltEvalManifest:
-    """Prebuilt validation caches for ``--eval-manifest``: rows of ``seq_len`` tokens with per-token loss weights."""
-
-    seq_len: int
-    input_ids_key: str
-    loss_weights_key: str
-    components: tuple[PrebuiltEvalComponent, ...]
-
-    def to_json(self) -> str:
-        return json.dumps(dataclasses.asdict(self), indent=2)
-
-    @classmethod
-    def from_json(cls, text: str) -> typing.Self:
-        data = json.loads(text)
-        components = tuple(PrebuiltEvalComponent(c["name"], c["cache_dir"]) for c in data["components"])
-        return cls(data["seq_len"], data["input_ids_key"], data["loss_weights_key"], components)
-
-
-def _manifest_validation_components(manifest_path: str) -> dict[str, DatasetComponent]:
-    """Validation components from a :class:`PrebuiltEvalManifest` at ``manifest_path``."""
-    manifest = PrebuiltEvalManifest.from_json(StoragePath(manifest_path).read_text())
-    if manifest.seq_len != SEQ_LEN:
-        raise ValueError(f"{manifest_path} packs {manifest.seq_len}-token rows; the ladder trains on {SEQ_LEN}")
-    fmt = PrebuiltLmDatasetFormat(input_ids_key=manifest.input_ids_key, loss_weights_key=manifest.loss_weights_key)
-    return {
-        c.name: DatasetComponent(source=None, cache_dir=c.cache_dir, format=fmt, tags=[c.name])
-        for c in manifest.components
-    }
-
-
 def _flat_cache_data_config(
     *,
     ctx: StepContext,
@@ -368,14 +330,13 @@ def _flat_cache_data_config(
     tokenizer: str,
     train_cache_dir: str,
     mix: TrainMix | None = None,
-    eval_manifest: str | None = None,
 ) -> LmDataConfig:
     """Straight-through training on one pre-built flat cache, or two at constant shares (``mix``).
 
     Mirrors the Harrier config's validation wiring, with constant weights -- no mixture phases, no simulated
     epoching. ``mix`` adds a second flat cache at a constant share of the batches; it repeats from its start if it
     runs out. ``validation`` sets are folded in as zero-weight components (built as executor deps, tokenized with the
-    same ``tokenizer``), and so are the prebuilt caches that ``eval_manifest`` lists.
+    same ``tokenizer``).
     """
     components = {
         "train": DatasetComponent(
@@ -396,8 +357,6 @@ def _flat_cache_data_config(
         val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
     else:
         val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
-    if eval_manifest is not None:
-        val_components |= _manifest_validation_components(eval_manifest)
     collisions = components.keys() & val_components.keys()
     if collisions:
         raise ValueError(f"validation components collide with the training component: {sorted(collisions)}")
@@ -453,7 +412,7 @@ def build_h100_ladder_run(
     expert_axis_size: int | None = None,
     output_path: str | None = None,
     mix: TrainMix | None = None,
-    eval_manifest: str | None = None,
+    eval_policy_answer_bpb: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -556,6 +515,8 @@ def build_h100_ladder_run(
             tokenizer=tokenizer, tag=eval_tag, raw_prefix=_PALOMA_DETOK_RAW, version=PALOMA_DETOK_VERSION
         ).values(),
     ]
+    if eval_policy_answer_bpb:
+        validation += eval_policy_answer_bpb_datasets(tokenizer=tokenizer, seq_len=SEQ_LEN).values()
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
@@ -614,7 +575,6 @@ def build_h100_ladder_run(
             tokenizer=tokenizer,
             train_cache_dir=train_cache_dir,
             mix=mix,
-            eval_manifest=eval_manifest,
         )
         return GrugRunConfig(
             model=model,
@@ -918,9 +878,9 @@ def _layer_skip_rule(
     help="Share of the training tokens from --mix-cache, in (0, 1].",
 )
 @click.option(
-    "--eval-manifest",
-    default=None,
-    help="JSON PrebuiltEvalManifest of extra validation caches, scored with their per-token loss weights.",
+    "--eval-policy-answer-bpb",
+    is_flag=True,
+    help="Also score gold-answer BPB on the Eval Policy benchmarks (experiments.datasets.eval_policy_answer_bpb).",
 )
 @click.option(
     "--expert-axis-size",
@@ -1008,7 +968,7 @@ def main(
     train_cache: str,
     mix_cache: str | None,
     mix_share: float | None,
-    eval_manifest: str | None,
+    eval_policy_answer_bpb: bool,
     output_path: str | None,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
@@ -1061,7 +1021,7 @@ def main(
         train_cache_dir=train_cache,
         output_path=output_path,
         mix=mix,
-        eval_manifest=eval_manifest,
+        eval_policy_answer_bpb=eval_policy_answer_bpb,
     )
 
 

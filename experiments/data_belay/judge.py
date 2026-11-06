@@ -26,7 +26,7 @@ from enum import StrEnum
 
 from scipy import stats
 
-from experiments.data_belay.answer_bpb import TASKS, TaskGroup, task_component_name
+from experiments.datasets.eval_policy_answer_bpb import TASKS, TaskGroup, task_component_name
 
 # BoolQ is logged but left out of the verdict: its one-token yes/no answer measures the model's prior for "yes", whose
 # BPB varied 10.7% between control seeds at d512 (PIQA and WinoGrande: 0.6%).
