@@ -27,7 +27,7 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, 
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import CheckpointerConfig, discover_checkpoint_candidates, save_checkpoint
+from levanter.checkpoint import CheckpointerConfig, discover_checkpoint_candidates, load_checkpoint, save_checkpoint
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
@@ -1673,17 +1673,17 @@ def test_a_clipping_run_restores_a_checkpoint_saved_without_clipping(tmp_path, m
 _EXTENSION_LOGGER = "test_schedule_extension_run"
 
 
+@dataclasses.dataclass(frozen=True)
+class _SgdOnTheHeroSchedule(GrugMoeMuonHConfig):
+    """Reads the real schedule, for the training loop: MuonH's Newton-Schulz rejects the one-device hero mesh."""
+
+    def build(self, num_train_steps):
+        return optax.inject_hyperparams(optax.sgd)(learning_rate=self.lr_scheduler(num_train_steps))
+
+
 @pytest.fixture
 def extension_run(tmp_path, monkeypatch):
     """Run the real loop and checkpointing with a 4-step schedule and a 2-step extension from 5% to 1% of peak."""
-    # MuonH's sharded Newton-Schulz does not lower on one CPU device. SGD reads the same schedule.
-    monkeypatch.setattr(
-        GrugMoeMuonHConfig,
-        "build",
-        lambda self, num_train_steps: optax.inject_hyperparams(optax.sgd)(
-            learning_rate=self.lr_scheduler(num_train_steps)
-        ),
-    )
     stream = StringIO()
     logger = logging.getLogger(_EXTENSION_LOGGER)
     logger.propagate = False
@@ -1722,7 +1722,7 @@ def extension_run(tmp_path, monkeypatch):
                 ),
                 data=LmDataConfig(components={}, vocab_size=64, tokenizer="passthrough"),
                 resources=ResourceConfig.with_cpu(),
-                optimizer=GrugMoeMuonHConfig(
+                optimizer=_SgdOnTheHeroSchedule(
                     learning_rate=1e-2,
                     adam_lr=1e-3,
                     min_lr_ratio=0.05,
@@ -1801,3 +1801,49 @@ def test_restore_of_a_temporary_checkpoint_at_the_stop_step_promotes_it_and_runs
 
     assert visits
     assert _committed_checkpoints(extension_run.checkpoint_root)[5].metadata["is_temporary"] is False
+
+
+def test_real_optimizer_continues_a_checkpoint_from_the_schedule_end_at_the_extension_rates(tmp_path):
+    schedule_steps = 4
+    base = GrugMoeMuonHConfig(learning_rate=1e-2, adam_lr=1e-3, min_lr_ratio=0.05, warmup=0.0, use_syrk=False)
+    extended = dataclasses.replace(base, schedule_extension=ScheduleExtension(steps=2, final_lr_ratio=0.01))
+    base_optimizer = base.build(schedule_steps)
+    extended_optimizer = extended.build(schedule_steps)
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("expert",), axis_types=(AxisType.Explicit,))
+    rng = np.random.default_rng(20)
+
+    def matrix(*shape):
+        return jnp.asarray(rng.normal(size=shape).astype(np.float32))
+
+    with jax.set_mesh(mesh):
+        params = {
+            "stacked_blocks": {"stacked": {"mlp": {"expert_mlp": {"w_up": matrix(1, 3, 8, 4)}}}},
+            "lm_head": matrix(8, 4),
+            "token_embed": matrix(8, 4),
+        }
+        grads = jax.tree.map(lambda leaf: matrix(*leaf.shape), params)
+        assert set(jax.tree.leaves(base.create_mask(params))) == {"muonh", "adamh", "adam"}
+
+        base_update = jax.jit(base_optimizer.update)
+        extended_update = jax.jit(extended_optimizer.update)
+        state = base_optimizer.init(params)
+        for _ in range(schedule_steps):
+            updates, state = base_update(grads, state, params)
+            params = optax.apply_updates(params, updates)
+
+        save_checkpoint({"params": params, "opt_state": state}, step=schedule_steps, checkpoint_path=str(tmp_path))
+        restored = load_checkpoint(
+            {"params": params, "opt_state": extended_optimizer.init(params)}, str(tmp_path), allow_partial=False
+        )
+        params, state = restored["params"], restored["opt_state"]
+
+        for ratio in (0.05, 0.03, 0.01, 0.01):
+            floor_updates, _ = base_update(grads, state, params)
+            updates, state = extended_update(grads, state, params)
+            assert float(state.hyperparams["learning_rate"]) == pytest.approx(1e-2 * ratio, rel=1e-5)
+            assert float(state.hyperparams["adam_lr"]) == pytest.approx(1e-3 * ratio, rel=1e-5)
+            for moved, floor_moved in zip(jax.tree.leaves(updates), jax.tree.leaves(floor_updates), strict=True):
+                assert float(jnp.linalg.norm(moved) / jnp.linalg.norm(floor_moved)) == pytest.approx(
+                    ratio / 0.05, rel=0.02
+                )
+            params = optax.apply_updates(params, updates)
