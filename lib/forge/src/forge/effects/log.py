@@ -159,9 +159,12 @@ class JsonlSink(Sink):
 
     def _read(self) -> tuple[Record, ...]:
         with open_url(self.path, "rt") as source:
+            content = source.read()
+            if urlsplit(self.path).scheme in ("", "file"):
+                content = content[: content.rfind("\n") + 1]
             records = tuple(
                 Record(row["sequence"], row["wall_time"], _decode(row["event"]))
-                for row in (json.loads(line) for line in source)
+                for row in (json.loads(line) for line in content.splitlines())
             )
         if any(record.sequence != index for index, record in enumerate(records, 1)):
             raise LogFailure("Log sequence is incomplete or out of order")

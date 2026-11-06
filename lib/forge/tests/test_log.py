@@ -88,6 +88,7 @@ async def test_local_sink_appends_without_rewriting_prefix_and_retries_torn_tail
     assert path.read_bytes().startswith(prefix)
     with path.open("ab") as output:
         output.write(b'{"sequence":3,"wall_time":')
+    assert await sink.read() == (first, second)
     await sink.write((second, third))
     assert await sink.read() == (first, second, third)
 
