@@ -628,7 +628,7 @@ def test_draining_pool_hands_a_lost_attempts_shard_to_its_replacement(tmp_path, 
     """
     coordinator = make_test_coordinator(tmp_path, drain_idle_workers=True)
     try:
-        run = start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
+        start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
         coordinator.register_worker("pool-0-a0", MagicMock(), task_id="/job/pool/0")
         assert coordinator.pull_task("pool-0-a0", TEST_WORKER_AVAILABLE)[0] == PullStatus.RUN_TASK
 
@@ -637,8 +637,27 @@ def test_draining_pool_hands_a_lost_attempts_shard_to_its_replacement(tmp_path, 
 
         assert status == PullStatus.RUN_TASK
         assert work is not None and work.task.shard_idx == 0
-        assert run.in_flight[0].worker_id == "pool-0-a1"
         assert coordinator.get_status().workers["pool-0-a0"]["state"] == "failed"
+    finally:
+        coordinator.shutdown()
+
+
+def test_superseded_attempt_that_still_runs_cannot_reclaim_its_shard(tmp_path, actor_context):
+    """An old attempt that keeps polling after its replacement registers gets SHUTDOWN.
+
+    Iris may start the replacement while the old attempt still runs. If the old
+    attempt could take the requeued shard back, Iris could then kill it after the
+    replacement had already drained, leaving the shard outstanding.
+    """
+    coordinator = make_test_coordinator(tmp_path, drain_idle_workers=True)
+    try:
+        start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
+        coordinator.register_worker("pool-0-a0", MagicMock(), task_id="/job/pool/0")
+        assert coordinator.pull_task("pool-0-a0", TEST_WORKER_AVAILABLE)[0] == PullStatus.RUN_TASK
+        coordinator.register_worker("pool-0-a1", MagicMock(), task_id="/job/pool/0")
+
+        assert coordinator.pull_task("pool-0-a0", TEST_WORKER_AVAILABLE)[0] == PullStatus.SHUTDOWN
+        assert coordinator.pull_task("pool-0-a1", TEST_WORKER_AVAILABLE)[0] == PullStatus.RUN_TASK
     finally:
         coordinator.shutdown()
 

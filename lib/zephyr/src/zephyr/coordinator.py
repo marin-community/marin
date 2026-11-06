@@ -414,6 +414,10 @@ class ZephyrCoordinator:
         self._worker_handles: dict[str, ActorHandle] = {}
         self._worker_group: ActorGroup | None = None  # owned, created by start_workers()
         self._worker_task_ids: dict[str, str] = {}
+        # Attempt IDs that a newer Iris attempt of the same task replaced. Their
+        # polls get SHUTDOWN, so a still-running old attempt cannot reclaim the
+        # shards that moved to its replacement.
+        self._superseded_workers: set[str] = set()
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
         self._lock = threading.Lock()
@@ -525,21 +529,20 @@ class ZephyrCoordinator:
                 logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
 
     def _retire_superseded_attempts(self, task_id: str) -> None:
-        """Mark earlier attempts of ``task_id`` FAILED and requeue their shards. Lock held.
+        """Fence earlier attempts of ``task_id`` and requeue their shards. Lock held.
 
-        Iris starts a new attempt once it treats the previous one as lost, so the
-        old attempt's shards move now rather than after the heartbeat timeout.
-        Otherwise a draining pool sees the shard as in flight on the lost
-        attempt, releases the new attempt as idle, and then aborts when the
-        worker job ends with that shard outstanding.
+        Iris starts a new attempt only for a task it treats as lost, so the
+        earlier attempts' shards go back to the queue for the new attempt.
         """
         if not task_id:
             return
         for old_id, old_task_id in self._worker_task_ids.items():
-            if old_task_id != task_id or self._worker_states.get(old_id) in {WorkerState.FAILED, WorkerState.DONE}:
+            if old_task_id != task_id or old_id in self._superseded_workers:
                 continue
             logger.warning("Worker %s superseded by a new attempt of task %s; requeueing its shards", old_id, task_id)
-            self._worker_states[old_id] = WorkerState.FAILED
+            self._superseded_workers.add(old_id)
+            if self._worker_states.get(old_id) is not WorkerState.DONE:
+                self._worker_states[old_id] = WorkerState.FAILED
             self._maybe_requeue_worker_tasks(old_id)
 
     def deregister_worker(self, worker_id: str) -> None:
@@ -894,6 +897,8 @@ class ZephyrCoordinator:
             ``status`` is ``RUN_TASK`` and ``None`` for all other statuses.
         """
         with self._lock:
+            if worker_id in self._superseded_workers:
+                return PullStatus.SHUTDOWN, None
             self._last_seen[worker_id] = time.monotonic()
             self._worker_states[worker_id] = WorkerState.ACTIVE
 
