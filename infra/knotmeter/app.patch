@@ -30,7 +30,7 @@ index cd1d35a..0a7faba 100644
        ...VIDEO_ALIAS_REDIRECTS,
        {
 diff --git a/packages/app/src/app/(dashboard)/inference/[model]/page.tsx b/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
-index d797752..6df51a1 100644
+index d797752..ae4bfba 100644
 --- a/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
 +++ b/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
 @@ -52,6 +52,11 @@ export default async function InferenceModelPage({ params }: Props) {
@@ -39,7 +39,7 @@ index d797752..6df51a1 100644
      <InferenceProvider activeTab="inference">
 +      {entry.slug === 'marin-hero-step144000' && (
 +        <p className="mx-auto max-w-7xl px-4 pt-4 text-sm text-muted-foreground">
-+          Hero calibration is provisional. Weekly loads have not been selected.
++          Saved October 28 Hero results use the older serving setup and remain provisional.
 +        </p>
 +      )}
        <InferenceChartDisplay />
@@ -59,7 +59,7 @@ index a9c567e..a370692 100644
      alternates: enAlternates(`/inference/agentic/${id}`),
      robots: { index: false },
 diff --git a/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx b/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
-index 091e729..4e887bc 100644
+index 091e729..b3765d0 100644
 --- a/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
 +++ b/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
 @@ -56,6 +56,11 @@ export default async function ZhInferenceModelPage({ params }: Props) {
@@ -68,7 +68,7 @@ index 091e729..4e887bc 100644
        <InferenceProvider activeTab="inference">
 +        {entry.slug === 'marin-hero-step144000' && (
 +          <p className="mx-auto max-w-7xl px-4 pt-4 text-sm text-muted-foreground">
-+            Hero 校准尚未完成，尚未选择每周测试负载。
++            保留的 10 月 28 日 Hero 结果来自旧的服务配置，结果仍属暂定。
 +          </p>
 +        )}
          <InferenceChartDisplay />
