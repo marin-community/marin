@@ -120,7 +120,7 @@ def _partition(token: int) -> tuple[str, str]:
     ("skew", "block_size", "expected_sequences"),
     [
         (1, 124, {("c01q0", "lte_64k"): 78, ("c01q0", "gt_64k"): 15, ("c02q3", "lte_64k"): 31}),
-        (8, 132, {("c01q0", "lte_64k"): 39, ("c01q0", "gt_64k"): 60, ("c02q3", "lte_64k"): 33}),
+        (4, 92, {("c01q0", "lte_64k"): 39, ("c01q0", "gt_64k"): 30, ("c02q3", "lte_64k"): 23}),
     ],
 )
 def test_statistics_weight_bucket_sampling_and_preserve_cell_share(fake_store, skew, block_size, expected_sequences):
