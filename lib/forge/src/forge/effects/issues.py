@@ -15,4 +15,4 @@ class Hold(Exception):
 
 
 class LogFailure(Exception):
-    """Persistence failed; surface the failure at root drain."""
+    """Event log encoding, decoding, or persistence failed."""
