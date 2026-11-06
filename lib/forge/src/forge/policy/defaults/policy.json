@@ -24,5 +24,19 @@
   "solver.tool_timeout": 120.0,
   "solver.command_timeout": 30.0,
   "solver.cleanup_timeout": 60.0,
-  "grader.timeout": 300.0
+  "grader.timeout": 300.0,
+  "provider.model": "glm-5.3",
+  "provider.max_attempts": 8,
+  "provider.hold_timeout": 3600.0,
+  "provider.backoff_initial": 1.0,
+  "provider.backoff_maximum": 60.0,
+  "provider.backoff_factor": 2.0,
+  "provider.stall_timeout": 600.0,
+  "provider.max_connections": 512,
+  "provider.structured_repairs": 1,
+  "sampling.temperature": 1.0,
+  "sampling.top_p": 0.95,
+  "sampling.reasoning_effort": "high",
+  "sampling.max_continuations": 0,
+  "sampling.max_tokens": 131072
 }
