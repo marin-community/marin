@@ -126,7 +126,7 @@ class Tracking:
                 io.makedirs(str(config.trainer.export_path), exist_ok=True)
                 io.write_bytes_atomic(
                     join_resource_path(str(config.trainer.export_path), TRACKING_FILENAME),
-                    json.dumps({"wandb_url": run.url}).encode(),
+                    json.dumps({"wandb_url": run.url, "attempt_id": tracking_config["attempt_id"]}).encode(),
                 )
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
