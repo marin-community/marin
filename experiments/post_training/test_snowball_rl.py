@@ -212,8 +212,9 @@ print(json.dumps([{
     "profiles": {name: OmegaConf.to_container(profile, resolve=True)
                  for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"
                  for name, profile in (entry.get("additional_evaluations") or {}).items()},
-    "primary_steps": [entry.eval_steps for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
-    "primary_start": [entry.eval_before_train for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
+    "primary_steps": [entry.get("eval_steps") for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
+    "primary_start": [entry.get("eval_before_train") for entry in config.skyrl.trainer.callbacks
+                      if entry.type == "evaluation"],
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"]
         if config.runtime.training_type is not None else [],
     "wire": asyncio.run(native_request(
