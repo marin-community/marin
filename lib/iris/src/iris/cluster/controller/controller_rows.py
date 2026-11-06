@@ -39,7 +39,7 @@ from sqlalchemy.engine.cursor import CursorResult
 
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTaskAttempt, stats_timestamp
-from iris.cluster.types import LOCAL_CLUSTER, JobName
+from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,8 @@ class _Marked:
     jobs: dict[JobName, None] = field(default_factory=dict)
     submitted: dict[JobName, None] = field(default_factory=dict)
     attempts: dict[tuple[JobName, int], None] = field(default_factory=dict)
+    # Attempts' workers as they were before ``remove_worker`` cleared them.
+    removed_workers: dict[tuple[JobName, int], WorkerId] = field(default_factory=dict)
     job_rows: list[IrisJob] = field(default_factory=list)
     config_rows: list[IrisJobConfig] = field(default_factory=list)
     attempt_rows: list[IrisTaskAttempt] = field(default_factory=list)
@@ -152,6 +154,20 @@ def record_attempt_changes(cur: RowCursor, attempts: Iterable[tuple[JobName, int
     if marked is None:
         return
     marked.attempts.update(dict.fromkeys(attempts))
+
+
+def record_worker_removal(cur: RowCursor, worker_id: WorkerId) -> None:
+    """Remember which attempts ran on ``worker_id`` before ``remove_worker`` clears them.
+
+    A failed worker's attempts finish in the same transaction that removes it, so
+    without this their final rows would lose ``worker_id``.
+    """
+    marked = _marked(cur)
+    if marked is None:
+        return
+    a = task_attempts_table.c
+    for r in cur.execute(select(a.task_id, a.attempt_id).where(a.worker_id == worker_id)):
+        marked.removed_workers[(r.task_id, r.attempt_id)] = worker_id
 
 
 def _write(tables: ControllerRowTables, marked: _Marked) -> None:
@@ -260,6 +276,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
             .where(tuple_(a.task_id, a.attempt_id).in_(chunk), j.cluster == LOCAL_CLUSTER)
         )
         for r in cur.execute(query):
+            worker_id = r.worker_id if r.worker_id is not None else marked.removed_workers.get((r.task_id, r.attempt_id))
             marked.attempt_rows.append(
                 IrisTaskAttempt(
                     cluster=tables.cluster,
@@ -276,7 +293,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     exit_code=r.exit_code,
                     error=r.error,
                     terminal_reason=r.terminal_reason,
-                    worker_id=str(r.worker_id) if r.worker_id is not None else None,
+                    worker_id=str(worker_id) if worker_id is not None else None,
                     node_name=r.node_name,
                     pod_name=r.pod_name,
                     pod_uid=r.pod_uid,

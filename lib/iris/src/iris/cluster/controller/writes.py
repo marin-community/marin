@@ -779,6 +779,7 @@ def remove_worker(
     ``current_worker_*`` to NULL before the delete so the row history
     is observable to readers in the same write transaction.
     """
+    controller_rows.record_worker_removal(tx, worker_id)
     tx.execute(update(task_attempts_table).where(task_attempts_table.c.worker_id == worker_id).values(worker_id=None))
     tx.execute(update(tasks_table).where(tasks_table.c.current_worker_id == worker_id).values(current_worker_id=None))
     tx.execute(delete(workers_table).where(workers_table.c.worker_id == worker_id))

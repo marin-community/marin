@@ -20,6 +20,7 @@ from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
 from iris.testing.controller import (
+    fail_worker,
     make_controller_state,
     make_direct_job_request,
     make_job_request,
@@ -273,6 +274,21 @@ def test_handed_off_job_is_written_by_the_executing_peer_only():
         assert (parent_rows.jobs, parent_rows.job_configs, parent_rows.attempts) == ([], [], [])
         assert [(j.cluster, j.job_id) for j in peer_rows.jobs] == [("cw-rno2a", job_id.to_wire())]
         assert len(peer_rows.job_configs) == 1
+
+
+def test_failed_worker_attempt_keeps_its_worker_id(state):
+    # ops.worker.fail finishes the worker's attempts (commit_effects) and then
+    # remove_worker clears task_attempts.worker_id, all in one transaction.
+    worker = register_worker(state, "w1", "host1:8080", make_worker_metadata())
+    tasks = submit_job(state, "train", make_job_request("train"))
+    rows = _attach(state, "marin")
+    _run_on_node(state, tasks[0], worker, "")
+
+    fail_worker(state, worker, "Connection lost")
+
+    final = rows.attempts[-1]
+    assert final.state == "TASK_STATE_WORKER_FAILED"
+    assert final.worker_id == "w1"
 
 
 _CLUSTER_CONFIGS = sorted((Path(__file__).parents[3] / "config").glob("*.yaml"))
