@@ -37,7 +37,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
-from levanter.compute_dtype import cast_model_for_compute
+from levanter.fp32_fields import with_fp32_fields
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
@@ -498,7 +498,7 @@ def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
         router = jnp.zeros((cfg.hidden_dim, cfg.num_experts), jnp.float32)
         router = router.at[0, :2].set(1).at[1, 0].set(1 / 256)
         model = replace(model, router=router, router_bias=jnp.array([0, 0.001, -10, -10], jnp.float32))
-        compute = cast_model_for_compute(model, jmp.get_policy("p=f32,c=bf16"), {"router_bias": "float32"})
+        compute = with_fp32_fields(jmp.get_policy("p=f32,c=bf16"), ("router_bias",)).cast_to_compute(model)
         inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, :2].set(1)
         # Keep primitive boundaries explicit: XLA may fuse the BF16 dot's
         # following FP32 conversion into a CPU dot with an FP32 accumulator.
@@ -519,7 +519,7 @@ def test_hf_reload_keeps_requested_runtime_settings():
         attention_implementation="torch_order",
     )
     reloaded = _tiny_config(moe_implementation=None)
-    restored = preserve_hf_runtime_settings(reloaded, requested, {"router_bias": "float32"})
+    restored = preserve_hf_runtime_settings(reloaded, requested, ("router_bias",))
     assert restored.router_dot_fp32
     assert restored.moe_implementation == "ring"
     assert restored.moe_capacity_factor == 4.0
