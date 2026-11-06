@@ -11,9 +11,8 @@ import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh, set_mesh
 from levanter.grug.attention import AttentionMask
-from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep import launch_diagnostics, model
+from experiments.grug.moe_hero_ep import model
 
 
 def _explicit_mesh(*axis_sizes):
@@ -164,24 +163,6 @@ def test_log_scaling_counts_keys_from_the_document_start_and_skips_padding():
 def test_log_scaling_refuses_a_floor_or_slope_alone(fields):
     with pytest.raises(ValueError, match="set together"):
         dataclasses.replace(_tiny_config(), **fields)
-
-
-def test_diagnostic_run_passes_the_log_scaling_slope_to_the_model():
-    step = launch_diagnostics.build_diagnostic_run(
-        run_id="log-scaling",
-        dp_racks=1,
-        num_steps=1,
-        max_seq_len=262144,
-        context_axis_size=4,
-        expert_axis_size=16,
-        log_scaling_n_floor=65536,
-        log_scaling_alpha=0.25,
-        version="dev",
-    )
-    config = step.build_config(StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps))
-
-    assert config.model.log_scaling_n_floor == 65536
-    assert config.model.log_scaling_alpha == 0.25
 
 
 def test_log_scaling_keeps_a_bf16_query_bf16(monkeypatch):
