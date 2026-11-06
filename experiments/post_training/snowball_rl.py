@@ -27,6 +27,11 @@ gives what the preset runs, its cost, what it measures and the changes it is for
   data-medium      learning-medium trained on --tasks instead of the default selection;
                    40 H100, about 2 h. Measures the panel score after training on the new
                    selection. For a new task selection that passed data-short.
+  learning-long    100 async updates on 40 H100, about 4 h (estimate). Fast panel at update 0 and
+                   every 25; full test panel only at update 100. Measures sustained learning changes.
+
+  data-long        learning-long on --tasks, using learning-long controls. For task/curriculum changes.
+
   train-long       the async production loop with checkpoints, fast_panel every 10 updates and
                    an HF export; 112 H100, or 40 with --layout p40. For release training and
                    for models that later runs load with --init. No verdict.
@@ -550,12 +555,14 @@ def build_run(
     elif preset.focus != presets.Focus.TRAIN and tasks is not None:
         raise click.BadParameter("use a data or train-long preset with --tasks")
     if preset.focus not in (presets.Focus.LEARNING, presets.Focus.TRAIN) and init is not None:
-        raise click.BadParameter("--init requires learning-medium or train-long")
+        raise click.BadParameter("--init requires a learning or train-long preset")
     if preset.focus != presets.Focus.TRAIN and (layout is not None or resume_from is not None or evaluations):
         raise click.BadParameter("--layout, --resume-from and --eval require train-long")
     if preset.focus == presets.Focus.TRAIN and (replicates != 1 or control):
         raise click.BadParameter("train-long accepts neither --replicates nor --control")
-    if control and (settings or tasks is not None or init is not None or evaluations or preset.name == "data-medium"):
+    if control and (
+        settings or tasks is not None or init is not None or evaluations or preset.name in ("data-medium", "data-long")
+    ):
         raise click.BadParameter("controls use only the preset's pinned default inputs")
     provenance = _provenance(control=control)
     if layout is not None:
@@ -579,10 +586,13 @@ def build_run(
     for name in evaluations:
         selected.setdefault(name, presets.EVALUATIONS[name])
     if init is not None:
-        selected = {name: replace(evaluation, at_start=True) for name, evaluation in selected.items()}
+        selected = {
+            name: replace(evaluation, at_start=True) if index == 0 else evaluation
+            for index, (name, evaluation) in enumerate(selected.items())
+        }
     chosen = tuple(selected.values())
     generating = preset.recipe.layout.role_plan.generate_only
-    if not generating and len(chosen) > 1:
+    if preset.focus == presets.Focus.TRAIN and len(chosen) > 1:
         raise click.BadParameter("a run evaluates at most one TaskSpec panel")
     required = {key for evaluation in selected.values() for key in presets.EVALUATORS[evaluation.harness].required_env}
     counts = summary["grader_kind_counts"]["train"]
@@ -616,15 +626,23 @@ def build_run(
             if generating:
                 config["trajectory_runner"]["max_concurrent_tasks"] = answer_count
         else:
+            if not generating and (evaluation.every is not None or evaluation.at_start):
+                raise click.BadParameter("additional training panels must run only at the final update")
             evaluation_data.append((evaluation.name, sources))
             profiles[evaluation.name] = {
                 "sampling_params": profile_config["generator"]["eval_sampling_params"],
                 "n_samples_per_prompt": profile_config["generator"]["eval_n_samples_per_prompt"],
             }
+            if not generating:
+                profiles[evaluation.name]["schedule"] = "final"
     if generating and profiles:
         config["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": profiles}]
     if not generating:
-        config["trainer"]["callbacks"] = _callbacks(preset, chosen, expected_tasks)
+        config["trainer"]["callbacks"] = _callbacks(preset, chosen[:1], expected_tasks)
+        if profiles:
+            next(callback for callback in config["trainer"]["callbacks"] if callback["type"] == "evaluation")[
+                "additional_evaluations"
+            ] = profiles
     if learning and export_hf:
         config["trainer"]["callbacks"].extend(
             (

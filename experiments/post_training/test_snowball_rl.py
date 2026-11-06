@@ -61,6 +61,11 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
                 paths.append(str(path))
                 if index == 0:
                     launches[name] = document
+    long_init = ArtifactStep.adopt("tests/long-initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
+    initialized = snowball.build_run(presets.PRESETS["learning-long"], init=long_init).runs[0]
+    path = tmp_path / "initialized-long.yaml"
+    _render(initialized, path, runtime=True)
+    paths.append(str(path))
     default_learning = snowball.build_run(presets.PRESETS["learning-medium"])
     for label, options in (("kept", {"keep_weights": True}), ("control", {"control": True})):
         retained = snowball.build_run(presets.PRESETS["learning-medium"], **options)
@@ -176,7 +181,7 @@ def quality_request(config):
         return None
     profile = parse_evaluation_profiles(config.skyrl.trainer.callbacks[0].additional_evaluations)["test_panel"]
     merged = evaluation_profile_config(config.skyrl, profile, "test_panel")
-    assert config.inputs.validation_data[0].identity != config.inputs.evaluation_data.test_panel[0].identity
+    assert tuple(config.inputs.validation_data) != tuple(config.inputs.evaluation_data.test_panel)
     return asyncio.run(native_request(get_vllm_sampling_params(merged.generator.eval_sampling_params),
                                      {"temperature": 1.0}, True))
 
@@ -198,6 +203,11 @@ print(json.dumps([{
     "export_hf": config.run.export_hf,
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
+    "profiles": {name: OmegaConf.to_container(profile, resolve=True)
+                 for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"
+                 for name, profile in (entry.get("additional_evaluations") or {}).items()},
+    "primary_steps": [entry.eval_steps for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
+    "primary_start": [entry.eval_before_train for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"]
         if config.runtime.training_type is not None else [],
     "wire": asyncio.run(native_request(
@@ -237,6 +247,14 @@ print(json.dumps([{
             assert ("hf_model_save" in row["callbacks"]) == saved
         if "speed-long-" in name:
             assert not row["validation"] and not row["export_hf"]
+        if "learning-long-" in name or "data-long-" in name:
+            assert row["nodes"] == 5 and row["steps"] == 100
+            assert row["primary_steps"] == [25] and row["primary_start"] == [True]
+            assert row["terminal_eval"] == [False]
+            assert row["profiles"]["test_panel"]["schedule"] == "final"
+            assert row["profiles"]["test_panel"]["data_files"]
+            assert row["quality_wire"] == greedy_wire
+            assert not row["export_hf"] and "checkpoint" not in row["callbacks"]
         if row["fixed"]:
             assert not row["overlong_filtering"], row
         if row["wire"] is not None:
@@ -257,6 +275,14 @@ print(json.dumps([{
     assert learning["inputs"]["model"] == data["inputs"]["model"]
     assert learning["inputs"]["validation_data"] == data["inputs"]["validation_data"]
     assert learning["inputs"]["train_data"] != data["inputs"]["train_data"]
+    long_learning, long_data = launches["learning-long"], launches["data-long"]
+    assert long_learning["skyrl"] == long_data["skyrl"]
+    assert long_learning["inputs"]["validation_data"] == long_data["inputs"]["validation_data"]
+    assert long_learning["inputs"]["evaluation_data"] == long_data["inputs"]["evaluation_data"]
+    assert long_learning["inputs"]["train_data"] != long_data["inputs"]["train_data"]
+    for options in ({}, {"tasks": selection, "settings": (presets.parse_setting("trainer.max_steps=2"),)}):
+        with pytest.raises(click.BadParameter, match="data presets require"):
+            snowball.build_run(presets.PRESETS["data-long"], **options)
     with pytest.raises(click.BadParameter, match="owned by"):
         snowball.build_run(
             presets.PRESETS["learning-medium"],
@@ -289,9 +315,24 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
         "learning-medium": "4c9fe674",
         "speed-long": "87810c2e",
     }
+    expected_envelopes = {
+        "speed-short": "9010cad0",
+        "data-short": "a83efdca",
+        "speed-medium": "1e78c00b",
+        "learning-medium": "ca4453f8",
+        "speed-long": "b55fa2ae",
+    }
+    expected_fingerprints = {
+        "speed-short": "ec7676b6",
+        "data-short": "71904f8f",
+        "speed-medium": "569f9728",
+        "learning-medium": "e1098d10",
+        "speed-long": "846902f3",
+    }
     paths = []
     for name in expected:
         step = snowball.build_run(presets.PRESETS[name], control=True).runs[0]
+        assert step.fingerprint() == expected_fingerprints[name]
         path = tmp_path / f"{name}.yaml"
         _render(step, path)
         paths.append(str(path))
@@ -304,13 +345,18 @@ from cloud.iris.launch_config import load_launch_config
 os.environ["HOME"] = "/snowball-pin-home"
 configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
 print(json.dumps([
-    {"skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
+    {"envelope": OmegaConf.to_container(config, resolve=True),
+     "skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
      "allocation": OmegaConf.to_container(config.iris.allocation, resolve=True)}
     for config in configs
 ], sort_keys=True))
 """,
         paths,
     )
+    assert {
+        name: fingerprint_hash(json.dumps(config.pop("envelope"), sort_keys=True))
+        for name, config in zip(expected, configs, strict=True)
+    } == expected_envelopes
     actual = {
         name: fingerprint_hash(json.dumps(config, sort_keys=True))
         for name, config in zip(expected, configs, strict=True)

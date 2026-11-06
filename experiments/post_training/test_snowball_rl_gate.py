@@ -333,6 +333,31 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
 @pytest.mark.parametrize(
     "preset,fault,control_fault,verdict,label,failed,bounds",
     [
+        pytest.param("learning-long", {"initial_score": 0.2}, {}, "pass", "no change", set(), None, id="long-complete"),
+        pytest.param("data-long", {"initial_score": 0.2}, {}, "pass", "no change", set(), None, id="data-long-complete"),
+        pytest.param(
+            "learning-long",
+            {"initial_score": 0.2, "argv": ("--preset", "learning-long", "--init", "users/test/initializer@2026.11.06")},
+            {},
+            "pass",
+            "no change",
+            set(),
+            None,
+            id="long-init-final-only",
+        ),
+        pytest.param(
+            "learning-long",
+            {"missing_final_panel": True, "initial_score": 0.2},
+            {},
+            "invalid",
+            None,
+            {"test_panel/batch_finished", "test_panel/panel_scored_fraction", "test_panel/grader_error_fraction"},
+            None,
+            id="long-missing-final",
+        ),
+        pytest.param(
+            "learning-long", {"native_crashed": True}, {}, "invalid", None, set(), None, id="long-native-crash"
+        ),
         ("speed-medium", {"speed": 80}, {}, "pass", "improves", set(), None),
         ("speed-medium", {"speed": 80, "metrics": {VLLM: 1}}, {}, "pass", "trade-off", set(), None),
         ("speed-medium", {"speed": 130, "metrics": {VLLM: 1000}}, {}, "fail", "trade-off", set(), None),
@@ -551,7 +576,14 @@ def test_rescore_reports_candidate_and_control_contracts(
     if preset == "speed-long":
         monkeypatch.setitem(gate.CONTROLS, preset, (gate.ControlPin(preset, "09026fd100", presets.PRESET_REVISION, 4),))
     controls(recorded_runs, preset, **control_fault)
-    source = recorded_runs(preset, f"users/test/{preset}", score=0.495, **fault)
+    recorded_fault = {key: value for key, value in fault.items() if key not in {"missing_final_panel", "native_crashed"}}
+    source = recorded_runs(preset, f"users/test/{preset}", score=0.495, **recorded_fault)
+    if fault.get("missing_final_panel"):
+        shutil.rmtree(source / "exports/test_panel")
+    if fault.get("native_crashed"):
+        terminal = json.loads((source / "terminal.json").read_text())
+        terminal["result"]["state"] = "failed"
+        _json(source / "terminal.json", terminal)
     if preset == "speed-short" and not fault and not control_fault:
         monkeypatch.setattr(presets, "DEFAULT_SELECTION_VERSION", "2099.01.01")
         _json(Path(presets.default_selection().path()) / "summary.json", {"full_validation_rows": 73})
@@ -559,6 +591,11 @@ def test_rescore_reports_candidate_and_control_contracts(
         preset, "--candidate", f"users/test/{preset}" + ("@" + fault["version"] if "version" in fault else "")
     )
     assert (report["verdict"], report["label"]) == (verdict, label), report
+    if fault.get("native_crashed"):
+        assert "run crashed:" in report["reason"]
+    if fault.get("missing_final_panel"):
+        assert report["reason"] and "test_panel" in report["reason"]
+        assert len(list((source / "exports/metrics").glob("step-*.json"))) == 101
     assert {row["name"] for row in report["invariants"] if not row["holds"]} == failed, report
     error_name = "test_panel/grader_error_fraction" if preset == "speed-short" else "grader_error_fraction"
     error = next((row for row in report["invariants"] if row["name"] == error_name), {})
@@ -1254,8 +1291,10 @@ def test_built_gate_and_rescore_share_inputs_and_status(
         assert all(path.read_bytes() == content for path, content in saved.items())
 
 
-@pytest.mark.parametrize("preset", ["speed-long", "speed-medium"])
+@pytest.mark.parametrize("preset", ["speed-long", "speed-medium", "learning-long", "data-long"])
 def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, preset):
+    if preset in {"learning-long", "data-long"}:
+        monkeypatch.delitem(gate.CONTROLS, "learning-long")
     if preset == "speed-medium":
         monkeypatch.setitem(
             gate.CONTROLS,
@@ -1274,7 +1313,7 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         payload = json.loads(refused.output)
         assert payload["preset"] == preset and payload["verdict"] == "invalid"
         assert payload["reason"].endswith(
-            f"python -m experiments.post_training.snowball_rl --preset {preset} "
+            f"python -m experiments.post_training.snowball_rl --preset {'learning-long' if preset == 'data-long' else preset} "
             f"--version {presets.PRESET_REVISION} --control --replicates 4 --run"
         )
         assert presets.PRESET_REVISION in payload["reason"]
@@ -1293,6 +1332,7 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("no-wait", 0),
         ("child", 0),
         ("learning-child", 0),
+        ("long-child", 0),
         ("train-child", 0),
         ("control", 0),
         ("generate", 0),
@@ -1304,8 +1344,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setenv("WANDB_ENTITY", "submission-team")
     preset_name = (
-        "learning-medium"
-        if case == "learning-child"
+        ("learning-long" if case == "long-child" else "learning-medium")
+        if case in {"learning-child", "long-child"}
         else "train-long" if case == "train-child" else "speed-short" if case == "generate" else "speed-medium"
     )
     if case != "train-child":
@@ -1317,7 +1357,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
             lambda cluster: str(tmp_path if cluster == presets.P40.cluster else tmp_path / "reno"),
         )
     preset = presets.PRESETS[preset_name]
-    replicates = 2 if case == "learning-child" else 1
+    replicates = 2 if case in {"learning-child", "long-child"} else 1
     built = snowball.build_run(
         preset, control=case == "control", replicates=replicates, layout=presets.P40 if case == "train-child" else None
     )
@@ -1327,7 +1367,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
             step.name,
             speed=150 if case in {"fail", "no-wait"} else 101,
             fingerprint=step.fingerprint(),
-            initial_score=0.2 if case in {"learning-child", "train-child"} else None,
+            initial_score=0.2 if case in {"learning-child", "long-child", "train-child"} else None,
         )
         for step in built.runs
     ]
@@ -1370,7 +1410,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    if case in {"child", "learning-child", "train-child"}:
+    if case in {"child", "learning-child", "long-child", "train-child"}:
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
     arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
@@ -1378,7 +1418,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         arguments.append("--wait")
     if case == "control":
         arguments.append("--control")
-    if case == "learning-child":
+    if case in {"learning-child", "long-child"}:
         arguments.extend(("--replicates", "2"))
     if case == "train-child":
         arguments.extend(("--layout", "p40"))
@@ -1390,13 +1430,17 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     waited = [] if case in {"no-wait", "child", "learning-child", "train-child"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
     assert all(call.kwargs["poll_interval"] == 60 for call in client.job.return_value.wait.call_args_list)
-    if case not in {"child", "learning-child", "train-child"}:
+    if case not in {"child", "learning-child", "long-child", "train-child"}:
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
     if case in {"pass", "fail", "invalid"}:
         assert "# speed-medium" in result.output
-    if case == "learning-child":
+    if case in {"learning-child", "long-child"}:
         snapshot = status(preset_name, ["--replicates", "2"])
         assert all(row["rl_progress_url"].startswith("https://applets.marina.oa.dev/") for row in snapshot["runs"])
+        if case == "long-child":
+            assert all(row["evaluation"]["name"] == "fast_panel" for row in publication_transport.rows.values())
+            assert all(row["evaluation"]["task_count"] == 100 for row in publication_transport.rows.values())
+            assert all(row["baseline"]["reward"] == pytest.approx(0.2) for row in publication_transport.rows.values())
         first_group = set(publication_transport.rows)
         assert len(first_group) == 2
         earlier = {path: path.read_bytes() for path in Path(source).parent.parent.rglob("loop-result.json")}

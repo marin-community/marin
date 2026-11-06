@@ -64,13 +64,15 @@ def source_provenance(monkeypatch):
 
 @pytest.fixture
 def synthetic_current_controls(monkeypatch):
+    long_pin = gate.ControlPin("learning-long", "09026fd100", presets.PRESET_REVISION, 4)
     monkeypatch.setattr(
         gate,
         "CONTROLS",
         {
             name: tuple(replace(pin, revision=presets.PRESET_REVISION) for pin in pins)
             for name, pins in gate.CONTROLS.items()
-        },
+        }
+        | {"learning-long": (long_pin,), "data-long": (long_pin,)},
     )
 
 

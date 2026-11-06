@@ -1,4 +1,5 @@
 import asyncio
+from collections import Counter
 import json
 import math
 import os
@@ -22,7 +23,6 @@ from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
 from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.entrypoints import main_generate
-from skyrl_train.callbacks.builtin import EvaluationCallback
 from skyrl_train.dataset.tasks import source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD
@@ -330,7 +330,8 @@ def train_positive(forkserver_context, root, model, seed=0):
                 "type": "evaluation",
                 "eval_steps": FAST_STEPS,
                 "additional_evaluations": {
-                    "sampled": {"sampling_params": {"temperature": 1.0, "seed": 42}, "n_samples_per_prompt": 8}
+                    "sampled": {"sampling_params": {"temperature": 1.0, "seed": 42}, "n_samples_per_prompt": 8},
+                    "full_panel": {"schedule": "final"},
                 },
                 "metric_groups": {"eval/reporting/avg_score": ["eval/train/avg_score", "eval/heldout/avg_score"]},
                 "stop_when": {"eval/reporting/avg_score": {"min_improvement": 0.1}},
@@ -343,6 +344,8 @@ def test_cat_count_cpu_learns(tmp_path, cat_count_policy, cat_count_session, for
     root = tmp_path / "positive"
     positive = train_positive(forkserver_context, root, cat_count_policy)
     assert_cpu_learning(positive, root, cat_count_session)
+    assert all(not any(key.startswith("eval/full_panel/") for key in row) for row in positive)
+    assert not (root / "exports/full_panel").exists()
     before, after = scores(positive)
     print(f"CAT_COUNT_CPU seed=0 positive_scores={before}->{after}")
 
@@ -362,7 +365,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         )
     preserved = None
     for steps, resume in ((2, False), (4, True)):
-        cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
+        cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3 if resume else 2)
         OmegaConf.update(cfg, "runtime", {"run_id": "cpu-rloo-n", "attempt_id": f"attempt-{steps}"}, force_add=True)
         cfg.trainer.logger = ["files", "wandb"]
         cfg.trainer.algorithm.advantage_estimator = "rloo_n"
@@ -393,7 +396,45 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             paths.append(str(path.with_suffix(".parquet")))
             write_tasks(Path(paths[-1]), tasks)
         cfg.data.train_data, cfg.data.val_data = paths[:1], paths[1:]
+        full_task = tasks[0].model_copy(update={"task": tasks[0].task.model_copy(update={"id": "full-panel-only"})})
+        full_panel = root / "data/full-panel.parquet"
+        write_tasks(full_panel, [full_task])
+        OmegaConf.update(
+            cfg,
+            "trainer.callbacks",
+            [
+                {
+                    "type": "evaluation",
+                    "eval_steps": 3 if resume else 2,
+                    "additional_evaluations": {
+                        "full_panel": {
+                            "data_files": [str(full_panel)],
+                            "schedule": "final",
+                            "n_samples_per_prompt": 1,
+                            "sampling_params": {"temperature": 0.0, "seed": 42},
+                        }
+                    },
+                },
+                {"type": "checkpoint", "save_steps": steps},
+            ],
+            force_add=True,
+        )
         records = run_process(forkserver_context, root, cfg, runner=run_tracked_cat_count)
+        final_metrics = [row for row in records if "eval/full_panel/all/num_attempted" in row]
+        assert [row["step"] for row in final_metrics] == ([2, 4] if resume else [2])
+        assert all(row["eval/full_panel/all/num_attempted"] == 1 for row in final_metrics)
+        dumped = Path(evaluation_dump_dir(str(root / "exports/full_panel"), steps))
+        full_rows = [json.loads(line) for path in dumped.glob("*.jsonl") for line in path.read_text().splitlines()]
+        assert [row["task_id"] for row in full_rows if "task_id" in row] == ["full-panel-only"]
+        assert not Path(evaluation_dump_dir(str(root / "exports/full_panel"), 0)).exists()
+        assert not Path(evaluation_dump_dir(str(root / "exports/full_panel"), 3)).exists()
+        observed = Counter(
+            row["attributes"]["step"]
+            for row in cat_count_session
+            if row["name"] == "training_metric_value"
+            and row["attributes"].get("metric") == "eval/full_panel/all/num_attempted"
+        )
+        assert observed == Counter({"2": 1, "4": 1} if resume else {"2": 1})
         tracking = json.loads((root / "wandb-init.json").read_text())
         assert {key: tracking[key] for key in ("run_id", "attempt_id", "source_commit", "iris_job_id")} == {
             "run_id": "cpu-rloo-n",
@@ -626,8 +667,9 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         assert result["eval/quality/all/timing/grading/mean"] == 103.0
         dump = Path(evaluation_dump_dir(str(probe_root / "quality"), None)) / "train.jsonl"
         assert [json.loads(line)["task_id"] for line in dump.read_text().splitlines()] == ["quality-only"]
-    with pytest.raises(ValueError, match="dataset-selecting"):
-        EvaluationCallback(additional_evaluations={"quality": {"data_files": [str(panel)]}})
+    OmegaConf.update(probe_cfg, "trainer.callbacks.0.additional_evaluations.quality.schedule", "final", force_add=True)
+    with pytest.raises(ValueError, match="final evaluation profiles require training updates"):
+        RecordedGenerateExp(probe_cfg).run()
 
 
 @pytest.mark.nightly
