@@ -7,7 +7,6 @@ import json
 import math
 import runpy
 import shutil
-import subprocess
 import sys
 from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, replace
@@ -32,7 +31,7 @@ from iris.resources.state import JobState
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, StepContext, run
-from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
+from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.timing import Timestamp
 from scipy.stats import t
@@ -369,7 +368,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, publication_transport):
     return write
 
 
-def _native_launches(steps, tmp_path):
+def _native_launches(steps, tmp_path, native_json):
     paths, authored = [], []
     for index, step in enumerate(steps):
         context = StepContext.for_run(
@@ -383,15 +382,10 @@ def _native_launches(steps, tmp_path):
     program = (
         "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
         "from cloud.iris import launch_config\n"
-        f"assert Path(launch_config.__file__).resolve().is_relative_to({str(presets.REPO_ROOT / 'vendor/skyrl')!r})\n"
         "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(Path(p)),resolve=True) "
         "for p in sys.argv[1:]]))\n"
     )
-    result = subprocess.run(
-        skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=170
-    )
-    assert result.returncode == 0, result.stderr
-    return tuple(zip(authored, json.loads(result.stdout.splitlines()[-1]), strict=True))
+    return tuple(zip(authored, native_json(program, paths), strict=True))
 
 
 def _record_launch(root, config, compiled):
@@ -1144,7 +1138,7 @@ REQUIREMENT = "policy/raw_grad_norm<=1"
     [("learning-medium", False), ("data-medium", False), ("learning-medium", True), ("speed-short", True)],
 )
 def test_built_gate_and_rescore_share_inputs_and_status(
-    recorded_runs, tmp_path, preset, panel_change, monkeypatch, publication_transport
+    recorded_runs, tmp_path, preset, panel_change, monkeypatch, publication_transport, native_json
 ):
     if panel_change:
         original_preset = presets.PRESETS[preset]
@@ -1158,7 +1152,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(
             ),
         )
         steps = snowball.build_run(recorded_preset, control=True, replicates=pin.runs).runs
-        for root, (config, compiled) in zip(originals, _native_launches(steps, tmp_path), strict=True):
+        for root, (config, compiled) in zip(originals, _native_launches(steps, tmp_path, native_json), strict=True):
             record = json.loads((root / RECORD_FILENAME).read_text())
             record["result"].update(
                 hf_model_uri=str(root / "retained-hf"),
@@ -1196,10 +1190,24 @@ def test_built_gate_and_rescore_share_inputs_and_status(
         assert missing["verdict"] == "invalid" and new_panel in missing["reason"]
         rescored = snowball.build_run(selected, control=True, rescore_panel=new_panel)
         assert len(rescored.runs) == pin.runs
+        if preset == "learning-medium":
+            for root, step in zip(originals, rescored.runs, strict=True):
+                marker = root / ".executor_status"
+                status_bytes = marker.read_bytes()
+                marker.unlink()
+                try:
+                    dependency = next(dep for dep in step.deps if dep.artifact_type is SkyRLRun)
+                    run(dependency)
+                    assert all(
+                        (source / filename).read_bytes() == content
+                        for (source, filename), content in original_bytes.items()
+                    )
+                finally:
+                    marker.write_bytes(status_bytes)
         evaluation_preset = presets.rescore_preset(selected, new_panel)
         receipts = []
         for index, (step, (config, compiled)) in enumerate(
-            zip(rescored.runs, _native_launches(rescored.runs, tmp_path), strict=True)
+            zip(rescored.runs, _native_launches(rescored.runs, tmp_path, native_json), strict=True)
         ):
             assert compiled["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
             assert compiled["iris"]["allocation"]["num_nodes"] == 1
@@ -1235,33 +1243,45 @@ def test_built_gate_and_rescore_share_inputs_and_status(
             selected, requirements=("test_panel/mean>=control",), baselines=(f"{candidate}@{presets.PRESET_REVISION}",)
         )
         assert rescore(preset, "--leave-out", "r0")["verdict"] == "pass"
+        bounded = rescore(preset, "--leave-out", "r0", "--require", "test_panel/mean>=0.9")
+        assert bounded["verdict"] == "fail", bounded
+        assert any(row["name"] == "require/test_panel/mean" and not row["holds"] for row in bounded["invariants"])
         if preset == "learning-medium":
             data_candidate = "users/test/data-new-panel"
             recorded_runs(presets.PRESETS["data-medium"], data_candidate, score=0.495)
             assert rescore("data-medium", "--candidate", data_candidate)["verdict"] == "pass"
         first = receipts[0]
         terminal = json.loads((first / "terminal.json").read_text())
-        for index, fault in enumerate(
-            ("model", "tokenizer", "control", "protocol", "file", "panel", "failed", "incomplete")
-        ):
+        faults = (
+            ("model", "config.inputs.model.identity", "other@2026.11.06"),
+            ("tokenizer", "config.inputs.model.tokenizer_revision", "wrong"),
+            ("control", "config.run.id", "another-control"),
+            ("missing_model", "config.inputs.model", ...),
+            ("missing_tokenizer", "config.inputs.model.tokenizer_revision", ...),
+            ("missing_control", "config.run.id", ...),
+            ("malformed_identity", "config.inputs.model.identity", None),
+            ("protocol", "config.skyrl.generator.eval_sampling_params.temperature", 1),
+            ("file", "config.inputs.validation_data.0.relative_path", "validation.parquet"),
+            (
+                "panel",
+                "config.inputs.validation_data.0.identity",
+                f"{presets.SELECTION_PREFIX}/{presets.DEFAULT_TEST_PANEL}",
+            ),
+            ("failed", "result.state", "failed"),
+            ("incomplete", "", None),
+        )
+        for index, (fault, fields, value) in enumerate(faults):
             broken = json.loads(json.dumps(terminal))
             broken["config"]["run"]["attempt_id"] = f"fault-{index}"
-            if fault == "model":
-                broken["config"]["inputs"]["model"]["identity"] = "other@2026.11.06"
-            elif fault == "tokenizer":
-                broken["config"]["inputs"]["model"]["tokenizer_revision"] = "wrong"
-            elif fault == "control":
-                broken["config"]["run"]["id"] = "another-control"
-            elif fault == "protocol":
-                broken["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 1
-            elif fault == "file":
-                broken["config"]["inputs"]["validation_data"][0]["relative_path"] = "validation.parquet"
-            elif fault == "panel":
-                broken["config"]["inputs"]["validation_data"][0][
-                    "identity"
-                ] = f"{presets.SELECTION_PREFIX}/{presets.DEFAULT_TEST_PANEL}"
-            elif fault == "failed":
-                broken["result"]["state"] = "failed"
+            if fields:
+                fields = fields.split(".")
+                target = broken
+                for key in fields[:-1]:
+                    target = target[int(key) if key.isdecimal() else key]
+                if value is ...:
+                    del target[fields[-1]]
+                else:
+                    target[fields[-1]] = value
             dump = first / "exports/dumped_evals/eval_only/panel.jsonl"
             original_dump = dump.read_bytes()
             if fault == "incomplete":
@@ -1293,6 +1313,28 @@ def test_built_gate_and_rescore_share_inputs_and_status(
             )
             assert refused.exit_code == 2, (refused.output, refused.exception)
             assert str(pin.runs - 1) in refused.output and "retained HF weights" in refused.output
+            _json(originals[-1] / "retained-hf/config.json", {})
+            summary_path = Path(presets.selection_artifact(new_panel).path()) / "summary.json"
+            summary = json.loads(summary_path.read_text())
+            summary["grader_kind_counts"]["full_validation"]["remote_judge"] = 1
+            _json(summary_path, summary)
+            judged = CliRunner().invoke(
+                snowball.main,
+                [
+                    "--preset",
+                    preset,
+                    "--version",
+                    presets.PRESET_REVISION,
+                    "--control",
+                    "--rescore-panel",
+                    new_panel,
+                    "--run",
+                ],
+            )
+            assert judged.exit_code == 2 and "no AI-judge-graded tasks" in judged.output, (
+                judged.output,
+                judged.exception,
+            )
         assert all((root / filename).read_bytes() == content for (root, filename), content in original_bytes.items())
         return
     monkeypatch.setenv("WANDB_ENTITY", "planned-team")
